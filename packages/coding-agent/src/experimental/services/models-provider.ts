@@ -16,7 +16,7 @@ export interface ModelsRuntime {
 	refresh(options?: Parameters<ModelRuntime["refresh"]>[0]): ReturnType<ModelRuntime["refresh"]> | undefined;
 	getModel(...args: Parameters<ModelRuntime["getModel"]>): ReturnType<ModelRuntime["getModel"]>;
 }
-export const ModelsRuntime = defineService<ModelsRuntime>("pi.local.models-runtime");
+export const ModelsRuntime = defineService<ModelsRuntime>("pi.local.models-runtime", { rpc: false });
 
 export function createModelsRuntime(runtime: ModelRuntime | undefined): ModelsRuntime {
 	return (

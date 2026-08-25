@@ -41,6 +41,12 @@ interface Activity {
 const Activity = defineService<Activity>("test.activity");
 
 describe("plugin remote services", () => {
+	test("marks services RPC-capable by default and permits explicit local services", () => {
+		const local = defineService<{ readonly value: string }>("test.local", { rpc: false });
+		expect(Models.rpc).toBe(true);
+		expect(local.rpc).toBe(false);
+	});
+
 	test("does not defensively clone borrowed state values", () => {
 		const initial: ModelsState = { selected: null, revision: 0 };
 		const state = remoteState(initial);
@@ -60,6 +66,7 @@ describe("plugin remote services", () => {
 
 	test("provides and consumes one singleton with replicated state", async () => {
 		const provider = new RemoteServiceProvider([Models]);
+		expect(provider.catalogue).toEqual([{ serviceId: Models.id, mode: "singleton" }]);
 		const initialState: ModelsState = { selected: null, revision: 0 };
 		const state = remoteState(initialState);
 		let publishedState: ModelsState | undefined;
@@ -230,7 +237,8 @@ describe("plugin remote services", () => {
 	});
 
 	test("hydrates keyed state before observe handlers and fences reused keys", async () => {
-		const provider = new RemoteServiceProvider([QuestionDialogs]);
+		const provider = new RemoteServiceProvider([{ service: QuestionDialogs, mode: "keyed" }]);
+		expect(provider.catalogue).toEqual([{ serviceId: QuestionDialogs.id, mode: "keyed" }]);
 		const connection = createLoopbackServiceConnection(provider);
 		const errors: Error[] = [];
 		const namespace = new RemoteServiceNamespace({
@@ -356,7 +364,7 @@ describe("plugin remote services", () => {
 	});
 
 	test("routes keyed RemoteEvents only for the live instance generation", async () => {
-		const provider = new RemoteServiceProvider([Activity]);
+		const provider = new RemoteServiceProvider([{ service: Activity, mode: "keyed" }]);
 		const namespace = new RemoteServiceNamespace({
 			services: [Activity],
 			connection: createLoopbackServiceConnection(provider),
@@ -382,7 +390,7 @@ describe("plugin remote services", () => {
 	});
 
 	test("rejects mode mixing, unsupported members, and non-JSON values", async () => {
-		const provider = new RemoteServiceProvider([Models, QuestionDialogs]);
+		const provider = new RemoteServiceProvider([Models, { service: QuestionDialogs, mode: "keyed" }]);
 		provider.provide(Models, {
 			state: remoteState<ModelsState>({ selected: null, revision: 0 }),
 			async select() {},

@@ -20,11 +20,11 @@ Do not serialize `Context`, `AbortSignal`, telemetry objects, callbacks, tools, 
 
 ## Service contracts and typed facades
 
-A remote-service token is a shared TypeScript contract and stable service ID. It is not a generated descriptor and creates no provider. `provide()` exposes one singleton implementation. `provideMany()` registers one keyed-service owner during facet setup and returns a `ServiceInstances` handle whose later `add()` calls expose instances. A token has one mode in one service source: mixing singleton and keyed use is an error.
+A service token is a shared TypeScript contract and stable service ID. It is not a generated descriptor and creates no provider. Tokens are RPC-capable by default; process-local tokens declare `{ rpc: false }`. `provide()` adds one singleton implementation to the host graph. `provideMany()` registers one keyed-service owner during facet setup and returns a `ServiceInstances` handle whose later `add()` calls add instances. The host automatically publishes every provided RPC-capable service. A token has one mode in one host service graph: mixing singleton and keyed use is an error.
 
 The provider must make enough control-plane information available for the host to validate an accessed member as a method, `ReplicatedState`, or `RemoteEvents`. The consumer must be able to obtain the member name from ordinary property access—for example, a JavaScript `Proxy` receives `"state"` for `models.state` and `"refresh"` for `models.refresh(context)`. How a disconnected lazy proxy represents an unresolved member, and the exact provider-kind validation exchange, are implementation details.
 
-Local and remote `use()` both return a stable, lazy typed facade shared by consumers of that token. During synchronous facet setup the facade is disconnected, so setup can capture it but cannot invoke methods, read state, or register member subscriptions. After assembly, a local facade binds through an in-process connection and a remote facade binds through its host namespace. While disconnected, invoking a method fails and state remains unhydrated; no call is queued merely because it was made through a proxy.
+Local and remote `use()` both return a stable, lazy typed facade shared by consumers of that token. During synchronous facet setup the facade is disconnected, so setup can capture it but cannot invoke methods, read state, or register member subscriptions. After assembly, a local facade resolves to its facet-provided implementation and a remote facade binds through the host's connected services. While disconnected, invoking a method fails and state remains unhydrated; no call is queued merely because it was made through a proxy.
 
 Remote methods return promises and accept and return strict JSON apart from their declared `Context`; `void` is a successful response without a result field. A private returned reference is a separately validated control envelope, not a business JSON value. The client removes the context before transport and the receiving host constructs a fresh local context. The contract position is host-controlled and must be consistent; the current examples use one required trailing `Context`. Business absence is JSON `null` or an options object, never transported `undefined`.
 
@@ -39,19 +39,19 @@ Type erasure does not hide service identity: every service token retains its sta
 - `use()` records a singleton requirement; and
 - `observe()` records a keyed requirement.
 
-The facet kind selects its host and service source. Facets always call unqualified `env.use()` or `env.observe()`; routing is not encoded in the call. The method supplies the mode and the token supplies the ID. The host therefore needs no reflection over the erased `T` and no handwritten parallel dependency list.
+Facets always call unqualified `env.use()` or `env.observe()`; routing is not encoded in the call. These operations return source-independent disconnected handles during setup. After setup, each connection returns its provider-generated service catalogue, and the host binds every requirement to its local provision or exactly one connected provider. The method supplies the mode and the token supplies the ID. The host therefore needs no reflection over the erased `T` and no handwritten parallel dependency list.
 
 First acquisition or provision is permitted only during facet setup. Later commands, hooks, events, and activation callbacks use setup-acquired singleton facades, observer registrations, or `ServiceInstances` handles. In particular, dynamic instances are added through the handle returned by `provideMany()`; a late direct addition cannot introduce a previously undeclared provision.
 
-After setup, each host privately resolves the recorded requirements and provisions to reject missing or duplicate providers and mode mismatches and to derive lifecycle edges. This internal service graph is distinct from the module loader's source import graph; it is not a plugin-authored or plugin-visible plan.
+After setup, each host privately resolves the recorded requirements against local provisions and connection catalogues to reject missing providers, duplicate remote offers, and mode mismatches and to derive lifecycle edges. A selected-Session connection with no live attachment may provisionally accept unresolved requirements as unavailable; attachment validates them against the worker's generated catalogue and caches that catalogue for later detached generations. Connection bindings are generation-owned and include only selected requirements, so failed or retired generations release their subscriptions without disposing the underlying transport connection. This internal service graph is distinct from the module loader's source import graph; it is not a plugin-authored or plugin-visible plan.
 
 ## Bindings and identity
 
-Server facets consume services from the connected server generation. Session facets consume services from the selected Session generation. Both use the same unqualified environment API. A Session-service call never accepts a client-selected durable `sessionId`; the server authorizes attachment and routes the selected Session binding to its worker.
+A presentation host combines services from its connected server and selected Session in one graph. All of its facets use the same unqualified environment API. A Session-service call never accepts a client-selected durable `sessionId`; the server authorizes attachment and routes the selected Session binding to its worker.
 
 ### Server control plane
 
-Session listing and management are ordinary server singleton services, not generic remote `Session` methods. `SessionDirectory` exposes presentation-safe session summaries as replicated state plus semantic directory events. `SessionManagement` exposes `create`, `remove`, `attach`, and `detach` methods. A server presentation facet consumes both through its environment:
+Session listing and management are ordinary server singleton services, not generic remote `Session` methods. `SessionDirectory` exposes presentation-safe session summaries as replicated state plus semantic directory events. `SessionManagement` exposes `create`, `remove`, `attach`, and `detach` methods. A TUI or web facet consumes both through its environment:
 
 ```ts
 const directory = env.use(SessionDirectory);
@@ -60,7 +60,7 @@ const management = env.use(SessionManagement);
 
 The server derives workspace and client authority from its locally authenticated identity, not from the summary or method arguments. It may project directory state per client; either way, summaries never expose server-private fields such as owner IDs or working directories.
 
-`management.attach(sessionId, context)` changes the service binding used by the presentation's Session facets. The server authorizes the requested managed Session, closes the presentation's previous Session-scoped requests, subscriptions, references, and observer tasks, binds the Session service source to the worker, then hydrates its singleton state and keyed-instance directory. Attachment state is host control state reporting this selection and its health; it is not a directory service. `detach()` performs the same cleanup without a replacement.
+`management.attach(sessionId, context)` changes the selected-Session services in the presentation host. The server authorizes the requested managed Session, closes the presentation's previous Session-scoped requests, subscriptions, references, and observer tasks, binds the presentation's Session services to the worker, then hydrates their singleton state and keyed-instance directory. Attachment state is host control state reporting this selection and its health; it is not a directory service. `detach()` performs the same cleanup without a replacement.
 
 The host needs a private, host-owned binding incarnation for that route. It changes when the presentation attaches, detaches, switches session, or replaces a failed worker. Its representation is deliberately unspecified. The binding prevents a delayed frame for the old selected session from being applied to the new one; it is not a plugin-visible service value or a substitute for authorization.
 
@@ -74,7 +74,7 @@ There is no separately discoverable state ID. An added instance key is a plugin-
 
 ## Calls, context, and routing
 
-A call carries enough control-plane information to select a namespace, service, optional keyed instance, and member, plus a request ID, JSON arguments, and trace carrier. The server may parse those control-plane fields to route a session call, but it does not parse plugin business payloads or load plugin contracts. The service endpoint validates the member and values, creates a request-local abort controller and `Context`, installs authenticated client identity as a server-created context value, and invokes the local implementation.
+A call carries enough control-plane information to select a provider binding, service, optional keyed instance, and member, plus a request ID, JSON arguments, and trace carrier. The server may parse those control-plane fields to route a session call, but it does not parse plugin business payloads or load plugin contracts. The service endpoint validates the member and values, creates a request-local abort controller and `Context`, installs authenticated client identity as a server-created context value, and invokes the local implementation.
 
 The client maps `context.abortSignal` to cancellation of that one request. Disconnect cancels that connection's active calls and closes its subscriptions. Neither action cancels service-owned work or writes durable Harness cancellation. Per-client request correlation reaches the worker so request IDs from different presentations cannot collide.
 
@@ -111,7 +111,7 @@ Three cancellation domains remain separate: aborting one RPC invocation; explici
 
 ## Security and lifecycle
 
-Only manifest-allowlisted remote service IDs may be provided or registered as multi-instance services. Only the owning `ServiceInstances` handle may add instances. Local services are never discoverable remotely. Providers validate member kinds and every JSON business value; clients cannot forge control envelopes as ordinary values, choose instance generations, select another session's route, choose server context values, or cancel another client's request.
+Only loaded service tokens marked RPC-capable may be registered at the remote boundary. Only the owning `ServiceInstances` handle may add instances. Services marked `{ rpc: false }` are never discoverable remotely. Providers validate member kinds and every JSON business value; clients cannot forge control envelopes as ordinary values, choose instance generations, select another session's route, choose server context values, or cancel another client's request.
 
 The server authenticates its connection and authorizes attachment. It reconstructs client identity locally at the service endpoint; ordinary arguments never carry authority. Credentials, prompts, completions, tool data, filesystem contents, and other sensitive values cross only through an explicit presentation-safe contract.
 
@@ -121,7 +121,7 @@ Facet environments own registrations, added service instances, subscriptions, ob
 
 Test the plugin-facing semantics over loopback and a real framed transport:
 
-- setup-time dependency-ledger ownership, rejection of late acquisition, local and remote `use()`, keyed-provider ownership, singleton/keyed mode validation, manifest allowlisting, lazy member access, and local services remaining unreachable remotely;
+- setup-time dependency-ledger ownership, rejection of late acquisition, local and remote `use()`, keyed-provider ownership, singleton/keyed mode validation, token-driven RPC publication, lazy member access, and `{ rpc: false }` services remaining unreachable remotely;
 - strict JSON boundaries, method context reconstruction, request cancellation isolation, and trace propagation without serializing context values;
 - server/Session facet isolation, authorized attach, selected-Session switching, stale-frame rejection, and worker-side per-client request correlation;
 - cold and hydrated `ReplicatedState`, snapshot/update race freedom, delivery contexts, stale display on reconnect, and clearing on provider switch;
@@ -181,7 +181,7 @@ serverContext.provide(SessionManagement, {
 });
 ```
 
-A server presentation facet renders and selects Sessions:
+A presentation facet renders and selects Sessions:
 
 ```ts
 setup(env) {
@@ -202,7 +202,7 @@ setup(env) {
 }
 ```
 
-A Session presentation facet independently acquires Session services through the same API:
+Another facet in the same presentation acquires Session services through the same API:
 
 ```ts
 setup(env) {
@@ -211,4 +211,4 @@ setup(env) {
 }
 ```
 
-The presentation never routes `models` with a selected `sessionId`; the facet generations select the server or Session service source and transport retains the routing state. The server closes the prior Session binding's resources before hydrating the new one.
+The presentation never routes `models` with a selected `sessionId`; its host routes each service token and transport retains the selected-Session binding. The server closes the prior Session binding's resources before hydrating the new one.

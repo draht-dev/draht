@@ -10,9 +10,9 @@ import {
 	type RemoteEventType,
 	type RemoteServiceConnection,
 	type RemoteServiceInstance,
-	type RemoteServiceNamespaceApi,
 	type RemoteServiceNamespaceOptions,
 	type RemoteServiceSubscription,
+	type RemoteServices,
 	type ReplicatedState,
 	type Service,
 	type ServiceInstanceAddress,
@@ -648,9 +648,9 @@ class KeyedBinding<T> {
 	}
 }
 
-export class RemoteServiceNamespace implements RemoteServiceNamespaceApi {
+export class RemoteServiceNamespace implements RemoteServices {
 	readonly #connection: RemoteServiceConnection;
-	readonly #allowlist: ReadonlySet<string>;
+	readonly #allowlist = new Set<string>();
 	readonly #reportError: ErrorReporter;
 	readonly #modes = new Map<string, "singleton" | "keyed">();
 	#assertAccess: () => void;
@@ -665,7 +665,7 @@ export class RemoteServiceNamespace implements RemoteServiceNamespaceApi {
 		this.#connection = options.connection;
 		const ids = options.services.map(({ id }) => id);
 		if (new Set(ids).size !== ids.length) throw new TypeError("Remote service namespace has duplicate service IDs");
-		this.#allowlist = new Set(ids);
+		for (const id of ids) this.#allowlist.add(id);
 		this.#reportError = options.onError ?? (() => {});
 		this.#assertAccess = options.assertAccess ?? (() => {});
 		this.#bound = options.bound ?? true;
@@ -727,6 +727,10 @@ export class RemoteServiceNamespace implements RemoteServiceNamespaceApi {
 
 	setAccessGuard(assertAccess: () => void): void {
 		this.#assertAccess = assertAccess;
+	}
+
+	async activate(context: Context): Promise<void> {
+		await this.ready(context);
 	}
 
 	async ready(context: Context): Promise<void> {

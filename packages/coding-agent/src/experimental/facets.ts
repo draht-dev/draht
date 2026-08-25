@@ -4,29 +4,20 @@ import {
 	createLoopbackServiceConnection,
 	type MutableRemoteEvents,
 	type MutableReplicatedState,
-	type RemoteServiceConnection,
 	type RemoteServiceContract,
 	type RemoteServiceInstance,
 	RemoteServiceNamespace,
-	type RemoteServiceNamespaceApi,
 	RemoteServiceProvider,
+	type RemoteServices,
 	remoteEvents,
 	remoteState,
 	type Service,
+	type ServiceCatalogueEntry,
 	type ServiceMode,
 } from "@draht/agent-core";
 
 export interface ServiceInstances<T> {
 	add(key: string, implementation: RemoteServiceContract<T>): () => void;
-}
-
-export interface FacetServiceBinding {
-	readonly service: { readonly id: string };
-	readonly implementation: unknown;
-}
-
-export function bindService<T>(service: Service<T>, implementation: NoInfer<T>): FacetServiceBinding {
-	return Object.freeze({ service, implementation });
 }
 
 interface FacetServiceReference {
@@ -46,7 +37,7 @@ export interface FacetEnvironment {
 		service: Service<T>,
 		handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
 	): () => void;
-	provide<T>(service: Service<T>, implementation: NoInfer<RemoteServiceContract<T>>): void;
+	provide<T>(service: Service<T>, implementation: NoInfer<T>): void;
 	provideMany<T>(service: Service<T>): ServiceInstances<T>;
 	remoteState<T>(initial: T): MutableReplicatedState<T>;
 	remoteEvents<T>(): MutableRemoteEvents<T>;
@@ -172,139 +163,112 @@ class FacetLedger {
 	}
 }
 
-interface LocalServiceHandle {
-	readonly mode: ServiceMode;
-	readonly namespace: RemoteServiceNamespace;
+interface SingletonServiceHandle {
+	bind(implementation: object): void;
+	bindRemote(services: RemoteServices): void;
+	readonly proxy: object;
 }
 
-class LocalServiceHandles {
-	readonly #assertAccess: () => void;
-	readonly #onError: (error: Error) => void;
-	readonly #handles = new Map<string, LocalServiceHandle>();
-	#connection: RemoteServiceConnection | undefined;
+interface StagedObservation {
+	start(): () => void;
+	stop(): void;
+}
 
-	constructor(assertAccess: () => void, onError: (error: Error) => void) {
+class FacetServiceHandles {
+	readonly #assertAccess: () => void;
+	readonly #singletons = new Map<string, SingletonServiceHandle>();
+	readonly #keyedSources = new Map<string, RemoteServices>();
+
+	constructor(assertAccess: () => void) {
 		this.#assertAccess = assertAccess;
-		this.#onError = onError;
 	}
 
 	use<T>(service: Service<T>): T {
-		return this.#handle(service, "singleton").namespace.use(service);
+		let handle = this.#singletons.get(service.id);
+		if (handle === undefined) {
+			let implementation: object | undefined;
+			let remote = false;
+			const methods = new Map<PropertyKey, unknown>();
+			const proxy = new Proxy(
+				{},
+				{
+					get: (_target, property) => {
+						this.#assertAccess();
+						if (implementation === undefined) throw new Error(`Service ${service.id} is disconnected`);
+						const value: unknown = Reflect.get(implementation, property, implementation);
+						if (remote || typeof value !== "function") return value;
+						let method = methods.get(property);
+						if (method === undefined) {
+							method = (...args: unknown[]) => Reflect.apply(value, implementation, args);
+							methods.set(property, method);
+						}
+						return method;
+					},
+				},
+			);
+			handle = {
+				proxy,
+				bind: (target) => {
+					implementation = target;
+					remote = false;
+				},
+				bindRemote: (services) => {
+					implementation = services.use(service) as object;
+					remote = true;
+				},
+			};
+			this.#singletons.set(service.id, handle);
+		}
+		return handle.proxy as T;
 	}
 
 	observe<T>(
 		service: Service<T>,
 		handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
-	): () => void {
-		return this.#handle(service, "keyed").namespace.observe(service, handler);
-	}
-
-	async connect(provider: RemoteServiceProvider): Promise<void> {
-		this.#connection = createLoopbackServiceConnection(provider);
-		await Promise.all(
-			[...this.#handles.values()].map(async ({ namespace }) => {
-				await namespace.rebind(true, BACKGROUND_CONTEXT);
-				await namespace.ready(BACKGROUND_CONTEXT);
-			}),
-		);
-	}
-
-	async dispose(): Promise<void> {
-		const results = await Promise.allSettled(
-			[...this.#handles.values()].map(({ namespace }) => namespace.dispose(BACKGROUND_CONTEXT)),
-		);
-		this.#handles.clear();
-		this.#connection = undefined;
-		const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
-		if (errors.length === 1) throw errors[0];
-		if (errors.length > 1) throw new AggregateError(errors, "Failed to dispose local facet service handles");
-	}
-
-	#handle<T>(service: Service<T>, mode: ServiceMode): LocalServiceHandle {
-		const existing = this.#handles.get(service.id);
-		if (existing !== undefined) {
-			if (existing.mode !== mode) {
-				throw new Error(`Local service ${service.id} is used as both singleton and keyed`);
-			}
-			return existing;
-		}
-		const namespace = new RemoteServiceNamespace({
-			services: [service],
-			bound: false,
-			assertAccess: this.#assertAccess,
-			onError: this.#onError,
-			connection: {
-				invoke: (call, context) => {
-					if (this.#connection === undefined) throw new Error("Local facet services are not connected");
-					return this.#connection.invoke(call, context);
-				},
-				subscribe: (serviceId, serviceMode, listener, context) => {
-					if (this.#connection === undefined) throw new Error("Local facet services are not connected");
-					return this.#connection.subscribe(serviceId, serviceMode, listener, context);
-				},
+	): StagedObservation {
+		let close: (() => void) | undefined;
+		let closed = false;
+		const stop = (): void => {
+			if (closed) return;
+			closed = true;
+			close?.();
+		};
+		return {
+			start: () => {
+				if (closed) return () => {};
+				const source = this.#keyedSources.get(service.id);
+				if (source === undefined) throw new Error(`Service ${service.id} is disconnected`);
+				close = source.observe(service, handler);
+				return stop;
 			},
-		});
-		const handle = { mode, namespace };
-		this.#handles.set(service.id, handle);
-		return handle;
-	}
-}
-
-class FacetServiceBindings {
-	readonly #assertAccess: () => void;
-	readonly #implementations = new Map<string, object>();
-	readonly #handles = new Map<string, object>();
-
-	constructor(bindings: readonly FacetServiceBinding[], assertAccess: () => void) {
-		this.#assertAccess = assertAccess;
-		for (const binding of bindings) {
-			if (this.#implementations.has(binding.service.id)) {
-				throw new Error(`Facet host service ${binding.service.id} is bound more than once`);
-			}
-			if (typeof binding.implementation !== "object" || binding.implementation === null) {
-				throw new TypeError(`Facet host service ${binding.service.id} implementation must be an object`);
-			}
-			this.#implementations.set(binding.service.id, binding.implementation);
-		}
+			stop,
+		};
 	}
 
-	get serviceIds(): ReadonlySet<string> {
-		return new Set(this.#implementations.keys());
+	bindSingleton(serviceId: string, implementation: object): void {
+		this.#singletons.get(serviceId)?.bind(implementation);
 	}
 
-	has(service: { readonly id: string }): boolean {
-		return this.#implementations.has(service.id);
+	bindRemoteSingleton(serviceId: string, services: RemoteServices): void {
+		const handle = this.#singletons.get(serviceId);
+		if (handle === undefined) throw new Error(`Service ${serviceId} has no singleton handle`);
+		handle.bindRemote(services);
 	}
 
-	use<T>(service: Service<T>): T {
-		const implementation = this.#implementations.get(service.id);
-		if (implementation === undefined) throw new Error(`Facet host service ${service.id} is not bound`);
-		let handle = this.#handles.get(service.id);
-		if (handle === undefined) {
-			const methods = new Map<PropertyKey, unknown>();
-			handle = new Proxy(implementation, {
-				get: (target, property) => {
-					this.#assertAccess();
-					const value: unknown = Reflect.get(target, property, target);
-					if (typeof value !== "function") return value;
-					let method = methods.get(property);
-					if (method === undefined) {
-						method = value.bind(target);
-						methods.set(property, method);
-					}
-					return method;
-				},
-			});
-			this.#handles.set(service.id, handle);
-		}
-		return handle as T;
+	bindKeyed(serviceId: string, services: RemoteServices): void {
+		this.#keyedSources.set(serviceId, services);
+	}
+
+	dispose(): void {
+		this.#singletons.clear();
+		this.#keyedSources.clear();
 	}
 }
 
 class StagedServiceInstances<T> implements ServiceInstances<T> {
 	readonly #service: Service<T>;
 	readonly #lifecycle: FacetLifecycle;
-	#provider: RemoteServiceProvider | undefined;
+	readonly #providers: RemoteServiceProvider[] = [];
 
 	constructor(service: Service<T>, lifecycle: FacetLifecycle) {
 		this.#service = service;
@@ -312,61 +276,66 @@ class StagedServiceInstances<T> implements ServiceInstances<T> {
 	}
 
 	connect(provider: RemoteServiceProvider): void {
-		this.#provider = provider;
+		this.#providers.push(provider);
 	}
 
 	add(key: string, implementation: RemoteServiceContract<T>): () => void {
 		this.#lifecycle.assertActive("add service instances");
-		if (this.#provider === undefined) throw new Error("Facet service provider is not connected");
-		const close = this.#provider.spawn(this.#service, key, implementation);
+		if (this.#providers.length === 0) throw new Error("Facet service provider is not connected");
+		const closes: Array<() => void> = [];
+		try {
+			for (const provider of this.#providers) closes.push(provider.spawn(this.#service, key, implementation));
+		} catch (error) {
+			for (const close of closes.reverse()) close();
+			throw error;
+		}
+		let closed = false;
+		const close = (): void => {
+			if (closed) return;
+			closed = true;
+			for (const release of closes.reverse()) release();
+		};
 		this.#lifecycle.own(close);
 		return close;
 	}
 }
 
 interface SingletonProvision {
-	readonly service: { readonly id: string };
+	readonly service: { readonly id: string; readonly rpc: boolean };
+	readonly implementation: object;
 	install(provider: RemoteServiceProvider): void;
 }
 
 interface KeyedProvision {
-	readonly service: { readonly id: string };
+	readonly service: { readonly id: string; readonly rpc: boolean };
 	connect(provider: RemoteServiceProvider): void;
+}
+
+export interface FacetConnection {
+	/** Whether this currently unavailable route may provisionally own requirements absent from its catalogue. */
+	readonly acceptsUnavailableServices: boolean;
+	catalogue(context: Context): Promise<readonly ServiceCatalogueEntry[]>;
+	open(options: {
+		readonly services: readonly { readonly id: string }[];
+		assertAccess(): void;
+		onError(error: Error): void;
+	}): RemoteServices;
 }
 
 interface FacetOptions {
 	readonly facets: readonly Facet[];
-	readonly bindings?: readonly FacetServiceBinding[];
+	readonly connections?: readonly FacetConnection[];
 	readonly onError?: (error: Error) => void;
 }
-
-interface RemoteFacetOptions extends FacetOptions {
-	readonly source: RemoteServiceNamespaceApi;
-	readonly connect?: () => void | Promise<void>;
-}
-
-type FacetKernelOptions = FacetOptions &
-	(
-		| { readonly kind: "provider" }
-		| {
-				readonly kind: "remote";
-				readonly source: RemoteServiceNamespaceApi;
-				readonly connect?: () => void | Promise<void>;
-		  }
-	);
 
 export interface FacetHost {
 	readonly services: RemoteServiceProvider;
 	dispose(): Promise<void>;
 }
 
-export interface RemoteFacetActivation {
-	dispose(): Promise<void>;
-}
-
-/** Create an active local host for facets that provide and consume services. */
+/** Create an active host for one complete set of facets. */
 export async function createFacetHost(options: FacetOptions): Promise<FacetHost> {
-	const kernel = new FacetKernel({ ...options, kind: "provider" });
+	const kernel = new FacetKernel(options);
 	await kernel.activate();
 	return Object.freeze({
 		services: kernel.provider,
@@ -374,39 +343,30 @@ export async function createFacetHost(options: FacetOptions): Promise<FacetHost>
 	});
 }
 
-/** Activate facets whose services come from an existing remote binding. */
-export async function activateRemoteFacets(options: RemoteFacetOptions): Promise<RemoteFacetActivation> {
-	const kernel = new FacetKernel({ ...options, kind: "remote" });
-	await kernel.activate();
-	return Object.freeze({ dispose: () => kernel.dispose() });
-}
-
-/** Private lifecycle and dependency kernel shared by the two atomic entry points. */
+/** Private lifecycle and dependency kernel behind the atomic host entry point. */
 class FacetKernel {
 	readonly #facets: readonly Facet[];
-	readonly #bindings: FacetServiceBindings;
-	readonly #source: RemoteServiceNamespaceApi | undefined;
-	readonly #connect: (() => void | Promise<void>) | undefined;
+	readonly #connections: readonly FacetConnection[];
 	readonly #onError: (error: Error) => void;
 	readonly #lifecycles = new Map<string, FacetLifecycle>();
 	readonly #singletons: SingletonProvision[] = [];
 	readonly #keyed: KeyedProvision[] = [];
-	readonly #localHandles: LocalServiceHandles;
+	readonly #handles: FacetServiceHandles;
+	readonly #connectionBindings = new Map<FacetConnection, RemoteServices>();
 	#activationOrder: readonly string[] = [];
 	#provider: RemoteServiceProvider | undefined;
+	#keyedProvider: RemoteServiceProvider | undefined;
+	#localKeyedServices: RemoteServiceNamespace | undefined;
 	#phase: GenerationPhase = "setup";
 
-	constructor(options: FacetKernelOptions) {
+	constructor(options: FacetOptions) {
 		const ids = options.facets.map((facet) => facet.id);
 		if (ids.some((id) => id.length === 0)) throw new Error("Facet ID must not be empty");
 		if (new Set(ids).size !== ids.length) throw new Error("Facet IDs must be unique within a generation");
 		this.#facets = options.facets;
-		this.#bindings = new FacetServiceBindings(options.bindings ?? [], () => this.#assertServiceAccess());
-		this.#source = options.kind === "remote" ? options.source : undefined;
-		this.#connect = options.kind === "remote" ? options.connect : undefined;
+		this.#connections = options.connections ?? [];
 		this.#onError = options.onError ?? (() => {});
-		this.#localHandles = new LocalServiceHandles(() => this.#assertServiceAccess(), this.#onError);
-		this.#source?.setAccessGuard(() => this.#assertServiceAccess());
+		this.#handles = new FacetServiceHandles(() => this.#assertServiceAccess());
 	}
 
 	get provider(): RemoteServiceProvider {
@@ -431,16 +391,16 @@ class FacetKernel {
 			}
 
 			this.#phase = "assembling";
-			if (this.#source === undefined) {
-				this.#activationOrder = validateFacets(records, this.#bindings.serviceIds);
-				this.#assembleProvider();
-			} else {
-				this.#activationOrder = records.map((record) => record.facetId);
-			}
+			const externalServices = await this.#resolveExternalServices(records);
+			this.#activationOrder = validateFacets(records, externalServices);
+			this.#assembleProviders();
+			this.#bindServices(externalServices);
 
 			this.#phase = "connecting";
-			if (this.#source === undefined) await this.#localHandles.connect(this.provider);
-			else await this.#connect?.();
+			await Promise.all([
+				this.#localKeyedNamespace.activate(BACKGROUND_CONTEXT),
+				...[...this.#connectionBindings.values()].map((services) => services.activate(BACKGROUND_CONTEXT)),
+			]);
 
 			this.#phase = "activating";
 			for (const id of this.#activationOrder) await this.#lifecycles.get(id)!.activate();
@@ -449,10 +409,13 @@ class FacetKernel {
 			const cleanupErrors = await this.#disposeLifecycles();
 			this.#phase = "disposing";
 			try {
-				await this.#localHandles.dispose();
+				await this.#localKeyedServices?.dispose(BACKGROUND_CONTEXT);
 			} catch (cleanupError) {
 				cleanupErrors.push(cleanupError);
 			}
+			cleanupErrors.push(...(await this.#disposeConnectionBindings()));
+			this.#handles.dispose();
+			this.#keyedProvider?.dispose();
 			this.#provider?.dispose();
 			this.#phase = "dead";
 			if (cleanupErrors.length > 0) {
@@ -467,10 +430,13 @@ class FacetKernel {
 		const errors = await this.#disposeLifecycles();
 		this.#phase = "disposing";
 		try {
-			await this.#localHandles.dispose();
+			await this.#localKeyedServices?.dispose(BACKGROUND_CONTEXT);
 		} catch (error) {
 			errors.push(error);
 		}
+		errors.push(...(await this.#disposeConnectionBindings()));
+		this.#handles.dispose();
+		this.#keyedProvider?.dispose();
 		this.#provider?.dispose();
 		this.#phase = "dead";
 		if (errors.length === 1) throw errors[0];
@@ -479,18 +445,20 @@ class FacetKernel {
 
 	#environment(lifecycle: FacetLifecycle, ledger: FacetLedger): FacetEnvironment {
 		return {
-			provide: <T>(service: Service<T>, implementation: NoInfer<RemoteServiceContract<T>>): void => {
+			provide: <T>(service: Service<T>, implementation: NoInfer<T>): void => {
 				lifecycle.assertSettingUp("provide services");
-				this.#assertProviderGeneration(lifecycle);
+				if (typeof implementation !== "object" || implementation === null || Array.isArray(implementation)) {
+					throw new TypeError(`Service ${service.id} implementation must be an object`);
+				}
 				ledger.provide(service, "singleton");
 				this.#singletons.push({
 					service,
-					install: (provider) => provider.provide(service, implementation),
+					implementation,
+					install: (provider) => provider.provide(service, implementation as NoInfer<RemoteServiceContract<T>>),
 				});
 			},
 			provideMany: <T>(service: Service<T>): ServiceInstances<T> => {
 				lifecycle.assertSettingUp("provide service instances");
-				this.#assertProviderGeneration(lifecycle);
 				ledger.provide(service, "keyed");
 				const instances = new StagedServiceInstances(service, lifecycle);
 				this.#keyed.push({ service, connect: (target) => instances.connect(target) });
@@ -499,19 +467,17 @@ class FacetKernel {
 			use: <T>(service: Service<T>): T => {
 				lifecycle.assertSettingUp("acquire services");
 				ledger.require(service, "singleton");
-				if (this.#bindings.has(service)) return this.#bindings.use(service);
-				if (this.#source !== undefined) return this.#source.use(service);
-				return this.#localHandles.use(service);
+				return this.#handles.use(service);
 			},
 			observe: <T>(
 				service: Service<T>,
 				handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
 			): (() => void) => {
 				lifecycle.assertSettingUp("observe services");
-				const services = this.#source ?? this.#localHandles;
-				if (this.#source === undefined) ledger.require(service, "keyed");
-				const prepare = services.observe(service, () => {});
-				return this.#stageObservation(lifecycle, () => services.observe(service, handler), prepare);
+				ledger.require(service, "keyed");
+				const observation = this.#handles.observe(service, handler);
+				lifecycle.observe(() => observation.start());
+				return observation.stop;
 			},
 			remoteState: <T>(initial: T) => {
 				lifecycle.assertRunning("create replicated state");
@@ -527,39 +493,120 @@ class FacetKernel {
 		};
 	}
 
-	#assertProviderGeneration(lifecycle: FacetLifecycle): void {
-		if (this.#source !== undefined) {
-			throw new Error(`Remote facet ${lifecycle.id} cannot provide services`);
+	async #resolveExternalServices(
+		records: readonly FacetRecord[],
+	): Promise<ReadonlyMap<string, { readonly mode: ServiceMode; readonly connection: FacetConnection }>> {
+		const catalogues = await Promise.all(
+			this.#connections.map(async (connection) => ({
+				connection,
+				entries: await connection.catalogue(BACKGROUND_CONTEXT),
+			})),
+		);
+		const offered = new Map<string, { readonly mode: ServiceMode; readonly connection: FacetConnection }>();
+		for (const { connection, entries } of catalogues) {
+			for (const { serviceId, mode } of entries) {
+				if (offered.has(serviceId)) {
+					throw new Error(`Facet host service ${serviceId} is offered by more than one connection`);
+				}
+				offered.set(serviceId, { mode, connection });
+			}
+		}
+
+		const local = new Set(records.flatMap(({ provides }) => provides.map(({ serviceId }) => serviceId)));
+		const external = new Map<string, { readonly mode: ServiceMode; readonly connection: FacetConnection }>();
+		for (const { requires } of records) {
+			for (const requirement of requires) {
+				if (local.has(requirement.serviceId) || external.has(requirement.serviceId)) continue;
+				let provider = offered.get(requirement.serviceId);
+				if (provider === undefined) {
+					const deferred = this.#connections.filter(
+						({ acceptsUnavailableServices }) => acceptsUnavailableServices,
+					);
+					if (deferred.length > 1) {
+						throw new Error(`Facet host service ${requirement.serviceId} has more than one deferred connection`);
+					}
+					if (deferred.length === 1) provider = { mode: requirement.mode, connection: deferred[0]! };
+				}
+				if (provider !== undefined) external.set(requirement.serviceId, provider);
+			}
+		}
+		const serviceIdsByConnection = new Map<FacetConnection, string[]>();
+		for (const [serviceId, { connection }] of external) {
+			let serviceIds = serviceIdsByConnection.get(connection);
+			if (serviceIds === undefined) {
+				serviceIds = [];
+				serviceIdsByConnection.set(connection, serviceIds);
+			}
+			serviceIds.push(serviceId);
+		}
+		for (const [connection, serviceIds] of serviceIdsByConnection) {
+			this.#connectionBindings.set(
+				connection,
+				connection.open({
+					services: serviceIds.map((id) => ({ id })),
+					assertAccess: () => this.#assertServiceAccess(),
+					onError: this.#onError,
+				}),
+			);
+		}
+		return external;
+	}
+
+	#assembleProviders(): void {
+		const rpcServices = [
+			...this.#singletons
+				.filter(({ service }) => service.rpc)
+				.map(({ service }) => ({ service, mode: "singleton" as const })),
+			...this.#keyed
+				.filter(({ service }) => service.rpc)
+				.map(({ service }) => ({ service, mode: "keyed" as const })),
+		];
+		const provider = new RemoteServiceProvider(rpcServices);
+		const keyedProvider = new RemoteServiceProvider(this.#keyed.map(({ service }) => ({ service, mode: "keyed" })));
+		this.#provider = provider;
+		this.#keyedProvider = keyedProvider;
+		this.#localKeyedServices = new RemoteServiceNamespace({
+			services: this.#keyed.map(({ service }) => service),
+			connection: createLoopbackServiceConnection(keyedProvider),
+			assertAccess: () => this.#assertServiceAccess(),
+			onError: this.#onError,
+		});
+		for (const provision of this.#singletons) {
+			if (provision.service.rpc) provision.install(provider);
+		}
+		for (const provision of this.#keyed) {
+			provision.connect(keyedProvider);
+			if (provision.service.rpc) provision.connect(provider);
 		}
 	}
 
-	#stageObservation(lifecycle: FacetLifecycle, start: () => () => void, prepare: () => void): () => void {
-		let close: (() => void) | undefined;
-		let closed = false;
-		const stop = (): void => {
-			if (closed) return;
-			closed = true;
-			close?.();
-			prepare();
-		};
-		lifecycle.own(prepare);
-		lifecycle.observe(() => {
-			if (!closed) {
-				close = start();
-				prepare();
-			}
-			return stop;
-		});
-		return stop;
+	#bindServices(
+		externalServices: ReadonlyMap<string, { readonly mode: ServiceMode; readonly connection: FacetConnection }>,
+	): void {
+		for (const provision of this.#singletons) {
+			this.#handles.bindSingleton(provision.service.id, provision.implementation);
+		}
+		for (const provision of this.#keyed) {
+			this.#handles.bindKeyed(provision.service.id, this.#localKeyedNamespace);
+		}
+		for (const [serviceId, { mode, connection }] of externalServices) {
+			const services = this.#connectionBindings.get(connection);
+			if (services === undefined) throw new Error(`Service connection for ${serviceId} is not open`);
+			if (mode === "singleton") this.#handles.bindRemoteSingleton(serviceId, services);
+			else this.#handles.bindKeyed(serviceId, services);
+		}
 	}
 
-	#assembleProvider(): void {
-		const services = new Map<string, { readonly id: string }>();
-		for (const { service } of [...this.#singletons, ...this.#keyed]) services.set(service.id, service);
-		const provider = new RemoteServiceProvider([...services.values()]);
-		this.#provider = provider;
-		for (const provision of this.#singletons) provision.install(provider);
-		for (const provision of this.#keyed) provision.connect(provider);
+	get #localKeyedNamespace(): RemoteServiceNamespace {
+		if (this.#localKeyedServices === undefined) throw new Error("Facet keyed services are not assembled");
+		return this.#localKeyedServices;
+	}
+
+	async #disposeConnectionBindings(): Promise<unknown[]> {
+		const bindings = [...this.#connectionBindings.values()];
+		this.#connectionBindings.clear();
+		const results = await Promise.allSettled(bindings.map((services) => services.dispose(BACKGROUND_CONTEXT)));
+		return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
 	}
 
 	#assertServiceAccess(): void {
@@ -588,14 +635,20 @@ class FacetKernel {
 	}
 }
 
-function validateFacets(records: readonly FacetRecord[], boundServices: ReadonlySet<string>): string[] {
-	const providers = new Map<string, { readonly facetId: string | undefined; readonly mode: ServiceMode }>();
-	for (const serviceId of boundServices) providers.set(serviceId, { facetId: undefined, mode: "singleton" });
+function validateFacets(
+	records: readonly FacetRecord[],
+	externalServices: ReadonlyMap<string, { readonly mode: ServiceMode }>,
+): string[] {
+	const providers = new Map<
+		string,
+		{ readonly facetId: string | undefined; readonly mode: ServiceMode | undefined }
+	>();
+	for (const [serviceId, { mode }] of externalServices) providers.set(serviceId, { facetId: undefined, mode });
 	for (const record of records) {
 		for (const provision of record.provides) {
 			const existing = providers.get(provision.serviceId);
 			if (existing !== undefined) {
-				if (existing.mode !== provision.mode) {
+				if (existing.mode !== undefined && existing.mode !== provision.mode) {
 					throw new Error(`Service ${provision.serviceId} is provided as both singleton and keyed`);
 				}
 				if (existing.facetId === undefined) {
@@ -619,7 +672,7 @@ function validateFacets(records: readonly FacetRecord[], boundServices: Readonly
 					`Facet ${record.facetId} requires local/${requirement.serviceId}/${requirement.mode}, but no facet provides it`,
 				);
 			}
-			if (provider.mode !== requirement.mode) {
+			if (provider.mode !== undefined && provider.mode !== requirement.mode) {
 				throw new Error(
 					`Facet ${record.facetId} requires ${requirement.serviceId} as ${requirement.mode}, but ${provider.facetId ?? "the host"} provides it as ${provider.mode}`,
 				);

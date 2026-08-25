@@ -9,8 +9,8 @@ This document assumes you already understand `AgentHarness`, `AgentLane`, `Sessi
 The new coding agent is assembled from an ordered plugin manifest, not a monolith with an extension API bolted on. Three layers:
 
 1. The **plugin kernel** owns generic lifecycle mechanics: ordered setup, activation, scoped resource ownership, setup-failure cleanup, and reverse-order disposal. It knows nothing about Harness, tools, TUI components, RPC services, connections, or coding-agent policy.
-2. An **application host** owns one concrete runtime and constructs the plugin bindings for that runtime. The **session host** normally runs in a dedicated session worker and owns session authority — the real Harness. A **presentation host** (TUI today, web later) owns a user interface. A **server host** owns server-wide authority: session records (`SessionRepo`), session-worker management, authentication, attachment, and routing between presentations and session workers.
-3. A **plugin package** implements one feature as one or more host-specific **facets** — setup functions, one per host kind. Each facet receives only the bindings natural to its host instance and process.
+2. An **application host** owns one concrete runtime and contributes a runtime facet that provides its concrete services. The **session host** normally runs in a dedicated session worker and owns session authority — the real Harness. A **presentation host** (TUI today, web later) owns a user interface. A **server host** owns server-wide authority: session records (`SessionRepo`), session-worker management, authentication, attachment, and routing between presentations and session workers.
+3. A **plugin package** implements one feature as one or more host-specific **facets** — setup functions, one per host kind. Each facet can use only the services available in its host instance and process.
 
 The initial topology has one server and no server-to-server links:
 
@@ -24,7 +24,7 @@ server
 
 A presentation and a session worker each connect to the server. There is no direct presentation→session-worker connection; the server routes service calls to the selected worker. The server lists and manages only its own sessions. Multi-server routing and server hierarchies are out of scope.
 
-A session worker normally owns one session, and each session facet is instantiated for that session. A server facet is instantiated once per server process and is shared across every session and presentation connected to it. Server facets should therefore be rare and limited to inherently server-wide concerns. Per-session feature state belongs in session facets; dedicated workers provide the preferred lifecycle, crash, and state isolation. Future co-location may preserve the same logical bindings without changing what objects a facet can access.
+A session worker normally owns one session, and each session facet is instantiated for that session. A server facet is instantiated once per server process and is shared across every session and presentation connected to it. Server facets should therefore be rare and limited to inherently server-wide concerns. Per-session feature state belongs in session facets; dedicated workers provide the preferred lifecycle, crash, and state isolation. Future co-location may preserve the same logical service graph without changing what objects a facet can access.
 
 **Host** and **client** are roles per connection, not fixed process kinds. The server hosts presentation and session-worker connections. A session worker serves its provided session services and may consume server-provided services over the same RPC binding mechanism. "Client" below always names the connection role, never a kind of plugin.
 
@@ -34,8 +34,8 @@ A session worker normally owns one session, and each session facet is instantiat
 - **One feature stays coherent.** The question plugin's tool, dialog, and renderer ship in one package around one JSON contract, yet each facet is host-native code.
 - **A new surface is presentation-only work.** A web facet for the question dialog or the session picker registers against existing tokens; session and server code do not change.
 - **Server state stays server-wide.** A server facet is shared by all sessions and clients, so features use one only when their authority is inherently global to that server.
-- **No privileged built-ins.** Built-ins and third-party plugins receive identical bindings, so shipping the product continuously exercises the extension API.
-- **Testable in pieces.** A facet tests against its host bindings, a contract against loopback, and a routed TUI → server → session-worker path against a real transport — independently.
+- **No privileged built-ins.** Built-ins, runtime facets, and third-party plugins use the same environment, so shipping the product continuously exercises the extension API.
+- **Testable in pieces.** A facet tests against service-providing fixtures, a contract against loopback, and a routed TUI → server → session-worker path against a real transport — independently.
 
 ## One feature, several host facets
 
@@ -46,20 +46,14 @@ interface CodingAgentPlugin {
 	readonly id: string;
 	readonly server?: PluginFacet;
 	readonly session?: PluginFacet;
-	readonly tui?: {
-		readonly server?: PluginFacet;
-		readonly session?: PluginFacet;
-	};
-	readonly web?: {
-		readonly server?: PluginFacet;
-		readonly session?: PluginFacet;
-	};
+	readonly tui?: PluginFacet;
+	readonly web?: PluginFacet;
 }
 
 type PluginFacet = (env: FacetEnvironment) => void;
 ```
 
-`PluginFacet` is the only plugin-facing shape the generic kernel needs. The host placement is the facet kind: it selects the lifetime and the local or remote service sources available through `env.use()`. Facets are optional: a `models.json` plugin has only a Session facet, a terminal theme only presentation facets, and the Session directory has a server provider facet plus a server TUI facet. Setup is a synchronous declaration phase; asynchronous initialization belongs in `onActivate`. Examples use an illustrative `definePlugin()` helper returning a `CodingAgentPlugin` — the loaded, in-process shape.
+`PluginFacet` is the only plugin-facing shape the generic kernel needs. Each process loads its complete facet set: the server loads server facets, each Session worker loads Session facets, and each presentation loads its TUI or web facets. The host resolves every `env.use()` across facet-provided and connected services. Facets are optional: a `models.json` plugin has only a Session facet, a terminal theme only a TUI facet, and the Session directory has a server facet plus a TUI facet. Setup is a synchronous declaration phase; asynchronous initialization belongs in `onActivate`. Examples use an illustrative `definePlugin()` helper returning a `CodingAgentPlugin` — the loaded, in-process shape.
 
 A package keeps shared wire contracts separate from host dependencies:
 
@@ -69,7 +63,7 @@ question-plugin/
   session.ts        dialog-service authority and tool contribution; imports agent/session code
   tui.ts            terminal dialog and renderer; imports TUI code
   web.ts            optional browser dialog and renderer
-  index.ts          loopback bundle; production hosts resolve per-host entry points
+  index.ts          loopback bundle; production hosts resolve one entry point per process kind
 ```
 
 The browser build never imports `session.ts`; the session process never imports TUI or DOM code.
@@ -171,7 +165,7 @@ type ConnectionState =
 	| { status: "disconnected"; since: string; reason: string; retryAt: string | null };
 ```
 
-After transport setup, each host gives the kernel its loaded facets and binds its concrete local services. The kernel invokes each facet against the resulting service graph:
+After transport setup, each host gives the kernel its loaded facets plus a runtime facet that provides concrete host services. The kernel invokes every facet against the resulting service graph:
 
 ```ts
 interface FacetLifecycle {
@@ -194,10 +188,10 @@ Out of scope: arbitrary undeclared object remoting, serialized functions/classes
 Facets communicate across processes through **services**. One token type gives a service contract its identity:
 
 ```ts
-function defineService<T>(id: string): Service<T>;
+function defineService<T>(id: string, options?: { rpc?: boolean }): Service<T>;
 ```
 
-The declaration lives in the shared contract module and creates nothing. `provide(service, implementation)` exposes one singleton. `provideMany(service)` registers ownership of a multi-instance service during facet setup and returns an owned collection whose later `add(key, implementation)` calls expose instances. Consumers select the same modes with `use(service)` or `observe(service, handler)`. Within one facet generation, a token must stay in one mode: mixing `provide`/`use` with `provideMany`/`observe` is an assembly or protocol error.
+The declaration lives in the shared contract module and creates nothing. Services are RPC-capable by default; a process-local token declares `{ rpc: false }`. `provide(service, implementation)` adds one singleton to the host service graph. `provideMany(service)` registers ownership of a multi-instance service during facet setup and returns an owned collection whose later `add(key, implementation)` calls add instances. The host automatically publishes provided RPC-capable services across its process boundary. Consumers select the same modes with `use(service)` or `observe(service, handler)`. Within one facet generation, a token must stay in one mode: mixing `provide`/`use` with `provideMany`/`observe` is an assembly or protocol error.
 
 ```ts
 interface ServiceInstances<T> {
@@ -205,13 +199,13 @@ interface ServiceInstances<T> {
 }
 ```
 
-TypeScript types cannot produce runtime member metadata. Plugin authors nevertheless declare no parallel member descriptor. When `provide()` or `ServiceInstances.add()` receives an implementation, the service runtime classifies functions as remote methods and recognizes branded `ReplicatedState` and `RemoteEvents` values. It rejects unsupported members and announces the resulting member table over the transport.
+TypeScript types cannot produce runtime member metadata. Plugin authors nevertheless declare no parallel member descriptor. When an exposed `provide()` or `ServiceInstances.add()` implementation reaches the remote-service boundary, the runtime classifies functions as remote methods and recognizes branded `ReplicatedState` and `RemoteEvents` values. It rejects unsupported members and announces the resulting member table over the transport. Services used only inside one host may use arbitrary object contracts.
 
 `use()` on a singleton returns a stable lazy proxy synchronously, even before a remote provider is attached. Member access creates local method, state, or event slots as they are used; attachment validates those slots against the provider-announced kinds. A mismatch is an assembly or protocol error. This runtime mechanism is implemented once by the host rather than repeated in every service declaration.
 
 ### Dependency declaration and assembly
 
-Service API calls made during facet setup are the dependency declarations. The kernel does not reflect on erased TypeScript interfaces, and plugin authors do not maintain parallel `requires` and `provides` lists. A `Service<T>` or `LocalService<T>` retains its stable ID at runtime; the API call supplies the mode, while the facet kind selects the host and service source.
+Service API calls made during facet setup are the dependency declarations. The kernel does not reflect on erased TypeScript interfaces, and plugin authors do not maintain parallel `requires` and `provides` lists. A `Service<T>` retains its stable ID at runtime, and the API call supplies the mode. `use()` and `observe()` initially return source-independent disconnected handles. After all setup completes, the host matches unresolved requirements against provider-generated connection catalogues and binds each token to its local provision or exactly one connection.
 
 The host records a private generation-scoped ledger:
 
@@ -220,20 +214,20 @@ env.provide(Models, implementation)
 → @pi/providers-builtin:session provides pi.models/singleton
 
 env.use(Models)
-→ @pi/model-selection:tui/session requires pi.models/singleton
+→ @pi/model-selection:tui requires pi.models/singleton
 
 env.provideMany(QuestionDialogs)
 → @pi/question:session provides pi.question-dialog/keyed
 
 env.observe(QuestionDialogs, handler)
-→ @pi/question:tui/session requires pi.question-dialog/keyed
+→ @pi/question:tui requires pi.question-dialog/keyed
 ```
 
 The first `provide()`, `provideMany()`, `use()`, or `observe()` for a token must occur during facet setup. Commands, hooks, event handlers, and activation callbacks use handles acquired during setup; they cannot introduce an undeclared service dependency later. Dynamic instances use the setup-owned `ServiceInstances` handle, so adding and closing instances do not change the graph.
 
-After every facet has registered, the host resolves requirements to provisions, rejects missing providers, duplicate singleton owners, singleton/keyed mismatches, and invalid dependency cycles, derives service allowlists, and records consumer-to-provider edges for lifecycle ordering. `use()` and `observe()` declare hard requirements; optional dependencies require a future distinct acquisition API rather than inference from call failure. The ledger and resulting graph are private kernel machinery, not a plugin-facing plan or second declaration format.
+After every facet has registered, the host generates its outgoing catalogue from RPC-capable provisions, obtains catalogues from its connections, resolves requirements to local or connected provisions, rejects missing providers, duplicate offers or singleton owners, singleton/keyed mismatches, invalid dependency cycles, and invalid RPC service implementations, then records consumer-to-provider edges for lifecycle ordering. `use()` and `observe()` declare hard requirements; optional dependencies require a future distinct acquisition API rather than inference from call failure. The ledger and resulting graph are private kernel machinery, not a plugin-facing plan or second declaration format.
 
-Only dependencies acquired through host bindings belong to this lifecycle graph. Importing another plugin's live implementation bypasses ownership and is unsupported. The module loader separately owns the ordinary source import graph. Complete-generation reload avoids needing that module graph for partial invalidation; see [`plugin-reloading.md`](plugin-reloading.md).
+Only dependencies acquired through `env.use()` or `env.observe()` belong to this lifecycle graph. Importing another plugin's live implementation bypasses ownership and is unsupported. The module loader separately owns the ordinary source import graph. Complete-generation reload avoids needing that module graph for partial invalidation; see [`plugin-reloading.md`](plugin-reloading.md).
 
 The models service — the authority behind the model picker and thinking-level control — exercises methods, replicated state, and multiple consumers.
 
@@ -360,7 +354,7 @@ Multi-instance services use `provideMany()` and `observe()`. The service is empt
 
 An added instance member has structural identity `(service, key, generation, member)`. Its `ReplicatedState` members therefore need no independent IDs. The instance directory is control-plane metadata, not a plugin-visible `ReplicatedState` containing proxies. Switching sessions aborts all observed instance tasks before hydrating the selected session's current instances.
 
-Every facet uses the same unqualified `env.use()` and `env.observe()` operations. A server presentation facet receives the connected server as its service source; a Session presentation facet receives the selected Session. A provider facet resolves services within its own host. Transport binding and routing remain host infrastructure rather than facet API.
+Every facet uses the same unqualified `env.use()` and `env.observe()` operations. A presentation host combines its local services with connected server and selected-Session services, then routes each token internally. Provider facets resolve services from the same host graph. Transport binding and routing remain host infrastructure rather than facet API.
 
 ## What each facet kind grants
 
@@ -462,7 +456,7 @@ const Tui = defineService<TuiHost>("pi.local.tui");
 
 `acquireModal()` waits in one presentation-owned queue and holds the modal slot across a multi-step interaction. Its signal removes a queued request or dismisses an active one, and `close()` is idempotent. `select()` is the one-step acquire/select/close convenience. Both return selected values directly, so feature code never recovers identity from a display label.
 
-A server TUI facet and a Session TUI facet can use the same host-local TUI services but run in different facet generations. The server generation binds `env.use(SessionDirectory)` to the connected server. The Session generation binds `env.use(Models)` to the selected Session. While detached, Session calls fail with `not_attached` and replicated state has no value. Connection and attachment health are host-local services because they describe presentation control state. A future web host similarly binds local services for routes, views, and DOM dialogs. Its server and Session facets still use unqualified service operations.
+The TUI loads all of its facets into one generation. Its host routes `env.use(SessionDirectory)` to the connected server and `env.use(Models)` to the selected Session. While detached, Session calls fail with `not_attached` and replicated state has no value. Connection and attachment health are host-local services because they describe presentation control state. A future web host similarly binds local services for routes, views, and DOM dialogs. Its server and Session facets still use unqualified service operations.
 
 Concretely, the minimum chat slice exposes `prompt(request, context)` returning `{ accepted, operationId, error }`, plus `requestAbort(operationId, context)`, and implements it with direct local lane capabilities. The experimental `Chat` contract also predeclares the later steer, follow-up, next-run, queue cancellation, resume, compaction, and navigation presentation operations; those members throw `ServiceSliceNotImplemented` until their Harness adapter slices land:
 
@@ -480,7 +474,7 @@ session(env) {
 }
 ```
 
-Its Session TUI facet consumes `Chat` through `env.use()` exactly as the model picker consumes `Models`. Neither reveals the Harness object behind them; there is no universal remote Harness for arbitrary plugins. `rpc.md` may still define generic Harness proxies for other trusted integrations (an IDE bridge, an orchestrator) — deliberate, separate exposures, not the plugin boundary.
+Its TUI facet consumes `Chat` through `env.use()` exactly as the model picker consumes `Models`. Neither reveals the Harness object behind them; there is no universal remote Harness for arbitrary plugins. `rpc.md` may still define generic Harness proxies for other trusted integrations (an IDE bridge, an orchestrator) — deliberate, separate exposures, not the plugin boundary.
 
 ## Local services and narrow remote facades
 
@@ -789,7 +783,7 @@ The TUI facet consumes a service provided by the one connected server. There is 
 
 1. the server authorizes the client for one of its managed sessions;
 2. it closes the client's previous session-scoped requests, subscriptions, references, and observed instance tasks;
-3. it binds the Session facet generation's service source to the selected Session worker;
+3. it binds the presentation host's Session services to the selected Session worker;
 4. the Session worker hydrates singleton state and current keyed instances from complete fresh snapshots; attachment state becomes `attached`.
 
 Session service handles are stable across switches: a proxy returned once by a Session facet's `env.use(Models)` keeps working against the new Session, and `env.observe(QuestionDialogs, ...)` reconciles the new Session's instances. Frames belonging to closed subscriptions or requests are dropped.
@@ -999,14 +993,14 @@ Disconnect behavior, from the plugin author's perspective:
 
 - **A presentation disconnects.** Its server aborts the client's active requests, closes its observed instance tasks and other session-routed resources, and the selected session's `onClientDetach` fires. Session-owned work continues per application policy. An added question dialog remains Session-owned; the disconnected presentation loses its proxy and any in-flight `submitAnswer()` call fails.
 - **A session worker disconnects or crashes.** Its server fails routed in-flight calls with `session_unavailable`, closes that worker's observed instance tasks, and updates the managed record's status. Attached presentations see `attachment.status === "degraded"` while the server connection stays healthy, so the picker still works and the user can attach elsewhere.
-- **A process loses its server connection.** Its server and Session facet service sources become unavailable. A Session worker loses server services and all attached presentations at once; unattended-Session policy decides whether it exits.
+- **A process loses its server connection.** Its connected server and Session services become unavailable. A Session worker loses server services and all attached presentations at once; unattended-Session policy decides whether it exits.
 - Reconnect and reattach always hydrate from a fresh authoritative snapshot; prior remote references are invalid unless the exposure has explicitly session-stable identity. **Never blindly replay a mutation after an uncertain disconnect** — a replayed `select()` is harmless, a replayed `prompt()` is not. Reconnect, hydrate, and reconcile, or design the operation around a stable operation ID with explicit lookup semantics.
 
 Errors cross the wire as a JSON envelope `{ code, message, data? }` with stable codes. Expected service errors use stable codes or result values; unexpected exceptions become an internal error with safe metadata — no stacks or sensitive causes by default. Experimental scaffold members use `service_not_implemented` until their implementation slice lands. Cancellation, disconnect, unknown service/method, invalid arguments/results, stale references, `not_attached`, `not_authorized`, `unknown_session`, and `session_unavailable` need distinct codes.
 
 Security rules every providing host (session and server alike) must enforce:
 
-- service IDs are allowlisted by trusted manifests; `provide()`, `provideMany()`, and `ServiceInstances` handles expose only implementation functions and branded replicated-state/event members, instance generations are host-owned, and local services are never discoverable remotely;
+- RPC-capable service IDs come from trusted loaded service tokens; the remote boundary accepts only implementation functions and branded replicated-state/event members, instance generations are host-owned, and `{ rpc: false }` services are never discoverable remotely;
 - business arguments, results, state, and events are validated as JSON; protocol envelopes cannot be forged as ordinary values;
 - clients cannot choose context position, server typed values, telemetry parents, or cancellation targets other than their own request IDs;
 - credentials, prompts, completions, tool arguments/results, and filesystem contents are not exposed unless an explicit contract permits them; state snapshots contain only client-safe data;
@@ -1025,7 +1019,7 @@ Before this becomes normative:
 - the exact minimal kernel contract (environment shape, phase ordering, failure policy), the built-in manifest, and the concrete server/Session/TUI host services;
 - the logical-manifest format, per-host entry-point resolution, and cross-process version pinning;
 - whether directory state is projected per client (workspace-scoped snapshots) or one presentation-safe value plus method authorization;
-- multiple selected Sessions per presentation connection (a multi-pane web UI) — deferred; it changes how Session facet generations select service sources;
+- multiple selected Sessions per presentation connection (a multi-pane web UI) — deferred; it requires explicit routing for services from more than one selected Session;
 - authentication of presentations and session workers, and protocol version negotiation;
 - the exact lazy `Service` member-discovery and provider-kind-validation API, and the context-position and JSON-safe optional-argument policy from `rpc.md`;
 - whether `ReplicatedState` is generic RPC infrastructure or host infrastructure; snapshot granularity; exact hydration/delivery-context semantics;

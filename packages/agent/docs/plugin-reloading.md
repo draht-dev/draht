@@ -26,7 +26,7 @@ These operations are different:
 - **Rebuild** replays active contributions over a fresh draft and commits a new registry value. Settings, configuration, availability, or source data changed, but plugin module bytes did not.
 - **Reload** selects a new manifest generation after plugin source or the selected plugin set changed. Every facet is replaced.
 - **Restart** stops and recreates a concrete server, session worker, or presentation runtime while implementing a reload.
-- **Rebind** moves a remote service namespace from one live provider binding to another and hydrates fresh snapshots.
+- **Rebind** moves connected services from one live provider binding to another and hydrates fresh snapshots.
 - **Resume** continues durable Harness work from the Session repository after a worker restart.
 
 Most runtime changes should be rebuilds. Only changed source bytes, changed plugin resolution, or changed manifest membership require reload.
@@ -55,7 +55,7 @@ The command completes when the system has accepted the reload and begun moving t
 
 A reload cannot be cancelled. A later implementation may report progress for each host, but cancellation would create another partially coordinated generation and is not part of the model.
 
-`/reload` must not be implemented as a session plugin service method. Otherwise the retiring service namespace would be asked to destroy itself while its own invocation remained active. A minimal reload and failure-reporting path must remain available even when plugin facets fail to load.
+`/reload` must not be implemented as a session plugin service method. Otherwise the retiring service graph would be asked to destroy itself while its own invocation remained active. A minimal reload and failure-reporting path must remain available even when plugin facets fail to load.
 
 ## Manifest generations
 
@@ -71,9 +71,11 @@ One generation names one resolved manifest across all facet kinds. Hosts resolve
 
 Temporary cross-generation communication is expected. The system does not attempt a distributed lock-step commit. Shared service contracts, durable records, and control messages must tolerate the supported forward-compatibility window. Runtime member-kind validation remains useful but does not replace contract compatibility.
 
+Each process receives one `FacetLoader` configured for its process kind. Calling `load()` returns the complete ordered facet set for that process plus a disposer for the loaded module or sandbox generation. The current loader may return hardcoded built-ins; a manifest-backed loader resolves the same `./server`, `./session`, `./tui`, or `./web` entry points without changing host startup. Reload creates a fresh loader result, replaces the process's complete facet host, then disposes the retired loader result. The loader collects code; facet setup collects service requirements and providers.
+
 ## Dependency discovery and manifest validation
 
-The service dependency graph is generated from facet setup, not reflected from erased TypeScript interfaces and not maintained as a parallel handwritten list. Every service token retains a stable runtime ID. Each host binds its concrete local services before activating the loaded facets. Setup runs synchronously as a declaration phase; service handles remain disconnected until the complete graph validates.
+The service dependency graph is generated from facet setup, not reflected from erased TypeScript interfaces and not maintained as a parallel handwritten list. Every service token retains a stable runtime ID. Each host adds a runtime facet that provides its concrete local services through the ordinary facet environment. Setup runs synchronously as a declaration phase; service handles remain disconnected until the complete graph validates.
 
 During setup the host records:
 
@@ -84,11 +86,11 @@ use(service)                      → this facet requires service/singleton
 observe(service, handler)         → this facet requires service/keyed
 ```
 
-The facet kind selects its host, lifetime, capabilities, and service source. A facet always uses unqualified `env.use()` and `env.observe()`; server and Session routing are not exposed as namespaces in the facet API. The token supplies the service ID, and the operation supplies singleton or keyed mode. No runtime representation of the generic service interface is needed.
+The process kind selects the facet lifetime and host capabilities. A facet always uses unqualified `env.use()` and `env.observe()`; the host routes tokens across local, server, and selected-Session services without exposing namespaces in the facet API. The token supplies the service ID, and the operation supplies singleton or keyed mode. No runtime representation of the generic service interface is needed.
 
 First acquisition and provision are setup-only operations. Commands, hooks, event handlers, and activation callbacks use handles acquired during setup. `provideMany()` returns the only `ServiceInstances` handle permitted to add that service's dynamic instances, allowing the provision to appear in the graph before any instance exists.
 
-After setup, the host privately resolves its recorded requirements and provisions. It rejects missing providers, duplicate singleton providers, mode mismatches, and invalid dependency cycles, then records provider-to-consumer edges for lifecycle ordering. The record is kernel machinery, not a plugin-facing plan or a second declaration format. Connected service inventories and allowlists are host/manifest inputs, and their transport bindings must become ready before consuming facets activate. `use()` and `observe()` are hard requirements; optional dependencies need a separate explicit acquisition operation if introduced later. Directly importing another plugin's live implementation bypasses this ownership model and is unsupported.
+After setup, the host privately resolves its recorded requirements and provisions. Connections return provider-generated catalogues containing service IDs and modes; the host matches unresolved requirements to exactly one connection, opens generation-owned bindings only for selected services, and rejects missing providers, duplicate offers, mode mismatches, and invalid dependency cycles. The record is kernel machinery, not a plugin-facing plan or a second declaration format. Transport bindings must become ready before consuming facets activate. `use()` and `observe()` are hard requirements; optional dependencies need a separate explicit acquisition operation if introduced later. Directly importing another plugin's live implementation bypasses this ownership model and is unsupported.
 
 Removing one plugin constructs a candidate manifest without that plugin and runs the same assembly. If retained facets have unresolved hard requirements, the candidate is rejected before becoming the desired generation. If it is valid, removal still uses a complete-generation reload and simply brings back fewer facets. The removed plugin's durable namespace remains stored.
 
@@ -166,7 +168,7 @@ selected Session S + replacement attachment B
 
 A replacement worker receives fresh attachment IDs. Attachment IDs are transport-internal, so preserving one across worker generations has no plugin-level benefit. Fresh IDs reuse the existing stale-route fence: delayed calls and frames for A cannot address B.
 
-`SessionServices.attachment` continues to use the existing presentation-safe states:
+`SessionServiceConnection.attachment` continues to use the existing presentation-safe states:
 
 ```ts
 type AttachmentState =
@@ -187,12 +189,12 @@ This matches the basic implementation:
 - `RemoteServiceProvider.provide()` installs one singleton for the provider's lifetime;
 - plugin-facing `provideMany()` registers keyed ownership during setup, while its `ServiceInstances.add()` handle delegates dynamic instances to the provider and preserves generation fencing when a key is reused;
 - disposing a provider removes its member listeners and subscriptions;
-- a server connection or Session attachment change makes `RemoteServiceNamespace` close old subscriptions and hydrate new ones; and
+- a server connection or Session attachment change makes connected services close old subscriptions and hydrate new ones; and
 - binding revisions and attachment IDs fence delayed frames.
 
 There is therefore no need for a singleton-provider replacement frame or public singleton generation merely to reload plugins. Replacing the server connection or Session attachment replaces the provider binding as a whole. A stable remote facade may remain a local object, but it becomes unready and receives a complete snapshot from the replacement before it is usable again.
 
-Changing the manifest may add or remove service tokens. Provider and consumer allowlists are loaded from their respective facets in the new manifest generation. During temporary version skew, a service absent from one side fails normally; forward-compatible plugin bundles must not assume every host has switched already.
+Changing the manifest may add or remove service tokens. Each provider catalogue is regenerated from the new facet generation's RPC-capable provisions, and each consumer generation resolves only requirements recorded by its own setup. During temporary version skew, a service absent from one side fails normally; forward-compatible plugin bundles must not assume every host has switched already.
 
 Local service implementations are replaced with their host generation as well. Captured local implementation objects from the retired generation are stale and must not be retained by host-global state.
 
@@ -256,7 +258,7 @@ The following claims are explicitly out of scope:
 Cordis identifies two useful concerns: resources created by a component need lifecycle ownership, and consumers must respond when a provider disappears. Pi keeps both principles:
 
 - facet environments own registrations, listeners, subscriptions, and process-local effects; and
-- remote namespace bindings become unavailable and rehydrate against replacement providers.
+- connected services become unavailable and rehydrate against replacement providers.
 
 Pi does not adopt Cordis's in-process component reload as its primary mechanism. Durable Session authority, process-per-session isolation, server replacement, and snapshot-based service rebinding make host-generation replacement the simpler boundary. Inverse disposal remains cleanup, not rollback.
 
@@ -285,6 +287,7 @@ This also follows Cordis's system-boundary caveat: acquiring and releasing a pro
 A later implementation handoff should cover at least:
 
 - one `/reload` selects one new manifest generation for server, session, and presentation facets;
+- each process's facet loader returns its complete ordered facet set and disposes failed or retired module generations;
 - setup-time service acquisition produces the complete internal dependency graph without reflecting on TypeScript types;
 - missing providers, duplicate singleton providers, mode mismatches, and late dependency acquisition are rejected;
 - removing a plugin rejects an invalid dependent manifest or performs a complete reload with fewer facets while retaining its durable state;

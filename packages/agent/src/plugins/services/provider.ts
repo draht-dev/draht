@@ -9,10 +9,12 @@ import {
 	type RemoteServiceContract,
 	type Service,
 	type ServiceCall,
+	type ServiceCatalogueEntry,
 	type ServiceInstanceAddress,
 	type ServiceInstanceSnapshot,
 	type ServiceMemberDescription,
 	type ServiceMode,
+	type ServiceProviderDefinition,
 	type ServiceProviderSubscription,
 	type ServiceProviderUpdate,
 	type ServiceSubscriptionSnapshot,
@@ -72,13 +74,33 @@ interface ServiceRegistration {
 
 export class RemoteServiceProvider {
 	readonly #allowlist: ReadonlySet<string>;
+	readonly #catalogue: readonly ServiceCatalogueEntry[];
 	readonly #registrations = new Map<string, ServiceRegistration>();
 	#disposed = false;
 
-	constructor(services: readonly { readonly id: string }[]) {
-		const ids = services.map(({ id }) => id);
-		if (new Set(ids).size !== ids.length) throw new TypeError("Remote service allowlist contains duplicate IDs");
+	constructor(entries: readonly (ServiceProviderDefinition | { readonly id: string })[]) {
+		const definitions = entries.map(
+			(entry): ServiceProviderDefinition => ("service" in entry ? entry : { service: entry, mode: "singleton" }),
+		);
+		const ids = definitions.map(({ service }) => service.id);
+		if (new Set(ids).size !== ids.length) throw new TypeError("Remote service catalogue contains duplicate IDs");
 		this.#allowlist = new Set(ids);
+		this.#catalogue = Object.freeze(
+			definitions.map(({ service, mode }) => Object.freeze({ serviceId: service.id, mode })),
+		);
+		for (const { service, mode } of definitions) {
+			this.#registrations.set(service.id, {
+				serviceId: service.id,
+				mode,
+				instances: new Map(),
+				generations: new Map(),
+				subscribers: new Set(),
+			});
+		}
+	}
+
+	get catalogue(): readonly ServiceCatalogueEntry[] {
+		return this.#catalogue;
 	}
 
 	provide<T>(service: Service<T>, implementation: NoInfer<RemoteServiceContract<T>>): void {

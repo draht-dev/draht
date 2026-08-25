@@ -6,6 +6,16 @@ const SERVICE_TYPE = Symbol("pi.service.type");
 export type ServiceMode = "singleton" | "keyed";
 export type ServiceMemberKind = "method" | "state" | "events";
 
+export interface ServiceCatalogueEntry {
+	readonly serviceId: string;
+	readonly mode: ServiceMode;
+}
+
+export interface ServiceProviderDefinition {
+	readonly service: { readonly id: string };
+	readonly mode: ServiceMode;
+}
+
 export class ServiceSliceNotImplemented extends Error {
 	readonly code = "service_not_implemented" as const;
 
@@ -88,15 +98,23 @@ export type RemoteServiceContract<T> = InvalidRemoteMemberNames<T> extends never
 /** Stable identity for one shared TypeScript service contract. */
 export interface Service<T> {
 	readonly id: string;
+	readonly rpc: boolean;
 	readonly [SERVICE_TYPE]?: (value: T) => T;
 }
 
 export type ServiceType<TService> = TService extends Service<infer T> ? T : never;
 
-export function defineService<T>(id: string): Service<T> {
-	if (id.length === 0) throw new TypeError("Remote service ID must not be empty");
-	if (id.startsWith("$pi.")) throw new TypeError("Remote service IDs beginning with $pi. are reserved");
-	return Object.freeze({ id });
+export function defineService<T>(id: string, options: { readonly rpc: false }): Service<T>;
+export function defineService<T>(
+	id: string,
+	...options: [RemoteServiceContract<T>] extends [never]
+		? readonly [options: never]
+		: readonly [options?: { readonly rpc?: true }]
+): Service<T>;
+export function defineService(id: string, options?: { readonly rpc?: boolean }): Service<unknown> {
+	if (id.length === 0) throw new TypeError("Service ID must not be empty");
+	if (id.startsWith("$pi.")) throw new TypeError("Service IDs beginning with $pi. are reserved");
+	return Object.freeze({ id, rpc: options?.rpc ?? true });
 }
 
 export interface ServiceInstanceAddress {
@@ -186,12 +204,14 @@ export interface RemoteServiceNamespaceOptions {
 	readonly assertAccess?: () => void;
 }
 
-export interface RemoteServiceNamespaceApi {
+export interface RemoteServices {
 	use<T>(service: Service<T>): T;
 	observe<T>(
 		service: Service<T>,
 		handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
 	): () => void;
+	/** Activate this service set and wait for every acquired service to become ready. */
+	activate(context: Context): Promise<void>;
 	/** Wait until every currently acquired service has installed its initial snapshot. */
 	ready(context: Context): Promise<void>;
 	/** Install a host lifecycle guard for proxy member access. */

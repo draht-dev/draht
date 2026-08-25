@@ -1,12 +1,15 @@
 import {
 	BACKGROUND_CONTEXT,
 	type Context,
+	createLoopbackServiceConnection,
 	defineService,
 	type MutableReplicatedState,
+	RemoteServiceNamespace,
+	RemoteServiceProvider,
 	type ReplicatedState,
 } from "@draht/agent-core";
 import { describe, expect, test, vi } from "vitest";
-import { bindService, createFacetHost, defineFacet } from "../src/experimental/facets.ts";
+import { createFacetHost, defineFacet, type FacetConnection } from "../src/experimental/facets.ts";
 
 interface Source {
 	read(context: Context): Promise<string>;
@@ -29,11 +32,26 @@ interface HostValues {
 	readonly use: string;
 }
 
+interface LeftValue {
+	read(context: Context): Promise<string>;
+}
+
+interface RightValue {
+	read(context: Context): Promise<string>;
+}
+
+interface CombinedValue {
+	read(context: Context): Promise<string>;
+}
+
 const Source = defineService<Source>("test.experimental.source");
 const Projection = defineService<Projection>("test.experimental.projection");
 const KeyedValue = defineService<KeyedValue>("test.experimental.keyed-value");
 const Watched = defineService<Watched>("test.experimental.watched");
-const HostValues = defineService<HostValues>("test.experimental.host-values");
+const HostValues = defineService<HostValues>("test.experimental.host-values", { rpc: false });
+const LeftValue = defineService<LeftValue>("test.experimental.left-value");
+const RightValue = defineService<RightValue>("test.experimental.right-value");
+const CombinedValue = defineService<CombinedValue>("test.experimental.combined-value");
 
 describe("experimental facet host", () => {
 	test("discovers setup dependencies before connecting stable service handles", async () => {
@@ -152,9 +170,9 @@ describe("experimental facet host", () => {
 		expect(deliveries).toBe(2);
 	});
 
-	test("resolves explicit host service bindings", async () => {
+	test("provides arbitrary host services through the facet graph", async () => {
 		const values: HostValues = { name: "session", use: "host value" };
-		const facet = defineFacet({
+		const consumer = defineFacet({
 			id: "host-service-consumer",
 			setup(env) {
 				const hostValues = env.use(HostValues);
@@ -166,8 +184,177 @@ describe("experimental facet host", () => {
 				});
 			},
 		});
-		const host = await createFacetHost({ facets: [facet], bindings: [bindService(HostValues, values)] });
+		const provider = defineFacet({
+			id: "host-service-provider",
+			setup(env) {
+				env.provide(HostValues, values);
+			},
+		});
+		const host = await createFacetHost({ facets: [consumer, provider] });
+		expect(() => host.services.use(HostValues)).toThrow(
+			"Remote service test.experimental.host-values is not allowlisted",
+		);
 		await host.dispose();
+	});
+
+	test("combines connected services and facet-provided services in one host", async () => {
+		const leftProvider = new RemoteServiceProvider([LeftValue]);
+		leftProvider.provide(LeftValue, {
+			async read() {
+				return "left";
+			},
+		});
+		const rightProvider = new RemoteServiceProvider([RightValue]);
+		rightProvider.provide(RightValue, {
+			async read() {
+				return "right";
+			},
+		});
+		const leftNamespace = new RemoteServiceNamespace({
+			services: [LeftValue],
+			connection: createLoopbackServiceConnection(leftProvider),
+			bound: false,
+		});
+		const rightNamespace = new RemoteServiceNamespace({
+			services: [RightValue],
+			connection: createLoopbackServiceConnection(rightProvider),
+			bound: false,
+		});
+		const connections = [
+			{ namespace: leftNamespace, provider: leftProvider },
+			{ namespace: rightNamespace, provider: rightProvider },
+		].map(({ namespace, provider }) =>
+			Object.assign(namespace, {
+				acceptsUnavailableServices: false,
+				async catalogue() {
+					return provider.catalogue;
+				},
+				open() {
+					return namespace;
+				},
+				async activate(context: Context) {
+					await namespace.rebind(true, context);
+					await namespace.ready(context);
+				},
+			}),
+		);
+		const facet = defineFacet({
+			id: "combined",
+			setup(env) {
+				const left = env.use(LeftValue);
+				const right = env.use(RightValue);
+				env.provide(CombinedValue, {
+					async read(context) {
+						return `${await left.read(context)} ${await right.read(context)}`;
+					},
+				});
+			},
+		});
+
+		const host = await createFacetHost({ facets: [facet], connections });
+		await expect(host.services.use(CombinedValue).read(BACKGROUND_CONTEXT)).resolves.toBe("left right");
+
+		await host.dispose();
+		await Promise.all([leftNamespace.dispose(BACKGROUND_CONTEXT), rightNamespace.dispose(BACKGROUND_CONTEXT)]);
+		leftProvider.dispose();
+		rightProvider.dispose();
+	});
+
+	test("rejects a service offered by multiple connections", async () => {
+		const duplicate = {
+			acceptsUnavailableServices: false,
+			async catalogue() {
+				return [{ serviceId: LeftValue.id, mode: "singleton" as const }];
+			},
+			open() {
+				throw new Error("Ambiguous connections must not open");
+			},
+		} satisfies FacetConnection;
+		const consumer = defineFacet({
+			id: "duplicate-consumer",
+			setup(env) {
+				env.use(LeftValue);
+			},
+		});
+		await expect(createFacetHost({ facets: [consumer], connections: [duplicate, duplicate] })).rejects.toThrow(
+			`Facet host service ${LeftValue.id} is offered by more than one connection`,
+		);
+	});
+
+	test("reopens connection bindings from changed catalogues for a replacement generation", async () => {
+		const leftProvider = new RemoteServiceProvider([LeftValue]);
+		leftProvider.provide(LeftValue, {
+			async read() {
+				return "left";
+			},
+		});
+		const rightProvider = new RemoteServiceProvider([RightValue]);
+		rightProvider.provide(RightValue, {
+			async read() {
+				return "right";
+			},
+		});
+		let currentProvider = leftProvider;
+		let opened = 0;
+		let disposed = 0;
+		const connection = {
+			acceptsUnavailableServices: false,
+			async catalogue() {
+				return currentProvider.catalogue;
+			},
+			open(options) {
+				opened += 1;
+				const namespace = new RemoteServiceNamespace({
+					services: options.services,
+					connection: createLoopbackServiceConnection(currentProvider),
+					bound: false,
+					assertAccess: options.assertAccess,
+					onError: options.onError,
+				});
+				const dispose = namespace.dispose.bind(namespace);
+				return Object.assign(namespace, {
+					async activate(context: Context) {
+						await namespace.rebind(true, context);
+						await namespace.ready(context);
+					},
+					async dispose(context: Context) {
+						disposed += 1;
+						await dispose(context);
+					},
+				});
+			},
+		} satisfies FacetConnection;
+		const values: string[] = [];
+		const leftConsumer = defineFacet({
+			id: "left-consumer",
+			setup(env) {
+				const left = env.use(LeftValue);
+				env.onActivate(async () => {
+					values.push(await left.read(BACKGROUND_CONTEXT));
+				});
+			},
+		});
+		const first = await createFacetHost({ facets: [leftConsumer], connections: [connection] });
+		await first.dispose();
+
+		currentProvider = rightProvider;
+		const rightConsumer = defineFacet({
+			id: "right-consumer",
+			setup(env) {
+				const right = env.use(RightValue);
+				env.onActivate(async () => {
+					values.push(await right.read(BACKGROUND_CONTEXT));
+				});
+			},
+		});
+		const second = await createFacetHost({ facets: [rightConsumer], connections: [connection] });
+		await second.dispose();
+
+		expect(values).toEqual(["left", "right"]);
+		expect(opened).toBe(2);
+		expect(disposed).toBe(2);
+		leftProvider.dispose();
+		rightProvider.dispose();
 	});
 
 	test("rejects missing dependencies, cycles, and asynchronous setup", async () => {

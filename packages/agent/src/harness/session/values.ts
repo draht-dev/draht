@@ -106,19 +106,41 @@ export function list<T>(namespace: string, key = ""): ValueList<T> {
 }
 
 export function setValue<T>(address: Value<T>, next: NoInfer<T>): ValueSetWrite {
-	return { kind: "value", op: "set", namespace: address.namespace, key: address.key, value: next };
+	return {
+		kind: "value",
+		op: "set",
+		namespace: address.namespace,
+		key: address.key,
+		value: next,
+	};
 }
 
 export function deleteValue<T>(address: Value<T>): ValueDeleteWrite {
-	return { kind: "value", op: "delete", namespace: address.namespace, key: address.key };
+	return {
+		kind: "value",
+		op: "delete",
+		namespace: address.namespace,
+		key: address.key,
+	};
 }
 
 export function appendList<T>(address: ValueList<T>, element: NoInfer<T>): ListAppendWrite {
-	return { kind: "list", op: "append", namespace: address.namespace, key: address.key, value: element };
+	return {
+		kind: "list",
+		op: "append",
+		namespace: address.namespace,
+		key: address.key,
+		value: element,
+	};
 }
 
 export function deleteList<T>(address: ValueList<T>): ListDeleteWrite {
-	return { kind: "list", op: "delete", namespace: address.namespace, key: address.key };
+	return {
+		kind: "list",
+		op: "delete",
+		namespace: address.namespace,
+		key: address.key,
+	};
 }
 
 export function resolveListReadOptions(options: ListReadOptions = {}): ResolvedListReadOptions {
@@ -133,11 +155,11 @@ export function resolveListReadOptions(options: ListReadOptions = {}): ResolvedL
 	};
 }
 
-export const laneLeaf = (lane: string) => value<string | null>("pi.lane.leaf", lane);
+export const branchTip = (branch: string) => value<string | null>("pi.branch.tip", branch);
+export const branchTipInventoryPrefix = () => value<string | null>("pi.branch.tip");
 export const laneConfig = (lane: string) => value<LaneConfiguration>("pi.lane.config", lane);
 export const laneState = (lane: string) => value<LaneState>("pi.lane.state", lane);
 export const laneLastResult = (lane: string) => value<LaneLastResult>("pi.lane.lastResult", lane);
-export const laneLeafInventoryPrefix = () => value<string | null>("pi.lane.leaf");
 
 export const operationMeta = (operationId: string) => value<OperationMeta>("pi.op.meta", operationId);
 export const operationState = (operationId: string) => value<OperationState>("pi.op.state", operationId);

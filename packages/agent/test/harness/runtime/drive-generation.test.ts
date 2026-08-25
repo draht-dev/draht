@@ -87,11 +87,10 @@ async function createFixture(backend: MemoryStorage = new MemoryStorage({ now: (
 		activeToolNames: [],
 	};
 	await session.mutate(
-		"main",
 		(mutator) =>
 			mutator.commit(
 				[
-					storedValues.setValue(storedValues.laneLeaf("main"), null),
+					storedValues.setValue(storedValues.branchTip("main"), null),
 					storedValues.setValue(storedValues.laneConfig("main"), configuration),
 					storedValues.setValue(storedValues.laneState("main"), {
 						currentOperationId: null,
@@ -208,7 +207,7 @@ describe("runtime generation checkpoint", () => {
 		expect(await startRun(fixture.lane, fixture.drive, starting)).toEqual({ kind: "continue" });
 		let run = currentRun(fixture.lane);
 		if (run.phase.kind !== "checkpoint") throw new Error("missing checkpoint");
-		expect(run.phase.triggerEntryId).toBe(fixture.lane.state.leafId);
+		expect(run.phase.triggerEntryId).toBe(fixture.lane.state.tipId);
 		expect(fixture.events.map((event) => event.type)).toContain("entry_added");
 		await expectProjectionRestores(fixture);
 
@@ -263,7 +262,7 @@ describe("runtime generation checkpoint", () => {
 
 		const drained = currentRun(fixture.lane);
 		if (drained.phase.kind !== "checkpoint") throw new Error("missing drained checkpoint");
-		expect(fixture.lane.state.leafId).toBe(customId);
+		expect(fixture.lane.state.tipId).toBe(customId);
 		expect(drained.phase.triggerEntryId).toBe(messageId);
 		expect(drained.phase).toMatchObject({
 			continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
@@ -350,7 +349,7 @@ describe("runtime assistant generation", () => {
 		).toEqual([
 			"entry",
 			"usage",
-			"value:set:pi.lane.leaf",
+			"value:set:pi.branch.tip",
 			"list:delete:pi.pending.assistant_frame",
 			"value:set:pi.op.state",
 		]);

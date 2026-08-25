@@ -4,7 +4,7 @@
 
 ## Goal
 
-`Session`, `SessionTree`, `AgentLane`, and `AgentHarness` receive invocation-scoped control data explicitly through a required trailing `Context` parameter. The same receiver may serve concurrent local callers or RPC clients, so it cannot retain a mutable or default caller context.
+`Session`, `Branch`, `AgentLane`, and `AgentHarness` receive invocation-scoped control data explicitly through a required trailing `Context` parameter. The same receiver may serve concurrent local callers or RPC clients, so it cannot retain a mutable or default caller context.
 
 The invocation context must solve two related problems without `AsyncLocalStorage`:
 
@@ -61,7 +61,7 @@ Shared receivers retain identity and durable/process state, not invocation conte
 AgentHarness receiver  ── no caller context
 AgentLane receiver     ── no caller context
 Session receiver       ── no caller context
-SessionTree receiver   ── no caller context
+Branch receiver        ── no caller context
 ```
 
 Every invocation supplies its own context. This prevents concurrent callers from overwriting each other's telemetry parent or cancellation signal.
@@ -247,7 +247,7 @@ Current tests cover immutable typed-value layering and shadowing, distinct empty
 ## Resolved migration decisions
 
 - Receiver methods use one required trailing `Context`.
-- Shared harness, lane, session, and tree receivers retain no default invocation context.
+- Shared Harness, AgentLane, Session, and Branch receivers retain no default invocation context.
 - `Context`, `AbortSignal`, and `TelemetryContext` objects are never serialized across RPC boundaries.
 
 ## Open decisions before `harness.md`

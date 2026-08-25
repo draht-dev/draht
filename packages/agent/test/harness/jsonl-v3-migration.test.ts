@@ -36,13 +36,27 @@ function uuidTimestamp(id: string): number {
 	return Number.parseInt(id.replaceAll("-", "").slice(0, 12), 16);
 }
 
+async function mainBranch(session: Session) {
+	const branch = await session.branch("main", BACKGROUND_CONTEXT);
+	if (branch === undefined) throw new Error("Expected imported main Branch");
+	return branch;
+}
+
+async function mainTip(session: Session): Promise<string | null> {
+	return (await mainBranch(session)).getTipId(BACKGROUND_CONTEXT);
+}
+
 describe("JSONL v3 migration", () => {
 	let fileSystem: FailableRenameNodeExecutionEnv;
 	let repo: JsonlSessionRepo;
 
 	beforeEach(() => {
 		fileSystem = new FailableRenameNodeExecutionEnv({ cwd: createTempDir() });
-		repo = new JsonlSessionRepo({ fileSystem, sessionsRoot: "sessions", now: () => NOW });
+		repo = new JsonlSessionRepo({
+			fileSystem,
+			sessionsRoot: "sessions",
+			now: () => NOW,
+		});
 	});
 
 	afterEach(async () => {
@@ -75,7 +89,9 @@ describe("JSONL v3 migration", () => {
 	}
 
 	it("discovers legacy v3 session files without rewriting them", async () => {
-		const { path, content } = await writeLegacyV3Fixture([], { parentSession: "/old-session.jsonl" });
+		const { path, content } = await writeLegacyV3Fixture([], {
+			parentSession: "/old-session.jsonl",
+		});
 
 		const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
 		const after = getOrThrow(await fileSystem.readTextFile(path, BACKGROUND_CONTEXT));
@@ -124,7 +140,10 @@ describe("JSONL v3 migration", () => {
 		const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
 		if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
 
-		expect(metadata).toMatchObject({ id: "legacy", parentSessionId: parentId });
+		expect(metadata).toMatchObject({
+			id: "legacy",
+			parentSessionId: parentId,
+		});
 		expect(metadata).not.toHaveProperty("legacyParentSessionPath");
 		const session = await repo.open(metadata, BACKGROUND_CONTEXT);
 		expect(session.metadata).toMatchObject({ parentSessionId: parentId });
@@ -158,7 +177,13 @@ describe("JSONL v3 migration", () => {
 			cacheRead: 2,
 			cacheWrite: 1,
 			totalTokens: 18,
-			cost: { input: 0.1, output: 0.05, cacheRead: 0.02, cacheWrite: 0.01, total: 0.18 },
+			cost: {
+				input: 0.1,
+				output: 0.05,
+				cacheRead: 0.02,
+				cacheWrite: 0.01,
+				total: 0.18,
+			},
 		} satisfies Usage;
 		const secondMessage = {
 			role: "assistant",
@@ -217,17 +242,22 @@ describe("JSONL v3 migration", () => {
 			expect(entries).toHaveLength(2);
 			const [first, second] = entries;
 			if (first === undefined || second === undefined) throw new Error("Forked entries were not written");
-			expect(first).toMatchObject({ type: "message", parentId: null, message: firstMessage });
-			expect(second).toMatchObject({ type: "message", parentId: first.id, message: secondMessage });
+			expect(first).toMatchObject({
+				type: "message",
+				parentId: null,
+				message: firstMessage,
+			});
+			expect(second).toMatchObject({
+				type: "message",
+				parentId: first.id,
+				message: secondMessage,
+			});
 			expect(first.id).not.toBe("message-1");
 			expect(second.id).not.toBe("message-2");
-			expect(await fork.getLeafId(BACKGROUND_CONTEXT)).toBe(second.id);
+			expect(await mainTip(fork)).toBe(second.id);
 			expect(await fork.getName(BACKGROUND_CONTEXT)).toBe("Imported fork");
 			expect(await fork.getLabel(first.id, BACKGROUND_CONTEXT)).toBe("Fork point");
-			expect((await fork.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value).toEqual({
-				currentOperationId: null,
-				pendingNextRun: [],
-			});
+			expect(await fork.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT)).toBeUndefined();
 			expect(await fork.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT)).toBeUndefined();
 			expect(await fork.getStats(BACKGROUND_CONTEXT)).toEqual({
 				messageCount: 2,
@@ -292,18 +322,15 @@ describe("JSONL v3 migration", () => {
 		});
 	});
 
-	it("opens an empty legacy session with an idle unconfigured main lane", async () => {
+	it("opens an empty legacy session with a data-only main Branch", async () => {
 		await writeLegacyV3Fixture([]);
 		const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
 		if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
 
 		const session = await repo.open(metadata, BACKGROUND_CONTEXT);
 		expect(await session.findEntries(undefined, BACKGROUND_CONTEXT)).toEqual([]);
-		expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBeNull();
-		expect((await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value).toEqual({
-			currentOperationId: null,
-			pendingNextRun: [],
-		});
+		expect(await mainTip(session)).toBeNull();
+		expect(await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT)).toBeUndefined();
 		expect(await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT)).toBeUndefined();
 		await session.close(BACKGROUND_CONTEXT);
 	});
@@ -400,7 +427,13 @@ describe("JSONL v3 migration", () => {
 			cacheRead: 2,
 			cacheWrite: 1,
 			totalTokens: 18,
-			cost: { input: 0.1, output: 0.05, cacheRead: 0.02, cacheWrite: 0.01, total: 0.18 },
+			cost: {
+				input: 0.1,
+				output: 0.05,
+				cacheRead: 0.02,
+				cacheWrite: 0.01,
+				total: 0.18,
+			},
 		} satisfies Usage;
 		const importedMessage = {
 			role: "assistant",
@@ -518,13 +551,10 @@ describe("JSONL v3 migration", () => {
 			expect(await reopened.scanEntries({ order: "asc" }, BACKGROUND_CONTEXT)).toEqual(importedEntries);
 			const [importedEntry] = importedEntries;
 			if (importedEntry === undefined) throw new Error("Legacy message was not imported");
-			expect((await reopened.getValue(storedValues.laneLeaf("main"), BACKGROUND_CONTEXT))?.value).toBe(
+			expect((await reopened.getValue(storedValues.branchTip("main"), BACKGROUND_CONTEXT))?.value).toBe(
 				importedEntry.id,
 			);
-			expect((await reopened.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value).toEqual({
-				currentOperationId: null,
-				pendingNextRun: [],
-			});
+			expect(await reopened.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT)).toBeUndefined();
 			expect((await reopened.getValue(storedValues.sessionName, BACKGROUND_CONTEXT))?.value).toBe(
 				"Converted session",
 			);
@@ -538,12 +568,13 @@ describe("JSONL v3 migration", () => {
 			const options = { fileSystem, path, now: () => NOW };
 			const storage = await JsonlStorage.open(options, BACKGROUND_CONTEXT);
 			const entriesBefore = await storage.scanEntries({ order: "asc" }, BACKGROUND_CONTEXT);
-			const leafBefore = await storage.getValue(storedValues.laneLeaf("main"), BACKGROUND_CONTEXT);
+			const leafBefore = await storage.getValue(storedValues.branchTip("main"), BACKGROUND_CONTEXT);
 			const laneStateBefore = await storage.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT);
 			const nameBefore = await storage.getValue(storedValues.sessionName, BACKGROUND_CONTEXT);
 			const statsBefore = await storage.getStats(BACKGROUND_CONTEXT);
 			const usageBefore = await storage.scanUsage({ order: "asc" }, BACKGROUND_CONTEXT);
-			if (laneStateBefore === undefined) throw new Error("Normalized main lane state is missing");
+			if (leafBefore === undefined) throw new Error("Normalized main Branch tip is missing");
+			expect(laneStateBefore).toBeUndefined();
 
 			fileSystem.failRename = true;
 			await expect(
@@ -553,7 +584,7 @@ describe("JSONL v3 migration", () => {
 
 			expect(getOrThrow(await fileSystem.readTextFile(path, BACKGROUND_CONTEXT))).toBe(content);
 			expect(await storage.scanEntries({ order: "asc" }, BACKGROUND_CONTEXT)).toEqual(entriesBefore);
-			expect(await storage.getValue(storedValues.laneLeaf("main"), BACKGROUND_CONTEXT)).toEqual(leafBefore);
+			expect(await storage.getValue(storedValues.branchTip("main"), BACKGROUND_CONTEXT)).toEqual(leafBefore);
 			expect(await storage.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT)).toEqual(laneStateBefore);
 			expect(await storage.getValue(storedValues.sessionName, BACKGROUND_CONTEXT)).toEqual(nameBefore);
 			expect(await storage.getStats(BACKGROUND_CONTEXT)).toEqual(statsBefore);
@@ -564,7 +595,7 @@ describe("JSONL v3 migration", () => {
 				BACKGROUND_CONTEXT,
 			);
 
-			expect(committed.firstSeq).toBe(laneStateBefore.seq + 2);
+			expect(committed.firstSeq).toBe(leafBefore.seq + 2);
 			expect(committed.seqs).toEqual([committed.firstSeq]);
 			expect(await storage.getValue(storedValues.sessionName, BACKGROUND_CONTEXT)).toMatchObject({
 				seq: committed.firstSeq,
@@ -582,7 +613,7 @@ describe("JSONL v3 migration", () => {
 		});
 	});
 
-	describe("discarding legacy configuration changes", () => {
+	describe("reconstructing legacy lane configuration", () => {
 		const firstTimestamp = NOW + 1_000;
 		const modelChangeTimestamp = NOW + 2_000;
 		const thinkingChangeTimestamp = NOW + 3_000;
@@ -651,15 +682,243 @@ describe("JSONL v3 migration", () => {
 			if (first === undefined || second === undefined) {
 				throw new Error("Legacy configuration-change chain was not imported");
 			}
-			expect(first).toMatchObject({ type: "message", parentId: null, message: firstMessage });
-			expect(second).toMatchObject({ type: "message", parentId: first.id, message: secondMessage });
+			expect(first).toMatchObject({
+				type: "message",
+				parentId: null,
+				message: firstMessage,
+			});
+			expect(second).toMatchObject({
+				type: "message",
+				parentId: first.id,
+				message: secondMessage,
+			});
 			expect(second.seq).toBeGreaterThan(first.seq);
-			expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(second.id);
-			expect(await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT)).toBeUndefined();
+			expect(await mainTip(session)).toBe(second.id);
+			expect((await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT))?.value).toEqual({
+				model: { provider: "anthropic", modelId: "claude-sonnet-4-5" },
+				thinkingLevel: "high",
+				activeToolNames: ["read", "bash"],
+			});
+			expect((await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value).toEqual({
+				currentOperationId: null,
+				pendingNextRun: [],
+			});
 			await session.close(BACKGROUND_CONTEXT);
 		});
 
-		it("resolves the main leaf through trailing configuration changes", async () => {
+		it("retains only configuration changes on the selected physical branch", async () => {
+			await writeLegacyV3Fixture([
+				{
+					type: "message",
+					id: "root",
+					parentId: null,
+					timestamp: new Date(firstTimestamp).toISOString(),
+					message: firstMessage,
+				},
+				{
+					type: "model_change",
+					id: "selected-model",
+					parentId: "root",
+					timestamp: new Date(modelChangeTimestamp).toISOString(),
+					provider: "anthropic",
+					modelId: "selected",
+				},
+				{
+					type: "thinking_level_change",
+					id: "selected-thinking",
+					parentId: "selected-model",
+					timestamp: new Date(thinkingChangeTimestamp).toISOString(),
+					thinkingLevel: "high",
+				},
+				{
+					type: "model_change",
+					id: "abandoned-model",
+					parentId: "root",
+					timestamp: new Date(activeToolsChangeTimestamp).toISOString(),
+					provider: "openai",
+					modelId: "abandoned",
+				},
+				{
+					type: "message",
+					id: "selected-tip",
+					parentId: "selected-thinking",
+					timestamp: new Date(secondTimestamp).toISOString(),
+					message: secondMessage,
+				},
+			]);
+			const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+			if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+			const session = await repo.open(metadata, BACKGROUND_CONTEXT);
+			expect((await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT))?.value).toEqual({
+				model: { provider: "anthropic", modelId: "selected" },
+				thinkingLevel: "high",
+				activeToolNames: [],
+			});
+			expect((await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value).toEqual({
+				currentOperationId: null,
+				pendingNextRun: [],
+			});
+			await session.close(BACKGROUND_CONTEXT);
+		});
+
+		it("omits an unsupported nearest value instead of falling back to an older change", async () => {
+			await writeLegacyV3Fixture([
+				{
+					type: "message",
+					id: "root",
+					parentId: null,
+					timestamp: new Date(firstTimestamp).toISOString(),
+					message: firstMessage,
+				},
+				{
+					type: "model_change",
+					id: "older-model",
+					parentId: "root",
+					timestamp: new Date(modelChangeTimestamp).toISOString(),
+					provider: "anthropic",
+					modelId: "older",
+				},
+				{
+					type: "model_change",
+					id: "invalid-model",
+					parentId: "older-model",
+					timestamp: new Date(thinkingChangeTimestamp).toISOString(),
+					provider: "",
+					modelId: "",
+				},
+				{
+					type: "message",
+					id: "tip",
+					parentId: "invalid-model",
+					timestamp: new Date(secondTimestamp).toISOString(),
+					message: secondMessage,
+				},
+			]);
+			const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+			if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+			const session = await repo.open(metadata, BACKGROUND_CONTEXT);
+			expect(await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT)).toBeUndefined();
+			expect(await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT)).toBeUndefined();
+			await session.close(BACKGROUND_CONTEXT);
+		});
+
+		it.each([
+			{
+				name: "missing model",
+				changes: [
+					{
+						type: "thinking_level_change",
+						id: "thinking",
+						parentId: "root",
+						timestamp: new Date(thinkingChangeTimestamp).toISOString(),
+						thinkingLevel: "high",
+					},
+				],
+			},
+			{
+				name: "missing thinking level",
+				changes: [
+					{
+						type: "model_change",
+						id: "model",
+						parentId: "root",
+						timestamp: new Date(modelChangeTimestamp).toISOString(),
+						provider: "anthropic",
+						modelId: "selected",
+					},
+				],
+			},
+			{
+				name: "invalid thinking level",
+				changes: [
+					{
+						type: "model_change",
+						id: "model",
+						parentId: "root",
+						timestamp: new Date(modelChangeTimestamp).toISOString(),
+						provider: "anthropic",
+						modelId: "selected",
+					},
+					{
+						type: "thinking_level_change",
+						id: "thinking",
+						parentId: "model",
+						timestamp: new Date(thinkingChangeTimestamp).toISOString(),
+						thinkingLevel: "unsupported",
+					},
+				],
+			},
+		])("leaves main data-only for $name", async ({ changes }) => {
+			await writeLegacyV3Fixture([
+				{
+					type: "message",
+					id: "root",
+					parentId: null,
+					timestamp: new Date(firstTimestamp).toISOString(),
+					message: firstMessage,
+				},
+				...changes,
+				{
+					type: "message",
+					id: "tip",
+					parentId: changes.at(-1)?.id ?? "root",
+					timestamp: new Date(secondTimestamp).toISOString(),
+					message: secondMessage,
+				},
+			]);
+			const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+			if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+			const session = await repo.open(metadata, BACKGROUND_CONTEXT);
+			expect(await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT)).toBeUndefined();
+			expect(await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT)).toBeUndefined();
+			await session.close(BACKGROUND_CONTEXT);
+		});
+
+		it("normalizes malformed active-tool history without compatibility state", async () => {
+			await writeLegacyV3Fixture([
+				{
+					type: "model_change",
+					id: "model",
+					parentId: null,
+					timestamp: new Date(modelChangeTimestamp).toISOString(),
+					provider: "anthropic",
+					modelId: "selected",
+				},
+				{
+					type: "thinking_level_change",
+					id: "thinking",
+					parentId: "model",
+					timestamp: new Date(thinkingChangeTimestamp).toISOString(),
+					thinkingLevel: "high",
+				},
+				{
+					type: "active_tools_change",
+					id: "tools",
+					parentId: "thinking",
+					timestamp: new Date(activeToolsChangeTimestamp).toISOString(),
+					activeToolNames: ["read", 42],
+				},
+			]);
+			const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+			if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+			const session = await repo.open(metadata, BACKGROUND_CONTEXT);
+			expect((await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT))?.value).toEqual({
+				model: { provider: "anthropic", modelId: "selected" },
+				thinkingLevel: "high",
+				activeToolNames: [],
+			});
+			expect((await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value).toEqual({
+				currentOperationId: null,
+				pendingNextRun: [],
+			});
+			await session.close(BACKGROUND_CONTEXT);
+		});
+
+		it("resolves the main tip through trailing configuration changes", async () => {
 			await writeLegacyV3Fixture([
 				{
 					type: "message",
@@ -678,12 +937,16 @@ describe("JSONL v3 migration", () => {
 			expect(entries).toHaveLength(1);
 			const [message] = entries;
 			if (message === undefined) throw new Error("Legacy message was not imported");
-			expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(message.id);
+			expect(await mainTip(session)).toBe(message.id);
+			expect((await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT))?.value).toEqual({
+				model: { provider: "anthropic", modelId: "claude-sonnet-4-5" },
+				thinkingLevel: "high",
+				activeToolNames: ["read", "bash"],
+			});
 			expect((await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value).toEqual({
 				currentOperationId: null,
 				pendingNextRun: [],
 			});
-			expect(await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT)).toBeUndefined();
 			await session.close(BACKGROUND_CONTEXT);
 		});
 	});
@@ -704,7 +967,7 @@ describe("JSONL v3 migration", () => {
 		const session = await repo.open(metadata, BACKGROUND_CONTEXT);
 		expect(await session.getName(BACKGROUND_CONTEXT)).toBe("Imported session");
 		expect(await session.findEntries(undefined, BACKGROUND_CONTEXT)).toEqual([]);
-		expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBeNull();
+		expect(await mainTip(session)).toBeNull();
 		await session.close(BACKGROUND_CONTEXT);
 	});
 
@@ -759,7 +1022,7 @@ describe("JSONL v3 migration", () => {
 		if (first === undefined || second === undefined) throw new Error("Legacy message chain was not imported");
 		expect(second.parentId).toBe(first.id);
 		expect(await session.getName(BACKGROUND_CONTEXT)).toBe("Latest name");
-		expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(second.id);
+		expect(await mainTip(session)).toBe(second.id);
 		await session.close(BACKGROUND_CONTEXT);
 	});
 
@@ -820,7 +1083,7 @@ describe("JSONL v3 migration", () => {
 		const [entry] = entries;
 		if (entry === undefined) throw new Error("Legacy message was not imported");
 		expect((await session.getValue(storedValues.entryLabel(entry.id), BACKGROUND_CONTEXT))?.value).toBe("Important");
-		expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(entry.id);
+		expect(await mainTip(session)).toBe(entry.id);
 		await session.close(BACKGROUND_CONTEXT);
 	});
 
@@ -863,7 +1126,7 @@ describe("JSONL v3 migration", () => {
 		if (entry === undefined) throw new Error("Legacy message was not imported");
 		expect(entry.parentId).toBeNull();
 		expect(await session.getLabel(entry.id, BACKGROUND_CONTEXT)).toBeUndefined();
-		expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(entry.id);
+		expect(await mainTip(session)).toBe(entry.id);
 		await session.close(BACKGROUND_CONTEXT);
 	});
 
@@ -926,7 +1189,7 @@ describe("JSONL v3 migration", () => {
 		if (first === undefined || second === undefined) throw new Error("Legacy message chain was not imported");
 		expect(second.parentId).toBe(first.id);
 		expect(await session.getLabel(first.id, BACKGROUND_CONTEXT)).toBe("Latest label");
-		expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(second.id);
+		expect(await mainTip(session)).toBe(second.id);
 		await session.close(BACKGROUND_CONTEXT);
 	});
 
@@ -969,7 +1232,7 @@ describe("JSONL v3 migration", () => {
 		const [entry] = entries;
 		if (entry === undefined) throw new Error("Legacy message was not imported");
 		expect(await session.getLabel(entry.id, BACKGROUND_CONTEXT)).toBeUndefined();
-		expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(entry.id);
+		expect(await mainTip(session)).toBe(entry.id);
 		await session.close(BACKGROUND_CONTEXT);
 	});
 
@@ -1023,7 +1286,7 @@ describe("JSONL v3 migration", () => {
 		});
 		expect(customEntry.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 		expect(uuidTimestamp(customEntry.id)).toBe(customTimestamp);
-		expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(customEntry.id);
+		expect(await mainTip(session)).toBe(customEntry.id);
 		await session.close(BACKGROUND_CONTEXT);
 	});
 
@@ -1083,7 +1346,7 @@ describe("JSONL v3 migration", () => {
 		});
 		expect(customMessageEntry.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 		expect(uuidTimestamp(customMessageEntry.id)).toBe(customMessageTimestamp);
-		expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(customMessageEntry.id);
+		expect(await mainTip(session)).toBe(customMessageEntry.id);
 		expect((await session.getStats(BACKGROUND_CONTEXT)).messageCount).toBe(2);
 		await session.close(BACKGROUND_CONTEXT);
 	});
@@ -1099,7 +1362,13 @@ describe("JSONL v3 migration", () => {
 			cacheRead: 3,
 			cacheWrite: 2,
 			totalTokens: 23,
-			cost: { input: 0.11, output: 0.07, cacheRead: 0.03, cacheWrite: 0.02, total: 0.23 },
+			cost: {
+				input: 0.11,
+				output: 0.07,
+				cacheRead: 0.03,
+				cacheWrite: 0.02,
+				total: 0.23,
+			},
 		} satisfies Usage;
 		const branchPointMessage = {
 			role: "user",
@@ -1118,7 +1387,13 @@ describe("JSONL v3 migration", () => {
 				cacheRead: 0,
 				cacheWrite: 0,
 				totalTokens: 30,
-				cost: { input: 0.2, output: 0.1, cacheRead: 0, cacheWrite: 0, total: 0.3 },
+				cost: {
+					input: 0.2,
+					output: 0.1,
+					cacheRead: 0,
+					cacheWrite: 0,
+					total: 0.3,
+				},
 			},
 			stopReason: "stop",
 			timestamp: abandonedResponseTimestamp,
@@ -1182,14 +1457,17 @@ describe("JSONL v3 migration", () => {
 			});
 			expect(branchSummary.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 			expect(uuidTimestamp(branchSummary.id)).toBe(summaryTimestamp);
-			expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(branchSummary.id);
+			expect(await mainTip(session)).toBe(branchSummary.id);
 			await session.close(BACKGROUND_CONTEXT);
 		});
 
 		it("preserves an explicit fromHook flag", async () => {
 			const { session, branchSummary } = await openFixture(true);
 
-			expect(branchSummary).toMatchObject({ type: "branch_summary", fromHook: true });
+			expect(branchSummary).toMatchObject({
+				type: "branch_summary",
+				fromHook: true,
+			});
 			await session.close(BACKGROUND_CONTEXT);
 		});
 
@@ -1210,7 +1488,10 @@ describe("JSONL v3 migration", () => {
 			const session = await repo.open(metadata, BACKGROUND_CONTEXT);
 			const entries = await session.findEntries({ order: "asc" }, BACKGROUND_CONTEXT);
 			expect(entries).toHaveLength(1);
-			expect(entries[0]).toMatchObject({ type: "branch_summary", fromId: null });
+			expect(entries[0]).toMatchObject({
+				type: "branch_summary",
+				fromId: null,
+			});
 			await session.close(BACKGROUND_CONTEXT);
 		});
 
@@ -1258,7 +1539,11 @@ describe("JSONL v3 migration", () => {
 			const session = await repo.open(metadata, BACKGROUND_CONTEXT);
 			const entries = await session.findEntries({ order: "asc" }, BACKGROUND_CONTEXT);
 			expect(entries).toHaveLength(1);
-			expect(entries[0]).toMatchObject({ type: "branch_summary", parentId: null, fromId: null });
+			expect(entries[0]).toMatchObject({
+				type: "branch_summary",
+				parentId: null,
+				fromId: null,
+			});
 			await session.close(BACKGROUND_CONTEXT);
 		});
 	});
@@ -1284,7 +1569,13 @@ describe("JSONL v3 migration", () => {
 			cacheRead: 10,
 			cacheWrite: 5,
 			totalTokens: 165,
-			cost: { input: 1.2, output: 0.3, cacheRead: 0.1, cacheWrite: 0.05, total: 1.65 },
+			cost: {
+				input: 1.2,
+				output: 0.3,
+				cacheRead: 0.1,
+				cacheWrite: 0.05,
+				total: 1.65,
+			},
 		} satisfies Usage;
 
 		async function openFixture(fromHook?: true) {
@@ -1348,7 +1639,7 @@ describe("JSONL v3 migration", () => {
 			expect(compaction).not.toHaveProperty("firstKeptEntryId");
 			expect(compaction.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 			expect(uuidTimestamp(compaction.id)).toBe(compactionTimestamp);
-			expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(compaction.id);
+			expect(await mainTip(session)).toBe(compaction.id);
 			await session.close(BACKGROUND_CONTEXT);
 		});
 
@@ -1621,11 +1912,23 @@ describe("JSONL v3 migration", () => {
 		expect(entries).toHaveLength(2);
 		const [first, second] = entries;
 		if (first === undefined || second === undefined) throw new Error("Legacy message chain was not imported");
-		expect(first).toMatchObject({ parentId: null, seq: 1, timestamp: firstTimestamp, message: firstMessage });
-		expect(second).toMatchObject({ parentId: first.id, seq: 2, timestamp: secondTimestamp, message: secondMessage });
-		expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(second.id);
+		expect(first).toMatchObject({
+			parentId: null,
+			seq: 1,
+			timestamp: firstTimestamp,
+			message: firstMessage,
+		});
+		expect(second).toMatchObject({
+			parentId: first.id,
+			seq: 2,
+			timestamp: secondTimestamp,
+			message: secondMessage,
+		});
+		expect(await mainTip(session)).toBe(second.id);
 		expect(
-			(await session.findEntriesOnBranch({ order: "oldestFirst" }, BACKGROUND_CONTEXT)).map((entry) => entry.id),
+			(await (await mainBranch(session)).findEntries({ order: "oldestFirst" }, BACKGROUND_CONTEXT)).map(
+				(entry) => entry.id,
+			),
 		).toEqual([first.id, second.id]);
 		expect((await session.getStats(BACKGROUND_CONTEXT)).messageCount).toBe(2);
 		await session.close(BACKGROUND_CONTEXT);
@@ -1688,14 +1991,11 @@ describe("JSONL v3 migration", () => {
 			expect(uuidTimestamp(entry.id)).toBe(entryTimestamp);
 		});
 
-		it("initializes an idle unconfigured main lane at the imported entry", async () => {
+		it("initializes a data-only main Branch at the imported entry", async () => {
 			const entry = await importedEntry();
 
-			expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(entry.id);
-			expect((await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value).toEqual({
-				currentOperationId: null,
-				pendingNextRun: [],
-			});
+			expect(await mainTip(session)).toBe(entry.id);
+			expect(await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT)).toBeUndefined();
 			expect(await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT)).toBeUndefined();
 		});
 

@@ -74,7 +74,7 @@ export interface LaneConfiguration {
 export interface OperationMeta {
 	operationId: string;
 	lane: string;
-	sourceLeafId: string | null;
+	sourceTipId: string | null;
 	startedAt: number;
 	intent:
 		| { kind: "run"; promptEntryIds: string[] }
@@ -296,8 +296,16 @@ export interface LaneState {
 	pendingNextRun: string[];
 }
 
-type FailedLaneLastResult = { outcome: "failed"; error: OperationError; runCompletion?: never };
-type AbortedLaneLastResult = { outcome: "aborted"; error?: never; runCompletion?: never };
+type FailedLaneLastResult = {
+	outcome: "failed";
+	error: OperationError;
+	runCompletion?: never;
+};
+type AbortedLaneLastResult = {
+	outcome: "aborted";
+	error?: never;
+	runCompletion?: never;
+};
 type StructuralLaneLastResultOutcome =
 	| FailedLaneLastResult
 	| AbortedLaneLastResult
@@ -308,7 +316,7 @@ export type LaneLastResult =
 	| ({
 			operationId: string;
 			kind: "run";
-			leafId: string;
+			tipId: string;
 			finalAssistantEntryId?: string;
 	  } & (
 			| FailedLaneLastResult
@@ -322,20 +330,30 @@ export type LaneLastResult =
 	| ({
 			operationId: string;
 			kind: "compaction";
-			leafId: string;
+			tipId: string;
 			finalAssistantEntryId?: never;
 	  } & StructuralLaneLastResultOutcome)
 	| ({
 			operationId: string;
 			kind: "navigation";
-			leafId: string | null;
-			oldLeafId: string | null;
+			tipId: string | null;
+			oldTipId: string | null;
 			finalAssistantEntryId?: never;
 	  } & (
 			| FailedLaneLastResult
 			| AbortedLaneLastResult
-			| { outcome: "declined"; error?: never; runCompletion?: never; summaryEntryId?: never }
-			| { outcome: "completed"; error?: never; runCompletion?: never; summaryEntryId?: string }
+			| {
+					outcome: "declined";
+					error?: never;
+					runCompletion?: never;
+					summaryEntryId?: never;
+			  }
+			| {
+					outcome: "completed";
+					error?: never;
+					runCompletion?: never;
+					summaryEntryId?: string;
+			  }
 	  ));
 
 export type PendingEntry =
@@ -495,62 +513,52 @@ export interface SessionReader {
 	scanBranch(query: StorageBranchScan, context: Context): Promise<Entry[]>;
 }
 
-/** Exclusive mutation barrier bound to one lane. */
+/** Exclusive keyless mutation barrier for one Session. */
 export interface SessionMutation extends SessionReader {
-	readonly lane: string;
-	/** The mutation's sole commit. A second attempt rejects. */
+	/** Exactly zero or one commit attempt. A second attempt rejects. */
 	commit(writes: Write[], context: Context): Promise<CommitResult>;
 	/** Wait for any commit attempt, invalidate the capability, and release the barrier. */
 	end(context: Context): Promise<void>;
 }
 
-/** Callback-scoped mutation capability without authority to release its lane barrier. */
+/** Callback-scoped mutation capability without authority to release its Session barrier. */
 export type SessionMutator = Omit<SessionMutation, "end">;
 
-export interface SessionTree {
-	getLeafId(context: Context): Promise<string | null>;
-	getEntry(id: string, context: Context): Promise<Entry | undefined>;
-	getStats(context: Context): Promise<SessionStats>;
-	getValue<T>(address: Value<T>, context: Context): Promise<StoredValue<T> | undefined>;
-	scanValues<T>(prefix: Value<T>, context: Context): Promise<StoredValue<T>[]>;
-	readList<T>(
-		address: ValueList<T>,
-		options: ListReadOptions | undefined,
-		context: Context,
-	): Promise<ListElement<T>[]>;
-	setValue<T>(address: Value<T>, next: NoInfer<T>, context: Context): Promise<void>;
-	deleteValue<T>(address: Value<T>, context: Context): Promise<void>;
-	appendList<T>(address: ValueList<T>, element: NoInfer<T>, context: Context): Promise<void>;
-	deleteList<T>(address: ValueList<T>, context: Context): Promise<void>;
-	getName(context: Context): Promise<string | undefined>;
-	setName(name: string | undefined, context: Context): Promise<void>;
-	getLabel(targetId: string, context: Context): Promise<string | undefined>;
-	setLabel(targetId: string, label: string | undefined, context: Context): Promise<void>;
-	findEntries(query: EntryQuery | undefined, context: Context): Promise<Entry[]>;
-	findEntry(query: EntryQuery | undefined, context: Context): Promise<Entry | undefined>;
-	findEntriesOnBranch(query: BranchScan | undefined, context: Context): Promise<Entry[]>;
-	findEntryOnBranch(query: BranchScan | undefined, context: Context): Promise<Entry | undefined>;
+export type SessionMutationCallback<T> = (mutator: SessionMutator, context: Context) => T | Promise<T>;
+
+export interface Branch {
+	readonly name: string;
+	getTipId(context: Context): Promise<string | null>;
+	findEntries(query: BranchScan | undefined, context: Context): Promise<Entry[]>;
+	findEntry(query: BranchScan | undefined, context: Context): Promise<Entry | undefined>;
 	appendMessage(message: AgentMessage, context: Context): Promise<string>;
 	appendCustomEntry(customType: string, data: JsonValue | undefined, context: Context): Promise<string>;
 }
 
-export interface Session<TMetadata extends SessionMetadata = SessionMetadata> extends SessionTree, SessionReader {
+export interface Session<TMetadata extends SessionMetadata = SessionMetadata> extends SessionReader {
 	readonly metadata: TMetadata;
 	readonly idGenerator: IdGenerator;
-	view(lane: string): SessionTree;
-	beginMutation(lane: string, context: Context): Promise<SessionMutation>;
-	mutate<T>(
-		lane: string,
-		mutation: (mutator: SessionMutator, context: Context) => T | Promise<T>,
-		context: Context,
-	): Promise<T>;
-	createLane(
-		name: string,
-		at: string | null,
-		configuration: LaneConfiguration,
-		onCommitted: ((context: Context) => void | Promise<void>) | undefined,
-		context: Context,
-	): Promise<SessionTree>;
+	getEntry(id: string, context: Context): Promise<Entry | undefined>;
+	getStats(context: Context): Promise<SessionStats>;
+	getName(context: Context): Promise<string | undefined>;
+	getLabel(targetId: string, context: Context): Promise<string | undefined>;
+	findEntries(query: EntryQuery | undefined, context: Context): Promise<Entry[]>;
+	findEntry(query: EntryQuery | undefined, context: Context): Promise<Entry | undefined>;
+	branch(name: string, context: Context): Promise<Branch | undefined>;
+	createBranch(name: string, at: string | null, context: Context): Promise<Branch>;
+	beginMutation(context: Context): Promise<SessionMutation>;
+	/**
+	 * Trusted exclusive callback over the Session mutation line. Calling a public Session writer from
+	 * this callback queues it behind the callback; awaiting that nested writer therefore deadlocks.
+	 * Use the supplied mutator for the callback's sole commit.
+	 */
+	mutate<T>(mutation: SessionMutationCallback<T>, context: Context): Promise<T>;
+	setValue<T>(address: Value<T>, next: NoInfer<T>, context: Context): Promise<void>;
+	deleteValue<T>(address: Value<T>, context: Context): Promise<void>;
+	appendList<T>(address: ValueList<T>, element: NoInfer<T>, context: Context): Promise<void>;
+	deleteList<T>(address: ValueList<T>, context: Context): Promise<void>;
+	setName(name: string | undefined, context: Context): Promise<void>;
+	setLabel(targetId: string, label: string | undefined, context: Context): Promise<void>;
 	close(context: Context): Promise<void>;
 }
 
@@ -562,13 +570,12 @@ export interface SessionCreateOptions {
 export type ForkOptions =
 	| {
 			/**
-			 * Copy one branch path into the destination session's main lane. This is
-			 * the default scope. The destination starts idle with a fresh lane state,
-			 * no operation values, no pending entries, no last result, and an empty
-			 * usage ledger.
+			 * Copy one path into destination Branch main. A configured source AgentLane
+			 * copies its configuration plus fresh idle state; a data-only Branch remains
+			 * data-only. Operation/pending/result/usage state is excluded.
 			 */
 			scope?: "branch";
-			/** Entry to fork from. Defaults to the source main lane's current leaf. */
+			/** Entry to fork from. Defaults to the source main Branch's current tip. */
 			entryId?: string;
 			/**
 			 * Whether the fork includes the selected entry or stops at its parent.
@@ -580,9 +587,9 @@ export type ForkOptions =
 	  }
 	| {
 			/**
-			 * Copy the whole conversation tree and every lane leaf/configuration. The
-			 * destination starts idle with fresh lane states, no operation values,
-			 * no pending entries, no last results, and an empty usage ledger.
+			 * Copy the whole conversation tree and every Branch tip. Each configured
+			 * AgentLane copies configuration plus fresh idle state; data-only Branches
+			 * remain data-only. Operation/pending/result/usage state is excluded.
 			 */
 			scope: "tree";
 			/** Optional destination session id. */

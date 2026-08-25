@@ -27,8 +27,8 @@ import type {
 	UsageRow,
 } from "../../session/types.ts";
 import {
+	branchTip,
 	deleteList,
-	laneLeaf,
 	operationState as operationStateValue,
 	pendingAssistantFrames,
 	setValue,
@@ -155,10 +155,10 @@ async function readRequestMessages<TContext extends object | undefined>(
 			) {
 				throw new SessionInvariantError("Generation context lost its ready boundary");
 			}
-			if (state.leafId === null) throw new SessionInvariantError("Assistant generation has no branch leaf");
+			if (state.tipId === null) throw new SessionInvariantError("Assistant generation has no Branch tip");
 			const entries = (
 				await reader.scanBranch(
-					{ start: state.leafId, stopAtType: "compaction", order: "newestFirst" },
+					{ start: state.tipId, stopAtType: "compaction", order: "newestFirst" },
 					drive.context,
 				)
 			).reverse();
@@ -388,7 +388,7 @@ export function settleAssistant<TContext extends object | undefined>(
 			};
 			const responseEntry: NewEntry<MessageEntry> = {
 				id: identity.responseEntryId,
-				parentId: state.leafId,
+				parentId: state.tipId,
 				type: "message",
 				message: committed,
 			};
@@ -403,13 +403,13 @@ export function settleAssistant<TContext extends object | undefined>(
 				writes: [
 					insertEntry(responseEntry),
 					insertUsage(usageRow),
-					setValue(laneLeaf(lane.name), identity.responseEntryId),
+					setValue(branchTip(lane.name), identity.responseEntryId),
 					deleteList(pendingAssistantFrames(drive.operationId, identity.responseEntryId)),
 					setValue(operationStateValue(drive.operationId), nextState),
 				],
 				next: {
 					...state,
-					leafId: identity.responseEntryId,
+					tipId: identity.responseEntryId,
 					operation: { meta: operation.meta, state: nextState },
 				},
 				materialize: () => ({ kind: "continue" }) as const,

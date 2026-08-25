@@ -140,7 +140,7 @@ export async function hydrateTerminalOutcome(
 					operation: "run",
 					runId: lastResult.operationId,
 					kind: "completed",
-					leafId: lastResult.leafId,
+					tipId: lastResult.tipId,
 				};
 			}
 			if (lastResult.finalAssistantEntryId === undefined) {
@@ -151,7 +151,7 @@ export async function hydrateTerminalOutcome(
 				operation: "run",
 				runId: lastResult.operationId,
 				kind: "completed",
-				leafId: lastResult.leafId,
+				tipId: lastResult.tipId,
 				finalEntryId: entry.id,
 				finalMessage: entry.message,
 			};
@@ -169,7 +169,7 @@ export async function hydrateTerminalOutcome(
 					operation: "run",
 					runId: lastResult.operationId,
 					kind: "failed",
-					leafId: lastResult.leafId,
+					tipId: lastResult.tipId,
 					error: lastResult.error,
 					...final,
 				}
@@ -177,19 +177,19 @@ export async function hydrateTerminalOutcome(
 					operation: "run",
 					runId: lastResult.operationId,
 					kind: "aborted",
-					leafId: lastResult.leafId,
+					tipId: lastResult.tipId,
 					...final,
 				};
 	}
 
 	if (lastResult.kind === "compaction") {
 		if (lastResult.outcome === "completed") {
-			const entry = await requireCompactionEntry(reader, lastResult.leafId, context);
+			const entry = await requireCompactionEntry(reader, lastResult.tipId, context);
 			return {
 				operation: "compaction",
 				runId: lastResult.operationId,
 				kind: "completed",
-				leafId: lastResult.leafId,
+				tipId: lastResult.tipId,
 				entry,
 			};
 		}
@@ -198,7 +198,7 @@ export async function hydrateTerminalOutcome(
 				operation: "compaction",
 				runId: lastResult.operationId,
 				kind: "failed",
-				leafId: lastResult.leafId,
+				tipId: lastResult.tipId,
 				error: lastResult.error,
 			};
 		}
@@ -206,7 +206,7 @@ export async function hydrateTerminalOutcome(
 			operation: "compaction",
 			runId: lastResult.operationId,
 			kind: lastResult.outcome,
-			leafId: lastResult.leafId,
+			tipId: lastResult.tipId,
 		};
 	}
 
@@ -217,7 +217,7 @@ export async function hydrateTerminalOutcome(
 				: await requireSummaryEntry(reader, lastResult.summaryEntryId, context);
 		if (
 			summaryEntry !== undefined &&
-			(summaryEntry.id !== lastResult.leafId || summaryEntry.fromId !== lastResult.oldLeafId)
+			(summaryEntry.id !== lastResult.tipId || summaryEntry.fromId !== lastResult.oldTipId)
 		) {
 			throw new SessionInvariantError("Completed navigation summary contradicts its terminal result");
 		}
@@ -225,8 +225,8 @@ export async function hydrateTerminalOutcome(
 			operation: "navigation",
 			runId: lastResult.operationId,
 			kind: "completed",
-			oldLeafId: lastResult.oldLeafId,
-			newLeafId: lastResult.leafId,
+			oldTipId: lastResult.oldTipId,
+			newTipId: lastResult.tipId,
 			...(summaryEntry === undefined ? {} : { summaryEntry }),
 		};
 	}
@@ -235,7 +235,7 @@ export async function hydrateTerminalOutcome(
 			operation: "navigation",
 			runId: lastResult.operationId,
 			kind: "failed",
-			leafId: lastResult.leafId,
+			tipId: lastResult.tipId,
 			error: lastResult.error,
 		};
 	}
@@ -243,6 +243,6 @@ export async function hydrateTerminalOutcome(
 		operation: "navigation",
 		runId: lastResult.operationId,
 		kind: lastResult.outcome,
-		leafId: lastResult.leafId,
+		tipId: lastResult.tipId,
 	};
 }

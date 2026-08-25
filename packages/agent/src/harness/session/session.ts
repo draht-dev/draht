@@ -2,42 +2,32 @@ import { uuidv7 } from "@draht/ai";
 import type { AgentMessage } from "../../types.ts";
 import type { Context } from "../context.ts";
 import { insertEntry } from "./commit.ts";
-import { LaneMutationLine } from "./lane-mutations.ts";
+import { MutationLine } from "./mutation-line.ts";
 import type {
+	Branch,
 	BranchScan,
 	CommitResult,
 	Entry,
 	EntryQuery,
 	IdGenerator,
 	JsonValue,
-	LaneConfiguration,
-	OperationMeta,
-	OperationState,
-	PendingEntry,
 	Session,
 	SessionMetadata,
 	SessionMutation,
-	SessionMutator,
+	SessionMutationCallback,
 	SessionStats,
-	SessionTree,
 	Storage,
 	StorageBranchScan,
 	Write,
 } from "./types.ts";
 import {
 	appendList as appendListWrite,
+	branchTip,
 	deleteList as deleteListWrite,
 	deleteValue as deleteValueWrite,
 	entryLabel,
 	type ListElement,
 	type ListReadOptions,
-	laneConfig,
-	laneLastResult,
-	laneLeaf,
-	laneState,
-	operationMeta,
-	operationState,
-	pendingEntry,
 	type StoredValue,
 	sessionName,
 	setValue as setValueWrite,
@@ -46,7 +36,7 @@ import {
 } from "./values.ts";
 
 export interface StorageBackedSessionOptions {
-	laneMutationLine?: LaneMutationLine;
+	mutationLine?: MutationLine;
 	idGenerator?: IdGenerator;
 	onClose?: () => void;
 }
@@ -59,27 +49,27 @@ export class SessionInvariantError extends Error {
 	}
 }
 
-/** A requested session lane name is invalid. */
-export class SessionInvalidLaneError extends Error {
-	readonly lane: string;
+/** A requested Branch name is invalid. */
+export class SessionInvalidBranchError extends Error {
+	readonly branch: string;
 	readonly reason: string;
 
-	constructor(lane: string, reason: string) {
-		super(`Invalid lane ${JSON.stringify(lane)}: ${reason}`);
-		this.name = "SessionInvalidLaneError";
-		this.lane = lane;
+	constructor(branch: string, reason: string) {
+		super(`Invalid branch ${JSON.stringify(branch)}: ${reason}`);
+		this.name = "SessionInvalidBranchError";
+		this.branch = branch;
 		this.reason = reason;
 	}
 }
 
-/** A requested session lane already exists. */
-export class SessionLaneExistsError extends Error {
-	readonly lane: string;
+/** A requested branch already exists. */
+export class SessionBranchExistsError extends Error {
+	readonly branch: string;
 
-	constructor(lane: string) {
-		super(`Lane already exists: ${lane}`);
-		this.name = "SessionLaneExistsError";
-		this.lane = lane;
+	constructor(branch: string) {
+		super(`Branch already exists: ${branch}`);
+		this.name = "SessionBranchExistsError";
+		this.branch = branch;
 	}
 }
 
@@ -103,15 +93,13 @@ export class SessionUnknownTargetError extends Error {
 }
 
 class StorageBackedSessionMutation implements SessionMutation {
-	readonly lane: string;
 	private readonly storage: Storage;
 	private readonly release: () => void;
 	private active = true;
 	private commitResult: Promise<CommitResult> | undefined;
 	private endPromise: Promise<void> | undefined;
 
-	constructor(lane: string, storage: Storage, release: () => void) {
-		this.lane = lane;
+	constructor(storage: Storage, release: () => void) {
 		this.storage = storage;
 		this.release = release;
 	}
@@ -138,10 +126,9 @@ class StorageBackedSessionMutation implements SessionMutation {
 	}
 
 	end(_context: Context): Promise<void> {
-		this.endPromise ??= this.settle().finally(() => {
-			this.active = false;
-			this.release();
-		});
+		if (this.endPromise !== undefined) return this.endPromise;
+		this.active = false;
+		this.endPromise = this.settle().finally(this.release);
 		return this.endPromise;
 	}
 
@@ -188,18 +175,54 @@ class StorageBackedSessionMutation implements SessionMutation {
 	}
 }
 
-/**
- * Package-internal typed boundary shared by concrete session repositories.
- * After this Session is passed to AgentHarness.create(), retained Session and SessionTree
- * facades are read-only until harness close; mutating through them would bypass the owning
- * Lane's authoritative projection and is a trusted-programming defect.
- */
+class StorageBackedBranch implements Branch {
+	readonly name: string;
+	private readonly session: StorageBackedSession;
+
+	constructor(name: string, session: StorageBackedSession) {
+		this.name = name;
+		this.session = session;
+	}
+
+	getTipId(context: Context): Promise<string | null> {
+		return this.session.getBranchTip(this.name, context);
+	}
+
+	async findEntries(query: BranchScan | undefined, context: Context): Promise<Entry[]> {
+		query ??= {};
+		const start = query.start ?? (await this.getTipId(context));
+		if (start === null) return [];
+		return this.session.scanBranch({ ...query, start, order: query.order ?? "newestFirst" }, context);
+	}
+
+	async findEntry(query: BranchScan | undefined, context: Context): Promise<Entry | undefined> {
+		query ??= {};
+		return (
+			await this.findEntries({ ...query, limit: query.limit === undefined ? 1 : Math.min(query.limit, 1) }, context)
+		)[0];
+	}
+
+	appendMessage(message: AgentMessage, context: Context): Promise<string> {
+		return this.session.appendToBranch(this.name, { type: "message", message }, context);
+	}
+
+	appendCustomEntry(customType: string, data: JsonValue | undefined, context: Context): Promise<string> {
+		return this.session.appendToBranch(
+			this.name,
+			{ type: "custom", customType, ...(data === undefined ? {} : { data }) },
+			context,
+		);
+	}
+}
+
+/** Package-internal typed boundary shared by concrete session repositories. */
 export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMetadata> implements Session<TMetadata> {
 	readonly metadata: TMetadata;
 	readonly idGenerator: IdGenerator;
 	private readonly storage: Storage;
-	private readonly laneMutationLine: LaneMutationLine;
+	private readonly mutationLine: MutationLine;
 	private readonly onClose: (() => void) | undefined;
+	private readonly branches = new Map<string, StorageBackedBranch>();
 	private readonly closedError = new Error("Session is closed");
 	private state: "open" | "closing" | "closed" = "open";
 	private closePromise: Promise<void> | undefined;
@@ -208,11 +231,11 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 		this.metadata = metadata;
 		this.idGenerator = options.idGenerator ?? { next: uuidv7 };
 		this.storage = storage;
-		this.laneMutationLine = options.laneMutationLine ?? new LaneMutationLine();
+		this.mutationLine = options.mutationLine ?? new MutationLine();
 		this.onClose = options.onClose;
 	}
 
-	async beginMutation(lane: string, _context: Context): Promise<SessionMutation> {
+	async beginMutation(_context: Context): Promise<SessionMutation> {
 		this.assertOpen();
 		let grant!: (mutation: SessionMutation) => void;
 		let rejectGrant!: (error: unknown) => void;
@@ -224,20 +247,16 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 		const finished = new Promise<void>((resolve) => {
 			release = resolve;
 		});
-		const line = this.laneMutationLine.run(lane, async () => {
-			grant(new StorageBackedSessionMutation(lane, this.storage, release));
+		const line = this.mutationLine.run(async () => {
+			grant(new StorageBackedSessionMutation(this.storage, release));
 			await finished;
 		});
 		void line.catch(rejectGrant);
 		return granted;
 	}
 
-	async mutate<T>(
-		lane: string,
-		mutation: (mutator: SessionMutator, context: Context) => T | Promise<T>,
-		context: Context,
-	): Promise<T> {
-		const mutator = await this.beginMutation(lane, context);
+	async mutate<T>(mutation: SessionMutationCallback<T>, context: Context): Promise<T> {
+		const mutator = await this.beginMutation(context);
 		try {
 			return await mutation(mutator, context);
 		} finally {
@@ -248,6 +267,10 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 	async getEntries(ids: string[], context: Context): Promise<Map<string, Entry>> {
 		this.assertOpen();
 		return this.storage.getEntries(ids, context);
+	}
+
+	async getEntry(id: string, context: Context): Promise<Entry | undefined> {
+		return (await this.getEntries([id], context)).get(id);
 	}
 
 	async getValue<T>(address: Value<T>, context: Context): Promise<StoredValue<T> | undefined> {
@@ -274,134 +297,17 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 		return this.storage.scanBranch(query, context);
 	}
 
-	view(lane: string): SessionTree {
-		return {
-			getLeafId: (context) => this.getLeafIdForLane(lane, context),
-			getEntry: (id, context) => this.getEntry(id, context),
-			getStats: (context) => this.getStats(context),
-			getValue: (address, context) => this.getValue(address, context),
-			scanValues: (prefix, context) => this.scanValues(prefix, context),
-			readList: (address, options, context) => this.readList(address, options, context),
-			setValue: (address, next, context) => this.setValueForLane(lane, address, next, context),
-			deleteValue: (address, context) => this.deleteValueForLane(lane, address, context),
-			appendList: (address, element, context) => this.appendListForLane(lane, address, element, context),
-			deleteList: (address, context) => this.deleteListForLane(lane, address, context),
-			getName: (context) => this.getName(context),
-			setName: (name, context) => this.setNameForLane(lane, name, context),
-			getLabel: (targetId, context) => this.getLabel(targetId, context),
-			setLabel: (targetId, label, context) => this.setLabelForLane(lane, targetId, label, context),
-			findEntries: (query, context) => this.findEntries(query, context),
-			findEntry: (query, context) => this.findEntry(query, context),
-			findEntriesOnBranch: (query, context) => this.findEntriesOnBranchForLane(lane, query, context),
-			findEntryOnBranch: (query, context) => this.findEntryOnBranchForLane(lane, query, context),
-			appendMessage: (message, context) => this.appendMessageForLane(lane, message, context),
-			appendCustomEntry: (customType, data, context) =>
-				this.appendCustomEntryForLane(lane, customType, data, context),
-		};
-	}
-
-	async createLane(
-		name: string,
-		at: string | null,
-		configuration: LaneConfiguration,
-		onCommitted: ((context: Context) => void | Promise<void>) | undefined,
-		context: Context,
-	): Promise<SessionTree> {
-		this.assertOpen();
-		let completion: Promise<void> | undefined;
-		await this.mutate(
-			name,
-			async (mutator) => {
-				if (mutator.lane !== name) {
-					throw new SessionInvariantError(
-						`Lane mutation for ${JSON.stringify(mutator.lane)} cannot create ${JSON.stringify(name)}`,
-					);
-				}
-				if (name.length === 0) throw new SessionInvalidLaneError(name, "lane name must not be empty");
-
-				const [leaf, storedConfiguration, storedLaneState, lastResult] = await Promise.all([
-					mutator.getValue(laneLeaf(name), context),
-					mutator.getValue(laneConfig(name), context),
-					mutator.getValue(laneState(name), context),
-					mutator.getValue(laneLastResult(name), context),
-				]);
-				const presentCount = [leaf, storedConfiguration, storedLaneState, lastResult].filter(
-					(stored) => stored !== undefined,
-				).length;
-				if (
-					leaf !== undefined &&
-					storedLaneState !== undefined &&
-					(storedConfiguration !== undefined || (name === "main" && lastResult === undefined))
-				) {
-					throw new SessionLaneExistsError(name);
-				}
-				if (presentCount !== 0) {
-					throw new SessionInvariantError(`Lane ${JSON.stringify(name)} has incomplete durable state`);
-				}
-				if (at !== null && !(await mutator.getEntries([at], context)).has(at)) {
-					throw new SessionUnknownTargetError(at);
-				}
-
-				await mutator.commit(
-					[
-						setValueWrite(laneConfig(name), configuration),
-						setValueWrite(laneLeaf(name), at),
-						setValueWrite(laneState(name), { currentOperationId: null, pendingNextRun: [] }),
-					],
-					context,
-				);
-				const result = onCommitted?.(context);
-				completion = result === undefined ? undefined : Promise.resolve(result);
-			},
-			context,
-		);
-		await completion;
-		return this.view(name);
-	}
-
-	getLeafId(context: Context): Promise<string | null> {
-		return this.getLeafIdForLane("main", context);
-	}
-
-	async getEntry(id: string, context: Context): Promise<Entry | undefined> {
-		return (await this.getEntries([id], context)).get(id);
-	}
-
 	async getStats(context: Context): Promise<SessionStats> {
 		this.assertOpen();
 		return this.storage.getStats(context);
-	}
-
-	setValue<T>(address: Value<T>, next: NoInfer<T>, context: Context): Promise<void> {
-		return this.setValueForLane("main", address, next, context);
-	}
-
-	deleteValue<T>(address: Value<T>, context: Context): Promise<void> {
-		return this.deleteValueForLane("main", address, context);
-	}
-
-	appendList<T>(address: ValueList<T>, element: NoInfer<T>, context: Context): Promise<void> {
-		return this.appendListForLane("main", address, element, context);
-	}
-
-	deleteList<T>(address: ValueList<T>, context: Context): Promise<void> {
-		return this.deleteListForLane("main", address, context);
 	}
 
 	async getName(context: Context): Promise<string | undefined> {
 		return (await this.getValue(sessionName, context))?.value;
 	}
 
-	setName(name: string | undefined, context: Context): Promise<void> {
-		return this.setNameForLane("main", name, context);
-	}
-
 	async getLabel(targetId: string, context: Context): Promise<string | undefined> {
 		return (await this.getValue(entryLabel(targetId), context))?.value;
-	}
-
-	setLabel(targetId: string, label: string | undefined, context: Context): Promise<void> {
-		return this.setLabelForLane("main", targetId, label, context);
 	}
 
 	async findEntries(query: EntryQuery | undefined, context: Context): Promise<Entry[]> {
@@ -430,44 +336,69 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 
 	async findEntry(query: EntryQuery | undefined, context: Context): Promise<Entry | undefined> {
 		query ??= {};
-		const entries = await this.findEntries(
-			{
-				...query,
-				limit: query.limit === undefined ? 1 : Math.min(query.limit, 1),
-			},
-			context,
-		);
-		return entries[0];
+		return (
+			await this.findEntries({ ...query, limit: query.limit === undefined ? 1 : Math.min(query.limit, 1) }, context)
+		)[0];
 	}
 
-	findEntriesOnBranch(query: BranchScan | undefined, context: Context): Promise<Entry[]> {
-		return this.findEntriesOnBranchForLane("main", query, context);
+	async branch(name: string, context: Context): Promise<Branch | undefined> {
+		this.assertValidBranchName(name);
+		if ((await this.getValue(branchTip(name), context)) === undefined) return undefined;
+		return this.getOrCreateBranchObject(name);
 	}
 
-	findEntryOnBranch(query: BranchScan | undefined, context: Context): Promise<Entry | undefined> {
-		return this.findEntryOnBranchForLane("main", query, context);
+	async createBranch(name: string, at: string | null, context: Context): Promise<Branch> {
+		this.assertOpen();
+		this.assertValidBranchName(name);
+		await this.mutate(async (mutator) => {
+			if ((await mutator.getValue(branchTip(name), context)) !== undefined) {
+				throw new SessionBranchExistsError(name);
+			}
+			if (at !== null && !(await mutator.getEntries([at], context)).has(at)) {
+				throw new SessionUnknownTargetError(at);
+			}
+			await mutator.commit([setValueWrite(branchTip(name), at)], context);
+		}, context);
+		return this.getOrCreateBranchObject(name);
 	}
 
-	appendMessage(message: AgentMessage, context: Context): Promise<string> {
-		return this.captureAppend("main", { type: "message", payload: message }, context);
+	setValue<T>(address: Value<T>, next: NoInfer<T>, context: Context): Promise<void> {
+		return this.mutate(async (mutator) => {
+			await mutator.commit([setValueWrite(address, next)], context);
+		}, context);
 	}
 
-	appendCustomEntry(customType: string, data: JsonValue | undefined, context: Context): Promise<string> {
-		return this.captureAppend(
-			"main",
-			{
-				type: "custom",
-				customType,
-				...(data === undefined ? {} : { payload: data }),
-			},
-			context,
-		);
+	deleteValue<T>(address: Value<T>, context: Context): Promise<void> {
+		return this.mutate(async (mutator) => {
+			await mutator.commit([deleteValueWrite(address)], context);
+		}, context);
+	}
+
+	appendList<T>(address: ValueList<T>, element: NoInfer<T>, context: Context): Promise<void> {
+		return this.mutate(async (mutator) => {
+			await mutator.commit([appendListWrite(address, element)], context);
+		}, context);
+	}
+
+	deleteList<T>(address: ValueList<T>, context: Context): Promise<void> {
+		return this.mutate(async (mutator) => {
+			await mutator.commit([deleteListWrite(address)], context);
+		}, context);
+	}
+
+	setName(name: string | undefined, context: Context): Promise<void> {
+		return name === undefined ? this.deleteValue(sessionName, context) : this.setValue(sessionName, name, context);
+	}
+
+	setLabel(targetId: string, label: string | undefined, context: Context): Promise<void> {
+		const address = entryLabel(targetId);
+		return label === undefined ? this.deleteValue(address, context) : this.setValue(address, label, context);
 	}
 
 	close(context: Context): Promise<void> {
 		if (this.closePromise !== undefined) return this.closePromise;
 		this.state = "closing";
-		this.closePromise = this.laneMutationLine
+		this.closePromise = this.mutationLine
 			.seal(this.closedError)
 			.then(() => this.storage.close(context))
 			.finally(() => {
@@ -477,215 +408,59 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 		return this.closePromise;
 	}
 
-	private async getLeafIdForLane(lane: string, context: Context): Promise<string | null> {
-		const leaf = await this.getValue(laneLeaf(lane), context);
-		if (leaf === undefined) throw new Error(`Unknown lane: ${lane}`);
-		return leaf.value;
+	async getBranchTip(name: string, context: Context): Promise<string | null> {
+		const stored = await this.getValue(branchTip(name), context);
+		if (stored === undefined) throw new SessionInvariantError(`Unknown branch: ${name}`);
+		return stored.value;
 	}
 
-	private async findEntriesOnBranchForLane(
-		lane: string,
-		query: BranchScan | undefined,
-		context: Context,
-	): Promise<Entry[]> {
-		query ??= {};
-		this.assertOpen();
-		const start = query.start ?? (await this.getLeafIdForLane(lane, context));
-		if (start === null) return [];
-		return this.storage.scanBranch({ ...query, start, order: query.order ?? "newestFirst" }, context);
-	}
-
-	private async findEntryOnBranchForLane(
-		lane: string,
-		query: BranchScan | undefined,
-		context: Context,
-	): Promise<Entry | undefined> {
-		query ??= {};
-		const entries = await this.findEntriesOnBranchForLane(
-			lane,
-			{
-				...query,
-				limit: query.limit === undefined ? 1 : Math.min(query.limit, 1),
-			},
-			context,
-		);
-		return entries[0];
-	}
-
-	private setValueForLane<T>(lane: string, address: Value<T>, next: NoInfer<T>, context: Context): Promise<void> {
-		return this.mutate(
-			lane,
-			async (mutator) => {
-				await mutator.commit([setValueWrite(address, next)], context);
-			},
-			context,
-		);
-	}
-
-	private deleteValueForLane<T>(lane: string, address: Value<T>, context: Context): Promise<void> {
-		return this.mutate(
-			lane,
-			async (mutator) => {
-				await mutator.commit([deleteValueWrite(address)], context);
-			},
-			context,
-		);
-	}
-
-	private appendListForLane<T>(
-		lane: string,
-		address: ValueList<T>,
-		element: NoInfer<T>,
-		context: Context,
-	): Promise<void> {
-		return this.mutate(
-			lane,
-			async (mutator) => {
-				await mutator.commit([appendListWrite(address, element)], context);
-			},
-			context,
-		);
-	}
-
-	private deleteListForLane<T>(lane: string, address: ValueList<T>, context: Context): Promise<void> {
-		return this.mutate(
-			lane,
-			async (mutator) => {
-				await mutator.commit([deleteListWrite(address)], context);
-			},
-			context,
-		);
-	}
-
-	private setNameForLane(lane: string, name: string | undefined, context: Context): Promise<void> {
-		return name === undefined
-			? this.deleteValueForLane(lane, sessionName, context)
-			: this.setValueForLane(lane, sessionName, name, context);
-	}
-
-	private setLabelForLane(lane: string, targetId: string, label: string | undefined, context: Context): Promise<void> {
-		const address = entryLabel(targetId);
-		return label === undefined
-			? this.deleteValueForLane(lane, address, context)
-			: this.setValueForLane(lane, address, label, context);
-	}
-
-	private appendMessageForLane(lane: string, message: AgentMessage, context: Context): Promise<string> {
-		return this.captureAppend(lane, { type: "message", payload: message }, context);
-	}
-
-	private appendCustomEntryForLane(
-		lane: string,
-		customType: string,
-		data: JsonValue | undefined,
+	async appendToBranch(
+		name: string,
+		entry: { type: "message"; message: AgentMessage } | { type: "custom"; customType: string; data?: JsonValue },
 		context: Context,
 	): Promise<string> {
-		return this.captureAppend(
-			lane,
-			{
-				type: "custom",
-				customType,
-				...(data === undefined ? {} : { payload: data }),
-			},
-			context,
-		);
-	}
-
-	private async captureAppend(lane: string, pending: PendingEntry, context: Context): Promise<string> {
 		this.assertOpen();
-		if (
-			pending.type === "message" &&
-			pending.payload.role === "assistant" &&
-			pending.payload.stopReason === "pending"
-		) {
+		if (entry.type === "message" && entry.message.role === "assistant" && entry.message.stopReason === "pending") {
 			throw new SessionPendingAssistantMessageError();
 		}
-		return this.appendCaptured(lane, this.idGenerator.next(), pending, context);
-	}
-
-	private async appendCaptured(lane: string, id: string, pending: PendingEntry, context: Context): Promise<string> {
-		await this.mutate(lane, (mutator) => this.appendCapturedIfReady(mutator, id, pending, context), context);
-		return id;
-	}
-
-	private async appendCapturedIfReady(
-		mutator: SessionMutator,
-		id: string,
-		pending: PendingEntry,
-		context: Context,
-	): Promise<void> {
-		const { lane } = mutator;
-		const [leaf, storedLaneState] = await Promise.all([
-			mutator.getValue(laneLeaf(lane), context),
-			mutator.getValue(laneState(lane), context),
-		]);
-		if (leaf === undefined) throw new SessionInvariantError(`Unknown lane: ${lane}`);
-		if (storedLaneState === undefined)
-			throw new SessionInvariantError(`Lane ${JSON.stringify(lane)} is missing lane.state`);
-		const operationId = storedLaneState.value.currentOperationId;
-		if (operationId === null) {
+		const id = this.idGenerator.next();
+		await this.mutate(async (mutator) => {
+			const tip = await mutator.getValue(branchTip(name), context);
+			if (tip === undefined) throw new SessionInvariantError(`Unknown branch: ${name}`);
 			await mutator.commit(
 				[
 					insertEntry(
-						pending.type === "message"
-							? { id, parentId: leaf.value, type: "message", message: pending.payload }
+						entry.type === "message"
+							? { id, parentId: tip.value, type: "message", message: entry.message }
 							: {
 									id,
-									parentId: leaf.value,
+									parentId: tip.value,
 									type: "custom",
-									customType: pending.customType,
-									...(pending.payload === undefined ? {} : { data: pending.payload }),
+									customType: entry.customType,
+									...(entry.data === undefined ? {} : { data: entry.data }),
 								},
 					),
-					setValueWrite(laneLeaf(lane), id),
+					setValueWrite(branchTip(name), id),
 				],
 				context,
 			);
-			return;
-		}
-
-		const [operation, storedOperationState] = await Promise.all([
-			mutator.getValue(operationMeta(operationId), context),
-			mutator.getValue(operationState(operationId), context),
-		]);
-		if (operation === undefined) {
-			throw new SessionInvariantError(`Active operation ${operationId} is missing op.meta`);
-		}
-		if (storedOperationState === undefined) {
-			throw new SessionInvariantError(`Active operation ${operationId} is missing op.state`);
-		}
-		this.validateCurrentOperation(lane, operation.value, storedOperationState.value);
-		if (storedOperationState.value.kind !== "run") {
-			// TODO: Tree writes during structural operations must wait for the operation to finish,
-			// then re-evaluate the lane state. That coordination is not yet implemented.
-			throw new Error(`Cannot append while structural operation ${operationId} is active`);
-		}
-
-		await mutator.commit(
-			[
-				setValueWrite(pendingEntry(id), pending),
-				setValueWrite(operationState(operationId), {
-					...storedOperationState.value,
-					inbox: {
-						...storedOperationState.value.inbox,
-						writes: [...storedOperationState.value.inbox.writes, id],
-					},
-				}),
-			],
-			context,
-		);
+		}, context);
+		return id;
 	}
 
-	private validateCurrentOperation(lane: string, operation: OperationMeta, state: OperationState): void {
-		if (operation.lane !== lane) {
-			throw new SessionInvariantError(
-				`Active operation ${operation.operationId} belongs to lane ${JSON.stringify(operation.lane)}, not ${JSON.stringify(lane)}`,
-			);
+	private getOrCreateBranchObject(name: string): Branch {
+		let branch = this.branches.get(name);
+		if (branch === undefined) {
+			branch = new StorageBackedBranch(name, this);
+			this.branches.set(name, branch);
 		}
-		if (operation.intent.kind !== state.kind) {
-			throw new SessionInvariantError(
-				`Active operation ${operation.operationId} intent ${operation.intent.kind} does not match state ${state.kind}`,
-			);
+		return branch;
+	}
+
+	private assertValidBranchName(name: string): void {
+		if (name.length === 0) throw new SessionInvalidBranchError(name, "branch name must not be empty");
+		if (name.includes("\u0000")) {
+			throw new SessionInvalidBranchError(name, "branch name must not contain \\u0000");
 		}
 	}
 

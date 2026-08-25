@@ -2,7 +2,7 @@
 
 ## Status
 
-Complete. Phase A established minimal attachment, open-operation inventory, lane-line inspection/watch capture, commit-continuation recipient binding, and in-band identity-failure vocabulary. Phase B landed in `beac75ecc` with focused, monorepo-check, full-suite, and final Fable review passing.
+Complete. Phase A established minimal attachment, open-operation inventory, Session-line inspection/watch capture, commit-continuation recipient binding, and in-band identity-failure vocabulary. Phase B landed in `beac75ecc` with focused, monorepo-check, full-suite, and final Fable review passing.
 
 Implementation also updated downstream protocol/coding-agent wire projections required by the changed public contract. No execution owner, provider/tool effect, timer, retry, polling, cancellation procedure, manual action, or terminal settlement was added.
 
@@ -16,7 +16,7 @@ idle lane
 → durable open operation in payload-free starting
 
 open or running lane
-→ lane-line watch capture
+→ Session-line watch capture
 → complete snapshot plus gap-free subsequent events
 ```
 
@@ -25,7 +25,7 @@ After `AgentHarness.create(options, context)` succeeds:
 - every configured lane has a complete small process-local projection;
 - `open` inventories every durable current operation without predicting model/tool availability;
 - attachment starts no hook, provider, tool, timer, breakpoint, drive owner, or application callback;
-- `inspectExecution(context)` observes the small projection and local owner on the lane line;
+- `inspectExecution(context)` observes the small projection and local owner on the Session line;
 - `watch(context)` registers buffering, clones live presentation, and performs bounded snapshot reads in one no-write lane job;
 - every committing lane job publishes memory and synchronously binds its event batch in the commit continuation;
 - the mutation does not await listener delivery, while the public operation does.
@@ -40,7 +40,7 @@ Passing the open Session to `AgentHarness.create()` transfers orchestration owne
 
 Attachment reads only:
 
-- `laneLeaf`, `laneConfig`, `laneState`, optional `laneLastResult`;
+- `branchTip`, `laneConfig`, `laneState`, optional `laneLastResult`;
 - `operationMeta` and `operationState` for a current operation.
 
 It validates required existence, operation id/lane ownership, and intent/state kind compatibility. Projection corruption faults `create()`.
@@ -49,7 +49,7 @@ Attachment does not read transcript, queues, pending writes, drained payloads, d
 
 ### 2. Watch owns detailed snapshot reads
 
-One no-write lane mutation job defines the watch boundary:
+One no-write Session mutation job defines the watch boundary:
 
 ```text
 enter after all earlier lane jobs
@@ -57,7 +57,7 @@ enter after all earlier lane jobs
 → synchronously clone live presentation state
 → perform bounded durable reads while later lane jobs are excluded
 → assemble snapshot
-→ release lane line
+→ release Session line
 → return handle
 ```
 
@@ -65,7 +65,7 @@ There is no special first-watch cache. The same path handles immediate post-atta
 
 The bounded read set is:
 
-- one compaction-bounded branch scan from the current leaf;
+- one compaction-bounded branch scan from the current tip;
 - exact `pendingEntry(id)` reads for next-run, steer, follow-up, writes, and abort drains;
 - exact deferred source entry when represented;
 - tools-phase assistant entry and exact args for represented `effect_pending` calls, using `batch.turnId` as the args step id;
@@ -99,11 +99,11 @@ publication/`emitBatch` first
 
 A live provider/tool presentation update follows the same synchronous publish-plus-`emitBatch` discipline. Frame/checkpoint commits are lane jobs and queue behind watch capture.
 
-### 4. Inspection is a no-write lane-line observation
+### 4. Inspection is a no-write Session-line observation
 
 `inspectExecution(context)` observes:
 
-- lane and leaf;
+- lane and tip;
 - configured model identity as unresolved `{ provider, modelId }` strings;
 - current operation id/kind/start time;
 - process status `running`, `open`, or durable `aborting`;
@@ -174,7 +174,7 @@ export interface CurrentOperationInfo {
 
 export interface LaneExecutionInfo {
   lane: string;
-  leafId: string | null;
+  tipId: string | null;
   configuredModel: ModelIdentity;
   current: CurrentOperationInfo | null;
   lastResult?: LaneLastResult;
@@ -182,7 +182,7 @@ export interface LaneExecutionInfo {
 
 export interface LaneInfo {
   name: string;
-  leafId: string | null;
+  tipId: string | null;
   operation: CurrentOperationInfo | null;
 }
 
@@ -221,7 +221,7 @@ WP05 removes the withdrawn action outcome before execution is enabled. Convenien
 export interface LaneSnapshot {
   lane: string;
   transcript: Entry[];
-  leafId: string | null;
+  tipId: string | null;
   lastResult?: LaneLastResult;
   operation: null | {
     id: string;
@@ -289,7 +289,7 @@ Exact writes:
 insert captured nextRun message entries
 insert request prompt entries
 delete captured pendingEntry values
-set laneLeaf
+set branchTip
 set operationMeta
 set operationState(run starting)
 set laneState(current operation, pendingNextRun=[])
@@ -315,7 +315,7 @@ Update `harness.md` before runtime source:
 - replace eager attachment hydration with minimal projection restore;
 - replace predictive status/classifier with open inventory;
 - specify configured/captured identity inspection without resolution;
-- move detailed reads to ad-hoc lane-line watch capture;
+- move detailed reads to ad-hoc Session-line watch capture;
 - require recipient binding in the exact commit-observation continuation;
 - remove identity preflight/suspension/error/event types;
 - specify in-band model/tool unavailability and configuration provenance;
@@ -426,14 +426,14 @@ Provider/tool/configuration-failure transitions are specified now but implemente
 - durable cancellation sets only `aborting:true`;
 - no transcript/pending/frame/tool reads at create;
 - configured and captured model identities may differ and remain visible when unresolved;
-- inspection runs on lane line and performs no payload reads;
+- inspection runs on the Session line and performs no payload reads;
 - projection corruption faults create;
 - no option callback/effect starts.
 
 ### Event publication and watch
 
 - recipient set binds at `emitBatch`: a watcher registered after publication but before delivery receives nothing;
-- state/event batch publication happens before lane-line release;
+- state/event batch publication happens before Session-line release;
 - direct append, lane configuration, session-name/entry-label, acceptance, and lane-creation commits all use that publication path;
 - `value_update` and `lane_created` bind recipients in their commit continuation, so later listeners receive neither historical event;
 - watcher-first gives snapshot-before plus complete events;
@@ -530,8 +530,8 @@ Stop when:
 
 - acceptance commits exactly once into payload-free `starting` without registry preflight;
 - attachment returns minimal complete projections and open inventory;
-- inspection is a coherent lane-line no-write observation;
-- watch captures detailed state ad hoc on the lane line;
+- inspection is a coherent Session-line no-write observation;
+- watch captures detailed state ad hoc on the Session line;
 - state publication and `emitBatch` recipient binding occur in the commit continuation while the mutation never awaits delivery;
 - snapshots and buffered events have no gap or duplicate;
 - required payload corruption faults its consumer;

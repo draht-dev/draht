@@ -1,10 +1,10 @@
-import type { RetryPolicy } from "@draht/ai";
+import type { Models, RetryPolicy } from "@draht/ai";
 import type { QueueMode } from "../../types.ts";
 import type {
+	AcquireLaneOptions,
 	AgentHarness,
 	AgentHarnessOptions,
 	AgentLane,
-	CreateLaneResult,
 	GlobalConfigEventPayload,
 	LaneInfo,
 	OpenOperation,
@@ -16,37 +16,46 @@ import type { Context } from "../context.ts";
 import { HarnessEventBus } from "../events.ts";
 import { HookRegistry } from "../hooks.ts";
 import { convertToLlm } from "../messages.ts";
-import { Closed, HarnessClosed, HarnessFault, InvalidLane, LaneExists, Result, UnknownTarget } from "../result.ts";
-import {
-	SessionInvalidLaneError,
-	SessionInvariantError,
-	SessionLaneExistsError,
-	SessionUnknownTargetError,
-} from "../session/session.ts";
+import { HarnessClosed, HarnessFault, InvalidLane, UnknownTarget } from "../result.ts";
+import { SessionInvariantError } from "../session/session.ts";
 import type { LaneConfiguration, Session } from "../session/types.ts";
-import { laneConfig, laneLastResult, laneLeaf, laneState, setValue } from "../session/values.ts";
+import {
+	branchTip,
+	deleteValue,
+	entryLabel,
+	laneConfig,
+	laneLastResult,
+	laneState,
+	sessionName,
+	setValue,
+} from "../session/values.ts";
 import type { AgentHarnessStreamOptions, AgentHarnessTool } from "../types.ts";
 import { Lane } from "./lane.ts";
-import { restoreSession } from "./restore.ts";
+import { restoreLaneState, restoreSession } from "./restore.ts";
 import { type Config, type LaneState, SliceNotImplemented } from "./types.ts";
 
 type GlobalConfigProperty = GlobalConfigEventPayload["property"];
 
-/** Runtime implementation of AgentHarness. The harness is the main lane. */
-export class Harness<TContext extends object | undefined> extends Lane<TContext> implements AgentHarness<TContext> {
+/** Runtime implementation of AgentHarness. The harness manages lanes but is not itself a lane. */
+export class Harness<TContext extends object | undefined> implements AgentHarness<TContext> {
+	readonly session: Session;
+	readonly models: Models;
+	readonly hooks: HookRegistry;
 	readonly events: HarnessEventBus;
-	readonly seed: LaneConfiguration;
 	readonly lanesByName = new Map<string, Lane<TContext>>();
+	private readonly seed: LaneConfiguration;
 	private readonly configStore: { value: Config<TContext> };
-	closePromise: Promise<void> | undefined;
-	faultError: HarnessFault | undefined;
+	private closePromise: Promise<void> | undefined;
+	private closedError: Error | undefined;
+	private faultError: HarnessFault | undefined;
 
 	constructor(options: AgentHarnessOptions<TContext>, seed: LaneConfiguration, restored: Map<string, LaneState>) {
-		const main = restored.get("main");
-		if (main === undefined) throw new SessionInvariantError("Session is missing main lane");
-		const events = new HarnessEventBus();
-		const hooks = new HookRegistry((error, hook, lane, context) =>
-			events.emit(
+		this.session = options.session;
+		this.models = options.models;
+		this.seed = seed;
+		this.events = new HarnessEventBus();
+		this.hooks = new HookRegistry((error, hook, lane, context) =>
+			this.events.emit(
 				{
 					type: "handler_error",
 					kind: "hook",
@@ -58,7 +67,7 @@ export class Harness<TContext extends object | undefined> extends Lane<TContext>
 				context,
 			),
 		);
-		const configStore: { value: Config<TContext> } = {
+		this.configStore = {
 			value: {
 				tools: options.tools ?? [],
 				resources: options.resources ?? {},
@@ -74,29 +83,96 @@ export class Harness<TContext extends object | undefined> extends Lane<TContext>
 				entryProjectors: options.entryProjectors ?? {},
 			},
 		};
-		super(
-			"main",
-			options.session,
-			options.models,
-			hooks,
-			main,
-			(cause, context) => this.fault(cause, context),
-			(events, context) => this.events.emitBatch(events, context),
-			(snapshot, filter, context) => this.events.watch(snapshot, filter, context),
-			() => configStore.value,
-		);
-		this.seed = seed;
-		this.configStore = configStore;
-		this.events = events;
-		this.lanesByName.set("main", this);
-		for (const [name, state] of restored) {
-			if (name !== "main") this.lanesByName.set(name, this.buildLane(name, state));
-		}
+		for (const [name, state] of restored) this.lanesByName.set(name, this.buildLane(name, state));
 	}
 
-	async lane(name: string, _context: Context): Promise<AgentLane | undefined> {
+	lane(name: string, context: Context): Promise<AgentLane>;
+	lane(name: string, options: AcquireLaneOptions, context: Context): Promise<AgentLane>;
+	async lane(
+		name: string,
+		optionsOrContext: AcquireLaneOptions | Context,
+		maybeContext?: Context,
+	): Promise<AgentLane> {
 		this.assertOpen();
-		return this.lanesByName.get(name);
+		if (name.length === 0 || name.includes("\u0000")) {
+			const reason = name.length === 0 ? "lane name must not be empty" : "lane name must not contain \\u0000";
+			throw new InvalidLane({
+				lane: name,
+				reason,
+				message: `Invalid lane ${JSON.stringify(name)}: ${reason}`,
+			});
+		}
+		const options = maybeContext === undefined ? {} : (optionsOrContext as AcquireLaneOptions);
+		const context = maybeContext ?? (optionsOrContext as Context);
+		let lane: Lane<TContext> | undefined;
+		let delivery: Promise<void> | undefined;
+		try {
+			await this.session.mutate(async (mutator) => {
+				this.assertOpen();
+				lane = this.lanesByName.get(name);
+				if (lane !== undefined) return;
+
+				const [tip, configuration, storedState, lastResult] = await Promise.all([
+					mutator.getValue(branchTip(name), context),
+					mutator.getValue(laneConfig(name), context),
+					mutator.getValue(laneState(name), context),
+					mutator.getValue(laneLastResult(name), context),
+				]);
+
+				if (tip !== undefined && configuration !== undefined && storedState !== undefined) {
+					const restored = await restoreLaneState(mutator, name, context);
+					lane = this.buildLane(name, restored);
+					this.lanesByName.set(name, lane);
+					return;
+				}
+
+				if ((configuration === undefined) !== (storedState === undefined) || lastResult !== undefined) {
+					throw new SessionInvariantError(`Lane ${JSON.stringify(name)} has incomplete durable state`);
+				}
+				if (configuration !== undefined || storedState !== undefined) {
+					throw new SessionInvariantError(`Lane ${JSON.stringify(name)} has durable state without a branch`);
+				}
+
+				const tipId = tip?.value ?? options.createAt ?? null;
+				if (tip === undefined && tipId !== null && !(await mutator.getEntries([tipId], context)).has(tipId)) {
+					throw new UnknownTarget({
+						targetId: tipId,
+						message: `Unknown target: ${tipId}`,
+					});
+				}
+				const attachedConfiguration: LaneConfiguration = {
+					model: { ...this.seed.model },
+					thinkingLevel: this.seed.thinkingLevel,
+					activeToolNames: [...this.seed.activeToolNames],
+				};
+				const state: LaneState = {
+					tipId,
+					configuration: attachedConfiguration,
+					pendingNextRun: [],
+					operation: null,
+				};
+				const writes = [
+					...(tip === undefined ? [setValue(branchTip(name), tipId)] : []),
+					setValue(laneConfig(name), attachedConfiguration),
+					setValue(laneState(name), {
+						currentOperationId: null,
+						pendingNextRun: [],
+					}),
+				];
+				await mutator.commit(writes, context);
+				lane = this.buildLane(name, state);
+				this.lanesByName.set(name, lane);
+				delivery = this.events.emitBatch([{ type: "lane_created", lane: name, at: tipId }], context);
+			}, context);
+		} catch (error) {
+			if (this.closedError !== undefined) throw this.closedError;
+			if (error instanceof InvalidLane || error instanceof UnknownTarget) throw error;
+			throw this.fault(error, context);
+		}
+		await delivery;
+		if (lane === undefined)
+			throw this.fault(new SessionInvariantError(`Lane ${JSON.stringify(name)} was not published`), context);
+		return lane;
 	}
 
 	async lanes(context: Context): Promise<LaneInfo[]> {
@@ -106,50 +182,58 @@ export class Harness<TContext extends object | undefined> extends Lane<TContext>
 		);
 		return executions.map((execution) => ({
 			name: execution.lane,
-			leafId: execution.leafId,
+			tipId: execution.tipId,
 			operation: execution.current,
 		}));
 	}
 
-	async createLane(name: string, at: string | null, context: Context): Promise<CreateLaneResult> {
-		// Public Result errors are expected caller/lifecycle outcomes. Harness faults reject every API call because the
-		// owned state can no longer advance safely; they are intentionally not members of CreateLaneResult.
-		if (this.faultError !== undefined) throw this.faultError;
-		if (this.closedError !== undefined) return Result.err(new Closed({ message: this.closedError.message }));
-		const state: LaneState = {
-			leafId: at,
-			configuration: this.seed,
-			pendingNextRun: [],
-			operation: null,
-		};
+	getName(context: Context): Promise<string | undefined> {
+		this.assertOpen();
+		return this.session.getName(context);
+	}
+
+	async setName(name: string | undefined, context: Context): Promise<void> {
+		this.assertOpen();
+		let delivery: Promise<void> | undefined;
 		try {
-			const lane = this.buildLane(name, state);
-			await this.session.createLane(
-				name,
-				at,
-				this.seed,
-				(context) => {
-					if (this.closedError !== undefined) lane.seal(this.closedError);
-					this.lanesByName.set(name, lane);
-					return this.events.emitBatch([{ type: "lane_created", lane: name, at }], context);
-				},
-				context,
-			);
-			return Result.ok(lane);
+			await this.session.mutate(async (mutator) => {
+				this.assertOpen();
+				await mutator.commit(
+					[name === undefined ? deleteValue(sessionName) : setValue(sessionName, name)],
+					context,
+				);
+				delivery = this.events.emitBatch([{ type: "value_update", value: "session_name", name }], context);
+			}, context);
 		} catch (error) {
-			// Session has no Result layer, so its expected validation failures are thrown. Translate only those failures
-			// to the public tagged Result contract; storage and invariant failures fault the harness below.
-			if (error instanceof SessionLaneExistsError) {
-				return Result.err(new LaneExists({ lane: error.lane, message: error.message }));
-			}
-			if (error instanceof SessionInvalidLaneError) {
-				return Result.err(new InvalidLane({ lane: error.lane, reason: error.reason, message: error.message }));
-			}
-			if (error instanceof SessionUnknownTargetError) {
-				return Result.err(new UnknownTarget({ targetId: error.targetId, message: error.message }));
-			}
+			if (this.closedError !== undefined) throw this.closedError;
 			throw this.fault(error, context);
 		}
+		await delivery;
+	}
+
+	getLabel(targetId: string, context: Context): Promise<string | undefined> {
+		this.assertOpen();
+		return this.session.getLabel(targetId, context);
+	}
+
+	async setLabel(targetId: string, label: string | undefined, context: Context): Promise<void> {
+		this.assertOpen();
+		let delivery: Promise<void> | undefined;
+		try {
+			await this.session.mutate(async (mutator) => {
+				this.assertOpen();
+				const address = entryLabel(targetId);
+				await mutator.commit([label === undefined ? deleteValue(address) : setValue(address, label)], context);
+				delivery = this.events.emitBatch(
+					[{ type: "value_update", value: "entry_label", targetId, label }],
+					context,
+				);
+			}, context);
+		} catch (error) {
+			if (this.closedError !== undefined) throw this.closedError;
+			throw this.fault(error, context);
+		}
+		await delivery;
 	}
 
 	getTools(context: Context): Promise<AgentHarnessTool<TContext>[]> {
@@ -215,6 +299,30 @@ export class Harness<TContext extends object | undefined> extends Lane<TContext>
 		throw new SliceNotImplemented("watchSession");
 	}
 
+	fault(cause: unknown, context: Context): Error {
+		if (this.faultError !== undefined) return this.faultError;
+		if (this.closedError !== undefined) return this.closedError;
+		const normalized = cause instanceof Error ? cause : new Error(String(cause));
+		const fault = new HarnessFault("AgentHarness storage or invariant fault", normalized);
+		this.faultError = fault;
+		for (const lane of this.lanesByName.values()) lane.seal(fault);
+		this.hooks.close(fault);
+		void this.events.emit({ type: "fault", code: "harness_fault", message: fault.message }, context);
+		this.events.close(fault);
+		return fault;
+	}
+
+	close(context: Context): Promise<void> {
+		if (this.closePromise !== undefined) return this.closePromise;
+		const error = new HarnessClosed();
+		this.closedError = error;
+		for (const lane of this.lanesByName.values()) lane.seal(error);
+		this.hooks.close(error);
+		this.events.close(error);
+		this.closePromise = this.session.close(context);
+		return this.closePromise;
+	}
+
 	private buildLane(name: string, state: LaneState): Lane<TContext> {
 		return new Lane<TContext>(
 			name,
@@ -248,46 +356,9 @@ export class Harness<TContext extends object | undefined> extends Lane<TContext>
 		await this.events.emit({ type: "config_update", property }, context);
 	}
 
-	fault(cause: unknown, context: Context): Error {
-		if (this.faultError !== undefined) return this.faultError;
-		if (this.closedError !== undefined) return this.closedError;
-		const normalized = cause instanceof Error ? cause : new Error(String(cause));
-		const fault = new HarnessFault("AgentHarness storage or invariant fault", normalized);
-		this.faultError = fault;
-		for (const lane of this.lanesByName.values()) lane.seal(fault);
-		this.hooks.close(fault);
-		void this.events.emit({ type: "fault", code: "harness_fault", message: fault.message }, context);
-		this.events.close(fault);
-		return fault;
-	}
-
-	close(context: Context): Promise<void> {
-		if (this.closePromise !== undefined) return this.closePromise;
-		/*
-		 * Close is a process-local admission boundary, not an abort. Public lane work checks Lane.assertOpen() at
-		 * entry. Durable work then enters Session.mutate(), whose mutation line is the final write-admission gate.
-		 * External effects use Gate.admit() immediately around invocation. Closing seals all applicable gates
-		 * before awaiting anything.
-		 *
-		 * If close wins, new work and queued mutation callbacks that have not started reject. An active mutation may
-		 * finish, and close waits for it. A successful commit must always publish its in-memory candidate and resolve
-		 * without another open check; otherwise close racing the commit would make durable and in-memory state
-		 * diverge. An admitted effect is signalled and allowed to unwind, but its settlement is a new durable unit and
-		 * cannot commit after close. Every later command, settlement, or effect must pass admission again.
-		 *
-		 * Session.close() is the final mutation barrier: it rejects later session jobs, drains active callbacks and
-		 * commits, then closes storage. Close itself writes no cancellation or terminal state.
-		 *
-		 * HarnessClosed is a process-local control signal. Lower procedures let it propagate, using only finally blocks
-		 * for cleanup. The outer drive owner catches it to remove live task state and reject the caller; it must not turn
-		 * close into a durable failure, abort settlement, or harness fault. Calls with no drive owner reject directly.
-		 */
-		const error = new HarnessClosed();
-		for (const lane of this.lanesByName.values()) lane.seal(error);
-		this.hooks.close(error);
-		this.events.close(error);
-		this.closePromise = this.session.close(context);
-		return this.closePromise;
+	private assertOpen(): void {
+		if (this.faultError !== undefined) throw this.faultError;
+		if (this.closedError !== undefined) throw this.closedError;
 	}
 }
 
@@ -303,10 +374,9 @@ export async function createAgentHarness<TContext extends object | undefined = o
 	const seed: LaneConfiguration = {
 		model: { provider: options.model.provider, modelId: options.model.id },
 		thinkingLevel: options.thinkingLevel ?? "off",
-		activeToolNames: options.activeToolNames ?? tools.map((tool) => tool.name),
+		activeToolNames: [...(options.activeToolNames ?? tools.map((tool) => tool.name))],
 	};
 	try {
-		await seedMain(options.session, seed, context);
 		const restored = await restoreSession(options.session, context);
 		const open = [...restored].flatMap(([lane, state]): OpenOperation[] => {
 			const operation = state.operation;
@@ -326,27 +396,4 @@ export async function createAgentHarness<TContext extends object | undefined = o
 	} catch (error) {
 		throw new HarnessFault("AgentHarness storage or invariant fault", error);
 	}
-}
-
-async function seedMain(session: Session, seed: LaneConfiguration, context: Context): Promise<void> {
-	await session.mutate(
-		"main",
-		async (mutator) => {
-			const [leaf, state, configuration, lastResult] = await Promise.all([
-				mutator.getValue(laneLeaf("main"), context),
-				mutator.getValue(laneState("main"), context),
-				mutator.getValue(laneConfig("main"), context),
-				mutator.getValue(laneLastResult("main"), context),
-			]);
-			if (leaf === undefined || state === undefined) {
-				throw new SessionInvariantError("Session main lane has incomplete durable state");
-			}
-			if (configuration !== undefined) return;
-			if (state.value.currentOperationId !== null || lastResult !== undefined) {
-				throw new SessionInvariantError("Configured or active main lane is missing lane.config");
-			}
-			await mutator.commit([setValue(laneConfig("main"), seed)], context);
-		},
-		context,
-	);
 }

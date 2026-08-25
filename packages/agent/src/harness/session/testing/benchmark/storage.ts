@@ -1,7 +1,7 @@
 import { BACKGROUND_CONTEXT } from "../../../context.ts";
 import { insertEntry, insertUsage } from "../../commit.ts";
 import type { MessageEntry, NewEntry, Storage, Write } from "../../types.ts";
-import { laneLeaf, setValue } from "../../values.ts";
+import { branchTip, setValue } from "../../values.ts";
 import { STORAGE_BENCHMARK_DATASETS, type StorageBenchmarkDataset, storageBenchmarkEntryId } from "./datasets.ts";
 
 const MESSAGE_TIMESTAMP = 1_650_000_000_000;
@@ -66,7 +66,7 @@ const hundredEntryTransaction = createStorageBenchmarkTransaction(0, 100, 256);
 const appendedEntryId = storageBenchmarkEntryId(WRITE_BASELINE_DATASET.entryCount);
 const mixedAppendTransaction: Write[] = [
 	...createStorageBenchmarkTransaction(WRITE_BASELINE_DATASET.entryCount, 1, WRITE_BASELINE_DATASET.payloadBytes),
-	setValue(laneLeaf("main"), appendedEntryId),
+	setValue(branchTip("main"), appendedEntryId),
 	insertUsage({
 		id: "benchmark-usage",
 		entryId: appendedEntryId,
@@ -108,7 +108,7 @@ export const STORAGE_READ_BENCHMARK_SCENARIOS: readonly StorageReadBenchmarkScen
 			return dataset.entryCount;
 		},
 		async run(storage, dataset) {
-			return (await storage.scanBranchStructure({ start: dataset.leafId, order: "newestFirst" }, BACKGROUND_CONTEXT))
+			return (await storage.scanBranchStructure({ start: dataset.tipId, order: "newestFirst" }, BACKGROUND_CONTEXT))
 				.length;
 		},
 	},

@@ -2,7 +2,7 @@
 
 > **Status:** Tentative design input, not a normative contract or implementation handoff. The transport-neutral service token, provider, singleton `use()`, keyed `observe()`, and `ReplicatedState` substrate now have an experimental implementation, including a `Models` vertical slice. `RemoteEvents` now has an experimental transport-neutral implementation with ordered non-replayed delivery. The application host contexts, plugin kernel, references, telemetry propagation, and most other example facets — including the `Chat`, `SessionDirectory`, and `SessionManagement` vertical slices below — remain illustrative. Plugin reload semantics are specified separately in [`plugin-reloading.md`](plugin-reloading.md). Reconcile this design with `rpc.md`, `telemetry.md`, and the final harness contract before adding it to `harness.md` or creating a work package.
 
-This document assumes you already understand `AgentHarness`, `AgentLane`, `Session`, `SessionTree`, `SessionRepo`, invocation `Context`, and telemetry. Read `rpc.md` for wire frames, remote references, subscriptions, and trace carriers, `telemetry.md` for context propagation and cancellation semantics, and `plugin-reloading.md` for manifest-generation replacement and durable reconstruction.
+This document assumes you already understand `AgentHarness`, `AgentLane`, `Session`, `Branch`, `SessionRepo`, invocation `Context`, and telemetry. Read `rpc.md` for wire frames, remote references, subscriptions, and trace carriers, `telemetry.md` for context propagation and cancellation semantics, and `plugin-reloading.md` for manifest-generation replacement and durable reconstruction.
 
 ## Bird's-eye view
 
@@ -365,14 +365,33 @@ Every facet uses the same unqualified `env.use()` and `env.observe()` operations
 
 This is the most important boundary in the design.
 
-**Session facets run beside the real thing.** They execute in the process that owns the concrete `AgentHarness`, `AgentLane`, `Session`, and `SessionTree`, and receive direct, process-local, scoped capabilities backed by those instances — not RPC proxies. Calls preserve real method signatures, `Context` propagation, `Result` types, and object identity. A session facet never RPCs back into its own process.
+**Session facets run beside the real thing.** They execute in the process that owns the concrete `AgentHarness`, `AgentLane`, `Session`, and Branches, and receive direct, process-local, scoped capabilities backed by those instances — not RPC proxies. Calls preserve real method signatures, `Context` propagation, `Result` types, and object identity. A session facet never RPCs back into its own process.
 
 ```ts
+interface ScopedSessionData {
+	readonly metadata: SessionMetadata;
+	getEntry(id: string, context: Context): Promise<Entry | undefined>;
+	getStats(context: Context): Promise<SessionStats>;
+	getValue<T>(address: Value<T>, context: Context): Promise<StoredValue<T> | undefined>;
+	scanValues<T>(prefix: Value<T>, context: Context): Promise<StoredValue<T>[]>;
+	readList<T>(address: ValueList<T>, options: ListReadOptions | undefined,
+		context: Context): Promise<ListElement<T>[]>;
+	setValue<T>(address: Value<T>, next: NoInfer<T>, context: Context): Promise<void>;
+	deleteValue<T>(address: Value<T>, context: Context): Promise<void>;
+	appendList<T>(address: ValueList<T>, element: NoInfer<T>, context: Context): Promise<void>;
+	deleteList<T>(address: ValueList<T>, context: Context): Promise<void>;
+	getName(context: Context): Promise<string | undefined>;
+	setName(name: string | undefined, context: Context): Promise<void>;
+	getLabel(targetId: string, context: Context): Promise<string | undefined>;
+	setLabel(targetId: string, label: string | undefined, context: Context): Promise<void>;
+	findEntries(query: EntryQuery | undefined, context: Context): Promise<Entry[]>;
+	findEntry(query: EntryQuery | undefined, context: Context): Promise<Entry | undefined>;
+}
+
 interface AgentPluginScope {
 	readonly identity: SessionIdentity; // sessionId + workspaceId
-	readonly main: AgentLanePluginView;
-	lane(name: string, context: Context): Promise<AgentLanePluginView | undefined>;
-	readonly sessionTree: SessionTree;
+	lane(name: string, context: Context): Promise<AgentLanePluginView>;
+	readonly session: ScopedSessionData;
 	readonly hooks: ScopedHooks;
 	readonly events: ScopedEvents;
 }
@@ -386,7 +405,7 @@ interface SessionFacetAttributes {
 }
 ```
 
-"Local" and "unrestricted" are separate decisions. The environment narrows authority for lifecycle and composition — hooks and event subscriptions registered through it are automatically owned by the plugin and disposed with it — but `sessionTree` may be the actual local derived object. The host keeps the unrestricted concrete instances and reserves: `AgentHarness.close()` and `Session.close()`; raw `Session.mutate()` and `SessionMutator` (unless a narrowly trusted durability plugin explicitly owns them); `idGenerator` and backend/storage objects; whole-registry setters such as `setTools()`; unscoped hook/event registration; transport exposure and remote-reference registration. This is a composition and lifecycle boundary, not a security sandbox: session facets are trusted code in the authoritative process. The manifest may explicitly grant broader local capability, but built-ins receive no implicit bypass.
+"Local" and "unrestricted" are separate decisions. The scope narrows authority for lifecycle and composition — hooks and event subscriptions registered through it are automatically owned by the plugin and disposed with it. `AgentLanePluginView` exposes Branch methods directly alongside agent operations. `ScopedSessionData` exposes purpose-bounded global value/list/name/label/query operations. The host keeps the unrestricted concrete instances and reserves: `AgentHarness.close()` and `Session.close()`; raw `Session.mutate()`, `beginMutation()`, and `SessionMutator` (unless a narrowly trusted durability plugin explicitly owns them); `idGenerator` and backend/storage objects; Branch creation; whole-registry setters such as `setTools()`; unscoped hook/event registration; transport exposure and remote-reference registration. This is a composition and lifecycle boundary, not a security sandbox: session facets are trusted code in the authoritative process. The manifest may explicitly grant broader local capability, but built-ins receive no implicit bypass.
 
 **Presentation facets hold none of this.** A TUI or web facet never receives the raw Harness, Session, tree, tool registry, hooks, or credentials — not even as proxies. It receives only what a session or server facet deliberately exposes: semantic service proxies and instances, replicated state, and semantic events.
 
@@ -959,7 +978,7 @@ With no connected presentation, the added instance and unresolved tool remain Se
 
 ### Durability and worker replacement
 
-The service instance is live process state; the invocation memo is the replay receipt. The Harness already persists a safe tool's effective arguments, stable invocation ID, `effect_pending` state, and memos. `memoOnce()` synchronously enters one atomic read-or-write on the invocation's lane mutation line and verifies that the same operation, turn, source position, and invocation still own the effect. It returns the existing value or commits and returns the candidate.
+The service instance is live process state; the invocation memo is the replay receipt. The Harness already persists a safe tool's effective arguments, stable invocation ID, `effect_pending` state, and memos. `memoOnce()` synchronously enters one atomic read-or-write on the invocation's Session mutation line and verifies that the same operation, turn, source position, and invocation still own the effect. It returns the existing value or commits and returns the candidate.
 
 If the worker dies before the answer commit, the old instance and promise disappear. Safe replay reads no answer and adds the same logical key with a new generation. If it dies after the commit, replay reads the answer and returns without adding an instance. A client cannot answer while the worker is absent; calls through the old generation fail instead of locating an invocation by bare ID.
 
@@ -1144,7 +1163,7 @@ const PromptQueue = defineLocalService<PromptQueueService>("prompt-queue");
 
 ### Why record mutations need a critical region
 
-`DiffReviewRecords` builds on the session facet's `SessionTree` (`values.md`): typed durable values in a plugin-owned namespace. Each storage call is atomic, but an application read-modify-write cycle spans multiple calls and therefore multiple awaits. Concurrent service calls can interleave between them.
+`DiffReviewRecords` builds on the facet's scoped Session data (`values.md`): typed durable values in a plugin-owned namespace. Each storage call is atomic, but an application read-modify-write cycle spans multiple calls and therefore multiple awaits. Concurrent service calls can interleave between them.
 
 Concrete failure without serialization — two users press submit at the same time:
 
@@ -1163,7 +1182,7 @@ In the one-authoritative-worker model, the simplest fix is a per-review **critic
 ```ts
 async freezeForSubmission(reviewId, context) {
 	return regionFor(reviewId).run(context.abortSignal, async () => {
-		const stored = await tree.getValue(reviewRecord(reviewId), context);
+		const stored = await session.getValue(reviewRecord(reviewId), context);
 		if (stored === undefined) throw new RemoteServiceError("review_not_found", `Unknown review: ${reviewId}`);
 
 		const current = stored.value;
@@ -1179,7 +1198,7 @@ async freezeForSubmission(reviewId, context) {
 				prompt: renderReviewPrompt(current.patch, current.comments),
 			},
 		};
-		await tree.setValue(reviewRecord(reviewId), frozen, context);
+		await session.setValue(reviewRecord(reviewId), frozen, context);
 		return frozen;
 	});
 }

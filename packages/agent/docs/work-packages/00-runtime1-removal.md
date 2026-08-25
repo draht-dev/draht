@@ -42,7 +42,7 @@ packages/agent/test/harness/scratch/r4.ts
 ## Retain
 
 - all `test/harness/runtime2/**` tests;
-- Session, SessionTree, storage, repository, backend-conformance, and instrumentation tests;
+- Session, Branch, storage, repository, backend-conformance, and instrumentation tests;
 - execution assistant/tool/primitives tests;
 - config, hooks, events, telemetry, compaction, and branch-summary code/tests;
 - `types.test.ts`, updated for the reduced public contract;

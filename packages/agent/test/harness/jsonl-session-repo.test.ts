@@ -67,7 +67,7 @@ describe("JsonlSessionRepo cwd-scoped lifecycle", () => {
 		await repo.close(BACKGROUND_CONTEXT);
 	});
 
-	it("atomically publishes the header and initialized main lane", async () => {
+	it("atomically publishes a branchless session header", async () => {
 		const fileSystem = new AtomicPublicationNodeExecutionEnv({ cwd: createTempDir() });
 		const repo = new JsonlSessionRepo({ fileSystem, sessionsRoot: "sessions", now: () => NOW });
 		const session = await repo.create({ id: "session", cwd: "/workspace" }, BACKGROUND_CONTEXT);
@@ -77,26 +77,8 @@ describe("JsonlSessionRepo cwd-scoped lifecycle", () => {
 		expect(publication.destinationPath).toBe(session.metadata.path);
 		expect(publication.destinationExisted).toBe(false);
 		const lines = publication.stagedContent.trimEnd().split("\n");
-		expect(lines).toHaveLength(2);
+		expect(lines).toHaveLength(1);
 		expect(JSON.parse(lines[0]!)).toMatchObject({ kind: "header", id: "session" });
-		expect(JSON.parse(lines[1]!)).toEqual([
-			{
-				kind: "value",
-				op: "set",
-				seq: 1,
-				namespace: "pi.lane.leaf",
-				key: "main",
-				value: null,
-			},
-			{
-				kind: "value",
-				op: "set",
-				seq: 2,
-				namespace: "pi.lane.state",
-				key: "main",
-				value: { currentOperationId: null, pendingNextRun: [] },
-			},
-		]);
 		expect(getOrThrow(await fileSystem.readTextFile(session.metadata.path, BACKGROUND_CONTEXT))).toBe(
 			publication.stagedContent,
 		);
@@ -106,19 +88,15 @@ describe("JsonlSessionRepo cwd-scoped lifecycle", () => {
 		await repo.close(BACKGROUND_CONTEXT);
 	});
 
-	it("keeps an explicit mutation on the lane through commit until end", async () => {
+	it("keeps an explicit Session mutation through commit until end", async () => {
 		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
 		const repo = new JsonlSessionRepo({ fileSystem, sessionsRoot: "sessions", now: () => NOW });
 		const session = await repo.create({ id: "session", cwd: "/workspace" }, BACKGROUND_CONTEXT);
-		const mutation = await session.beginMutation("main", BACKGROUND_CONTEXT);
+		const mutation = await session.beginMutation(BACKGROUND_CONTEXT);
 		let queuedStarted = false;
-		const queued = session.mutate(
-			"main",
-			() => {
-				queuedStarted = true;
-			},
-			BACKGROUND_CONTEXT,
-		);
+		const queued = session.mutate(() => {
+			queuedStarted = true;
+		}, BACKGROUND_CONTEXT);
 
 		const result = await mutation.commit([setValue(sessionName, "explicit")], BACKGROUND_CONTEXT);
 		expect(result.seqs).toHaveLength(1);
@@ -162,7 +140,7 @@ describe("JsonlSessionRepo cwd-scoped lifecycle", () => {
 		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
 		const repo = new JsonlSessionRepo({ fileSystem, sessionsRoot: "sessions", now: () => NOW });
 		const source = await repo.create({ id: "source", cwd: "/workspace" }, BACKGROUND_CONTEXT);
-		const fork = await repo.fork(source.metadata, { id: "fork" }, BACKGROUND_CONTEXT);
+		const fork = await repo.fork(source.metadata, { id: "fork", scope: "tree" }, BACKGROUND_CONTEXT);
 
 		await expect(repo.open(fork.metadata, BACKGROUND_CONTEXT)).rejects.toThrow("already open");
 		await expect(repo.delete(fork.metadata, BACKGROUND_CONTEXT)).rejects.toThrow("open");

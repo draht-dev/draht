@@ -4,6 +4,7 @@ import { type HarnessEvent, HarnessFault, type WatchHandle } from "../../../src/
 import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/compaction.ts";
 import { BACKGROUND_CONTEXT, type Context, createContextKey, withContextValue } from "../../../src/harness/context.ts";
 import { createAgentHarness, Harness } from "../../../src/harness/runtime/harness.ts";
+import { Lane } from "../../../src/harness/runtime/lane.ts";
 import * as sessionWrites from "../../../src/harness/session/commit.ts";
 import { MemoryStorage } from "../../../src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
@@ -32,11 +33,10 @@ async function createSession(storage: MemoryStorage = new MemoryStorage()): Prom
 	);
 	sessions.push(session);
 	await session.mutate(
-		"main",
 		(mutator) =>
 			mutator.commit(
 				[
-					storedValues.setValue(storedValues.laneLeaf("main"), null),
+					storedValues.setValue(storedValues.branchTip("main"), null),
 					storedValues.setValue(storedValues.laneConfig("main"), configuration),
 					storedValues.setValue(storedValues.laneState("main"), {
 						currentOperationId: null,
@@ -51,7 +51,7 @@ async function createSession(storage: MemoryStorage = new MemoryStorage()): Prom
 }
 
 async function commit(session: Session, writes: Write[]): Promise<void> {
-	await session.mutate("main", (mutator) => mutator.commit(writes, BACKGROUND_CONTEXT), BACKGROUND_CONTEXT);
+	await session.mutate((mutator) => mutator.commit(writes, BACKGROUND_CONTEXT), BACKGROUND_CONTEXT);
 }
 
 function runState(phase: RunPhase, control: RunState["control"] = { status: "running" }): RunState {
@@ -70,13 +70,17 @@ function runState(phase: RunPhase, control: RunState["control"] = { status: "run
 	};
 }
 
-async function attach(session: Session): Promise<Harness<object | undefined>> {
+async function attach(
+	session: Session,
+): Promise<Lane<object | undefined> & Pick<Harness<object | undefined>, "events">> {
 	const provider = fauxProvider();
 	const models = createModels();
 	models.setProvider(provider.provider);
 	const { harness } = await createAgentHarness({ session, models, model: provider.getModel() }, BACKGROUND_CONTEXT);
 	if (!(harness instanceof Harness)) throw new Error("Expected runtime Harness");
-	return harness;
+	const lane = await harness.lane("main", BACKGROUND_CONTEXT);
+	if (!(lane instanceof Lane)) throw new Error("Expected runtime Lane");
+	return Object.assign(lane, { events: harness.events });
 }
 
 class BlockingScanStorage extends MemoryStorage {
@@ -117,7 +121,7 @@ describe("runtime lane watch", () => {
 				type: "message",
 				message: { role: "user", content: "after", timestamp: 2 },
 			}),
-			storedValues.setValue(storedValues.laneLeaf("main"), "after"),
+			storedValues.setValue(storedValues.branchTip("main"), "after"),
 		]);
 		const harness = await attach(session);
 
@@ -125,17 +129,17 @@ describe("runtime lane watch", () => {
 		expect(first.snapshot.transcript.map(({ id }) => id)).toEqual(["compact", "after"]);
 		expect(first.snapshot).toMatchObject({
 			lane: "main",
-			leafId: "after",
+			tipId: "after",
 			operation: null,
 			queues: { steer: [], followUp: [], nextRun: [] },
 			pendingWrites: [],
 			faulted: false,
 		});
 		first.snapshot.transcript.length = 0;
-		first.snapshot.leafId = null;
+		first.snapshot.tipId = null;
 		const second = await harness.watch(BACKGROUND_CONTEXT);
 		expect(second.snapshot.transcript.map(({ id }) => id)).toEqual(["compact", "after"]);
-		expect(second.snapshot.leafId).toBe("after");
+		expect(second.snapshot.tipId).toBe("after");
 		first.unsubscribe();
 		second.unsubscribe();
 	});
@@ -180,7 +184,7 @@ describe("runtime lane watch", () => {
 		const meta: OperationMeta = {
 			operationId,
 			lane: "main",
-			sourceLeafId: null,
+			sourceTipId: null,
 			startedAt: 1,
 			intent: { kind: "run", promptEntryIds: [] },
 		};
@@ -194,7 +198,7 @@ describe("runtime lane watch", () => {
 			),
 			storedValues.setValue(storedValues.operationMeta(operationId), meta),
 			storedValues.setValue(storedValues.operationState(operationId), state),
-			storedValues.setValue(storedValues.laneLeaf("main"), "source"),
+			storedValues.setValue(storedValues.branchTip("main"), "source"),
 			storedValues.setValue(storedValues.laneState("main"), {
 				currentOperationId: operationId,
 				pendingNextRun: [ids.next],
@@ -230,7 +234,7 @@ describe("runtime lane watch", () => {
 			storedValues.setValue(storedValues.operationMeta(operationId), {
 				operationId,
 				lane: "main",
-				sourceLeafId: null,
+				sourceTipId: null,
 				startedAt: 1,
 				intent: { kind: "run", promptEntryIds: [] },
 			}),
@@ -282,7 +286,7 @@ describe("runtime lane watch", () => {
 			storedValues.setValue(storedValues.operationMeta(frameOperationId), {
 				operationId: frameOperationId,
 				lane: "main",
-				sourceLeafId: null,
+				sourceTipId: null,
 				startedAt: 1,
 				intent: { kind: "run", promptEntryIds: [] },
 			}),
@@ -333,7 +337,7 @@ describe("runtime lane watch", () => {
 			storedValues.setValue(storedValues.operationMeta(toolOperationId), {
 				operationId: toolOperationId,
 				lane: "main",
-				sourceLeafId: null,
+				sourceTipId: null,
 				startedAt: 1,
 				intent: { kind: "run", promptEntryIds: [] },
 			}),
@@ -365,7 +369,7 @@ describe("runtime lane watch", () => {
 				content: [{ type: "text", text: "partial" }],
 				details: { bytes: 1 },
 			}),
-			storedValues.setValue(storedValues.laneLeaf("main"), "assistant"),
+			storedValues.setValue(storedValues.branchTip("main"), "assistant"),
 			storedValues.setValue(storedValues.laneState("main"), {
 				currentOperationId: toolOperationId,
 				pendingNextRun: [],
@@ -423,7 +427,7 @@ describe("runtime lane watch", () => {
 		const session = await createSession(storage);
 		await commit(session, [
 			sessionWrites.insertEntry({ id: "root", parentId: null, type: "custom", customType: "root" }),
-			storedValues.setValue(storedValues.laneLeaf("main"), "root"),
+			storedValues.setValue(storedValues.branchTip("main"), "root"),
 		]);
 		const harness = await attach(session);
 		storage.block = true;
@@ -431,7 +435,7 @@ describe("runtime lane watch", () => {
 		await storage.started.promise;
 		const sourceKey = createContextKey<string>("watch.event.source");
 		const sourceContext = withContextValue(sourceKey, "append", BACKGROUND_CONTEXT);
-		const append = harness.sessionTree.appendMessage({ role: "user", content: "later", timestamp: 2 }, sourceContext);
+		const append = harness.appendMessage({ role: "user", content: "later", timestamp: 2 }, sourceContext);
 		storage.release.resolve();
 		const watch = await watchPromise;
 		expect(watch.snapshot.transcript.map(({ id }) => id)).toEqual(["root"]);
@@ -449,7 +453,7 @@ describe("runtime lane watch", () => {
 	it("returns snapshot-after without replay when publication wins", async () => {
 		const session = await createSession();
 		const harness = await attach(session);
-		const entryId = await harness.sessionTree.appendMessage(
+		const entryId = await harness.appendMessage(
 			{ role: "user", content: "existing", timestamp: 1 },
 			BACKGROUND_CONTEXT,
 		);

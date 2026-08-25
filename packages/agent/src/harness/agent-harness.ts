@@ -18,11 +18,9 @@ import type { CompactionPreparation, CompactionSettings, CompactResult } from ".
 import type { Context } from "./context.ts";
 import type {
 	Closed,
-	InvalidLane,
 	InvalidMessage,
 	InvalidNavigation,
 	LaneBusy,
-	LaneExists,
 	NoActiveOperation,
 	NoActiveRun,
 	NothingToCompact,
@@ -42,7 +40,6 @@ export {
 	InvalidMessage,
 	InvalidNavigation,
 	LaneBusy,
-	LaneExists,
 	NoActiveOperation,
 	NoActiveRun,
 	NothingToCompact,
@@ -55,6 +52,7 @@ export {
 
 import { createAgentHarness } from "./runtime/harness.ts";
 import type {
+	BranchScan,
 	BranchSummaryEntry,
 	CompactionEntry,
 	Entry,
@@ -64,7 +62,6 @@ import type {
 	LaneLastResult,
 	OperationError,
 	Session,
-	SessionTree,
 	SettledAssistantMessage,
 	UsageRow,
 } from "./session/types.ts";
@@ -82,31 +79,31 @@ export type OptionalFinalAssistant =
 	| { finalEntryId?: never; finalMessage?: never };
 
 export type RunOutcome =
-	| ({ kind: "completed"; leafId: string } & OptionalFinalAssistant)
-	| ({ kind: "aborted"; leafId: string } & OptionalFinalAssistant)
-	| ({ kind: "failed"; leafId: string; error: OperationError } & OptionalFinalAssistant)
+	| ({ kind: "completed"; tipId: string } & OptionalFinalAssistant)
+	| ({ kind: "aborted"; tipId: string } & OptionalFinalAssistant)
+	| ({ kind: "failed"; tipId: string; error: OperationError } & OptionalFinalAssistant)
 	| {
 			kind: "suspended";
 			reason: "deferred";
-			leafId: string;
+			tipId: string;
 			finalEntryId: string;
 			deferred: DeferredHandle;
 	  };
 
 export type CompactionOutcome =
-	| { kind: "completed"; leafId: string; entry: CompactionEntry }
-	| { kind: "declined" | "aborted"; leafId: string }
-	| { kind: "failed"; leafId: string; error: OperationError };
+	| { kind: "completed"; tipId: string; entry: CompactionEntry }
+	| { kind: "declined" | "aborted"; tipId: string }
+	| { kind: "failed"; tipId: string; error: OperationError };
 
 export type NavigationOutcome =
 	| {
 			kind: "completed";
-			oldLeafId: string | null;
-			newLeafId: string | null;
+			oldTipId: string | null;
+			newTipId: string | null;
 			summaryEntry?: BranchSummaryEntry;
 	  }
-	| { kind: "declined" | "aborted"; leafId: string | null }
-	| { kind: "failed"; leafId: string | null; error: OperationError };
+	| { kind: "declined" | "aborted"; tipId: string | null }
+	| { kind: "failed"; tipId: string | null; error: OperationError };
 
 export type RunOperationOutcome = { operation: "run"; runId: string } & RunOutcome;
 export type CompactionOperationOutcome = { operation: "compaction"; runId: string } & CompactionOutcome;
@@ -131,7 +128,6 @@ export type AbortResult = Result<
 	NoActiveOperation | Closed
 >;
 export type RecordUsageResult = Result<{ usageId: string }, Closed>;
-export type CreateLaneResult = Result<AgentLane, LaneExists | InvalidLane | UnknownTarget | Closed>;
 
 export interface NavigateOptions {
 	summarize?: boolean;
@@ -187,7 +183,7 @@ export interface CurrentOperationInfo {
 
 export interface LaneExecutionInfo {
 	lane: string;
-	leafId: string | null;
+	tipId: string | null;
 	configuredModel: ModelIdentity;
 	current: CurrentOperationInfo | null;
 	lastResult?: LaneLastResult;
@@ -222,7 +218,7 @@ export interface WatchHandle<T> {
 
 export interface LaneInfo {
 	name: string;
-	leafId: string | null;
+	tipId: string | null;
 	operation: CurrentOperationInfo | null;
 }
 
@@ -242,7 +238,7 @@ export interface QueuedItem {
 export interface LaneSnapshot {
 	lane: string;
 	transcript: Entry[];
-	leafId: string | null;
+	tipId: string | null;
 	lastResult?: LaneLastResult;
 	operation: null | {
 		id: string;
@@ -281,7 +277,7 @@ export type HarnessEventPayload =
 	| { type: "run_resume"; runId: string }
 	| { type: "run_suspend"; runId: string; reason: "deferred"; deferred: DeferredHandle }
 	| { type: "run_abort"; runId: string; steer: AgentMessage[]; followUp: AgentMessage[] }
-	| ({ type: "run_end"; runId: string; leafId: string | null } & (
+	| ({ type: "run_end"; runId: string; tipId: string | null } & (
 			| ({ outcome: "completed" | "aborted" } & OptionalFinalAssistant)
 			| ({ outcome: "failed"; error: OperationError } & OptionalFinalAssistant)
 	  ))
@@ -387,8 +383,8 @@ export type HarnessEventPayload =
 	| ({
 			type: "navigation_end";
 			runId: string;
-			oldLeafId: string | null;
-			newLeafId: string | null;
+			oldTipId: string | null;
+			newTipId: string | null;
 	  } & (
 			| { outcome: "completed"; summaryEntry?: BranchSummaryEntry }
 			| { outcome: "declined" | "aborted"; summaryEntry?: never; error?: never }
@@ -548,7 +544,11 @@ export interface AgentHarnessOptions<TContext extends object | undefined = objec
 
 export interface AgentLane {
 	readonly name: string;
-	getLeafId(context: Context): Promise<string | null>;
+	getTipId(context: Context): Promise<string | null>;
+	findEntries(query: BranchScan | undefined, context: Context): Promise<Entry[]>;
+	findEntry(query: BranchScan | undefined, context: Context): Promise<Entry | undefined>;
+	appendMessage(message: AgentMessage, context: Context): Promise<string>;
+	appendCustomEntry(customType: string, data: JsonValue | undefined, context: Context): Promise<string>;
 	getLastResult(context: Context): Promise<LaneLastResult | undefined>;
 	accept(request: OperationRequest, context: Context): Promise<OperationAdmissionResult>;
 	drive(options: DriveOptions, context: Context): Promise<DriveResult>;
@@ -587,14 +587,21 @@ export interface AgentLane {
 	setThinkingLevel(level: ThinkingLevel, context: Context): Promise<void>;
 	getActiveTools(context: Context): Promise<string[]>;
 	setActiveTools(names: string[], context: Context): Promise<void>;
-	readonly sessionTree: SessionTree;
 	watch(context: Context): Promise<WatchHandle<LaneSnapshot>>;
 }
 
-export interface AgentHarness<TContext extends object | undefined = object | undefined> extends AgentLane {
-	lane(name: string, context: Context): Promise<AgentLane | undefined>;
-	createLane(name: string, at: string | null, context: Context): Promise<CreateLaneResult>;
+export interface AcquireLaneOptions {
+	createAt?: string | null;
+}
+
+export interface AgentHarness<TContext extends object | undefined = object | undefined> {
+	lane(name: string, context: Context): Promise<AgentLane>;
+	lane(name: string, options: AcquireLaneOptions, context: Context): Promise<AgentLane>;
 	lanes(context: Context): Promise<LaneInfo[]>;
+	getName(context: Context): Promise<string | undefined>;
+	setName(name: string | undefined, context: Context): Promise<void>;
+	getLabel(targetId: string, context: Context): Promise<string | undefined>;
+	setLabel(targetId: string, label: string | undefined, context: Context): Promise<void>;
 	getTools(context: Context): Promise<AgentHarnessTool<TContext>[]>;
 	setTools(tools: AgentHarnessTool<TContext>[], context: Context): Promise<void>;
 	getResources(context: Context): Promise<Resources>;

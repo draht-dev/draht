@@ -13,9 +13,9 @@ import type {
 	SettledAssistantMessage,
 } from "../../session/types.ts";
 import {
+	branchTip,
 	deleteValue,
 	laneLastResult as laneLastResultValue,
-	laneLeaf,
 	laneState as laneStateValue,
 	operationState as operationStateValue,
 	pendingEntry,
@@ -74,10 +74,10 @@ async function readRunContext<TContext extends object | undefined>(
 			if (operation.state.phase.kind !== "checkpoint" || !sameCheckpoint(operation.state.phase, phase)) {
 				throw new SessionInvariantError("Checkpoint context lost its durable boundary");
 			}
-			if (state.leafId === null) throw new SessionInvariantError("Run checkpoint has no branch leaf");
+			if (state.tipId === null) throw new SessionInvariantError("Run checkpoint has no Branch tip");
 			const path = (
 				await reader.scanBranch(
-					{ start: state.leafId, stopAtType: "compaction", order: "newestFirst" },
+					{ start: state.tipId, stopAtType: "compaction", order: "newestFirst" },
 					drive.context,
 				)
 			).reverse();
@@ -158,7 +158,7 @@ export async function startRun<TContext extends object | undefined>(
 			if (operation.state.phase.kind !== "starting") {
 				throw new SessionInvariantError("before_run settlement lost the starting boundary");
 			}
-			let parentId = state.leafId;
+			let parentId = state.tipId;
 			const entries = reserved.map(({ id, message }) => {
 				const entry: NewEntry<MessageEntry> = { id, parentId, type: "message", message };
 				parentId = id;
@@ -178,12 +178,12 @@ export async function startRun<TContext extends object | undefined>(
 				kind: "commit",
 				writes: [
 					...entries.map((entry) => insertEntry(entry)),
-					...(entries.length === 0 ? [] : [setValue(laneLeaf(lane.name), triggerEntryId)]),
+					...(entries.length === 0 ? [] : [setValue(branchTip(lane.name), triggerEntryId)]),
 					setValue(operationStateValue(drive.operationId), nextState),
 				],
 				next: {
 					...state,
-					leafId: triggerEntryId,
+					tipId: triggerEntryId,
 					operation: { meta: operation.meta, state: nextState },
 				},
 				materialize: () => ({ kind: "continue" }) as const,
@@ -229,7 +229,7 @@ async function applyPendingWrites<TContext extends object | undefined>(
 					return { id, pending: value.value };
 				}),
 			);
-			let parentId = state.leafId;
+			let parentId = state.tipId;
 			let triggerEntryId: string | undefined;
 			const entries: NewEntry[] = pending.map(({ id, pending: item }) => {
 				const entry: NewEntry =
@@ -267,10 +267,10 @@ async function applyPendingWrites<TContext extends object | undefined>(
 				writes: [
 					...entries.map((entry) => insertEntry(entry)),
 					...ids.map((id) => deleteValue(pendingEntry(id))),
-					setValue(laneLeaf(lane.name), parentId),
+					setValue(branchTip(lane.name), parentId),
 					setValue(operationStateValue(drive.operationId), nextState),
 				],
-				next: { ...state, leafId: parentId, operation: { meta: operation.meta, state: nextState } },
+				next: { ...state, tipId: parentId, operation: { meta: operation.meta, state: nextState } },
 				materialize: () => ({ kind: "continue" }) as const,
 				events: (commit) =>
 					entries.flatMap((entry, index) =>
@@ -331,7 +331,7 @@ async function consumeQueuedMessages<TContext extends object | undefined>(
 				readMessages(remainingFollowUpIds, "Follow-up entry"),
 				readMessages(state.pendingNextRun, "Pending next-run entry"),
 			]);
-			let parentId = state.leafId;
+			let parentId = state.tipId;
 			const entries = messages.map(({ id, message }) => {
 				const entry: NewEntry<MessageEntry> = { id, parentId, type: "message", message };
 				parentId = id;
@@ -354,12 +354,12 @@ async function consumeQueuedMessages<TContext extends object | undefined>(
 				writes: [
 					...entries.map((entry) => insertEntry(entry)),
 					...ids.map((id) => deleteValue(pendingEntry(id))),
-					setValue(laneLeaf(lane.name), triggerEntryId),
+					setValue(branchTip(lane.name), triggerEntryId),
 					setValue(operationStateValue(drive.operationId), nextState),
 				],
 				next: {
 					...state,
-					leafId: triggerEntryId,
+					tipId: triggerEntryId,
 					operation: { meta: operation.meta, state: nextState },
 				},
 				materialize: () => ({ kind: "continue" }) as const,
@@ -437,7 +437,7 @@ async function finishRun<TContext extends object | undefined>(
 				};
 				const entry: NewEntry<MessageEntry> = {
 					id: followUpId,
-					parentId: state.leafId,
+					parentId: state.tipId,
 					type: "message",
 					message: followUpMessage,
 				};
@@ -445,12 +445,12 @@ async function finishRun<TContext extends object | undefined>(
 					kind: "commit",
 					writes: [
 						insertEntry(entry),
-						setValue(laneLeaf(lane.name), followUpId),
+						setValue(branchTip(lane.name), followUpId),
 						setValue(operationStateValue(drive.operationId), nextState),
 					],
 					next: {
 						...state,
-						leafId: followUpId,
+						tipId: followUpId,
 						operation: { meta: operation.meta, state: nextState },
 					},
 					materialize: () => ({ kind: "continue" }) as const,
@@ -463,7 +463,7 @@ async function finishRun<TContext extends object | undefined>(
 				};
 			}
 
-			if (state.leafId === null) throw new SessionInvariantError("Completed run has no leaf");
+			if (state.tipId === null) throw new SessionInvariantError("Completed run has no tip");
 			const finalId = current.phase.continuation.includeFinalAssistant ? current.latestAssistantEntryId : null;
 			if (current.phase.continuation.includeFinalAssistant && finalId === null) {
 				throw new SessionInvariantError("Completed run is missing its final assistant");
@@ -486,14 +486,14 @@ async function finishRun<TContext extends object | undefined>(
 				operation: "run",
 				runId: drive.operationId,
 				kind: "completed",
-				leafId: state.leafId,
+				tipId: state.tipId,
 				...final,
 			};
 			const lastResult: LaneLastResult = {
 				operationId: drive.operationId,
 				kind: "run",
 				outcome: "completed",
-				leafId: state.leafId,
+				tipId: state.tipId,
 				runCompletion: finalId === null ? "terminated_tools" : "assistant",
 				...(finalId === null ? {} : { finalAssistantEntryId: finalId }),
 			};
@@ -515,7 +515,7 @@ async function finishRun<TContext extends object | undefined>(
 						type: "run_end",
 						lane: lane.name,
 						runId: drive.operationId,
-						leafId: state.leafId,
+						tipId: state.tipId,
 						outcome: "completed",
 						...final,
 					},

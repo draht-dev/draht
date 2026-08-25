@@ -39,7 +39,7 @@ export interface Config<TContext extends object | undefined> {
 
 /** The current durable state owned by one lane. */
 export interface LaneState {
-	readonly leafId: string | null;
+	readonly tipId: string | null;
 	readonly configuration: LaneConfiguration;
 	readonly pendingNextRun: string[];
 	readonly lastResult?: LaneLastResult;

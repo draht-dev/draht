@@ -1,6 +1,8 @@
 # WP05 — Direct durable drive
 
-**Status: M3 complete; M4 next.** Independent Opus, GPT-5.6-Sol, and Fable reviews approved the authoritative-`Lane.state` design and M3 generation implementation with no blockers.
+**Status: M3 complete; WP06 foundation landed before M4.** Independent Opus, GPT-5.6-Sol, and Fable reviews approved the authoritative-`Lane.state` design and M3 generation implementation with no blockers.
+
+WP06 separates Session/Branch/AgentLane/AgentHarness, replaces keyed lane lines with one keyless Session mutation line, removes implicit main, and renames durable/public leaf fields to tip. Every M4–M8 instruction below is interpreted on that foundation; no compatibility aliases or Harness-as-main assumptions remain.
 
 Removes breakpoints/manual drive, then implements the complete durable execution graph. Public drive stays disabled until every reachable phase and reconciliation path exists.
 
@@ -129,7 +131,7 @@ private removeDrive(drive: Drive): void {
 }
 ```
 
-Every late transition and progress write checks the current operation in the authoritative `Lane.state` supplied by the lane mutation line and exact process identity. Exact identity is checked again synchronously at commit admission, immediately before `mutator.commit()`, with no `await` between the check and invocation. A planner-side check alone is insufficient because abandonment may replace the owner after an asynchronous planner returns.
+Every late transition and progress write checks the current operation in the authoritative `Lane.state` supplied by the Session mutation line and exact process identity. Exact identity is checked again synchronously at commit admission, immediately before `mutator.commit()`, with no `await` between the check and invocation. A planner-side check alone is insufficient because abandonment may replace the owner after an asynchronous planner returns.
 
 This prevents ABA writes: after invocation abandonment, a replacement `Drive` may own the same durable operation id; the old object still fails exact identity and cannot write or remove the replacement. The small package-internal `Lane.commandDriveOwned(drive, plan, context)` variant performs only this admission check; it otherwise has the same visible `LaneCommand` decision as `command` and introduces no planner or transition framework.
 
@@ -456,7 +458,7 @@ The body is illustrative, not a required helper inventory. The unchanged-`contin
 
 `Lane.command` passes the authoritative current lane/operation projection. Every supported control-state mutation commits through that `Lane`, and a successful commit publishes `decision.next` before releasing the mutation line. A failed commit publishes nothing and faults the harness. A process crash destroys the projection; attachment restores and validates it from durable control values.
 
-Procedures therefore do **not** reread `laneState`, `operationMeta`, `operationState`, `laneLeaf`, or `laneConfig` on each transition. They use the callback reader only to dereference content named by the projection: pending entries, assistant frames, tool arguments/checkpoints, preparations, memos, staged outcomes, tree entries, and cleanup-prefix scans.
+Procedures therefore do **not** reread `laneState`, `operationMeta`, `operationState`, `branchTip`, or `laneConfig` on each transition. They use the callback reader only to dereference content named by the projection: pending entries, assistant frames, tool arguments/checkpoints, preparations, memos, staged outcomes, tree entries, and cleanup-prefix scans.
 
 Drive-owned commands use one small `Lane` variant so exact-object ownership is checked at commit admission rather than only in an asynchronous planner:
 
@@ -475,7 +477,7 @@ async commandDriveOwned<TResult>(
 }
 ```
 
-`commandDriveOwned` is not a scheduler, planner, transaction wrapper, or capability facade. It is `Lane.command` plus the exact-Drive admission fence. If its initial operation/id check or final exact-object check fails, it returns `lost_ownership` and commits nothing. Close/fault is checked first at final admission and propagates its lifecycle error rather than being mislabeled as ownership loss. This extra final open check is drive-specific: exact owner abandonment may occur outside the lane line while an asynchronous planner runs. An ordinary `command` is admitted when its mutation callback starts and may finish that active commit after close begins. Ordinary public lane commands continue to use `command`.
+`commandDriveOwned` is not a scheduler, planner, transaction wrapper, or capability facade. It is `Lane.command` plus the exact-Drive admission fence. If its initial operation/id check or final exact-object check fails, it returns `lost_ownership` and commits nothing. Close/fault is checked first at final admission and propagates its lifecycle error rather than being mislabeled as ownership loss. This extra final open check is drive-specific: exact owner abandonment may occur outside the Session line while an asynchronous planner runs. An ordinary `command` is admitted when its mutation callback starts and may finish that active commit after close begins. Ordinary public lane commands continue to use `command`.
 
 A representative transition stays direct:
 
@@ -512,7 +514,7 @@ if (intent.kind !== "committed") return intent.kind === "lost_ownership"
 
 The transition derives `next` from the state supplied to that planner, never from a snapshot captured before the lane job. Inbox and other concurrent fields that do not invalidate this transition are preserved in the committed next state. Cancellation returns to reconciliation without committing; a newly non-empty inbox invalidates only a terminal-finish boundary; relevant tool-sibling movement uses the tool-local `state_changed` result. Ownership loss is handled in band. A matching operation with any other impossible kind/phase relationship is a `SessionInvariantError`.
 
-The single-owner contract is explicit: while a harness owns a `Session`, retained `Session` and pre-attachment `SessionTree` mutators are forbidden. In-process administrative finalization also commits through the owning `Lane`. External storage mutation is not a supported second authority, and the runtime does not silently heal it. Conformance tests compare each committed projection with a fresh restore at controlled boundaries.
+The single-owner contract is explicit: while a Harness owns a `Session`, raw Branch mutation for a configured AgentLane and reserved control-address writes are forbidden. In-process administrative finalization also commits through the owning `Lane`. External storage mutation is not a supported second authority, and the runtime does not silently heal it. Conformance tests compare each committed projection with a fresh restore at controlled boundaries.
 
 ### 2.6 Generation procedure — approved shape, illustrative bodies
 
@@ -551,7 +553,7 @@ async function runReadyGeneration<TContext extends object | undefined>(
 	if (intent.kind === "lost_ownership") return intent;
 	if (intent.kind === "state_changed") return { kind: "continue" };
 
-	// ---- effect: admitted, off the lane line ----
+	// ---- effect: admitted, off the Session line ----
 	const progress = openFrameProgress(lane, drive, responseEntryId);
 	let response: SettledAssistantMessage;
 	try {
@@ -783,10 +785,10 @@ Inside that one command, the procedure:
 
 1. verifies its exact terminal boundary against the current authoritative projection;
 2. computes its bounded `LaneLastResult` directly from known state and reserved ids;
-3. prepends any procedure-specific publication writes (summary entry, navigation leaf/label movement, usage);
+3. prepends any procedure-specific publication writes (summary entry, navigation tip/label movement, usage);
 4. appends the shared mechanical operation-cleanup writes;
 5. writes `laneLastResult` and idle `laneState`;
-6. publishes the exact idle process-local projection, including any leaf movement in its publication writes;
+6. publishes the exact idle process-local projection, including any tip movement in its publication writes;
 7. constructs the complete `{ kind: "settled", outcome }` and its one terminal event from `CommitResult`, which supplies storage-assigned entry sequence and timestamp when needed.
 
 A normal completed-run finish is representative. Its terminal check is visibly part of the checkpoint procedure:
@@ -807,7 +809,7 @@ return lane.commandDriveOwned(drive, async (state, reader) => {
 	if (run.inbox.steer.length !== 0 || run.inbox.followUp.length !== 0 || run.inbox.writes.length !== 0) {
 		return { kind: "return", result: { kind: "continue" } as const };
 	}
-	if (state.leafId === null) throw new SessionInvariantError("completed run has no leaf");
+	if (state.tipId === null) throw new SessionInvariantError("completed run has no tip");
 
 	const finalId = run.phase.continuation.includeFinalAssistant
 		? run.latestAssistantEntryId
@@ -825,13 +827,13 @@ return lane.commandDriveOwned(drive, async (state, reader) => {
 		: {};
 	const outcome: TerminalOperationOutcome = {
 		operation: "run", runId: drive.operationId, kind: "completed",
-		leafId: state.leafId, ...final,
+		tipId: state.tipId, ...final,
 	};
 	const lastResult: LaneLastResult = {
 		operationId: drive.operationId,
 		kind: "run",
 		outcome: "completed",
-		leafId: state.leafId,
+		tipId: state.tipId,
 		runCompletion: finalId === null ? "terminated_tools" : "assistant",
 		...(finalId === null ? {} : { finalAssistantEntryId: finalId }),
 	};
@@ -852,7 +854,7 @@ return lane.commandDriveOwned(drive, async (state, reader) => {
 		materialize: () => ({ kind: "settled", outcome } as const),
 		events: () => [{
 			type: "run_end", lane: lane.name, runId: drive.operationId,
-			leafId: state.leafId, outcome: "completed", ...final,
+			tipId: state.tipId, outcome: "completed", ...final,
 		}],
 	};
 }, drive.context);
@@ -1092,7 +1094,7 @@ const usageRow: Omit<UsageRow, "seq"> = { id: usageId, usage: response.usage, en
 const writes: Write[] = [
 	insertEntry(responseEntry),                                       // 0
 	insertUsage(usageRow),                                            // 1
-	setValue(laneLeaf(lane.name), responseEntryId),             // 2
+	setValue(branchTip(lane.name), responseEntryId),             // 2
 	deleteList(pendingAssistantFrames(drive.operationId, responseEntryId)),
 	setValue(operationStateValue(drive.operationId), nextState),
 ];
@@ -1113,7 +1115,7 @@ return {
 };
 ```
 
-Cross-lane ordering is the storage commit queue's: both backends serialize commits, so two lanes committing usage concurrently observe two different snapshots in commit order, and the later one includes the earlier. A consumer keeping the greatest `row.seq` it applied therefore never regresses totals (harness.md §5.5).
+Cross-lane ordering is first the sole Session mutation line and then the storage commit queue: two lanes committing usage observe two different snapshots in commit order, and the later one includes the earlier. A consumer keeping the greatest `row.seq` it applied therefore never regresses totals (harness.md §5.5).
 
 **Fabricated `CommitResult` literals must be inventoried**, because adding a required field breaks every hand-written one. Current sites:
 
@@ -1224,7 +1226,7 @@ Only `packages/coding-agent/src/core/cache-stats.ts` (comment) and vendored `hig
 | `src/harness/result.ts`, `src/harness/agent-harness.ts` | keep tagged/runtime errors in the dependency-neutral result module and re-export them from `agent-harness.ts`; this lets `agent-harness.ts` directly wire `createAgentHarness` while concrete Lane imports remain order-independent |
 | `src/harness/runtime/types.ts` | add the `Drive` class (completion, gate control, stripped pass Context, installer signal, wait policy, mutable `deferredPermits`, mutable `finalizedOutcome`) and the initial procedure-result union, simplified in M2; move `LaneCommand<TResult>` here from `lane.ts` |
 | `src/harness/runtime/lane.ts` | make the class `Lane<TContext extends object | undefined>`; expose package-internal `session`, `models`, `hooks`, `emitBatch`, `command`, `readConfig`, and `mismatch` for direct procedure use; add package-internal `activeDrive: Drive | undefined` and `isDriveActive(drive)`; import `LaneCommand` from `types.ts`; remove the obsolete `AcceptanceConfig` type |
-| `src/harness/runtime/harness.ts` | `Harness<TContext> extends Lane<TContext>`; `buildLane` returns `Lane<TContext>`; pass `HookRegistry` and full `Config` into `Lane` |
+| `src/harness/runtime/harness.ts` | `Harness<TContext>` manages ordinary `Lane<TContext>` objects by composition; `buildLane` returns `Lane<TContext>`; pass `HookRegistry` and full `Config` into each Lane |
 | `src/harness/runtime/restore.ts` | name `Lane<TContext>` wherever it names `Lane` |
 | `src/harness/session/types.ts` | add `stats: SessionStats` to `CommitResult` (§2.12) |
 | `src/harness/session/commit.ts` | `PreparedCommit.result` becomes `Omit<CommitResult, "stats">` |
@@ -1287,7 +1289,7 @@ Only `packages/coding-agent/src/core/cache-stats.ts` (comment) and vendored `hig
 | `test/harness/runtime/lane.test.ts` | exact owner replaced after an async planner returns but before commit admission → no write; commit admitted first → write and projection publish complete before replacement |
 | `test/harness/runtime/progress.test.ts` | current projection permits matching frame/tool progress; terminal or phase movement first → queued write declines; no durable control reads |
 | `test/harness/runtime/drive-terminal.test.ts` | cleanup completeness for run, compaction, navigation, including leftovers and exact live frame list; `pendingNextRun` excluded; bounded hydration equality for directly constructed latest-result values per kind |
-| `test/harness/runtime/restore.test.ts` | required durable projection absence/contradiction remains attachment corruption; a stored null leaf remains valid |
+| `test/harness/runtime/restore.test.ts` | required durable projection absence/contradiction remains attachment corruption; a stored null tip remains valid |
 
 **Commands.** `npm run check` · targeted vitest for every modified test file
 
@@ -1318,12 +1320,12 @@ Only `packages/coding-agent/src/core/cache-stats.ts` (comment) and vendored `hig
 |---|---|
 | `src/harness/execution/assistant.ts` | use provider-facing `Tool` declarations; observer callbacks receive trailing Context, and `start` receives the actual start event; pre-generation errors synthesize no start, while updates or successful completion before start are protocol defects; the runtime request adapter admits `Models.streamSimple` through `Gate` |
 
-**Behavior/invariants landed.** Preparation precedes intent; ids reserved at intent and honoured at settlement; frames enqueued synchronously without per-frame awaits; settlement deletes the frame list; every transition plans from the current owned projection and publishes its exact next projection; checkpoint separates tree parent/leaf from `triggerEntryId` for unprojected custom writes.
+**Behavior/invariants landed.** Preparation precedes intent; ids reserved at intent and honoured at settlement; frames enqueued synchronously without per-frame awaits; settlement deletes the frame list; every transition plans from the current owned projection and publishes its exact next projection; checkpoint separates tree parent/tip from `triggerEntryId` for unprojected custom writes.
 
 **Focused tests**
 | Path | Theme |
 |---|---|
-| `test/harness/runtime/drive-generation.test.ts` | each procedure invoked directly with a concrete `Lane` and `Drive`, no switch; intent before provider; reserved-id settlement; frame order without storage awaits; orphan recovery without provider call; mixed projecting/unprojected drains (leaf vs trigger); queued inbox mutation before intent → intent commits while preserving it; cancellation before intent → procedure returns `continue` and commits nothing; fence taken by another operation → returns `lost_ownership` and commits nothing; published projection equals fresh restore |
+| `test/harness/runtime/drive-generation.test.ts` | each procedure invoked directly with a concrete `Lane` and `Drive`, no switch; intent before provider; reserved-id settlement; frame order without storage awaits; orphan recovery without provider call; mixed projecting/unprojected drains (tip vs trigger); queued inbox mutation before intent → intent commits while preserving it; cancellation before intent → procedure returns `continue` and commits nothing; fence taken by another operation → returns `lost_ownership` and commits nothing; published projection equals fresh restore |
 
 **Commands.** `npm run check` · targeted vitest
 

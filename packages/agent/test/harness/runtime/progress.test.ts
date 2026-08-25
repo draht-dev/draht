@@ -83,12 +83,12 @@ async function createFixture(
 	const meta = {
 		operationId,
 		lane: "main",
-		sourceLeafId: null,
+		sourceTipId: null,
 		startedAt: 1,
 		intent: { kind: "run" as const, promptEntryIds: [] },
 	};
 	const projection: RuntimeLaneState = {
-		leafId: null,
+		tipId: null,
 		configuration,
 		pendingNextRun: [],
 		operation: { meta, state },
@@ -105,11 +105,10 @@ async function createFixture(
 		() => runtimeConfig,
 	);
 	await session.mutate(
-		"main",
 		(mutator) =>
 			mutator.commit(
 				[
-					storedValues.setValue(storedValues.laneLeaf("main"), null),
+					storedValues.setValue(storedValues.branchTip("main"), null),
 					storedValues.setValue(storedValues.laneConfig("main"), configuration),
 					storedValues.setValue(storedValues.laneState("main"), {
 						currentOperationId: operationId,

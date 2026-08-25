@@ -3,7 +3,7 @@ export interface StorageBenchmarkDataset {
 	readonly entryCount: number;
 	readonly payloadBytes: number;
 	readonly lookupIds: readonly string[];
-	readonly leafId: string;
+	readonly tipId: string;
 }
 
 /** Package-internal deterministic id shared by dataset and transaction generation. */
@@ -21,7 +21,7 @@ function createDataset(scale: string, entryCount: number): StorageBenchmarkDatas
 			const entryIndex = Math.floor((index * (entryCount - 1)) / Math.max(1, lookupCount - 1));
 			return storageBenchmarkEntryId(entryIndex);
 		}),
-		leafId: storageBenchmarkEntryId(entryCount - 1),
+		tipId: storageBenchmarkEntryId(entryCount - 1),
 	};
 }
 

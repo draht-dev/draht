@@ -50,7 +50,6 @@ describe("MemoryStorage commit statistics", () => {
 		};
 		try {
 			await session.mutate(
-				"main",
 				(mutator) =>
 					mutator.commit(
 						[
@@ -69,7 +68,6 @@ describe("MemoryStorage commit statistics", () => {
 			await session.close(BACKGROUND_CONTEXT);
 			const reopened = await repo.open(session.metadata, BACKGROUND_CONTEXT);
 			const result = await reopened.mutate(
-				"main",
 				(mutator) =>
 					mutator.commit([storedValues.setValue(storedValues.sessionName, "reopened")], BACKGROUND_CONTEXT),
 				BACKGROUND_CONTEXT,

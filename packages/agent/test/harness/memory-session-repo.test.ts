@@ -22,14 +22,14 @@ describe("MemorySessionRepo metadata", () => {
 	it("returns a fresh facade after close while retaining one session and storage", async () => {
 		const repo = new MemorySessionRepo({ now: () => NOW });
 		const first = await repo.create({ id: "session" }, BACKGROUND_CONTEXT);
-		const firstView = first.view("main");
+		const firstBranch = await first.createBranch("main", null, BACKGROUND_CONTEXT);
 		const admittedWrite = first.setName("preserved", BACKGROUND_CONTEXT);
 
 		await expect(repo.open(first.metadata, BACKGROUND_CONTEXT)).rejects.toThrow("already open");
 		await Promise.all([admittedWrite, first.close(BACKGROUND_CONTEXT)]);
 		await expect(first.getName(BACKGROUND_CONTEXT)).rejects.toThrow("Session is closed");
 		await expect(first.scanBranch({ start: "entry" }, BACKGROUND_CONTEXT)).rejects.toThrow("Session is closed");
-		await expect(firstView.getName(BACKGROUND_CONTEXT)).rejects.toThrow("Session is closed");
+		await expect(firstBranch.getTipId(BACKGROUND_CONTEXT)).rejects.toThrow("Session is closed");
 
 		const second = await repo.open(first.metadata, BACKGROUND_CONTEXT);
 		expect(second).not.toBe(first);
@@ -41,7 +41,7 @@ describe("MemorySessionRepo metadata", () => {
 	it("waits for an explicit mutation before closing its facade", async () => {
 		const repo = new MemorySessionRepo({ now: () => NOW });
 		const session = await repo.create({ id: "session" }, BACKGROUND_CONTEXT);
-		const mutation = await session.beginMutation("main", BACKGROUND_CONTEXT);
+		const mutation = await session.beginMutation(BACKGROUND_CONTEXT);
 		let closed = false;
 		const closing = session.close(BACKGROUND_CONTEXT).then(() => {
 			closed = true;
@@ -57,21 +57,55 @@ describe("MemorySessionRepo metadata", () => {
 		await Promise.all([reopened.close(BACKGROUND_CONTEXT), repo.close(BACKGROUND_CONTEXT)]);
 	});
 
+	it("rejects an explicit scope that had not acquired before facade close", async () => {
+		const repo = new MemorySessionRepo({ now: () => NOW });
+		const session = await repo.create({ id: "session" }, BACKGROUND_CONTEXT);
+		const first = await session.beginMutation(BACKGROUND_CONTEXT);
+		const secondPromise = session.beginMutation(BACKGROUND_CONTEXT);
+		void secondPromise.catch(() => {});
+		let closed = false;
+		const closing = session.close(BACKGROUND_CONTEXT).then(() => {
+			closed = true;
+		});
+
+		await first.end(BACKGROUND_CONTEXT);
+		await expect(secondPromise).rejects.toThrow("Session is closed");
+		await closing;
+		expect(closed).toBe(true);
+
+		const reopened = await repo.open(session.metadata, BACKGROUND_CONTEXT);
+		await Promise.all([reopened.close(BACKGROUND_CONTEXT), repo.close(BACKGROUND_CONTEXT)]);
+	});
+
 	it("captures fork options before waiting for its snapshot boundary", async () => {
 		const repo = new MemorySessionRepo({ now: () => NOW });
 		const source = await repo.create({ id: "source" }, BACKGROUND_CONTEXT);
 		const rootId = "00000000-0000-7000-8000-000000000001";
 		const childId = "00000000-0000-7000-8000-000000000002";
-		const mutation = await source.beginMutation("main", BACKGROUND_CONTEXT);
+		const mutation = await source.beginMutation(BACKGROUND_CONTEXT);
 		const commit = mutation.commit(
 			[
-				sessionWrites.insertEntry({ id: rootId, parentId: null, type: "custom", customType: "root" }),
-				sessionWrites.insertEntry({ id: childId, parentId: rootId, type: "custom", customType: "child" }),
-				storedValues.setValue(storedValues.laneLeaf("main"), childId),
+				sessionWrites.insertEntry({
+					id: rootId,
+					parentId: null,
+					type: "custom",
+					customType: "root",
+				}),
+				sessionWrites.insertEntry({
+					id: childId,
+					parentId: rootId,
+					type: "custom",
+					customType: "child",
+				}),
+				storedValues.setValue(storedValues.branchTip("main"), childId),
 			],
 			BACKGROUND_CONTEXT,
 		);
-		const options = { id: "fork", entryId: childId, position: "before" as "before" | "at" };
+		const options = {
+			id: "fork",
+			entryId: childId,
+			position: "before" as "before" | "at",
+		};
 		const fork = repo.fork(source.metadata, options, BACKGROUND_CONTEXT);
 		options.entryId = rootId;
 		options.position = "at";
@@ -82,7 +116,8 @@ describe("MemorySessionRepo metadata", () => {
 			source.scanBranch({ start: childId, order: "oldestFirst" }, BACKGROUND_CONTEXT),
 		).resolves.toMatchObject([{ id: rootId }, { id: childId }]);
 		const forked = await fork;
-		expect(await forked.getLeafId(BACKGROUND_CONTEXT)).toBe(rootId);
+		const forkedMain = await forked.branch("main", BACKGROUND_CONTEXT);
+		expect(await forkedMain?.getTipId(BACKGROUND_CONTEXT)).toBe(rootId);
 		await Promise.all([
 			source.close(BACKGROUND_CONTEXT),
 			forked.close(BACKGROUND_CONTEXT),

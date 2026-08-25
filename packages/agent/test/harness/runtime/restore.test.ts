@@ -18,9 +18,18 @@ async function createSession(): Promise<Session> {
 	repos.push(repo);
 	const session = await repo.create({}, BACKGROUND_CONTEXT);
 	await session.mutate(
-		"main",
 		(mutator) =>
-			mutator.commit([storedValues.setValue(storedValues.laneConfig("main"), configuration)], BACKGROUND_CONTEXT),
+			mutator.commit(
+				[
+					storedValues.setValue(storedValues.branchTip("main"), null),
+					storedValues.setValue(storedValues.laneConfig("main"), configuration),
+					storedValues.setValue(storedValues.laneState("main"), {
+						currentOperationId: null,
+						pendingNextRun: [],
+					}),
+				],
+				BACKGROUND_CONTEXT,
+			),
 		BACKGROUND_CONTEXT,
 	);
 	return session;
@@ -57,11 +66,10 @@ describe("runtime lane restore", () => {
 			operationId: session.idGenerator.next(),
 			kind: "navigation" as const,
 			outcome: "completed" as const,
-			oldLeafId: null,
-			leafId: null,
+			oldTipId: null,
+			tipId: null,
 		};
 		await session.mutate(
-			"main",
 			(mutator) =>
 				mutator.commit([storedValues.setValue(storedValues.laneLastResult("main"), result)], BACKGROUND_CONTEXT),
 			BACKGROUND_CONTEXT,
@@ -70,7 +78,7 @@ describe("runtime lane restore", () => {
 		const state = await restoreLane(session, "main", BACKGROUND_CONTEXT);
 
 		expect(state).toEqual({
-			leafId: null,
+			tipId: null,
 			configuration,
 			pendingNextRun: [],
 			lastResult: result,
@@ -85,13 +93,12 @@ describe("runtime lane restore", () => {
 		const meta: OperationMeta = {
 			operationId,
 			lane: "main",
-			sourceLeafId: null,
+			sourceTipId: null,
 			startedAt: 1,
 			intent: { kind: "run", promptEntryIds: [] },
 		};
 		const state = runState(missingTriggerId);
 		await session.mutate(
-			"main",
 			(mutator) =>
 				mutator.commit(
 					[
@@ -119,7 +126,7 @@ describe("runtime lane restore", () => {
 			const base: OperationMeta = {
 				operationId,
 				lane: "main",
-				sourceLeafId: null,
+				sourceTipId: null,
 				startedAt: 1,
 				intent: { kind: "run", promptEntryIds: [] },
 			};
@@ -130,7 +137,6 @@ describe("runtime lane restore", () => {
 						? { ...base, lane: "worker" }
 						: { ...base, intent: { kind: "navigation", targetId: null, summarize: false } };
 			await session.mutate(
-				"main",
 				(mutator) =>
 					mutator.commit(
 						[
@@ -151,12 +157,12 @@ describe("runtime lane restore", () => {
 	});
 
 	it.each([
-		[storedValues.laneLeaf("main").namespace, storedValues.deleteValue(storedValues.laneLeaf("main"))],
+		[storedValues.branchTip("main").namespace, storedValues.deleteValue(storedValues.branchTip("main"))],
 		[storedValues.laneConfig("main").namespace, storedValues.deleteValue(storedValues.laneConfig("main"))],
 		[storedValues.laneState("main").namespace, storedValues.deleteValue(storedValues.laneState("main"))],
 	] as const)("requires %s", async (namespace, write) => {
 		const session = await createSession();
-		await session.mutate("main", (mutator) => mutator.commit([write], BACKGROUND_CONTEXT), BACKGROUND_CONTEXT);
+		await session.mutate((mutator) => mutator.commit([write], BACKGROUND_CONTEXT), BACKGROUND_CONTEXT);
 
 		await expect(restoreLane(session, "main", BACKGROUND_CONTEXT)).rejects.toThrow(`missing ${namespace.slice(3)}`);
 	});
@@ -169,13 +175,12 @@ describe("runtime lane restore", () => {
 			const meta: OperationMeta = {
 				operationId,
 				lane: "main",
-				sourceLeafId: null,
+				sourceTipId: null,
 				startedAt: 1,
 				intent: { kind: "run", promptEntryIds: [] },
 			};
 			const state = runState(session.idGenerator.next());
 			await session.mutate(
-				"main",
 				(mutator) =>
 					mutator.commit(
 						[
@@ -208,18 +213,31 @@ describe("runtime lane restore", () => {
 			thinkingLevel: "high",
 			activeToolNames: ["read"],
 		};
-		await session.createLane("worker", null, workerConfiguration, undefined, BACKGROUND_CONTEXT);
+		await session.mutate(
+			(mutator) =>
+				mutator.commit(
+					[
+						storedValues.setValue(storedValues.branchTip("worker"), null),
+						storedValues.setValue(storedValues.laneConfig("worker"), workerConfiguration),
+						storedValues.setValue(storedValues.laneState("worker"), {
+							currentOperationId: null,
+							pendingNextRun: [],
+						}),
+					],
+					BACKGROUND_CONTEXT,
+				),
+			BACKGROUND_CONTEXT,
+		);
 		const operationId = session.idGenerator.next();
 		const meta: OperationMeta = {
 			operationId,
 			lane: "worker",
-			sourceLeafId: null,
+			sourceTipId: null,
 			startedAt: 1,
 			intent: { kind: "run", promptEntryIds: [] },
 		};
 		const state = runState(session.idGenerator.next());
 		await session.mutate(
-			"worker",
 			(mutator) =>
 				mutator.commit(
 					[
@@ -235,7 +253,7 @@ describe("runtime lane restore", () => {
 			BACKGROUND_CONTEXT,
 		);
 		const before = {
-			leaves: await session.scanValues(storedValues.laneLeafInventoryPrefix(), BACKGROUND_CONTEXT),
+			leaves: await session.scanValues(storedValues.branchTipInventoryPrefix(), BACKGROUND_CONTEXT),
 			mainConfiguration: await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT),
 			workerConfiguration: await session.getValue(storedValues.laneConfig("worker"), BACKGROUND_CONTEXT),
 			mainState: await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT),
@@ -252,10 +270,10 @@ describe("runtime lane restore", () => {
 			configuration: workerConfiguration,
 			operation: { meta, state },
 		});
-		expect(mutate.mock.calls.map(([lane]) => lane).sort()).toEqual(["main", "worker"]);
+		expect(mutate).toHaveBeenCalledTimes(1);
 		expect(readList).not.toHaveBeenCalled();
 		expect({
-			leaves: await session.scanValues(storedValues.laneLeafInventoryPrefix(), BACKGROUND_CONTEXT),
+			leaves: await session.scanValues(storedValues.branchTipInventoryPrefix(), BACKGROUND_CONTEXT),
 			mainConfiguration: await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT),
 			workerConfiguration: await session.getValue(storedValues.laneConfig("worker"), BACKGROUND_CONTEXT),
 			mainState: await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT),
@@ -264,14 +282,17 @@ describe("runtime lane restore", () => {
 		readList.mockRestore();
 	});
 
-	it("requires main in the trusted lane inventory", async () => {
+	it("allows an empty inventory but rejects lane values without a Branch", async () => {
+		const repo = new MemorySessionRepo();
+		repos.push(repo);
+		const empty = await repo.create({}, BACKGROUND_CONTEXT);
+		await expect(restoreSession(empty, BACKGROUND_CONTEXT)).resolves.toEqual(new Map());
+
 		const session = await createSession();
 		await session.mutate(
-			"main",
-			(mutator) => mutator.commit([storedValues.deleteValue(storedValues.laneLeaf("main"))], BACKGROUND_CONTEXT),
+			(mutator) => mutator.commit([storedValues.deleteValue(storedValues.branchTip("main"))], BACKGROUND_CONTEXT),
 			BACKGROUND_CONTEXT,
 		);
-
-		await expect(restoreSession(session, BACKGROUND_CONTEXT)).rejects.toThrow("Session is missing main lane");
+		await expect(restoreSession(session, BACKGROUND_CONTEXT)).rejects.toThrow("incomplete durable state");
 	});
 });

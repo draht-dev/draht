@@ -4,7 +4,9 @@
 
 Complete. Phase A and the final implementation rereview passed Fable with no findings. Focused agent/server/SQLite tests, `npm run build`, `npm run check`, and `./test.sh` pass. `packages/agent/docs/harness.md` remains normative.
 
-WP02 established atomic acceptance, recipient binding, and coherent lane watches. WP03 removed drive deadlines. WP04 removes the caller-operated event-delivery gate without weakening those guarantees and makes `Session.createLane()` own lane creation end to end. The direct durable-drive package follows as WP05.
+> Historical note: WP06 later replaced the lane-creation API and keyed line described in this completed handoff with atomic `AgentHarness.lane()` acquisition on one Session line. The event-publication guarantees remain current.
+
+WP02 established atomic acceptance, recipient binding, and coherent lane watches. WP03 removed drive deadlines. WP04 removes the caller-operated event-delivery gate without weakening those guarantees and makes the historical `Session.createLane()` own lane creation end to end. The direct durable-drive package follows as WP05.
 
 ## Problem
 
@@ -20,9 +22,9 @@ outside Session.mutate:
   await delivery.start()
 ```
 
-The split preserves the correct boundary, but it is a footgun: calling `emit()` too early, calling `start()` too early, or dropping `start()` can violate observation semantics or stall the global event tail. `Harness.createLane()` repeats the choreography manually.
+The split preserves the correct boundary, but it is a footgun: calling `emit()` too early, calling `start()` too early, or dropping `start()` can violate observation semantics or stall the global event tail. The historical `Harness.createLane()` repeats the choreography manually.
 
-Lane creation has a second one-off boundary. `Session.createLane()` owns validation and the durable transaction, but Harness cannot publish its process-local `Lane` and bind `lane_created` recipients from that same commit continuation. Harness therefore opens `Session.mutate()` itself and calls exported `createLaneWithMutator()`.
+Lane creation has a second one-off boundary. The historical `Session.createLane()` owns validation and the durable transaction, but Harness cannot publish its process-local `Lane` and bind `lane_created` recipients from that same commit continuation. Harness therefore opens `Session.mutate()` itself and calls exported `createLaneWithMutator()`.
 
 WP04 removes both caller-operated seams while preserving current direct-listener and hook barriers.
 
@@ -155,7 +157,7 @@ Expected no-commit rejections publish no events. Commit/materialization/publicat
 
 ## Session lane creation contract
 
-`Session.createLane()` owns validation, commit, and the synchronous committed-publication callback. Context remains last:
+The historical `Session.createLane()` owns validation, commit, and the synchronous committed-publication callback. Context remains last:
 
 ```ts
 createLane(
@@ -223,7 +225,7 @@ Modify:
 - `packages/agent/src/harness/runtime2/lane.ts`;
 - `packages/agent/src/harness/runtime2/harness.ts`;
 - `packages/agent/src/harness/session/types.ts`;
-- local Session implementations and tests required by the `createLane` signature;
+- local Session implementations and tests required by the historical `createLane` signature;
 - direct event primitive, acceptance, watch, lane, and harness tests.
 
 Remote/experimental runtime behavior is not a design constraint for WP04. Session mutation authority remains process-local; do not add remote Session callback transport, protocol machinery, compatibility abstractions, or boundary tests.
@@ -235,7 +237,7 @@ Update normative `harness.md`:
 - replace enqueue/start language with synchronous `emitBatch` binding and post-mutation awaiting;
 - state accurately that listener execution may begin after publication/binding but before technical line release;
 - retain awaited direct-listener, event/hook, watcher, Context, close, and ordering semantics;
-- replace shared exported mutator-procedure lane creation with `Session.createLane(onCommitted, context)`;
+- replace shared exported mutator-procedure lane creation with the historical `Session.createLane(onCommitted, context)`;
 - update invariants, races, tests, glossary, and Part 8;
 - link WP04 and move direct durable drive to WP05.
 

@@ -36,11 +36,10 @@ async function createLane(
 	);
 	sessions.push(session);
 	await session.mutate(
-		"main",
 		(mutator) =>
 			mutator.commit(
 				[
-					storedValues.setValue(storedValues.laneLeaf("main"), null),
+					storedValues.setValue(storedValues.branchTip("main"), null),
 					storedValues.setValue(storedValues.laneConfig("main"), configuration),
 					storedValues.setValue(storedValues.laneState("main"), { currentOperationId: null, pendingNextRun: [] }),
 				],
@@ -167,7 +166,7 @@ describe("runtime Lane commands", () => {
 		await expect(lane.command(() => ({ kind: "reject", error: rejection }), BACKGROUND_CONTEXT)).rejects.toBe(
 			rejection,
 		);
-		expect(await lane.getLeafId(BACKGROUND_CONTEXT)).toBeNull();
+		expect(await lane.getTipId(BACKGROUND_CONTEXT)).toBeNull();
 		await lane.setThinkingLevel("high", BACKGROUND_CONTEXT);
 	});
 
@@ -343,7 +342,7 @@ describe("runtime Lane commands", () => {
 		const closed = new HarnessClosed();
 		lane.seal(closed);
 
-		await expect(lane.getLeafId(BACKGROUND_CONTEXT)).rejects.toBe(closed);
+		await expect(lane.getTipId(BACKGROUND_CONTEXT)).rejects.toBe(closed);
 		await expect(lane.setThinkingLevel("low", BACKGROUND_CONTEXT)).rejects.toBe(closed);
 		releaseCommit.resolve();
 		await admitted;

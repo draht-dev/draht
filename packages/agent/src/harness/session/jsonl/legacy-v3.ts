@@ -1,12 +1,12 @@
 import { type ImageContent, type TextContent, type Usage, uuidv7 } from "@draht/ai";
-import type { AgentMessage } from "../../../types.ts";
+import type { AgentMessage, ThinkingLevel } from "../../../types.ts";
 import type { Context } from "../../context.ts";
 import { createBranchSummaryMessage, createCompactionSummaryMessage } from "../../messages.ts";
 import type { FileSystem } from "../../types.ts";
 import { addUsage, emptyUsage } from "../../utils/usage.ts";
 import type { CommittedEntryWrite, CommittedValueSetWrite, CommittedWrite } from "../commit.ts";
-import type { JsonValue } from "../types.ts";
-import { entryLabel, laneLeaf, laneState, sessionName } from "../values.ts";
+import type { JsonValue, LaneConfiguration } from "../types.ts";
+import { branchTip, entryLabel, laneConfig, laneState, sessionName } from "../values.ts";
 import { type LegacyV3SessionHeader, parseJsonlSessionHeader } from "./codec.ts";
 import {
 	JSONL_FORMAT_VERSION,
@@ -73,6 +73,7 @@ interface LegacyV3ThinkingLevelChangeEntry extends LegacyV3EntryBase {
 
 interface LegacyV3ActiveToolsChangeEntry extends LegacyV3EntryBase {
 	type: "active_tools_change";
+	activeToolNames: string[];
 }
 
 interface LegacyV3SessionInfoEntry extends LegacyV3EntryBase {
@@ -337,7 +338,11 @@ function normalizeRetainedEntry(
 		return { ...committedBase, type: "message", message: entry.message };
 	}
 	if (entry.type === "custom_message") {
-		return { ...committedBase, type: "message", message: importedCustomMessage(entry) };
+		return {
+			...committedBase,
+			type: "message",
+			message: importedCustomMessage(entry),
+		};
 	}
 	if (entry.type === "branch_summary") {
 		return {
@@ -370,8 +375,55 @@ function normalizeRetainedEntry(
 	};
 }
 
+const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+function selectedConfiguration(
+	entriesById: ReadonlyMap<string, LegacyV3Entry>,
+	selectedId: string | null,
+): LaneConfiguration | undefined {
+	let model: LaneConfiguration["model"] | undefined;
+	let thinkingLevel: ThinkingLevel | undefined;
+	let activeToolNames: string[] | undefined;
+	let sawModel = false;
+	let sawThinkingLevel = false;
+	let sawActiveToolNames = false;
+	const visited = new Set<string>();
+	let currentId = selectedId;
+	while (currentId !== null && (!sawModel || !sawThinkingLevel || !sawActiveToolNames)) {
+		if (visited.has(currentId)) throw new Error(`Cycle in legacy v3 parent chain at entry: ${currentId}`);
+		visited.add(currentId);
+		const entry = entriesById.get(currentId);
+		if (entry === undefined) throw new Error(`Missing legacy v3 entry reference: ${currentId}`);
+		if (entry.type === "model_change" && !sawModel) {
+			sawModel = true;
+			if (
+				typeof entry.provider === "string" &&
+				entry.provider.length !== 0 &&
+				typeof entry.modelId === "string" &&
+				entry.modelId.length !== 0
+			) {
+				model = { provider: entry.provider, modelId: entry.modelId };
+			}
+		} else if (entry.type === "thinking_level_change" && !sawThinkingLevel) {
+			sawThinkingLevel = true;
+			if (typeof entry.thinkingLevel === "string" && THINKING_LEVELS.has(entry.thinkingLevel as ThinkingLevel)) {
+				thinkingLevel = entry.thinkingLevel as ThinkingLevel;
+			}
+		} else if (entry.type === "active_tools_change" && !sawActiveToolNames) {
+			sawActiveToolNames = true;
+			if (Array.isArray(entry.activeToolNames) && entry.activeToolNames.every((name) => typeof name === "string")) {
+				activeToolNames = [...entry.activeToolNames];
+			}
+		}
+		currentId = entry.parentId;
+	}
+	if (model === undefined || thinkingLevel === undefined) return undefined;
+	return { model, thinkingLevel, activeToolNames: activeToolNames ?? [] };
+}
+
 function normalizeLegacyV3Values(
 	entries: readonly LegacyV3Entry[],
+	entriesById: ReadonlyMap<string, LegacyV3Entry>,
 	resolver: RetainedIdResolver,
 	firstSeq: number,
 ): CommittedValueSetWrite[] {
@@ -414,24 +466,36 @@ function normalizeLegacyV3Values(
 	}
 
 	const finalEntry = entries.at(-1);
-	const leafAddress = laneLeaf("main");
+	const tipAddress = branchTip("main");
 	writes.push({
 		kind: "value",
 		op: "set",
 		seq: firstSeq + writes.length,
-		namespace: leafAddress.namespace,
-		key: leafAddress.key,
+		namespace: tipAddress.namespace,
+		key: tipAddress.key,
 		value: finalEntry === undefined ? null : resolver.resolve(finalEntry.id),
 	});
-	const stateAddress = laneState("main");
-	writes.push({
-		kind: "value",
-		op: "set",
-		seq: firstSeq + writes.length,
-		namespace: stateAddress.namespace,
-		key: stateAddress.key,
-		value: { currentOperationId: null, pendingNextRun: [] },
-	});
+	const configuration = selectedConfiguration(entriesById, finalEntry?.id ?? null);
+	if (configuration !== undefined) {
+		const configAddress = laneConfig("main");
+		writes.push({
+			kind: "value",
+			op: "set",
+			seq: firstSeq + writes.length,
+			namespace: configAddress.namespace,
+			key: configAddress.key,
+			value: configuration,
+		});
+		const stateAddress = laneState("main");
+		writes.push({
+			kind: "value",
+			op: "set",
+			seq: firstSeq + writes.length,
+			namespace: stateAddress.namespace,
+			key: stateAddress.key,
+			value: { currentOperationId: null, pendingNextRun: [] },
+		});
+	}
 	return writes;
 }
 
@@ -464,7 +528,7 @@ export function normalizeLegacyV3Records(recordLines: readonly string[]): Normal
 	const entryWrites = retainedEntries.map((entry, index) =>
 		normalizeRetainedEntry(entry, index + 1, entriesById, resolver),
 	);
-	const valueWrites = normalizeLegacyV3Values(entries, resolver, entryWrites.length + 1);
+	const valueWrites = normalizeLegacyV3Values(entries, entriesById, resolver, entryWrites.length + 1);
 	const writes: CommittedWrite[] = [...entryWrites, ...valueWrites];
 	return {
 		writes,

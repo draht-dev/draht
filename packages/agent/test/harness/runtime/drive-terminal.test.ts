@@ -48,7 +48,7 @@ function meta(operationId: string, state: OperationState): OperationMeta {
 			: state.kind === "compaction"
 				? { kind: "compaction" }
 				: { kind: "navigation", targetId: state.targetId, summarize: state.summarize };
-	return { operationId, lane: "main", sourceLeafId: null, startedAt: 1, intent };
+	return { operationId, lane: "main", sourceTipId: null, startedAt: 1, intent };
 }
 
 async function createSession(): Promise<{ session: Session; storage: MemoryStorage }> {
@@ -62,13 +62,9 @@ async function createSession(): Promise<{ session: Session; storage: MemoryStora
 }
 
 async function commit(session: Session, writes: Write[]): Promise<void> {
-	await session.mutate(
-		"main",
-		async (mutator) => {
-			await mutator.commit(writes, BACKGROUND_CONTEXT);
-		},
-		BACKGROUND_CONTEXT,
-	);
+	await session.mutate(async (mutator) => {
+		await mutator.commit(writes, BACKGROUND_CONTEXT);
+	}, BACKGROUND_CONTEXT);
 }
 
 function address(write: Write): string {
@@ -285,17 +281,17 @@ describe("runtime terminal outcome hydration", () => {
 				operationId: "run",
 				kind: "run",
 				outcome: "completed",
-				leafId: "assistant",
+				tipId: "assistant",
 				finalAssistantEntryId: "assistant",
 				runCompletion: "assistant",
 			},
-			{ operationId: "compact", kind: "compaction", outcome: "completed", leafId: "compaction" },
+			{ operationId: "compact", kind: "compaction", outcome: "completed", tipId: "compaction" },
 			{
 				operationId: "navigate",
 				kind: "navigation",
 				outcome: "completed",
-				oldLeafId: "old",
-				leafId: "summary",
+				oldTipId: "old",
+				tipId: "summary",
 				summaryEntryId: "summary",
 			},
 		];
@@ -309,7 +305,7 @@ describe("runtime terminal outcome hydration", () => {
 				operation: "run",
 				runId: "run",
 				kind: "completed",
-				leafId: "assistant",
+				tipId: "assistant",
 				finalEntryId: "assistant",
 				finalMessage: assistant,
 			},
@@ -317,15 +313,15 @@ describe("runtime terminal outcome hydration", () => {
 				operation: "compaction",
 				runId: "compact",
 				kind: "completed",
-				leafId: "compaction",
+				tipId: "compaction",
 				entry: expect.objectContaining({ id: "compaction", type: "compaction", summary: "summary" }),
 			},
 			{
 				operation: "navigation",
 				runId: "navigate",
 				kind: "completed",
-				oldLeafId: "old",
-				newLeafId: "summary",
+				oldTipId: "old",
+				newTipId: "summary",
 				summaryEntry: expect.objectContaining({ id: "summary", type: "branch_summary", summary: "branch" }),
 			},
 		]);
@@ -340,16 +336,16 @@ describe("runtime terminal outcome hydration", () => {
 				operationId: "run",
 				kind: "run",
 				outcome: "completed",
-				leafId: "tool-result",
+				tipId: "tool-result",
 				runCompletion: "terminated_tools",
 			},
-			{ operationId: "compact", kind: "compaction", outcome: "declined", leafId: "leaf" },
+			{ operationId: "compact", kind: "compaction", outcome: "declined", tipId: "leaf" },
 			{
 				operationId: "navigate",
 				kind: "navigation",
 				outcome: "aborted",
-				oldLeafId: "old",
-				leafId: "old",
+				oldTipId: "old",
+				tipId: "old",
 			},
 		];
 
@@ -358,9 +354,9 @@ describe("runtime terminal outcome hydration", () => {
 		);
 
 		expect(outcomes).toEqual([
-			{ operation: "run", runId: "run", kind: "completed", leafId: "tool-result" },
-			{ operation: "compaction", runId: "compact", kind: "declined", leafId: "leaf" },
-			{ operation: "navigation", runId: "navigate", kind: "aborted", leafId: "old" },
+			{ operation: "run", runId: "run", kind: "completed", tipId: "tool-result" },
+			{ operation: "compaction", runId: "compact", kind: "declined", tipId: "leaf" },
+			{ operation: "navigation", runId: "navigate", kind: "aborted", tipId: "old" },
 		]);
 		expect(getEntries).not.toHaveBeenCalled();
 	});

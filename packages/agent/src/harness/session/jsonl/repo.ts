@@ -4,7 +4,6 @@ import type { FileError, FileInfo, FileSystem, Result } from "../../types.ts";
 import { createForkSnapshot, type ForkSourceSnapshot } from "../fork.ts";
 import { StorageBackedSession } from "../session.ts";
 import type { ForkOptions, Session, SessionRepo } from "../types.ts";
-import { laneLeaf, laneState, setValue } from "../values.ts";
 import { parseJsonlSessionHeader } from "./codec.ts";
 import { metadataFromLegacyV3Header } from "./legacy-v3.ts";
 import { JsonlStorage } from "./storage.ts";
@@ -85,15 +84,7 @@ export class JsonlSessionRepo
 				cwd,
 				...(options.parentSessionId === undefined ? {} : { parentSessionId: options.parentSessionId }),
 			};
-			storage = await JsonlStorage.create(
-				{ fileSystem: this.fileSystem, path, now: this.now },
-				header,
-				[
-					setValue(laneLeaf("main"), null),
-					setValue(laneState("main"), { currentOperationId: null, pendingNextRun: [] }),
-				],
-				context,
-			);
+			storage = await JsonlStorage.create({ fileSystem: this.fileSystem, path, now: this.now }, header, [], context);
 			const info = fileValue(await this.fileSystem.fileInfo(path, context), `Failed to read session ${path}`);
 			return this.publishOpenSession(metadataFromHeader(header, path, info.mtimeMs), storage, key);
 		} catch (error) {

@@ -138,9 +138,9 @@ export type AgentHarnessToolUpdateCallback<TDetails> = (
 
 Every callback invocation remains an immediate live update. The callback is synchronous and returns `void`; `checkpoint: true` additionally requests persistence of that complete snapshot. It is not a durability acknowledgement. Internally, the harness retains the latest `events.emit(tool_update)` promise so existing listener delivery completes before `after_tool`; tools do not await or receive that promise.
 
-Every `checkpoint:true` call synchronously enqueues one scalar replacement on the lane mutation line, attaches the ordinary harness-fault observer to that promise, and replaces the process-local `latestCheckpointWrite` reference. Writes themselves are neither dropped nor coalesced, and replacing the reference never leaves an earlier rejection unobserved:
+Every `checkpoint:true` call synchronously enqueues one scalar replacement on the Session mutation line, attaches the ordinary harness-fault observer to that promise, and replaces the process-local `latestCheckpointWrite` reference. Writes themselves are neither dropped nor coalesced, and replacing the reference never leaves an earlier rejection unobserved:
 
-- lane-line FIFO preserves request order;
+- Session mutation FIFO preserves request order;
 - each mutation verifies the same call remains `effect_pending`;
 - completion of the latest promise implies completion of every earlier checkpoint write;
 - tool-promise settlement stops accepting updates and awaits that latest promise before `after_tool`;
@@ -317,7 +317,7 @@ TX[
   deleteValue(pendingEntry(i+1)),
   insert tool usage row i+1 if reported,
 
-  setValue(laneLeaf(lane), newest result),
+  setValue(branchTip(lane), newest result),
   setValue(operationState(operationId),
            calls i..i+1 = completed and, when complete, next checkpoint)
 ]
@@ -423,7 +423,7 @@ interface AgentHarnessToolInvocation {
 Each operation:
 
 1. validates the memo name and checks process-local capability expiry;
-2. synchronously enqueues work on the lane mutation line before returning its promise;
+2. synchronously enqueues work on the Session mutation line before returning its promise;
 3. verifies the operation, turn, source position, and invocation are still the same `effect_pending` call when that job executes;
 4. constructs and reads or writes only `operationToolMemo(operationId, invocationId, name)`;
 5. rejects after capability expiry or durable ownership loss.
@@ -558,7 +558,7 @@ Materialization reads `pendingEntry(resultEntryId)`. Its absence or wrong truste
 
 Ordinary dispatch performs no restore-time entry audit. Context/tree reads later consume the immutable entry through their normal typed paths.
 
-Every live mutation still verifies current operation, turn, source position, invocation, and status on the lane line. Those checks fence concurrent settlement, cancellation, and external finalization; they are not historical restore validation. Terminal prefix cleanup remains defensive and does not make orphan scans part of restore.
+Every live mutation still verifies current operation, turn, source position, invocation, and status on the Session line. Those checks fence concurrent settlement, cancellation, and external finalization; they are not historical restore validation. Terminal prefix cleanup remains defensive and does not make orphan scans part of restore.
 
 ## Snapshots and reconnect
 
@@ -593,7 +593,7 @@ Instrumented-storage tests assert this ordering. A crash after `tool_end` but be
 | crash after outcome staging | tool never replays; pending result later materializes |
 | crash during source-prefix placement | transaction exposes either none or all of that placement prefix |
 | safe replay vs old partial output | the old bound checkpoint value is deleted before replay emits new progress |
-| cancellation vs real settlement | lane-line order chooses real cancelled-control result or synthetic reconciliation; at most one outcome stages |
+| cancellation vs real settlement | Session mutation order chooses real cancelled-control result or synthetic reconciliation; at most one outcome stages |
 | terminal finalization vs late result | terminal ownership wins or outcome stages first; late task never recreates operation data |
 | external finalization vs memo/checkpoint mutation | mutation first is removed by terminal cleanup; finalization first makes the mutation's durable ownership check reject |
 
@@ -672,7 +672,7 @@ Instrumented-storage tests assert this ordering. A crash after `tool_end` but be
 
 - exact intent, synchronous update acceptance, asynchronous update-delivery, `after_tool`, `tool_end`, outcome-ready, source-ordered message lifecycle, and materialization order;
 - outcome staging is atomic with memo/output cleanup;
-- materialization is atomic with pending deletion, usage, leaf, and state;
+- materialization is atomic with pending deletion, usage, tip, and state;
 - crash at every boundary;
 - no effect starts before intent;
 - no effect or hook starts from `outcome_ready`;
@@ -687,7 +687,7 @@ Expected runtime areas:
 - tool-batch procedure and source-ordered materialization;
 - terminal cleanup and cancellation reconciliation;
 - harness-specific update options, snapshots, and events;
-- invocation-scoped capability implementation on the lane mutation line;
+- invocation-scoped capability implementation on the Session mutation line;
 - backend conformance through the bound value/list APIs;
 - instrumented-storage transaction assertions.
 

@@ -80,7 +80,6 @@ export class InvalidNavigation extends TaggedError("InvalidNavigation")<{
 export class UnknownSkill extends TaggedError("UnknownSkill")<{ name: string; message: string }> {}
 export class UnknownTemplate extends TaggedError("UnknownTemplate")<{ name: string; message: string }> {}
 export class UnknownTarget extends TaggedError("UnknownTarget")<{ targetId: string; message: string }> {}
-export class LaneExists extends TaggedError("LaneExists")<{ lane: string; message: string }> {}
 export class InvalidLane extends TaggedError("InvalidLane")<{
 	lane: string;
 	reason: string;

@@ -10,6 +10,7 @@ import type {
 	AgentLane,
 	AgentMessage,
 	AgentTool,
+	Branch,
 	BranchScan,
 	CancelQueuedResult,
 	CheckpointPhase,
@@ -56,7 +57,6 @@ import type {
 	SessionSearchService,
 	SessionSnapshot,
 	SessionStats,
-	SessionTree,
 	SettledAssistantMessage,
 	Storage,
 	StorageBranchScan,
@@ -237,21 +237,21 @@ const operations = [
 	{
 		operationId: "run",
 		lane: "main",
-		sourceLeafId: null,
+		sourceTipId: null,
 		startedAt: 1,
 		intent: { kind: "run", promptEntryIds: ["prompt"] },
 	},
 	{
 		operationId: "compaction",
 		lane: "main",
-		sourceLeafId: "source",
+		sourceTipId: "source",
 		startedAt: 2,
 		intent: { kind: "compaction", customInstructions: "compact" },
 	},
 	{
 		operationId: "navigation",
 		lane: "main",
-		sourceLeafId: "source",
+		sourceTipId: "source",
 		startedAt: 3,
 		intent: { kind: "navigation", targetId: "target", summarize: true, label: "target" },
 	},
@@ -260,13 +260,13 @@ const operations = [
 const lastResult = {
 	operationId: "run",
 	kind: "run",
-	leafId: "leaf",
+	tipId: "leaf",
 	finalAssistantEntryId: "assistant",
 	outcome: "completed",
 	runCompletion: "assistant",
 } satisfies LaneLastResult;
 const valueWrites: ValueSetWrite[] = [
-	storedValues.setValue(storedValues.laneLeaf("main"), "leaf"),
+	storedValues.setValue(storedValues.branchTip("main"), "leaf"),
 	storedValues.setValue(storedValues.laneConfig("main"), configuration),
 	storedValues.setValue(storedValues.laneState("main"), { currentOperationId: "run", pendingNextRun: [] }),
 	storedValues.setValue(storedValues.laneLastResult("main"), lastResult),
@@ -377,17 +377,11 @@ it("covers storage, session, repository, search, and identity signatures", () =>
 			context: Context,
 		) => Promise<{ firstSeq: number; seqs: number[]; timestamp: number; stats: SessionStats }>
 	>();
-	expectTypeOf<Session["beginMutation"]>().toEqualTypeOf<
-		(lane: string, context: Context) => Promise<SessionMutation>
-	>();
+	expectTypeOf<Session["beginMutation"]>().toEqualTypeOf<(context: Context) => Promise<SessionMutation>>();
 	expectTypeOf<SessionMutation["commit"]>().toEqualTypeOf<SessionMutator["commit"]>();
 	expectTypeOf<SessionMutation["end"]>().toEqualTypeOf<(context: Context) => Promise<void>>();
 	expectTypeOf<Session["mutate"]>().toEqualTypeOf<
-		<T>(
-			lane: string,
-			mutation: (mutator: SessionMutator, context: Context) => T | Promise<T>,
-			context: Context,
-		) => Promise<T>
+		<T>(mutation: (mutator: SessionMutator, context: Context) => T | Promise<T>, context: Context) => Promise<T>
 	>();
 	expectTypeOf<SessionMutator["commit"]>().toEqualTypeOf<
 		(
@@ -398,14 +392,8 @@ it("covers storage, session, repository, search, and identity signatures", () =>
 	expectTypeOf<SessionReader["scanBranch"]>().toEqualTypeOf<
 		(query: StorageBranchScan, context: Context) => Promise<Entry[]>
 	>();
-	expectTypeOf<Session["createLane"]>().toEqualTypeOf<
-		(
-			name: string,
-			at: string | null,
-			laneConfiguration: LaneConfiguration,
-			onCommitted: ((context: Context) => void | Promise<void>) | undefined,
-			context: Context,
-		) => Promise<SessionTree>
+	expectTypeOf<Session["createBranch"]>().toEqualTypeOf<
+		(name: string, at: string | null, context: Context) => Promise<Branch>
 	>();
 	expectTypeOf<SessionRepo["create"]>().toEqualTypeOf<
 		(options: SessionCreateOptions, context: Context) => Promise<Session>
@@ -480,6 +468,9 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 	expectTypeOf<keyof DriveOptions>().toEqualTypeOf<"operationId" | "waitForRetry" | "pollDeferred">();
 	expectTypeOf<DriveOutcome["kind"]>().toEqualTypeOf<"settled" | "waiting">();
 	expectTypeOf<AgentLane["inspectExecution"]>().returns.toEqualTypeOf<Promise<LaneExecutionInfo>>();
+	expectTypeOf<AgentLane["getTipId"]>().returns.toEqualTypeOf<Promise<string | null>>();
+	expectTypeOf<Extract<keyof AgentLane, "sessionTree">>().toEqualTypeOf<never>();
+	expectTypeOf<Extract<keyof AgentHarness, keyof AgentLane>>().toEqualTypeOf<never>();
 	expectTypeOf<
 		Extract<
 			keyof AgentLane,

@@ -95,7 +95,7 @@ encode the event against the per-stream frame encoder
 → consume the next provider event
 ```
 
-`appendList()` is called synchronously for each returned frame, so all frame mutations enter the lane line in provider-event order. The procedure does not await each write. Every promise is immediately observed for fault propagation before the latest reference replaces its predecessor. Covered queued events allocate no durable frame or write. Encoder state is proportional to open block count plus the unsynchronized prefix of an active tool-call JSON stream; it retains no second full assistant message. Model output limits bound queued frame bytes to bounded output plus frame/transaction overhead.
+`appendList()` is called synchronously for each returned frame, so all frame mutations enter the Session line in provider-event order. The procedure does not await each write. Every promise is immediately observed for fault propagation before the latest reference replaces its predecessor. Covered queued events allocate no durable frame or write. Encoder state is proportional to open block count plus the unsynchronized prefix of an active tool-call JSON stream; it retains no second full assistant message. Model output limits bound queued frame bytes to bounded output plus frame/transaction overhead.
 
 The event side retains existing behavior: `AssistantStreamObserver.start/update` awaits `events.emit()` for every event. There is no separate latest event-delivery promise because no assistant event delivery remains outstanding when the provider loop advances.
 
@@ -109,19 +109,19 @@ stop frame admission
 → classify and commit final response settlement
 ```
 
-The lane mutation line is FIFO, so completion of `latestFrameWrite` implies every earlier append completed. There is no array of promises, timer, batcher, active/waiting state, coalescer, or public/internal flush method.
+The Session mutation line is FIFO, so completion of `latestFrameWrite` implies every earlier append completed. There is no array of promises, timer, batcher, active/waiting state, coalescer, or public/internal flush method.
 
 A failed frame append faults the harness before `after_response` starts. The complete final response remains process-local and does not commit after a storage fault.
 
 ## Normal settlement
 
-Every assistant response settlement that used a frame list deletes that exact list in the same transaction as the immutable response entry, usage, leaf, and next operation state:
+Every assistant response settlement that used a frame list deletes that exact list in the same transaction as the immutable response entry, usage, tip, and next operation state:
 
 ```text
 TX[
   insert response entry R,
   insert usage U,
-  setValue(laneLeaf(lane), R),
+  setValue(branchTip(lane), R),
   deleteList(frames),
   setValue(operationState(operationId), classified next state)
 ]
@@ -147,7 +147,7 @@ An orphaned assistant generation `effect_pending` has no surviving provider stre
 3. constructs a harness-owned synthetic assistant response under the already-reserved response ID;
 4. preserves reconstructed partial content and safe message identity metadata when frames exist;
 5. sets `stopReason: "error"`, zero usage, and an explicit interruption/unknown-outcome `errorMessage`/diagnostic;
-6. commits the synthetic response, zero-usage row, frame-list deletion, leaf, and ordinary retry/failure state atomically.
+6. commits the synthetic response, zero-usage row, frame-list deletion, tip, and ordinary retry/failure state atomically.
 
 Required warning meaning:
 
@@ -248,7 +248,7 @@ Close is a controlled crash:
 
 A frame-commit storage failure faults the harness. No later response settlement commits in that process.
 
-Authorized external finalization deletes the operation-owned frame-list address in its terminal transaction. Every append mutation verifies current operation/response ownership on the lane line:
+Authorized external finalization deletes the operation-owned frame-list address in its terminal transaction. Every append mutation verifies current operation/response ownership on the Session line:
 
 - append first → external terminal cleanup deletes the list;
 - finalization first → stale append rejects without recreating state.

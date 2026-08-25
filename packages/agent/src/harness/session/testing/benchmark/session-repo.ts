@@ -1,6 +1,6 @@
 import { BACKGROUND_CONTEXT } from "../../../context.ts";
 import type { SessionMetadata, SessionRepo } from "../../types.ts";
-import { laneLeaf, setValue } from "../../values.ts";
+import { branchTip, setValue } from "../../values.ts";
 import { STORAGE_BENCHMARK_DATASETS, type StorageBenchmarkDataset } from "./datasets.ts";
 import { generateStorageBenchmarkSeedTransactions } from "./storage.ts";
 
@@ -139,11 +139,10 @@ export async function seedSessionRepoForkBenchmark(
 ): Promise<SessionMetadata> {
 	const session = await repo.create({ id: BENCHMARK_SESSION_ID }, BACKGROUND_CONTEXT);
 	for (const transaction of generateStorageBenchmarkSeedTransactions(dataset)) {
-		await session.mutate("main", (mutator) => mutator.commit(transaction, BACKGROUND_CONTEXT), BACKGROUND_CONTEXT);
+		await session.mutate((mutator) => mutator.commit(transaction, BACKGROUND_CONTEXT), BACKGROUND_CONTEXT);
 	}
 	await session.mutate(
-		"main",
-		(mutator) => mutator.commit([setValue(laneLeaf("main"), dataset.leafId)], BACKGROUND_CONTEXT),
+		(mutator) => mutator.commit([setValue(branchTip("main"), dataset.tipId)], BACKGROUND_CONTEXT),
 		BACKGROUND_CONTEXT,
 	);
 	return session.metadata;

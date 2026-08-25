@@ -13,17 +13,17 @@ The namespace/key pair is bound once when the address is constructed. Every late
 const state = value<ApplicationState>("my-app.state");
 const events = list<ApplicationEvent>("my-app.events");
 
-await session.getValue(state);
-await session.setValue(state, nextState);
-await session.readList(events, { limit: 100 });
-await session.appendList(events, event);
+await session.getValue(state, context);
+await session.setValue(state, nextState, context);
+await session.readList(events, { limit: 100 }, context);
+await session.appendList(events, event, context);
 ```
 
 It does **not** repeatedly pass a second unexplained key:
 
 ```ts
 // Not the API.
-await session.readList(events, "another-key", { limit: 100 });
+await session.readList(events, "another-key", { limit: 100 }, context);
 ```
 
 When an application genuinely has keyed instances, it constructs the address for that instance:
@@ -32,7 +32,7 @@ When an application genuinely has keyed instances, it constructs the address for
 const workspaceEvents = (workspaceId: string) =>
   list<ApplicationEvent>("my-app.events", workspaceId);
 
-await session.readList(workspaceEvents("pi"), { limit: 100 });
+await session.readList(workspaceEvents("pi"), { limit: 100 }, context);
 ```
 
 Storage may physically index the address as `(kind, namespace, key)`, but that representation does not leak into each read or write call. Storage, Session, harness code, and applications use the same address vocabulary. There is no global value-type map, dynamic registry, token catalog, or separate application-state storage mechanism.
@@ -123,8 +123,8 @@ The two components remain separate rather than concatenated. Dynamic application
 An address names one value or one list. Internal code uses small constructors when it has dynamic keys:
 
 ```ts
-export const laneLeaf = (lane: string) =>
-  value<string | null>("pi.lane.leaf", lane);
+export const branchTip = (lane: string) =>
+  value<string | null>("pi.branch.tip", lane);
 
 export const operationState = (operationId: string) =>
   value<OperationState>("pi.op.state", operationId);
@@ -178,14 +178,18 @@ Applications should use a stable, collision-resistant namespace prefix. Namespac
 Built-in constructors live together in `packages/agent/src/harness/session/values.ts` and are imported directly by consumers. Representative definitions:
 
 ```ts
-export const laneLeaf = (lane: string) => value<string | null>("pi.lane.leaf", lane);
-export const laneConfig = (lane: string) => value<LaneConfiguration>("pi.lane.config", lane);
-export const laneState = (lane: string) => value<LaneState>("pi.lane.state", lane);
+export const branchTip = (lane: string) =>
+  value<string | null>("pi.branch.tip", lane);
+export const laneConfig = (lane: string) =>
+  value<LaneConfiguration>("pi.lane.config", lane);
+export const laneState = (lane: string) =>
+  value<LaneState>("pi.lane.state", lane);
 export const laneLastResult = (lane: string) =>
   value<LaneLastResult>("pi.lane.lastResult", lane);
 
-/** Used only by scanValues() to enumerate configured lane names. */
-export const laneLeafInventoryPrefix = () => value<string | null>("pi.lane.leaf");
+/** Used only by scanValues() to enumerate Branch names. */
+export const branchTipInventoryPrefix = () =>
+  value<string | null>("pi.branch.tip");
 
 export const operationMeta = (operationId: string) =>
   value<OperationMeta>("pi.op.meta", operationId);
@@ -239,7 +243,7 @@ export const entryLabel = (entryId: string) => value<string>("pi.entry.label", e
 
 `OperationMeta` is immutable acceptance metadata stored at `pi.op.meta`. The process-local `Operation` projection is `{ meta: OperationMeta, state: OperationState }`, assembled from the separate metadata and state values; it is never stored at one address.
 
-The five exported scan-prefix constructors are `laneLeafInventoryPrefix`, `operationToolArgsPrefix`, `operationToolMemoPrefix`, `operationPreparationPrefix`, and `pendingToolOutputPrefix`. Their addresses are consumed only by `scanValues()`.
+The five exported scan-prefix constructors are `branchTipInventoryPrefix`, `operationToolArgsPrefix`, `operationToolMemoPrefix`, `operationPreparationPrefix`, and `pendingToolOutputPrefix`. Their addresses are consumed only by `scanValues()`.
 
 Applications define their own `value()` and `list()` addresses directly; there is no built-in custom application-state namespace or custom-state API. `AgentHarnessToolInvocation.getMemo()` and `setMemo()` are invocation-fenced capabilities over `operationToolMemo(...)`, not raw Session access. Invocation memos remain operation-owned and are deleted when their tool outcome becomes durable.
 
@@ -290,14 +294,22 @@ interface ValueReader {
 
 `scanValues(prefixAddress)` scans scalar addresses with exactly that namespace and keys beginning with the bound key, returning them in key-ascending order. Core call sites use only the exported prefix constructors above so raw namespace/key grammar stays in `session/values.ts`. Prefix addresses are passed only to `scanValues()`, never to exact get/set/delete operations. There is no unrestricted cross-namespace dump. Ordinary application reads use exact addresses.
 
-`SessionTree` exposes direct one-transition writes using the same addresses:
+`Session` exposes direct one-transition writes using the same addresses:
 
 ```ts
-interface SessionTree extends ValueReader {
-  setValue<T>(address: Value<T>, next: NoInfer<T>): Promise<void>;
-  deleteValue<T>(address: Value<T>): Promise<void>;
-  appendList<T>(address: ValueList<T>, element: NoInfer<T>): Promise<void>;
-  deleteList<T>(address: ValueList<T>): Promise<void>;
+interface Session extends ValueReader {
+  setValue<T>(
+    address: Value<T>,
+    next: NoInfer<T>,
+    context: Context,
+  ): Promise<void>;
+  deleteValue<T>(address: Value<T>, context: Context): Promise<void>;
+  appendList<T>(
+    address: ValueList<T>,
+    element: NoInfer<T>,
+    context: Context,
+  ): Promise<void>;
+  deleteList<T>(address: ValueList<T>, context: Context): Promise<void>;
 }
 ```
 
@@ -441,18 +453,18 @@ For every convertible non-terminal provider event, the assistant procedure:
 
 ```text
 convert event to frame
-→ synchronously enqueue appendList(frames, frame) on the lane mutation line
+→ synchronously enqueue appendList(frames, frame) on the Session mutation line
 → attach the ordinary harness-fault observer to that returned promise
 → replace the process-local latestFrameWrite reference
 → emit and await the existing message event
 → consume the next provider event
 ```
 
-The provider loop does not await storage for every frame. Synchronous enqueue preserves provider-event order. Replacing the latest-promise reference never leaves an earlier rejection unobserved because every promise receives the fault observer. Bounded output bounds queued work. On stream settlement, the procedure stops frame admission and awaits the latest append promise before `after_response`; lane-line FIFO means that completion implies every earlier append completed. There is no timer, batcher, coalescer, or flush API.
+The provider loop does not await storage for every frame. Synchronous enqueue preserves provider-event order. Replacing the latest-promise reference never leaves an earlier rejection unobserved because every promise receives the fault observer. Bounded output bounds queued work. On stream settlement, the procedure stops frame admission and awaits the latest append promise before `after_response`; Session mutation FIFO means that completion implies every earlier append completed. There is no timer, batcher, coalescer, or flush API.
 
 Scalar assistant `effect_pending` remains authoritative. Each append verifies that the same operation, attempt, and response ID still own the lane when its mutation executes. Frames never prove request admission, completion, success, or failure.
 
-Final or synthetic assistant settlement deletes the exact list atomically with its immutable response, usage, leaf, and next scalar state:
+Final or synthetic assistant settlement deletes the exact list atomically with its immutable response, usage, Branch tip, and next scalar state:
 
 ```text
 TX[
@@ -613,7 +625,7 @@ Append-path tests prove that no `readList` call occurs before append commit. Fra
 1. One bound address has one stable namespace/key/kind and one trusted value type in a storage version.
 2. Address object identity has no durable meaning.
 3. Namespace `pi` and every `pi.*` are reserved by contract; every built-in namespace starts with `pi.`, and application use is a trusted-programming defect.
-4. Exactly five built-in prefix constructors encapsulate lane inventory and operation cleanup grammar; their results are consumed only by namespace-scoped `scanValues()`.
+4. Exactly five built-in prefix constructors encapsulate Branch inventory and operation cleanup grammar; their results are consumed only by namespace-scoped `scanValues()`.
 5. Scalar and list addresses must not occupy the same physical location; this is a trusted-programming rule, not a runtime cross-kind collision check.
 6. Typed reads and helper-constructed writes preserve `T`.
 7. Scalar helpers reject list addresses; list helpers reject scalar addresses.
@@ -643,9 +655,9 @@ Append-path tests prove that no `readList` call occurs before append commit. Fra
 - incompatible definitions of one physical address are documented/tested as a programming defect;
 - empty keys work, while empty namespaces and separator-containing components reject;
 - core and application code use the same `value()` and `list()` constructors, with no private constructor, privilege token, registry, or catalog;
-- built-in address constructors produce exact `pi.lane.*`, `pi.op.*`, `pi.pending.*`, `pi.session.name`, and `pi.entry.label` namespace/key/kind triples;
+- built-in address constructors produce exact `pi.branch.tip`, `pi.lane.*`, `pi.op.*`, `pi.pending.*`, `pi.session.name`, and `pi.entry.label` namespace/key/kind triples;
 - every built-in namespace starts with `pi.`, while application fixtures use non-reserved namespaces;
-- `laneLeafInventoryPrefix()` binds the empty-key `pi.lane.leaf` inventory prefix and is used only to enumerate lanes through `scanValues`;
+- `branchTipInventoryPrefix()` binds the empty-key `pi.branch.tip` inventory prefix and is used only to enumerate Branches through `scanValues`;
 - tool-args prefixes cover one operation and optionally one step, tool-memo prefixes cover one operation and optionally one invocation, preparation and tool-output prefixes cover exactly one operation;
 - each prefix constructor result is used only by `scanValues`, and no inventory or cleanup call constructs a raw reserved namespace;
 - application addresses work without declaration merging or core catalogs;
@@ -713,8 +725,8 @@ Expected primary changes:
 
 - replace `session/registers.ts` with `packages/agent/src/harness/session/values.ts` containing addresses, constructors, typed write helpers, and built-in address constructors;
 - remove `RegisterValues`, namespace unions, register token types, and raw namespace/key read signatures from `session/types.ts`;
-- expose `ValueReader` through Storage, SessionReader, SessionMutator, Session, and SessionTree;
-- add direct application scalar/list methods to SessionTree using bound addresses;
+- expose `ValueReader` through Storage, SessionReader, SessionMutator, and Session;
+- expose direct application scalar/list methods on Session using bound addresses;
 - update Memory state, JSONL codec/storage, snapshots, fork/rewrite code, instrumentation, and conformance suites;
 - replace SQLite's unfinished initial schema in place with `scalar_values` and `list_values`; keep storage version 1 and add no migration runner;
 - update telemetry schema sources and regenerate `telemetry-schema.md`; do not edit that generated file manually.

@@ -30,19 +30,18 @@ import { SessionInvariantError, SessionPendingAssistantMessageError } from "../s
 import type {
 	BranchScan,
 	Entry,
+	JsonValue,
 	LaneLastResult,
 	Operation,
 	PendingEntry,
 	Session,
 	SessionReader,
-	SessionTree,
 	StructuralDecision,
 } from "../session/types.ts";
 import {
+	branchTip,
 	deleteValue,
-	entryLabel,
 	laneConfig,
-	laneLeaf,
 	laneState as laneStateValue,
 	operationMeta as operationMetaValue,
 	operationState as operationStateValue,
@@ -50,7 +49,6 @@ import {
 	pendingAssistantFrames,
 	pendingEntry,
 	pendingToolOutput,
-	sessionName,
 	setValue,
 } from "../session/values.ts";
 import { formatSkillInvocation } from "../skills.ts";
@@ -105,12 +103,10 @@ function capturedModel(operation: Operation): ModelIdentity | undefined {
 /** Runtime implementation of one configured lane. */
 export class Lane<TContext extends object | undefined> implements AgentLane {
 	readonly name: string;
-	readonly sessionTree: SessionTree;
 	readonly session: Session;
 	readonly models: Models;
 	readonly hooks: HookRegistry;
 	readonly emitBatch: EmitBatch;
-	private readonly sessionView: SessionTree;
 	private readonly onFault: FaultHandler;
 	private readonly installWatch: WatchHandler;
 	private readonly config: () => Config<TContext>;
@@ -135,18 +131,6 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 		this.models = models;
 		this.hooks = hooks;
 		this.name = name;
-		this.sessionView = session.view(name);
-		this.sessionTree = {
-			...this.sessionView,
-			getLeafId: (context) => this.getLeafId(context),
-			setName: (name, context) => this.setName(name, context),
-			setLabel: (targetId, label, context) => this.setLabel(targetId, label, context),
-			findEntriesOnBranch: (query, context) => this.findEntriesOnBranch(query, context),
-			findEntryOnBranch: (query, context) => this.findEntryOnBranch(query, context),
-			appendMessage: (message, context) => this.append({ type: "message", payload: message }, context),
-			appendCustomEntry: (customType, data, context) =>
-				this.append({ type: "custom", customType, ...(data === undefined ? {} : { payload: data }) }, context),
-		};
 		this.state = state;
 		this.onFault = onFault;
 		this.emitBatch = emitBatch;
@@ -154,9 +138,9 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 		this.config = readConfig;
 	}
 
-	async getLeafId(_context: Context): Promise<string | null> {
+	async getTipId(_context: Context): Promise<string | null> {
 		this.assertOpen();
-		return this.state.leafId;
+		return this.state.tipId;
 	}
 
 	async getLastResult(_context: Context): Promise<LaneLastResult | undefined> {
@@ -191,13 +175,13 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 	 * A planner may choose exactly one outcome:
 	 * - `commit` commits once, publishes `next`, then synchronously materializes the caller result from
 	 *   storage-assigned `CommitResult` metadata;
-	 * - `return` returns without a commit, boxed so a promise value is not awaited while holding the lane line;
+	 * - `return` returns without a commit, boxed so a promise value is not awaited while holding the Session line;
 	 * - `reject` rejects outside the mutation/fault boundary as an expected caller error without a commit.
 	 *
-	 * Planner, commit, and materialization errors fault the harness before releasing the lane line. Close/fault gates
+	 * Planner, commit, and materialization errors fault the harness before releasing the Session line. Close/fault gates
 	 * are checked both before queueing and when the callback starts: close-first rejects, while a callback admitted
 	 * before close may finish its commit, publish memory, and resolve without another open check. Drive-owned commands
-	 * additionally need a final fence because their exact owner may be removed outside the lane line. Never invoke
+	 * additionally need a final fence because their exact owner may be removed outside the Session line. Never invoke
 	 * providers, tools, hooks,
 	 * timers, event handlers, or wait for task completion here; perform those after `command()` returns.
 	 */
@@ -208,36 +192,32 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 		this.assertOpen();
 		let outcome: LaneCommandOutcome<TResult>;
 		try {
-			outcome = await this.session.mutate(
-				this.name,
-				async (mutator) => {
-					this.assertOpen();
-					try {
-						const decision = await plan(this.state, mutator);
-						switch (decision.kind) {
-							case "return":
-								return { kind: "return", result: decision.result };
-							case "reject":
-								return { kind: "reject", error: decision.error };
-							case "commit": {
-								const commit = await mutator.commit(decision.writes, context);
-								this.state = decision.next;
-								const result = decision.materialize(commit);
-								if (isPromiseLike(result)) {
-									throw new TypeError("Lane command materialize() must be synchronous");
-								}
-								const events = decision.events?.(commit) ?? [];
-								const delivery = events.length === 0 ? undefined : this.emitBatch(events, context);
-								return { kind: "return", result, ...(delivery === undefined ? {} : { delivery }) };
+			outcome = await this.session.mutate(async (mutator) => {
+				this.assertOpen();
+				try {
+					const decision = await plan(this.state, mutator);
+					switch (decision.kind) {
+						case "return":
+							return { kind: "return", result: decision.result };
+						case "reject":
+							return { kind: "reject", error: decision.error };
+						case "commit": {
+							const commit = await mutator.commit(decision.writes, context);
+							this.state = decision.next;
+							const result = decision.materialize(commit);
+							if (isPromiseLike(result)) {
+								throw new TypeError("Lane command materialize() must be synchronous");
 							}
+							const events = decision.events?.(commit) ?? [];
+							const delivery = events.length === 0 ? undefined : this.emitBatch(events, context);
+							return { kind: "return", result, ...(delivery === undefined ? {} : { delivery }) };
 						}
-					} catch (error) {
-						if (this.closedError !== undefined) throw this.closedError;
-						throw this.onFault(error, context);
 					}
-				},
-				context,
-			);
+				} catch (error) {
+					if (this.closedError !== undefined) throw this.closedError;
+					throw this.onFault(error, context);
+				}
+			}, context);
 		} catch (error) {
 			if (this.closedError !== undefined) throw this.closedError;
 			throw error;
@@ -250,7 +230,7 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 	/**
 	 * Run one drive-owned command with an exact-object fence at commit admission.
 	 * Durable control state comes from the authoritative projection; storage reads are only for referenced payloads.
-	 * Unlike an ordinary command, owner abandonment can occur outside the lane line while the planner awaits. The final
+	 * Unlike an ordinary command, owner abandonment can occur outside the Session line while the planner awaits. The final
 	 * open check preserves close/fault as lifecycle errors before the exact-owner check can report lost ownership.
 	 */
 	async commandDriveOwned<TResult>(
@@ -261,47 +241,43 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 		this.assertOpen();
 		let outcome: LaneCommandOutcome<TResult | LostOwnership>;
 		try {
-			outcome = await this.session.mutate(
-				this.name,
-				async (mutator) => {
-					this.assertOpen();
-					const operation = this.state.operation;
-					if (operation?.meta.operationId !== drive.operationId || this.activeDrive !== drive) {
-						return { kind: "return", result: { kind: "lost_ownership" } as const };
-					}
-					try {
-						const decision = await plan(this.state, mutator);
-						switch (decision.kind) {
-							case "return":
-								return { kind: "return", result: decision.result };
-							case "reject":
-								return { kind: "reject", error: decision.error };
-							case "commit": {
-								// Keep these checks adjacent to commit admission. Owner abandonment may occur
-								// outside the line; close/fault must still win classification over ownership loss.
-								this.assertOpen();
-								if (this.activeDrive !== drive) {
-									return { kind: "return", result: { kind: "lost_ownership" } as const };
-								}
-								const commitPromise = mutator.commit(decision.writes, context);
-								const commit = await commitPromise;
-								this.state = decision.next;
-								const result = decision.materialize(commit);
-								if (isPromiseLike(result)) {
-									throw new TypeError("Lane command materialize() must be synchronous");
-								}
-								const events = decision.events?.(commit) ?? [];
-								const delivery = events.length === 0 ? undefined : this.emitBatch(events, context);
-								return { kind: "return", result, ...(delivery === undefined ? {} : { delivery }) };
+			outcome = await this.session.mutate(async (mutator) => {
+				this.assertOpen();
+				const operation = this.state.operation;
+				if (operation?.meta.operationId !== drive.operationId || this.activeDrive !== drive) {
+					return { kind: "return", result: { kind: "lost_ownership" } as const };
+				}
+				try {
+					const decision = await plan(this.state, mutator);
+					switch (decision.kind) {
+						case "return":
+							return { kind: "return", result: decision.result };
+						case "reject":
+							return { kind: "reject", error: decision.error };
+						case "commit": {
+							// Keep these checks adjacent to commit admission. Owner abandonment may occur
+							// outside the line; close/fault must still win classification over ownership loss.
+							this.assertOpen();
+							if (this.activeDrive !== drive) {
+								return { kind: "return", result: { kind: "lost_ownership" } as const };
 							}
+							const commitPromise = mutator.commit(decision.writes, context);
+							const commit = await commitPromise;
+							this.state = decision.next;
+							const result = decision.materialize(commit);
+							if (isPromiseLike(result)) {
+								throw new TypeError("Lane command materialize() must be synchronous");
+							}
+							const events = decision.events?.(commit) ?? [];
+							const delivery = events.length === 0 ? undefined : this.emitBatch(events, context);
+							return { kind: "return", result, ...(delivery === undefined ? {} : { delivery }) };
 						}
-					} catch (error) {
-						if (this.closedError !== undefined) throw this.closedError;
-						throw this.onFault(error, context);
 					}
-				},
-				context,
-			);
+				} catch (error) {
+					if (this.closedError !== undefined) throw this.closedError;
+					throw this.onFault(error, context);
+				}
+			}, context);
 		} catch (error) {
 			if (this.closedError !== undefined) throw this.closedError;
 			throw error;
@@ -433,7 +409,7 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 				};
 			}
 
-			let parentId = state.leafId;
+			let parentId = state.tipId;
 			const entryWrites = placed.map(({ id, message }) => {
 				const write = insertEntry({ id, parentId, type: "message", message });
 				parentId = id;
@@ -442,7 +418,7 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 			const meta = {
 				operationId,
 				lane: this.name,
-				sourceLeafId: state.leafId,
+				sourceTipId: state.tipId,
 				startedAt,
 				intent: { kind: "run" as const, promptEntryIds: prompt.map(({ id }) => id) },
 			};
@@ -461,7 +437,7 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 			};
 			const next: LaneState = {
 				...state,
-				leafId: parentId,
+				tipId: parentId,
 				pendingNextRun: [],
 				operation: { meta, state: operationState },
 			};
@@ -470,7 +446,7 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 				writes: [
 					...entryWrites,
 					...capturedIds.map((id) => deleteValue(pendingEntry(id))),
-					setValue(laneLeaf(this.name), parentId),
+					setValue(branchTip(this.name), parentId),
 					setValue(operationMetaValue(operationId), meta),
 					setValue(operationStateValue(operationId), operationState),
 					setValue(laneStateValue(this.name), { currentOperationId: operationId, pendingNextRun: [] }),
@@ -480,7 +456,7 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 				events: (commit) => {
 					const events: HarnessEvent[] = [{ type: "run_start", runId: operationId, lane: this.name }];
 					for (const [index, item] of placed.entries()) {
-						const parent = index === 0 ? state.leafId : placed[index - 1]!.id;
+						const parent = index === 0 ? state.tipId : placed[index - 1]!.id;
 						const entry: Entry = {
 							id: item.id,
 							parentId: parent,
@@ -545,7 +521,7 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 				kind: "return",
 				result: {
 					lane: this.name,
-					leafId: state.leafId,
+					tipId: state.tipId,
 					configuredModel: state.configuration.model,
 					current,
 					...(state.lastResult === undefined ? {} : { lastResult: state.lastResult }),
@@ -681,11 +657,11 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 			const captured = structuredClone(state);
 			try {
 				const transcript =
-					captured.leafId === null
+					captured.tipId === null
 						? []
 						: (
 								await reader.scanBranch(
-									{ start: captured.leafId, stopAtType: "compaction", order: "newestFirst" },
+									{ start: captured.tipId, stopAtType: "compaction", order: "newestFirst" },
 									context,
 								)
 							).reverse();
@@ -877,7 +853,7 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 				watcher.snapshot = structuredClone({
 					lane: this.name,
 					transcript,
-					leafId: captured.leafId,
+					tipId: captured.tipId,
 					...(captured.lastResult === undefined ? {} : { lastResult: captured.lastResult }),
 					operation: operationSnapshot,
 					queues: { steer, followUp, nextRun },
@@ -909,41 +885,28 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 		}, context);
 	}
 
-	private async setName(name: string | undefined, context: Context): Promise<void> {
-		await this.command(
-			(state) => ({
-				kind: "commit",
-				writes: [name === undefined ? deleteValue(sessionName) : setValue(sessionName, name)],
-				next: state,
-				materialize: () => undefined,
-				events: () => [{ type: "value_update", value: "session_name", name }],
-			}),
-			context,
-		);
-	}
-
-	private async setLabel(targetId: string, label: string | undefined, context: Context): Promise<void> {
-		await this.command(
-			(state) => ({
-				kind: "commit",
-				writes: [label === undefined ? deleteValue(entryLabel(targetId)) : setValue(entryLabel(targetId), label)],
-				next: state,
-				materialize: () => undefined,
-				events: () => [{ type: "value_update", value: "entry_label", targetId, label }],
-			}),
-			context,
-		);
-	}
-
-	private async findEntriesOnBranch(query: BranchScan | undefined, context: Context): Promise<Entry[]> {
+	async findEntries(query: BranchScan | undefined, context: Context): Promise<Entry[]> {
 		query ??= {};
 		this.assertOpen();
-		const start = query.start ?? this.state.leafId;
-		return start === null ? [] : this.sessionView.findEntriesOnBranch({ ...query, start }, context);
+		const start = query.start ?? this.state.tipId;
+		return start === null
+			? []
+			: this.session.scanBranch({ ...query, start, order: query.order ?? "newestFirst" }, context);
 	}
 
-	private async findEntryOnBranch(query: BranchScan | undefined, context: Context): Promise<Entry | undefined> {
-		return (await this.findEntriesOnBranch({ ...query, limit: 1 }, context))[0];
+	async findEntry(query: BranchScan | undefined, context: Context): Promise<Entry | undefined> {
+		query ??= {};
+		return (
+			await this.findEntries({ ...query, limit: query.limit === undefined ? 1 : Math.min(query.limit, 1) }, context)
+		)[0];
+	}
+
+	appendMessage(message: AgentMessage, context: Context): Promise<string> {
+		return this.append({ type: "message", payload: message }, context);
+	}
+
+	appendCustomEntry(customType: string, data: JsonValue | undefined, context: Context): Promise<string> {
+		return this.append({ type: "custom", customType, ...(data === undefined ? {} : { payload: data }) }, context);
 	}
 
 	private append(pending: PendingEntry, context: Context): Promise<string> {
@@ -963,25 +926,25 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 					writes: [
 						insertEntry(
 							pending.type === "message"
-								? { id, parentId: state.leafId, type: "message", message: pending.payload }
+								? { id, parentId: state.tipId, type: "message", message: pending.payload }
 								: {
 										id,
-										parentId: state.leafId,
+										parentId: state.tipId,
 										type: "custom",
 										customType: pending.customType,
 										...(pending.payload === undefined ? {} : { data: pending.payload }),
 									},
 						),
-						setValue(laneLeaf(this.name), id),
+						setValue(branchTip(this.name), id),
 					],
-					next: { ...state, leafId: id },
+					next: { ...state, tipId: id },
 					materialize: () => id,
 					events: (commit) => {
 						const entry: Entry =
 							pending.type === "message"
 								? {
 										id,
-										parentId: state.leafId,
+										parentId: state.tipId,
 										type: "message",
 										message: pending.payload,
 										seq: commit.seqs[0]!,
@@ -989,7 +952,7 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 									}
 								: {
 										id,
-										parentId: state.leafId,
+										parentId: state.tipId,
 										type: "custom",
 										customType: pending.customType,
 										...(pending.payload === undefined ? {} : { data: pending.payload }),

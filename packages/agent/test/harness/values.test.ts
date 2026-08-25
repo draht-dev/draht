@@ -15,14 +15,14 @@ import type {
 } from "../../src/harness/session/types.ts";
 import {
 	appendList,
+	branchTip,
+	branchTipInventoryPrefix,
 	deleteList,
 	deleteValue,
 	entryLabel,
 	type ListElement,
 	laneConfig,
 	laneLastResult,
-	laneLeaf,
-	laneLeafInventoryPrefix,
 	laneState,
 	list,
 	operationMeta,
@@ -117,7 +117,7 @@ describe("built-in durable addresses", () => {
 		const state = operationState("operation");
 		const frames = pendingAssistantFrames("operation", "response");
 		expectTypeOf(config).toEqualTypeOf<Value<LaneConfiguration>>();
-		expectTypeOf(laneLeaf("review")).toEqualTypeOf<Value<string | null>>();
+		expectTypeOf(branchTip("review")).toEqualTypeOf<Value<string | null>>();
 		expectTypeOf(laneState("review")).toEqualTypeOf<Value<LaneState>>();
 		expectTypeOf(laneLastResult("review")).toEqualTypeOf<Value<LaneLastResult>>();
 		expectTypeOf(meta).toEqualTypeOf<Value<OperationMeta>>();
@@ -129,7 +129,7 @@ describe("built-in durable addresses", () => {
 		expectTypeOf(frames).toEqualTypeOf<ValueList<AssistantMessageFrame>>();
 
 		expect([
-			laneLeaf("review"),
+			branchTip("review"),
 			laneConfig("review"),
 			laneState("review"),
 			laneLastResult("review"),
@@ -144,7 +144,7 @@ describe("built-in durable addresses", () => {
 			sessionName,
 			entryLabel("entry"),
 		]).toEqual([
-			{ kind: "value", namespace: "pi.lane.leaf", key: "review" },
+			{ kind: "value", namespace: "pi.branch.tip", key: "review" },
 			{ kind: "value", namespace: "pi.lane.config", key: "review" },
 			{ kind: "value", namespace: "pi.lane.state", key: "review" },
 			{ kind: "value", namespace: "pi.lane.lastResult", key: "review" },
@@ -163,7 +163,7 @@ describe("built-in durable addresses", () => {
 
 	it("exports exactly the five documented scan-prefix constructors", () => {
 		const prefixes = [
-			laneLeafInventoryPrefix(),
+			branchTipInventoryPrefix(),
 			operationToolArgsPrefix("operation"),
 			operationToolMemoPrefix("operation", "invocation"),
 			operationPreparationPrefix("operation"),
@@ -171,7 +171,7 @@ describe("built-in durable addresses", () => {
 		];
 		expect(prefixes).toHaveLength(5);
 		expect(prefixes).toEqual([
-			{ kind: "value", namespace: "pi.lane.leaf", key: "" },
+			{ kind: "value", namespace: "pi.branch.tip", key: "" },
 			{ kind: "value", namespace: "pi.op.tool_args", key: "operation:" },
 			{ kind: "value", namespace: "pi.op.tool_memo", key: "operation:invocation:" },
 			{ kind: "value", namespace: "pi.op.preparation", key: "operation:" },

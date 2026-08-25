@@ -45,7 +45,7 @@ function preparedSnapshot(): ForkDestinationSnapshot {
 			],
 		]),
 		scalarValues: [
-			stored(storedValues.laneLeaf("main"), "root", 2),
+			stored(storedValues.branchTip("main"), "root", 2),
 			stored(storedValues.laneState("main"), { currentOperationId: null, pendingNextRun: [] }, 3),
 			stored(storedValues.sessionName, "forked", 4),
 		],
@@ -69,7 +69,7 @@ describe("JsonlStorage snapshot creation", () => {
 			.split("\n");
 		expect(lines.slice(1).every((line) => !Array.isArray(JSON.parse(line)))).toBe(true);
 		expect((await storage.getEntries(["root"], BACKGROUND_CONTEXT)).get("root")?.timestamp).toBe(NOW);
-		expect((await storage.getValue(storedValues.laneLeaf("main"), BACKGROUND_CONTEXT))?.value).toBe("root");
+		expect((await storage.getValue(storedValues.branchTip("main"), BACKGROUND_CONTEXT))?.value).toBe("root");
 		expect((await storage.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value).toEqual({
 			currentOperationId: null,
 			pendingNextRun: [],
@@ -153,7 +153,7 @@ describe("JsonlStorage persistence", () => {
 					type: "message",
 					message: { role: "user", content: "hello", timestamp: 1 },
 				}),
-				storedValues.setValue(storedValues.laneLeaf("main"), "root"),
+				storedValues.setValue(storedValues.branchTip("main"), "root"),
 				sessionWrites.insertUsage({
 					id: "usage",
 					entryId: "root",
@@ -189,8 +189,8 @@ describe("JsonlStorage persistence", () => {
 			seq: committed.seqs[0],
 			timestamp: committed.timestamp,
 		});
-		expect(await reopened.getValue(storedValues.laneLeaf("main"), BACKGROUND_CONTEXT)).toEqual({
-			address: storedValues.laneLeaf("main"),
+		expect(await reopened.getValue(storedValues.branchTip("main"), BACKGROUND_CONTEXT)).toEqual({
+			address: storedValues.branchTip("main"),
 			value: "root",
 			seq: committed.seqs[1],
 		});
@@ -225,7 +225,7 @@ describe("JsonlStorage snapshots", () => {
 		const firstCommit = storage.commit(
 			[
 				sessionWrites.insertEntry({ id: "root", parentId: null, type: "custom", customType: "root" }),
-				storedValues.setValue(storedValues.laneLeaf("main"), "root"),
+				storedValues.setValue(storedValues.branchTip("main"), "root"),
 			],
 			BACKGROUND_CONTEXT,
 		);
@@ -233,7 +233,7 @@ describe("JsonlStorage snapshots", () => {
 		const secondCommit = storage.commit(
 			[
 				sessionWrites.insertEntry({ id: "child", parentId: "root", type: "custom", customType: "child" }),
-				storedValues.setValue(storedValues.laneLeaf("main"), "child"),
+				storedValues.setValue(storedValues.branchTip("main"), "child"),
 			],
 			BACKGROUND_CONTEXT,
 		);
@@ -245,11 +245,11 @@ describe("JsonlStorage snapshots", () => {
 		expect(captured.entries.map(({ id }) => id)).toEqual(["root"]);
 		expect(
 			captured.scalarValues.find(
-				({ address }) => address.namespace === storedValues.laneLeaf("main").namespace && address.key === "main",
+				({ address }) => address.namespace === storedValues.branchTip("main").namespace && address.key === "main",
 			)?.value,
 		).toBe("root");
 		expect((await storage.getEntries(["child"], BACKGROUND_CONTEXT)).has("child")).toBe(true);
-		expect((await storage.getValue(storedValues.laneLeaf("main"), BACKGROUND_CONTEXT))?.value).toBe("child");
+		expect((await storage.getValue(storedValues.branchTip("main"), BACKGROUND_CONTEXT))?.value).toBe("child");
 		await storage.close(BACKGROUND_CONTEXT);
 	});
 });

@@ -373,7 +373,7 @@ describe("HookRegistry", () => {
 describe("HarnessEventBus", () => {
 	it("buffers between snapshot and start, then delivers each event once in order", async () => {
 		const bus = new HarnessEventBus();
-		const watcher = bus.watch({ leafId: null }, () => true, BACKGROUND_CONTEXT);
+		const watcher = bus.watch({ tipId: null }, () => true, BACKGROUND_CONTEXT);
 		await bus.emit({ type: "run_start", runId: "one", lane: "main" }, BACKGROUND_CONTEXT);
 		const seen: string[] = [];
 		watcher.start((event) => {
@@ -381,7 +381,7 @@ describe("HarnessEventBus", () => {
 		});
 		await bus.emit({ type: "run_start", runId: "two", lane: "main" }, BACKGROUND_CONTEXT);
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(watcher.snapshot).toEqual({ leafId: null });
+		expect(watcher.snapshot).toEqual({ tipId: null });
 		expect(seen).toEqual(["run_start:one", "run_start:two"]);
 		watcher.unsubscribe();
 		await bus.emit({ type: "run_start", runId: "three", lane: "main" }, BACKGROUND_CONTEXT);

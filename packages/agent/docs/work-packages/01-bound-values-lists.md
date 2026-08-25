@@ -11,7 +11,7 @@ Replace the retained register/custom-state storage surface with bound `Value<T>`
 ## Decisions fixed for this package
 
 1. **Core and application namespaces.** Every core address uses the exact documented `pi.*` namespace. Applications use their own non-reserved namespaces through the same public `value()` / `list()` constructors. `fact.custom` and its API are deleted, not renamed to a built-in custom namespace.
-2. **Forks.** Generic forks copy only explicitly handled core addresses: lane leaf/configuration plus fresh lane state, session name, and labels whose targets copy. They copy no `pi.op.*`, `pi.pending.*`, list, ledger, or arbitrary application address. A later application feature must add an address-specific fork policy before relying on copied application state.
+2. **Forks.** Generic forks copy only explicitly handled core addresses: Branch tip/lane configuration plus fresh lane state, session name, and labels whose targets copy. They copy no `pi.op.*`, `pi.pending.*`, list, ledger, or arbitrary application address. A later application feature must add an address-specific fork policy before relying on copied application state.
 3. **Trusted kind discipline.** Using one `(namespace, key)` as both a value and a list is a trusted-programming defect. Backends do not add cross-kind collision checks, triggers, registries, or catalogs.
 4. **Operation names.** Keep source `OperationMeta` for immutable acceptance metadata and `Operation` for the process-local `{ meta: OperationMeta, state: OperationState }` projection. `operationMeta(id)` binds `Value<OperationMeta>`; the composite is never persisted as one value.
 5. **Query ordering and bounds.** `scanValues()` returns key-ascending results. `readList()` limits only one query page, never total list length or bytes: reject non-positive or non-safe limits, default to 1,000, and clamp larger values to 10,000.
@@ -37,7 +37,7 @@ listRegisters(namespace, prefix) -> scanValues(prefixAddress)
 register set/delete writes        -> typed value helpers
 ```
 
-Storage, `SessionReader`, `SessionMutator`, `Session`, and `SessionTree` expose the same bound-address reads:
+Storage and the historical Session reader, mutator, tree-view, and repository surfaces expose the same bound-address reads:
 
 ```ts
 getValue<T>(address: Value<T>): Promise<StoredValue<T> | undefined>;
@@ -45,7 +45,7 @@ scanValues<T>(prefix: Value<T>): Promise<StoredValue<T>[]>;
 readList<T>(address: ValueList<T>, options?: ListReadOptions): Promise<ListElement<T>[]>;
 ```
 
-`SessionTree` and therefore `Session` additionally expose one-commit direct writes:
+The historical tree-view and Session surfaces additionally expose one-commit direct writes:
 
 ```ts
 setValue<T>(address: Value<T>, next: NoInfer<T>): Promise<void>;
@@ -144,7 +144,7 @@ If the final old-API grep identifies another retained source/test call site, it 
 2. **Cut the shared API once.** Replace register types and writes in `types.ts`/`commit.ts`; split `StorageState` into current scalar values and surviving list elements; implement Memory reads/writes, ordered prefix scans, paged list reads, transaction validation/application, snapshots, and direct Session methods. Remove custom-fact APIs and migrate name/label wrappers.
 3. **Migrate JSONL and generic fork/snapshot code.** Encode only `kind:"value"` and `kind:"list"`; replay set/delete/append/delete; preserve transaction-line torn-tail atomicity; serialize surviving list elements with original `seq` merged in global sequence order; preserve the sequence high-water mark. This extends existing snapshot serialization only—do not add a new compaction trigger or precise-rewrite feature. Forks copy the fixed core set from Decisions item 2, re-sequence destination scalar values after copied entries as today, and copy no lists.
 4. **Migrate instrumentation, conformance, and benchmarks.** The storage decorator exposes all three reads; instrumented storage records erased value/list writes in exact order without content telemetry. Extend shared conformance before backend-specific assertions.
-5. **Migrate runtime2 shell call sites.** Replace lane/harness raw writes with built-in constructors/helpers. `restore.ts` uses `scanValues(laneLeafInventoryPrefix())` plus exact `getValue` lookups and performs no `readList()` call. Do not add acceptance, drive, hydration, or cleanup behavior.
+5. **Migrate runtime2 shell call sites.** Replace lane/harness raw writes with built-in constructors/helpers. `restore.ts` uses `scanValues(branchTipInventoryPrefix())` plus exact `getValue` lookups and performs no `readList()` call. Do not add acceptance, drive, hydration, or cleanup behavior.
 6. **Replace the SQLite WIP schema and adapter.** Edit `001_initial.sql` in place, implement scalar operations and indexed list append/delete/paging in `session/values.ts`, keep every write inside the existing `BEGIN IMMEDIATE` writer-lease transaction, update both fork snapshot paths, and retain all entry/usage/branch/lease behavior from current `dev`.
 7. **Migrate public events, tests, and the coding-agent helper.** Remove old type assertions and raw namespaces. Change `fact_update` to `value_update`. Keep the two remote prompt tests skipped for the existing WP00 reason; WP01 must not alter runtime execution.
 8. **Update telemetry and documentation.** Change `pi.session.write` item kinds from `register` to `value` and `list`, regenerate `telemetry-schema.md`, run the old-API sweeps, and record any branch-policy-deferred changelog requirement. Do not edit a changelog on `gramps` unless it becomes a pull-request branch or the user requests it.
@@ -225,7 +225,7 @@ Do not add a value/list collision test: cross-kind misuse is intentionally an un
 - identical Memory/JSONL/SQLite pages and cursors;
 - JSONL single/multi-write replay, torn-tail behavior, and sequence-preserving snapshot output;
 - SQLite query plans and writer-lease transaction behavior;
-- branch/tree forks copy session name, eligible labels, and lane configuration/leaf with fresh lane state;
+- branch/tree forks copy session name, eligible labels, and lane configuration/Branch tip with fresh lane state;
 - forks exclude operation/pending values, all lists, application addresses, last results, queues, and ledger rows;
 - repository parent metadata, entry IDs, stats, branch indexes, v3 normalization, UUIDv7/follower IDs, and current SQLite lease/fork scenarios remain unchanged;
 - runtime2 restore enumerates lanes through the one prefix constructor and reads no list.
@@ -254,7 +254,7 @@ rg -n 'kind: "register"|getCustomFact\(|setCustomFact\(|fact\.(name|label|custom
   packages/agent packages/session-backends/sqlite-node packages/coding-agent \
   --glob '!**/dist/**' --glob '!**/CHANGELOG.md' --glob '!**/docs/**'
 
-rg -n '"(lane\.(leaf|config|state|lastResult)|op\.(meta|state|tool_args|preparation)|pending\.entry)"' \
+rg -n '"(branch\.tip|lane\.(config|state|lastResult)|op\.(meta|state|tool_args|preparation)|pending\.entry)"' \
   packages/agent packages/session-backends/sqlite-node packages/coding-agent \
   --glob '!**/dist/**' --glob '!**/CHANGELOG.md' --glob '!**/docs/**'
 

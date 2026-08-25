@@ -1,4 +1,4 @@
-import { type AgentHarness, BACKGROUND_CONTEXT, type Context, type MutableReplicatedState } from "@draht/agent-core";
+import { type AgentLane, BACKGROUND_CONTEXT, type Context, type MutableReplicatedState } from "@draht/agent-core";
 import { getSupportedThinkingLevels } from "@draht/ai";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
 import { defineFacet } from "../facets.ts";
@@ -11,7 +11,7 @@ export interface ModelsServiceRuntime {
 }
 
 export function createModelsService(
-	harness: AgentHarness,
+	lane: AgentLane,
 	modelRuntime: ModelRuntime | undefined,
 	createState: (initial: ModelsState) => MutableReplicatedState<ModelsState>,
 ): ModelsServiceRuntime {
@@ -22,17 +22,14 @@ export function createModelsService(
 		refresh: { status: "idle" },
 	});
 	const readConfiguration = async (context: Context): Promise<ModelsState["configuration"]> => {
-		const [selected, thinkingLevel] = await Promise.all([
-			harness.getModel(context),
-			harness.getThinkingLevel(context),
-		]);
+		const [selected, thinkingLevel] = await Promise.all([lane.getModel(context), lane.getThinkingLevel(context)]);
 		return {
 			model: selected === undefined ? null : { provider: selected.provider, modelId: selected.id },
 			thinkingLevel,
 		};
 	};
 	const readCatalog = async (context: Context): Promise<ModelsState["catalog"]> => {
-		const selected = await harness.getModel(context);
+		const selected = await lane.getModel(context);
 		const available = modelRuntime?.getAvailableSnapshot() ?? [];
 		const catalog =
 			selected === undefined || includesModel(available, selected) ? available : [...available, selected];
@@ -50,13 +47,13 @@ export function createModelsService(
 	const service: ModelsService = {
 		state,
 		async cycleThinking(context) {
-			const selected = await harness.getModel(context);
+			const selected = await lane.getModel(context);
 			if (selected === undefined) return;
 			const levels = getSupportedThinkingLevels(selected);
-			const current = await harness.getThinkingLevel(context);
+			const current = await lane.getThinkingLevel(context);
 			const index = levels.indexOf(current);
 			const next = levels[(index + 1) % levels.length] ?? "off";
-			await harness.setThinkingLevel(next, context);
+			await lane.setThinkingLevel(next, context);
 			state.set({ ...state.value, configuration: await readConfiguration(context) }, context);
 		},
 		async refresh(context) {
@@ -88,7 +85,7 @@ export function createModelsService(
 		async select(model, context) {
 			const selected = modelRuntime?.getModel(model.provider, model.modelId);
 			if (selected === undefined) throw new Error(`Unknown model: ${model.provider}/${model.modelId}`);
-			await harness.setModel(selected, context);
+			await lane.setModel(selected, context);
 			state.set({ ...state.value, configuration: await readConfiguration(context) }, context);
 		},
 	};
@@ -104,7 +101,7 @@ export function createModelsService(
 export const modelsServiceFacet = defineFacet<SessionFacetAttributes>({
 	id: "@pi/models",
 	setup(env) {
-		const runtime = createModelsService(env.harness, env.modelRuntime, env.remoteState);
+		const runtime = createModelsService(env.lane, env.modelRuntime, env.remoteState);
 		env.provide(Models, runtime.service);
 		env.onActivate(() => runtime.activate(BACKGROUND_CONTEXT));
 	},

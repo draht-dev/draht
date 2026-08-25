@@ -16,10 +16,10 @@ import type {
 } from "../../types.ts";
 import {
 	appendList,
+	branchTip,
 	deleteList,
 	deleteValue,
 	entryLabel,
-	laneLeaf,
 	list,
 	pendingEntry,
 	setValue,
@@ -318,7 +318,7 @@ export function createStorageConformance(factory: () => Promise<StorageFixture>)
 			await storage.commit(
 				[
 					setValue(pendingEntry(entry.id), { type: "message", payload: entry.message }),
-					setValue(laneLeaf("main"), null),
+					setValue(branchTip("main"), null),
 				],
 				BACKGROUND_CONTEXT,
 			);
@@ -328,10 +328,10 @@ export function createStorageConformance(factory: () => Promise<StorageFixture>)
 				type: "message",
 				payload: entry.message,
 			});
-			strictEqual((await storage.getValue(laneLeaf("main"), BACKGROUND_CONTEXT))?.value, null);
+			strictEqual((await storage.getValue(branchTip("main"), BACKGROUND_CONTEXT))?.value, null);
 
 			const placement = await storage.commit(
-				[insertEntry(entry), deleteValue(pendingEntry(entry.id)), setValue(laneLeaf("main"), entry.id)],
+				[insertEntry(entry), deleteValue(pendingEntry(entry.id)), setValue(branchTip("main"), entry.id)],
 				BACKGROUND_CONTEXT,
 			);
 
@@ -340,8 +340,8 @@ export function createStorageConformance(factory: () => Promise<StorageFixture>)
 				new Map([[entry.id, { ...entry, seq: placement.seqs[0], timestamp: placement.timestamp }]]),
 			);
 			strictEqual(await storage.getValue(pendingEntry(entry.id), BACKGROUND_CONTEXT), undefined);
-			deepStrictEqual(await storage.getValue(laneLeaf("main"), BACKGROUND_CONTEXT), {
-				address: laneLeaf("main"),
+			deepStrictEqual(await storage.getValue(branchTip("main"), BACKGROUND_CONTEXT), {
+				address: branchTip("main"),
 				value: entry.id,
 				seq: placement.seqs[2],
 			});

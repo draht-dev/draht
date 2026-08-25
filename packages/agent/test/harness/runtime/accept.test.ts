@@ -5,6 +5,7 @@ import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/com
 import { BACKGROUND_CONTEXT, createContextKey, withContextValue } from "../../../src/harness/context.ts";
 import type { Result } from "../../../src/harness/result.ts";
 import { createAgentHarness, Harness } from "../../../src/harness/runtime/harness.ts";
+import { Lane } from "../../../src/harness/runtime/lane.ts";
 import { MemoryStorage } from "../../../src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
 import { InstrumentedStorage } from "../../../src/harness/session/testing/index.ts";
@@ -13,6 +14,11 @@ import type { AgentMessage, Session } from "../../../src/index.ts";
 import { ControlledMemoryStorage, deferred, FailingMemoryStorage } from "./test-utils.ts";
 
 const sessions: Session[] = [];
+const configuration = {
+	model: { provider: "faux", modelId: "faux-1" },
+	thinkingLevel: "off" as const,
+	activeToolNames: [],
+};
 
 async function createSession(storage = new InstrumentedStorage(new MemoryStorage())): Promise<{
 	session: Session;
@@ -24,11 +30,11 @@ async function createSession(storage = new InstrumentedStorage(new MemoryStorage
 	);
 	sessions.push(session);
 	await session.mutate(
-		"main",
 		(mutator) =>
 			mutator.commit(
 				[
-					storedValues.setValue(storedValues.laneLeaf("main"), null),
+					storedValues.setValue(storedValues.branchTip("main"), null),
+					storedValues.setValue(storedValues.laneConfig("main"), configuration),
 					storedValues.setValue(storedValues.laneState("main"), {
 						currentOperationId: null,
 						pendingNextRun: [],
@@ -53,6 +59,7 @@ async function createHarness(
 	resources: Parameters<typeof createAgentHarness>[0]["resources"] = {},
 ): Promise<{
 	harness: Harness<object | undefined>;
+	lane: Lane<object | undefined>;
 	session: Session;
 	storage: InstrumentedStorage;
 	models: ReturnType<typeof createModels>;
@@ -62,8 +69,10 @@ async function createHarness(
 	const harnessOptions = { ...options(created.session), resources };
 	const { harness } = await createAgentHarness(harnessOptions, BACKGROUND_CONTEXT);
 	if (!(harness instanceof Harness)) throw new Error("Expected runtime Harness");
+	const lane = await harness.lane("main", BACKGROUND_CONTEXT);
+	if (!(lane instanceof Lane)) throw new Error("Expected runtime Lane");
 	created.storage.clearCommitAttempts();
-	return { harness, ...created, models: harnessOptions.models };
+	return { harness, lane, ...created, models: harnessOptions.models };
 }
 
 function unwrap<T>(result: Result<T, unknown>): T {
@@ -100,10 +109,10 @@ describe("runtime atomic run acceptance", () => {
 			],
 		],
 	] as const)("accepts normalized %s prompts into starting", async (_name, request, expectedContent) => {
-		const { harness, session } = await createHarness();
+		const { lane, session } = await createHarness();
 
-		const admission = unwrap(await harness.accept(request, BACKGROUND_CONTEXT));
-		const operation = harness.state.operation;
+		const admission = unwrap(await lane.accept(request, BACKGROUND_CONTEXT));
+		const operation = lane.state.operation;
 		if (operation?.state.kind !== "run") throw new Error("Expected accepted run");
 		const entryId = operation.meta.intent.kind === "run" ? operation.meta.intent.promptEntryIds[0] : undefined;
 		if (entryId === undefined) throw new Error("Expected prompt entry");
@@ -121,7 +130,7 @@ describe("runtime atomic run acceptance", () => {
 	});
 
 	it("preserves supplied message arrays and commits the exact acceptance write families once", async () => {
-		const { harness, session, storage, models } = await createHarness();
+		const { harness, lane, storage, models } = await createHarness();
 		const messages: AgentMessage[] = [
 			{ role: "user", content: "one", timestamp: 10 },
 			{ role: "user", content: "two", timestamp: 11 },
@@ -137,7 +146,7 @@ describe("runtime atomic run acceptance", () => {
 		}
 
 		const admission = unwrap(
-			await harness.accept({ kind: "prompt", operationId: "operation", prompt: messages }, context),
+			await lane.accept({ kind: "prompt", operationId: "operation", prompt: messages }, context),
 		);
 
 		expect(admission).toEqual({ operationId: "operation", kind: "run", startedAt: expect.any(Number) });
@@ -147,16 +156,16 @@ describe("runtime atomic run acceptance", () => {
 				.getCommitAttempts()[0]
 				?.map((write) => (write.kind === "value" ? `${write.kind}:${write.op}` : write.kind)),
 		).toEqual(["entry", "entry", "value:set", "value:set", "value:set", "value:set"]);
-		const operation = harness.state.operation;
+		const operation = lane.state.operation;
 		if (operation?.meta.intent.kind !== "run") throw new Error("Expected run metadata");
 		expect(operation.meta).toMatchObject({
 			operationId: "operation",
 			lane: "main",
-			sourceLeafId: null,
+			sourceTipId: null,
 			intent: { promptEntryIds: expect.any(Array) },
 		});
 		expect(operation.meta.intent.promptEntryIds).toHaveLength(2);
-		expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(operation.meta.intent.promptEntryIds[1]);
+		expect(await lane.getTipId(BACKGROUND_CONTEXT)).toBe(operation.meta.intent.promptEntryIds[1]);
 		expect(seen.map(({ event }) => event.type)).toEqual([
 			"run_start",
 			"message_start",
@@ -175,9 +184,8 @@ describe("runtime atomic run acceptance", () => {
 		const second = "pending-second";
 		const firstMessage = { role: "user" as const, content: "first", timestamp: 1 };
 		const secondMessage = { role: "user" as const, content: "second", timestamp: 2 };
-		const { harness, session, storage } = await createHarness(async (source) => {
+		const { harness, lane, session, storage } = await createHarness(async (source) => {
 			await source.mutate(
-				"main",
 				(mutator) =>
 					mutator.commit(
 						[
@@ -204,14 +212,14 @@ describe("runtime atomic run acceptance", () => {
 			events.push(event.type);
 		});
 
-		unwrap(await harness.accept({ kind: "prompt", prompt: "" }, BACKGROUND_CONTEXT));
+		unwrap(await lane.accept({ kind: "prompt", prompt: "" }, BACKGROUND_CONTEXT));
 
-		const operation = harness.state.operation;
+		const operation = lane.state.operation;
 		if (operation?.meta.intent.kind !== "run" || operation.state.kind !== "run") {
 			throw new Error("Expected accepted run");
 		}
 		expect(operation.meta.intent.promptEntryIds).toEqual([]);
-		expect(operation.meta.sourceLeafId).toBeNull();
+		expect(operation.meta.sourceTipId).toBeNull();
 		expect(operation.state.inbox).toEqual({ steer: [], followUp: [], writes: [] });
 		expect(
 			(await session.scanBranch({ start: second, order: "oldestFirst" }, BACKGROUND_CONTEXT)).map(({ id }) => id),
@@ -235,12 +243,12 @@ describe("runtime atomic run acceptance", () => {
 		};
 		const skill = await createHarness(undefined, resources);
 		unwrap(
-			await skill.harness.accept(
+			await skill.lane.accept(
 				{ kind: "skill", name: "review", additionalInstructions: "Be strict" },
 				BACKGROUND_CONTEXT,
 			),
 		);
-		const skillEntry = await skill.session.getEntry(skill.harness.state.leafId!, BACKGROUND_CONTEXT);
+		const skillEntry = await skill.session.getEntry(skill.lane.state.tipId!, BACKGROUND_CONTEXT);
 		expect(skillEntry).toMatchObject({
 			type: "message",
 			message: { content: [{ type: "text", text: expect.stringContaining('<skill name="review"') }] },
@@ -248,9 +256,9 @@ describe("runtime atomic run acceptance", () => {
 
 		const template = await createHarness(undefined, resources);
 		unwrap(
-			await template.harness.accept({ kind: "prompt_template", name: "fix", args: ["A", "B"] }, BACKGROUND_CONTEXT),
+			await template.lane.accept({ kind: "prompt_template", name: "fix", args: ["A", "B"] }, BACKGROUND_CONTEXT),
 		);
-		const templateEntry = await template.session.getEntry(template.harness.state.leafId!, BACKGROUND_CONTEXT);
+		const templateEntry = await template.session.getEntry(template.lane.state.tipId!, BACKGROUND_CONTEXT);
 		expect(templateEntry).toMatchObject({
 			type: "message",
 			message: { content: [{ type: "text", text: "Fix A then A B" }] },
@@ -258,22 +266,22 @@ describe("runtime atomic run acceptance", () => {
 	});
 
 	it("returns expected pre-acceptance errors without writing", async () => {
-		const { harness, storage } = await createHarness();
+		const { lane, storage } = await createHarness();
 		const pending = fauxAssistantMessage([], { stopReason: "pending" });
 
-		expect(await harness.accept({ kind: "prompt", prompt: "" }, BACKGROUND_CONTEXT)).toMatchObject({
+		expect(await lane.accept({ kind: "prompt", prompt: "" }, BACKGROUND_CONTEXT)).toMatchObject({
 			ok: false,
 			error: { _tag: "InvalidMessage", reason: "empty" },
 		});
-		expect(await harness.accept({ kind: "prompt", prompt: pending }, BACKGROUND_CONTEXT)).toMatchObject({
+		expect(await lane.accept({ kind: "prompt", prompt: pending }, BACKGROUND_CONTEXT)).toMatchObject({
 			ok: false,
 			error: { _tag: "InvalidMessage", reason: "pending_assistant" },
 		});
-		expect(await harness.accept({ kind: "skill", name: "missing" }, BACKGROUND_CONTEXT)).toMatchObject({
+		expect(await lane.accept({ kind: "skill", name: "missing" }, BACKGROUND_CONTEXT)).toMatchObject({
 			ok: false,
 			error: { _tag: "UnknownSkill" },
 		});
-		expect(await harness.accept({ kind: "prompt_template", name: "missing" }, BACKGROUND_CONTEXT)).toMatchObject({
+		expect(await lane.accept({ kind: "prompt_template", name: "missing" }, BACKGROUND_CONTEXT)).toMatchObject({
 			ok: false,
 			error: { _tag: "UnknownTemplate" },
 		});
@@ -281,11 +289,11 @@ describe("runtime atomic run acceptance", () => {
 	});
 
 	it("serializes concurrent accepts so exactly one wins", async () => {
-		const { harness, storage } = await createHarness();
+		const { lane, storage } = await createHarness();
 
 		const results = await Promise.all([
-			harness.accept({ kind: "prompt", prompt: "first" }, BACKGROUND_CONTEXT),
-			harness.accept({ kind: "prompt", prompt: "second" }, BACKGROUND_CONTEXT),
+			lane.accept({ kind: "prompt", prompt: "first" }, BACKGROUND_CONTEXT),
+			lane.accept({ kind: "prompt", prompt: "second" }, BACKGROUND_CONTEXT),
 		]);
 
 		expect(results.filter((result) => result.ok)).toHaveLength(1);
@@ -298,11 +306,11 @@ describe("runtime atomic run acceptance", () => {
 		const session = new StorageBackedSession({ id: "failing", createdAt: 1, storageVersion: 1 }, storage);
 		sessions.push(session);
 		await session.mutate(
-			"main",
 			(mutator) =>
 				mutator.commit(
 					[
-						storedValues.setValue(storedValues.laneLeaf("main"), null),
+						storedValues.setValue(storedValues.branchTip("main"), null),
+						storedValues.setValue(storedValues.laneConfig("main"), configuration),
 						storedValues.setValue(storedValues.laneState("main"), {
 							currentOperationId: null,
 							pendingNextRun: [],
@@ -314,28 +322,30 @@ describe("runtime atomic run acceptance", () => {
 		);
 		const { harness } = await createAgentHarness(options(session), BACKGROUND_CONTEXT);
 		if (!(harness instanceof Harness)) throw new Error("Expected runtime Harness");
+		const lane = await harness.lane("main", BACKGROUND_CONTEXT);
+		if (!(lane instanceof Lane)) throw new Error("Expected runtime Lane");
 		storage.failure = new Error("accept failed");
 
-		await expect(harness.accept({ kind: "prompt", prompt: "hello" }, BACKGROUND_CONTEXT)).rejects.toBeInstanceOf(
+		await expect(lane.accept({ kind: "prompt", prompt: "hello" }, BACKGROUND_CONTEXT)).rejects.toBeInstanceOf(
 			HarnessFault,
 		);
-		expect(harness.state.operation).toBeNull();
+		expect(lane.state.operation).toBeNull();
 	});
 
 	it("delivers acceptance listeners after publishing state and permits serialized reads", async () => {
-		const { harness } = await createHarness();
+		const { harness, lane } = await createHarness();
 		let inspected = false;
 		harness.events.on("run_start", async () => {
-			inspected = (await harness.inspectExecution(BACKGROUND_CONTEXT)).current?.status === "open";
+			inspected = (await lane.inspectExecution(BACKGROUND_CONTEXT)).current?.status === "open";
 		});
 
-		unwrap(await harness.accept({ kind: "prompt", prompt: "hello" }, BACKGROUND_CONTEXT));
+		unwrap(await lane.accept({ kind: "prompt", prompt: "hello" }, BACKGROUND_CONTEXT));
 
 		expect(inspected).toBe(true);
 	});
 
 	it("does not resolve acceptance before its direct listeners settle", async () => {
-		const { harness } = await createHarness();
+		const { harness, lane } = await createHarness();
 		const started = deferred();
 		const release = deferred();
 		harness.events.on("run_start", async () => {
@@ -343,7 +353,7 @@ describe("runtime atomic run acceptance", () => {
 			await release.promise;
 		});
 
-		const acceptance = harness.accept({ kind: "prompt", prompt: "hello" }, BACKGROUND_CONTEXT);
+		const acceptance = lane.accept({ kind: "prompt", prompt: "hello" }, BACKGROUND_CONTEXT);
 		await started.promise;
 		let resolved = false;
 		void acceptance.then(() => {
@@ -357,10 +367,10 @@ describe("runtime atomic run acceptance", () => {
 	});
 
 	it("returns Closed when acceptance starts after close", async () => {
-		const { harness, storage } = await createHarness();
+		const { harness, lane, storage } = await createHarness();
 		await harness.close(BACKGROUND_CONTEXT);
 
-		expect(await harness.accept({ kind: "prompt", prompt: "late" }, BACKGROUND_CONTEXT)).toMatchObject({
+		expect(await lane.accept({ kind: "prompt", prompt: "late" }, BACKGROUND_CONTEXT)).toMatchObject({
 			ok: false,
 			error: { _tag: "Closed" },
 		});
@@ -372,11 +382,11 @@ describe("runtime atomic run acceptance", () => {
 		const session = new StorageBackedSession({ id: "closing", createdAt: 1, storageVersion: 1 }, storage);
 		sessions.push(session);
 		await session.mutate(
-			"main",
 			(mutator) =>
 				mutator.commit(
 					[
-						storedValues.setValue(storedValues.laneLeaf("main"), null),
+						storedValues.setValue(storedValues.branchTip("main"), null),
+						storedValues.setValue(storedValues.laneConfig("main"), configuration),
 						storedValues.setValue(storedValues.laneState("main"), {
 							currentOperationId: null,
 							pendingNextRun: [],
@@ -387,13 +397,14 @@ describe("runtime atomic run acceptance", () => {
 			BACKGROUND_CONTEXT,
 		);
 		const { harness } = await createAgentHarness(options(session), BACKGROUND_CONTEXT);
+		const lane = await harness.lane("main", BACKGROUND_CONTEXT);
 		const started = deferred();
 		const release = deferred();
 		storage.beforeNextCommit = async () => {
 			started.resolve();
 			await release.promise;
 		};
-		const acceptance = harness.accept({ kind: "prompt", prompt: "hello" }, BACKGROUND_CONTEXT);
+		const acceptance = lane.accept({ kind: "prompt", prompt: "hello" }, BACKGROUND_CONTEXT);
 		await started.promise;
 		const closing = harness.close(BACKGROUND_CONTEXT);
 		release.resolve();

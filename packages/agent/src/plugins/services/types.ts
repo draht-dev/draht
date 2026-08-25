@@ -83,7 +83,7 @@ type InvalidRemoteMemberNames<T> = {
 	[TKey in keyof T]-?: InvalidRemoteMember<T[TKey]> extends never ? never : TKey;
 }[keyof T];
 
-type CheckedRemoteContract<T> = InvalidRemoteMemberNames<T> extends never ? T : never;
+export type RemoteServiceContract<T> = InvalidRemoteMemberNames<T> extends never ? T : never;
 
 /** Stable identity for one shared TypeScript service contract. */
 export interface Service<T> {
@@ -93,7 +93,7 @@ export interface Service<T> {
 
 export type ServiceType<TService> = TService extends Service<infer T> ? T : never;
 
-export function defineService<T>(id: string): Service<CheckedRemoteContract<T>> {
+export function defineService<T>(id: string): Service<T> {
 	if (id.length === 0) throw new TypeError("Remote service ID must not be empty");
 	if (id.startsWith("$pi.")) throw new TypeError("Remote service IDs beginning with $pi. are reserved");
 	return Object.freeze({ id });

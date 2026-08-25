@@ -5,6 +5,7 @@ import {
 	type MutableRemoteEvents,
 	type MutableReplicatedState,
 	type RemoteServiceConnection,
+	type RemoteServiceContract,
 	type RemoteServiceInstance,
 	RemoteServiceNamespace,
 	type RemoteServiceNamespaceApi,
@@ -16,7 +17,16 @@ import {
 } from "@draht/agent-core";
 
 export interface ServiceInstances<T> {
-	add(key: string, implementation: T): () => void;
+	add(key: string, implementation: RemoteServiceContract<T>): () => void;
+}
+
+export interface FacetServiceBinding {
+	readonly service: { readonly id: string };
+	readonly implementation: unknown;
+}
+
+export function bindService<T>(service: Service<T>, implementation: NoInfer<T>): FacetServiceBinding {
+	return Object.freeze({ service, implementation });
 }
 
 interface FacetServiceReference {
@@ -36,7 +46,7 @@ export interface FacetEnvironment {
 		service: Service<T>,
 		handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
 	): () => void;
-	provide<T>(service: Service<T>, implementation: NoInfer<T>): void;
+	provide<T>(service: Service<T>, implementation: NoInfer<RemoteServiceContract<T>>): void;
 	provideMany<T>(service: Service<T>): ServiceInstances<T>;
 	remoteState<T>(initial: T): MutableReplicatedState<T>;
 	remoteEvents<T>(): MutableRemoteEvents<T>;
@@ -45,12 +55,12 @@ export interface FacetEnvironment {
 	onDeactivate(callback: () => void | Promise<void>): void;
 }
 
-export interface Facet<TAttributes extends object = object> {
+export interface Facet {
 	readonly id: string;
-	setup(env: FacetEnvironment & TAttributes): void;
+	setup(env: FacetEnvironment): void;
 }
 
-export function defineFacet<TAttributes extends object = object>(facet: Facet<TAttributes>): Facet<TAttributes> {
+export function defineFacet(facet: Facet): Facet {
 	return facet;
 }
 
@@ -240,6 +250,57 @@ class LocalServiceHandles {
 	}
 }
 
+class FacetServiceBindings {
+	readonly #assertAccess: () => void;
+	readonly #implementations = new Map<string, object>();
+	readonly #handles = new Map<string, object>();
+
+	constructor(bindings: readonly FacetServiceBinding[], assertAccess: () => void) {
+		this.#assertAccess = assertAccess;
+		for (const binding of bindings) {
+			if (this.#implementations.has(binding.service.id)) {
+				throw new Error(`Facet host service ${binding.service.id} is bound more than once`);
+			}
+			if (typeof binding.implementation !== "object" || binding.implementation === null) {
+				throw new TypeError(`Facet host service ${binding.service.id} implementation must be an object`);
+			}
+			this.#implementations.set(binding.service.id, binding.implementation);
+		}
+	}
+
+	get serviceIds(): ReadonlySet<string> {
+		return new Set(this.#implementations.keys());
+	}
+
+	has(service: { readonly id: string }): boolean {
+		return this.#implementations.has(service.id);
+	}
+
+	use<T>(service: Service<T>): T {
+		const implementation = this.#implementations.get(service.id);
+		if (implementation === undefined) throw new Error(`Facet host service ${service.id} is not bound`);
+		let handle = this.#handles.get(service.id);
+		if (handle === undefined) {
+			const methods = new Map<PropertyKey, unknown>();
+			handle = new Proxy(implementation, {
+				get: (target, property) => {
+					this.#assertAccess();
+					const value: unknown = Reflect.get(target, property, target);
+					if (typeof value !== "function") return value;
+					let method = methods.get(property);
+					if (method === undefined) {
+						method = value.bind(target);
+						methods.set(property, method);
+					}
+					return method;
+				},
+			});
+			this.#handles.set(service.id, handle);
+		}
+		return handle as T;
+	}
+}
+
 class StagedServiceInstances<T> implements ServiceInstances<T> {
 	readonly #service: Service<T>;
 	readonly #lifecycle: FacetLifecycle;
@@ -254,7 +315,7 @@ class StagedServiceInstances<T> implements ServiceInstances<T> {
 		this.#provider = provider;
 	}
 
-	add(key: string, implementation: T): () => void {
+	add(key: string, implementation: RemoteServiceContract<T>): () => void {
 		this.#lifecycle.assertActive("add service instances");
 		if (this.#provider === undefined) throw new Error("Facet service provider is not connected");
 		const close = this.#provider.spawn(this.#service, key, implementation);
@@ -273,17 +334,18 @@ interface KeyedProvision {
 	connect(provider: RemoteServiceProvider): void;
 }
 
-type FacetOptions<TAttributes extends object> = {
-	readonly facets: readonly Facet<TAttributes>[];
+interface FacetOptions {
+	readonly facets: readonly Facet[];
+	readonly bindings?: readonly FacetServiceBinding[];
 	readonly onError?: (error: Error) => void;
-} & (keyof TAttributes extends never ? { readonly attributes?: TAttributes } : { readonly attributes: TAttributes });
+}
 
-type RemoteFacetOptions<TAttributes extends object> = FacetOptions<TAttributes> & {
+interface RemoteFacetOptions extends FacetOptions {
 	readonly source: RemoteServiceNamespaceApi;
 	readonly connect?: () => void | Promise<void>;
-};
+}
 
-type FacetKernelOptions<TAttributes extends object> = FacetOptions<TAttributes> &
+type FacetKernelOptions = FacetOptions &
 	(
 		| { readonly kind: "provider" }
 		| {
@@ -293,39 +355,36 @@ type FacetKernelOptions<TAttributes extends object> = FacetOptions<TAttributes> 
 		  }
 	);
 
-export interface FacetGeneration {
+export interface FacetHost {
+	readonly services: RemoteServiceProvider;
 	dispose(): Promise<void>;
 }
 
-export interface FacetServiceGeneration extends FacetGeneration {
-	readonly provider: RemoteServiceProvider;
+export interface RemoteFacetActivation {
+	dispose(): Promise<void>;
 }
 
-/** Assemble and activate facets that provide and consume services within one process. */
-export async function assembleFacetServices<TAttributes extends object = object>(
-	options: FacetOptions<TAttributes>,
-): Promise<FacetServiceGeneration> {
-	const kernel = new FacetKernel<TAttributes>({ ...options, kind: "provider" });
+/** Create an active local host for facets that provide and consume services. */
+export async function createFacetHost(options: FacetOptions): Promise<FacetHost> {
+	const kernel = new FacetKernel({ ...options, kind: "provider" });
 	await kernel.activate();
 	return Object.freeze({
-		provider: kernel.provider,
+		services: kernel.provider,
 		dispose: () => kernel.dispose(),
 	});
 }
 
 /** Activate facets whose services come from an existing remote binding. */
-export async function activateRemoteFacets<TAttributes extends object = object>(
-	options: RemoteFacetOptions<TAttributes>,
-): Promise<FacetGeneration> {
-	const kernel = new FacetKernel<TAttributes>({ ...options, kind: "remote" });
+export async function activateRemoteFacets(options: RemoteFacetOptions): Promise<RemoteFacetActivation> {
+	const kernel = new FacetKernel({ ...options, kind: "remote" });
 	await kernel.activate();
 	return Object.freeze({ dispose: () => kernel.dispose() });
 }
 
 /** Private lifecycle and dependency kernel shared by the two atomic entry points. */
-class FacetKernel<TAttributes extends object> {
-	readonly #facets: readonly Facet<TAttributes>[];
-	readonly #attributes: TAttributes;
+class FacetKernel {
+	readonly #facets: readonly Facet[];
+	readonly #bindings: FacetServiceBindings;
 	readonly #source: RemoteServiceNamespaceApi | undefined;
 	readonly #connect: (() => void | Promise<void>) | undefined;
 	readonly #onError: (error: Error) => void;
@@ -337,12 +396,12 @@ class FacetKernel<TAttributes extends object> {
 	#provider: RemoteServiceProvider | undefined;
 	#phase: GenerationPhase = "setup";
 
-	constructor(options: FacetKernelOptions<TAttributes>) {
+	constructor(options: FacetKernelOptions) {
 		const ids = options.facets.map((facet) => facet.id);
 		if (ids.some((id) => id.length === 0)) throw new Error("Facet ID must not be empty");
 		if (new Set(ids).size !== ids.length) throw new Error("Facet IDs must be unique within a generation");
 		this.#facets = options.facets;
-		this.#attributes = options.attributes ?? ({} as TAttributes);
+		this.#bindings = new FacetServiceBindings(options.bindings ?? [], () => this.#assertServiceAccess());
 		this.#source = options.kind === "remote" ? options.source : undefined;
 		this.#connect = options.kind === "remote" ? options.connect : undefined;
 		this.#onError = options.onError ?? (() => {});
@@ -362,7 +421,7 @@ class FacetKernel<TAttributes extends object> {
 				const lifecycle = new FacetLifecycle(facet.id);
 				const ledger = new FacetLedger(facet.id);
 				this.#lifecycles.set(facet.id, lifecycle);
-				const result: unknown = facet.setup(Object.assign(this.#environment(lifecycle, ledger), this.#attributes));
+				const result: unknown = facet.setup(this.#environment(lifecycle, ledger));
 				if (isPromiseLike(result)) {
 					void Promise.resolve(result).catch(() => {});
 					throw new Error(`Facet ${facet.id} setup must be synchronous`);
@@ -373,7 +432,7 @@ class FacetKernel<TAttributes extends object> {
 
 			this.#phase = "assembling";
 			if (this.#source === undefined) {
-				this.#activationOrder = validateFacets(records);
+				this.#activationOrder = validateFacets(records, this.#bindings.serviceIds);
 				this.#assembleProvider();
 			} else {
 				this.#activationOrder = records.map((record) => record.facetId);
@@ -420,7 +479,7 @@ class FacetKernel<TAttributes extends object> {
 
 	#environment(lifecycle: FacetLifecycle, ledger: FacetLedger): FacetEnvironment {
 		return {
-			provide: <T>(service: Service<T>, implementation: NoInfer<T>): void => {
+			provide: <T>(service: Service<T>, implementation: NoInfer<RemoteServiceContract<T>>): void => {
 				lifecycle.assertSettingUp("provide services");
 				this.#assertProviderGeneration(lifecycle);
 				ledger.provide(service, "singleton");
@@ -439,8 +498,9 @@ class FacetKernel<TAttributes extends object> {
 			},
 			use: <T>(service: Service<T>): T => {
 				lifecycle.assertSettingUp("acquire services");
-				if (this.#source !== undefined) return this.#source.use(service);
 				ledger.require(service, "singleton");
+				if (this.#bindings.has(service)) return this.#bindings.use(service);
+				if (this.#source !== undefined) return this.#source.use(service);
 				return this.#localHandles.use(service);
 			},
 			observe: <T>(
@@ -528,14 +588,18 @@ class FacetKernel<TAttributes extends object> {
 	}
 }
 
-function validateFacets(records: readonly FacetRecord[]): string[] {
-	const providers = new Map<string, { readonly facetId: string; readonly mode: ServiceMode }>();
+function validateFacets(records: readonly FacetRecord[], boundServices: ReadonlySet<string>): string[] {
+	const providers = new Map<string, { readonly facetId: string | undefined; readonly mode: ServiceMode }>();
+	for (const serviceId of boundServices) providers.set(serviceId, { facetId: undefined, mode: "singleton" });
 	for (const record of records) {
 		for (const provision of record.provides) {
 			const existing = providers.get(provision.serviceId);
 			if (existing !== undefined) {
 				if (existing.mode !== provision.mode) {
 					throw new Error(`Service ${provision.serviceId} is provided as both singleton and keyed`);
+				}
+				if (existing.facetId === undefined) {
+					throw new Error(`Service ${provision.serviceId} is provided by both the host and ${record.facetId}`);
 				}
 				throw new Error(
 					`Service ${provision.serviceId} is provided by both ${existing.facetId} and ${record.facetId}`,
@@ -557,10 +621,10 @@ function validateFacets(records: readonly FacetRecord[]): string[] {
 			}
 			if (provider.mode !== requirement.mode) {
 				throw new Error(
-					`Facet ${record.facetId} requires ${requirement.serviceId} as ${requirement.mode}, but ${provider.facetId} provides it as ${provider.mode}`,
+					`Facet ${record.facetId} requires ${requirement.serviceId} as ${requirement.mode}, but ${provider.facetId ?? "the host"} provides it as ${provider.mode}`,
 				);
 			}
-			if (provider.facetId === record.facetId) continue;
+			if (provider.facetId === undefined || provider.facetId === record.facetId) continue;
 			dependencies.get(record.facetId)!.add(provider.facetId);
 			dependents.get(provider.facetId)!.add(record.facetId);
 		}

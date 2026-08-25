@@ -73,7 +73,7 @@ Temporary cross-generation communication is expected. The system does not attemp
 
 ## Dependency discovery and manifest validation
 
-The service dependency graph is generated from facet setup, not reflected from erased TypeScript interfaces and not maintained as a parallel handwritten list. Every service token retains a stable runtime ID. Each host combines the common facet environment with the attributes for that facet kind. Setup runs synchronously as a declaration phase; service handles remain disconnected until the complete graph validates.
+The service dependency graph is generated from facet setup, not reflected from erased TypeScript interfaces and not maintained as a parallel handwritten list. Every service token retains a stable runtime ID. Each host binds its concrete local services before activating the loaded facets. Setup runs synchronously as a declaration phase; service handles remain disconnected until the complete graph validates.
 
 During setup the host records:
 

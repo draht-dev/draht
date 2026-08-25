@@ -187,11 +187,12 @@ A server presentation facet renders and selects Sessions:
 setup(env) {
 	const directory = env.use(SessionDirectory);
 	const management = env.use(SessionManagement);
+	const tui = env.use(Tui);
 
-	env.commands.register("sessions.switch", async (operation) => {
+	tui.commands.register("sessions.switch", async (operation) => {
 		const snapshot = directory.state.value;
 		if (snapshot === undefined) return;
-		const sessionId = await env.ui.select(
+		const sessionId = await tui.select(
 			"Sessions",
 			snapshot.sessions.map((session) => ({ label: session.title, value: session.sessionId })),
 			{ signal: operation.abortSignal },

@@ -44,22 +44,22 @@ A coding-agent plugin is a feature bundle that may provide a facet for any host:
 ```ts
 interface CodingAgentPlugin {
 	readonly id: string;
-	readonly server?: PluginFacet<ServerFacetAttributes>;
-	readonly session?: PluginFacet<SessionFacetAttributes>;
+	readonly server?: PluginFacet;
+	readonly session?: PluginFacet;
 	readonly tui?: {
-		readonly server?: PluginFacet<TuiFacetAttributes>;
-		readonly session?: PluginFacet<TuiFacetAttributes>;
+		readonly server?: PluginFacet;
+		readonly session?: PluginFacet;
 	};
 	readonly web?: {
-		readonly server?: PluginFacet<WebFacetAttributes>;
-		readonly session?: PluginFacet<WebFacetAttributes>;
+		readonly server?: PluginFacet;
+		readonly session?: PluginFacet;
 	};
 }
 
-type PluginFacet<TAttributes extends object> = (env: FacetEnvironment & TAttributes) => void;
+type PluginFacet = (env: FacetEnvironment) => void;
 ```
 
-`PluginFacet` is the only plugin-facing shape the generic kernel needs. The host placement is the facet kind: it selects the lifetime, service source, and application-specific attributes added to the common environment. Facets are optional: a `models.json` plugin has only a Session facet, a terminal theme only presentation facets, and the Session directory has a server provider facet plus a server TUI facet. Setup is a synchronous declaration phase; asynchronous initialization belongs in `onActivate`. Examples use an illustrative `definePlugin()` helper returning a `CodingAgentPlugin` — the loaded, in-process shape.
+`PluginFacet` is the only plugin-facing shape the generic kernel needs. The host placement is the facet kind: it selects the lifetime and the local or remote service sources available through `env.use()`. Facets are optional: a `models.json` plugin has only a Session facet, a terminal theme only presentation facets, and the Session directory has a server provider facet plus a server TUI facet. Setup is a synchronous declaration phase; asynchronous initialization belongs in `onActivate`. Examples use an illustrative `definePlugin()` helper returning a `CodingAgentPlugin` — the loaded, in-process shape.
 
 A package keeps shared wire contracts separate from host dependencies:
 
@@ -171,7 +171,7 @@ type ConnectionState =
 	| { status: "disconnected"; since: string; reason: string; retryAt: string | null };
 ```
 
-After transport setup, each host asks the kernel to create one environment per selected facet, adds its host-specific attributes, and invokes the facet:
+After transport setup, each host gives the kernel its loaded facets and binds its concrete local services. The kernel invokes each facet against the resulting service graph:
 
 ```ts
 interface FacetLifecycle {
@@ -323,11 +323,12 @@ export const modelSelection = definePlugin({
 	tui: {
 		session(env) {
 			const models = env.use(Models);
+			const tui = env.use(Tui);
 
-			env.commands.register("models.select", async (context) => {
+			tui.commands.register("models.select", async (context) => {
 				const current = models.state.value;
 				if (current === undefined) return;
-				const selected = await env.ui.select(
+				const selected = await tui.select(
 				"Models",
 				current.catalog.availableModels.map((model) => ({
 					label: model.name,
@@ -337,7 +338,7 @@ export const modelSelection = definePlugin({
 			);
 				if (selected !== undefined) await models.select(selected, context);
 			});
-			env.commands.register("models.cycle-thinking", (context) => models.cycleThinking(context));
+			tui.commands.register("models.cycle-thinking", (context) => models.cycleThinking(context));
 			env.own(models.state.subscribe((next) => renderModelSelector(next)));
 		},
 	},
@@ -396,18 +397,21 @@ interface AgentPluginScope {
 	readonly events: ScopedEvents;
 }
 
-interface SessionFacetAttributes {
-	readonly agent: AgentPluginScope; // scoped local Session authority
-	readonly providers: ProviderContributionRegistry;
-	readonly tools: ToolContributionRegistry;
-	onClientAttach(callback: (clientId: string) => void): void;
-	onClientDetach(callback: (clientId: string) => void): void;
+const Agent = defineService<AgentPluginScope>("pi.local.agent");
+const Providers = defineService<ProviderContributionRegistry>("pi.local.providers");
+const Tools = defineService<ToolContributionRegistry>("pi.local.tools");
+
+interface ClientLifecycle {
+	onAttach(callback: (clientId: string) => void): void;
+	onDetach(callback: (clientId: string) => void): void;
 }
+
+const Clients = defineService<ClientLifecycle>("pi.local.clients");
 ```
 
 "Local" and "unrestricted" are separate decisions. The scope narrows authority for lifecycle and composition — hooks and event subscriptions registered through it are automatically owned by the plugin and disposed with it. `AgentLanePluginView` exposes Branch methods directly alongside agent operations. `ScopedSessionData` exposes purpose-bounded global value/list/name/label/query operations. The host keeps the unrestricted concrete instances and reserves: `AgentHarness.close()` and `Session.close()`; raw `Session.mutate()`, `beginMutation()`, and `SessionMutator` (unless a narrowly trusted durability plugin explicitly owns them); `idGenerator` and backend/storage objects; Branch creation; whole-registry setters such as `setTools()`; unscoped hook/event registration; transport exposure and remote-reference registration. This is a composition and lifecycle boundary, not a security sandbox: session facets are trusted code in the authoritative process. The manifest may explicitly grant broader local capability, but built-ins receive no implicit bypass.
 
-**Presentation facets hold none of this.** A TUI or web facet never receives the raw Harness, Session, tree, tool registry, hooks, or credentials — not even as proxies. It receives only what a session or server facet deliberately exposes: semantic service proxies and instances, replicated state, and semantic events.
+**Presentation facets hold none of this.** A TUI or web facet never receives the raw Harness, Session, tree, tool registry, hooks, or credentials. It uses host-local presentation services plus the semantic services, replicated state, and events deliberately exposed by a session or server facet.
 
 ```ts
 interface RemoteServiceInstance<T> {
@@ -441,34 +445,30 @@ interface TuiModal {
 	close(): void;
 }
 
-interface TuiFacilities {
+interface TuiHost {
+	readonly connection: ReplicatedState<ConnectionState>;
+	readonly attachment: ReplicatedState<AttachmentState>;
+	readonly commands: CommandContributions;
+	readonly keybindings: KeybindingContributions;
+	readonly toolRenderers: ToolRendererContributions;
+	readonly slots: SlotContributions;
 	acquireModal(signal: AbortSignal): Promise<TuiModal>;
 	select<T>(title: string, items: SelectItem<T>[], options: { signal: AbortSignal }): Promise<T | undefined>;
 	// overlays and focus facilities
 }
 
-interface TuiFacetAttributes {
-	readonly connection: ReplicatedState<ConnectionState>;
-	readonly attachment: ReplicatedState<AttachmentState>;
-	readonly ui: TuiFacilities;
-	readonly commands: CommandContributions;
-	readonly keybindings: KeybindingContributions;
-	readonly toolRenderers: ToolRendererContributions;
-	readonly slots: SlotContributions;
-}
+const Tui = defineService<TuiHost>("pi.local.tui");
 ```
 
 `acquireModal()` waits in one presentation-owned queue and holds the modal slot across a multi-step interaction. Its signal removes a queued request or dismisses an active one, and `close()` is idempotent. `select()` is the one-step acquire/select/close convenience. Both return selected values directly, so feature code never recovers identity from a display label.
 
-A server TUI facet and a Session TUI facet receive the same TUI attributes but run in different facet generations. The server generation binds `env.use(SessionDirectory)` to the connected server. The Session generation binds `env.use(Models)` to the selected Session. While detached, Session calls fail with `not_attached` and replicated state has no value. Connection and attachment health remain direct host attributes because they describe presentation control state, not services.
-
-A future web host adds browser attributes—routes, views, and DOM dialogs—to the same common environment. Its server and Session facets still use unqualified service operations. The server attributes are defined in the [server section](#the-server-directory-management-and-routing).
+A server TUI facet and a Session TUI facet can use the same host-local TUI services but run in different facet generations. The server generation binds `env.use(SessionDirectory)` to the connected server. The Session generation binds `env.use(Models)` to the selected Session. While detached, Session calls fail with `not_attached` and replicated state has no value. Connection and attachment health are host-local services because they describe presentation control state. A future web host similarly binds local services for routes, views, and DOM dialogs. Its server and Session facets still use unqualified service operations.
 
 Concretely, the minimum chat slice exposes `prompt(request, context)` returning `{ accepted, operationId, error }`, plus `requestAbort(operationId, context)`, and implements it with direct local lane capabilities. The experimental `Chat` contract also predeclares the later steer, follow-up, next-run, queue cancellation, resume, compaction, and navigation presentation operations; those members throw `ServiceSliceNotImplemented` until their Harness adapter slices land:
 
 ```ts
 session(env) {
-	const lane = env.agent.main;
+	const lane = env.use(Agent).main;
 	env.provide(Chat, {
 		async prompt(request, context) {
 			return toPromptResponse(await lane.prompt(request.message, context));
@@ -631,7 +631,7 @@ The server host does two jobs. It **owns server-wide services**—listing, creat
 
 A server facet is shared by every session and presentation connected to the server. It should be used only for inherently server-wide features. Per-session feature data belongs in session facets.
 
-### Server facet attributes
+### Server host services
 
 ```ts
 interface FleetPluginScope {
@@ -639,9 +639,7 @@ interface FleetPluginScope {
 	readonly attachments: AttachmentsView;  // bind/unbind a client's selected session
 }
 
-interface ServerFacetAttributes {
-	readonly fleet: FleetPluginScope;
-}
+const Fleet = defineService<FleetPluginScope>("pi.local.fleet");
 ```
 
 The raw `SessionRepo`, storage handles, unrestricted process-kill authority, routing map, and routing machinery stay with the server application:
@@ -705,8 +703,8 @@ export const SessionManagement = defineService<SessionManagement>("pi.session-ma
 
 ```ts
 // server.ts
-export function sessionDirectoryServerFacet(env: FacetEnvironment & ServerFacetAttributes) {
-	const { managed, attachments } = env.fleet;
+export function sessionDirectoryServerFacet(env: FacetEnvironment) {
+	const { managed, attachments } = env.use(Fleet);
 	const state = env.remoteState({ revision: 0, sessions: [] as SessionRecordSummary[] });
 	const events = env.remoteEvents<SessionDirectoryEvent>();
 
@@ -759,15 +757,16 @@ Every call is authorized against the client identity that transport policy insta
 
 ```ts
 // tui.ts
-export function sessionPickerTuiFacet(env: FacetEnvironment & TuiFacetAttributes) {
+export function sessionPickerTuiFacet(env: FacetEnvironment) {
 	const directory = env.use(SessionDirectory);
 	const management = env.use(SessionManagement);
+	const tui = env.use(Tui);
 
-	env.commands.register("sessions.switch", async (context) => {
+	tui.commands.register("sessions.switch", async (context) => {
 		const current = directory.state.value;
-		const attachment = env.attachment.value;
+		const attachment = tui.attachment.value;
 		if (current === undefined || attachment === undefined) return;
-		const selected = await env.ui.select(
+		const selected = await tui.select(
 			"Sessions",
 			current.sessions.map((session) => ({
 				label: pickerLabel(session, attachment),
@@ -871,10 +870,11 @@ function questionResult(request: QuestionRequest, answer: string | null, wasCust
 
 ```ts
 // session.ts
-export function questionSessionFacet(env: FacetEnvironment & SessionFacetAttributes) {
+export function questionSessionFacet(env: FacetEnvironment) {
 	const dialogs = env.provideMany(QuestionDialogs);
+	const tools = env.use(Tools);
 
-	env.tools.add((draft) => {
+	tools.add((draft) => {
 		draft.set("question", {
 			label: "Question",
 			description: "Ask users a question and wait for an answer.",
@@ -931,13 +931,14 @@ type QuestionChoice =
 	| { outcome: "selected"; index: number }
 	| { outcome: "custom" };
 
-export function questionTuiFacet(env: FacetEnvironment & TuiFacetAttributes) {
+export function questionTuiFacet(env: FacetEnvironment) {
+	const tui = env.use(Tui);
 	env.own(
 		env.observe(QuestionDialogs, async (dialog, context) => {
 			const request = dialog.service.request.value;
 			if (request === undefined) throw new Error("Question dialog was observed before hydration");
 
-			const modal = await bindings.ui.acquireModal(context.abortSignal);
+			const modal = await tui.acquireModal(context.abortSignal);
 			try {
 				const choice = await modal.select<QuestionChoice>(
 					request.question,
@@ -968,7 +969,7 @@ export function questionTuiFacet(env: FacetEnvironment & TuiFacetAttributes) {
 		}),
 	);
 
-	env.toolRenderers.add<QuestionDetails>("question", questionRenderer);
+	tui.toolRenderers.add<QuestionDetails>("question", questionRenderer);
 }
 ```
 
@@ -1021,7 +1022,7 @@ The generic kernel knows none of these domain concepts; each app host knows only
 
 Before this becomes normative:
 
-- the exact minimal kernel contract (environment shape, phase ordering, failure policy), the built-in manifest, and the concrete server/Session/TUI facet attributes;
+- the exact minimal kernel contract (environment shape, phase ordering, failure policy), the built-in manifest, and the concrete server/Session/TUI host services;
 - the logical-manifest format, per-host entry-point resolution, and cross-process version pinning;
 - whether directory state is projected per client (workspace-scoped snapshots) or one presentation-safe value plus method authorization;
 - multiple selected Sessions per presentation connection (a multi-pane web UI) — deferred; it changes how Session facet generations select service sources;
@@ -1221,7 +1222,7 @@ function toDiffReviewActivity(record: DiffReviewRecord): DiffReviewActivity {
 	};
 }
 
-export function diffReviewSessionFacet(bindings: FacetEnvironment & SessionFacetAttributes) {
+export function diffReviewSessionFacet(bindings: FacetEnvironment) {
 	const reviews = bindings.provideMany(DiffReviews);
 	const diffs = bindings.use(DiffSource);
 	const records = bindings.use(DiffReviewRecords);
@@ -1323,16 +1324,18 @@ function observeDiffReviews(
 }
 
 // tui.ts
-export function diffReviewTuiFacet(env: FacetEnvironment & TuiFacetAttributes) {
+export function diffReviewTuiFacet(env: FacetEnvironment) {
 	const manager = env.use(DiffReviewManager);
-	env.commands.register("diff.review", (context) => manager.createReview(context));
-	observeDiffReviews(env, (document) => createTuiDiffReviewPanel(env.slots, document));
+	const tui = env.use(Tui);
+	tui.commands.register("diff.review", (context) => manager.createReview(context));
+	observeDiffReviews(env, (document) => createTuiDiffReviewPanel(tui.slots, document));
 }
 
 // web.ts
-export function diffReviewWebFacet(env: FacetEnvironment & WebFacetAttributes) {
+export function diffReviewWebFacet(env: FacetEnvironment) {
 	const manager = env.use(DiffReviewManager);
-	observeDiffReviews(env, (document) => createWebDiffReviewPanel(env.views, document));
+	const views = env.use(WebViews);
+	observeDiffReviews(env, (document) => createWebDiffReviewPanel(views, document));
 	// The web plugin's "Review diff" button calls manager.createReview(context).
 }
 ```

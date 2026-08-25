@@ -31,6 +31,7 @@ export {
 	type RemoteEventType,
 	type RemoteJson,
 	type RemoteServiceConnection,
+	type RemoteServiceContract,
 	type RemoteServiceInstance,
 	type RemoteServiceNamespaceApi,
 	type RemoteServiceNamespaceOptions,

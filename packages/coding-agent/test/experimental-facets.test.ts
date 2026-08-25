@@ -6,7 +6,7 @@ import {
 	type ReplicatedState,
 } from "@draht/agent-core";
 import { describe, expect, test, vi } from "vitest";
-import { assembleFacetServices, defineFacet } from "../src/experimental/facets.ts";
+import { bindService, createFacetHost, defineFacet } from "../src/experimental/facets.ts";
 
 interface Source {
 	read(context: Context): Promise<string>;
@@ -24,12 +24,18 @@ interface Watched {
 	readonly state: ReplicatedState<{ value: number }>;
 }
 
+interface HostValues {
+	readonly name: string;
+	readonly use: string;
+}
+
 const Source = defineService<Source>("test.experimental.source");
 const Projection = defineService<Projection>("test.experimental.projection");
 const KeyedValue = defineService<KeyedValue>("test.experimental.keyed-value");
 const Watched = defineService<Watched>("test.experimental.watched");
+const HostValues = defineService<HostValues>("test.experimental.host-values");
 
-describe("experimental facet generation", () => {
+describe("experimental facet host", () => {
 	test("discovers setup dependencies before connecting stable service handles", async () => {
 		const trace: string[] = [];
 		let sourceHandle: Source | undefined;
@@ -69,13 +75,13 @@ describe("experimental facet generation", () => {
 				});
 			},
 		});
-		const generation = await assembleFacetServices({ facets: [projection, source] });
+		const host = await createFacetHost({ facets: [projection, source] });
 
 		expect(trace).toEqual(["setup projection", "setup source", "activate source", "activate projection"]);
 		expect(await sourceHandle!.read(BACKGROUND_CONTEXT)).toBe("value");
-		expect(await generation.provider.use(Projection).read(BACKGROUND_CONTEXT)).toBe("value");
+		expect(await host.services.use(Projection).read(BACKGROUND_CONTEXT)).toBe("value");
 
-		await generation.dispose();
+		await host.dispose();
 		expect(trace.slice(-2)).toEqual(["dispose projection", "dispose source"]);
 	});
 
@@ -106,11 +112,11 @@ describe("experimental facet generation", () => {
 				});
 			},
 		});
-		const generation = await assembleFacetServices({ facets: [observer, provider] });
+		const host = await createFacetHost({ facets: [observer, provider] });
 		await vi.waitFor(() => expect(trace).toContain("observe one"));
 
 		expect(trace).toEqual(["activate provider", "activate observer", "observe one"]);
-		await generation.dispose();
+		await host.dispose();
 	});
 
 	test("owns resources registered during activation", async () => {
@@ -136,14 +142,32 @@ describe("experimental facet generation", () => {
 				env.provide(Watched, { state });
 			},
 		});
-		const generation = await assembleFacetServices({ facets: [consumer, provider] });
+		const host = await createFacetHost({ facets: [consumer, provider] });
 		expect(deliveries).toBe(1);
 		state!.set({ value: 1 }, BACKGROUND_CONTEXT);
 		expect(deliveries).toBe(2);
 
-		await generation.dispose();
+		await host.dispose();
 		state!.set({ value: 2 }, BACKGROUND_CONTEXT);
 		expect(deliveries).toBe(2);
+	});
+
+	test("resolves explicit host service bindings", async () => {
+		const values: HostValues = { name: "session", use: "host value" };
+		const facet = defineFacet({
+			id: "host-service-consumer",
+			setup(env) {
+				const hostValues = env.use(HostValues);
+				expect(() => hostValues.use).toThrow("Facet service handles cannot be used during setup");
+				env.onActivate(() => {
+					expect(hostValues).not.toBe(values);
+					expect(hostValues.name).toBe("session");
+					expect(hostValues.use).toBe("host value");
+				});
+			},
+		});
+		const host = await createFacetHost({ facets: [facet], bindings: [bindService(HostValues, values)] });
+		await host.dispose();
 	});
 
 	test("rejects missing dependencies, cycles, and asynchronous setup", async () => {
@@ -157,7 +181,7 @@ describe("experimental facet generation", () => {
 				});
 			},
 		});
-		await expect(assembleFacetServices({ facets: [missing] })).rejects.toThrow(
+		await expect(createFacetHost({ facets: [missing] })).rejects.toThrow(
 			"Facet missing requires local/test.experimental.source/singleton, but no facet provides it",
 		);
 		expect(activated).toBe(false);
@@ -184,7 +208,7 @@ describe("experimental facet generation", () => {
 				});
 			},
 		});
-		await expect(assembleFacetServices({ facets: [first, second] })).rejects.toThrow(
+		await expect(createFacetHost({ facets: [first, second] })).rejects.toThrow(
 			"Facet dependency cycle: first, second",
 		);
 
@@ -194,7 +218,7 @@ describe("experimental facet generation", () => {
 				await Promise.resolve();
 			},
 		});
-		await expect(assembleFacetServices({ facets: [asynchronous] })).rejects.toThrow(
+		await expect(createFacetHost({ facets: [asynchronous] })).rejects.toThrow(
 			"Facet asynchronous setup must be synchronous",
 		);
 	});

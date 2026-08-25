@@ -6,6 +6,7 @@ import {
 	cloneJson,
 	isJsonValue,
 	type RemoteServiceConnection,
+	type RemoteServiceContract,
 	type Service,
 	type ServiceCall,
 	type ServiceInstanceAddress,
@@ -80,7 +81,7 @@ export class RemoteServiceProvider {
 		this.#allowlist = new Set(ids);
 	}
 
-	provide<T>(service: Service<T>, implementation: NoInfer<T>): void {
+	provide<T>(service: Service<T>, implementation: NoInfer<RemoteServiceContract<T>>): void {
 		this.#assertActive();
 		this.#assertAllowed(service.id);
 		const registration = this.#registration(service.id, "singleton", true);
@@ -101,7 +102,7 @@ export class RemoteServiceProvider {
 		return registration.singleton.implementation as T;
 	}
 
-	spawn<T>(service: Service<T>, key: string, implementation: NoInfer<T>): () => void {
+	spawn<T>(service: Service<T>, key: string, implementation: NoInfer<RemoteServiceContract<T>>): () => void {
 		this.#assertActive();
 		this.#assertAllowed(service.id);
 		if (key.length === 0) throw new TypeError("Remote service instance key must not be empty");

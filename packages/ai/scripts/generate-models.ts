@@ -1749,10 +1749,10 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 			}
 		}
 
-		// models.dev may omit Workers AI passthroughs from the AI Gateway provider
-		// list even though the gateway /compat endpoint supports routing to them.
-		// Mirror the Workers AI catalog under the documented workers-ai/ prefix so
-		// the gateway keeps its OpenAI-compatible /compat models stable.
+		// The gateway proxies Workers AI through its OpenAI-compatible endpoint, but
+		// models.dev's gateway catalog only lists `workers-ai/*` entries intermittently.
+		// Derive them from the Workers AI catalog so the gateway's openai-completions
+		// models stay stable regardless of that duplication.
 		if (data["cloudflare-workers-ai"]?.models) {
 			for (const [modelId, model] of Object.entries(data["cloudflare-workers-ai"].models)) {
 				const m = model as ModelsDevModel;

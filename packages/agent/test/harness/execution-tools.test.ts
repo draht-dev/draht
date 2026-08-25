@@ -9,7 +9,8 @@ import {
 	finalizeToolCall,
 	prepareToolCall,
 } from "../../src/harness/execution/tools.ts";
-import type { AgentTool, AgentToolCall, AgentToolResult } from "../../src/types.ts";
+import type { AgentHarnessTool } from "../../src/harness/types.ts";
+import type { AgentToolCall, AgentToolResult } from "../../src/types.ts";
 
 const parameters = Type.Object({ value: Type.String() });
 
@@ -18,8 +19,8 @@ function call(arguments_: Record<string, unknown> = { value: "input" }): AgentTo
 }
 
 function tool(
-	overrides: Partial<AgentTool<typeof parameters, { value: string }>> = {},
-): AgentTool<typeof parameters, { value: string }> {
+	overrides: Partial<AgentHarnessTool<undefined, typeof parameters, { value: string }>> = {},
+): AgentHarnessTool<undefined, typeof parameters, { value: string }> {
 	return {
 		name: "echo",
 		label: "Echo",
@@ -56,6 +57,14 @@ function effectGate(): Gate {
 	return createGate().gate;
 }
 
+const invocation = {
+	invocationId: "result-1",
+	operationId: "operation-1",
+	turnId: "turn-1",
+	getMemo: async () => undefined,
+	setMemo: async () => {},
+};
+
 describe("tool execution primitives", () => {
 	it("prepares arguments before validation and preserves the provider call", () => {
 		const providerCall = call({ legacy: "prepared" });
@@ -85,7 +94,8 @@ describe("tool execution primitives", () => {
 		]);
 		const invalid = prepareToolCall(call({}), [tool()]);
 
-		expect(isImmediate(unknown) ? text(unknown.result) : "").toContain("Tool echo not found");
+		expect(isImmediate(unknown) ? text(unknown.result) : "").toBe('Tool "echo" is unavailable');
+		expect(isImmediate(unknown) ? unknown.result.details : null).toBeUndefined();
 		expect(isImmediate(preparationFailure) ? text(preparationFailure.result) : "").toBe("cannot prepare");
 		expect(isImmediate(invalid) ? text(invalid.result) : "").toContain('Validation failed for tool "echo"');
 	});
@@ -109,9 +119,9 @@ describe("tool execution primitives", () => {
 	it("executes with updates, passes the signal, and ignores late updates", async () => {
 		const gate = effectGate();
 		let lateUpdate: ((partial: AgentToolResult<{ value: string }>) => void) | undefined;
-		const execute: AgentTool<typeof parameters, { value: string }>["execute"] = vi.fn(
-			async (_id, args, signal, onUpdate) => {
-				expect(signal).toBe(gate.signal);
+		const execute: AgentHarnessTool<undefined, typeof parameters, { value: string }>["execute"] = vi.fn(
+			async (_id, args, onUpdate, _toolContext, _invocation, context) => {
+				expect(context.abortSignal).toBe(gate.signal);
 				onUpdate?.({ content: [{ type: "text", text: "partial" }], details: { value: args.value } });
 				lateUpdate = onUpdate;
 				return { content: [{ type: "text" as const, text: "done" }], details: { value: args.value } };
@@ -120,7 +130,14 @@ describe("tool execution primitives", () => {
 		const cleared = clearPrepared(prepareToolCall(call(), [tool({ execute })]));
 		const updates: AgentToolResult<unknown>[] = [];
 
-		const result = await executeToolCall(cleared, gate, (update) => updates.push(update), BACKGROUND_CONTEXT);
+		const result = await executeToolCall(
+			cleared,
+			gate,
+			(update) => updates.push(update),
+			undefined,
+			invocation,
+			BACKGROUND_CONTEXT,
+		);
 		lateUpdate?.({ content: [{ type: "text", text: "late" }], details: { value: "late" } });
 
 		expect(vi.mocked(execute)).toHaveBeenCalledOnce();
@@ -146,7 +163,7 @@ describe("tool execution primitives", () => {
 	])("converts %s tool throws to error output", async (_kind, execute) => {
 		const cleared = clearPrepared(prepareToolCall(call(), [tool({ execute })]));
 
-		const result = await executeToolCall(cleared, effectGate(), () => {}, BACKGROUND_CONTEXT);
+		const result = await executeToolCall(cleared, effectGate(), () => {}, undefined, invocation, BACKGROUND_CONTEXT);
 
 		expect(result.isError).toBe(true);
 		expect(text(result.result)).toBe("tool failed");
@@ -158,7 +175,9 @@ describe("tool execution primitives", () => {
 		const { gate, control } = createGate();
 		control.beginAbort(Promise.resolve());
 
-		expect(() => executeToolCall(cleared, gate, () => {}, BACKGROUND_CONTEXT)).toThrow(AbortRequested);
+		expect(() => executeToolCall(cleared, gate, () => {}, undefined, invocation, BACKGROUND_CONTEXT)).toThrow(
+			AbortRequested,
+		);
 		expect(execute).not.toHaveBeenCalled();
 	});
 

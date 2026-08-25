@@ -403,7 +403,7 @@ For orphaned `effect_pending` where both the stored and current declarations are
 
 Deleting old progress prevents duplicate chunks when replayed code emits progress again. A crash after the delete but before replay admission remains `effect_pending`; the next recovery repeats the same safe procedure.
 
-If the current tool declaration is missing, suspend before replay. If it is present but no longer safe, use unsafe interruption recovery.
+If the current tool declaration is missing or no longer safe, use unsafe interruption recovery rather than suspending.
 
 ## Invocation memos
 

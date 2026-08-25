@@ -90,6 +90,8 @@ export function openFrameProgress<TContext extends object | undefined>(
 export function openToolProgress<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
+	turnId: string,
+	sourceIndex: number,
 	invocationId: string,
 ): ProgressChannel<AgentToolResult<unknown>> {
 	const address = pendingToolOutput(drive.operationId, invocationId);
@@ -107,8 +109,15 @@ export function openToolProgress<TContext extends object | undefined>(
 			) {
 				return false;
 			}
-			return operation.state.phase.batch.calls.some(
-				(call) => call.resultEntryId === invocationId && call.status === "effect_pending",
+			const batch = operation.state.phase.batch;
+			return (
+				batch.turnId === turnId &&
+				batch.calls.some(
+					(call) =>
+						call.sourceIndex === sourceIndex &&
+						call.resultEntryId === invocationId &&
+						call.status === "effect_pending",
+				)
 			);
 		},
 	);

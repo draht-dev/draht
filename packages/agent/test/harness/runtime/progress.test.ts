@@ -356,7 +356,7 @@ describe("runtime progress channels", () => {
 				},
 			}),
 		);
-		const progress = openToolProgress(lane, drive, invocationId);
+		const progress = openToolProgress(lane, drive, "turn", 0, invocationId);
 		progress.write({ content: [{ type: "text", text: "first" }], details: {} });
 		progress.write({ content: [{ type: "text", text: "second" }], details: {} });
 		await progress.drain();

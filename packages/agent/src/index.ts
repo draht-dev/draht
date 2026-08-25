@@ -110,6 +110,8 @@ export {
 	type AgentHarnessTool,
 	type AgentHarnessToolContextSource,
 	type AgentHarnessToolInvocation,
+	type AgentHarnessToolUpdateCallback,
+	type AgentHarnessToolUpdateOptions,
 	BranchSummaryError,
 	type BranchSummaryErrorCode,
 	CompactionError,

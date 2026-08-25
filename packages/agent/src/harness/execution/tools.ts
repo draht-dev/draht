@@ -1,13 +1,14 @@
 import { type ToolResultMessage, validateToolArguments } from "@draht/ai";
-import type { AgentTool, AgentToolCall, AgentToolResult } from "../../types.ts";
+import type { AgentToolCall, AgentToolResult } from "../../types.ts";
 import { type Context, withAbortSignal } from "../context.ts";
 import type { JsonValue } from "../session/types.ts";
+import type { AgentHarnessTool, AgentHarnessToolInvocation, AgentHarnessToolUpdateCallback } from "../types.ts";
 import type { Gate } from "./effect-gate.ts";
 
 /** A tool call whose tool exists and whose prepared arguments passed validation. */
-export interface PreparedToolCall {
+export interface PreparedToolCall<TContext extends object | undefined> {
 	toolCall: AgentToolCall;
-	tool: AgentTool;
+	tool: AgentHarnessTool<TContext>;
 	args: Record<string, JsonValue>;
 }
 
@@ -27,9 +28,9 @@ export interface BeforeToolDecision {
 }
 
 /** A prepared call cleared for durable intent publication and execution. */
-export interface ClearedToolCall {
+export interface ClearedToolCall<TContext extends object | undefined> {
 	toolCall: AgentToolCall;
-	tool: AgentTool;
+	tool: AgentHarnessTool<TContext>;
 	args: Record<string, JsonValue>;
 }
 
@@ -59,7 +60,7 @@ export interface FinalizedToolCall {
 function createErrorToolResult(message: string): AgentToolResult<unknown> {
 	return {
 		content: [{ type: "text", text: message }],
-		details: {},
+		details: undefined,
 	};
 }
 
@@ -74,10 +75,13 @@ function immediateError(toolCall: AgentToolCall, message: string, terminate = fa
 }
 
 /** Resolve a tool, apply its deterministic argument preparation, and validate the result. */
-export function prepareToolCall(call: AgentToolCall, tools: AgentTool[]): PreparedToolCall | ImmediateToolOutcome {
+export function prepareToolCall<TContext extends object | undefined>(
+	call: AgentToolCall,
+	tools: AgentHarnessTool<TContext>[],
+): PreparedToolCall<TContext> | ImmediateToolOutcome {
 	const tool = tools.find((candidate) => candidate.name === call.name);
 	if (!tool) {
-		return immediateError(call, `Tool ${call.name} not found`);
+		return immediateError(call, `Tool ${JSON.stringify(call.name)} is unavailable`);
 	}
 
 	try {
@@ -94,10 +98,10 @@ export function prepareToolCall(call: AgentToolCall, tools: AgentTool[]): Prepar
 }
 
 /** Apply an explicit hook decision and revalidate replacement arguments. */
-export function applyBeforeToolDecision(
-	prepared: PreparedToolCall,
+export function applyBeforeToolDecision<TContext extends object | undefined>(
+	prepared: PreparedToolCall<TContext>,
 	decision: BeforeToolDecision | undefined,
-): ClearedToolCall | ImmediateToolOutcome {
+): ClearedToolCall<TContext> | ImmediateToolOutcome {
 	if (decision?.block) {
 		return immediateError(prepared.toolCall, decision.block.reason, decision.block.terminate === true);
 	}
@@ -118,10 +122,12 @@ export function applyBeforeToolDecision(
 }
 
 /** Execute one cleared external tool effect, converting expected tool throws to error output. */
-export function executeToolCall(
-	call: ClearedToolCall,
+export function executeToolCall<TContext extends object | undefined>(
+	call: ClearedToolCall<TContext>,
 	gate: Gate,
-	onUpdate: (partial: AgentToolResult<unknown>) => void,
+	onUpdate: AgentHarnessToolUpdateCallback<unknown>,
+	toolContext: TContext,
+	invocation: AgentHarnessToolInvocation,
 	context: Context,
 ): Promise<ExecutedToolCall> {
 	let acceptingUpdates = true;
@@ -129,9 +135,16 @@ export function executeToolCall(
 		const admittedContext = withAbortSignal(gate.signal, context);
 		admittedContext.abortSignal?.throwIfAborted();
 		try {
-			const result = await call.tool.execute(call.toolCall.id, call.args, admittedContext.abortSignal, (partial) => {
-				if (acceptingUpdates) onUpdate(partial);
-			});
+			const result = await call.tool.execute(
+				call.toolCall.id,
+				call.args,
+				(partial, options) => {
+					if (acceptingUpdates) onUpdate(partial, options);
+				},
+				toolContext,
+				invocation,
+				admittedContext,
+			);
 			return { result, isError: false };
 		} catch (error) {
 			return {
@@ -145,8 +158,8 @@ export function executeToolCall(
 }
 
 /** Apply an after-tool patch field by field. */
-export function finalizeToolCall(
-	call: ClearedToolCall,
+export function finalizeToolCall<TContext extends object | undefined>(
+	call: ClearedToolCall<TContext>,
 	executed: ExecutedToolCall,
 	patch: AfterToolPatch | undefined,
 ): FinalizedToolCall {
@@ -174,8 +187,8 @@ export function createToolResultMessage(call: FinalizedToolCall): ToolResultMess
 		toolCallId: call.toolCall.id,
 		toolName: call.toolCall.name,
 		content: call.result.content ?? [],
-		details: call.result.details,
-		usage: call.result.usage,
+		...(call.result.details === undefined ? {} : { details: call.result.details }),
+		...(call.result.usage === undefined ? {} : { usage: call.result.usage }),
 		...(call.result.addedToolNames?.length ? { addedToolNames: call.result.addedToolNames } : {}),
 		isError: call.isError,
 		timestamp: Date.now(),

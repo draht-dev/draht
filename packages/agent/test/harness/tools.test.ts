@@ -1,6 +1,6 @@
 import { symlink } from "node:fs/promises";
 import { applyPatch } from "diff";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { BACKGROUND_CONTEXT, type Context, withAbortSignal } from "../../src/harness/context.ts";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
 import { type BashToolDetails, createBashTool } from "../../src/harness/tools/bash.ts";
@@ -18,6 +18,8 @@ import {
 } from "../../src/harness/types.ts";
 import { DEFAULT_MAX_LINES } from "../../src/harness/utils/truncate.ts";
 import { createTempDir } from "./session-test-utils.ts";
+
+const noUpdate = () => {};
 
 function textOutput(result: { content: Array<{ type: string; text?: string }> }): string {
 	return result.content.flatMap((part) => (part.type === "text" ? [part.text ?? ""] : [])).join("\n");
@@ -105,7 +107,30 @@ class LateOutputExecutionEnv extends NodeExecutionEnv {
 }
 
 const TRUNCATED_OUTPUT_LINES = DEFAULT_MAX_LINES + 1;
-const invocation = { invocationId: "test-result", operationId: "test-operation", turnId: "test-turn" };
+const invocation = {
+	invocationId: "test-result",
+	operationId: "test-operation",
+	turnId: "test-turn",
+	getMemo: async () => undefined,
+	setMemo: async () => {},
+};
+
+class CheckpointOutputExecutionEnv extends NodeExecutionEnv {
+	override async exec(
+		_command: string,
+		options: ShellExecOptions | undefined,
+		context: Context,
+	): Promise<Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>> {
+		options?.onStdout?.("one\n", context);
+		await delay(2_100);
+		options?.onStdout?.("two\n", context);
+		await delay(100);
+		options?.onStdout?.("three\n", context);
+		await delay(2_000);
+		options?.onStdout?.("four\n", context);
+		return ok({ stdout: "one\ntwo\nthree\nfour\n", stderr: "", exitCode: 0 });
+	}
+}
 
 class TimeoutOutputExecutionEnv extends NodeExecutionEnv {
 	override async exec(
@@ -150,7 +175,7 @@ describe("AgentHarness tools", () => {
 			const result = await createReadTool().execute(
 				"read-1",
 				{ path: "test.txt", offset: 41, limit: 20 },
-				undefined,
+				noUpdate,
 				context,
 				invocation,
 				BACKGROUND_CONTEXT,
@@ -177,7 +202,7 @@ describe("AgentHarness tools", () => {
 			const result = await createReadTool().execute(
 				"read-2",
 				{ path: "large.txt" },
-				undefined,
+				noUpdate,
 				context,
 				invocation,
 				BACKGROUND_CONTEXT,
@@ -205,7 +230,7 @@ describe("AgentHarness tools", () => {
 			const result = await createReadTool().execute(
 				"read-exact",
 				{ path: "exact.txt" },
-				undefined,
+				noUpdate,
 				context,
 				invocation,
 				BACKGROUND_CONTEXT,
@@ -223,7 +248,7 @@ describe("AgentHarness tools", () => {
 				createReadTool().execute(
 					"read-3",
 					{ path: "short.txt", offset: 100 },
-					undefined,
+					noUpdate,
 					context,
 					invocation,
 					BACKGROUND_CONTEXT,
@@ -244,7 +269,7 @@ describe("AgentHarness tools", () => {
 			const result = await createReadTool().execute(
 				"read-4",
 				{ path: "image.txt" },
-				undefined,
+				noUpdate,
 				context,
 				invocation,
 				BACKGROUND_CONTEXT,
@@ -279,7 +304,7 @@ describe("AgentHarness tools", () => {
 			const result = await tool.execute(
 				"read-bmp",
 				{ path: "image.bmp" },
-				undefined,
+				noUpdate,
 				context,
 				invocation,
 				BACKGROUND_CONTEXT,
@@ -298,7 +323,7 @@ describe("AgentHarness tools", () => {
 			const result = await createWriteTool().execute(
 				"write-1",
 				{ path: "nested/dir/file.txt", content: "hello" },
-				undefined,
+				noUpdate,
 				context,
 				invocation,
 				BACKGROUND_CONTEXT,
@@ -315,7 +340,7 @@ describe("AgentHarness tools", () => {
 			const firstWrite = tool.execute(
 				"write-first",
 				{ path: "file.txt", content: "first\n" },
-				undefined,
+				noUpdate,
 				{
 					env,
 				},
@@ -327,7 +352,7 @@ describe("AgentHarness tools", () => {
 			const secondWrite = tool.execute(
 				"write-second",
 				{ path: "file.txt", content: "second\n" },
-				undefined,
+				noUpdate,
 				{ env },
 				invocation,
 				BACKGROUND_CONTEXT,
@@ -357,7 +382,7 @@ describe("AgentHarness tools", () => {
 						{ oldText: "gamma\n", newText: "GAMMA\n" },
 					],
 				},
-				undefined,
+				noUpdate,
 				context,
 				invocation,
 				BACKGROUND_CONTEXT,
@@ -386,7 +411,7 @@ describe("AgentHarness tools", () => {
 							{ oldText: "two\nthree\n", newText: "TWO\nTHREE\n" },
 						],
 					},
-					undefined,
+					noUpdate,
 					context,
 					invocation,
 					BACKGROUND_CONTEXT,
@@ -404,7 +429,7 @@ describe("AgentHarness tools", () => {
 				tool.execute(
 					"edit-3",
 					{ path: "edit.txt", edits: [{ oldText: "bar", newText: "baz" }] },
-					undefined,
+					noUpdate,
 					context,
 					invocation,
 					BACKGROUND_CONTEXT,
@@ -414,7 +439,7 @@ describe("AgentHarness tools", () => {
 				tool.execute(
 					"edit-4",
 					{ path: "edit.txt", edits: [{ oldText: "foo", newText: "bar" }] },
-					undefined,
+					noUpdate,
 					context,
 					invocation,
 					BACKGROUND_CONTEXT,
@@ -430,7 +455,7 @@ describe("AgentHarness tools", () => {
 			const firstEdit = tool.execute(
 				"edit-first",
 				{ path: "file.txt", edits: [{ oldText: "alpha", newText: "ALPHA" }] },
-				undefined,
+				noUpdate,
 				{ env },
 				invocation,
 				withAbortSignal(controller.signal, BACKGROUND_CONTEXT),
@@ -440,7 +465,7 @@ describe("AgentHarness tools", () => {
 			const secondEdit = tool.execute(
 				"edit-second",
 				{ path: "file.txt", edits: [{ oldText: "beta", newText: "BETA" }] },
-				undefined,
+				noUpdate,
 				{ env },
 				invocation,
 				BACKGROUND_CONTEXT,
@@ -465,7 +490,7 @@ describe("AgentHarness tools", () => {
 				tool.execute(
 					"edit-target",
 					{ path: "target.txt", edits: [{ oldText: "alpha", newText: "ALPHA" }] },
-					undefined,
+					noUpdate,
 					{ env },
 					invocation,
 					BACKGROUND_CONTEXT,
@@ -473,7 +498,7 @@ describe("AgentHarness tools", () => {
 				tool.execute(
 					"edit-link",
 					{ path: "link.txt", edits: [{ oldText: "beta", newText: "BETA" }] },
-					undefined,
+					noUpdate,
 					{ env },
 					invocation,
 					BACKGROUND_CONTEXT,
@@ -491,7 +516,7 @@ describe("AgentHarness tools", () => {
 			await createEditTool().execute(
 				"edit-symlink",
 				{ path: "link.txt", edits: [{ oldText: "before", newText: "after" }] },
-				undefined,
+				noUpdate,
 				context,
 				invocation,
 				BACKGROUND_CONTEXT,
@@ -507,7 +532,7 @@ describe("AgentHarness tools", () => {
 			await createEditTool().execute(
 				"edit-5",
 				{ path: "edit.txt", edits: [{ oldText: "two", newText: "TWO" }] },
-				undefined,
+				noUpdate,
 				context,
 				invocation,
 				BACKGROUND_CONTEXT,
@@ -525,7 +550,7 @@ describe("AgentHarness tools", () => {
 			const result = await createBashTool().execute(
 				"bash-1",
 				{ command: "printf out; printf err >&2" },
-				undefined,
+				noUpdate,
 				context,
 				invocation,
 				BACKGROUND_CONTEXT,
@@ -543,7 +568,7 @@ describe("AgentHarness tools", () => {
 				tool.execute(
 					"bash-2",
 					{ command: "printf failed; exit 7" },
-					undefined,
+					noUpdate,
 					context,
 					invocation,
 					BACKGROUND_CONTEXT,
@@ -553,7 +578,7 @@ describe("AgentHarness tools", () => {
 				tool.execute(
 					"bash-3",
 					{ command: "sleep 2", timeout: 0.01 },
-					undefined,
+					noUpdate,
 					context,
 					invocation,
 					BACKGROUND_CONTEXT,
@@ -568,7 +593,7 @@ describe("AgentHarness tools", () => {
 				await createBashTool().execute(
 					"bash-timeout-output",
 					{ command: "emit-output-then-time-out", timeout: 0.05 },
-					undefined,
+					noUpdate,
 					context,
 					invocation,
 					BACKGROUND_CONTEXT,
@@ -609,7 +634,7 @@ describe("AgentHarness tools", () => {
 			const result = await createBashTool().execute(
 				"bash-long-line",
 				{ command: "printf '%060000d' 0" },
-				undefined,
+				noUpdate,
 				context,
 				invocation,
 				BACKGROUND_CONTEXT,
@@ -643,7 +668,7 @@ describe("AgentHarness tools", () => {
 			const result = await tool.execute(
 				"bash-prepare",
 				{ command: ":" },
-				undefined,
+				noUpdate,
 				context,
 				invocation,
 				withAbortSignal(controller.signal, BACKGROUND_CONTEXT),
@@ -661,13 +686,37 @@ describe("AgentHarness tools", () => {
 			const result = await createBashTool({ commandPrefix: "value=hello" }).execute(
 				"bash-4",
 				{ command: "printf $value" },
-				undefined,
+				noUpdate,
 				context,
 				invocation,
 				BACKGROUND_CONTEXT,
 			);
 
 			expect(textOutput(result)).toBe("hello");
+		});
+
+		it("requests distinct bounded checkpoints at most every two seconds", async () => {
+			vi.useFakeTimers({ now: 0 });
+			try {
+				const env = new CheckpointOutputExecutionEnv({ cwd: createTempDir() });
+				const checkpoints: string[] = [];
+				const execution = createBashTool().execute(
+					"bash-checkpoints",
+					{ command: "controlled" },
+					(update, options) => {
+						if (options?.checkpoint === true) checkpoints.push(textOutput(update));
+					},
+					{ env },
+					invocation,
+					BACKGROUND_CONTEXT,
+				);
+				await vi.advanceTimersByTimeAsync(4_500);
+				await execution;
+
+				expect(checkpoints).toEqual(["one\ntwo\n", "one\ntwo\nthree\nfour\n"]);
+			} finally {
+				vi.useRealTimers();
+			}
 		});
 
 		it("coalesces updates and persists truncated full output", async () => {

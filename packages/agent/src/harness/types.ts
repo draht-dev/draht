@@ -1,7 +1,8 @@
 import type { SimpleStreamOptions, Transport } from "@draht/ai";
 import type { Static, TSchema } from "typebox";
-import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "../types.ts";
+import type { AgentTool, AgentToolResult } from "../types.ts";
 import type { Context } from "./context.ts";
+import type { JsonValue } from "./session/types.ts";
 
 /** Result of a fallible operation. Expected failures are returned as `ok: false` instead of thrown. */
 export type Result<TValue, TError> = { ok: true; value: TValue } | { ok: false; error: TError };
@@ -78,12 +79,28 @@ export interface AgentHarnessResources<
 	skills?: TSkill[];
 }
 
+/** Options for one live harness tool progress update. */
+export interface AgentHarnessToolUpdateOptions {
+	/** Request replacement of this invocation's durable recovery checkpoint. */
+	checkpoint?: true;
+}
+
+/** Synchronous full-snapshot progress callback supplied to harness-native tools. */
+export type AgentHarnessToolUpdateCallback<TDetails> = (
+	partialResult: AgentToolResult<TDetails>,
+	options?: AgentHarnessToolUpdateOptions,
+) => void;
+
 /** Stable harness identity for one logical tool call, unchanged during safe replay. */
 export interface AgentHarnessToolInvocation {
 	/** Opaque session-unique id equal to the call's reserved result-entry id. */
-	invocationId: string;
-	operationId: string;
-	turnId: string;
+	readonly invocationId: string;
+	readonly operationId: string;
+	readonly turnId: string;
+	/** Read one invocation-scoped durable replay memo. */
+	getMemo(name: string): Promise<JsonValue | undefined>;
+	/** Set or delete one invocation-scoped durable replay memo. */
+	setMemo(name: string, value: JsonValue | undefined): Promise<void>;
 }
 
 /** Tool definition executed by an {@link AgentHarness} with an application-defined context. */
@@ -96,7 +113,7 @@ export type AgentHarnessTool<
 	execute(
 		toolCallId: string,
 		params: Static<TParameters>,
-		onUpdate: AgentToolUpdateCallback<TDetails> | undefined,
+		onUpdate: AgentHarnessToolUpdateCallback<TDetails>,
 		toolContext: TContext,
 		invocation: AgentHarnessToolInvocation,
 		context: Context,

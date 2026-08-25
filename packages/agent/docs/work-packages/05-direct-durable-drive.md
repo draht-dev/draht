@@ -1,6 +1,6 @@
 # WP05 — Direct durable drive
 
-**Status: M4 complete; WP06 foundation landed before M4.** Independent Opus, GPT-5.6-Sol, and Fable reviews approved the authoritative-`Lane.state` design and M3 generation implementation with no blockers. M4 retry/deferred implementation also passed independent Fable review with no blockers.
+**Status: M5 complete; WP06 foundation landed before M4.** Independent Opus, GPT-5.6-Sol, and Fable reviews approved the authoritative-`Lane.state` design and M3 generation implementation with no blockers. M4 retry/deferred and M5 durable tool-batch implementations also passed independent Fable review with no blockers.
 
 WP06 separates Session/Branch/AgentLane/AgentHarness, replaces keyed lane lines with one keyless Session mutation line, removes implicit main, and renames durable/public leaf fields to tip. Every M4–M8 instruction below is interpreted on that foundation; no compatibility aliases or Harness-as-main assumptions remain.
 
@@ -1694,6 +1694,20 @@ Both methods run on `Lane`; procedures do not remove ownership. The external fin
 **Do not implement yet.** `watchSession`.
 
 **Exit condition / review questions.** Any public path reachable over a partial graph? Any `SliceNotImplemented` left besides `watchSession`? Does any usage total come from anywhere but `CommitResult.stats`?
+
+---
+
+### Post-WP05 lifecycle simplification review
+
+After M8 and the crash matrix are complete, revisit the abort/close/crash design before treating the lifecycle machinery as stable. This review does not block the current milestone sequence.
+
+Start from these intended semantics:
+
+- close and process crash leave the same durable restart point; close differs only by cooperatively sealing admission, signalling live work, and draining already-admitted mutations;
+- explicit abort is durable because it changes recovery policy: live cooperative effects settle normally under `cancel_requested`, while a replacement process reconciles rather than retrying assistant requests, replaying safe tools, polling deferred work, or starting new structural work;
+- process-local invocation cancellation is not durable abort.
+
+Audit whether the implementation can be simplified by replacing propagated `lost_ownership` result unions with one internal sentinel caught at the outer Drive boundary, centralizing cancellation classification at effect/phase boundaries, and removing owner-retention, external-finalization, or non-cooperative-effect machinery that the final required scenarios do not justify. Preserve only complexity demonstrated by concrete close/crash/abort traces and crash-matrix tests.
 
 ---
 

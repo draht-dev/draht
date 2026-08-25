@@ -107,6 +107,41 @@ function saturatingAdd(left: number, right: number): number {
 	return Number.isSafeInteger(sum) ? sum : Number.MAX_SAFE_INTEGER;
 }
 
+function waitUntil(notBefore: number, signal: AbortSignal): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const cleanup = () => {
+			if (timer !== undefined) clearTimeout(timer);
+			signal.removeEventListener("abort", onAbort);
+		};
+		const onAbort = () => {
+			cleanup();
+			reject(signal.reason);
+		};
+		const check = () => {
+			const remaining = notBefore - Date.now();
+			if (remaining <= 0) {
+				cleanup();
+				resolve();
+				return;
+			}
+			timer = setTimeout(check, Math.min(remaining, 2_147_483_647));
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+		if (signal.aborted) onAbort();
+		else check();
+	});
+}
+
+function sameRetryWait(current: Generation, expected: Extract<Generation, { status: "retry_wait" }>): boolean {
+	return (
+		current.status === "retry_wait" &&
+		current.context.stepId === expected.context.stepId &&
+		current.nextAttempt === expected.nextAttempt &&
+		current.notBefore === expected.notBefore
+	);
+}
+
 function deferredHandleIsValid(
 	message: SettledAssistantMessage,
 	identity: GenerationContext["configuration"]["model"],
@@ -430,6 +465,27 @@ export function settleAssistant<TContext extends object | undefined>(
 					];
 					if (
 						options.recovery !== true &&
+						generation.attempt > 1 &&
+						!(nextPhase.kind === "assistant" && nextPhase.generation.status === "retry_wait")
+					) {
+						const success = committed.stopReason !== "error" && committed.stopReason !== "aborted";
+						events.push({
+							type: "retry_end",
+							lane: lane.name,
+							runId: drive.operationId,
+							step: identity.stepId,
+							attempt: generation.attempt,
+							success,
+							...(success
+								? {}
+								: {
+										finalError:
+											committed.errorMessage ?? `Assistant request ended with ${committed.stopReason}`,
+									}),
+						});
+					}
+					if (
+						options.recovery !== true &&
 						nextPhase.kind === "assistant" &&
 						nextPhase.generation.status === "retry_wait"
 					) {
@@ -459,6 +515,15 @@ export function settleAssistant<TContext extends object | undefined>(
 							...options,
 						});
 					}
+					if (options.recovery !== true && nextPhase.kind === "deferred" && committed.deferred !== undefined) {
+						events.push({
+							type: "run_suspend",
+							lane: lane.name,
+							runId: drive.operationId,
+							reason: "deferred",
+							deferred: committed.deferred,
+						});
+					}
 					return events;
 				},
 			};
@@ -467,15 +532,87 @@ export function settleAssistant<TContext extends object | undefined>(
 	);
 }
 
-/** Execute one ready assistant generation through intent, admitted stream, and settlement. */
+/** Advance one durable assistant retry wait according to this pass's local wait policy. */
+export async function runRetryWait<TContext extends object | undefined>(
+	lane: Lane<TContext>,
+	drive: Drive,
+	run: RunState,
+	generation: Extract<Generation, { status: "retry_wait" }>,
+): Promise<ProcedureResult> {
+	if (run.phase.kind !== "assistant" || !sameRetryWait(run.phase.generation, generation)) {
+		throw new SessionInvariantError("runRetryWait requires its current retry wait");
+	}
+	if (run.control.status === "cancel_requested") return { kind: "continue" };
+	if (Date.now() < generation.notBefore) {
+		if (!drive.waitForRetry) {
+			return {
+				kind: "waiting",
+				outcome: {
+					kind: "waiting",
+					operationId: drive.operationId,
+					reason: "retry",
+					notBefore: generation.notBefore,
+				},
+			};
+		}
+		await drive.gate.admit(() => waitUntil(generation.notBefore, drive.gate.signal));
+	}
+
+	return lane.commandDriveOwned<ProcedureResult>(
+		drive,
+		(state) => {
+			const operation = state.operation;
+			if (operation === null || operation.state.kind !== "run") {
+				throw new SessionInvariantError("Retry wait reached a non-run operation");
+			}
+			const current = operation.state;
+			if (current.control.status === "cancel_requested") {
+				return { kind: "return", result: { kind: "continue" } as const };
+			}
+			if (current.phase.kind !== "assistant" || !sameRetryWait(current.phase.generation, generation)) {
+				throw new SessionInvariantError("Retry wait lost its durable boundary");
+			}
+			const nextState: RunState = {
+				...current,
+				phase: {
+					kind: "assistant",
+					generation: {
+						status: "ready",
+						context: generation.context,
+						nextAttempt: generation.nextAttempt,
+					},
+				},
+			};
+			return {
+				kind: "commit",
+				writes: [setValue(operationStateValue(drive.operationId), nextState)],
+				next: { ...state, operation: { meta: operation.meta, state: nextState } },
+				materialize: () => ({ kind: "continue" }) as const,
+				events: () => [
+					{
+						type: "retry_start",
+						lane: lane.name,
+						runId: drive.operationId,
+						step: generation.context.stepId,
+						attempt: generation.nextAttempt,
+					},
+				],
+			};
+		},
+		drive.context,
+	);
+}
+
+/** Execute one ready assistant generation or advance its durable retry wait. */
 export async function runGeneration<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
 	run: RunState,
 	generation: Generation,
 ): Promise<ProcedureResult> {
+	if (generation.status === "retry_wait") return runRetryWait(lane, drive, run, generation);
 	if (generation.status !== "ready") {
-		throw new SessionInvariantError("M3 runGeneration requires a ready generation");
+		throw new SessionInvariantError("runGeneration requires a ready generation or retry wait");
 	}
 	if (run.phase.kind !== "assistant" || !sameReadyGeneration(run.phase.generation, generation)) {
 		throw new SessionInvariantError("runGeneration requires its current ready phase");

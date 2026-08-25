@@ -1,6 +1,6 @@
 # WP05 — Direct durable drive
 
-**Status: M3 complete; WP06 foundation landed before M4.** Independent Opus, GPT-5.6-Sol, and Fable reviews approved the authoritative-`Lane.state` design and M3 generation implementation with no blockers.
+**Status: M4 complete; WP06 foundation landed before M4.** Independent Opus, GPT-5.6-Sol, and Fable reviews approved the authoritative-`Lane.state` design and M3 generation implementation with no blockers. M4 retry/deferred implementation also passed independent Fable review with no blockers.
 
 WP06 separates Session/Branch/AgentLane/AgentHarness, replaces keyed lane lines with one keyless Session mutation line, removes implicit main, and renames durable/public leaf fields to tip. Every M4–M8 instruction below is interpreted on that foundation; no compatibility aliases or Harness-as-main assumptions remain.
 
@@ -1353,6 +1353,10 @@ Only `packages/coding-agent/src/core/cache-stats.ts` (comment) and vendored `hig
 |---|---|
 | `src/harness/runtime/drive/generation.ts` | retry classification → `retry_wait`; `waitForRetry` policy |
 | `src/harness/runtime/drive/deferred.ts` | `drive.deferredPermits` consumption lives with the deferred procedure. **Do not touch `drive.ts`** — it does not exist until M7 |
+| `packages/ai/src/models.ts` | add the event-stream-preserving `Models.streamDeferred`; retain `fetchDeferred` as `streamDeferred(...).result()` |
+| `packages/coding-agent/src/core/model-runtime.ts` | implement the same `Models.streamDeferred` auth-preserving runtime path |
+
+The two `Models` rows are a necessary implementation prerequisite discovered in M4: the existing promise-returning `fetchDeferred()` discarded provider events, making deferred frame persistence and partial recovery impossible. The additive stream method preserves Models auth/request transforms and avoids bypassing the registry.
 
 **Behavior/invariants landed.** No durable armed poll state: `suspended` never becomes a durable pollable `ready`; the permit is consumed by the **fresh intent commit** that reserves new ids; a crash before that commit leaves `suspended` at the same poll number; an unknown-outcome poll does not consume a poll, deletes the old frame list, and mints fresh ids next poll; an unknown-outcome structural attempt *does* consume an attempt.
 
@@ -1741,6 +1745,8 @@ Milestone in parentheses where creation order matters.
 - `packages/agent/src/harness/runtime/harness.ts`
 - `packages/agent/src/harness/runtime/types.ts`
 - `packages/agent/src/harness/runtime/restore.ts`
+- `packages/ai/src/models.ts`
+- `packages/coding-agent/src/core/model-runtime.ts`
 - `packages/agent/src/harness/session/session.ts`
 - `packages/agent/src/harness/session/types.ts`
 - `packages/agent/src/harness/session/commit.ts`

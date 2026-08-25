@@ -192,7 +192,7 @@ A deferred poll that returns an `AssistantMessageEventStream` uses the same `pen
 - when a poll permit replaces the unknown poll with fresh reserved response/usage IDs, that intent transaction deletes the abandoned old frame-list address;
 - the replacement poll starts a fresh list under its fresh response ID.
 
-Frames never change deferred-handle equality or poll-number rules.
+Frames never change poll-number rules.
 
 ## Structural generation scope
 

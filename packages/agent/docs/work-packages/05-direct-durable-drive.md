@@ -1,29 +1,32 @@
 # WP05 — Direct durable drive
 
-**Status: M5 complete; pre-M6 runtime simplification in progress.**
+**Status: M5 complete; M6 structural foundation committed; redesign package R1–R3 pending, then M7 (reconciliation), M8 (public surfaces), M9 (documentation reconciliation), and M10 (provider KV-cache identity review).**
 
-WP06's Session/Branch/Lane separation is already part of the foundation. Public drive remains disabled until structural execution, cancellation reconciliation, the total drive switch, and every public execution surface are complete.
+WP06's Session/Branch/Lane separation is already part of the foundation. Public drive remains disabled until R1–R3, cancellation reconciliation, the total drive switch, every public execution surface, and the provider KV-cache identity review are complete.
 
-Format 4 remains work in progress. The flat operation-state replacement requires no migration or compatibility decoder.
+Format 4 remains work in progress. Every durable type replacement in this package requires no migration and no compatibility decoder for the pre-redesign shapes.
+
+The standalone-compaction inbox/promotion design previously in this document is **withdrawn** (§5). R1–R3 and the updated M7/M8 replace it. Where `docs/harness.md` contradicts this document, this document wins until M9 reconciles them.
 
 ## 0. Mandatory reading
 
 Read completely before implementation work:
 
-1. `packages/agent/docs/harness.md`
-2. `packages/agent/docs/runtime-simplification.md`
+1. `packages/agent/docs/harness.md` (normative except where superseded here; M9 reconciles)
+2. `packages/agent/docs/runtime-simplification.md` (its 22-leaf list is replaced by R3)
 3. `packages/agent/src/harness/session/types.ts`
 4. `packages/agent/src/harness/session/values.ts`
 5. `packages/agent/src/harness/runtime/lane.ts`
 6. `packages/agent/src/harness/runtime/types.ts`
 7. every existing `packages/agent/src/harness/runtime/drive/*.ts`
 8. `packages/agent/src/harness/runtime/progress.ts`
-9. `packages/agent/src/harness/execution/{effect-gate,assistant,tools}.ts`
-10. relevant focused runtime tests
+9. `packages/agent/src/harness/runtime/restore.ts`
+10. `packages/agent/src/harness/execution/{effect-gate,assistant,tools}.ts`
+11. relevant focused runtime tests
 
 Do not inspect Git history or removed runtime implementations. The current source and these documents are the only implementation inputs.
 
-## 1. Runtime model
+## 1. Runtime model (target)
 
 ### Lane authority
 
@@ -31,12 +34,12 @@ Do not inspect Git history or removed runtime implementations. The current sourc
 
 - tip;
 - lane configuration;
-- pending-next-run ids;
-- latest terminal result;
+- the lane inbox: tagged queued-input ids (R1);
+- last operation id (R2);
 - operation metadata;
-- flat operation state, including control and inbox ids.
+- flat operation state, including control.
 
-Every supported mutation commits on the one Session mutation line and publishes the matching `Lane.state` before releasing the line. Drive procedures never reread `laneState`, `operationMeta`, `operationState`, `branchTip`, `laneConfig`, or `laneLastResult` from storage.
+Every supported mutation commits on the one Session mutation line and publishes the matching `Lane.state` before releasing the line. Drive procedures never reread `laneState`, `operationMeta`, `operationState`, `branchTip`, `laneConfig`, or `operationResult` from storage.
 
 `SessionReader` is used only to dereference content named by in-memory state and to enumerate operation-owned cleanup addresses:
 
@@ -48,33 +51,65 @@ Every supported mutation commits on the one Session mutation line and publishes 
 - staged tool outcomes;
 - cleanup-prefix scans.
 
-### Flat state
+### One lane-owned inbox (R1)
 
-`OperationState` has one `at` discriminator with 22 direct leaves. The canonical declarations are in `session/types.ts`. There is no nested operation-kind/phase/generation-status/deferred-status/structural-status dispatch hierarchy.
+Queued input is lane-owned, never operation-owned. `LaneState` (durable and process-local) carries one ordered inbox of `{ entryId, kind }` items with `kind: "steer" | "followUp" | "nextRun" | "write"`. Payload staging is unchanged: enqueue mints the entry id and writes `pendingEntry(id)`; the inbox holds ids only. Item lifecycle is admission → consumption | cancellation; terminal cleanup never touches queue payloads.
 
-`ToolBatch` and `ToolCall` remain a nested child state machine because parallel call children genuinely update sibling statuses concurrently.
+Tags are consumption-eligibility markers, not ownership. Enqueue always succeeds — during runs, structural operations, cancellation, and idle. Every drain point **selects per tag (queue modes apply at selection), then places**; each selected group is internally in admission order:
+
+| Drain point | Selection, in order |
+| --- | --- |
+| acceptance (idle lane) | writes (all) → nextRun (all) → steer (`steeringMode`: all or oldest) → followUp (`followUpMode`) → request prompt entries. The acceptance transaction itself places these and removes their ids; `starting` drains nothing. followUp is acceptance-eligible because an idle lane vacuously satisfies its "after current work" condition. |
+| turn-end boundary pass (run) | writes (all) → threshold check → steer (`steeringMode`) → continuation-required assistant → followUp (`followUpMode`, only at `may_finish`) → `before_run_end` → finish. nextRun items are never eligible mid-run and never block finish. |
+| failure_drain pass | writes → steer → followUp (modes, same order); projecting input rescues into an assistant turn; unprojected custom writes do not rescue; with no rescue input it finishes failed; cancelled control defers to reconciliation. |
+| idle direct append | queued write items are placed first, then the new entry, in one commit |
+| abort (M7) | steer + followUp removed from the inbox, payload values deleted, payloads returned; nextRun and write items stay |
+
+**One decision, one commit.** Every boundary computes its complete decision on the mutation line and commits once, into a state that never drains (`assistant.ready`, `summary.deciding`, or a terminal transaction). A crash before that commit re-runs the whole decision with nothing consumed; a crash after it lands in a non-draining state. Consequently `skipInboxOnce` and `thresholdCheckedTriggerEntryId` are deleted: both existed only to defend the re-draining windows between today's stepwise checkpoint commits. Mode remainders stay queued and are consumed at later boundaries, giving the per-turn steer cadence and per-run-end followUp cadence.
+
+There is no terminal drain. `cancelQueued` triage is unchanged and single-location. Queued input survives operation termination (including abort, for nextRun/write) until consumed or cancelled; this is a deliberate product decision.
+
+### Flat state (R3)
+
+`OperationState` has one `at` discriminator with **14** direct leaves:
+
+- `starting`
+- `checkpoint`
+- `assistant.ready`
+- `assistant.effect_pending`
+- `assistant.retry_wait`
+- `tools`
+- `deferred.suspended`
+- `deferred.effect_pending`
+- `failure_drain`
+- `summary.deciding`
+- `summary.ready`
+- `summary.effect_pending`
+- `summary.retry_wait`
+- `navigation.ready_to_commit`
+
+Every leaf carries one uniform scope `{ control, settings, latestAssistantEntryId }`. There are no `run.`/`compaction.`/`navigation.` leaf prefixes, no per-family scope types, and no intersection zoo. The four `summary.*` leaves carry a `SummaryTask` whose `boundary` datum (a closed three-arm union, §8) decides what happens at the result boundary. `starting` and `navigation.ready_to_commit` are intent-locked entry leaves. `ToolBatch`/`ToolCall` remain the nested child collection state machine. `Control` stays orthogonal and loses its drained fields (R1).
+
+### Durable operation results (R2)
+
+Every terminal transaction writes one small immutable result record at `operationResult(operationId)` (namespace `pi.result`, operation id key). The record is lane-lived; keeping it outside `pi.op.*` keeps that namespace's "deleted no later than the terminal transaction" grammar total and exception-free. `LaneState.lastOperationId` points at the newest record. `laneLastResult` (value, address constructor, and type union) is deleted.
+
+- `drive(id)` becomes total for settled operations: current id → install/join; record exists → return its hydrated outcome; neither → `OperationMismatch`.
+- Recovery and attachment never read result records; they are observation only.
+- Terminal-control invariant: a terminal transaction that executes under durable `cancel_requested` always records `status: "aborted"`; equivalently, any other status implies running terminal control. (Every non-aborted terminal path goes through `continueOperation`, which diverts under cancellation, and the mutation line serializes the marker against the terminal commit.)
+- There is no listing, filtering, pagination, or retention API for records. `getResult(operationId)` and drive hydration are the entire read surface.
 
 ### One lane-owned Drive
 
-One lane may install one process-local Drive pass.
-
-- The first matching caller installs it.
-- Later matching callers observe the same completion.
-- No caller owns the Drive after installation; the Lane does.
-- Invocation cancellation rejects only that caller's observation.
-- An installed Drive is never abandoned or replaced in-process.
-- `requestAbort(operationId)` is the only durable operation cancellation.
-- A stale operation id returns `OperationMismatch` and affects nothing.
-
-`Drive.context` removes the installing invocation signal. Effects receive only the operation gate's signal composed with that cancellation-free Context.
+Unchanged: one process-local Drive pass per lane; first matching caller installs, later matching callers observe the same completion; no caller owns it after installation; invocation cancellation rejects only that caller's observation; an installed Drive is never abandoned or replaced in-process; `requestAbort(operationId)` is the only durable operation cancellation; a stale operation id returns `OperationMismatch` and affects nothing. `Drive.context` removes the installing invocation signal.
 
 ### Close
 
-Close is not abort. It seals mutation admission, rejects local observations with `HarnessClosed`, observes detached pass failures, drains mutations admitted before the seal, and closes the Session. It writes no cancellation marker or synthetic terminal state and never replaces a Drive.
+Unchanged: close is not abort. It seals mutation admission, rejects local observations with `HarnessClosed`, observes detached pass failures, drains mutations admitted before the seal, and closes the Session. It writes no cancellation marker or synthetic terminal state and never replaces a Drive.
 
 ### No external finalization
 
-There is no live-process external-finalization path, `OperationEnded`, `finalizedOutcome`, ownership-loss result, or exact-Drive ABA fence. Administrative rewriting or expiration first acquires exclusive Session ownership with no live Harness.
+Unchanged: no live-process external-finalization path, `OperationEnded`, `finalizedOutcome`, ownership-loss result, or exact-Drive ABA fence.
 
 ## 2. Procedure shape
 
@@ -87,29 +122,24 @@ prepare
 → commit settlement
 ```
 
-A procedure is the sole writer that changes its top-level `at` leaf. Inbox methods change only inbox fields; `requestAbort` changes only `control`. Therefore a live continuation does not repeatedly check operation existence, operation id, kind, or `at`.
+A procedure is the sole writer that changes its top-level `at` leaf. `requestAbort` changes only `control` (and the lane inbox); inbox admission changes only the lane inbox. Operation state has exactly two supported writers: the procedure and `requestAbort`.
 
-The Lane supplies two concrete operations:
-
-- `continueOperation(state, planner, context)` — ordinary progress; if durable cancellation already won, return to the drive loop without invoking the planner;
-- `settleOperation(state, planner, context)` — effect settlement and parallel tool-child mutations; the planner always receives current control/inbox data.
-
-Both pair a returned next `OperationState` with its durable `operationState` write and exact process-local publication. A terminal decision additionally appends the universal suffix:
+The Lane supplies `continueOperation` and `settleOperation` as today. A terminal decision appends the universal suffix:
 
 1. procedure-specific publication and cleanup writes;
-2. `laneLastResult`;
-3. idle `laneState` preserving `pendingNextRun`;
+2. `setValue(operationResult(operationId), record)`;
+3. idle `laneState` with `currentOperationId: null`, `lastOperationId: operationId`, and the preserved inbox;
 4. idle process-local projection;
 5. terminal result and event materialization.
 
-The state argument is a type capability established by dispatcher control flow. It is not compared with current state at runtime. A mismatch would be a programming defect, not a supported race.
+The state argument is a type capability established by dispatcher control flow, never compared with current state at runtime.
 
 ## 3. Remaining concurrency checks
 
 Keep checks only where another supported writer can change the relevant fact:
 
 1. `requestAbort` versus effect admission and settlement;
-2. inbox arrival before checkpoint routing, a standalone compaction result boundary, or terminal finish;
+2. lane-inbox arrival before a drain point, a summary result boundary, or terminal finish;
 3. parallel tool-call statuses and source-ready placement;
 4. queued frame/checkpoint writes versus settlement;
 5. invocation memo/checkpoint calls versus effect completion;
@@ -120,15 +150,7 @@ Keep checks only where another supported writer can change the relevant fact:
 
 Do not reintroduce operation identity, expected-`at`, exact-Drive, or ownership-loss checks into ordinary transitions.
 
-`requestAbort` keeps the two-step gate order:
-
-```text
-beginAbort before the cancellation mutation
-commit cancel_requested
-signalAbort after the commit
-```
-
-This prevents a new effect from entering while the durable marker is being committed.
+`requestAbort` keeps the two-step gate order: `beginAbort` before the cancellation mutation, commit `cancel_requested`, `signalAbort` after the commit.
 
 ## 4. Completed milestones
 
@@ -142,14 +164,7 @@ Complete. Includes the split effect gate, deterministic gated storage, authorita
 
 ### M3 — Assistant generation and recovery
 
-Complete. Includes:
-
-- `run.starting → run.checkpoint`;
-- assistant ready/intent/effect/settlement;
-- frame persistence and cleanup;
-- configuration failure;
-- unknown-outcome assistant recovery;
-- response/usage/state atomicity.
+Complete. Includes `run.starting → run.checkpoint`, assistant ready/intent/effect/settlement, frame persistence and cleanup, configuration failure, unknown-outcome assistant recovery, and response/usage/state atomicity.
 
 ### M4 — Retry and deferred
 
@@ -161,189 +176,303 @@ Complete. Includes planned/effect-pending/outcome-ready/completed calls, safe re
 
 ### Pre-M6 simplification
 
-Required before further graph work:
+Complete. Canonical flat `at` types, `continueOperation`/`settleOperation`, removal of the installer-owned Drive model, and conversion of M3–M5 procedures.
 
-- canonical flat `at` operation types;
-- shared assistant/deferred response settlement;
-- Lane transition operations;
-- removal of installer abandonment, `LostOwnership`, exact-object fencing, `DriveAbandoned`, `installerSignal`, and `finalizedOutcome`;
-- conversion of existing M3–M5 procedures;
-- update of normative documentation and focused tests;
-- measured material reduction in runtime LOC.
+### M6 structural foundation
 
-Stop and revisit the design if this conversion does not materially reduce the existing runtime.
+Committed (`9b23c6583`): `runtime/drive/structural.ts`, `test/harness/runtime/drive-structural.test.ts`, the one-provider-request seams in the compaction modules, threshold routing, overflow preparation, per-request structural intent/usage settlement, hook decisions, structural retry/recovery, and unsummarized navigation commit. Its family cross-product layer (triplicated quadruples, three-armed publishers) is rebuilt by R3; its effect seam, preparation plumbing, threshold/overflow logic, and navigation commit are retained.
 
-## 5. M6 — Structural execution and navigation
+## 5. Withdrawn: standalone-compaction inbox and run-continuation promotion
+
+The design that gave `compaction.*` leaves a `RunScope` inbox and a one-way cross-family move into `run.*` at the result boundary is withdrawn. Its problems: a relaxed intent/state invariant with bespoke restore rules, `compact()` resolving with a run outcome that does not fit `CompactionResult`, suppressed `run_start` producing unbalanced event brackets, fused-consumption rules to avoid `cancelQueued` stranding, and promotion-specific arms in reconciliation, cleanup, watch, and admission.
+
+Replacement, spread across this package:
+
+- queued input during any operation is lane-owned (R1) — no operation inbox exists to promote;
+- continuation after standalone compaction/navigation is a **second ordinary run operation** with a fresh id, composed in the convenience layer (M8);
+- each operation delivers exactly one result; both results are returned by the convenience call and both are durable records (R2).
+
+No code implements promotion; nothing needs removal beyond this document's previous text and the harness.md references (M9).
+
+## 6. R1 — Lane-owned tagged inbox
 
 ### Goal
 
-Implement every structural leaf:
+Move all queued input to one lane-owned tagged inbox; delete the operation inbox, the drained-control machinery, and the checkpoint patch fields.
 
-- in-run threshold/overflow compaction;
-- standalone compaction, including its steer/follow-up inbox and run-continuation promotion;
-- summarized and unsummarized navigation;
-- structural decision hooks;
-- generated summary attempts, retries, and recovery;
-- atomic result publication and terminal completion.
+### Files
 
-Create:
+- `src/harness/session/types.ts` — durable `LaneState { currentOperationId, inbox }` with `InboxItem { entryId, kind }` (replaces `pendingNextRun`); delete `Inbox`, `RunScope.inbox`, and the `Control` drained fields (`Control` becomes `{ status: "running" } | { status: "cancel_requested"; requestedAt: number }`); delete `skipInboxOnce` and `thresholdCheckedTriggerEntryId` from `CheckpointData`.
+- `src/harness/runtime/types.ts` — process-local `LaneState.inbox` replaces `pendingNextRun`.
+- `src/harness/runtime/lane.ts` — acceptance capture per the §1 selection row: the acceptance transaction places writes (all) → nextRun (all) → steer (`steeringMode`) → followUp (`followUpMode`) → request prompt entries, deletes their pending values, and removes their ids atomically with the `LaneBusy` check; acceptance validity counts conversational items only (a lone queued write never satisfies or triggers acceptance); `append` while any operation is open enqueues a write-tagged item (the structural-operation rejection is removed); idle `append` places queued write items first, then the new entry, in one commit; `watch` derives `queues`/`pendingWrites` from the lane inbox by tag; delete drained-payload snapshot reads.
+- `src/harness/runtime/drive/checkpoint.ts` — replace the stepwise drain commits with the one-decision-one-commit boundary pass (§1): writes, threshold, steer, continuation, followUp, `before_run_end`, finish — committing once into `assistant.ready`, `summary.deciding`, a placed follow-up continuation, or the terminal transaction. The threshold check runs inside the boundary planner against the would-be branch (the existing overflow-preparation pattern). Implement the `failure_drain` pass with the same one-commit shape.
+- `src/harness/runtime/drive/terminal.ts` — `operationCleanupWrites` no longer deletes queued or drained pending values; staged `outcome_ready` results and other operation-owned addresses are unchanged.
+- `src/harness/runtime/drive/{generation,response,deferred,tools,structural}.ts` — `runScopeOf`/scope copies drop `inbox`; settlement classification no longer routes through drain flags; no other behavioral change.
+- `src/harness/runtime/restore.ts` — restore the inbox from durable `laneState`.
+- Focused tests for every file above.
 
-- `src/harness/runtime/drive/structural.ts`
-- `test/harness/runtime/drive-structural.test.ts`
+### Rules
 
-Modify checkpoint handling for threshold checks and the existing compaction modules only to expose one-provider-request seams. Additionally modify `session/types.ts` (`CompactionScope`), `runtime/drive/terminal.ts`, `runtime/lane.ts` (`watch`), and `runtime/restore.ts` for the standalone compaction inbox design below.
-
-### Structural request seam
-
-One structural attempt may contain one or two provider requests. Each request must have its own durable intent and usage row. Do not wrap a retrying helper in one intent.
-
-The runtime-owned request callback performs:
-
-```text
-reserve usage id
-→ commit nested request intent { index, usageId }
-→ compose gate signal and invocation telemetry Context
-→ gate.admit(() => models.completeSimple(...))
-→ commit usage and clear/advance nested request intent
-```
-
-Attempt-level retry is represented by the flat structural ready/effect-pending/retry-wait leaves. Existing non-harness callers retain their current in-helper retry behavior through a default request adapter.
-
-Structural streams emit no transcript assistant lifecycle and persist no assistant frames.
-
-### Standalone compaction inbox and run-continuation promotion
-
-Standalone manual compaction keeps a live steer/follow-up inbox. Queued input survives the whole operation and, at the result boundary, continues into an assistant turn instead of being rejected or letting the lane go idle. The durable types and transitions land in M6; abort drain lands in M7 and public admission in M8 (called out in those sections).
-
-Durable types:
-
-- `CompactionScope` extends `RunScope` (control, captured `settings`, `inbox`, `latestAssistantEntryId`) plus optional `customInstructions`. All four `compaction.*` leaves gain these fields. The leaf set stays at 22: promotion reuses the existing `run.*` leaves; no new leaves, result arms, or events exist.
-- Standalone compaction acceptance captures current settings exactly like run acceptance and starts with an empty inbox and `latestAssistantEntryId: null`. It still neither captures nor consumes `pendingNextRun`.
-- Steer/follow-up staging is unchanged: enqueue mints the entry id and writes `pendingEntry(id)`; the leaf holds ids only. Tree writes remain rejected on `compaction.*` leaves; `inbox.writes` stays empty until promotion.
-- `OperationMeta` is immutable and keeps `intent.kind: "compaction"`. The intent-prefix invariant is relaxed in exactly one direction: run intent ↔ `run.*`, navigation intent ↔ `navigation.*`, compaction intent starts in `compaction.*` and may take one one-way move into `run.*` at its result boundary. The restore compatibility check (`restore.ts`) admits `run.*` leaves under compaction intent and nothing else. There is no other cross-family transition and no operation replacement: id, meta, Drive, and mutation line are unchanged. Dispatch is always over `state.at`, never `intent.kind`. The only semantic `intent` readers are `run.starting` consumption (`promptEntryIds` with its non-run invariant guard), which stays unreachable because promotion enters at `run.checkpoint`/`run.failure_drain`, and the relaxed restore check; `inspectExecution`, `watch`, harness operation listing, and `LaneBusy` keep reporting `kind: "compaction"` from meta while leaf-specific snapshot data follows `state.at`, and a promoted operation never emits `run_start`.
-
-Result-boundary transitions. Every standalone boundary — hook decline, hook-supplied result, generated success, terminal generation failure, and model unavailability — plans on the mutation line against the latest inbox. A `cancel_requested` boundary defers to reconciliation and never promotes. With running control:
-
-- steer and follow-up both empty → today's terminal transaction unchanged: compaction-kind `laneLastResult` (`completed`/`declined`/`failed`), operation cleanup, and idle lane in one commit;
-- completed or declined with queued steer/follow-up → one promotion commit: insert the compaction entry and tip move (completed only), emit `compaction_end`, consume eligible steer — or, with no steer, eligible follow-up — per the captured queue mode using the ordinary checkpoint-consumption writes (insert entries from pending values, delete those values, advance tip), and set `run.checkpoint{need_assistant(false), triggerEntryId = newest consumed entry, skipInboxOnce}`. Fusing consumption into the promotion commit guarantees the continuation always holds projected input, so a later `cancelQueued` can never strand a promoted operation at `may_finish` with no assistant;
-- failed with queued steer/follow-up → `run.failure_drain{error, provenance}` (structural taskId or configuration) plus `compaction_end(failed)`; the existing drain machinery applies the queued input and rescues into `checkpoint{need_assistant(false)}`.
-
-After promotion the ordinary run machinery owns the operation — assistant, tools, deferred, threshold compaction, `before_run_end`, and finish behave exactly as in a run — and it terminates through the untouched run terminal transaction with a run-kind `laneLastResult`. The structural outcome was already reported by `compaction_end` at the boundary. `before_run` never runs for a promoted operation.
-
-Terminal cleanup and snapshots become inbox-scope-based rather than `run.*`-prefix-based: `operationCleanupWrites` deletes queued/drained steer and follow-up pending values for any inbox-carrying leaf, and `watch` reads steer/follow-up queues from any inbox-carrying leaf. Navigation scopes are unchanged and carry no inbox.
-
-Update `docs/harness.md` in the same change: §3.2 state shapes, §3.5 standalone graph, §3.6 compaction acceptance capture, §3.11 admission/drain rows, and §3.13 cleanup ownership.
-
-### Required behavior
-
-- Preparation is written before the decision hook and reused after reopen.
-- Threshold checks happen at most once per trigger boundary.
-- An unknown structural attempt consumes an attempt; it does not resume request two.
-- Model disappearance fails in band.
-- Standalone result publication with an empty inbox is one transaction with terminal cleanup; with queued steer/follow-up it is one transaction with promotion consumption.
-- In-run success/decline restores the captured checkpoint according to reason.
-- Unsummarized navigation moves tip/label and terminates in one transaction.
+- The §1 selection table and the one-decision-one-commit boundary rule are normative.
+- One transaction per boundary: insert entries from pending values, delete those values, remove the ids from the lane inbox, and write the next operation state together. The pending-value XOR entry invariant is unchanged.
+- Queue modes apply at selection time at every drain point, acceptance included. Mode remainders are consumed only at later boundaries; no flag mediates this — the committed target state simply does not drain.
+- nextRun items are never consumed mid-run and never block run finish.
+- Deferred-suspension enqueue keeps working (items admit at any time; consumption happens at the post-redemption boundary).
 
 ### Focused validation
 
-Cover every structural `at` leaf, split-turn request accounting, crashes after each nested request, threshold deduplication, hook decline/result, model absence, retry cap, navigation validation, and publication/terminal atomicity.
+Enqueue during idle/run/structural/cancelled states always admits; acceptance places groups in the specified order with modes applied and remainders retained; `one-at-a-time` cadence — each remaining steer is consumed by a later boundary and answered in its own turn, across crash/reopen at every commit; followUp captured at idle acceptance and only at `may_finish` during a run; a boundary crash before its commit re-runs the whole decision with nothing consumed; threshold checked at most once per boundary by construction; idle append places queued writes first; items survive operation terminal (any status) and process loss; `cancelQueued` at every boundary; watch queues by tag; no queue payload deleted by any terminal transaction; a lone queued write never validates acceptance.
 
-Standalone inbox coverage: queued steer/follow-up surviving every `compaction.*` commit and process loss; empty-inbox boundaries finishing exactly as before; completed/declined/failed promotion each continuing into an assistant turn and finishing with a run result; queue-mode consumption order at promotion (steer before follow-up, `one-at-a-time` versus `all`); inbox arrival racing the boundary commit on the mutation line; `cancel_requested` boundaries never promoting; queued/drained pending values dying only in terminal cleanup; restore accepting `run.*` under compaction intent and rejecting `compaction.*` under run intent.
+## 7. R2 — Neutral operation outcome and durable result records
 
-Public drive remains disabled.
+### Goal
 
-## 6. M7 — Cancellation reconciliation and total switch
+Replace the three per-family outcome unions and `laneLastResult` with one neutral outcome shape and one immutable per-operation result record.
+
+### Types
+
+```ts
+type TerminalStatus = "completed" | "declined" | "aborted" | "failed";
+
+/** Stored at operationResult(operationId) — namespace "pi.result" — by the terminal transaction. Immutable, lane-lived. */
+interface OperationResultRecord {
+  operationId: string;
+  kind: "run" | "compaction" | "navigation";   // meta.intent.kind; matches OperationAdmission.kind
+  status: TerminalStatus;
+  error?: OperationError;              // status "failed"
+  fromTipId: string | null;            // meta.sourceTipId — start of the transcript segment
+  tipId: string | null;                // lane tip at terminal — end of the segment
+  startedAt: number;                   // Unix ms, from meta
+  endedAt: number;                     // Unix ms, Date.now() at terminal planning
+}
+
+/** Live/public outcome. "suspended" is never stored. */
+type OperationOutcome =
+  | (OperationResultRecord & { tipEntry?: Entry; deferred?: never })
+  | { operationId: string; kind: "run"; status: "suspended"; fromTipId: string | null;
+      tipId: string | null; startedAt: number; tipEntry?: Entry; deferred: DeferredHandle };
+```
+
+The result is a disposition plus a pointer to the transcript segment `(fromTipId, tipId]`. It never lists intermediate work (compactions, turns, tools); the events and the tree are that record. `tipEntry` is hydrated for live promises and `getResult`/drive hydration; it is never stored.
+
+### Files
+
+- `src/harness/session/types.ts` — add the record; delete the `LaneLastResult` union; `LaneState` gains `lastOperationId: string | null`.
+- `src/harness/session/values.ts` — `operationResult(operationId) = value<OperationResultRecord>("pi.result", operationId)`; delete `laneLastResult`. The `pi.op.*` lifetime grammar stays total: no operation-lived namespace survives its terminal transaction.
+- `src/harness/agent-harness.ts` — delete `RunOutcome`, `CompactionOutcome`, `NavigationOutcome`, `OptionalFinalAssistant`, `TerminalOperationOutcome`, `ResumeOutcome`; `DriveOutcome.settled` carries `OperationOutcome` (drop the duplicate `operationId` field); result aliases become
+  `RunResult = Result<OperationOutcome, …>`,
+  `CompactionResult = Result<{ compaction: OperationOutcome; run?: OperationOutcome }, …>`,
+  `NavigationResult = Result<{ navigation: OperationOutcome; run?: OperationOutcome }, …>`;
+  `QueueResult` loses `NoActiveRun` and absorbs `NextRunResult`.
+- End-event payloads, one shape per event type: `run_end` and `navigation_end` carry `{ runId, status, error?, fromTipId, tipId }`. `compaction_end` is a segment event, not a terminal event — it also closes in-run threshold/overflow brackets — and always carries `{ runId, reason, status: "completed" | "declined" | "failed" | "aborted", error?, entryId? }`, where `entryId` names the compaction entry on success. Embedded `entry`/`summaryEntry`/final-assistant fields are dropped everywhere (`entry_added`/`message_end` already delivered payloads).
+- `src/harness/runtime/types.ts` — `FinishDecision` carries the record instead of `lastResult`.
+- `src/harness/runtime/lane.ts` — terminal suffix per §2; `getLastResult` is replaced by `getResult(operationId, context): Promise<OperationOutcome | undefined>` (record read + one `getEntry` for `tipEntry`); `inspectExecution` reports `lastOperationId` (and may embed the hydrated last outcome).
+- `src/harness/runtime/drive/terminal.ts` — `hydrateTerminalOutcome` collapses to record + `tipEntry` hydration.
+- `src/harness/runtime/drive/{checkpoint,response,structural,recovery,deferred,tools}.ts` — every finish decision constructs the record; `runCompletion`, per-family last-result construction, and final-assistant plumbing in results are deleted. (`latestAssistantEntryId` stays in scope for cancellation classification and checkpoint logic; it just no longer feeds results.)
+- `src/harness/runtime/restore.ts` — restore `lastOperationId`; attachment never reads records.
+- Focused tests.
+
+### Rules
+
+- Records are written exactly once, by the terminal transaction, and never deleted, updated, or read by recovery.
+- Terminal-control invariant (§1): a terminal transaction under durable `cancel_requested` records `aborted`; no path commits any other status under cancellation. M7 adds the enforcing test; M9 adds the Part 9 invariant.
+- Forks exclude `pi.result` values.
+- `drive(id)` arms: current → install/join; record → hydrated outcome; neither → `OperationMismatch`.
+
+### Focused validation
+
+Record written for every terminal path of every operation kind and status; `drive(id)` returns settled outcomes for arbitrarily old ids across reopen; `getResult` hydration and unknown-id `undefined`; `lastOperationId` restore; suspended never stored; fork exclusion; segment pointers correct (`fromTipId` = pre-acceptance tip, including navigation); `compaction_end` closes both standalone and in-run brackets, including `aborted` via reconciliation.
+
+## 8. R3 — Family-neutral leaves and structural rebuild
+
+### Goal
+
+Collapse 22 leaves to the 14 in §1; rebuild `structural.ts`'s state-shape layer on one summary quadruple with an explicit result-boundary datum.
+
+### Types
+
+```ts
+interface OperationScope { control: Control; settings: RunSettings; latestAssistantEntryId: string | null }
+
+type ResultBoundary =                                  // closed; do not extend
+  | { kind: "resume_checkpoint"; resumeAfter: CheckpointData }   // in-run threshold/overflow
+  | { kind: "finish" }                                            // standalone compaction
+  | { kind: "commit_navigation"; targetId: string; label?: string };
+
+interface SummaryTask {
+  taskId: string;
+  reason?: "manual" | "threshold" | "overflow";
+  customInstructions?: string;
+  boundary: ResultBoundary;
+}
+```
+
+The summary algorithm kind is **derived from the boundary** (`resume_checkpoint`/`finish` → compaction; `commit_navigation` → branch summary); it is not stored, so no contradictory kind/boundary combination is representable. `summary.ready/effect_pending/retry_wait` additionally carry the generation snapshot (result entry id, configuration, stream options, retry policy, attempt counters); the snapshot drops the `taskId`/`kind`/`reason` fields it previously duplicated. Canonical declarations land in `session/types.ts`. Uniform scope means compaction/navigation acceptance captures `settings` exactly like run acceptance; `latestAssistantEntryId` stays null for structural intents.
+
+### Reachability (restore check; replaces the intent-prefix check)
+
+| Intent | Admissible leaves |
+| --- | --- |
+| run | `starting`, `checkpoint`, `assistant.*`, `tools`, `deferred.*`, `failure_drain`, `summary.*` with boundary `resume_checkpoint` |
+| compaction | `summary.*` with boundary `finish` |
+| navigation | `navigation.ready_to_commit`; `summary.*` with boundary `commit_navigation` |
+
+Forbidden and unreachable by construction (assert in tests, never implement): any edge into `starting` or `navigation.ready_to_commit` other than acceptance; `summary.*` → `tools`/`assistant.*` directly; `failure_drain` → `summary.*`; `navigation.ready_to_commit` → `summary.*`; terminal → anything.
+
+### Result-boundary rule
+
+Every summary boundary (hook decline, hook-supplied result, generated success, terminal generation failure, model unavailability) plans on the mutation line and switches on `boundary` in one visible place:
+
+- `resume_checkpoint` → publish result (when any), restore the marked checkpoint (success/threshold-decline) or enter `failure_drain` (overflow-decline/failure) — current behavior, expressed once;
+- `finish` → publish the compaction entry and terminal-complete (or terminal declined/failed) in one commit;
+- `commit_navigation` → the single move/summary/label/terminal commit (or terminal declined/failed).
+
+A `cancel_requested` boundary defers to reconciliation and never takes its continuation.
+
+### Files
+
+- `src/harness/session/types.ts` — the 14-leaf union, `OperationScope`, `SummaryTask`, `ResultBoundary`; delete `RunScope`, `CompactionScope`, `NavigationScope`, `NavigationSummaryScope`, `RunCompactionScope`, `StructuralTask`, per-family `Extract` aliases, `isRunOperationState`.
+- `src/harness/runtime/drive/structural.ts` — rebuild: keep `durableCompactionPreparation`/readers, the nested request seam, `performStructuralAttempt`, `runCompactionThreshold`, `prepareOverflowCompaction`, `commitNavigation`; delete the seven union aliases, the `startsWith` guards, and the three-armed `effectPendingFromReady`/`retryWaitFromEffect`/`readyFromRetryWait`/`publishStructuralReady`/`publishStructuralDecline`/`publishStructuralFailure`/`publishCompactionResult`-vs-`publishNavigationSummary` split; one quadruple of converters plus one boundary switch replace them.
+- `src/harness/runtime/drive/{checkpoint,generation,response,recovery,deferred,tools,tool-placement,terminal}.ts` — leaf literal renames (`run.checkpoint` → `checkpoint`, …); `response.ts` overflow arm constructs `summary.deciding` with `resume_checkpoint`; no other behavior change.
+- `src/harness/runtime/progress.ts` — frame/checkpoint fences currently match the leaf literals `"run.assistant.effect_pending"`, `"run.deferred.effect_pending"`, and `"run.tools"`; retarget them to the neutral leaves.
+- `src/harness/runtime/restore.ts` — reachability predicate above.
+- `src/harness/runtime/lane.ts` — `capturedModel` and `watch` switch over the neutral leaves; acceptance writes neutral initial leaves.
+- `docs/runtime-simplification.md` — replace the 22-leaf list and status.
+- `test/harness/runtime/drive-structural.test.ts` and other focused tests — retarget; behavioral assertions survive.
+
+### Focused validation
+
+Everything the M6 foundation covered, re-expressed over neutral leaves, plus: reachability accept/reject matrix (including corrupted boundary/intent combinations faulting restore); each boundary arm × {success, hook result, decline, failure, model absence} × {running, cancelled}; a post-terminal leak scan asserting every `pi.op.*` address is gone for every leaf while the `pi.result` record is present; crash/reopen at every leaf under every intent that can reach it.
+
+## 9. M7 — Cancellation reconciliation and total switch
 
 ### Goal
 
 Make the internal graph total without public wiring.
 
-Create:
-
-- `src/harness/runtime/drive/reconcile.ts`
-- `src/harness/runtime/drive.ts`
-- focused reconciliation and switch tests
+Create `src/harness/runtime/drive/reconcile.ts`, `src/harness/runtime/drive.ts`, and focused reconciliation and switch tests.
 
 ### `requestOperationAbort`
 
-Implement the package-private expected-id primitive:
+Package-private expected-id primitive:
 
 1. synchronously `beginAbort` on a matching live Drive;
-2. commit or observe `cancel_requested` on the Session line;
-3. drain steer/follow-up ids from any inbox-carrying leaf — run and standalone compaction alike — into control without deleting their payloads;
-4. call `signalAbort` after commit;
-5. return once cancellation is durable.
+2. one commit on the Session line: `control = cancel_requested` **plus** removal of steer/followUp-tagged ids from the lane inbox and deletion of their `pendingEntry` values; payloads are read in the same mutation and returned; nextRun/write items stay;
+3. `signalAbort` after the commit;
+4. return once cancellation is durable. Repeat calls observe the marker, drain nothing further, and report `newlyRequested: false`.
 
-With no Drive it commits the same marker and starts no pass.
+With no Drive it commits the same marker and starts no pass. There is no `control.drained*`; the drained payloads exist only in the returned result (accepted loss: a crash inside the abort window loses their content).
 
 ### Reconciliation
 
-Cancellation is checked before `before_drive` and ordinary dispatch. Reconciliation is a single switch over flat `state.at` and never starts new ordinary work.
-
-It must handle:
+Checked before `before_drive` and ordinary dispatch; a single switch over the 14 leaves; never starts new ordinary work. It must handle:
 
 - assistant and deferred effects with live or reconstructed results;
 - planned/effect-pending/outcome-ready tool calls;
-- accepted deferred writes;
-- structural process-local results;
-- cancelled standalone compaction leaves, which finish aborted without promotion; their queued/drained inbox ids die in the aborted terminal cleanup;
-- retry waits, checkpoints, suspended deferred work, and failure drain;
+- structural process-local results (discarded unless already atomically published);
+- cancelled summary boundaries finishing `aborted` without taking their `ResultBoundary` continuation;
+- retry waits, checkpoints, suspended deferred work, failure drain;
 - best-effort deferred-provider cancellation;
-- aborted terminal cleanup.
+- the aborted terminal transaction (result record `status: "aborted"`);
+- the terminal-control invariant test: no terminal path commits a non-aborted status under cancelled control (this keeps §10's continuation rule decidable from the record alone).
+
+Queued lane-inbox items are **not** applied or deleted by reconciliation; nextRun/write items simply remain queued.
 
 ### Total switch
 
-`runtime/drive.ts` owns one direct `state.at` switch. It imports only complete procedure modules. It has no graph table, action interpreter, ownership-loss arm, external-finalization arm, or storage-state reload.
-
-A `continue` result must correspond to a replaced `Lane.state` projection; unchanged continuation is an invariant defect.
+`runtime/drive.ts` owns one direct `state.at` switch over 14 leaves. It imports only complete procedure modules. No graph table, action interpreter, ownership-loss arm, external-finalization arm, or storage-state reload. A `continue` result must correspond to a replaced `Lane.state` projection **or** to currently observable `cancel_requested` control, which the switch routes to reconciliation before ordinary dispatch; any other unchanged continuation is an invariant defect.
 
 Public methods remain guarded through M7.
 
-## 7. M8 — Public surfaces
+## 10. M8 — Public surfaces
 
-Remove execution guards only after every state and reconciliation path is total.
+Remove execution guards only after every leaf and reconciliation path is total.
 
 Order:
 
-1. admit compaction/navigation requests;
-2. implement `drive` install/join/latest-result hydration;
+1. admit compaction/navigation requests (acceptance captures `settings`; writes the R3 entry leaves);
+2. implement `drive` install/join/record hydration (three arms, §7);
 3. expose `requestAbort`;
 4. add convenience compositions;
 5. add queues/configuration/usage/idle surfaces;
 6. retain `watchSession` as the sole `SliceNotImplemented` method.
 
-Queue admission follows inbox scope: `steer`/`followUp` admit on any open operation whose leaf carries an inbox under running control — runs including deferred suspension, and standalone compaction before and after promotion — and return `NoActiveRun` otherwise (idle, navigation, `cancel_requested`). They emit `queue_update`, and `LaneSnapshot.queues` covers standalone compaction leaves. `compact()` and same-id `drive` resolve with the compaction-kind outcome when un-promoted and with the run outcome of the continued turn after promotion; `compaction_end` already carried the structural outcome at the boundary.
+### Queues
 
-### Drive observation
+`steer`/`followUp`/`nextRun` are tag sugar over one enqueue and always admit. `queue_update` and `LaneSnapshot.queues`/`pendingWrites` expose one identical shape: the tagged ordered inbox (clients group by tag).
 
-A caller checks its signal before installation. After installation every caller uses observation-only cancellation:
+### Convenience compositions and continuation
 
-```text
-awaitWithContext(drive.completion, callerContext)
-```
-
-`awaitWithContext` rejects that waiter without cancelling the underlying completion. Installer and joiner have identical lifetime semantics.
-
-### Close/fault
-
-Public observations race Harness close/fault so they reject promptly. Every detached pass promise has an attached rejection observer. Late effect settlement reaches the sealed mutation line and rejects without a durable write.
+- `prompt`/`skill`/`promptFromTemplate`: accept + drive; return `Result<OperationOutcome, …>`.
+- `compact`/`navigateTree`: accept A + drive A. If A settled with status `completed`, `declined`, or `failed` and eligible steer/followUp/nextRun items exist, accept a continuation run B with the **public empty-prompt request** (`{ kind: "prompt", prompt: "" }`): acceptance places no request messages and is legal exactly when its capture places at least one conversational item; `OperationMeta.intent` is an ordinary run intent with empty `promptEntryIds`. Then drive B and return `{ compaction|navigation: A, run?: B }`. Never after `aborted`: abort already drained steer/followUp, and the terminal-control invariant (§7) makes `status ∈ {completed, declined, failed}` imply the operation was never durably cancelled, so the rule is decidable from the record alone. B is an ordinary run — it emits `run_start`, runs `before_run` (with `prompt: []`, the existing captured-only acceptance shape), and owns the full run graph with no continuation-aware special case.
+- Continuation races: a competing accept that wins the idle window captures the queued input into its own run; the continuation accept then fails empty (`InvalidMessage`) or `LaneBusy`, and the convenience returns A without `run`. Both histories are valid. A crash between A's terminal and B's acceptance leaves the items queued; no auto-start on reopen.
+- `resume`: inspect + drive current id, one deferred-poll permit; returns `OperationOutcome`.
+- `abort`: inspect + `requestAbort` + ensure a reconciliation pass; returns the drained steer/followUp payloads.
+- `getResult(operationId)`: public.
+- Equivalence: every convenience call ≡ its primitive composition using only public request kinds (`compact()` with continuation ≡ `accept(A); drive(A); accept({ kind: "prompt", prompt: "" }); drive(B)`), byte-identical writes and events — externally reproducible by any scheduler.
 
 ### Focused validation
 
-Cover:
+One install and same-id joins; stale-id isolation; record hydration for old ids; caller cancellation before/after installation; close/fault during cooperative and non-cooperative effects; accept/drive vs convenience equivalence including continuation via the public empty-prompt request; steer-only, followUp-only, and nextRun-only continuation each start run B; both continuation race orders; abort drain-and-return including the both-orders abort/settlement race; enqueue during every state through public surfaces; full crash matrix across all 14 leaves; no unhandled detached rejection; no `SliceNotImplemented` except `watchSession`.
 
-- one install and same-id joins;
-- stale-id isolation and latest-result hydration;
-- caller cancellation before and after installation;
-- one caller cancelling while other observers remain;
-- close/fault during cooperative and non-cooperative effects;
-- accept/drive and convenience equivalence;
-- steer/follow-up admission, survival, and promotion through the public surfaces of a standalone compaction;
-- full crash matrix across every flat leaf;
-- no unhandled detached rejection;
-- no `SliceNotImplemented` except `watchSession`.
+## 11. M9 — Documentation reconciliation
 
-## 8. Module boundaries
+Update `docs/harness.md` to the implemented state; it must again be normative on its own. Sections that change:
+
+- §1.3 address table and lifetime grammar: new lane-lived `pi.result` namespace, `laneLastResult` removed, `LaneState.inbox`/`lastOperationId`; `pi.op.*` stays strictly operation-lived;
+- §1.7 JSONL/SQLite examples referencing `pi.lane.lastResult`; state the bounded growth tradeoff — one small immutable record per operation, retained forever, carried through JSONL snapshot compaction;
+- §2.9 precise rewrite: decide and document the policy for records whose `tipId` the rewrite removes (retain-dangling or delete);
+- §3.1–§3.2 state shapes: 14 neutral leaves, `OperationScope`, `SummaryTask`/`ResultBoundary` (kind derived from boundary), `Control` without drained fields, `CheckpointData` without `skipInboxOnce`/`thresholdCheckedTriggerEntryId`;
+- §3.5 graph (one summary quadruple, boundary arms);
+- §3.6 acceptance: per-tag mode-respecting capture (writes → nextRun → steer → followUp → prompt), idle followUp eligibility, empty-prompt continuation acceptance;
+- §3.9/§3.10 summary machinery expressed once over the boundary datum;
+- §3.11 complete rewrite: one lane inbox, the selection table, one-decision-one-commit boundaries, silent deferral of late steer (an unconsumed steer becomes future-run input rather than an error), and unbounded write pendency during structural operations with the `waitForIdle`-then-append escape hatch;
+- §3.12 checkpoint procedure: the one-commit boundary decision replaces the stepwise algorithm; `failure_drain` drain-and-rescue;
+- §3.13 terminal transactions: result records, universal suffix, observation contract (`drive(id)` total, `getResult`);
+- §4.6 abort: drain-and-return, no drained control, and the client-visible consequence — drained steer/followUp payloads exist only in the returned result, so a crash or lost response in that window loses their content permanently;
+- §5.1 lane surface and all result types; §5.5 `queue_update` and end-event payloads (`compaction_end` as a segment event with `aborted`);
+- Part 9: invariants 12–16, 21, 26 (result-record lifetime, observation via records, continuation equivalence), the new terminal-control invariant (a non-aborted terminal status implies running terminal control), and the race catalog rows touching drained items, `cancelQueued`, and continuation;
+- Appendix A glossary (Inbox, Result record, Continuation run, Boundary pass; remove Drained).
+
+Also update `docs/runtime-simplification.md` status and remove every remaining promotion reference in the repository's docs. Grep gate:
+
+```bash
+rg -i 'promotion|drainedSteer|drainedFollowUp|laneLastResult|lastResult|skipInboxOnce|thresholdChecked' packages/agent/src packages/agent/docs
+```
+
+(matches must be zero in `src`; docs may retain historical notes only inside completed-milestone records.)
+
+## 12. M10 — Provider KV-cache identity review
+
+### Goal
+
+Audit and fix the provider-facing cache/affinity identity before public drive is considered complete. Core Session identity is not a valid provider cache lineage: several lanes may issue concurrent requests over divergent transcripts, so forwarding one shared session id can cause incorrect KV-cache reuse, affinity collisions, or shared transport resources across unrelated lane histories. M10 must complete before M8 finishes removing the public execution guards (M8 step 6); public drive is not exposed on an unreviewed cache policy.
+
+### Review scope
+
+- Inventory every harness and pi-ai path that sets, preserves, derives, or consumes `SimpleStreamOptions.sessionId`, including prompt-cache keys, affinity headers, WebSocket/session-resource caches, deferred requests, and structural summary requests. Current facts: no harness runtime path forwards a session id today; the sole forwarder is the legacy `src/agent.ts:451`, and `src/harness/compaction/compaction.ts:123` already mints a fresh id per request — M10 therefore establishes the lineage policy rather than preserving an existing one.
+- Define a provider-request cache lineage distinct from the durable Session id and operation id. Concurrent lanes must never share one lineage merely because they belong to the same Session.
+- Decide whether lineage is derived or durably stored. It must remain stable while one lane's provider context only appends at the tail, and rotate whenever that assumption breaks: compaction, navigation, branch replacement, incompatible model/provider changes, or any other context-prefix discontinuity.
+- Preserve useful same-lane reuse across ordinary assistant turns and retries without allowing a stale lineage to cross a context reset.
+- Keep structural summary requests isolated: `cacheRetention: "none"` and fresh request identity per nested request remain the baseline unless the review proves a safe, useful alternative.
+- Distinguish cache identity from observability correlation. Session, lane, operation, task, and request ids remain available to telemetry without being reused blindly as provider affinity/cache keys.
+- Review provider-specific semantics rather than assuming `sessionId` means only KV caching; some adapters also use it for headers, WebSocket reuse, fallback state, or resource cleanup.
+
+### Focused validation
+
+- Two active lanes in one Session issue concurrent, divergent prompts and receive distinct provider cache/affinity identities.
+- One lane keeps a stable lineage across append-only assistant/tool turns where reuse is valid.
+- Compaction, summarized and unsummarized navigation, branch changes, and incompatible model/provider changes rotate lineage before the next request.
+- Retry and deferred paths neither collide across lanes nor accidentally defeat intended same-lineage reuse.
+- Structural split-turn requests remain isolated from transcript assistant caching.
+- Close/resource cleanup affects only the intended provider lineage and cannot close another lane's live transport.
+- Faux-provider cache tests fail when a raw Session id is shared and pass with the chosen lineage policy; relevant provider adapter tests assert their exact cache/header/resource behavior.
+
+### Exit condition
+
+No harness request forwards the durable Session id as `SimpleStreamOptions.sessionId` solely because requests belong to that Session. The chosen lineage and rotation rules are documented in `docs/harness.md`, implemented consistently across assistant/deferred/structural paths, and independently reviewed before WP05 completion.
+
+## 13. Module boundaries
 
 ```text
 session/**             durable storage; imports no runtime module
@@ -358,25 +487,26 @@ runtime/harness.ts     Harness lifecycle and Lane composition
 
 Procedure modules import concrete `Lane<TContext>` type-only. `TContext` remains `object | undefined` invariant. No `any`, `Lane<any>`, `as unknown as`, `@ts-expect-error`, inline imports, parameter properties, enums, or other non-erasable TypeScript syntax.
 
-## 9. Exclusions
+## 14. Exclusions
 
 Do not introduce:
 
-- generic scheduler, graph, action interpreter, or effect-plan DSL;
+- generic scheduler, graph, action interpreter, or effect-plan DSL — `ResultBoundary` stays a closed three-arm data union switched in one visible place;
+- per-family outcome unions, `OptionalFinalAssistant`, or embedded result entries in stored records;
+- result-record listing, filtering, pagination, status queries, or retention machinery;
+- operation-owned queues, drained-control fields, or terminal queue cleanup;
+- automatic continuation anywhere below the convenience layer (never inside `drive`);
 - a second mutation line or transaction framework;
-- a dependency/capability facade around Lane;
 - expected-`at` runtime checks for the sole top-level writer;
 - process-local Drive replacement or caller-owned lifetime;
 - external finalization;
 - storage rereads of authoritative control state;
-- string addresses or prefix-delete writes;
 - read caches, read budgets, or generic `getValues` batching;
-- process-local usage accumulators;
-- compatibility aliases for the pre-flat WIP durable shape.
+- compatibility aliases for any pre-redesign durable shape.
 
-Procedure-specific writes, effect admission, settlement classification, and event construction remain visible at their call sites. The Lane helpers centralize only the transaction mechanics common to every transition.
+Procedure-specific writes, effect admission, settlement classification, and event construction remain visible at their call sites.
 
-## 10. Validation and reviews
+## 15. Validation and reviews
 
 After every code stage:
 
@@ -384,24 +514,29 @@ After every code stage:
 npm run check
 ```
 
-Run each modified focused test file from the package root. Do not invoke the full Vitest suite directly. Run `./test.sh` only for the final package validation or when explicitly requested.
+Run each modified focused test file from the package root. Do not invoke the full Vitest suite directly. Run `./test.sh` only for final package validation or when explicitly requested.
 
-Review checkpoints remain mandatory at M7 and final completion. Delegated reviews use provider `anthropic` and model `claude-fable-5`.
+Review checkpoints are mandatory at the end of R3, M7, M10, and final completion. Delegated reviews use provider `anthropic` and model `claude-fable-5`.
 
 Final greps:
 
 ```bash
 rg 'lost_ownership|LostOwnership|DriveAbandoned|commandDriveOwned|installerSignal|finalizedOutcome|OperationEnded' \
   packages/agent/src/harness packages/agent/test/harness
+rg 'drainedSteer|drainedFollowUp|laneLastResult|RunOutcome|CompactionOutcome|NavigationOutcome|TerminalOperationOutcome|skipInboxOnce|thresholdCheckedTriggerEntryId' \
+  packages/agent/src/harness
 rg 'SliceNotImplemented' packages/agent/src/harness/runtime
-rg ': any\\b|<any>|as unknown as|@ts-expect-error' packages/agent/src/harness/runtime
+rg ': any\b|<any>|as unknown as|@ts-expect-error' packages/agent/src/harness/runtime
 ```
 
 Final exit conditions:
 
-- every flat operation leaf is driveable and reconcilable;
-- public primitive/convenience behavior is equivalent;
+- every flat leaf is driveable and reconcilable;
+- public primitive/convenience behavior is equivalent, including continuation;
 - every focused test and backend conformance path passes;
 - public drive exposes no partial graph;
 - `watchSession` is the only deferred public method;
+- `drive(id)` answers every settled operation id in the session;
+- harness.md is self-consistent with the implementation (M9);
+- provider cache/affinity identity is lane-safe across concurrent and context-reset histories (M10);
 - independent final review reports no blocker.

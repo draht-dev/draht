@@ -203,26 +203,22 @@ The experimental core services already illustrate the reconstruction rules:
 
 | Service | Current owner | Reconstruction after reload |
 |---|---|---|
-| `SessionDirectory` | Server, with one provider per presentation over shared repository-backed state | List the repository again and publish a complete directory snapshot. Directory events during the gap are not replayed. |
+| `SessionDirectory` | Server, with one provider per presentation over shared repository-backed state | List the repository again and publish a complete directory snapshot. |
 | `SessionManagement` | Server provider closure bound to one presentation | Recreate the per-presentation implementation after reconnect. In-flight management calls follow ordinary uncertain-disconnect semantics. |
 | `Models` | Session worker over Harness and `ModelRuntime` | Read selected model and thinking level from the Harness and rebuild the catalog from the model runtime. Process-local refresh status is discarded. |
 | `Chat` | Session worker over the Harness | Durable accepted work remains in the Session. A call interrupted before receiving its operation ID has an uncertain outcome and must not be blindly retried. |
 | `Accounts` | Session worker facade over credential authority | Rebuild presentation-safe account summaries from the credential source. Credentials never live in `ReplicatedState`. |
-| `Transcript` | Session worker projection of durable lane state | Hydrate an authoritative revisioned snapshot, then resume semantic event delivery. Snapshot/event gap handling is required before removing the compatibility watch. |
+| `Transcript` | Session worker projection of durable lane state | Implement an authoritative revisioned snapshot before removing the compatibility watch. |
 
 `Accounts` and `Transcript` are currently incomplete scaffolds, but their reload ownership follows the same rule.
 
 Provider-local counters are not automatically durable. `ReplicatedState` transport sequences, keyed generations, model-catalog revisions, and directory revisions may restart with a new provider binding unless their application contract explicitly makes them durable. Consumers must not compare binding-scoped revisions across a rebind as if they were globally monotonic.
 
-## Replicated state and events
+## Replicated state and keyed services
 
 `ReplicatedState` is a projection, not storage. Every state needed after reload must be reconstructible from durable authority, configuration, or another owned source. On provider replacement, the consumer becomes unready and installs a fresh complete snapshot before later updates.
 
-`RemoteEvents` is non-durable and non-replayed. Events emitted while no subscription is active are lost. A consumer that must recover after reload needs one of:
-
-- a `ReplicatedState` snapshot;
-- a pull method returning current authority; or
-- an application-level revisioned snapshot/event protocol such as `Transcript`.
+A consumer that must recover after reload needs a `ReplicatedState` snapshot or a pull method returning current authority.
 
 Keyed services are live projections. If an instance must return after worker replacement, its owner reconstructs it from durable invocation or plugin records. The new provider may reuse the logical key, but it creates a fresh live generation under the new attachment binding. A stale proxy never locates durable work by key alone.
 
@@ -269,7 +265,6 @@ This also follows Cordis's system-boundary caveat: acquiring and releasing a pro
 - Reloading one facet while another active facet still imports the same changed source bytes.
 - Opening the same Session in old and replacement workers concurrently.
 - Treating `ReplicatedState` as the durable source rather than a reconstructible projection.
-- Depending on `RemoteEvents` to repair missed state after restart.
 - Reusing an attachment ID across worker generations and weakening stale-route fencing.
 - Automatically retrying a call after reload when its durable outcome is uncertain.
 - Deleting namespaced durable data when a plugin leaves the manifest.
@@ -298,8 +293,7 @@ A later implementation handoff should cover at least:
 - a committed durable operation remains discoverable after its initiating response is lost;
 - logical Session selection survives the route gap, reports `attaching` or `degraded`, and receives a fresh attachment ID on success;
 - old attachment calls, service updates, and keyed proxies are rejected after replacement;
-- singleton state rehydrates from a complete new snapshot before updates and events flow;
-- non-durable events are not replayed, while snapshot-backed services recover current state;
+- singleton state rehydrates from a complete new snapshot before updates flow;
 - durable keyed interactions reconstruct from records with fresh live generations;
 - removed plugin data remains stored and is readable when the plugin returns;
 - server replacement reads desired manifest and worker intentions from the server directory;

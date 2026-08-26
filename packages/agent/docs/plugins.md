@@ -1,6 +1,6 @@
 # Coding-Agent Application Hosts and Plugin Facets
 
-> **Status:** Tentative design input, not a normative contract or implementation handoff. The transport-neutral service token, provider, singleton `use()`, keyed `observe()`, and `ReplicatedState` substrate now have an experimental implementation, including a `Models` vertical slice. `RemoteEvents` now has an experimental transport-neutral implementation with ordered non-replayed delivery. The application host contexts, plugin kernel, references, telemetry propagation, and most other example facets — including the `Chat`, `SessionDirectory`, and `SessionManagement` vertical slices below — remain illustrative. Plugin reload semantics are specified separately in [`plugin-reloading.md`](plugin-reloading.md). Reconcile this design with `rpc.md`, `telemetry.md`, and the final harness contract before adding it to `harness.md` or creating a work package.
+> **Status:** Tentative design input, not a normative contract or implementation handoff. The transport-neutral service token, provider, singleton `use()`, keyed `observe()`, and `ReplicatedState` substrate now have an experimental implementation, including a `Models` vertical slice. The remaining documented built-in service contracts — including the `Chat`, `SessionDirectory`, and `SessionManagement` vertical slices below — retain explicit `ServiceSliceNotImplemented` members and remain illustrative. The application host contexts, plugin kernel, references, telemetry propagation, and most other example facets remain illustrative. Plugin reload semantics are specified separately in [`plugin-reloading.md`](plugin-reloading.md). Reconcile this design with `rpc.md`, `telemetry.md`, and the final harness contract before adding it to `harness.md` or creating a work package.
 
 This document assumes you already understand `AgentHarness`, `AgentLane`, `Session`, `Branch`, `SessionRepo`, invocation `Context`, and telemetry. Read `rpc.md` for wire frames, remote references, subscriptions, and trace carriers, `telemetry.md` for context propagation and cancellation semantics, and `plugin-reloading.md` for manifest-generation replacement and durable reconstruction.
 
@@ -199,7 +199,7 @@ interface ServiceInstances<T> {
 }
 ```
 
-TypeScript types cannot produce runtime member metadata. Plugin authors nevertheless declare no parallel member descriptor. When an exposed `provide()` or `ServiceInstances.add()` implementation reaches the remote-service boundary, the runtime classifies functions as remote methods and recognizes branded `ReplicatedState` and `RemoteEvents` values. It rejects unsupported members and announces the resulting member table over the transport. Services used only inside one host may use arbitrary object contracts.
+TypeScript types cannot produce runtime member metadata. Plugin authors nevertheless declare no parallel member descriptor. When an exposed `provide()` or `ServiceInstances.add()` implementation reaches the remote-service boundary, the runtime classifies functions as remote methods and recognizes branded `ReplicatedState` values. It rejects unsupported members and announces the resulting member table over the transport. Services used only inside one host may use arbitrary object contracts.
 
 `use()` on a singleton returns a stable lazy proxy synchronously, even before a remote provider is attached. Member access creates local method, state, or event slots as they are used; attachment validates those slots against the provider-announced kinds. A mismatch is an assembly or protocol error. This runtime mechanism is implemented once by the host rather than repeated in every service declaration.
 
@@ -267,7 +267,7 @@ export const providersBuiltin = definePlugin({
 
 	session(env) {
 		const providers = new ProviderRegistry(); // process-local, non-JSON
-		const state = env.remoteState<ModelsState>(initialModelsState());
+		const state = env.replicatedState<ModelsState>(initialModelsState());
 
 		env.provide(Models, {
 			state,
@@ -421,8 +421,7 @@ interface FacetEnvironment extends FacetLifecycle {
 	): () => void;
 	provide<T>(service: Service<T>, implementation: T): void;
 	provideMany<T>(service: Service<T>): ServiceInstances<T>;
-	remoteState<T extends JsonValue>(initial: T): MutableReplicatedState<T>;
-	remoteEvents<T extends JsonValue>(): MutableRemoteEvents<T>;
+	replicatedState<T extends JsonValue>(initial: T): MutableReplicatedState<T>;
 }
 
 type AttachmentState = { status: "detached" } | { status: "attaching" | "attached" | "degraded"; sessionId: string };
@@ -524,7 +523,7 @@ Required behavior:
 
 Anything a consumer must recover after reconnect is exposed as replicated state or pulled through a remote method. Replicated state is latest-value replication, not by itself durable session storage; the providing facet must reconstruct its authoritative value after a worker restart.
 
-Prefer several coarse independent cells over one giant value or a universal patch language, so a catalogue refresh does not retransmit unrelated configuration. High-frequency data such as transcript streaming should use semantic deltas plus a final authoritative replacement. Revision metadata, gap recovery, unchanged-value suppression, and demand-driven subscription are protocol concerns, not plugin-author concerns.
+Prefer several coarse independent cells over one giant value or a universal patch language, so a catalogue refresh does not retransmit unrelated configuration. High-frequency data such as transcript streaming needs a future snapshot-and-delta design rather than overloading `ReplicatedState`. Revision metadata, gap recovery, unchanged-value suppression, and demand-driven subscription belong to that future protocol, not individual plugin authors.
 
 ## Contribution registries: many contributors, one result
 
@@ -589,21 +588,6 @@ Three cancellation domains must never blur:
 3. **Durable Harness cancellation** — `requestAbort()`/`abort()` — writes durable `cancel_requested` and drives durable settlement.
 
 A transport disconnect performs only the first for active requests and closes that client's subscriptions. It must not silently cancel service-owned work or write durable cancellation. Work intended to outlive its initiating request must deliberately detach into a service-owned task with its own controller and telemetry root.
-
-## Events
-
-A remotely exposed event source is a projection of host-local events, not a remotely invoked callback. A Git plugin:
-
-```ts
-interface Git {
-	readonly status: ReplicatedState<GitStatus>;
-	readonly events: RemoteEvents<GitEvent>;   // { type: "status_changed" | "head_changed" }
-	refresh(context: Context): Promise<void>;
-}
-const Git = defineService<Git>("pi.git");
-```
-
-Server-side, the exposure adapter subscribes to the host-local source once per remote subscription and forwards frames. Client-side, `events` is a local facade whose listeners run in the client process — callbacks never cross the wire; `on(type, listener)` filters by discriminator, `subscribe(listener)` observes everything. Each event carries source trace metadata from the providing host's context, so client-side handling stays correlated with the originating operation. The adapter owns subscribe/unsubscribe frames, sequencing, buffering, flow control, and disconnect cleanup (`rpc.md`). Remote events are non-durable and never replayed: a new or reconnected consumer sees only events emitted after its subscription becomes active. Anything needed to reconstruct current behavior after reconnect belongs in replicated state or a pull method.
 
 ## Service-owned jobs
 
@@ -672,13 +656,8 @@ export interface SessionRecordSummary {
 	updatedAt: string;
 }
 
-export type SessionDirectoryEvent =
-	| { type: "created" | "changed"; session: SessionRecordSummary }
-	| { type: "deleted"; sessionId: string };
-
 export interface SessionDirectory {
 	readonly state: ReplicatedState<{ revision: number; sessions: SessionRecordSummary[] }>;
-	readonly events: RemoteEvents<SessionDirectoryEvent>;
 }
 
 export const SessionDirectory = defineService<SessionDirectory>("pi.session-directory");
@@ -699,12 +678,10 @@ export const SessionManagement = defineService<SessionManagement>("pi.session-ma
 // server.ts
 export function sessionDirectoryServerFacet(env: FacetEnvironment) {
 	const { managed, attachments } = env.use(Fleet);
-	const state = env.remoteState({ revision: 0, sessions: [] as SessionRecordSummary[] });
-	const events = env.remoteEvents<SessionDirectoryEvent>();
+	const state = env.replicatedState({ revision: 0, sessions: [] as SessionRecordSummary[] });
 
-	function publish(change: ManagedSessionChange, context: Context) {
+	function publish(_change: ManagedSessionChange, context: Context) {
 		state.set({ revision: state.value.revision + 1, sessions: managed.snapshot().map(toSummary) }, context);
-		events.emit(toDirectoryEvent(change), context);
 	}
 
 	env.own(managed.onChanged(publish));
@@ -712,7 +689,7 @@ export function sessionDirectoryServerFacet(env: FacetEnvironment) {
 		state.set({ revision: 1, sessions: managed.snapshot().map(toSummary) }, BACKGROUND_CONTEXT),
 	);
 
-	env.provide(SessionDirectory, { state, events });
+	env.provide(SessionDirectory, { state });
 	env.provide(SessionManagement, {
 		async create(options, context) {
 			const client = requireClientIdentity(context);
@@ -884,7 +861,7 @@ export function questionSessionFacet(env: FacetEnvironment) {
 
 				if (response === undefined) {
 					const completion = Promise.withResolvers<QuestionResponse>();
-					const request = env.remoteState<QuestionRequest>(params);
+					const request = env.replicatedState<QuestionRequest>(params);
 					const close = dialogs.add(invocation.invocationId, {
 						request,
 						async submitAnswer(candidate, _answerContext) {
@@ -1000,7 +977,7 @@ Errors cross the wire as a JSON envelope `{ code, message, data? }` with stable 
 
 Security rules every providing host (session and server alike) must enforce:
 
-- RPC-capable service IDs come from trusted loaded service tokens; the remote boundary accepts only implementation functions and branded replicated-state/event members, instance generations are host-owned, and `{ rpc: false }` services are never discoverable remotely;
+- RPC-capable service IDs come from trusted loaded service tokens; the remote boundary accepts only implementation functions and branded replicated-state members, instance generations are host-owned, and `{ rpc: false }` services are never discoverable remotely;
 - business arguments, results, state, and events are validated as JSON; protocol envelopes cannot be forged as ordinary values;
 - clients cannot choose context position, server typed values, telemetry parents, or cancellation targets other than their own request IDs;
 - credentials, prompts, completions, tool arguments/results, and filesystem contents are not exposed unless an explicit contract permits them; state snapshots contain only client-safe data;
@@ -1008,7 +985,7 @@ Security rules every providing host (session and server alike) must enforce:
 
 ## The coding agent as a plugin manifest
 
-The coding agent is one manifest of built-in and third-party plugins; each app host loads its facets through the same kernel in deterministic order. Server facets cover the directory/management services, authentication and client authorization, and worker spawn/stop policy and health. Session facets cover session creation/restoration and the scoped Harness facade; providers, model selection, and authentication; tools, wrappers, and permissions; prompt/steer/abort/compaction services; transcript persistence and event projection; filesystem and subprocess effects; temporary service instances for deferred interactions; unattended-session policy; and server service consumption where a feature needs server-wide data. TUI facets cover the chat screen, transcript rendering, editor, commands, keybindings, pickers, renderers, screens/slots/dialogs, and themes; a web host carries analogous browser facets. Shared contracts are service tokens with JSON-safe DTOs, latest-value state and semantic event types, presentation-local screen/slot tokens, stable renderer discriminators, and portable structured errors.
+The coding agent is one manifest of built-in and third-party plugins; each app host loads its facets through the same kernel in deterministic order. Server facets cover the directory/management services, authentication and client authorization, and worker spawn/stop policy and health. Session facets cover session creation/restoration and the scoped Harness facade; providers, model selection, and authentication; tools, wrappers, and permissions; prompt/steer/abort/compaction services; transcript persistence and snapshot projection; filesystem and subprocess effects; temporary service instances for deferred interactions; unattended-session policy; and server service consumption where a feature needs server-wide data. TUI facets cover the chat screen, transcript rendering, editor, commands, keybindings, pickers, renderers, screens/slots/dialogs, and themes; a web host carries analogous browser facets. Shared contracts are service tokens with JSON-safe DTOs, latest-value state, presentation-local screen/slot tokens, stable renderer discriminators, and portable structured errors.
 
 The generic kernel knows none of these domain concepts; each app host knows only its own.
 
@@ -1023,7 +1000,7 @@ Before this becomes normative:
 - authentication of presentations and session workers, and protocol version negotiation;
 - the exact lazy `Service` member-discovery and provider-kind-validation API, and the context-position and JSON-safe optional-argument policy from `rpc.md`;
 - whether `ReplicatedState` is generic RPC infrastructure or host infrastructure; snapshot granularity; exact hydration/delivery-context semantics;
-- state/event flow control and per-client buffering at the server; reference lifetime and garbage collection;
+- replicated-state flow control and per-client buffering at the server; reference lifetime and garbage collection;
 - the stable error envelope and expected-error registration; activation/disposal ordering, optional dependencies, and shared-proxy lifetime;
 - the exact singleton/keyed mode validation, keyed provider/observe APIs, instance-key and generation rules, instance hydration protocol, and answer authorization; general memo-name ownership remains with the invocation-memo design;
 - package boundaries between the generic kernel, agent plugin contracts, generic protocol machinery, and coding-agent host integration.
@@ -1223,8 +1200,8 @@ export function diffReviewSessionFacet(bindings: FacetEnvironment) {
 	const prompts = bindings.use(PromptQueue);
 
 	function exposeReview(initial: DiffReviewRecord) {
-		const document = bindings.remoteState({ reviewId: initial.reviewId, patch: initial.patch });
-		const activity = bindings.remoteState(toDiffReviewActivity(initial));
+		const document = bindings.replicatedState({ reviewId: initial.reviewId, patch: initial.patch });
+		const activity = bindings.replicatedState(toDiffReviewActivity(initial));
 
 		function publish(next: DiffReviewRecord, context: Context) {
 			if (next.revision > activity.value.revision) activity.set(toDiffReviewActivity(next), context);
@@ -1355,19 +1332,9 @@ This is a shared review, not a generic room primitive. Keyed services provide di
 
 > **Deferred:** `DeltaState` is not part of the initial plugin or RPC contract. Add it only after a concrete feature demonstrates that full-value `ReplicatedState` updates are too expensive and the same pattern appears in more than one feature.
 
-A real replication gap remains. Some authoritative values are large, change frequently, and must support late joiners. `ReplicatedState` hydrates and reconnects correctly but sends a complete value on every update. `RemoteEvents` can send small deltas but has no snapshot, replay, or automatic gap recovery.
+A real replication gap remains. Some authoritative values are large, change frequently, and must support late joiners. `ReplicatedState` hydrates and reconnects correctly but sends a complete value on every update.
 
-A canvas is one possible example: joining requires the complete document, while dragging a shape should send only that operation. With today's primitives, the plugin can expose `getSnapshot()` plus revisioned `RemoteEvents` and implement the join protocol itself:
-
-```text
-subscribe and buffer deltas
-→ fetch and install a snapshot
-→ discard buffered revisions covered by the snapshot
-→ apply consecutive later deltas
-→ on a gap or reconnect, discard the replica and start over
-```
-
-That feature-local protocol is the preferred initial solution. It keeps a hypothetical optimization out of the generic host and reveals whether flow control, authoritative replacement, or other requirements actually matter.
+A canvas is one possible example: joining requires the complete document, while dragging a shape should ideally send only that operation. With today's primitives, the plugin must accept complete `ReplicatedState` updates or keep the high-frequency projection process-local. A concrete feature should establish the snapshot, delta, gap-recovery, and flow-control requirements before another remote primitive is added.
 
 ### Possible future primitive
 

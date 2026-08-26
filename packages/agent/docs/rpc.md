@@ -12,7 +12,7 @@ session/server facet: provide() / provideMany().add()
 presentation/session facet: use() / observe()
 ```
 
-The service system is the plugin boundary. Presentation facets receive semantic services, replicated state, and semantic events; they never receive a raw Harness, Session, tool registry, hook registry, credential store, or storage handle.
+The service system is the plugin boundary. Presentation facets receive semantic services and replicated state; they never receive a raw Harness, Session, tool registry, hook registry, credential store, or storage handle.
 
 ## Non-goals
 
@@ -22,13 +22,13 @@ Do not serialize `Context`, `AbortSignal`, telemetry objects, callbacks, tools, 
 
 A service token is a shared TypeScript contract and stable service ID. It is not a generated descriptor and creates no provider. Tokens are RPC-capable by default; process-local tokens declare `{ rpc: false }`. `provide()` adds one singleton implementation to the host graph. `provideMany()` registers one keyed-service owner during facet setup and returns a `ServiceInstances` handle whose later `add()` calls add instances. The host automatically publishes every provided RPC-capable service. A token has one mode in one host service graph: mixing singleton and keyed use is an error.
 
-The provider must make enough control-plane information available for the host to validate an accessed member as a method, `ReplicatedState`, or `RemoteEvents`. The consumer must be able to obtain the member name from ordinary property access—for example, a JavaScript `Proxy` receives `"state"` for `models.state` and `"refresh"` for `models.refresh(context)`. How a disconnected lazy proxy represents an unresolved member, and the exact provider-kind validation exchange, are implementation details.
+The provider must make enough control-plane information available for the host to validate an accessed member as a method or `ReplicatedState`. The consumer must be able to obtain the member name from ordinary property access—for example, a JavaScript `Proxy` receives `"state"` for `models.state` and `"refresh"` for `models.refresh(context)`. How a disconnected lazy proxy represents an unresolved member, and the exact provider-kind validation exchange, are implementation details.
 
 Local and remote `use()` both return a stable, lazy typed facade shared by consumers of that token. During synchronous facet setup the facade is disconnected, so setup can capture it but cannot invoke methods, read state, or register member subscriptions. After assembly, a local facade resolves to its facet-provided implementation and a remote facade binds through the host's connected services. Reloading the providing facet temporarily marks that same facade unavailable, then swaps its target; RPC singletons clear readiness and install a complete replacement snapshot on their existing subscription so captured methods and member facades address the replacement. While no provider is bound, invoking a method fails and state remains unhydrated; no call is queued merely because it was made through a proxy.
 
 Remote methods return promises and accept and return strict JSON apart from their declared `Context`; `void` is a successful response without a result field. A private returned reference is a separately validated control envelope, not a business JSON value. The client removes the context before transport and the receiving host constructs a fresh local context. The contract position is host-controlled and must be consistent; the current examples use one required trailing `Context`. Business absence is JSON `null` or an options object, never transported `undefined`.
 
-Use static assertions and runtime validation. Static checks constrain remote methods and state/event members; runtime boundaries reject unsupported members and non-JSON arguments, results, state, and event values. TypeScript supplies typed facades but does not authenticate a peer or create runtime metadata.
+Use static assertions and runtime validation. Static checks constrain remote methods and replicated-state members; runtime boundaries reject unsupported members and non-JSON arguments, results, and state values. TypeScript supplies typed facades but does not authenticate a peer or create runtime metadata.
 
 ## Dependency ledger
 
@@ -41,7 +41,7 @@ Type erasure does not hide service identity: every service token retains its sta
 
 Facets always call unqualified `env.use()` or `env.observe()`; routing is not encoded in the call. These operations return source-independent disconnected handles during setup. After setup, each connection returns its provider-generated service catalogue, and the host binds every requirement to its local provision or exactly one connected provider. The method supplies the mode and the token supplies the ID. The host therefore needs no reflection over the erased `T` and no handwritten parallel dependency list.
 
-First acquisition or provision is permitted only during facet setup. Later commands, hooks, events, and activation callbacks use setup-acquired singleton facades, observer registrations, or `ServiceInstances` handles. In particular, dynamic instances are added through the handle returned by `provideMany()`; a late direct addition cannot introduce a previously undeclared provision.
+First acquisition or provision is permitted only during facet setup. Later commands, hooks, and activation callbacks use setup-acquired singleton facades, observer registrations, or `ServiceInstances` handles. In particular, dynamic instances are added through the handle returned by `provideMany()`; a late direct addition cannot introduce a previously undeclared provision.
 
 After setup, each host privately resolves the recorded requirements against local provisions and connection catalogues to reject missing providers, duplicate remote offers, and mode mismatches and to derive lifecycle edges. A selected-Session connection with no live attachment may provisionally accept unresolved requirements as unavailable; attachment validates them against the worker's generated catalogue and caches that catalogue for later detached generations. Connection bindings are generation-owned and include only selected requirements, so failed or retired generations release their subscriptions without disposing the underlying transport connection. This internal service graph is distinct from the module loader's source import graph; it is not a plugin-authored or plugin-visible plan.
 
@@ -51,7 +51,7 @@ A presentation host combines services from its connected server and selected Ses
 
 ### Server control plane
 
-Session listing and management are ordinary server singleton services, not generic remote `Session` methods. `SessionDirectory` exposes presentation-safe session summaries as replicated state plus semantic directory events. `SessionManagement` exposes `create`, `remove`, `attach`, and `detach` methods. A TUI or web facet consumes both through its environment:
+Session listing and management are ordinary server singleton services, not generic remote `Session` methods. `SessionDirectory` exposes presentation-safe session summaries as replicated state. `SessionManagement` exposes `create`, `remove`, `attach`, and `detach` methods. A TUI or web facet consumes both through its environment:
 
 ```ts
 const directory = env.use(SessionDirectory);
@@ -64,7 +64,7 @@ The server derives workspace and client authority from its locally authenticated
 
 The host needs a private, host-owned binding incarnation for that route. It changes when the presentation attaches, detaches, switches session, or replaces a failed worker. Its representation is deliberately unspecified. The binding prevents a delayed frame for the old selected session from being applied to the new one; it is not a plugin-visible service value or a substitute for authorization.
 
-A state or event source has structural identity:
+A replicated-state source has structural identity:
 
 ```text
 (provider binding, service ID, optional instance key + generation, member name)
@@ -78,13 +78,11 @@ A call carries enough control-plane information to select a provider binding, se
 
 The client maps `context.abortSignal` to cancellation of that one request. Disconnect cancels that connection's active calls and closes its subscriptions. Neither action cancels service-owned work or writes durable Harness cancellation. Per-client request correlation reaches the worker so request IDs from different presentations cannot collide.
 
-## Replicated state, events, and keyed instances
+## Replicated state and keyed instances
 
 `ReplicatedState` is authoritative latest-value replication, not event history, durable storage, a CRDT, or multi-writer state. A cold replica has `value === undefined`; subscribing before hydration records a listener without invoking it. Hydration installs a complete snapshot atomically before later updates are delivered, so there is no snapshot/update gap. Once hydrated, `value` is synchronous and subscribing reports the current value followed by later updates. The first snapshot callback uses a fresh hydration context; an already hydrated replica uses a fresh local delivery context rather than retaining the original write context. State values are borrowed immutable JSON and are not defensively cloned; callers must not mutate or retain them.
 
 The providing host attaches source trace metadata to updates. The consumer reconstructs fresh delivery contexts; hydration uses a fresh context parented to the subscription. Disconnect may retain a value as stale display data. Reconnect replaces it from a complete snapshot, while a switch to a different provider clears readiness and disposes binding-specific resources. The precise subscription, buffering, sequence, acknowledgement, and flow-control frames are transport mechanics.
-
-`RemoteEvents` is a projection of provider-local events. Listeners run only in the consuming process; callbacks never cross the wire. Events are non-durable and never replayed after reconnect. Event delivery carries source trace metadata. State subscriptions, event subscriptions, and their cleanup are host-owned resources, not retained caller contexts.
 
 `observe()` is keyed-instance discovery, not a `ReplicatedState` containing proxies. It reconciles a complete initial directory with ordered additions, replacements, and removals. Each instance's initial state members hydrate before its observer task starts. Closing an instance rejects new calls, aborts only that instance's observer task, and allows admitted calls to settle. A Session facet's `env.observe()` registration aborts old tasks when that facet generation closes; the replacement generation reconciles the fresh directory.
 
@@ -105,7 +103,7 @@ caller
       └─ service implementation
 ```
 
-State and event delivery independently carry source trace metadata. The consumer reconstructs a delivery context from it rather than retaining the context that established the subscription.
+State delivery carries source trace metadata. The consumer reconstructs a delivery context from it rather than retaining the context that established the subscription.
 
 Three cancellation domains remain separate: aborting one RPC invocation; explicitly cancelling service-owned work such as `job.cancel()`; and durable Harness cancellation such as `requestAbort()`. Transport cancellation and disconnect perform only the first. Work that outlives a call must detach into a service-owned task with its own controller and telemetry root.
 
@@ -125,14 +123,13 @@ Test the plugin-facing semantics over loopback and a real framed transport:
 - strict JSON boundaries, method context reconstruction, request cancellation isolation, and trace propagation without serializing context values;
 - server/Session facet isolation, authorized attach, selected-Session switching, stale-frame rejection, and worker-side per-client request correlation;
 - cold and hydrated `ReplicatedState`, snapshot/update race freedom, delivery contexts, stale display on reconnect, and clearing on provider switch;
-- event subscription setup, non-replay, ordering, cleanup, and bounded flow control;
 - instance directory hydration, ordered reconciliation, state hydration before observer tasks, generation-based stale rejection, and task cleanup on close or switch;
 - private returned-reference lifetime distinct from keyed-service discovery; and
 - the question and shared-review patterns: concurrent instances, late presentation attachment, disconnect without cancelling session work, worker replacement, and durable application-level settlement.
 
 ## Open protocol mechanics
 
-The following are intentionally not specified here: most exact control-frame schemas; member-kind discovery and lazy-proxy implementation; subscription sequencing, acknowledgements, buffering, and flow control; reference collection; and how a future multi-pane presentation represents more than one selected session. Singleton provider replacement requires a complete replacement snapshot on the existing subscription so method, state, and event member slots retain identity. The remaining mechanics must preserve the semantics above without changing the plugin contract.
+The following are intentionally not specified here: most exact control-frame schemas; member-kind discovery and lazy-proxy implementation; subscription sequencing, acknowledgements, buffering, and flow control; reference collection; and how a future multi-pane presentation represents more than one selected session. Singleton provider replacement requires a complete replacement snapshot on the existing subscription so method and state member slots retain identity. The remaining mechanics must preserve the semantics above without changing the plugin contract.
 
 ## Example: directory and selected session
 
@@ -147,13 +144,8 @@ interface SessionSummary {
 	updatedAt: string;
 }
 
-type SessionDirectoryEvent =
-	| { type: "created" | "changed"; session: SessionSummary }
-	| { type: "deleted"; sessionId: string };
-
 interface SessionDirectory {
 	readonly state: ReplicatedState<{ revision: number; sessions: SessionSummary[] }>;
-	readonly events: RemoteEvents<SessionDirectoryEvent>;
 }
 
 interface SessionManagement {
@@ -168,7 +160,7 @@ const SessionManagement = defineService<SessionManagement>("pi.session-managemen
 A server facet supplies the services. The host-local attachment capability derives the client from `Context`, authorizes the requested session, and performs the binding transition:
 
 ```ts
-serverContext.provide(SessionDirectory, { state: directoryState, events: directoryEvents });
+serverContext.provide(SessionDirectory, { state: directoryState });
 serverContext.provide(SessionManagement, {
 	async attach(sessionId, context) {
 		const client = requireClientIdentity(context);

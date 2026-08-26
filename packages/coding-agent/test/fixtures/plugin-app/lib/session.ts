@@ -1,7 +1,7 @@
 import { type AppPlugin, type MutableReplicatedState, rpcOptions, type Service } from "./api.ts";
 import type { ServerWireMessage, SessionRequest, StateSnapshot } from "./protocol.ts";
 
-class SessionRemoteState<T> implements MutableReplicatedState<T> {
+class SessionReplicatedState<T> implements MutableReplicatedState<T> {
 	private readonly listeners = new Set<(value: T) => void>();
 	private current: T;
 
@@ -55,7 +55,7 @@ export interface SessionContext {
 	onClientDisconnect(callback: (clientId: string) => void): void;
 	onClose(callback: () => void): void;
 	provide<T>(service: Service<T>, implementation: T): void;
-	remoteState<T>(initial: T): MutableReplicatedState<T>;
+	replicatedState<T>(initial: T): MutableReplicatedState<T>;
 	use<T>(service: Service<T>): T;
 }
 
@@ -111,7 +111,7 @@ export class SessionRuntime<ClientContext> {
 			onClientDisconnect: (callback) => this.clientDisconnectCallbacks.push(callback),
 			onClose: (callback) => this.closeCallbacks.push(callback),
 			provide: (service, implementation) => this.provide(service, implementation),
-			remoteState: (initial) => new SessionRemoteState(initial),
+			replicatedState: (initial) => new SessionReplicatedState(initial),
 			use: (service) => this.use(service),
 		};
 		for (const plugin of this.plugins) await plugin.session?.(context);
@@ -126,7 +126,7 @@ export class SessionRuntime<ClientContext> {
 		if (this.services.has(service.id)) throw new Error(`Service already provided: ${service.id}`);
 		this.services.set(service.id, implementation as object);
 		for (const [property, value] of Object.entries(implementation as object)) {
-			if (!(value instanceof SessionRemoteState)) continue;
+			if (!(value instanceof SessionReplicatedState)) continue;
 			value.subscribe((next) => {
 				this.hub.broadcast({
 					type: "state_update",
@@ -149,7 +149,7 @@ export class SessionRuntime<ClientContext> {
 		for (const [serviceId, implementation] of this.services) {
 			const states: Record<string, unknown> = {};
 			for (const [property, value] of Object.entries(implementation)) {
-				if (value instanceof SessionRemoteState) states[property] = structuredClone(value.value);
+				if (value instanceof SessionReplicatedState) states[property] = structuredClone(value.value);
 			}
 			if (Object.keys(states).length > 0) snapshot[serviceId] = states;
 		}

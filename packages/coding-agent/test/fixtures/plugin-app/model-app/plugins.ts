@@ -23,7 +23,7 @@ export const providersBuiltin = definePlugin<SessionContext, TuiContext>({
 				values.set(key, structuredClone(value));
 			},
 		};
-		const state = context.remoteState<ModelsState>({
+		const state = context.replicatedState<ModelsState>({
 			catalog: providers.snapshot(),
 			configuration: { model: undefined, thinkingLevel: "high" },
 			refresh: { status: "idle" },

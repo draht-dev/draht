@@ -12,7 +12,7 @@ export type ConnectionState =
 	| { status: "connected" }
 	| { status: "disconnected"; reason: string };
 
-class ClientRemoteState<T> implements ReplicatedState<T> {
+class ClientReplicatedState<T> implements ReplicatedState<T> {
 	private readonly listeners = new Set<(value: T) => void>();
 	private current: T;
 
@@ -37,10 +37,10 @@ class ClientRemoteState<T> implements ReplicatedState<T> {
 }
 
 export class ClientStateStore {
-	readonly connection = new ClientRemoteState<ConnectionState>({ status: "connecting" });
+	readonly connection = new ClientReplicatedState<ConnectionState>({ status: "connecting" });
 	updates = 0;
 	private readonly listeners = new Set<() => void>();
-	private readonly states = new Map<string, ClientRemoteState<unknown>>();
+	private readonly states = new Map<string, ClientReplicatedState<unknown>>();
 
 	apply(message: ServerWireMessage): void {
 		if (message.type === "response") return;
@@ -85,7 +85,7 @@ export class ClientStateStore {
 		const key = `${service}.${property}`;
 		const current = this.states.get(key);
 		if (current) current.set(value);
-		else this.states.set(key, new ClientRemoteState(value));
+		else this.states.set(key, new ClientReplicatedState(value));
 		if (count) this.updates++;
 	}
 }

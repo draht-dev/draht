@@ -4,7 +4,7 @@ import type { JsonValue } from "../../harness/session/types.ts";
 const SERVICE_TYPE = Symbol("pi.service.type");
 
 export type ServiceMode = "singleton" | "keyed";
-export type ServiceMemberKind = "method" | "state" | "events";
+export type ServiceMemberKind = "method" | "state";
 
 export interface ServiceCatalogueEntry {
 	readonly serviceId: string;
@@ -38,22 +38,6 @@ export interface MutableReplicatedState<T> extends ReplicatedState<T> {
 	set(value: T, context: Context): void;
 }
 
-export type RemoteEventType<T> = T extends { readonly type: infer TType extends string } ? TType : never;
-export type RemoteEventListener<T> = (event: T, context: Context) => void;
-
-/** Non-durable semantic events. Event values are borrowed immutable JSON and are never replayed. */
-export interface RemoteEvents<T> {
-	subscribe(listener: RemoteEventListener<T>): () => void;
-	on<TType extends RemoteEventType<T>>(
-		type: TType,
-		listener: RemoteEventListener<Extract<T, { readonly type: TType }>>,
-	): () => void;
-}
-
-export interface MutableRemoteEvents<T> extends RemoteEvents<T> {
-	emit(event: T, context: Context): void;
-}
-
 /** Marks an existing schema-validated wire DTO as JSON-safe for static service-contract checking. */
 declare const REMOTE_JSON_TYPE: unique symbol;
 export type RemoteJson<T> = T & { readonly [REMOTE_JSON_TYPE]?: true };
@@ -75,19 +59,15 @@ type InvalidRemoteMember<T> = T extends ReplicatedState<infer TValue>
 	? InvalidJsonPart<TValue> extends never
 		? never
 		: "state value is not JSON"
-	: T extends RemoteEvents<infer TEvent>
-		? InvalidJsonPart<TEvent> extends never
-			? never
-			: "event value is not JSON"
-		: T extends (...args: [...infer TArgs, Context]) => Promise<infer TResult>
-			? InvalidJsonPart<TArgs[number]> extends never
-				? TResult extends void
+	: T extends (...args: [...infer TArgs, Context]) => Promise<infer TResult>
+		? InvalidJsonPart<TArgs[number]> extends never
+			? TResult extends void
+				? never
+				: InvalidJsonPart<TResult> extends never
 					? never
-					: InvalidJsonPart<TResult> extends never
-						? never
-						: "method result is not JSON or void"
-				: "method argument is not JSON"
-			: "member is not a remote method, ReplicatedState, or RemoteEvents";
+					: "method result is not JSON or void"
+			: "method argument is not JSON"
+		: "member is not a remote method or ReplicatedState";
 
 type InvalidRemoteMemberNames<T> = {
 	[TKey in keyof T]-?: InvalidRemoteMember<T[TKey]> extends never ? never : TKey;
@@ -151,12 +131,6 @@ export type ServiceProviderUpdate =
 			readonly member: string;
 			readonly sequence: number;
 			readonly value: JsonValue;
-	  }
-	| {
-			readonly type: "event";
-			readonly instance?: ServiceInstanceAddress;
-			readonly member: string;
-			readonly event: JsonValue;
 	  }
 	| { readonly type: "unavailable" }
 	| { readonly type: "replaced"; readonly snapshot: ServiceInstanceSnapshot }

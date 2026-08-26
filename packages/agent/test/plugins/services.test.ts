@@ -4,13 +4,11 @@ import {
 	BACKGROUND_CONTEXT,
 	createLoopbackServiceConnection,
 	defineService,
-	type RemoteEvents,
 	type RemoteServiceConnection,
 	RemoteServiceNamespace,
 	RemoteServiceProvider,
 	type ReplicatedState,
-	remoteEvents,
-	remoteState,
+	replicatedState,
 } from "../../src/index.ts";
 
 type ModelRef = { provider: string; modelId: string };
@@ -33,13 +31,6 @@ interface QuestionDialogs {
 
 const QuestionDialogs = defineService<QuestionDialogs>("test.question-dialog");
 
-type ActivityEvent = { type: "changed"; revision: number } | { type: "ignored"; revision: number };
-interface Activity {
-	readonly events: RemoteEvents<ActivityEvent>;
-}
-
-const Activity = defineService<Activity>("test.activity");
-
 describe("plugin remote services", () => {
 	test("marks services RPC-capable by default and permits explicit local services", () => {
 		const local = defineService<{ readonly value: string }>("test.local", { rpc: false });
@@ -49,7 +40,7 @@ describe("plugin remote services", () => {
 
 	test("does not defensively clone borrowed state values", () => {
 		const initial: ModelsState = { selected: null, revision: 0 };
-		const state = remoteState(initial);
+		const state = replicatedState(initial);
 		let delivered: ModelsState | undefined;
 		const unsubscribe = state.subscribe((value) => {
 			delivered = value;
@@ -68,7 +59,7 @@ describe("plugin remote services", () => {
 		const provider = new RemoteServiceProvider([Models]);
 		expect(provider.catalogue).toEqual([{ serviceId: Models.id, mode: "singleton" }]);
 		const initialState: ModelsState = { selected: null, revision: 0 };
-		const state = remoteState(initialState);
+		const state = replicatedState(initialState);
 		let publishedState: ModelsState | undefined;
 		provider.provide(Models, {
 			state,
@@ -121,7 +112,7 @@ describe("plugin remote services", () => {
 	test("keeps singleton facades stable when their provider is replaced", async () => {
 		const provider = new RemoteServiceProvider([Models]);
 		provider.provide(Models, {
-			state: remoteState<ModelsState>({ selected: null, revision: 1 }),
+			state: replicatedState<ModelsState>({ selected: null, revision: 1 }),
 			async select() {},
 		});
 		const namespace = new RemoteServiceNamespace({
@@ -142,7 +133,7 @@ describe("plugin remote services", () => {
 
 		const replacementSelect = vi.fn(async () => {});
 		provider.replace(Models, {
-			state: remoteState<ModelsState>({ selected: null, revision: 2 }),
+			state: replicatedState<ModelsState>({ selected: null, revision: 2 }),
 			select: replacementSelect,
 		});
 
@@ -159,7 +150,7 @@ describe("plugin remote services", () => {
 	test("keeps deferred service handles inaccessible until host activation", async () => {
 		const provider = new RemoteServiceProvider([Models]);
 		provider.provide(Models, {
-			state: remoteState<ModelsState>({ selected: null, revision: 0 }),
+			state: replicatedState<ModelsState>({ selected: null, revision: 0 }),
 			async select() {},
 		});
 		let active = false;
@@ -209,7 +200,7 @@ describe("plugin remote services", () => {
 
 	test("buffers state updates that race subscription hydration", async () => {
 		const provider = new RemoteServiceProvider([Models]);
-		const state = remoteState<ModelsState>({ selected: null, revision: 0 });
+		const state = replicatedState<ModelsState>({ selected: null, revision: 0 });
 		provider.provide(Models, {
 			state,
 			async select() {},
@@ -239,7 +230,7 @@ describe("plugin remote services", () => {
 
 	test("hydrates cold ReplicatedState replicas and replaces them across rebinds", async () => {
 		const provider = new RemoteServiceProvider([Models]);
-		const state = remoteState<ModelsState>({ selected: null, revision: 0 });
+		const state = replicatedState<ModelsState>({ selected: null, revision: 0 });
 		provider.provide(Models, {
 			state,
 			async select() {},
@@ -300,7 +291,7 @@ describe("plugin remote services", () => {
 		});
 		await vi.waitFor(() => expect(errors).toEqual([]));
 
-		const firstRequest = remoteState<Question>({ question: "First?" });
+		const firstRequest = replicatedState<Question>({ question: "First?" });
 		const firstSubmit = vi.fn(async () => ({ accepted: true }));
 		const closeFirst = provider.spawn(QuestionDialogs, "invocation-1", {
 			request: firstRequest,
@@ -321,7 +312,7 @@ describe("plugin remote services", () => {
 			code: "service_stale_instance",
 		});
 
-		const secondRequest = remoteState<Question>({ question: "Again?" });
+		const secondRequest = replicatedState<Question>({ question: "Again?" });
 		const closeSecond = provider.spawn(QuestionDialogs, "invocation-1", {
 			request: secondRequest,
 			async submit() {
@@ -339,98 +330,10 @@ describe("plugin remote services", () => {
 		provider.dispose();
 	});
 
-	test("delivers filtered RemoteEvents without replay and buffers hydration races", async () => {
-		const provider = new RemoteServiceProvider([Activity]);
-		const events = remoteEvents<ActivityEvent>();
-		provider.provide(Activity, { events });
-		const local: ActivityEvent[] = [];
-		const localChanged: ActivityEvent[] = [];
-		const removeLocal = events.subscribe((event) => local.push(event));
-		const removeLocalChanged = events.on("changed", (event) => localChanged.push(event));
-		const beforeSubscription = { type: "changed", revision: 0 } as const;
-		events.emit(beforeSubscription, BACKGROUND_CONTEXT);
-		expect(local[0]).toBe(beforeSubscription);
-		expect(localChanged).toEqual([beforeSubscription]);
-
-		const connection: RemoteServiceConnection = {
-			invoke: (call, context) => provider.invoke(call, context),
-			subscribe: async (serviceId, mode, listener) => {
-				const subscription = provider.subscribe(serviceId, mode, listener);
-				events.emit({ type: "changed", revision: 1 }, BACKGROUND_CONTEXT);
-				return {
-					snapshot: subscription.snapshot,
-					activate: () => subscription.activate(),
-					close: () => subscription.close(),
-				};
-			},
-		};
-		const errors: Error[] = [];
-		const namespace = new RemoteServiceNamespace({
-			services: [Activity],
-			connection,
-			onError: (error) => errors.push(error),
-		});
-		const activity = namespace.use(Activity);
-		const received: ActivityEvent[] = [];
-		const changed: Extract<ActivityEvent, { type: "changed" }>[] = [];
-		const unsubscribe = activity.events.subscribe((event) => received.push(event));
-		const unsubscribeChanged = activity.events.on("changed", (event) => changed.push(event));
-		await vi.waitFor(() => expect(received).toEqual([{ type: "changed", revision: 1 }]));
-		events.emit({ type: "ignored", revision: 2 }, BACKGROUND_CONTEXT);
-		events.emit({ type: "changed", revision: 3 }, BACKGROUND_CONTEXT);
-		expect(received).toEqual([
-			{ type: "changed", revision: 1 },
-			{ type: "ignored", revision: 2 },
-			{ type: "changed", revision: 3 },
-		]);
-		expect(changed).toEqual([
-			{ type: "changed", revision: 1 },
-			{ type: "changed", revision: 3 },
-		]);
-		expect(received).not.toContainEqual(beforeSubscription);
-		expect(errors).toEqual([]);
-		expect(() => events.emit({ type: "changed", revision: Number.NaN }, BACKGROUND_CONTEXT)).toThrow(
-			"Remote event value must be strict JSON",
-		);
-
-		removeLocal();
-		removeLocalChanged();
-		unsubscribe();
-		unsubscribeChanged();
-		await namespace.dispose(BACKGROUND_CONTEXT);
-		provider.dispose();
-	});
-
-	test("routes keyed RemoteEvents only for the live instance generation", async () => {
-		const provider = new RemoteServiceProvider([{ service: Activity, mode: "keyed" }]);
-		const namespace = new RemoteServiceNamespace({
-			services: [Activity],
-			connection: createLoopbackServiceConnection(provider),
-		});
-		let observed: Activity | undefined;
-		const stop = namespace.observe(Activity, (instance) => {
-			observed = instance.service;
-		});
-		const events = remoteEvents<ActivityEvent>();
-		const close = provider.spawn(Activity, "activity-1", { events });
-		await vi.waitFor(() => expect(observed).toBeDefined());
-		const received: ActivityEvent[] = [];
-		observed!.events.subscribe((event) => received.push(event));
-		events.emit({ type: "changed", revision: 1 }, BACKGROUND_CONTEXT);
-		expect(received).toEqual([{ type: "changed", revision: 1 }]);
-		close();
-		events.emit({ type: "changed", revision: 2 }, BACKGROUND_CONTEXT);
-		expect(received).toEqual([{ type: "changed", revision: 1 }]);
-
-		stop();
-		await namespace.dispose(BACKGROUND_CONTEXT);
-		provider.dispose();
-	});
-
 	test("rejects mode mixing, unsupported members, and non-JSON values", async () => {
 		const provider = new RemoteServiceProvider([Models, { service: QuestionDialogs, mode: "keyed" }]);
 		provider.provide(Models, {
-			state: remoteState<ModelsState>({ selected: null, revision: 0 }),
+			state: replicatedState<ModelsState>({ selected: null, revision: 0 }),
 			async select() {},
 		});
 		expect(() => provider.spawn(Models, "wrong", {} as Models)).toThrow(/singleton/);

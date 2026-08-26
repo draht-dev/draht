@@ -1,13 +1,10 @@
 import { awaitWithContext, BACKGROUND_CONTEXT, type Context, withCancel } from "../../harness/context.ts";
 import type { JsonValue } from "../../harness/session/types.ts";
 import { RemoteServiceError } from "./provider.ts";
-import { freshDeliveryContext } from "./state.ts";
+import { freshDeliveryContext } from "./replicated-state.ts";
 import {
 	cloneJson,
 	isJsonValue,
-	type RemoteEventListener,
-	type RemoteEvents,
-	type RemoteEventType,
 	type RemoteServiceConnection,
 	type RemoteServiceInstance,
 	type RemoteServiceNamespaceOptions,
@@ -25,7 +22,7 @@ import {
 
 type ErrorReporter = (error: Error) => void;
 
-class RemoteStateReplica implements ReplicatedState<JsonValue> {
+class ReplicatedStateReplica implements ReplicatedState<JsonValue> {
 	readonly #listeners = new Set<(value: JsonValue, context: Context) => void>();
 	readonly #reportError: ErrorReporter;
 	#value: JsonValue | undefined;
@@ -79,55 +76,13 @@ class RemoteStateReplica implements ReplicatedState<JsonValue> {
 	}
 }
 
-class RemoteEventsReplica implements RemoteEvents<JsonValue> {
-	readonly #listeners = new Set<RemoteEventListener<JsonValue>>();
-	readonly #reportError: ErrorReporter;
-
-	constructor(reportError: ErrorReporter) {
-		this.#reportError = reportError;
-	}
-
-	subscribe(listener: RemoteEventListener<JsonValue>): () => void {
-		this.#listeners.add(listener);
-		return () => this.#listeners.delete(listener);
-	}
-
-	on<TType extends RemoteEventType<JsonValue>>(
-		type: TType,
-		listener: RemoteEventListener<Extract<JsonValue, { readonly type: TType }>>,
-	): () => void {
-		return this.subscribe((event, context) => {
-			if (hasEventType(event, type)) listener(event, context);
-		});
-	}
-
-	deliver(event: JsonValue, context: Context): void {
-		for (const listener of this.#listeners) {
-			try {
-				listener(event, context);
-			} catch (error) {
-				this.#reportError(toError(error));
-			}
-		}
-	}
-}
-
-interface PendingMemberSubscription {
-	readonly listener: RemoteEventListener<JsonValue>;
-	remove: (() => void) | undefined;
-	closed: boolean;
-}
-
 class MemberSlot {
 	readonly #serviceId: string;
 	readonly #member: string;
 	readonly #invoke: (args: readonly JsonValue[], context: Context) => Promise<JsonValue | undefined>;
-	readonly #state: RemoteStateReplica;
-	readonly #events: RemoteEventsReplica;
+	readonly #state: ReplicatedStateReplica;
 	readonly #isActive: () => boolean;
 	readonly #assertAccess: () => void;
-	readonly #reportError: ErrorReporter;
-	readonly #pendingSubscriptions = new Set<PendingMemberSubscription>();
 	readonly value: unknown;
 	#kind: ServiceMemberKind | undefined;
 	#expectedKind: ServiceMemberKind | undefined;
@@ -145,9 +100,7 @@ class MemberSlot {
 		this.#invoke = invoke;
 		this.#isActive = isActive;
 		this.#assertAccess = assertAccess;
-		this.#reportError = reportError;
-		this.#state = new RemoteStateReplica(reportError);
-		this.#events = new RemoteEventsReplica(reportError);
+		this.#state = new ReplicatedStateReplica(reportError);
 		const callable = (): void => {};
 		this.value = new Proxy(callable, {
 			apply: (_target, _thisArg, args) => this.#call(args),
@@ -158,7 +111,6 @@ class MemberSlot {
 					return this.#state.value;
 				}
 				if (property === "subscribe") return this.#subscribe.bind(this);
-				if (property === "on") return this.#on.bind(this);
 				if (property === Symbol.toStringTag) return "RemoteServiceMember";
 				if (property === "then") return undefined;
 				return undefined;
@@ -177,8 +129,6 @@ class MemberSlot {
 				`Remote service member ${this.#serviceId}.${this.#member} is ${kind}, not ${this.#expectedKind}`,
 			);
 		}
-		for (const pending of this.#pendingSubscriptions) this.#activateSubscription(pending, kind);
-		this.#pendingSubscriptions.clear();
 	}
 
 	hydrate(snapshot: ServiceStateSnapshot, context: Context): void {
@@ -191,58 +141,17 @@ class MemberSlot {
 		this.#state.update(sequence, value, context);
 	}
 
-	deliverEvent(event: JsonValue, context: Context): void {
-		this.setDescription("events");
-		this.#events.deliver(event, context);
-	}
-
 	clear(): void {
 		this.#state.clear();
 	}
 
-	#subscribe(listener: RemoteEventListener<JsonValue>): () => void {
+	#subscribe(listener: (value: JsonValue, context: Context) => void): () => void {
 		this.#assertAccess();
-		if (typeof listener !== "function")
-			throw new TypeError("Remote service subscription listener must be a function");
-		if (this.#kind === "state" || this.#expectedKind === "state") {
-			this.#expect("state");
-			return this.#state.subscribe(listener);
+		if (typeof listener !== "function") {
+			throw new TypeError("Replicated state subscription listener must be a function");
 		}
-		if (this.#kind === "events" || this.#expectedKind === "events") {
-			this.#expect("events");
-			return this.#events.subscribe(listener);
-		}
-		const pending: PendingMemberSubscription = { listener, remove: undefined, closed: false };
-		this.#pendingSubscriptions.add(pending);
-		return () => {
-			if (pending.closed) return;
-			pending.closed = true;
-			pending.remove?.();
-			this.#pendingSubscriptions.delete(pending);
-		};
-	}
-
-	#on(type: string, listener: RemoteEventListener<JsonValue>): () => void {
-		this.#assertAccess();
-		this.#expect("events");
-		return this.#events.subscribe((event, context) => {
-			if (hasEventType(event, type)) listener(event, context);
-		});
-	}
-
-	#activateSubscription(pending: PendingMemberSubscription, kind: ServiceMemberKind): void {
-		if (pending.closed) return;
-		if (kind === "state") pending.remove = this.#state.subscribe(pending.listener);
-		else if (kind === "events") pending.remove = this.#events.subscribe(pending.listener);
-		else {
-			pending.closed = true;
-			this.#reportError(
-				new RemoteServiceError(
-					"service_member_mismatch",
-					`Remote service member ${this.#serviceId}.${this.#member} is a method, not subscribable`,
-				),
-			);
-		}
+		this.#expect("state");
+		return this.#state.subscribe(listener);
 	}
 
 	#expect(kind: ServiceMemberKind): void {
@@ -364,13 +273,6 @@ class ServiceFacade {
 		const snapshot = { sequence, value };
 		this.#stateSnapshots.set(member, snapshot);
 		this.#slot(member).update(sequence, value, context);
-	}
-
-	deliverEvent(member: string, event: JsonValue, context: Context): void {
-		if (this.#descriptions.get(member) !== "events") {
-			throw new Error(`Remote service event targets non-event member ${this.#serviceId}.${member}`);
-		}
-		this.#slot(member).deliverEvent(event, context);
 	}
 
 	clear(): void {
@@ -577,13 +479,6 @@ class KeyedBinding<T> {
 					const instance = this.#instances.get(update.instance.key);
 					if (instance?.address.generation !== update.instance.generation) return;
 					instance.facade.update(update.member, update.sequence, update.value, context);
-					break;
-				}
-				case "event": {
-					if (update.instance === undefined) throw new Error("Keyed event has no instance address");
-					const instance = this.#instances.get(update.instance.key);
-					if (instance?.address.generation !== update.instance.generation) return;
-					instance.facade.deliverEvent(update.member, update.event, context);
 					break;
 				}
 			}
@@ -826,8 +721,6 @@ export class RemoteServiceNamespace implements RemoteServices {
 						binding.facade.install(update.snapshot, context);
 					} else if (update.type === "state" && update.instance === undefined) {
 						binding.facade.update(update.member, update.sequence, update.value, context);
-					} else if (update.type === "event" && update.instance === undefined) {
-						binding.facade.deliverEvent(update.member, update.event, context);
 					}
 				} catch (error) {
 					this.#reportError(toError(error));
@@ -888,10 +781,6 @@ function isContext(value: unknown): value is Context {
 	if (typeof value !== "object" || value === null) return false;
 	const candidate = value as Partial<Context>;
 	return typeof candidate.value === "function" && typeof candidate.toString === "function";
-}
-
-function hasEventType<T, TType extends string>(event: T, type: TType): event is Extract<T, { readonly type: TType }> {
-	return typeof event === "object" && event !== null && "type" in event && event.type === type;
 }
 
 function toError(error: unknown): Error {

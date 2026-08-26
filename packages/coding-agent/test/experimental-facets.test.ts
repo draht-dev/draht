@@ -156,7 +156,7 @@ describe("experimental facet host", () => {
 		const provider = defineFacet({
 			id: "provider",
 			setup(env) {
-				state = env.remoteState({ value: 0 });
+				state = env.replicatedState({ value: 0 });
 				env.provide(Watched, { state });
 			},
 		});

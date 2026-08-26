@@ -1,19 +1,19 @@
 import { BACKGROUND_CONTEXT, type Context, withCancel } from "../../harness/context.ts";
 import { isJsonValue, type MutableReplicatedState, type ReplicatedState } from "./types.ts";
 
-export const REMOTE_STATE_INTERNALS = Symbol("pi.remoteState.internals");
+export const REPLICATED_STATE_INTERNALS = Symbol("pi.replicatedState.internals");
 
-export interface RemoteStateInternals<T = unknown> {
+export interface ReplicatedStateInternals<T = unknown> {
 	readonly sequence: number;
 	readonly value: T;
 	subscribe(listener: (value: T, sequence: number, context: Context) => void): () => void;
 }
 
-export interface RemoteStateSource<T = unknown> extends MutableReplicatedState<T> {
-	readonly [REMOTE_STATE_INTERNALS]: RemoteStateInternals<T>;
+export interface ReplicatedStateSource<T = unknown> extends MutableReplicatedState<T> {
+	readonly [REPLICATED_STATE_INTERNALS]: ReplicatedStateInternals<T>;
 }
 
-class MutableRemoteStateImpl<T> implements RemoteStateSource<T> {
+class MutableReplicatedStateImpl<T> implements ReplicatedStateSource<T> {
 	readonly #listeners = new Set<(value: T, context: Context) => void>();
 	readonly #sourceListeners = new Set<(value: T, sequence: number, context: Context) => void>();
 	#value: T;
@@ -42,7 +42,7 @@ class MutableRemoteStateImpl<T> implements RemoteStateSource<T> {
 		return () => this.#listeners.delete(listener);
 	}
 
-	get [REMOTE_STATE_INTERNALS](): RemoteStateInternals<T> {
+	get [REPLICATED_STATE_INTERNALS](): ReplicatedStateInternals<T> {
 		const source = this;
 		return {
 			get sequence() {
@@ -59,16 +59,16 @@ class MutableRemoteStateImpl<T> implements RemoteStateSource<T> {
 	}
 }
 
-export function remoteState<T>(initial: T): MutableReplicatedState<T> {
-	return new MutableRemoteStateImpl(initial);
+export function replicatedState<T>(initial: T): MutableReplicatedState<T> {
+	return new MutableReplicatedStateImpl(initial);
 }
 
-export function getRemoteStateInternals(value: unknown): RemoteStateInternals | undefined {
-	if (typeof value !== "object" || value === null || !(REMOTE_STATE_INTERNALS in value)) return undefined;
-	const candidate = value as { readonly [REMOTE_STATE_INTERNALS]?: unknown };
-	const internals = candidate[REMOTE_STATE_INTERNALS];
+export function getReplicatedStateInternals(value: unknown): ReplicatedStateInternals | undefined {
+	if (typeof value !== "object" || value === null || !(REPLICATED_STATE_INTERNALS in value)) return undefined;
+	const candidate = value as { readonly [REPLICATED_STATE_INTERNALS]?: unknown };
+	const internals = candidate[REPLICATED_STATE_INTERNALS];
 	if (typeof internals !== "object" || internals === null) return undefined;
-	return internals as RemoteStateInternals;
+	return internals as ReplicatedStateInternals;
 }
 
 export function freshDeliveryContext(): Context {

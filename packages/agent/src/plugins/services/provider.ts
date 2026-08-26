@@ -1,7 +1,10 @@
 import type { Context } from "../../harness/context.ts";
 import type { JsonValue } from "../../harness/session/types.ts";
-import { getRemoteEventsInternals, type RemoteEventsInternals } from "./events.ts";
-import { freshDeliveryContext, getRemoteStateInternals, type RemoteStateInternals } from "./state.ts";
+import {
+	freshDeliveryContext,
+	getReplicatedStateInternals,
+	type ReplicatedStateInternals,
+} from "./replicated-state.ts";
 import {
 	cloneJson,
 	isJsonValue,
@@ -45,8 +48,7 @@ type RemoteMethod = (...args: unknown[]) => unknown;
 
 type InstanceMember =
 	| { readonly kind: "method"; readonly method: RemoteMethod }
-	| { readonly kind: "state"; readonly state: RemoteStateInternals }
-	| { readonly kind: "events"; readonly events: RemoteEventsInternals };
+	| { readonly kind: "state"; readonly state: ReplicatedStateInternals };
 
 interface ProviderInstance {
 	readonly address?: ServiceInstanceAddress;
@@ -314,7 +316,7 @@ export class RemoteServiceProvider {
 				members.set(name, { kind: "method", method: descriptor.value as RemoteMethod });
 				continue;
 			}
-			const state = getRemoteStateInternals(descriptor.value);
+			const state = getReplicatedStateInternals(descriptor.value);
 			if (state !== undefined) {
 				members.set(name, { kind: "state", state });
 				removeMemberListeners.push(
@@ -334,29 +336,6 @@ export class RemoteServiceProvider {
 								member: name,
 								sequence,
 								value,
-							},
-							context,
-						);
-					}),
-				);
-				continue;
-			}
-			const events = getRemoteEventsInternals(descriptor.value);
-			if (events !== undefined) {
-				members.set(name, { kind: "events", events });
-				removeMemberListeners.push(
-					events.subscribe((event, context) => {
-						if (!instance.active) return;
-						if (!isJsonValue(event)) {
-							throw new RemoteServiceError("service_invalid_value", "Remote event must be strict JSON");
-						}
-						this.#emit(
-							registration,
-							{
-								type: "event",
-								...(address === undefined ? {} : { instance: address }),
-								member: name,
-								event,
 							},
 							context,
 						);

@@ -1,10 +1,3 @@
-export {
-	getRemoteEventsInternals,
-	REMOTE_EVENTS_INTERNALS,
-	type RemoteEventsInternals,
-	type RemoteEventsSource,
-	remoteEvents,
-} from "./events.ts";
 export { RemoteServiceNamespace } from "./namespace.ts";
 export {
 	createLoopbackServiceConnection,
@@ -14,21 +7,17 @@ export {
 } from "./provider.ts";
 export {
 	freshDeliveryContext,
-	getRemoteStateInternals,
-	REMOTE_STATE_INTERNALS,
-	type RemoteStateInternals,
-	type RemoteStateSource,
-	remoteState,
-} from "./state.ts";
+	getReplicatedStateInternals,
+	REPLICATED_STATE_INTERNALS,
+	type ReplicatedStateInternals,
+	type ReplicatedStateSource,
+	replicatedState,
+} from "./replicated-state.ts";
 export {
 	cloneJson,
 	defineService,
 	isJsonValue,
-	type MutableRemoteEvents,
 	type MutableReplicatedState,
-	type RemoteEventListener,
-	type RemoteEvents,
-	type RemoteEventType,
 	type RemoteJson,
 	type RemoteServiceConnection,
 	type RemoteServiceContract,

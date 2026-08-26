@@ -2,15 +2,13 @@ import {
 	BACKGROUND_CONTEXT,
 	type Context,
 	createLoopbackServiceConnection,
-	type MutableRemoteEvents,
 	type MutableReplicatedState,
 	type RemoteServiceContract,
 	type RemoteServiceInstance,
 	RemoteServiceNamespace,
 	RemoteServiceProvider,
 	type RemoteServices,
-	remoteEvents,
-	remoteState,
+	replicatedState,
 	type Service,
 	type ServiceCatalogueEntry,
 	type ServiceMode,
@@ -32,17 +30,80 @@ interface FacetRecord {
 }
 
 export interface FacetEnvironment {
+	/**
+	 * Declare a hard dependency on one singleton service and return its stable handle.
+	 *
+	 * Call this synchronously during setup so the host can validate and order the complete
+	 * dependency graph before activation. The handle cannot be accessed during setup. It
+	 * binds when the host activates and follows later provider-facet replacements, whether
+	 * the implementation is process-local or reached through RPC.
+	 */
 	use<T>(service: Service<T>): T;
+
+	/**
+	 * Declare a hard dependency on a keyed service and observe each live instance.
+	 *
+	 * The host starts the handler after the instance and its replicated state have hydrated.
+	 * The handler receives a context that is aborted when that instance closes or is replaced.
+	 * The returned idempotent function stops this observation early; otherwise the facet owns
+	 * it automatically. Use keyed services when instances appear and disappear at runtime.
+	 */
 	observe<T>(
 		service: Service<T>,
 		handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
 	): () => void;
+
+	/**
+	 * Declare and install this facet's singleton implementation of a service.
+	 *
+	 * Call this synchronously during setup. The declaration lets the host reject duplicate
+	 * providers and order consumers after this facet. RPC-capable tokens are published
+	 * automatically; `{ rpc: false }` tokens remain process-local. Reloading this facet swaps
+	 * the implementation behind existing consumer handles.
+	 */
 	provide<T>(service: Service<T>, implementation: NoInfer<T>): void;
+
+	/**
+	 * Declare ownership of a keyed service and return the handle used to add live instances.
+	 *
+	 * Declaring ownership during setup makes the service discoverable even while it has no
+	 * instances. Instances may be added only while the facet is active and are closed
+	 * automatically when the facet deactivates.
+	 */
 	provideMany<T>(service: Service<T>): ServiceInstances<T>;
-	remoteState<T>(initial: T): MutableReplicatedState<T>;
-	remoteEvents<T>(): MutableRemoteEvents<T>;
+
+	/**
+	 * Create initialized mutable state suitable for exposing through a service implementation.
+	 *
+	 * Remote consumers receive a stable read-only replica that hydrates from this value and
+	 * follows later updates. This is live projection state, not durable storage; the facet must
+	 * be able to reconstruct it after reload or process restart.
+	 */
+	replicatedState<T>(initial: T): MutableReplicatedState<T>;
+
+	/**
+	 * Give the facet ownership of a resource cleanup function.
+	 *
+	 * Cleanups run once in reverse registration order during deactivation and startup-failure
+	 * cleanup. Register every subscription, timer, process, file, or contribution here so a
+	 * failed or reloaded facet cannot leak resources into its replacement.
+	 */
 	own(disposal: () => void | Promise<void>): void;
+
+	/**
+	 * Register asynchronous initialization to run after dependencies are bound and ready.
+	 *
+	 * Setup itself must stay synchronous because it declares the graph. Put I/O, hydration,
+	 * and other effects here. Provider facets activate before facets that consume them.
+	 */
 	onActivate(callback: () => void | Promise<void>): void;
+
+	/**
+	 * Register final facet teardown.
+	 *
+	 * The callback runs after resources acquired during activation have been released. Use it
+	 * for shutdown work that is not naturally represented by an individual `own()` cleanup.
+	 */
 	onDeactivate(callback: () => void | Promise<void>): void;
 }
 
@@ -657,13 +718,9 @@ class FacetKernel {
 				lifecycle.observe(() => observation.start());
 				return observation.stop;
 			},
-			remoteState: <T>(initial: T) => {
+			replicatedState: <T>(initial: T) => {
 				lifecycle.assertRunning("create replicated state");
-				return remoteState(initial);
-			},
-			remoteEvents: <T>() => {
-				lifecycle.assertRunning("create remote events");
-				return remoteEvents<T>();
+				return replicatedState(initial);
 			},
 			own: (disposal) => lifecycle.own(disposal),
 			onActivate: (callback) => lifecycle.onActivate(callback),

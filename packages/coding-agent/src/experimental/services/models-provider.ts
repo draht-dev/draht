@@ -125,7 +125,7 @@ export function createModelsService(
 export const modelsServiceFacet = defineFacet({
 	id: "@pi/models",
 	setup(env) {
-		const runtime = createModelsService(env.use(Lane), env.use(ModelsRuntime), env.remoteState);
+		const runtime = createModelsService(env.use(Lane), env.use(ModelsRuntime), env.replicatedState);
 		env.provide(Models, runtime.service);
 		env.onActivate(() => runtime.activate(BACKGROUND_CONTEXT));
 	},

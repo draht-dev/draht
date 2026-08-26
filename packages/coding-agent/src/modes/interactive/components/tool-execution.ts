@@ -1,3 +1,4 @@
+import type { AgentToolResult } from "@draht/agent-core";
 import {
 	Box,
 	type Component,
@@ -10,8 +11,27 @@ import {
 	type TUI,
 	type TuiMouseEvent,
 } from "@draht/tui";
-import type { ToolDefinition, ToolRenderContext } from "../../../core/extensions/types.js";
-import { createAllToolDefinitions, type ToolName } from "../../../core/tools/index.js";
+import type { ToolDefinition, ToolRenderContext, ToolRenderResultOptions } from "../../../core/extensions/types.js";
+import type { Theme } from "../theme/theme.js";
+
+/**
+ * What this component needs from a tool: how to draw it. It neither executes tools nor reads their
+ * parameter schemas, so a definition and a bare renderer pair are equally acceptable.
+ *
+ * The renderer parameters are `any` on purpose: a `ToolDefinition` types them from its schema, and
+ * narrowing them here would make those definitions unassignable.
+ */
+export interface ToolRenderers {
+	renderShell?: "default" | "self";
+	renderCall?: (args: any, theme: Theme, context: ToolRenderContext<any, any>) => Component;
+	renderResult?: (
+		result: AgentToolResult<any>,
+		options: ToolRenderResultOptions,
+		theme: Theme,
+		context: ToolRenderContext<any, any>,
+	) => Component;
+}
+
 import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.js";
 import { convertToPng } from "../../../utils/image-convert.js";
 import { theme } from "../theme/theme.js";
@@ -42,8 +62,7 @@ export class ToolExecutionComponent extends Container {
 	private showImages: boolean;
 	private imageWidthCells: number;
 	private isPartial = true;
-	private toolDefinition?: ToolDefinition<any, any>;
-	private builtInToolDefinition?: ToolDefinition<any, any>;
+	private toolDefinition?: ToolRenderers;
 	private ui: TUI;
 	private cwd: string;
 	private executionStarted = false;
@@ -61,7 +80,7 @@ export class ToolExecutionComponent extends Container {
 		toolCallId: string,
 		args: any,
 		options: ToolExecutionOptions = {},
-		toolDefinition: ToolDefinition<any, any> | undefined,
+		toolDefinition: ToolRenderers | ToolDefinition<any, any, any> | undefined,
 		ui: TUI,
 		cwd: string,
 	) {
@@ -70,7 +89,6 @@ export class ToolExecutionComponent extends Container {
 		this.toolCallId = toolCallId;
 		this.args = args;
 		this.toolDefinition = toolDefinition;
-		this.builtInToolDefinition = createAllToolDefinitions(cwd)[toolName as ToolName];
 		this.showImages = options.showImages ?? true;
 		this.imageWidthCells = options.imageWidthCells ?? 60;
 		this.ui = ui;
@@ -96,37 +114,19 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private getCallRenderer(): ToolDefinition<any, any>["renderCall"] | undefined {
-		if (!this.builtInToolDefinition) {
-			return this.toolDefinition?.renderCall;
-		}
-		if (!this.toolDefinition) {
-			return this.builtInToolDefinition.renderCall;
-		}
-		return this.toolDefinition.renderCall ?? this.builtInToolDefinition.renderCall;
+		return this.toolDefinition?.renderCall;
 	}
 
 	private getResultRenderer(): ToolDefinition<any, any>["renderResult"] | undefined {
-		if (!this.builtInToolDefinition) {
-			return this.toolDefinition?.renderResult;
-		}
-		if (!this.toolDefinition) {
-			return this.builtInToolDefinition.renderResult;
-		}
-		return this.toolDefinition.renderResult ?? this.builtInToolDefinition.renderResult;
+		return this.toolDefinition?.renderResult;
 	}
 
 	private hasRendererDefinition(): boolean {
-		return this.builtInToolDefinition !== undefined || this.toolDefinition !== undefined;
+		return this.toolDefinition !== undefined;
 	}
 
 	private getRenderShell(): "default" | "self" {
-		if (!this.builtInToolDefinition) {
-			return this.toolDefinition?.renderShell ?? "default";
-		}
-		if (!this.toolDefinition) {
-			return this.builtInToolDefinition.renderShell ?? "default";
-		}
-		return this.toolDefinition.renderShell ?? this.builtInToolDefinition.renderShell ?? "default";
+		return this.toolDefinition?.renderShell ?? "default";
 	}
 
 	private getRenderContext(lastComponent: Component | undefined): ToolRenderContext {

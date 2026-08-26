@@ -1,6 +1,6 @@
 # Invocation Context and Telemetry Design Notes
 
-> **Status:** Design input, not a normative contract. The context primitives and required trailing `Context` parameters have landed across the harness, sessions, execution capabilities, and hosted-harness adapters. Local propagation is scaffolding rather than proof of complete cancellation or telemetry semantics: most runtime spans, drive ownership, RPC cancellation, and cross-process trace propagation remain design or implementation work. Fold accepted final behavior into `harness.md`. `telemetry-schema.md` remains the generated reference for span names and attributes.
+> **Status:** Design input, not a normative contract. The context primitives and required trailing `Context` parameters have landed across the harness, sessions, execution capabilities, and hosted-harness adapters. Local propagation is scaffolding rather than proof of complete telemetry semantics: most runtime spans and cross-process trace propagation remain design or implementation work. Drive ownership is now harness-owned and request-ID RPC cancellation is implemented; neither supplies distributed trace parentage. Fold accepted final behavior into `harness.md`. `telemetry-schema.md` remains the generated reference for span names and attributes.
 
 ## Goal
 
@@ -159,9 +159,9 @@ An aborted invocation signal is process-local control. It does not mean that dur
 
 ```text
 context.abortSignal is present and aborts
-→ stop or detach process-local waiting/work according to drive ownership policy
+→ stop only that caller's observation; an installed lane-owned Drive continues
 → do not write cancel_requested
-→ preserve a valid durable restart point
+→ preserve the same durable operation state
 ```
 
 An undefined `abortSignal`, as exposed by both empty roots, means that the invocation has no cancellation signal.
@@ -180,13 +180,7 @@ type ExecutionStopCause =
 
 Only `durable_cancel_requested` may normalize and commit a durable aborted outcome. An invocation/disconnect abort must not produce an assistant `stopReason: "aborted"` settlement while durable control remains `running`; that path would violate the durable state machine.
 
-The drive ownership policy remains to be finalized:
-
-1. **Installer-owned:** the installer signal controls execution; joiner signals control only their waits.
-2. **Caller leases:** every drive caller owns a wait lease; execution is aborted process-locally only when the last lease disappears.
-3. **Harness-owned:** drive execution survives all caller disconnects until durable settlement, durable cancellation, close, or fault.
-
-Signals from unrelated joiners must never be combined with `AbortSignal.any()` and attached directly to shared execution. One canceled joiner cannot cancel every other caller.
+Drive ownership is resolved as **harness-owned**: once installed, execution survives caller cancellation/disconnect until durable settlement or wait, explicit durable cancellation, close, fault, or process loss. Joiner signals control only their own observations. Signals from unrelated joiners must never be combined with `AbortSignal.any()` and attached directly to shared execution. One canceled joiner cannot cancel every other caller.
 
 ## RPC trace propagation
 
@@ -235,9 +229,8 @@ Current tests cover immutable typed-value layering and shadowing, distinct empty
 - buffered events retain their emitting context under delayed delivery;
 - no receiver-level telemetry default;
 - pre-aborted invocation starts no external effect;
-- installer and joiner cancellation isolation;
-- last-waiter/owner policy selected by the final design;
-- invocation abort leaves resumable durable state;
+- installer and joiner cancellation isolation under lane-owned execution;
+- invocation abort leaves the installed Drive and durable state unchanged;
 - durable abort commits the durable aborted outcome;
 - close and disconnect do not masquerade as durable cancellation;
 - client → server trace reconstruction;
@@ -250,9 +243,8 @@ Current tests cover immutable typed-value layering and shadowing, distinct empty
 - Shared Harness, AgentLane, Session, and Branch receivers retain no default invocation context.
 - `Context`, `AbortSignal`, and `TelemetryContext` objects are never serialized across RPC boundaries.
 
-## Open decisions before `harness.md`
+## Open decisions before the telemetry handoff
 
-- installer-owned, lease-owned, or harness-owned drive execution;
 - whether telemetry links are required for joiners;
 - trace-carrier adapter ownership and shape;
 - which context values, if any, may cross an RPC boundary;

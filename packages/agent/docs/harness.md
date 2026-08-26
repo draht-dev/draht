@@ -21,7 +21,7 @@
 - [Part 2 — The conversation tree](#part-2--the-conversation-tree)
   - [2.1 Entries](#21-entries)
   - [2.2 Placement](#22-placement)
-  - [2.3 Lanes](#23-lanes)
+  - [2.3 Branches and AgentLanes](#23-branches-and-agentlanes)
   - [2.4 Session metadata and application values](#24-session-metadata-and-application-values)
   - [2.5 Branch queries and context](#25-branch-queries-and-context)
   - [2.6 The branch index](#26-the-branch-index)
@@ -40,8 +40,8 @@
   - [3.9 Summary generation — compaction and navigation summaries](#39-summary-generation--compaction-and-navigation-summaries)
   - [3.10 Navigation](#310-navigation)
   - [3.11 Inbox, queues, deferred writes](#311-inbox-queues-deferred-writes)
-  - [3.12 The checkpoint procedure](#312-the-checkpoint-procedure)
-  - [3.13 Terminal transactions](#313-terminal-transactions)
+  - [3.12 The checkpoint and boundary procedure](#312-the-checkpoint-and-boundary-procedure)
+  - [3.13 Terminal transactions and result records](#313-terminal-transactions-and-result-records)
 - [Part 4 — Execution, recovery, abort, close](#part-4--execution-recovery-abort-close)
   - [4.1 The live operation task](#41-the-live-operation-task)
   - [4.2 Effect gate](#42-effect-gate)
@@ -67,7 +67,7 @@
   - [7.3 The mechanism: storage version plus migrate-on-open](#73-the-mechanism-storage-version-plus-migrate-on-open)
   - [7.4 Migrations are total](#74-migrations-are-total)
   - [7.5 The three strata, restated as policy](#75-the-three-strata-restated-as-policy)
-- [Part 8 — Build order](#part-8--build-order)
+- [Part 8 — Work packages](#part-8--work-packages)
 - [Part 9 — Invariants and tests](#part-9--invariants-and-tests)
   - [9.1 Invariants](#91-invariants)
   - [9.2 Race catalog](#92-race-catalog)
@@ -695,10 +695,7 @@ When to compact: on open when the dead-bytes ratio crosses a threshold; after a 
 
 ### SQLite
 
-**One database file per session.** The file is the session, exactly as a JSONL
-file is. Corruption is confined to one session, deletion is unlinking a file, and
-SQLite's one-writer-per-file rule coincides with the design's
-one-writer-per-session rule by construction.
+**One database file per session is the default; a shared container is supported.** Without `databasePath`, the repository creates one `{id}.sqlite` file per Session under its directory; WP07 makes that filename mapping path-safe for arbitrary explicit ids. With `databasePath`, any number of Sessions share one explicitly selected container. Every authoritative/projection/lease row is therefore scoped by `session_id`, even though examples below abbreviate that column. Shared containers are a supported deployment mode, not an implementation detail to remove. SQLite's one-writer-per-file rule is insufficient in either mode: a fenced per-Session lease enforces the design's one writer per Session.
 
 ```sql
 entries(id TEXT PRIMARY KEY, parent_id TEXT, seq INTEGER, type TEXT,
@@ -731,10 +728,11 @@ branch_meta(branch_id TEXT PRIMARY KEY, tip_entry_id TEXT, tip_seq INTEGER,
             base_branch_id TEXT, base_seq INTEGER);
 CREATE UNIQUE INDEX ix_bm_tip ON branch_meta(tip_entry_id);
 
--- One row each: the file is the session.
-session(created_at, parent_session_id, storage_version, metadata,
-        message_count, usage_payload, next_seq);
-writer_lease(owner_id TEXT, fence INTEGER, expires_at_ms INTEGER);
+-- One row per Session in the container.
+sessions(id, created_at, parent_session_id, storage_version, metadata,
+         message_count, usage_payload, next_seq);
+writer_lease(session_id TEXT PRIMARY KEY, owner_id TEXT,
+             fence INTEGER, expires_at_ms INTEGER);
 ```
 
 WP01 replaces the unfinished format-4 schema in place: `001_initial.sql` uses these physical table names, keeps storage version 1, and supports no pre-WP01 format-4 SQLite file. Migration machinery belongs to R11, not this WIP schema replacement.
@@ -793,7 +791,7 @@ regression.
 
 `scanBranchStructure` is the same query without the payload column. `getEntries` is a primary-key lookup keyed by `e.id IN (...)`.
 
-Because the file is the session, the precise rewrite (§2.9) and forks are file operations: build a fresh database (`VACUUM INTO` or row copy over one read snapshot) and, for the rewrite, atomically swap it over the old path — the same shape JSONL uses.
+In default per-session-file mode, a precise rewrite (§2.9) may build a fresh database (`VACUUM INTO` or row copy over one read snapshot) and atomically swap it over the old path, like JSONL. A shared-container rewrite/fork copies only the selected Session's `session_id` rows inside the container and must not swap or rewrite unrelated Sessions. Current forks use coherent row snapshots; precise-rewrite tooling remains administrative future work.
 
 ## 1.8 Why write-once plus values and lists
 
@@ -1133,7 +1131,7 @@ All supported mutations serialize on one keyless Session line. `beginMutation()`
 
 Ordinary Session and Branch reads bypass the line. Each read observes the latest fully applied storage commit, but several reads are not a snapshot. Use `mutate()` for coherent read-decide-write. Providers, tools, hooks, timers, and asynchronous event delivery never run inside mutation callbacks. Process-local projection publication and synchronous event-recipient binding may follow commit before line release.
 
-The explicit begin/read/commit/end lifecycle is retained for RemoteSession transport. The worker runs its local callback and publication while the server holds the sole concrete Session line, then sends end. Disconnect or timeout terminates that server-side scope under hosting policy. No caller-selected lane key exists.
+The explicit begin/read/commit/end lifecycle is the specified RemoteSession transport contract: the worker runs its local callback and publication while the server holds the sole concrete Session line, then sends end; disconnect or timeout terminates that scope; no caller-selected lane key exists. The current product deliberately ships process-local Session plus routed semantic services and has no raw RemoteSession implementation. C1 (Part 8 and `post-wp05-roadmap.md`) must resolve whether to implement this paragraph or retire it from the normative contract.
 
 A repository creates only metadata/header/catalog state: no Branch, configuration, or lane state. `createBranch` validates name, absence, and a non-null target atomically and writes only the tip. Repository open ownership, version checks, storage snapshot boundaries, and search integration otherwise remain as described below.
 
@@ -2693,7 +2691,7 @@ The design conclusion: the volatile part of the system — orchestration — was
 
 # Part 8 — Work packages
 
-This part is a rolling plan for the repository as it exists now, not a replay of its historical build order. `harness.md` remains the normative behavior contract; a work-package handoff defines one executable implementation boundary.
+This part is a rolling plan for the repository as it exists now, not a replay of its historical build order. `harness.md` remains the normative behavior contract; a work-package handoff defines one executable implementation boundary. The evidence-backed cross-package inventory and ordering live in [`post-wp05-roadmap.md`](post-wp05-roadmap.md).
 
 ## Work-package workflow
 
@@ -2716,9 +2714,11 @@ Every package implements its named concern end to end and tests its normal path,
 | WP02 (complete)       | Implemented atomic prompt/skill/template acceptance, minimal open-operation attachment, Session mutation inspection, and gap-free ad-hoc lane watch capture without starting execution. | WP01                                                    | [Atomic acceptance and coherent attachment](work-packages/02-atomic-run-acceptance.md) |
 | WP03 (complete)       | Removed the unused wall-clock drive deadline and non-durable yielded outcome before implementing durable execution.                                                                     | WP02                                                    | [Remove drive deadlines](work-packages/03-remove-drive-deadlines.md)                   |
 | WP04 (complete)       | Replaced caller-operated event delivery gates with synchronous `emitBatch` publication and made Session own committed lane publication.                                                 | WP03                                                    | [Mutation publication and event delivery](work-packages/04-mutation-publication.md)    |
-| WP05 (complete)       | Implemented the total direct durable graph, public/replicated lane surfaces, immutable results, atomic boundaries, cancellation reconciliation, and lane-safe provider identity.                              | WP04                                                    | [Direct durable drive](work-packages/05-direct-durable-drive.md)                       |
+| WP05 (complete)       | Implemented the total direct durable graph, public/replicated lane surfaces, immutable results, atomic boundaries, cancellation reconciliation, and lane-safe provider identity.                              | WP04 plus WP06 before M4                                | [Direct durable drive](work-packages/05-direct-durable-drive.md)                       |
+| WP06 (complete)       | Separated Session, Branch, AgentLane, and AgentHarness and installed one keyless Session mutation line.                                                                                                       | WP05 M0–M3                                              | [Session, Branch, Lane separation](work-packages/06-session-branch-lane-separation.md) |
+| WP07 (planned)        | Make SQLite commit fencing and deletion exclusive, bind active storage to physical identity, harden paths/close, and preserve shared containers.                                                              | Current SQLite backend                                  | [SQLite ownership fencing](work-packages/07-sqlite-ownership-fencing.md)               |
 
-The old Types, Session/Memory, JSONL, and SQLite rows described work already present in the repository. Their remaining cross-backend delta was WP01; they are not separate future packages.
+The old Types, Session/Memory, JSONL, and SQLite rows described work already present in the repository. Their remaining cross-backend delta was WP01; they are not separate future packages. WP07 is a newly discovered backend-correctness package, not a revival of those historical rows.
 
 WP05 subsumed the former R2–R12 execution rows. Their implemented contract is in Parts 0–5 and the completed handoff; retaining pre-implementation rows here would create a second, stale specification.
 
@@ -2726,12 +2726,16 @@ WP05 subsumed the former R2–R12 execution rows. Their implemented contract is 
 
 | ID | Slice | Remaining boundary |
 |---|---|---|
-| S3 | Search | Standalone `SessionSearchService`, repository catch-up utilities, and the reference SQLite FTS5 projection (§2.8). |
-| M11 | Durable frame volume | Bound JSONL/SQLite assistant-frame write amplification without weakening unknown-outcome recovery; tracked in WP05 M11. |
-| R11 | Schema migrations | Chained migrate-on-open under the writer lease with total mappings for every open durable leaf and address grammar (§7). |
+| C1 | Remote Session boundary | Resolve the contradiction between the process-local routed-service product and WP06/§2.8's raw RemoteSession requirement before implementing either direction. |
+| L1 | Repository lifecycle | Define repository ownership of open handles and all-settled close behavior across Memory, JSONL, and SQLite. |
+| J1 | JSONL snapshot compaction | Implement §1.7 current-state rewrite, dead-byte triggers, preserved high-water/list sequence semantics, and physical reclamation. |
+| M11 | Durable frame volume | Measure Memory logical elements, SQLite rows/pages/WAL, JSONL peak/post-compaction bytes and replay time, then bound assistant-frame writes without weakening unknown-outcome recovery; tracked in WP05 M11. |
 | R12 | Session-wide watch | Implement `watchSession`; it is the sole intentionally deferred Harness method. |
+| T1 | Telemetry | Reconcile the declared schema, then implement retained local spans; RPC trace propagation and an exporter remain separate follow-ups. |
+| S3 | Search | Reconcile the draft public API, then add standalone `SessionSearchService`, repository catch-up utilities, and the reference SQLite FTS5 projection (§2.8). |
+| R11 | Schema migrations | Chained migrate-on-open under the writer lease with total mappings for every open durable leaf and address grammar (§7); activate only before the first incompatible stabilized-format change. |
 
-Protocol, client/server resnapshot, and lane reducer surfaces required by WP05 are already implemented; future protocol work extends them rather than redefining the lane contract.
+Client watch/subscription incarnation fencing, SQLite branch/fork/query performance, pending-payload measurement, and optional presentation/plugin capabilities are inventoried in `post-wp05-roadmap.md`; they do not alter the Harness state machine. Protocol, client/server resnapshot, and lane reducer surfaces required by WP05 are already implemented; future protocol work extends them rather than redefining the lane contract.
 
 # Part 9 — Invariants and tests
 

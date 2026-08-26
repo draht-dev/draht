@@ -24,7 +24,7 @@ A service token is a shared TypeScript contract and stable service ID. It is not
 
 The provider must make enough control-plane information available for the host to validate an accessed member as a method, `ReplicatedState`, or `RemoteEvents`. The consumer must be able to obtain the member name from ordinary property access—for example, a JavaScript `Proxy` receives `"state"` for `models.state` and `"refresh"` for `models.refresh(context)`. How a disconnected lazy proxy represents an unresolved member, and the exact provider-kind validation exchange, are implementation details.
 
-Local and remote `use()` both return a stable, lazy typed facade shared by consumers of that token. During synchronous facet setup the facade is disconnected, so setup can capture it but cannot invoke methods, read state, or register member subscriptions. After assembly, a local facade resolves to its facet-provided implementation and a remote facade binds through the host's connected services. While disconnected, invoking a method fails and state remains unhydrated; no call is queued merely because it was made through a proxy.
+Local and remote `use()` both return a stable, lazy typed facade shared by consumers of that token. During synchronous facet setup the facade is disconnected, so setup can capture it but cannot invoke methods, read state, or register member subscriptions. After assembly, a local facade resolves to its facet-provided implementation and a remote facade binds through the host's connected services. Reloading the providing facet temporarily marks that same facade unavailable, then swaps its target; RPC singletons clear readiness and install a complete replacement snapshot on their existing subscription so captured methods and member facades address the replacement. While no provider is bound, invoking a method fails and state remains unhydrated; no call is queued merely because it was made through a proxy.
 
 Remote methods return promises and accept and return strict JSON apart from their declared `Context`; `void` is a successful response without a result field. A private returned reference is a separately validated control envelope, not a business JSON value. The client removes the context before transport and the receiving host constructs a fresh local context. The contract position is host-controlled and must be consistent; the current examples use one required trailing `Context`. Business absence is JSON `null` or an options object, never transported `undefined`.
 
@@ -121,7 +121,7 @@ Facet environments own registrations, added service instances, subscriptions, ob
 
 Test the plugin-facing semantics over loopback and a real framed transport:
 
-- setup-time dependency-ledger ownership, rejection of late acquisition, local and remote `use()`, keyed-provider ownership, singleton/keyed mode validation, token-driven RPC publication, lazy member access, and `{ rpc: false }` services remaining unreachable remotely;
+- setup-time dependency-ledger ownership, rejection of late acquisition, local and remote `use()`, keyed-provider ownership, singleton/keyed mode validation, token-driven RPC publication, lazy member access, stable local and RPC singleton facades across provider-facet replacement, and `{ rpc: false }` services remaining unreachable remotely;
 - strict JSON boundaries, method context reconstruction, request cancellation isolation, and trace propagation without serializing context values;
 - server/Session facet isolation, authorized attach, selected-Session switching, stale-frame rejection, and worker-side per-client request correlation;
 - cold and hydrated `ReplicatedState`, snapshot/update race freedom, delivery contexts, stale display on reconnect, and clearing on provider switch;
@@ -132,7 +132,7 @@ Test the plugin-facing semantics over loopback and a real framed transport:
 
 ## Open protocol mechanics
 
-The following are intentionally not specified here: exact control-frame schemas; member-kind discovery and lazy-proxy implementation; subscription sequencing, acknowledgements, buffering, and flow control; provider replacement and reference collection; and how a future multi-pane presentation represents more than one selected session. They must preserve the semantics above without changing the plugin contract.
+The following are intentionally not specified here: most exact control-frame schemas; member-kind discovery and lazy-proxy implementation; subscription sequencing, acknowledgements, buffering, and flow control; reference collection; and how a future multi-pane presentation represents more than one selected session. Singleton provider replacement requires a complete replacement snapshot on the existing subscription so method, state, and event member slots retain identity. The remaining mechanics must preserve the semantics above without changing the plugin contract.
 
 ## Example: directory and selected session
 

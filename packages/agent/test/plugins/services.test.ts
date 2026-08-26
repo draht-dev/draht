@@ -118,6 +118,44 @@ describe("plugin remote services", () => {
 		provider.dispose();
 	});
 
+	test("keeps singleton facades stable when their provider is replaced", async () => {
+		const provider = new RemoteServiceProvider([Models]);
+		provider.provide(Models, {
+			state: remoteState<ModelsState>({ selected: null, revision: 1 }),
+			async select() {},
+		});
+		const namespace = new RemoteServiceNamespace({
+			services: [Models],
+			connection: createLoopbackServiceConnection(provider),
+		});
+		const models = namespace.use(Models);
+		const state = models.state;
+		const select = models.select;
+		await namespace.ready(BACKGROUND_CONTEXT);
+		expect(state.value?.revision).toBe(1);
+
+		provider.withdraw(Models);
+		expect(state.value).toBeUndefined();
+		await expect(select({ provider: "test", modelId: "unavailable" }, BACKGROUND_CONTEXT)).rejects.toMatchObject({
+			code: "service_not_found",
+		});
+
+		const replacementSelect = vi.fn(async () => {});
+		provider.replace(Models, {
+			state: remoteState<ModelsState>({ selected: null, revision: 2 }),
+			select: replacementSelect,
+		});
+
+		expect(namespace.use(Models)).toBe(models);
+		expect(models.state).toBe(state);
+		expect(state.value?.revision).toBe(2);
+		await select({ provider: "test", modelId: "replacement" }, BACKGROUND_CONTEXT);
+		expect(replacementSelect).toHaveBeenCalledOnce();
+
+		await namespace.dispose(BACKGROUND_CONTEXT);
+		provider.dispose();
+	});
+
 	test("keeps deferred service handles inaccessible until host activation", async () => {
 		const provider = new RemoteServiceProvider([Models]);
 		provider.provide(Models, {

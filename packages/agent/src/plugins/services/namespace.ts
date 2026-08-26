@@ -563,6 +563,9 @@ class KeyedBinding<T> {
 		if (this.#closed) return;
 		try {
 			switch (update.type) {
+				case "unavailable":
+				case "replaced":
+					throw new Error("Keyed service received a singleton lifecycle update");
 				case "spawned":
 					this.#spawn(update.instance, context, true);
 					break;
@@ -812,11 +815,18 @@ export class RemoteServiceNamespace implements RemoteServices {
 			serviceId,
 			"singleton",
 			(update, context) => {
-				if (!binding.active || binding.revision !== revision || update.instance !== undefined) return;
+				if (!binding.active || binding.revision !== revision) return;
 				try {
-					if (update.type === "state") {
+					if (update.type === "unavailable") {
+						binding.facade.clear();
+					} else if (update.type === "replaced") {
+						if (update.snapshot.instance !== undefined) {
+							throw new Error("Singleton replacement has an instance address");
+						}
+						binding.facade.install(update.snapshot, context);
+					} else if (update.type === "state" && update.instance === undefined) {
 						binding.facade.update(update.member, update.sequence, update.value, context);
-					} else if (update.type === "event") {
+					} else if (update.type === "event" && update.instance === undefined) {
 						binding.facade.deliverEvent(update.member, update.event, context);
 					}
 				} catch (error) {

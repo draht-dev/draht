@@ -114,6 +114,34 @@ export class RemoteServiceProvider {
 		registration.singleton = instance;
 	}
 
+	/** Disconnect one singleton while preserving its active subscriptions and remote facades. */
+	withdraw<T>(service: Service<T>): void {
+		this.#assertActive();
+		this.#assertAllowed(service.id);
+		const registration = this.#registration(service.id, "singleton", false);
+		const previous = registration.singleton;
+		if (previous === undefined) return;
+		previous.active = false;
+		for (const remove of previous.removeMemberListeners) remove();
+		delete registration.singleton;
+		this.#emit(registration, { type: "unavailable" });
+	}
+
+	/** Replace one singleton while preserving its active subscriptions and remote facades. */
+	replace<T>(service: Service<T>, implementation: NoInfer<RemoteServiceContract<T>>): void {
+		this.#assertActive();
+		this.#assertAllowed(service.id);
+		const registration = this.#registration(service.id, "singleton", false);
+		const replacement = this.#classifyInstance(registration, implementation, undefined);
+		const previous = registration.singleton;
+		if (previous !== undefined) {
+			previous.active = false;
+			for (const remove of previous.removeMemberListeners) remove();
+		}
+		registration.singleton = replacement;
+		this.#emit(registration, { type: "replaced", snapshot: this.#snapshotInstance(replacement) });
+	}
+
 	use<T>(service: Service<T>): T {
 		this.#assertActive();
 		this.#assertAllowed(service.id);

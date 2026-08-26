@@ -158,6 +158,8 @@ export type ServiceProviderUpdate =
 			readonly member: string;
 			readonly event: JsonValue;
 	  }
+	| { readonly type: "unavailable" }
+	| { readonly type: "replaced"; readonly snapshot: ServiceInstanceSnapshot }
 	| { readonly type: "spawned"; readonly instance: ServiceInstanceSnapshot }
 	| { readonly type: "closed"; readonly instance: ServiceInstanceAddress };
 

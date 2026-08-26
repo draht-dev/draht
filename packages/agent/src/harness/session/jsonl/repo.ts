@@ -1,4 +1,4 @@
-import { uuidv7 } from "@draht/ai";
+import { uuidv7 } from "@draht/ai/utils/uuid";
 import type { Context } from "../../context.ts";
 import type { FileError, FileInfo, FileSystem, Result } from "../../types.ts";
 import { createForkSnapshot, type ForkSourceSnapshot } from "../fork.ts";

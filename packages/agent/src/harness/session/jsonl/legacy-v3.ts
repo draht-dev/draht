@@ -1,4 +1,5 @@
-import { type ImageContent, type TextContent, type Usage, uuidv7 } from "@draht/ai";
+import type { ImageContent, TextContent, Usage } from "@draht/ai";
+import { uuidv7 } from "@draht/ai/utils/uuid";
 import type { AgentMessage, ThinkingLevel } from "../../../types.ts";
 import type { Context } from "../../context.ts";
 import { createBranchSummaryMessage, createCompactionSummaryMessage } from "../../messages.ts";

@@ -1,4 +1,4 @@
-import { uuidv7 } from "@draht/ai";
+import { uuidv7 } from "@draht/ai/utils/uuid";
 import type { AgentMessage } from "../../types.ts";
 import type { Context } from "../context.ts";
 import { insertEntry } from "./commit.ts";

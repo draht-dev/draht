@@ -14,7 +14,23 @@
 			"types": "./dist/node.d.ts",
 			"import": "./dist/node.js"
 		},
-		"./session/testing": {
+		"./harness/context": {
+			"types": "./dist/harness/context.d.ts",
+			"import": "./dist/harness/context.js"
+		},
+		"./harness/env/nodejs": {
+			"types": "./dist/harness/env/nodejs.d.ts",
+			"import": "./dist/harness/env/nodejs.js"
+		},
+		"./harness/runtime/reducer": {
+			"types": "./dist/harness/runtime/reducer.d.ts",
+			"import": "./dist/harness/runtime/reducer.js"
+		},
+		"./harness/session": {
+			"types": "./dist/harness/session/index.d.ts",
+			"import": "./dist/harness/session/index.js"
+		},
+		"./harness/session/testing": {
 			"types": "./dist/harness/session/testing/index.d.ts",
 			"import": "./dist/harness/session/testing/index.js"
 		},

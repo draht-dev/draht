@@ -22,6 +22,10 @@
 			"types": "./dist/api/*.d.ts",
 			"import": "./dist/api/*.js"
 		},
+		"./utils/*": {
+			"types": "./dist/utils/*.d.ts",
+			"import": "./dist/utils/*.js"
+		},
 		"./oauth": {
 			"types": "./dist/oauth.d.ts",
 			"import": "./dist/oauth.js"

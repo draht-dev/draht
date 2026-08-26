@@ -1,4 +1,5 @@
-import { type Usage, uuidv7 } from "@draht/ai";
+import type { Usage } from "@draht/ai";
+import { uuidv7 } from "@draht/ai/utils/uuid";
 import type { Context } from "../../context.ts";
 import type { FileError, FileSystem, Result } from "../../types.ts";
 import { insertUsage } from "../commit.ts";

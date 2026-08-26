@@ -291,7 +291,7 @@ afterEach(async () => {
 });
 
 describe("runtime structural drive", () => {
-	it("marks a threshold once and restores that checkpoint when the hook declines", async () => {
+	it("routes a declined threshold directly to assistant generation", async () => {
 		const fixture = await createFixture();
 		const model = fixture.faux.getModel();
 		const settings = {
@@ -331,9 +331,12 @@ describe("runtime structural drive", () => {
 
 		fixture.hooks.on("before_compaction", () => ({ decline: true }));
 		expect(await runStructuralDecision(fixture.lane, fixture.drive, deciding)).toEqual({ kind: "continue" });
-		const restored = currentState(fixture);
-		if (restored.at !== "checkpoint") throw new Error("threshold decline did not restore checkpoint");
-		expect(restored.thresholdCheckedTriggerEntryId).toBe(restored.triggerEntryId);
+		const routed = currentState(fixture);
+		if (routed.at !== "assistant.ready") throw new Error("threshold decline did not route to generation");
+		expect(routed.generationContext).toMatchObject({
+			triggerEntryId: "assistant",
+			overflowRecoveryUsed: false,
+		});
 		expect(fixture.events.filter((event) => event.type === "compaction_start")).toHaveLength(1);
 		expect(fixture.events.filter((event) => event.type === "compaction_end")).toHaveLength(1);
 	});
@@ -399,18 +402,113 @@ describe("runtime structural drive", () => {
 			releaseHook.resolve();
 			expect(await running).toEqual({ kind: "continue" });
 
-			let checkpoint = currentState(fixture);
-			if (checkpoint.at !== "checkpoint") throw new Error("compaction did not restore checkpoint");
-			expect(fixture.lane.state.inbox).toEqual([{ entryId: "queued", kind: queue }]);
-			expect(await runCheckpoint(fixture.lane, fixture.drive, checkpoint)).toEqual({ kind: "continue" });
-			checkpoint = currentState(fixture);
-			if (checkpoint.at !== "checkpoint") throw new Error("queued input did not reach checkpoint");
-			expect(checkpoint.continuation).toEqual({ kind: "need_assistant", overflowRecoveryUsed: false });
-			expect(fixture.lane.state.inbox).toEqual([]);
-			expect(await runCheckpoint(fixture.lane, fixture.drive, checkpoint)).toEqual({ kind: "continue" });
-			expect(currentState(fixture).at).toBe("assistant.ready");
+			const routed = currentState(fixture);
+			if (queue === "steer") {
+				if (routed.at !== "assistant.ready") throw new Error("steer did not route directly to generation");
+				expect(routed.generationContext).toMatchObject({
+					triggerEntryId: "queued",
+					overflowRecoveryUsed: false,
+				});
+				expect(fixture.lane.state.inbox).toEqual([]);
+				expect(
+					await fixture.session.getValue(storedValues.pendingEntry("queued"), BACKGROUND_CONTEXT),
+				).toBeUndefined();
+				const entry = await fixture.session.getEntry("queued", BACKGROUND_CONTEXT);
+				expect(entry).toMatchObject({ parentId: expect.any(String), type: "message" });
+				expect((await fixture.session.getEntry(entry!.parentId!, BACKGROUND_CONTEXT))?.type).toBe("compaction");
+			} else {
+				if (routed.at !== "checkpoint") throw new Error("follow-up did not reach the finish checkpoint");
+				expect(fixture.lane.state.inbox).toEqual([{ entryId: "queued", kind: "followUp" }]);
+				expect(await runCheckpoint(fixture.lane, fixture.drive, routed)).toEqual({ kind: "continue" });
+				const checkpoint = currentState(fixture);
+				if (checkpoint.at !== "checkpoint") throw new Error("follow-up did not reach checkpoint");
+				expect(checkpoint.continuation).toEqual({ kind: "need_assistant", overflowRecoveryUsed: false });
+				expect(fixture.lane.state.inbox).toEqual([]);
+				expect(await runCheckpoint(fixture.lane, fixture.drive, checkpoint)).toEqual({ kind: "continue" });
+				expect(currentState(fixture).at).toBe("assistant.ready");
+			}
 		},
 	);
+
+	it("publishes structural output and mixed write/steer input in one admission-ordered commit", async () => {
+		const fixture = await createFixture();
+		const scope = runScope();
+		const deciding = {
+			...scope,
+			settings: { ...scope.settings, steeringMode: "one-at-a-time" },
+			at: "summary.deciding",
+			task: runCompactionTask("threshold", {
+				continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
+				triggerEntryId: "tip",
+				thresholdCheckedTriggerEntryId: "tip",
+			}),
+		} as const;
+		await installOperation(
+			fixture,
+			deciding,
+			{ kind: "run", promptEntryIds: ["tip"] },
+			{
+				entries: [{ id: "tip", parentId: null, type: "message", message: user("history") }],
+				preparation: { taskId: "task", value: compactionPreparation() },
+			},
+		);
+		await fixture.lane.command((projection) => {
+			const inbox = [
+				{ entryId: "write-1", kind: "write" as const },
+				{ entryId: "steer", kind: "steer" as const },
+				{ entryId: "write-2", kind: "write" as const },
+				{ entryId: "steer-2", kind: "steer" as const },
+			];
+			return {
+				kind: "commit",
+				writes: [
+					storedValues.setValue(storedValues.pendingEntry("write-1"), {
+						type: "custom",
+						customType: "note",
+						payload: { order: 1 },
+					}),
+					storedValues.setValue(storedValues.pendingEntry("steer"), {
+						type: "message",
+						payload: user("steer"),
+					}),
+					storedValues.setValue(storedValues.pendingEntry("write-2"), {
+						type: "custom",
+						customType: "note",
+						payload: { order: 2 },
+					}),
+					storedValues.setValue(storedValues.pendingEntry("steer-2"), {
+						type: "message",
+						payload: user("next steer"),
+					}),
+					storedValues.setValue(storedValues.laneState("main"), {
+						currentOperationId: operationId,
+						lastOperationId: null,
+						inbox,
+					}),
+				],
+				next: { ...projection, inbox },
+				materialize: () => undefined,
+			};
+		}, BACKGROUND_CONTEXT);
+		fixture.storage.clearCommitAttempts();
+		fixture.hooks.on("before_compaction", () => ({
+			compaction: { summary: "summary", tokensBefore: 1_000, retainedTail: [user("tail")] },
+		}));
+
+		expect(await runStructuralDecision(fixture.lane, fixture.drive, deciding)).toEqual({ kind: "continue" });
+		expect(fixture.storage.getCommitAttempts()).toHaveLength(1);
+		expect(fixture.lane.state.inbox).toEqual([{ entryId: "steer-2", kind: "steer" }]);
+		expect(await fixture.session.getValue(storedValues.pendingEntry("steer-2"), BACKGROUND_CONTEXT)).toBeDefined();
+		const routed = currentState(fixture);
+		if (routed.at !== "assistant.ready") throw new Error("mixed input did not route to generation");
+		expect(routed.generationContext.triggerEntryId).toBe("steer");
+		expect(await fixture.session.getEntry("write-1", BACKGROUND_CONTEXT)).toMatchObject({
+			parentId: expect.any(String),
+		});
+		expect(await fixture.session.getEntry("steer", BACKGROUND_CONTEXT)).toMatchObject({ parentId: "write-1" });
+		expect(await fixture.session.getEntry("write-2", BACKGROUND_CONTEXT)).toMatchObject({ parentId: "steer" });
+		expect(fixture.lane.state.tipId).toBe("write-2");
+	});
 
 	it("queues writes during standalone structural work without changing the operation", async () => {
 		const fixture = await createFixture();
@@ -510,6 +608,7 @@ describe("runtime structural drive", () => {
 				preparation: { taskId: "task", value: compactionPreparation() },
 			},
 		);
+		const queuedId = await fixture.lane.appendCustomEntry("retained", { after: "compaction" }, BACKGROUND_CONTEXT);
 		fixture.hooks.on("before_compaction", () => ({
 			compaction: {
 				summary: "hook summary",
@@ -525,6 +624,8 @@ describe("runtime structural drive", () => {
 			outcome: { operationId, kind: "compaction", status: "completed" },
 		});
 		expect(fixture.lane.state.operation).toBeNull();
+		expect(fixture.lane.state.inbox).toEqual([{ entryId: queuedId, kind: "write" }]);
+		expect(await fixture.session.getValue(storedValues.pendingEntry(queuedId), BACKGROUND_CONTEXT)).toBeDefined();
 		const entry = await fixture.session.getEntry(fixture.lane.state.tipId!, BACKGROUND_CONTEXT);
 		expect(entry).toMatchObject({
 			type: "compaction",
@@ -657,7 +758,7 @@ describe("runtime structural drive", () => {
 		expect(fixture.events.filter((event) => event.type === "usage")).toHaveLength(2);
 	});
 
-	it("restores the captured run checkpoint after generated threshold compaction", async () => {
+	it("preserves the overflow recovery bound when compaction resumes generation", async () => {
 		const fixture = await createFixture();
 		const resumeAfter: CheckpointOperation = {
 			...runScope(),
@@ -668,8 +769,8 @@ describe("runtime structural drive", () => {
 		};
 		const ready = summaryReady(
 			runScope(),
-			runCompactionTask("threshold", {
-				continuation: resumeAfter.continuation,
+			runCompactionTask("overflow", {
+				continuation: { kind: "need_assistant", overflowRecoveryUsed: true },
 				triggerEntryId: resumeAfter.triggerEntryId,
 				thresholdCheckedTriggerEntryId: resumeAfter.thresholdCheckedTriggerEntryId,
 			}),
@@ -687,12 +788,11 @@ describe("runtime structural drive", () => {
 		fixture.faux.setResponses([fauxAssistantMessage("generated summary")]);
 
 		expect(await runStructuralGeneration(fixture.lane, fixture.drive, ready)).toEqual({ kind: "continue" });
-		const restored = currentState(fixture);
-		if (restored.at !== "checkpoint") throw new Error("generated compaction did not restore checkpoint");
-		expect(restored).toMatchObject({
-			continuation: resumeAfter.continuation,
+		const routed = currentState(fixture);
+		if (routed.at !== "assistant.ready") throw new Error("generated compaction did not route to generation");
+		expect(routed.generationContext).toMatchObject({
 			triggerEntryId: "tip",
-			thresholdCheckedTriggerEntryId: "tip",
+			overflowRecoveryUsed: true,
 		});
 		expect(fixture.lane.state.tipId).toBe("summary-entry");
 		const entry = await fixture.session.getEntry("summary-entry", BACKGROUND_CONTEXT);

@@ -17,6 +17,7 @@ import { insertEntry, insertUsage } from "../../session/commit.ts";
 import { SessionInvariantError } from "../../session/session.ts";
 import {
 	type AssistantEffectPendingOperation,
+	type AssistantReadyOperation,
 	type BranchSummaryEntry,
 	type CheckpointOperation,
 	type CommitResult,
@@ -40,10 +41,17 @@ import {
 	type UsageRow,
 	type Write,
 } from "../../session/types.ts";
-import { branchTip, entryLabel, operationPreparation, setValue } from "../../session/values.ts";
+import {
+	branchTip,
+	deleteValue,
+	entryLabel,
+	operationPreparation,
+	pendingEntry,
+	setValue,
+} from "../../session/values.ts";
 import type { AgentHarnessStreamOptions } from "../../types.ts";
 import type { Lane } from "../lane.ts";
-import { committedEntryEvents, readBoundedEntries } from "../transcript.ts";
+import { committedEntryEvents, readBoundedEntries, readPendingMessages } from "../transcript.ts";
 import type { ContinueOperationResult, Drive, ProcedureResult } from "../types.ts";
 import { retryDelay, retryNotBefore, waitUntil } from "./retry.ts";
 import { operationCleanupWrites, operationResultRecord } from "./terminal.ts";
@@ -296,38 +304,129 @@ async function publishStructuralOutcome<TContext extends object | undefined>(
 					if (outcome.kind === "branch_summary") {
 						throw new SessionInvariantError("Run compaction boundary received a branch summary");
 					}
-					if (outcome.kind === "compaction") {
+					if (
+						outcome.kind === "compaction" ||
+						(outcome.kind === "declined" && current.task.reason === "threshold")
+					) {
+						if (terminalTipId === null) throw new SessionInvariantError("Run compaction has no Branch tip");
+						const steer = state.inbox.filter((item) => item.kind === "steer");
+						const selectedSteer = new Set(
+							(current.settings.steeringMode === "all" ? steer : steer.slice(0, 1)).map((item) => item.entryId),
+						);
+						const selected = state.inbox.filter(
+							(item) => item.kind === "write" || (item.kind === "steer" && selectedSteer.has(item.entryId)),
+						);
+						const pending = await Promise.all(
+							selected.map(async (item) => {
+								const stored = await reader.getValue(pendingEntry(item.entryId), drive.context);
+								if (stored === undefined) {
+									throw new SessionInvariantError(
+										`Pending ${item.kind} entry ${item.entryId} is missing its payload`,
+									);
+								}
+								if (item.kind === "steer" && stored.value.type !== "message") {
+									throw new SessionInvariantError(`Queued steer entry ${item.entryId} is not a message`);
+								}
+								return { item, pending: stored.value };
+							}),
+						);
+						let parentId = terminalTipId;
+						let triggerEntryId: string | undefined;
+						const entries: NewEntry[] = pending.map(({ item, pending: value }) => {
+							const entry: NewEntry =
+								value.type === "message"
+									? { id: item.entryId, parentId, type: "message", message: value.payload }
+									: {
+											id: item.entryId,
+											parentId,
+											type: "custom",
+											customType: value.customType,
+											...(value.payload === undefined ? {} : { data: value.payload }),
+										};
+							parentId = item.entryId;
+							if (
+								value.type === "message" ||
+								lane.readConfig().entryProjectors[value.customType] !== undefined
+							) {
+								triggerEntryId = item.entryId;
+							}
+							return entry;
+						});
+						const selectedIds = new Set(selected.map((item) => item.entryId));
+						const inbox = state.inbox.filter((item) => !selectedIds.has(item.entryId));
+						const queueUpdate =
+							selectedSteer.size === 0
+								? undefined
+								: await Promise.all(
+										(["steer", "followUp", "nextRun"] as const).map((kind) =>
+											readPendingMessages(
+												reader,
+												inbox.filter((item) => item.kind === kind).map((item) => item.entryId),
+												`Pending ${kind} entry`,
+												drive.context,
+											),
+										),
+									);
+						const entryWriteIndex = writes.length;
+						writes.push(
+							...entries.map((entry) => insertEntry(entry)),
+							...selected.map((item) => deleteValue(pendingEntry(item.entryId))),
+							...(entries.length === 0 ? [] : [setValue(branchTip(lane.name), parentId)]),
+						);
+						const continuation = current.task.boundary.resumeAfter.continuation;
+						const operationState: AssistantReadyOperation | CheckpointOperation =
+							triggerEntryId !== undefined || continuation.kind === "need_assistant"
+								? {
+										...operationScopeOf(current),
+										at: "assistant.ready",
+										generationContext: {
+											stepId: lane.session.idGenerator.next(),
+											triggerEntryId: triggerEntryId ?? current.task.boundary.resumeAfter.triggerEntryId,
+											configuration: state.configuration,
+											streamOptions: lane.readConfig().streamOptions,
+											retryPolicy: normalizedRetryPolicy(lane),
+											overflowRecoveryUsed:
+												triggerEntryId === undefined && continuation.kind === "need_assistant"
+													? continuation.overflowRecoveryUsed
+													: false,
+										},
+										nextAttempt: 1,
+									}
+								: {
+										...operationScopeOf(current),
+										at: "checkpoint",
+										...current.task.boundary.resumeAfter,
+									};
 						return {
 							kind: "commit",
 							writes,
-							operationState: {
-								...operationScopeOf(current),
-								at: "checkpoint",
-								...current.task.boundary.resumeAfter,
-							},
-							lane: { tipId: terminalTipId },
+							operationState,
+							lane: { tipId: parentId, inbox },
 							materialize: () => ({ kind: "continue" }) as const,
-							events,
-						};
-					}
-					if (outcome.kind === "declined" && current.task.reason === "threshold") {
-						return {
-							kind: "commit",
-							writes: [],
-							operationState: {
-								...operationScopeOf(current),
-								at: "checkpoint",
-								...current.task.boundary.resumeAfter,
-							},
-							materialize: () => ({ kind: "continue" }) as const,
-							events: () => [
-								{
-									type: "compaction_end",
-									lane: lane.name,
-									runId: drive.operationId,
-									reason: "threshold",
-									status: "declined",
-								},
+							events: (commit) => [
+								...(outcome.kind === "compaction"
+									? events(commit)
+									: [
+											{
+												type: "compaction_end" as const,
+												lane: lane.name,
+												runId: drive.operationId,
+												reason: "threshold" as const,
+												status: "declined" as const,
+											},
+										]),
+								...committedEntryEvents(entries, commit, lane.name, drive.operationId, entryWriteIndex),
+								...(queueUpdate === undefined
+									? []
+									: [
+											{
+												type: "queue_update" as const,
+												lane: lane.name,
+												steer: queueUpdate[0],
+												followUp: queueUpdate[1],
+												nextRun: queueUpdate[2],
+											},
+										]),
 							],
 						};
 					}

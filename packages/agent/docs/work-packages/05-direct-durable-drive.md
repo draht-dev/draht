@@ -1,6 +1,6 @@
 # WP05 — Direct durable drive
 
-**Status: M5 complete; M6 structural foundation committed; R1a lane-owned inbox relocation, R2 record-only outcomes, and reviewed R3 family-neutral leaves implemented; R1b next, then M7 (reconciliation), M8 (public surfaces), M9 (documentation reconciliation), and M10 (provider KV-cache identity review).**
+**Status: M5 complete; M6 structural foundation committed; R1a lane-owned inbox relocation, R2 record-only outcomes, reviewed R3 family-neutral leaves, and R1b-1 structural boundary fusion implemented; R1b-2 next, then M7 (reconciliation), M8 (public surfaces), M9 (documentation reconciliation), and M10 (provider KV-cache identity review).**
 
 WP06's Session/Branch/Lane separation is already part of the foundation. Public drive remains disabled until R1–R3, cancellation reconciliation, the total drive switch, every public execution surface, and the provider KV-cache identity review are complete.
 
@@ -244,7 +244,7 @@ Crash between TX4..n and TX-pub → structural recovery (attempt unknown, per ex
 
 Slices, in order (the order is load-bearing — deleting the marker while decline still re-entered `checkpoint` would live-loop):
 
-1. **R1b-1**: extract the shared planner; fuse it into the structural `resume_checkpoint` boundary (`threshold: "skip"`); structural success/decline stop committing back into `checkpoint` except the success/`may_finish` resting case. Both patch fields still written and checked by the old checkpoint pass — harmless.
+1. **R1b-1**: fuse the future shared planner into the structural `resume_checkpoint` boundary (`threshold: "skip"`); structural success/decline route directly except for a `may_finish` resting checkpoint, which remains safe for either outcome while the durable marker still exists. Keep the route inline until R1b-2 creates its second caller. Both patch fields are still written and checked by the old checkpoint pass — harmless.
 2. **R1b-2**: convert the `checkpoint` pass to single-commit exits with the recency guard, implement the three-phase finish arm, delete `skipInboxOnce` and `thresholdCheckedTriggerEntryId`.
 
 ### Rules

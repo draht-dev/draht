@@ -1,4 +1,10 @@
-import { type AssistantMessageEvent, AssistantMessageFrameEncoder, isRetryableAssistantError } from "@draht/ai";
+import {
+	type AssistantMessageEvent,
+	AssistantMessageFrameEncoder,
+	isContextOverflow,
+	isRecoverableLength,
+	isRetryableAssistantError,
+} from "@draht/ai";
 import type { HarnessEvent } from "../../agent-harness.ts";
 import type { Context } from "../../context.ts";
 import type { AssistantResponseMetadata, AssistantStreamObserver } from "../../execution/assistant.ts";
@@ -10,6 +16,7 @@ import {
 	type OperationError,
 	type OperationState,
 	type RunAssistantEffectPendingOperation,
+	type RunCompactionDecidingOperation,
 	type RunDeferredEffectPendingOperation,
 	type RunOperationState,
 	runScopeOf,
@@ -18,10 +25,12 @@ import {
 	type UsageRow,
 	type Write,
 } from "../../session/types.ts";
-import { branchTip, deleteList, pendingAssistantFrames, setValue } from "../../session/values.ts";
+import { branchTip, deleteList, operationPreparation, pendingAssistantFrames, setValue } from "../../session/values.ts";
 import type { Lane } from "../lane.ts";
 import { openFrameProgress } from "../progress.ts";
 import type { Drive, ProcedureResult } from "../types.ts";
+import { retryDelay, retryNotBefore } from "./retry.ts";
+import { prepareOverflowCompaction } from "./structural.ts";
 
 export type AssistantResponseLifecycle = {
 	observer: AssistantStreamObserver;
@@ -145,16 +154,6 @@ function normalizeAborted(source: "assistant" | "deferred", message: SettledAssi
 	};
 }
 
-function retryDelay(baseDelayMs: number, attempt: number): number {
-	const delay = baseDelayMs * 2 ** Math.max(0, attempt - 1);
-	return Number.isSafeInteger(delay) ? delay : Number.MAX_SAFE_INTEGER;
-}
-
-function saturatingAdd(left: number, right: number): number {
-	const sum = left + right;
-	return Number.isSafeInteger(sum) ? sum : Number.MAX_SAFE_INTEGER;
-}
-
 function deferredHandleIsValid(
 	message: SettledAssistantMessage,
 	generation: RunAssistantEffectPendingOperation,
@@ -172,13 +171,20 @@ function deferredHandleIsValid(
 }
 
 /** Classify and atomically settle one assistant-generation or deferred-poll response. */
-export function publishResponse<TContext extends object | undefined>(
+export async function publishResponse<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
 	intent: ResponseIntent,
 	response: SettledAssistantMessage,
 	options: { recovery?: true } = {},
 ): Promise<ProcedureResult> {
+	const overflow =
+		intent.at === "run.assistant.effect_pending" &&
+		(isContextOverflow(response, intent.contextWindow) || isRecoverableLength(response, intent.intendedOutputLimit));
+	const overflowPreparation =
+		overflow && !intent.generationContext.overflowRecoveryUsed
+			? await prepareOverflowCompaction(lane, drive, intent)
+			: undefined;
 	return lane.settleOperation(
 		intent,
 		(state, current) => {
@@ -208,6 +214,32 @@ export function publishResponse<TContext extends object | undefined>(
 				throw new SessionInvariantError(
 					`${source === "assistant" ? "Assistant" : "Deferred"} response is aborted while durable control is running`,
 				);
+			} else if (current.at === "run.assistant.effect_pending" && overflow) {
+				committed = normalizeError(
+					response,
+					response.errorMessage ?? "Assistant request exceeded the context window",
+				);
+				if (current.generationContext.overflowRecoveryUsed || overflowPreparation === undefined) {
+					settled = {
+						...scope,
+						at: "run.failure_drain",
+						error: providerError(source, committed),
+						provenance: { kind: "response", entryId: responseEntryId },
+					};
+				} else {
+					const structural: RunCompactionDecidingOperation = {
+						...scope,
+						at: "run.compaction.deciding",
+						reason: "overflow",
+						resumeAfter: {
+							continuation: { kind: "need_assistant", overflowRecoveryUsed: true },
+							triggerEntryId: current.generationContext.triggerEntryId,
+							thresholdCheckedTriggerEntryId: current.generationContext.triggerEntryId,
+						},
+						taskId: overflowPreparation.taskId,
+					};
+					settled = structural;
+				}
 			} else if (response.stopReason === "deferred") {
 				if (current.at === "run.assistant.effect_pending") {
 					if (deferredHandleIsValid(response, current)) {
@@ -246,13 +278,12 @@ export function publishResponse<TContext extends object | undefined>(
 					(options.recovery === true || isRetryableAssistantError(response)) &&
 					current.attempt < current.generationContext.retryPolicy.maxAttempts
 				) {
-					const delayMs = retryDelay(current.generationContext.retryPolicy.baseDelayMs, current.attempt);
 					settled = {
 						...scope,
 						at: "run.assistant.retry_wait",
 						generationContext: current.generationContext,
 						nextAttempt: current.attempt + 1,
-						notBefore: saturatingAdd(Date.now(), delayMs),
+						notBefore: retryNotBefore(current.generationContext.retryPolicy.baseDelayMs, current.attempt),
 						errorMessage: response.errorMessage ?? "Assistant request failed",
 					};
 				} else {
@@ -316,6 +347,14 @@ export function publishResponse<TContext extends object | undefined>(
 					insertUsage(usageRow),
 					setValue(branchTip(lane.name), responseEntryId),
 					deleteList(pendingAssistantFrames(drive.operationId, responseEntryId)),
+					...(settled.at === "run.compaction.deciding" && overflowPreparation !== undefined
+						? [
+								setValue(
+									operationPreparation(drive.operationId, overflowPreparation.taskId),
+									overflowPreparation.preparation,
+								),
+							]
+						: []),
 				],
 				operationState: settled,
 				lane: { tipId: responseEntryId },
@@ -377,6 +416,14 @@ export function publishResponse<TContext extends object | undefined>(
 								turnId,
 								message: committed,
 								toolResults: [],
+							});
+						}
+						if (settled.at === "run.compaction.deciding") {
+							events.push({
+								type: "compaction_start",
+								lane: lane.name,
+								runId: drive.operationId,
+								reason: "overflow",
 							});
 						}
 					} else if (settled.at !== "run.tools") {

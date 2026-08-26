@@ -13,7 +13,13 @@ import type { Context } from "../context.ts";
 import { convertToLlm, createBranchSummaryMessage, createCompactionSummaryMessage } from "../messages.ts";
 import type { Branch, Entry, Session } from "../session/index.ts";
 import { BranchSummaryError, err, ok, type Result } from "../types.ts";
-import { completeSimpleWithRetries, estimateTokens, SUMMARIZATION_SYSTEM_PROMPT } from "./compaction.ts";
+import {
+	completeSimpleWithRetries,
+	createSummaryRequestOptions,
+	estimateTokens,
+	SUMMARIZATION_SYSTEM_PROMPT,
+	type SummaryRequest,
+} from "./compaction.ts";
 import {
 	computeFileLists,
 	createFileOps,
@@ -210,17 +216,37 @@ Use this EXACT format:
 Keep each section concise. Preserve exact file paths, function names, and error messages.`;
 
 /** Generate a summary for abandoned branch entries. */
-export async function generateBranchSummary(
+export function generateBranchSummary(
 	entries: Entry[],
 	options: GenerateBranchSummaryOptions,
 	context: Context,
 ): Promise<Result<BranchSummaryResult, BranchSummaryError>> {
 	const { models, model, customInstructions, replaceInstructions, reserveTokens = 16384, retry, callbacks } = options;
 	const contextWindow = model.contextWindow || 128000;
-	const tokenBudget = contextWindow - reserveTokens;
+	const preparation = prepareBranchEntries(entries, contextWindow - reserveTokens);
+	return generateBranchSummaryWithRequest(
+		preparation,
+		{ customInstructions, replaceInstructions },
+		(aiContext, requestOptions, requestContext) =>
+			completeSimpleWithRetries(models, model, aiContext, requestOptions, retry, callbacks, requestContext),
+		context,
+	);
+}
 
-	const { messages, fileOps } = prepareBranchEntries(entries, tokenBudget);
+export interface PreparedBranchSummaryOptions {
+	customInstructions?: string;
+	replaceInstructions?: boolean;
+}
 
+/** Generate a prepared branch summary through a caller-owned one-request boundary. */
+export async function generateBranchSummaryWithRequest(
+	preparation: BranchPreparation,
+	options: PreparedBranchSummaryOptions,
+	request: SummaryRequest,
+	context: Context,
+): Promise<Result<BranchSummaryResult, BranchSummaryError>> {
+	const { customInstructions, replaceInstructions } = options;
+	const { messages, fileOps } = preparation;
 	if (messages.length === 0) {
 		return ok({ summary: "No content to summarize", readFiles: [], modifiedFiles: [] });
 	}
@@ -243,13 +269,9 @@ export async function generateBranchSummary(
 			timestamp: Date.now(),
 		},
 	];
-	const response = await completeSimpleWithRetries(
-		models,
-		model,
+	const response = await request(
 		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		{ maxTokens: 2048 },
-		retry,
-		callbacks,
+		createSummaryRequestOptions({ maxTokens: 2048 }, context),
 		context,
 	);
 	if (response.stopReason === "aborted") {

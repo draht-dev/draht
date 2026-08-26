@@ -55,7 +55,7 @@ import {
 } from "../session/values.ts";
 import { formatSkillInvocation } from "../skills.ts";
 import { readAssistantFrames } from "./progress.ts";
-import { chainEntries, entryLifecycleEvents, readPendingMessages } from "./transcript.ts";
+import { chainEntries, committedEntryEvents, readPendingMessages } from "./transcript.ts";
 import {
 	type Config,
 	type ContinueOperationResult,
@@ -473,16 +473,10 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 				next,
 				materialize: () => Result.ok({ operationId, kind: "run", startedAt }),
 				events: (commit) => {
-					const events: HarnessEvent[] = [{ type: "run_start", runId: operationId, lane: this.name }];
-					for (const [index, entry] of entries.entries()) {
-						events.push(
-							...entryLifecycleEvents(
-								{ ...entry, seq: commit.seqs[index]!, timestamp: commit.timestamp },
-								this.name,
-								operationId,
-							),
-						);
-					}
+					const events: HarnessEvent[] = [
+						{ type: "run_start", runId: operationId, lane: this.name },
+						...committedEntryEvents(entries, commit, this.name, operationId),
+					];
 					if (captured.length !== 0) {
 						events.push({
 							type: "queue_update",

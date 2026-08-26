@@ -643,6 +643,39 @@ describe("harness compaction", () => {
 		expect(sessionIds[0]).not.toBe(sessionIds[1]);
 	});
 
+	it("retains per-request retries for non-harness compaction callers", async () => {
+		const messages: AgentMessage[] = [createUserMessage("Summarize this.")];
+		const preparation: CompactionPreparation = {
+			messagesToSummarize: messages,
+			turnPrefixMessages: [],
+			retainedTail: messages,
+			isSplitTurn: false,
+			tokensBefore: 100,
+			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+			settings: { enabled: true, reserveTokens: 2_000, keepRecentTokens: 20 },
+		};
+		const { faux, model } = createFauxModel(false);
+		faux.setResponses([
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "rate limit exceeded" }),
+			fauxAssistantMessage("recovered summary"),
+		]);
+
+		expect(
+			getOrThrow(
+				await compact(
+					preparation,
+					models,
+					model,
+					undefined,
+					undefined,
+					{ enabled: true, maxRetries: 1, baseDelayMs: 0 },
+					undefined,
+					BACKGROUND_CONTEXT,
+				),
+			).summary,
+		).toContain("recovered summary");
+	});
+
 	it("returns compaction error results without throwing", async () => {
 		const messages: AgentMessage[] = [createUserMessage("Summarize this.")];
 		const preparation: CompactionPreparation = {

@@ -8,17 +8,14 @@ Public drive remains disabled until the execution graph is total. Format 4 is st
 
 ## Implementation status
 
-Completion measurements:
+Pre-M6 completion measurements:
 
 - pre-simplification runtime at `eb1185d93`: 5,358 TypeScript lines;
 - runtime after the first simplification at `417905647`: 4,667 lines;
-- runtime after this pass: 4,654 lines;
-- total reduction: 704 lines (13.1%);
-- this pass versus `417905647`: -13 runtime lines.
+- simplified substrate at `0e77e57d9`: 4,654 lines;
+- total pre-M6 reduction: 704 lines (13.1%).
 
-`npm run check` passes. The 13 focused assistant/runtime/type files pass with 128 tests.
-
-Implemented in the working tree:
+Implemented by the simplification pass:
 
 - explicit `ContinueOperationResult<T>` with `cancel_requested` instead of implicit `undefined`;
 - concrete generation, deferred-poll, and tool-call phases: prepare immutable input, publish durable intent, perform the effect, publish the durable outcome;
@@ -31,9 +28,22 @@ Implemented in the working tree:
 - shared transcript mechanics in `runtime/transcript.ts`;
 - narrower `LanePatch`, no redundant Drive promise-settlement flag, and no unused operation reject arm.
 
-Current largest files are `runtime/lane.ts` (~996), `runtime/drive/tools.ts` (~663), `runtime/drive/checkpoint.ts` (~452), and `runtime/drive/response.ts` (~417).
+At simplification completion, the largest files were `runtime/lane.ts` (~996), `runtime/drive/tools.ts` (~663), `runtime/drive/checkpoint.ts` (~452), and `runtime/drive/response.ts` (~417).
 
-Public drive remains disabled; M6–M8 have not started. Keep the visible durable procedure order:
+### M6 status
+
+M6 structural execution is underway on the simplified substrate. Its first coherent slice adds:
+
+- shared compaction-bounded transcript/context reads and committed-entry event decoration;
+- caller-owned one-provider-request seams for compaction and branch summaries while preserving retrying behavior for existing non-harness callers;
+- direct procedures for every structural `at` leaf in `runtime/drive/structural.ts`;
+- once-per-trigger threshold routing and atomic overflow preparation publication;
+- per-request structural intent and usage settlement, attempt retry/recovery, hook decisions, compaction/navigation publication, and terminal cleanup;
+- focused coverage for threshold/overflow entry, split-turn request accounting, generated and hook results, retry/cap/recovery, model absence, mid-request durable cancellation, navigation, and preparation corruption.
+
+The runtime is currently 6,149 lines including the new 1,460-line structural procedure module. `npm run check` passes, as do 168 tests across 16 focused files. Remaining M6 work is broader crash/state coverage and any corrections it reveals; M7 reconciliation/total dispatch and M8 public surfaces have not started.
+
+Public drive remains disabled. Keep the visible durable procedure order:
 `prepare → publish intent → perform effect → publish outcome`.
 Do not introduce a generic Procedure interface, runner, scheduler, graph, callback plan, or dependency facade. Historical work-package documents remain unchanged.
 

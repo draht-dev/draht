@@ -3,7 +3,6 @@ import type { AgentMessage } from "../../../types.ts";
 import { type Context, withAbortSignal } from "../../context.ts";
 import { type HarnessAssistantStreamConfig, streamHarnessAssistant } from "../../execution/assistant.ts";
 import { applyStreamOptionsPatch } from "../../hooks.ts";
-import { buildSessionContext } from "../../session/context.ts";
 import { SessionInvariantError } from "../../session/session.ts";
 import {
 	type JsonValue,
@@ -17,8 +16,10 @@ import {
 } from "../../session/types.ts";
 import type { AgentHarnessStreamOptions } from "../../types.ts";
 import type { Lane } from "../lane.ts";
+import { readBoundedContext } from "../transcript.ts";
 import type { ContinueOperationResult, Drive, ProcedureResult } from "../types.ts";
 import { openAssistantResponse, publishConfigurationFailure, publishResponse } from "./response.ts";
+import { waitUntil } from "./retry.ts";
 
 /** Assistant effect-pending payload without the run-wide scope fields. */
 type AssistantEffectPending = Omit<RunAssistantEffectPendingOperation, keyof RunScope>;
@@ -52,32 +53,6 @@ function configurationError(
 	};
 }
 
-function waitUntil(notBefore: number, signal: AbortSignal): Promise<void> {
-	return new Promise<void>((resolve, reject) => {
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		const cleanup = () => {
-			if (timer !== undefined) clearTimeout(timer);
-			signal.removeEventListener("abort", onAbort);
-		};
-		const onAbort = () => {
-			cleanup();
-			reject(signal.reason);
-		};
-		const check = () => {
-			const remaining = notBefore - Date.now();
-			if (remaining <= 0) {
-				cleanup();
-				resolve();
-				return;
-			}
-			timer = setTimeout(check, Math.min(remaining, 2_147_483_647));
-		};
-		signal.addEventListener("abort", onAbort, { once: true });
-		if (signal.aborted) onAbort();
-		else check();
-	});
-}
-
 async function resolveSystemPrompt<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	context: Context,
@@ -88,36 +63,6 @@ async function resolveSystemPrompt<TContext extends object | undefined>(
 	const source = config.toolContext;
 	const toolContext = typeof source === "function" ? await source(context) : source;
 	return config.systemPrompt(toolContext as TContext, context);
-}
-
-async function readRequestMessages<TContext extends object | undefined>(
-	lane: Lane<TContext>,
-	drive: Drive,
-	generation: RunAssistantReadyOperation,
-): Promise<ContinueOperationResult<AgentMessage[]>> {
-	const path = await lane.continueOperation(
-		generation,
-		async (state, _current, _meta, reader) => {
-			if (state.tipId === null) throw new SessionInvariantError("Assistant generation has no Branch tip");
-			const entries = (
-				await reader.scanBranch(
-					{ start: state.tipId, stopAtType: "compaction", order: "newestFirst" },
-					drive.context,
-				)
-			).reverse();
-			return { kind: "return", result: entries };
-		},
-		drive.context,
-	);
-	if (path.kind === "cancel_requested") return path;
-	return {
-		kind: "result",
-		value: await buildSessionContext(
-			path.value,
-			{ entryProjectors: lane.readConfig().entryProjectors },
-			drive.context,
-		),
-	};
 }
 
 async function prepareGeneration<TContext extends object | undefined>(
@@ -153,7 +98,7 @@ async function prepareGeneration<TContext extends object | undefined>(
 		};
 	});
 
-	const messages = await readRequestMessages(lane, drive, generation);
+	const messages = await readBoundedContext(lane, drive, generation);
 	if (messages.kind === "cancel_requested") return messages;
 	const systemPrompt = await resolveSystemPrompt(lane, drive.context);
 	const beforeRequest = await lane.hooks.runWithGate(

@@ -1,9 +1,13 @@
 import type { AgentMessage } from "../../types.ts";
 import type { HarnessEvent } from "../agent-harness.ts";
 import type { Context } from "../context.ts";
+import { materializeCommittedEntry } from "../session/commit.ts";
+import { buildSessionContext } from "../session/context.ts";
 import { SessionInvariantError } from "../session/session.ts";
-import type { Entry, SessionReader } from "../session/types.ts";
+import type { CommitResult, Entry, NewEntry, RunOperationState, SessionReader } from "../session/types.ts";
 import { pendingEntry } from "../session/values.ts";
+import type { Lane } from "./lane.ts";
+import type { ContinueOperationResult, Drive } from "./types.ts";
 
 export function chainEntries<T extends { id: string }>(
 	parentId: string | null,
@@ -24,6 +28,58 @@ export function entryLifecycleEvents(entry: Entry, lane: string, runId: string):
 				{ type: "entry_added", lane, entry },
 			]
 		: [{ type: "entry_added", lane, entry }];
+}
+
+export function committedEntryEvents(
+	entries: readonly NewEntry[],
+	commit: CommitResult,
+	lane: string,
+	runId: string,
+	firstWriteIndex = 0,
+): HarnessEvent[] {
+	return entries.flatMap((entry, index) =>
+		entryLifecycleEvents(
+			materializeCommittedEntry(entry, commit.seqs[firstWriteIndex + index]!, commit.timestamp),
+			lane,
+			runId,
+		),
+	);
+}
+
+export function readBoundedEntries<TContext extends object | undefined, TState extends RunOperationState>(
+	lane: Lane<TContext>,
+	drive: Drive,
+	capability: TState,
+): Promise<ContinueOperationResult<Entry[]>> {
+	return lane.continueOperation(
+		capability,
+		async (state, _current, _meta, reader) => {
+			if (state.tipId === null) throw new SessionInvariantError("Run operation has no Branch tip");
+			const entries = await reader.scanBranch(
+				{ start: state.tipId, stopAtType: "compaction", order: "newestFirst" },
+				drive.context,
+			);
+			return { kind: "return", result: entries.reverse() };
+		},
+		drive.context,
+	);
+}
+
+export async function readBoundedContext<TContext extends object | undefined, TState extends RunOperationState>(
+	lane: Lane<TContext>,
+	drive: Drive,
+	capability: TState,
+): Promise<ContinueOperationResult<AgentMessage[]>> {
+	const entries = await readBoundedEntries(lane, drive, capability);
+	if (entries.kind === "cancel_requested") return entries;
+	return {
+		kind: "result",
+		value: await buildSessionContext(
+			entries.value,
+			{ entryProjectors: lane.readConfig().entryProjectors },
+			drive.context,
+		),
+	};
 }
 
 export function readPendingMessages(

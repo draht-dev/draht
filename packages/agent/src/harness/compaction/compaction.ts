@@ -16,7 +16,7 @@ import type { AgentMessage, ThinkingLevel } from "../../types.ts";
 import type { Context } from "../context.ts";
 import { convertToLlm, createBranchSummaryMessage, createCompactionSummaryMessage } from "../messages.ts";
 import { buildContextEntries, sessionEntryToContextMessages } from "../session/context.ts";
-import type { CompactionEntry, Entry } from "../session/types.ts";
+import type { CompactionEntry, Entry, JsonValue } from "../session/types.ts";
 import { CompactionError, err, ok, type Result } from "../types.ts";
 import { addUsage } from "../utils/usage.ts";
 import {
@@ -29,7 +29,7 @@ import {
 } from "./utils.ts";
 
 /** File-operation details stored on generated compaction entries. */
-export interface CompactionDetails {
+export interface CompactionDetails extends Record<string, JsonValue> {
 	/** Files read in the compacted history. */
 	readFiles: string[];
 	/** Files modified in the compacted history. */
@@ -95,7 +95,7 @@ function getMessageFromEntryForCompaction(entry: Entry): AgentMessage | undefine
 }
 
 /** Generated compaction data ready to be persisted as a compaction entry. */
-export interface CompactResult<T = unknown> {
+export interface CompactResult<T = JsonValue> {
 	/** Summary text that replaces compacted history in future context. */
 	summary: string;
 	/** Estimated context tokens before compaction. */
@@ -108,6 +108,22 @@ export interface CompactResult<T = unknown> {
 	details?: T;
 }
 
+export type SummaryRequest = (
+	aiContext: AiContext,
+	options: SimpleStreamOptions,
+	context: Context,
+) => Promise<AssistantMessage>;
+
+export function createSummaryRequestOptions(options: SimpleStreamOptions, context: Context): SimpleStreamOptions {
+	return {
+		...options,
+		signal: context.abortSignal,
+		telemetryContext: context.telemetryContext,
+		cacheRetention: "none",
+		sessionId: options.sessionId ?? uuidv7(),
+	};
+}
+
 export async function completeSimpleWithRetries(
 	models: Models,
 	model: Model<Api>,
@@ -118,13 +134,7 @@ export async function completeSimpleWithRetries(
 	context: Context,
 ): Promise<AssistantMessage> {
 	// Summaries are standalone requests, so isolate routing and avoid cache writes that cannot be reused.
-	const requestOptions: SimpleStreamOptions = {
-		...options,
-		signal: context.abortSignal,
-		telemetryContext: context.telemetryContext,
-		cacheRetention: "none",
-		sessionId: uuidv7(),
-	};
+	const requestOptions = createSummaryRequestOptions(options, context);
 	return retryAssistantCall(
 		() => models.completeSimple(model, aiContext, requestOptions),
 		retry,
@@ -512,7 +522,7 @@ export async function generateSummary(
 }
 
 /** Generate or update a conversation summary and return its provider usage. */
-export async function generateSummaryWithUsage(
+export function generateSummaryWithUsage(
 	currentMessages: AgentMessage[],
 	models: Models,
 	model: Model<Api>,
@@ -524,6 +534,31 @@ export async function generateSummaryWithUsage(
 	callbacks: RetryCallbacks | undefined,
 	context: Context,
 ): Promise<Result<{ text: string; usage: Usage }, CompactionError>> {
+	return generateSummaryWithRequest(
+		currentMessages,
+		{ model, reserveTokens, customInstructions, previousSummary, thinkingLevel },
+		(aiContext, options, requestContext) =>
+			completeSimpleWithRetries(models, model, aiContext, options, retry, callbacks, requestContext),
+		context,
+	);
+}
+
+export interface SummaryGenerationOptions {
+	model: Model<Api>;
+	reserveTokens: number;
+	customInstructions?: string;
+	previousSummary?: string;
+	thinkingLevel?: ThinkingLevel;
+}
+
+/** Generate one summary through a caller-owned one-request boundary. */
+export async function generateSummaryWithRequest(
+	currentMessages: AgentMessage[],
+	options: SummaryGenerationOptions,
+	request: SummaryRequest,
+	context: Context,
+): Promise<Result<{ text: string; usage: Usage }, CompactionError>> {
+	const { model, reserveTokens, customInstructions, previousSummary, thinkingLevel } = options;
 	const maxTokens = Math.min(
 		Math.floor(0.8 * reserveTokens),
 		model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
@@ -555,13 +590,9 @@ export async function generateSummaryWithUsage(
 			? { maxTokens, reasoning: thinkingLevel }
 			: { maxTokens };
 
-	const response = await completeSimpleWithRetries(
-		models,
-		model,
+	const response = await request(
 		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		completionOptions,
-		retry,
-		callbacks,
+		createSummaryRequestOptions(completionOptions, context),
 		context,
 	);
 	if (response.stopReason === "aborted") {
@@ -695,7 +726,7 @@ Be concise. Focus on what's needed to understand the kept suffix.`;
 export { serializeConversation } from "./utils.ts";
 
 /** Generate compaction summary data from prepared session history. */
-export async function compact(
+export function compact(
 	preparation: CompactionPreparation,
 	models: Models,
 	model: Model<Api>,
@@ -705,6 +736,29 @@ export async function compact(
 	callbacks: RetryCallbacks | undefined,
 	context: Context,
 ): Promise<Result<CompactResult, CompactionError>> {
+	return compactWithRequest(
+		preparation,
+		{ model, customInstructions, thinkingLevel },
+		(aiContext, options, requestContext) =>
+			completeSimpleWithRetries(models, model, aiContext, options, retry, callbacks, requestContext),
+		context,
+	);
+}
+
+export interface CompactGenerationOptions {
+	model: Model<Api>;
+	customInstructions?: string;
+	thinkingLevel?: ThinkingLevel;
+}
+
+/** Generate compaction data through a caller-owned boundary for each provider request. */
+export async function compactWithRequest(
+	preparation: CompactionPreparation,
+	options: CompactGenerationOptions,
+	request: SummaryRequest,
+	context: Context,
+): Promise<Result<CompactResult, CompactionError>> {
+	const { model, customInstructions, thinkingLevel } = options;
 	const {
 		messagesToSummarize,
 		turnPrefixMessages,
@@ -723,16 +777,10 @@ export async function compact(
 		let historyText = "No prior history.";
 		let historyUsage: Usage | undefined;
 		if (messagesToSummarize.length > 0) {
-			const historyResult = await generateSummaryWithUsage(
+			const historyResult = await generateSummaryWithRequest(
 				messagesToSummarize,
-				models,
-				model,
-				settings.reserveTokens,
-				customInstructions,
-				previousSummary,
-				thinkingLevel,
-				retry,
-				callbacks,
+				{ model, reserveTokens: settings.reserveTokens, customInstructions, previousSummary, thinkingLevel },
+				request,
 				context,
 			);
 			if (!historyResult.ok) return err(historyResult.error);
@@ -741,28 +789,20 @@ export async function compact(
 		}
 		const turnPrefixResult = await generateTurnPrefixSummary(
 			turnPrefixMessages,
-			models,
 			model,
 			settings.reserveTokens,
 			thinkingLevel,
-			retry,
-			callbacks,
+			request,
 			context,
 		);
 		if (!turnPrefixResult.ok) return err(turnPrefixResult.error);
 		summary = `${historyText}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.value.text}`;
 		summaryUsage = historyUsage ? addUsage(historyUsage, turnPrefixResult.value.usage) : turnPrefixResult.value.usage;
 	} else {
-		const summaryResult = await generateSummaryWithUsage(
+		const summaryResult = await generateSummaryWithRequest(
 			messagesToSummarize,
-			models,
-			model,
-			settings.reserveTokens,
-			customInstructions,
-			previousSummary,
-			thinkingLevel,
-			retry,
-			callbacks,
+			{ model, reserveTokens: settings.reserveTokens, customInstructions, previousSummary, thinkingLevel },
+			request,
 			context,
 		);
 		if (!summaryResult.ok) return err(summaryResult.error);
@@ -772,23 +812,16 @@ export async function compact(
 
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
 	summary += formatFileOperations(readFiles, modifiedFiles);
+	const details: CompactionDetails = { readFiles, modifiedFiles };
 
-	return ok({
-		summary,
-		tokensBefore,
-		usage: summaryUsage,
-		retainedTail,
-		details: { readFiles, modifiedFiles } as CompactionDetails,
-	});
+	return ok({ summary, tokensBefore, usage: summaryUsage, retainedTail, details });
 }
 async function generateTurnPrefixSummary(
 	messages: AgentMessage[],
-	models: Models,
 	model: Model<Api>,
 	reserveTokens: number,
 	thinkingLevel: ThinkingLevel | undefined,
-	retry: RetryPolicy | undefined,
-	callbacks: RetryCallbacks | undefined,
+	request: SummaryRequest,
 	context: Context,
 ): Promise<Result<{ text: string; usage: Usage }, CompactionError>> {
 	const maxTokens = Math.min(
@@ -810,13 +843,9 @@ async function generateTurnPrefixSummary(
 		model.reasoning && thinkingLevel && thinkingLevel !== "off"
 			? { maxTokens, reasoning: thinkingLevel }
 			: { maxTokens };
-	const response = await completeSimpleWithRetries(
-		models,
-		model,
+	const response = await request(
 		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		completionOptions,
-		retry,
-		callbacks,
+		createSummaryRequestOptions(completionOptions, context),
 		context,
 	);
 	if (response.stopReason === "aborted") {

@@ -34,7 +34,7 @@ Do not inspect Git history or removed runtime implementations. The current sourc
 - pending-next-run ids;
 - latest terminal result;
 - operation metadata;
-- flat operation state, including control and run inbox ids.
+- flat operation state, including control and inbox ids.
 
 Every supported mutation commits on the one Session mutation line and publishes the matching `Lane.state` before releasing the line. Drive procedures never reread `laneState`, `operationMeta`, `operationState`, `branchTip`, `laneConfig`, or `laneLastResult` from storage.
 
@@ -109,7 +109,7 @@ The state argument is a type capability established by dispatcher control flow. 
 Keep checks only where another supported writer can change the relevant fact:
 
 1. `requestAbort` versus effect admission and settlement;
-2. inbox arrival before checkpoint routing or terminal finish;
+2. inbox arrival before checkpoint routing, a standalone compaction result boundary, or terminal finish;
 3. parallel tool-call statuses and source-ready placement;
 4. queued frame/checkpoint writes versus settlement;
 5. invocation memo/checkpoint calls versus effect completion;
@@ -180,7 +180,7 @@ Stop and revisit the design if this conversion does not materially reduce the ex
 Implement every structural leaf:
 
 - in-run threshold/overflow compaction;
-- standalone compaction;
+- standalone compaction, including its steer/follow-up inbox and run-continuation promotion;
 - summarized and unsummarized navigation;
 - structural decision hooks;
 - generated summary attempts, retries, and recovery;
@@ -191,7 +191,7 @@ Create:
 - `src/harness/runtime/drive/structural.ts`
 - `test/harness/runtime/drive-structural.test.ts`
 
-Modify checkpoint handling for threshold checks and the existing compaction modules only to expose one-provider-request seams.
+Modify checkpoint handling for threshold checks and the existing compaction modules only to expose one-provider-request seams. Additionally modify `session/types.ts` (`CompactionScope`), `runtime/drive/terminal.ts`, `runtime/lane.ts` (`watch`), and `runtime/restore.ts` for the standalone compaction inbox design below.
 
 ### Structural request seam
 
@@ -211,19 +211,44 @@ Attempt-level retry is represented by the flat structural ready/effect-pending/r
 
 Structural streams emit no transcript assistant lifecycle and persist no assistant frames.
 
+### Standalone compaction inbox and run-continuation promotion
+
+Standalone manual compaction keeps a live steer/follow-up inbox. Queued input survives the whole operation and, at the result boundary, continues into an assistant turn instead of being rejected or letting the lane go idle. The durable types and transitions land in M6; abort drain lands in M7 and public admission in M8 (called out in those sections).
+
+Durable types:
+
+- `CompactionScope` extends `RunScope` (control, captured `settings`, `inbox`, `latestAssistantEntryId`) plus optional `customInstructions`. All four `compaction.*` leaves gain these fields. The leaf set stays at 22: promotion reuses the existing `run.*` leaves; no new leaves, result arms, or events exist.
+- Standalone compaction acceptance captures current settings exactly like run acceptance and starts with an empty inbox and `latestAssistantEntryId: null`. It still neither captures nor consumes `pendingNextRun`.
+- Steer/follow-up staging is unchanged: enqueue mints the entry id and writes `pendingEntry(id)`; the leaf holds ids only. Tree writes remain rejected on `compaction.*` leaves; `inbox.writes` stays empty until promotion.
+- `OperationMeta` is immutable and keeps `intent.kind: "compaction"`. The intent-prefix invariant is relaxed in exactly one direction: run intent ↔ `run.*`, navigation intent ↔ `navigation.*`, compaction intent starts in `compaction.*` and may take one one-way move into `run.*` at its result boundary. The restore compatibility check (`restore.ts`) admits `run.*` leaves under compaction intent and nothing else. There is no other cross-family transition and no operation replacement: id, meta, Drive, and mutation line are unchanged. Dispatch is always over `state.at`, never `intent.kind`. The only semantic `intent` readers are `run.starting` consumption (`promptEntryIds` with its non-run invariant guard), which stays unreachable because promotion enters at `run.checkpoint`/`run.failure_drain`, and the relaxed restore check; `inspectExecution`, `watch`, harness operation listing, and `LaneBusy` keep reporting `kind: "compaction"` from meta while leaf-specific snapshot data follows `state.at`, and a promoted operation never emits `run_start`.
+
+Result-boundary transitions. Every standalone boundary — hook decline, hook-supplied result, generated success, terminal generation failure, and model unavailability — plans on the mutation line against the latest inbox. A `cancel_requested` boundary defers to reconciliation and never promotes. With running control:
+
+- steer and follow-up both empty → today's terminal transaction unchanged: compaction-kind `laneLastResult` (`completed`/`declined`/`failed`), operation cleanup, and idle lane in one commit;
+- completed or declined with queued steer/follow-up → one promotion commit: insert the compaction entry and tip move (completed only), emit `compaction_end`, consume eligible steer — or, with no steer, eligible follow-up — per the captured queue mode using the ordinary checkpoint-consumption writes (insert entries from pending values, delete those values, advance tip), and set `run.checkpoint{need_assistant(false), triggerEntryId = newest consumed entry, skipInboxOnce}`. Fusing consumption into the promotion commit guarantees the continuation always holds projected input, so a later `cancelQueued` can never strand a promoted operation at `may_finish` with no assistant;
+- failed with queued steer/follow-up → `run.failure_drain{error, provenance}` (structural taskId or configuration) plus `compaction_end(failed)`; the existing drain machinery applies the queued input and rescues into `checkpoint{need_assistant(false)}`.
+
+After promotion the ordinary run machinery owns the operation — assistant, tools, deferred, threshold compaction, `before_run_end`, and finish behave exactly as in a run — and it terminates through the untouched run terminal transaction with a run-kind `laneLastResult`. The structural outcome was already reported by `compaction_end` at the boundary. `before_run` never runs for a promoted operation.
+
+Terminal cleanup and snapshots become inbox-scope-based rather than `run.*`-prefix-based: `operationCleanupWrites` deletes queued/drained steer and follow-up pending values for any inbox-carrying leaf, and `watch` reads steer/follow-up queues from any inbox-carrying leaf. Navigation scopes are unchanged and carry no inbox.
+
+Update `docs/harness.md` in the same change: §3.2 state shapes, §3.5 standalone graph, §3.6 compaction acceptance capture, §3.11 admission/drain rows, and §3.13 cleanup ownership.
+
 ### Required behavior
 
 - Preparation is written before the decision hook and reused after reopen.
 - Threshold checks happen at most once per trigger boundary.
 - An unknown structural attempt consumes an attempt; it does not resume request two.
 - Model disappearance fails in band.
-- Standalone result publication and terminal cleanup are one transaction.
+- Standalone result publication with an empty inbox is one transaction with terminal cleanup; with queued steer/follow-up it is one transaction with promotion consumption.
 - In-run success/decline restores the captured checkpoint according to reason.
 - Unsummarized navigation moves tip/label and terminates in one transaction.
 
 ### Focused validation
 
 Cover every structural `at` leaf, split-turn request accounting, crashes after each nested request, threshold deduplication, hook decline/result, model absence, retry cap, navigation validation, and publication/terminal atomicity.
+
+Standalone inbox coverage: queued steer/follow-up surviving every `compaction.*` commit and process loss; empty-inbox boundaries finishing exactly as before; completed/declined/failed promotion each continuing into an assistant turn and finishing with a run result; queue-mode consumption order at promotion (steer before follow-up, `one-at-a-time` versus `all`); inbox arrival racing the boundary commit on the mutation line; `cancel_requested` boundaries never promoting; queued/drained pending values dying only in terminal cleanup; restore accepting `run.*` under compaction intent and rejecting `compaction.*` under run intent.
 
 Public drive remains disabled.
 
@@ -245,7 +270,7 @@ Implement the package-private expected-id primitive:
 
 1. synchronously `beginAbort` on a matching live Drive;
 2. commit or observe `cancel_requested` on the Session line;
-3. drain run steer/follow-up ids into control without deleting their payloads;
+3. drain steer/follow-up ids from any inbox-carrying leaf — run and standalone compaction alike — into control without deleting their payloads;
 4. call `signalAbort` after commit;
 5. return once cancellation is durable.
 
@@ -261,6 +286,7 @@ It must handle:
 - planned/effect-pending/outcome-ready tool calls;
 - accepted deferred writes;
 - structural process-local results;
+- cancelled standalone compaction leaves, which finish aborted without promotion; their queued/drained inbox ids die in the aborted terminal cleanup;
 - retry waits, checkpoints, suspended deferred work, and failure drain;
 - best-effort deferred-provider cancellation;
 - aborted terminal cleanup.
@@ -286,6 +312,8 @@ Order:
 5. add queues/configuration/usage/idle surfaces;
 6. retain `watchSession` as the sole `SliceNotImplemented` method.
 
+Queue admission follows inbox scope: `steer`/`followUp` admit on any open operation whose leaf carries an inbox under running control — runs including deferred suspension, and standalone compaction before and after promotion — and return `NoActiveRun` otherwise (idle, navigation, `cancel_requested`). They emit `queue_update`, and `LaneSnapshot.queues` covers standalone compaction leaves. `compact()` and same-id `drive` resolve with the compaction-kind outcome when un-promoted and with the run outcome of the continued turn after promotion; `compaction_end` already carried the structural outcome at the boundary.
+
 ### Drive observation
 
 A caller checks its signal before installation. After installation every caller uses observation-only cancellation:
@@ -310,6 +338,7 @@ Cover:
 - one caller cancelling while other observers remain;
 - close/fault during cooperative and non-cooperative effects;
 - accept/drive and convenience equivalence;
+- steer/follow-up admission, survival, and promotion through the public surfaces of a standalone compaction;
 - full crash matrix across every flat leaf;
 - no unhandled detached rejection;
 - no `SliceNotImplemented` except `watchSession`.

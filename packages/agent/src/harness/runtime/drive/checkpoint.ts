@@ -1,10 +1,8 @@
 import type { AgentMessage } from "../../../types.ts";
 import type { TerminalOperationOutcome } from "../../agent-harness.ts";
 import { insertEntry } from "../../session/commit.ts";
-import { buildSessionContext } from "../../session/context.ts";
 import { SessionInvariantError } from "../../session/session.ts";
 import {
-	type Entry,
 	type LaneLastResult,
 	type MessageEntry,
 	type NewEntry,
@@ -16,44 +14,21 @@ import {
 } from "../../session/types.ts";
 import { branchTip, deleteValue, pendingEntry, setValue } from "../../session/values.ts";
 import type { Lane } from "../lane.ts";
-import { chainEntries, entryLifecycleEvents, readPendingMessages } from "../transcript.ts";
-import type { ContinueOperationResult, Drive, ProcedureResult } from "../types.ts";
+import {
+	chainEntries,
+	committedEntryEvents,
+	entryLifecycleEvents,
+	readBoundedContext,
+	readPendingMessages,
+} from "../transcript.ts";
+import type { Drive, ProcedureResult } from "../types.ts";
+import { runCompactionThreshold } from "./structural.ts";
 import { operationCleanupWrites } from "./terminal.ts";
 
 type FinishContinuation = Extract<RunCheckpointOperation["continuation"], { kind: "may_finish" }>;
 
 function isSettledAssistant(message: AgentMessage): message is SettledAssistantMessage {
 	return message.role === "assistant" && message.stopReason !== "pending";
-}
-
-async function readRunContext<TContext extends object | undefined>(
-	lane: Lane<TContext>,
-	drive: Drive,
-	checkpoint: RunCheckpointOperation,
-): Promise<ContinueOperationResult<AgentMessage[]>> {
-	const entries = await lane.continueOperation(
-		checkpoint,
-		async (state, _current, _meta, reader) => {
-			if (state.tipId === null) throw new SessionInvariantError("Run checkpoint has no Branch tip");
-			const path = (
-				await reader.scanBranch(
-					{ start: state.tipId, stopAtType: "compaction", order: "newestFirst" },
-					drive.context,
-				)
-			).reverse();
-			return { kind: "return", result: path };
-		},
-		drive.context,
-	);
-	if (entries.kind === "cancel_requested") return entries;
-	return {
-		kind: "result",
-		value: await buildSessionContext(
-			entries.value,
-			{ entryProjectors: lane.readConfig().entryProjectors },
-			drive.context,
-		),
-	};
 }
 
 /** Consume before_run and commit the initial checkpoint. */
@@ -118,14 +93,7 @@ export async function startRun<TContext extends object | undefined>(
 				operationState: nextState,
 				lane: { tipId: triggerEntryId },
 				materialize: () => ({ kind: "continue" }) as const,
-				events: (commit) =>
-					entries.flatMap((entry, index) =>
-						entryLifecycleEvents(
-							{ ...entry, seq: commit.seqs[index]!, timestamp: commit.timestamp },
-							lane.name,
-							drive.operationId,
-						),
-					),
+				events: (commit) => committedEntryEvents(entries, commit, lane.name, drive.operationId),
 			};
 		},
 		drive.context,
@@ -191,14 +159,7 @@ async function applyPendingWrites<TContext extends object | undefined>(
 				operationState: nextState,
 				lane: { tipId: parentId },
 				materialize: () => ({ kind: "continue" }) as const,
-				events: (commit) =>
-					entries.flatMap((entry, index) =>
-						entryLifecycleEvents(
-							{ ...entry, seq: commit.seqs[index]!, timestamp: commit.timestamp } as Entry,
-							lane.name,
-							drive.operationId,
-						),
-					),
+				events: (commit) => committedEntryEvents(entries, commit, lane.name, drive.operationId),
 			};
 		},
 		drive.context,
@@ -253,13 +214,7 @@ async function consumeQueuedMessages<TContext extends object | undefined>(
 				lane: { tipId: triggerEntryId },
 				materialize: () => ({ kind: "continue" }) as const,
 				events: (commit) => [
-					...entries.flatMap((entry, index) =>
-						entryLifecycleEvents(
-							{ ...entry, seq: commit.seqs[index]!, timestamp: commit.timestamp },
-							lane.name,
-							drive.operationId,
-						),
-					),
+					...committedEntryEvents(entries, commit, lane.name, drive.operationId),
 					{
 						type: "queue_update",
 						lane: lane.name,
@@ -281,7 +236,7 @@ async function finishRun<TContext extends object | undefined>(
 	checkpoint: RunCheckpointOperation,
 	continuation: FinishContinuation,
 ): Promise<ProcedureResult> {
-	const context = await readRunContext(lane, drive, checkpoint);
+	const context = await readBoundedContext(lane, drive, checkpoint);
 	if (context.kind === "cancel_requested") return { kind: "continue" };
 	const hook = await lane.hooks.runWithGate(
 		"before_run_end",
@@ -403,6 +358,13 @@ export async function runCheckpoint<TContext extends object | undefined>(
 	}
 	if (run.skipInboxOnce !== true && run.inbox.steer.length !== 0) {
 		return consumeQueuedMessages(lane, drive, run, "steer");
+	}
+	if (run.thresholdCheckedTriggerEntryId !== run.triggerEntryId) {
+		const result = await runCompactionThreshold(lane, drive, run);
+		if (result.kind !== "continue") return result;
+		const current = lane.state.operation?.state;
+		if (current?.control.status === "cancel_requested" || current?.at !== "run.checkpoint") return result;
+		return runCheckpoint(lane, drive, current);
 	}
 	const continuation = run.continuation;
 	if (continuation.kind === "need_assistant") {

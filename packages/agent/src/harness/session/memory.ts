@@ -204,6 +204,7 @@ class MemorySessionFacade implements Session {
 				}
 			},
 			getEntries: (ids, readContext) => source.getEntries(ids, readContext),
+			getStats: (readContext) => source.getStats(readContext),
 			getValue: (address, readContext) => source.getValue(address, readContext),
 			scanValues: (prefix, readContext) => source.scanValues(prefix, readContext),
 			readList: (address, options, readContext) => source.readList(address, options, readContext),

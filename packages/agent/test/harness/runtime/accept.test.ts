@@ -368,6 +368,163 @@ describe("runtime atomic run acceptance", () => {
 		});
 	});
 
+	it("accepts standalone compaction with durable preparation and no execution", async () => {
+		const { harness, lane, session, storage } = await createHarness();
+		await lane.appendMessage({ role: "user", content: "history", timestamp: 1 }, BACKGROUND_CONTEXT);
+		storage.clearCommitAttempts();
+		const starts = vi.fn();
+		harness.events.on("compaction_start", starts);
+
+		const admission = unwrap(
+			await lane.accept(
+				{ kind: "compaction", operationId: "compaction", customInstructions: "focus" },
+				BACKGROUND_CONTEXT,
+			),
+		);
+
+		expect(admission).toEqual({ operationId: "compaction", kind: "compaction", startedAt: expect.any(Number) });
+		const operation = lane.state.operation;
+		if (operation?.state.at !== "summary.deciding") throw new Error("Expected accepted compaction");
+		expect(operation.state.task).toMatchObject({
+			reason: "manual",
+			customInstructions: "focus",
+			boundary: { kind: "finish" },
+		});
+		expect(
+			await session.getValue(
+				storedValues.operationPreparation("compaction", operation.state.task.taskId),
+				BACKGROUND_CONTEXT,
+			),
+		).toMatchObject({ value: { kind: "compaction" } });
+		expect(storage.getCommitAttempts()).toHaveLength(1);
+		expect(starts).toHaveBeenCalledTimes(1);
+		expect(lane.activeDrive).toBeUndefined();
+	});
+
+	it("rejects empty standalone compaction without writing", async () => {
+		const { lane, storage } = await createHarness();
+
+		expect(await lane.accept({ kind: "compaction" }, BACKGROUND_CONTEXT)).toMatchObject({
+			ok: false,
+			error: { _tag: "NothingToCompact" },
+		});
+		expect(storage.getCommitAttempts()).toEqual([]);
+	});
+
+	it.each([false, true])("accepts %s summarized navigation atomically", async (summarize) => {
+		const { harness, lane, session, storage } = await createHarness(async (source) => {
+			await source.mutate(
+				(mutator) =>
+					mutator.commit(
+						[
+							{
+								kind: "entry",
+								entry: {
+									id: "root",
+									parentId: null,
+									type: "message",
+									message: { role: "user", content: "root", timestamp: 1 },
+								},
+							},
+							{
+								kind: "entry",
+								entry: {
+									id: "source",
+									parentId: "root",
+									type: "message",
+									message: { role: "user", content: "source", timestamp: 2 },
+								},
+							},
+							{
+								kind: "entry",
+								entry: {
+									id: "target",
+									parentId: "root",
+									type: "message",
+									message: { role: "user", content: "target", timestamp: 3 },
+								},
+							},
+							storedValues.setValue(storedValues.branchTip("main"), "source"),
+						],
+						BACKGROUND_CONTEXT,
+					),
+				BACKGROUND_CONTEXT,
+			);
+		});
+		storage.clearCommitAttempts();
+		const starts = vi.fn();
+		harness.events.on("navigation_start", starts);
+
+		unwrap(
+			await lane.accept(
+				{
+					kind: "navigation",
+					operationId: summarize ? "summarized" : "direct",
+					targetId: "target",
+					options: { summarize, label: "chosen", customInstructions: "focus" },
+				},
+				BACKGROUND_CONTEXT,
+			),
+		);
+
+		const operation = lane.state.operation;
+		if (operation === null) throw new Error("Expected accepted navigation");
+		expect(operation.state.at).toBe(summarize ? "summary.deciding" : "navigation.ready_to_commit");
+		expect(lane.state.tipId).toBe("source");
+		if (summarize) {
+			if (operation.state.at !== "summary.deciding") throw new Error("Expected summary decision");
+			expect(
+				await session.getValue(
+					storedValues.operationPreparation(operation.meta.operationId, operation.state.task.taskId),
+					BACKGROUND_CONTEXT,
+				),
+			).toMatchObject({ value: { kind: "branch_summary", messages: [{ content: "source" }] } });
+		}
+		expect(storage.getCommitAttempts()).toHaveLength(1);
+		expect(starts).toHaveBeenCalledTimes(1);
+		expect(lane.activeDrive).toBeUndefined();
+	});
+
+	it("validates navigation before acceptance", async () => {
+		const { lane, storage } = await createHarness(async (source) => {
+			await source.mutate(
+				(mutator) =>
+					mutator.commit(
+						[
+							{
+								kind: "entry",
+								entry: {
+									id: "source",
+									parentId: null,
+									type: "message",
+									message: { role: "user", content: "source", timestamp: 1 },
+								},
+							},
+							storedValues.setValue(storedValues.branchTip("main"), "source"),
+						],
+						BACKGROUND_CONTEXT,
+					),
+				BACKGROUND_CONTEXT,
+			);
+		});
+
+		expect(await lane.accept({ kind: "navigation", targetId: "source" }, BACKGROUND_CONTEXT)).toMatchObject({
+			ok: false,
+			error: { _tag: "InvalidNavigation", reason: "current_tip" },
+		});
+		expect(
+			await lane.accept({ kind: "navigation", targetId: null, options: { label: "bad" } }, BACKGROUND_CONTEXT),
+		).toMatchObject({
+			ok: false,
+			error: { _tag: "InvalidNavigation", reason: "root_label" },
+		});
+		expect(await lane.accept({ kind: "navigation", targetId: "missing" }, BACKGROUND_CONTEXT)).toMatchObject({
+			ok: false,
+			error: { _tag: "UnknownTarget" },
+		});
+		expect(storage.getCommitAttempts()).toEqual([]);
+	});
+
 	it("returns expected pre-acceptance errors without writing", async () => {
 		const { lane, storage } = await createHarness();
 		const pending = fauxAssistantMessage([], { stopReason: "pending" });

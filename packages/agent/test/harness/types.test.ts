@@ -413,7 +413,6 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 		| "tool_update"
 		| "tool_end"
 		| "entry_added"
-		| "write_pending"
 		| "queue_update"
 		| "value_update"
 		| "config_update"

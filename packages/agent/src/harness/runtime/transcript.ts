@@ -1,10 +1,10 @@
 import type { AgentMessage } from "../../types.ts";
-import type { HarnessEvent } from "../agent-harness.ts";
+import type { HarnessEvent, LaneQueuedItem } from "../agent-harness.ts";
 import type { Context } from "../context.ts";
 import { materializeCommittedEntry } from "../session/commit.ts";
 import { buildSessionContext } from "../session/context.ts";
 import { SessionInvariantError } from "../session/session.ts";
-import type { CommitResult, Entry, NewEntry, OperationState, SessionReader } from "../session/types.ts";
+import type { CommitResult, Entry, InboxItem, NewEntry, OperationState, SessionReader } from "../session/types.ts";
 import { pendingEntry } from "../session/values.ts";
 import type { Lane } from "./lane.ts";
 import type { ContinueOperationResult, Drive } from "./types.ts";
@@ -81,6 +81,34 @@ export async function readBoundedContext<TContext extends object | undefined, TS
 			drive.context,
 		),
 	};
+}
+
+export function readLaneQueues(
+	reader: SessionReader,
+	inbox: readonly InboxItem[],
+	context: Context,
+): Promise<LaneQueuedItem[]> {
+	return Promise.all(
+		inbox.map(async (item): Promise<LaneQueuedItem> => {
+			const stored = await reader.getValue(pendingEntry(item.entryId), context);
+			if (stored === undefined) {
+				throw new SessionInvariantError(`Pending ${item.kind} entry ${item.entryId} is missing its payload`);
+			}
+			if (stored.value.type === "message") {
+				return { entryId: item.entryId, kind: item.kind, type: "message", message: stored.value.payload };
+			}
+			if (item.kind !== "write") {
+				throw new SessionInvariantError(`Pending ${item.kind} entry ${item.entryId} is not a message`);
+			}
+			return {
+				entryId: item.entryId,
+				kind: "write",
+				type: "custom",
+				customType: stored.value.customType,
+				...(stored.value.payload === undefined ? {} : { data: stored.value.payload }),
+			};
+		}),
+	);
 }
 
 export function readPendingMessages(

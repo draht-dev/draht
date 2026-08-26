@@ -80,6 +80,7 @@ async function publishAbortedTerminal<TContext extends object | undefined>(
 							runId: drive.operationId,
 							reason: current.task.reason,
 							status: "aborted",
+							endedAt: record.endedAt,
 						});
 						break;
 					default:
@@ -92,6 +93,7 @@ async function publishAbortedTerminal<TContext extends object | undefined>(
 					status: "aborted",
 					fromTipId: meta.sourceTipId,
 					tipId: state.tipId,
+					endedAt: record.endedAt,
 				});
 			} else if (meta.intent.kind === "compaction") {
 				events.push({
@@ -100,6 +102,7 @@ async function publishAbortedTerminal<TContext extends object | undefined>(
 					runId: drive.operationId,
 					reason: "manual",
 					status: "aborted",
+					endedAt: record.endedAt,
 				});
 			} else {
 				events.push({
@@ -109,6 +112,7 @@ async function publishAbortedTerminal<TContext extends object | undefined>(
 					status: "aborted",
 					fromTipId: meta.sourceTipId,
 					tipId: state.tipId,
+					endedAt: record.endedAt,
 				});
 			}
 			return {

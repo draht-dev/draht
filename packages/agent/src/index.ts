@@ -74,6 +74,7 @@ export * from "./harness/context.ts";
 export * from "./harness/messages.ts";
 export * from "./harness/prompt-templates.ts";
 export * from "./harness/result.ts";
+export { type LaneSnapshotReduction, reduceLaneSnapshot } from "./harness/runtime/reducer.ts";
 export * from "./harness/session/index.ts";
 export * from "./harness/skills.ts";
 export * from "./harness/system-prompt.ts";

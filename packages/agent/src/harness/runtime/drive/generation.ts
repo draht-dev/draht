@@ -215,6 +215,7 @@ async function performGeneration<TContext extends object | undefined>(
 					return drive.gate.admit(() =>
 						lane.models.streamSimple(prepared.model, aiContext, {
 							...options,
+							sessionId: `${lane.session.metadata.id}:${lane.name}`,
 							signal: admitted.abortSignal,
 							telemetryContext: admitted.telemetryContext,
 						}),

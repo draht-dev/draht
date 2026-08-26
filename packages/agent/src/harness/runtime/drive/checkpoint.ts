@@ -148,7 +148,13 @@ export async function runCheckpoint<TContext extends object | undefined>(
 					materialize: () => ({ kind: "continue" }) as const,
 					events: (commit) => [
 						...boundaryPlacementEvents(placement, commit, 0, lane.name, drive.operationId),
-						{ type: "compaction_start", lane: lane.name, runId: drive.operationId, reason: "threshold" },
+						{
+							type: "compaction_start",
+							lane: lane.name,
+							runId: drive.operationId,
+							reason: "threshold",
+							startedAt: commit.timestamp,
+						},
 					],
 				};
 			}

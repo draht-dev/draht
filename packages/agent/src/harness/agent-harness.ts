@@ -54,11 +54,12 @@ import type {
 	BranchScan,
 	Entry,
 	EntryProjector,
-	EntryType,
 	JsonValue,
+	LaneConfiguration,
 	OperationError,
 	OperationResultRecord,
 	Session,
+	SessionStats,
 	SettledAssistantMessage,
 	UsageRow,
 } from "./session/types.ts";
@@ -94,7 +95,7 @@ export type ResumeResult = Result<OperationResultRecord | SuspendedRun, NothingT
 export type QueueResult = Result<{ entryId: string }, InvalidMessage | Closed>;
 export type CancelQueuedResult = Result<{ kind: "cancelled" | "already_consumed" | "not_found" }, Closed>;
 export type AbortResult = Result<
-	{ runId: string; steer: AgentMessage[]; followUp: AgentMessage[] },
+	{ operationId: string; steer: AgentMessage[]; followUp: AgentMessage[] },
 	NoActiveOperation | Closed
 >;
 export type RecordUsageResult = Result<{ usageId: string }, Closed>;
@@ -178,6 +179,7 @@ export type AbortRequestResult = Result<
 export interface WatchHandle<T> {
 	snapshot: T;
 	start(listener: EventListener): void;
+	resnapshot(context: Context): Promise<T>;
 	unsubscribe(): void;
 }
 
@@ -195,20 +197,27 @@ export interface OpenOperation {
 	aborting?: true;
 }
 
-export interface QueuedItem {
-	entryId: string;
-	message: AgentMessage;
-}
+export type LaneQueuedItem =
+	| {
+			entryId: string;
+			kind: "steer" | "followUp" | "nextRun" | "write";
+			type: "message";
+			message: AgentMessage;
+	  }
+	| { entryId: string; kind: "write"; type: "custom"; customType: string; data?: JsonValue };
 
 export interface LaneSnapshot {
 	lane: string;
 	transcript: Entry[];
 	tipId: string | null;
-	lastOperationId: string | null;
+	lastResult?: OperationResultRecord;
+	configuration: LaneConfiguration;
+	stats: SessionStats;
 	operation: null | {
 		id: string;
 		kind: "run" | "compaction" | "navigation";
 		startedAt: number;
+		fromTipId: string | null;
 		status: OperationStatus;
 		retry?: { attempt: number; maxAttempts: number; nextAttemptAt: number };
 		deferred?: { handle: DeferredHandle; poll: number };
@@ -220,14 +229,7 @@ export interface LaneSnapshot {
 			partialResult?: AgentToolResult<unknown>;
 		}[];
 	};
-	queues: { steer: QueuedItem[]; followUp: QueuedItem[]; nextRun: QueuedItem[] };
-	pendingWrites: {
-		entryId: string;
-		type: EntryType;
-		customType?: string;
-		message?: AgentMessage;
-		data?: JsonValue;
-	}[];
+	queues: LaneQueuedItem[];
 	faulted: boolean;
 }
 
@@ -237,11 +239,11 @@ export interface SessionSnapshot {
 }
 
 export type HarnessEventPayload =
-	| { type: "run_start"; runId: string }
+	| { type: "run_start"; runId: string; startedAt: number }
 	| { type: "run_resume"; runId: string }
-	| { type: "run_suspend"; runId: string; reason: "deferred"; deferred: DeferredHandle }
+	| { type: "run_suspend"; runId: string; reason: "deferred"; deferred: DeferredHandle; poll: number }
 	| { type: "operation_abort"; operationId: string; steer: AgentMessage[]; followUp: AgentMessage[] }
-	| ({ type: "run_end"; runId: string; fromTipId: string | null; tipId: string | null } & (
+	| ({ type: "run_end"; runId: string; fromTipId: string | null; tipId: string | null; endedAt: number } & (
 			| { status: "completed" | "aborted"; error?: never }
 			| { status: "failed"; error: OperationError }
 	  ))
@@ -265,6 +267,7 @@ export type HarnessEventPayload =
 			attempt: number;
 			maxAttempts: number;
 			delayMs: number;
+			notBefore: number;
 			errorMessage: string;
 	  }
 	| { type: "retry_start"; runId: string; step: string; attempt: number }
@@ -312,8 +315,7 @@ export type HarnessEventPayload =
 			terminate: boolean;
 	  }
 	| { type: "entry_added"; entry: Entry }
-	| { type: "write_pending"; runId: string; entryId: string; entryType: EntryType }
-	| { type: "queue_update"; steer: QueuedItem[]; followUp: QueuedItem[]; nextRun: QueuedItem[] }
+	| { type: "queue_update"; queues: LaneQueuedItem[] }
 	| ({ type: "value_update" } & (
 			| { value: "session_name"; name: string | undefined }
 			| { value: "entry_label"; targetId: string; label: string | undefined }
@@ -326,25 +328,30 @@ export type HarnessEventPayload =
 			  }
 			| { property: "thinkingLevel"; value: ThinkingLevel; previous: ThinkingLevel }
 			| { property: "activeTools"; value: string[]; previous: string[] }
+			| { property: "tools" | "resources" }
 			| {
-					property:
-						| "tools"
-						| "resources"
-						| "streamOptions"
-						| "retryPolicy"
-						| "compactionSettings"
-						| "steeringMode"
-						| "followUpMode";
+					property: "streamOptions";
+					value: AgentHarnessStreamOptions;
+					previous: AgentHarnessStreamOptions;
 			  }
+			| { property: "retryPolicy"; value: RetryPolicy; previous: RetryPolicy }
+			| { property: "compactionSettings"; value: CompactionSettings; previous: CompactionSettings }
+			| { property: "steeringMode"; value: QueueMode; previous: QueueMode }
+			| { property: "followUpMode"; value: QueueMode; previous: QueueMode }
 	  ))
-	| { type: "compaction_start"; runId: string; reason: "manual" | "threshold" | "overflow" }
-	| ({ type: "compaction_end"; runId: string; reason: "manual" | "threshold" | "overflow" } & (
+	| {
+			type: "compaction_start";
+			runId: string;
+			reason: "manual" | "threshold" | "overflow";
+			startedAt: number;
+	  }
+	| ({ type: "compaction_end"; runId: string; reason: "manual" | "threshold" | "overflow"; endedAt: number } & (
 			| { status: "completed"; entryId: string; error?: never }
 			| { status: "declined" | "aborted"; entryId?: never; error?: never }
 			| { status: "failed"; entryId?: never; error: OperationError }
 	  ))
-	| { type: "navigation_start"; runId: string; targetId: string | null }
-	| ({ type: "navigation_end"; runId: string; fromTipId: string | null; tipId: string | null } & (
+	| { type: "navigation_start"; runId: string; targetId: string | null; startedAt: number }
+	| ({ type: "navigation_end"; runId: string; fromTipId: string | null; tipId: string | null; endedAt: number } & (
 			| { status: "completed" | "declined" | "aborted"; error?: never }
 			| { status: "failed"; error: OperationError }
 	  ))
@@ -536,7 +543,7 @@ export interface AgentLane {
 	waitForIdle(context: Context): Promise<void>;
 	runWhenIdle(callback: (context: Context) => void | Promise<void>, context: Context): Promise<void>;
 	getModel(context: Context): Promise<Model<Api> | undefined>;
-	setModel(model: Model<Api>, context: Context): Promise<void>;
+	setModel(model: ModelIdentity, context: Context): Promise<void>;
 	getThinkingLevel(context: Context): Promise<ThinkingLevel>;
 	setThinkingLevel(level: ThinkingLevel, context: Context): Promise<void>;
 	getActiveTools(context: Context): Promise<string[]>;

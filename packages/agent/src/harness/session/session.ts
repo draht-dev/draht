@@ -137,6 +137,11 @@ class StorageBackedSessionMutation implements SessionMutation {
 		return this.storage.getEntries(ids, context);
 	}
 
+	getStats(context: Context): Promise<SessionStats> {
+		this.assertActive();
+		return this.storage.getStats(context);
+	}
+
 	getValue<T>(address: Value<T>, context: Context): Promise<StoredValue<T> | undefined> {
 		this.assertActive();
 		return this.storage.getValue(address, context);

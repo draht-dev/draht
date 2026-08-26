@@ -85,7 +85,7 @@ export function createModelsService(
 		async select(model, context) {
 			const selected = modelRuntime?.getModel(model.provider, model.modelId);
 			if (selected === undefined) throw new Error(`Unknown model: ${model.provider}/${model.modelId}`);
-			await lane.setModel(selected, context);
+			await lane.setModel({ provider: selected.provider, modelId: selected.id }, context);
 			state.set({ ...state.value, configuration: await readConfiguration(context) }, context);
 		},
 	};

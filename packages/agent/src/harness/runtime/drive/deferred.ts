@@ -163,6 +163,12 @@ async function publishPollIntent<TContext extends object | undefined>(
 				},
 				events: () => [
 					{
+						type: "run_resume",
+						lane: lane.name,
+						runId: drive.operationId,
+						...(recovery ? { recovery: true as const } : {}),
+					},
+					{
 						type: "turn_start",
 						lane: lane.name,
 						runId: drive.operationId,

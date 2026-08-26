@@ -502,8 +502,8 @@ Audit and fix the provider-facing cache/affinity identity before public drive is
 
 - Inventory every harness and pi-ai path that sets, preserves, derives, or consumes `SimpleStreamOptions.sessionId`, including prompt-cache keys, affinity headers, WebSocket/session-resource caches, deferred requests, and structural summary requests. Current facts: no harness runtime path forwards a session id today; the sole forwarder is the legacy `src/agent.ts:451`, and `src/harness/compaction/compaction.ts:123` already mints a fresh id per request — M10 therefore establishes the lineage policy rather than preserving an existing one.
 - Define a provider-request cache lineage distinct from the durable Session id and operation id. Concurrent lanes must never share one lineage merely because they belong to the same Session.
-- Decide whether lineage is derived or durably stored. It must remain stable while one lane's provider context only appends at the tail, and rotate whenever that assumption breaks: compaction, navigation, branch replacement, incompatible model/provider changes, or any other context-prefix discontinuity.
-- Preserve useful same-lane reuse across ordinary assistant turns and retries without allowing a stale lineage to cross a context reset.
+- Derive ordinary assistant lineage as `Session metadata id + ":" + lane name`; do not store another durable identifier. It remains stable for the lane's lifetime and differs across lanes in one Session.
+- Preserve same-lane reuse across ordinary assistant turns and retries. Compaction, navigation, branch replacement, and model changes may miss an old prefix, but cannot incorrectly reuse it; do not add rotation machinery.
 - Keep structural summary requests isolated: `cacheRetention: "none"` and fresh request identity per nested request remain the baseline unless the review proves a safe, useful alternative.
 - Distinguish cache identity from observability correlation. Session, lane, operation, task, and request ids remain available to telemetry without being reused blindly as provider affinity/cache keys.
 - Review provider-specific semantics rather than assuming `sessionId` means only KV caching; some adapters also use it for headers, WebSocket reuse, fallback state, or resource cleanup.
@@ -512,17 +512,29 @@ Audit and fix the provider-facing cache/affinity identity before public drive is
 
 - Two active lanes in one Session issue concurrent, divergent prompts and receive distinct provider cache/affinity identities.
 - One lane keeps a stable lineage across append-only assistant/tool turns where reuse is valid.
-- Compaction, summarized and unsummarized navigation, branch changes, and incompatible model/provider changes rotate lineage before the next request.
-- Retry and deferred paths neither collide across lanes nor accidentally defeat intended same-lineage reuse.
+- Context-prefix discontinuities safely miss old cached prefixes without lineage rotation.
+- Assistant retries retain the lane identity; deferred handle polling needs no cache identity.
 - Structural split-turn requests remain isolated from transcript assistant caching.
-- Close/resource cleanup affects only the intended provider lineage and cannot close another lane's live transport.
-- Faux-provider cache tests fail when a raw Session id is shared and pass with the chosen lineage policy; relevant provider adapter tests assert their exact cache/header/resource behavior.
+- Faux-provider tests assert stable same-lane and distinct cross-lane request identities.
 
 ### Exit condition
 
-No harness request forwards the durable Session id as `SimpleStreamOptions.sessionId` solely because requests belong to that Session. The chosen lineage and rotation rules are documented in `docs/harness.md`, implemented consistently across assistant/deferred/structural paths, and independently reviewed before WP05 completion.
+Ordinary assistant requests use the derived lane identity, structural requests keep fresh identities with `cacheRetention: "none"`, and deferred handle polling sends no cache identity. The policy is documented in `docs/harness.md` and independently reviewed before WP05 completion.
 
-## 13. Module boundaries
+## 13. M11 — Bound durable streaming-frame volume
+
+**Tracked follow-up; not part of the M8/M10 public-drive gate.** A trivial mini coding-agent Session produced an approximately 300 KB JSONL file because live assistant streaming persists many `pi.pending.frames` list appends. Logical frame cleanup does not reclaim bytes already appended to the JSONL history, so short conversations can have disproportionate durable storage and replay cost.
+
+M11 must measure frame count and encoded-byte growth across Memory, JSONL, and SQLite, then bound amplification without weakening the existing crash contract: an admitted assistant effect remains reconstructible, progress observation remains useful, and settlement still removes operation-owned pending-frame state. Investigate coalesced durable checkpoints, bounded frame snapshots plus a short delta tail, and JSONL snapshot-compaction interaction. Do not solve this by dropping unknown-outcome recovery, persisting only the final response, or adding a generic retention framework.
+
+Exit checks:
+
+- representative short streamed responses do not create hundreds of kilobytes of durable frame history;
+- crash/reopen at every assistant and deferred effect boundary reconstructs the same pending message;
+- frame/checkpoint writers remain fenced to the owning durable effect;
+- backend conformance covers both reconstruction and bounded write amplification.
+
+## 14. Module boundaries
 
 ```text
 session/**             durable storage; imports no runtime module
@@ -537,7 +549,7 @@ runtime/harness.ts     Harness lifecycle and Lane composition
 
 Procedure modules import concrete `Lane<TContext>` type-only. `TContext` remains `object | undefined` invariant. No `any`, `Lane<any>`, `as unknown as`, `@ts-expect-error`, inline imports, parameter properties, enums, or other non-erasable TypeScript syntax.
 
-## 14. Exclusions
+## 15. Exclusions
 
 Do not introduce:
 
@@ -558,7 +570,7 @@ Do not introduce:
 
 Procedure-specific writes, effect admission, settlement classification, and event construction remain visible at their call sites.
 
-## 15. Validation and reviews
+## 16. Validation and reviews
 
 After every code stage:
 

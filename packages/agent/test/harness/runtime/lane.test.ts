@@ -62,7 +62,12 @@ async function createLane(
 			await restoreLane(session, "main", BACKGROUND_CONTEXT),
 			(cause) => (cause instanceof Error ? cause : new Error(String(cause))),
 			emitBatch,
-			(snapshot) => ({ snapshot, start: () => {}, unsubscribe: () => {} }),
+			(snapshot) => ({
+				snapshot,
+				start: () => {},
+				resnapshot: () => Promise.resolve(snapshot),
+				unsubscribe: () => {},
+			}),
 			() => ({
 				tools: [],
 				resources: {},
@@ -110,7 +115,7 @@ describe("runtime Lane commands", () => {
 		const { lane, model, session } = await createLane();
 		const activeToolNames = ["read"];
 
-		await lane.setModel(model, BACKGROUND_CONTEXT);
+		await lane.setModel({ provider: model.provider, modelId: model.id }, BACKGROUND_CONTEXT);
 		await lane.setThinkingLevel("high", BACKGROUND_CONTEXT);
 		await lane.setActiveTools(activeToolNames, BACKGROUND_CONTEXT);
 
@@ -133,7 +138,7 @@ describe("runtime Lane commands", () => {
 			await releaseCommit.promise;
 		};
 
-		const modelUpdate = lane.setModel(model, BACKGROUND_CONTEXT);
+		const modelUpdate = lane.setModel({ provider: model.provider, modelId: model.id }, BACKGROUND_CONTEXT);
 		await commitStarted.promise;
 		const thinkingUpdate = lane.setThinkingLevel("high", BACKGROUND_CONTEXT);
 		releaseCommit.resolve();

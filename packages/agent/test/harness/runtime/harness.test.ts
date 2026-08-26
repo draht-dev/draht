@@ -1,4 +1,4 @@
-import { createModels, fauxProvider } from "@draht/ai";
+import { createModels, fauxAssistantMessage, fauxProvider, type Provider } from "@draht/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentHarness, HarnessFault, InvalidLane, UnknownTarget } from "../../../src/harness/agent-harness.ts";
 import { BACKGROUND_CONTEXT } from "../../../src/harness/context.ts";
@@ -100,6 +100,43 @@ describe("runtime Harness lane management", () => {
 		expect(second).toBe(first);
 		expect(third).toBe(first);
 		expect(listener).toHaveBeenCalledTimes(1);
+	});
+
+	it("uses one stable provider session id per lane", async () => {
+		const session = await createSession("shared-session");
+		const faux = fauxProvider();
+		faux.setResponses([
+			fauxAssistantMessage("main one"),
+			fauxAssistantMessage("main two"),
+			fauxAssistantMessage("review"),
+		]);
+		const sessionIds: Array<string | undefined> = [];
+		const base = faux.provider;
+		const provider: Provider = {
+			id: base.id,
+			name: base.name,
+			auth: base.auth,
+			getModels: () => base.getModels(),
+			stream: (model, context, options) => base.stream(model, context, options),
+			streamSimple: (model, context, options) => {
+				sessionIds.push(options?.sessionId);
+				return base.streamSimple(model, context, options);
+			},
+		};
+		const models = createModels();
+		models.setProvider(provider);
+		const created = await AgentHarness.create(
+			{ session, models, model: faux.getModel(), activeToolNames: [] },
+			BACKGROUND_CONTEXT,
+		);
+		const main = await created.harness.lane("main", BACKGROUND_CONTEXT);
+		const review = await created.harness.lane("review", BACKGROUND_CONTEXT);
+
+		await main.prompt("one", undefined, BACKGROUND_CONTEXT);
+		await main.prompt("two", undefined, BACKGROUND_CONTEXT);
+		await review.prompt("review", undefined, BACKGROUND_CONTEXT);
+
+		expect(sessionIds).toEqual(["shared-session:main", "shared-session:main", "shared-session:review"]);
 	});
 
 	it("serializes commands from different AgentLanes on the one Session line", async () => {
@@ -313,6 +350,32 @@ describe("runtime Harness global metadata", () => {
 		expect(await harness.getName(BACKGROUND_CONTEXT)).toBe("named");
 		expect(await harness.getLabel("entry", BACKGROUND_CONTEXT)).toBe("label");
 		expect(seen).toEqual(["name:named", "entry_label"]);
+	});
+
+	it("publishes previous and current data-bearing global configuration", async () => {
+		const harness = await createHarness();
+		const events: unknown[] = [];
+		harness.events.on("config_update", (event) => {
+			events.push(event);
+		});
+
+		await harness.setStreamOptions({ timeoutMs: 123 }, BACKGROUND_CONTEXT);
+		await harness.setSteeringMode("one-at-a-time", BACKGROUND_CONTEXT);
+
+		expect(events).toEqual([
+			expect.objectContaining({
+				type: "config_update",
+				property: "streamOptions",
+				previous: {},
+				value: { timeoutMs: 123 },
+			}),
+			expect.objectContaining({
+				type: "config_update",
+				property: "steeringMode",
+				previous: "all",
+				value: "one-at-a-time",
+			}),
+		]);
 	});
 
 	it("closes every lane and rejects later acquisition", async () => {

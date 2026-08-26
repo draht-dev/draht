@@ -25,8 +25,6 @@ import { Lane } from "./lane.ts";
 import { readLaneStorage, restoreLaneState, restoreSession } from "./restore.ts";
 import { type Config, type LaneState, SliceNotImplemented } from "./types.ts";
 
-type GlobalConfigProperty = GlobalConfigEventPayload["property"];
-
 /** Runtime implementation of AgentHarness. The harness manages lanes but is not itself a lane. */
 export class Harness<TContext extends object | undefined> implements AgentHarness<TContext> {
 	readonly session: Session;
@@ -137,7 +135,11 @@ export class Harness<TContext extends object | undefined> implements AgentHarnes
 				const writes = [
 					...(stored.kind === "absent" ? [setValue(branchTip(name), tipId)] : []),
 					setValue(laneConfig(name), attachedConfiguration),
-					setValue(laneState(name), { currentOperationId: null, lastOperationId: null, inbox: [] }),
+					setValue(laneState(name), {
+						currentOperationId: null,
+						lastOperationId: null,
+						inbox: [],
+					}),
 				];
 				await mutator.commit(writes, context);
 				lane = this.buildLane(name, state);
@@ -222,7 +224,7 @@ export class Harness<TContext extends object | undefined> implements AgentHarnes
 
 	setTools(tools: AgentHarnessTool<TContext>[], context: Context): Promise<void> {
 		validateToolNames(tools);
-		return this.setConfig("tools", tools, "tools", context);
+		return this.setConfig("tools", tools, () => ({ type: "config_update", property: "tools" }), context);
 	}
 
 	getResources(context: Context): Promise<Resources> {
@@ -230,7 +232,7 @@ export class Harness<TContext extends object | undefined> implements AgentHarnes
 	}
 
 	setResources(resources: Resources, context: Context): Promise<void> {
-		return this.setConfig("resources", resources, "resources", context);
+		return this.setConfig("resources", resources, () => ({ type: "config_update", property: "resources" }), context);
 	}
 
 	getStreamOptions(context: Context): Promise<AgentHarnessStreamOptions> {
@@ -238,7 +240,12 @@ export class Harness<TContext extends object | undefined> implements AgentHarnes
 	}
 
 	setStreamOptions(options: AgentHarnessStreamOptions, context: Context): Promise<void> {
-		return this.setConfig("streamOptions", options, "streamOptions", context);
+		return this.setConfig(
+			"streamOptions",
+			options,
+			(previous, value) => ({ type: "config_update", property: "streamOptions", previous, value }),
+			context,
+		);
 	}
 
 	getRetryPolicy(context: Context): Promise<RetryPolicy> {
@@ -247,7 +254,12 @@ export class Harness<TContext extends object | undefined> implements AgentHarnes
 
 	setRetryPolicy(policy: RetryPolicy, context: Context): Promise<void> {
 		validateRetryPolicy(policy);
-		return this.setConfig("retryPolicy", policy, "retryPolicy", context);
+		return this.setConfig(
+			"retryPolicy",
+			policy,
+			(previous, value) => ({ type: "config_update", property: "retryPolicy", previous, value }),
+			context,
+		);
 	}
 
 	getCompactionSettings(context: Context): Promise<CompactionSettings> {
@@ -256,7 +268,12 @@ export class Harness<TContext extends object | undefined> implements AgentHarnes
 
 	setCompactionSettings(compaction: CompactionSettings, context: Context): Promise<void> {
 		validateCompactionSettings(compaction);
-		return this.setConfig("compaction", compaction, "compactionSettings", context);
+		return this.setConfig(
+			"compaction",
+			compaction,
+			(previous, value) => ({ type: "config_update", property: "compactionSettings", previous, value }),
+			context,
+		);
 	}
 
 	getSteeringMode(context: Context): Promise<QueueMode> {
@@ -264,7 +281,12 @@ export class Harness<TContext extends object | undefined> implements AgentHarnes
 	}
 
 	setSteeringMode(steeringMode: QueueMode, context: Context): Promise<void> {
-		return this.setConfig("steeringMode", steeringMode, "steeringMode", context);
+		return this.setConfig(
+			"steeringMode",
+			steeringMode,
+			(previous, value) => ({ type: "config_update", property: "steeringMode", previous, value }),
+			context,
+		);
 	}
 
 	getFollowUpMode(context: Context): Promise<QueueMode> {
@@ -272,7 +294,12 @@ export class Harness<TContext extends object | undefined> implements AgentHarnes
 	}
 
 	setFollowUpMode(followUpMode: QueueMode, context: Context): Promise<void> {
-		return this.setConfig("followUpMode", followUpMode, "followUpMode", context);
+		return this.setConfig(
+			"followUpMode",
+			followUpMode,
+			(previous, value) => ({ type: "config_update", property: "followUpMode", previous, value }),
+			context,
+		);
 	}
 
 	async watchSession(_context: Context): Promise<never> {
@@ -296,10 +323,11 @@ export class Harness<TContext extends object | undefined> implements AgentHarnes
 		if (this.closePromise !== undefined) return this.closePromise;
 		const error = new HarnessClosed();
 		this.closedError = error;
-		for (const lane of this.lanesByName.values()) lane.seal(error);
+		const idleCallbacks = [...this.lanesByName.values()].map((lane) => lane.seal(error));
 		this.hooks.close(error);
 		this.events.close(error);
-		this.closePromise = this.session.close(context);
+		const sessionClose = this.session.close(context);
+		this.closePromise = Promise.all([sessionClose, ...idleCallbacks]).then(() => undefined);
 		return this.closePromise;
 	}
 
@@ -312,7 +340,7 @@ export class Harness<TContext extends object | undefined> implements AgentHarnes
 			state,
 			(cause, context) => this.fault(cause, context),
 			(events, context) => this.events.emitBatch(events, context),
-			(snapshot, filter, context) => this.events.watch(snapshot, filter, context),
+			(snapshot, filter, context, resnapshot) => this.events.watch(snapshot, filter, context, resnapshot),
 			() => this.configStore.value,
 		);
 	}
@@ -328,12 +356,13 @@ export class Harness<TContext extends object | undefined> implements AgentHarnes
 	private async setConfig<TKey extends keyof Config<TContext>>(
 		key: TKey,
 		value: Config<TContext>[TKey],
-		property: GlobalConfigProperty,
+		event: (previous: Config<TContext>[TKey], value: Config<TContext>[TKey]) => GlobalConfigEventPayload,
 		context: Context,
 	): Promise<void> {
 		this.assertOpen();
+		const previous = this.configStore.value[key];
 		this.configStore.value = { ...this.configStore.value, [key]: value };
-		await this.events.emit({ type: "config_update", property }, context);
+		await this.events.emit(event(previous, value), context);
 	}
 
 	private assertOpen(): void {

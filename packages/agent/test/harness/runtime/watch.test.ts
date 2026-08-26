@@ -128,9 +128,10 @@ describe("runtime lane watch", () => {
 		expect(first.snapshot).toMatchObject({
 			lane: "main",
 			tipId: "after",
+			configuration,
+			stats: { messageCount: 1 },
 			operation: null,
-			queues: { steer: [], followUp: [], nextRun: [] },
-			pendingWrites: [],
+			queues: [],
 			faulted: false,
 		});
 		first.snapshot.transcript.length = 0;
@@ -199,11 +200,11 @@ describe("runtime lane watch", () => {
 
 		const watch = await harness.watch(BACKGROUND_CONTEXT);
 
-		expect(watch.snapshot.queues.steer).toMatchObject([{ entryId: ids.steer, message: { content: ids.steer } }]);
-		expect(watch.snapshot.queues.followUp).toMatchObject([{ entryId: ids.follow, message: { content: ids.follow } }]);
-		expect(watch.snapshot.queues.nextRun).toMatchObject([{ entryId: ids.next, message: { content: ids.next } }]);
-		expect(watch.snapshot.pendingWrites).toEqual([
-			{ entryId: ids.write, type: "custom", customType: "note", data: { id: ids.write } },
+		expect(watch.snapshot.queues).toMatchObject([
+			{ entryId: ids.next, kind: "nextRun", type: "message", message: { content: ids.next } },
+			{ entryId: ids.steer, kind: "steer", type: "message", message: { content: ids.steer } },
+			{ entryId: ids.follow, kind: "followUp", type: "message", message: { content: ids.follow } },
+			{ entryId: ids.write, kind: "write", type: "custom", customType: "note", data: { id: ids.write } },
 		]);
 		expect(watch.snapshot.operation).toMatchObject({
 			id: operationId,

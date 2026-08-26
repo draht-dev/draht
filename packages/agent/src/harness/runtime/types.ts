@@ -136,6 +136,7 @@ export class Drive {
 	closeGate(error: Error): void {
 		this.control.close(error);
 		if (!this.closeSignal.aborted) this.closeController.abort(error);
+		this.rejectCompletion(error);
 	}
 }
 

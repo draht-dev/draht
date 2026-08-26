@@ -684,7 +684,10 @@ describe("runtime structural drive", () => {
 			inbox: [{ entryId, kind: "write" }],
 		});
 		expect(await fixture.session.getValue(storedValues.pendingEntry(entryId), BACKGROUND_CONTEXT)).toBeDefined();
-		expect(fixture.events.at(-1)).toMatchObject({ type: "write_pending", entryId });
+		expect(fixture.events.at(-1)).toMatchObject({
+			type: "queue_update",
+			queues: [{ entryId, kind: "write", type: "custom" }],
+		});
 	});
 
 	it("publishes overflow preparation with the normalized response settlement", async () => {

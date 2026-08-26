@@ -491,6 +491,7 @@ export interface EntryQuery {
 
 export interface SessionReader {
 	getEntries(ids: string[], context: Context): Promise<Map<string, Entry>>;
+	getStats(context: Context): Promise<SessionStats>;
 	getValue<T>(address: Value<T>, context: Context): Promise<StoredValue<T> | undefined>;
 	scanValues<T>(prefix: Value<T>, context: Context): Promise<StoredValue<T>[]>;
 	readList<T>(

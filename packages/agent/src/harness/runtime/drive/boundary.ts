@@ -1,5 +1,4 @@
-import type { AgentMessage } from "../../../types.ts";
-import type { HarnessEvent } from "../../agent-harness.ts";
+import type { HarnessEvent, LaneQueuedItem } from "../../agent-harness.ts";
 import { insertEntry } from "../../session/commit.ts";
 import { SessionInvariantError } from "../../session/session.ts";
 import type {
@@ -17,15 +16,9 @@ import type {
 } from "../../session/types.ts";
 import { branchTip, deleteValue, pendingEntry, setValue } from "../../session/values.ts";
 import type { Lane } from "../lane.ts";
-import { committedEntryEvents, entryLifecycleEvents, readBoundedContext, readPendingMessages } from "../transcript.ts";
+import { committedEntryEvents, entryLifecycleEvents, readBoundedContext, readLaneQueues } from "../transcript.ts";
 import type { Drive, LaneState, ProcedureResult } from "../types.ts";
 import { operationCleanupWrites, operationResultRecord } from "./terminal.ts";
-
-interface QueueSnapshot {
-	steer: Array<{ entryId: string; message: AgentMessage }>;
-	followUp: Array<{ entryId: string; message: AgentMessage }>;
-	nextRun: Array<{ entryId: string; message: AgentMessage }>;
-}
 
 export interface BoundaryFinishPending {
 	kind: "finish_pending";
@@ -38,7 +31,7 @@ export interface BoundaryPlacement {
 	tipId: string | null;
 	inbox: LaneState["inbox"];
 	triggerEntryId?: string;
-	queue?: QueueSnapshot;
+	queues?: LaneQueuedItem[];
 }
 
 type FinishBoundaryOperation =
@@ -136,18 +129,7 @@ export async function planBoundaryInbox<TContext extends object | undefined>(
 	});
 	const selectedIds = new Set(selected.map((item) => item.entryId));
 	const inbox = state.inbox.filter((item) => !selectedIds.has(item.entryId));
-	const queue = selected.some((item) => item.kind === "steer" || item.kind === "followUp")
-		? await (async () => {
-				const remaining = (kind: "steer" | "followUp" | "nextRun") =>
-					inbox.filter((item) => item.kind === kind).map((item) => item.entryId);
-				const [remainingSteer, remainingFollowUp, nextRun] = await Promise.all([
-					readPendingMessages(reader, remaining("steer"), "Steer entry", drive.context),
-					readPendingMessages(reader, remaining("followUp"), "Follow-up entry", drive.context),
-					readPendingMessages(reader, remaining("nextRun"), "Pending next-run entry", drive.context),
-				]);
-				return { steer: remainingSteer, followUp: remainingFollowUp, nextRun };
-			})()
-		: undefined;
+	const queues = selected.length === 0 ? undefined : await readLaneQueues(reader, inbox, drive.context);
 	return {
 		entries,
 		writes: [
@@ -158,7 +140,7 @@ export async function planBoundaryInbox<TContext extends object | undefined>(
 		tipId: parentId,
 		inbox,
 		...(triggerEntryId === undefined ? {} : { triggerEntryId }),
-		...(queue === undefined ? {} : { queue }),
+		...(queues === undefined ? {} : { queues }),
 	};
 }
 
@@ -171,7 +153,7 @@ export function boundaryPlacementEvents(
 ): HarnessEvent[] {
 	return [
 		...committedEntryEvents(placement.entries, commit, lane, runId, firstWriteIndex),
-		...(placement.queue === undefined ? [] : [{ type: "queue_update" as const, lane, ...placement.queue }]),
+		...(placement.queues === undefined ? [] : [{ type: "queue_update" as const, lane, queues: placement.queues }]),
 	];
 }
 
@@ -266,6 +248,7 @@ export async function finishRunBoundary<TContext extends object | undefined, TSt
 						status: "completed",
 						fromTipId: meta.sourceTipId,
 						tipId: placement.tipId,
+						endedAt: record.endedAt,
 					},
 				],
 			};

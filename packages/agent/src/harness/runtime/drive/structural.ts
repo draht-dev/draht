@@ -87,6 +87,17 @@ export function durableCompactionPreparation(
 	};
 }
 
+export function durableBranchPreparation(
+	preparation: BranchPreparation,
+): Extract<DurableStructuralPreparation, { kind: "branch_summary" }> {
+	return {
+		kind: "branch_summary",
+		messages: preparation.messages,
+		fileOps: durableFileOperations(preparation.fileOps),
+		totalTokens: preparation.totalTokens,
+	};
+}
+
 function fileOperations(fileOps: DurableFileOperations): CompactionPreparation["fileOps"] {
 	return {
 		read: new Set(fileOps.read),
@@ -226,6 +237,7 @@ async function publishStructuralOutcome<TContext extends object | undefined>(
 		capability,
 		async (state, current, meta, reader) => {
 			const expected = summaryKind(current.task);
+			let terminalCompactionEndedAt: number | undefined;
 			if ((outcome.kind === "compaction" || outcome.kind === "branch_summary") && outcome.kind !== expected) {
 				throw new SessionInvariantError(
 					`Structural ${outcome.kind} result does not match ${expected} task ${current.task.taskId}`,
@@ -304,7 +316,7 @@ async function publishStructuralOutcome<TContext extends object | undefined>(
 				]);
 			}
 			if (outcome.kind === "compaction") {
-				baseEvents.push(() => [
+				baseEvents.push((commit) => [
 					{
 						type: "compaction_end",
 						lane: lane.name,
@@ -312,6 +324,7 @@ async function publishStructuralOutcome<TContext extends object | undefined>(
 						reason: compactionReason(current.task),
 						status: "completed",
 						entryId: outcome.resultEntryId,
+						endedAt: terminalCompactionEndedAt ?? commit.timestamp,
 					},
 				]);
 			}
@@ -388,6 +401,7 @@ async function publishStructuralOutcome<TContext extends object | undefined>(
 												runId: drive.operationId,
 												reason: "threshold" as const,
 												status: "declined" as const,
+												endedAt: commit.timestamp,
 											},
 										]),
 								...boundaryPlacementEvents(
@@ -415,6 +429,7 @@ async function publishStructuralOutcome<TContext extends object | undefined>(
 									runId: drive.operationId,
 									reason: compactionReason(current.task),
 									status: "declined",
+									endedAt: record.endedAt,
 								}
 							: {
 									type: "compaction_end",
@@ -423,6 +438,7 @@ async function publishStructuralOutcome<TContext extends object | undefined>(
 									reason: compactionReason(current.task),
 									status: "failed",
 									error: outcome.error,
+									endedAt: record.endedAt,
 								};
 					return {
 						kind: "finish",
@@ -440,6 +456,7 @@ async function publishStructuralOutcome<TContext extends object | undefined>(
 								error,
 								fromTipId: meta.sourceTipId,
 								tipId: state.tipId,
+								endedAt: record.endedAt,
 							},
 						],
 					};
@@ -456,6 +473,7 @@ async function publishStructuralOutcome<TContext extends object | undefined>(
 						outcome.kind === "declined" ? "declined" : outcome.kind === "failed" ? "failed" : "completed";
 					const cleanup = await operationCleanupWrites(reader, drive.operationId, current, drive.context);
 					const record = operationResultRecord(meta, status, terminalTipId, error);
+					terminalCompactionEndedAt = record.endedAt;
 					const compactionEnd: HarnessEvent | undefined =
 						outcome.kind === "compaction"
 							? undefined
@@ -466,6 +484,7 @@ async function publishStructuralOutcome<TContext extends object | undefined>(
 										runId: drive.operationId,
 										reason: "manual",
 										status: "declined",
+										endedAt: record.endedAt,
 									}
 								: {
 										type: "compaction_end",
@@ -474,6 +493,7 @@ async function publishStructuralOutcome<TContext extends object | undefined>(
 										reason: "manual",
 										status: "failed",
 										error: outcome.error,
+										endedAt: record.endedAt,
 									};
 					return {
 						kind: "finish",
@@ -502,6 +522,7 @@ async function publishStructuralOutcome<TContext extends object | undefined>(
 									status: "completed",
 									fromTipId: meta.sourceTipId,
 									tipId: terminalTipId,
+									endedAt: record.endedAt,
 								}
 							: outcome.kind === "declined"
 								? {
@@ -511,6 +532,7 @@ async function publishStructuralOutcome<TContext extends object | undefined>(
 										status: "declined",
 										fromTipId: meta.sourceTipId,
 										tipId: terminalTipId,
+										endedAt: record.endedAt,
 									}
 								: {
 										type: "navigation_end",
@@ -520,6 +542,7 @@ async function publishStructuralOutcome<TContext extends object | undefined>(
 										error: outcome.error,
 										fromTipId: meta.sourceTipId,
 										tipId: terminalTipId,
+										endedAt: record.endedAt,
 									};
 					return {
 						kind: "finish",
@@ -547,6 +570,7 @@ async function publishStructuralOutcome<TContext extends object | undefined>(
 			runId: drive.operationId,
 			reason: "threshold",
 			status: "declined",
+			endedAt: Date.now(),
 		},
 	]);
 }
@@ -969,6 +993,7 @@ async function publishAttemptResult<TContext extends object | undefined>(
 						attempt: retryWait.nextAttempt,
 						maxAttempts: effect.summaryContext.retryPolicy.maxAttempts,
 						delayMs: retryDelay(effect.summaryContext.retryPolicy.baseDelayMs, effect.attempt),
+						notBefore: retryWait.notBefore,
 						errorMessage: result.error.message,
 					},
 				],
@@ -1077,6 +1102,7 @@ export async function recoverStructuralGeneration<TContext extends object | unde
 					attempt: retryWait.nextAttempt,
 					maxAttempts: effect.summaryContext.retryPolicy.maxAttempts,
 					delayMs: retryDelay(effect.summaryContext.retryPolicy.baseDelayMs, effect.attempt),
+					notBefore: retryWait.notBefore,
 					errorMessage: error.message,
 					recovery: true,
 				},
@@ -1184,6 +1210,7 @@ export function commitNavigation<TContext extends object | undefined>(
 							status: "completed",
 							fromTipId: meta.sourceTipId,
 							tipId: current.targetId,
+							endedAt: record.endedAt,
 						},
 					],
 				};

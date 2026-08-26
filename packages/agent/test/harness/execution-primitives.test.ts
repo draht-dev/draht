@@ -369,17 +369,17 @@ describe("HarnessEventBus", () => {
 	it("buffers between snapshot and start, then delivers each event once in order", async () => {
 		const bus = new HarnessEventBus();
 		const watcher = bus.watch({ tipId: null }, () => true, BACKGROUND_CONTEXT);
-		await bus.emit({ type: "run_start", runId: "one", lane: "main" }, BACKGROUND_CONTEXT);
+		await bus.emit({ type: "run_start", runId: "one", startedAt: 1, lane: "main" }, BACKGROUND_CONTEXT);
 		const seen: string[] = [];
 		watcher.start((event) => {
 			seen.push(`${event.type}:${"runId" in event ? event.runId : ""}`);
 		});
-		await bus.emit({ type: "run_start", runId: "two", lane: "main" }, BACKGROUND_CONTEXT);
+		await bus.emit({ type: "run_start", runId: "two", startedAt: 1, lane: "main" }, BACKGROUND_CONTEXT);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(watcher.snapshot).toEqual({ tipId: null });
 		expect(seen).toEqual(["run_start:one", "run_start:two"]);
 		watcher.unsubscribe();
-		await bus.emit({ type: "run_start", runId: "three", lane: "main" }, BACKGROUND_CONTEXT);
+		await bus.emit({ type: "run_start", runId: "three", startedAt: 1, lane: "main" }, BACKGROUND_CONTEXT);
 		expect(seen).toHaveLength(2);
 	});
 
@@ -419,9 +419,9 @@ describe("HarnessEventBus", () => {
 			seen.push(`${event.runId}:end`);
 		});
 
-		const one = bus.emit({ type: "run_start", runId: "one", lane: "main" }, BACKGROUND_CONTEXT);
+		const one = bus.emit({ type: "run_start", runId: "one", startedAt: 1, lane: "main" }, BACKGROUND_CONTEXT);
 		await started.promise;
-		const two = bus.emit({ type: "run_start", runId: "two", lane: "main" }, BACKGROUND_CONTEXT);
+		const two = bus.emit({ type: "run_start", runId: "two", startedAt: 1, lane: "main" }, BACKGROUND_CONTEXT);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(seen).toEqual(["one:start"]);
 		release.resolve();
@@ -442,15 +442,15 @@ describe("HarnessEventBus", () => {
 
 		const first = bus.emitBatch(
 			[
-				{ type: "run_start", runId: "a1", lane: "main" },
-				{ type: "run_start", runId: "a2", lane: "main" },
+				{ type: "run_start", runId: "a1", startedAt: 1, lane: "main" },
+				{ type: "run_start", runId: "a2", startedAt: 1, lane: "main" },
 			],
 			firstContext,
 		);
 		const second = bus.emitBatch(
 			[
-				{ type: "run_start", runId: "b1", lane: "worker" },
-				{ type: "run_start", runId: "b2", lane: "worker" },
+				{ type: "run_start", runId: "b1", startedAt: 1, lane: "worker" },
+				{ type: "run_start", runId: "b2", startedAt: 1, lane: "worker" },
 			],
 			secondContext,
 		);
@@ -470,10 +470,13 @@ describe("HarnessEventBus", () => {
 			started.resolve();
 			await release.promise;
 		});
-		const blocking = bus.emit({ type: "run_start", runId: "blocking", lane: "main" }, BACKGROUND_CONTEXT);
+		const blocking = bus.emit(
+			{ type: "run_start", runId: "blocking", startedAt: 1, lane: "main" },
+			BACKGROUND_CONTEXT,
+		);
 		await started.promise;
 
-		const queued = bus.emit({ type: "run_start", runId: "queued", lane: "main" }, BACKGROUND_CONTEXT);
+		const queued = bus.emit({ type: "run_start", runId: "queued", startedAt: 1, lane: "main" }, BACKGROUND_CONTEXT);
 		const lateListenerEvents: string[] = [];
 		bus.on("run_start", (event) => {
 			lateListenerEvents.push(event.runId);
@@ -489,7 +492,7 @@ describe("HarnessEventBus", () => {
 		expect(lateListenerEvents).toEqual([]);
 		expect(lateWatcherEvents).toEqual([]);
 
-		await bus.emit({ type: "run_start", runId: "later", lane: "main" }, BACKGROUND_CONTEXT);
+		await bus.emit({ type: "run_start", runId: "later", startedAt: 1, lane: "main" }, BACKGROUND_CONTEXT);
 		expect(lateListenerEvents).toEqual(["later"]);
 		expect(lateWatcherEvents).toEqual(["later"]);
 	});
@@ -516,18 +519,21 @@ describe("HarnessEventBus", () => {
 				await release.promise;
 			}
 		});
-		const blocking = bus.emit({ type: "run_start", runId: "blocking", lane: "main" }, BACKGROUND_CONTEXT);
+		const blocking = bus.emit(
+			{ type: "run_start", runId: "blocking", startedAt: 1, lane: "main" },
+			BACKGROUND_CONTEXT,
+		);
 		await started.promise;
 		const batch = bus.emitBatch(
 			[
-				{ type: "run_start", runId: "one", lane: "main" },
-				{ type: "run_start", runId: "two", lane: "main" },
+				{ type: "run_start", runId: "one", startedAt: 1, lane: "main" },
+				{ type: "run_start", runId: "two", startedAt: 1, lane: "main" },
 			],
 			BACKGROUND_CONTEXT,
 		);
 
 		bus.close(new Error("closed"));
-		await bus.emit({ type: "run_start", runId: "late", lane: "main" }, BACKGROUND_CONTEXT);
+		await bus.emit({ type: "run_start", runId: "late", startedAt: 1, lane: "main" }, BACKGROUND_CONTEXT);
 		release.resolve();
 		await Promise.all([blocking, batch]);
 
@@ -548,8 +554,8 @@ describe("HarnessEventBus", () => {
 			seen.push(event.runId);
 		});
 
-		await bus.emit({ type: "run_start", runId: "one", lane: "main" }, BACKGROUND_CONTEXT);
-		await bus.emit({ type: "run_start", runId: "two", lane: "main" }, BACKGROUND_CONTEXT);
+		await bus.emit({ type: "run_start", runId: "one", startedAt: 1, lane: "main" }, BACKGROUND_CONTEXT);
+		await bus.emit({ type: "run_start", runId: "two", startedAt: 1, lane: "main" }, BACKGROUND_CONTEXT);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(seen).toEqual(["two"]);
 		expect(failures).toEqual(["watcher failed"]);
@@ -564,7 +570,7 @@ describe("HarnessEventBus", () => {
 		bus.on("handler_error", (event) => {
 			failures.push(event.error);
 		});
-		await bus.emit({ type: "run_start", runId: "run", lane: "main" }, BACKGROUND_CONTEXT);
+		await bus.emit({ type: "run_start", runId: "run", startedAt: 1, lane: "main" }, BACKGROUND_CONTEXT);
 		expect(failures).toEqual(["listener failed"]);
 	});
 
@@ -579,7 +585,7 @@ describe("HarnessEventBus", () => {
 			throw new Error("error listener failed");
 		});
 
-		await bus.emit({ type: "run_start", runId: "run", lane: "main" }, BACKGROUND_CONTEXT);
+		await bus.emit({ type: "run_start", runId: "run", startedAt: 1, lane: "main" }, BACKGROUND_CONTEXT);
 
 		expect(handlerErrors).toBe(1);
 	});

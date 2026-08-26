@@ -126,6 +126,7 @@ export async function publishConfigurationFailure<
 						error,
 						fromTipId: meta.sourceTipId,
 						tipId: state.tipId,
+						endedAt: record.endedAt,
 					},
 				],
 			};
@@ -395,6 +396,7 @@ export async function publishResponse<TContext extends object | undefined>(
 							attempt: settled.nextAttempt,
 							maxAttempts: settled.generationContext.retryPolicy.maxAttempts,
 							delayMs: retryDelay(current.generationContext.retryPolicy.baseDelayMs, current.attempt),
+							notBefore: settled.notBefore,
 							errorMessage: settled.errorMessage,
 						});
 					}
@@ -414,6 +416,7 @@ export async function publishResponse<TContext extends object | undefined>(
 							lane: lane.name,
 							runId: drive.operationId,
 							reason: "overflow",
+							startedAt: commit.timestamp,
 						});
 					}
 				} else if (settled?.at !== "tools") {
@@ -438,6 +441,7 @@ export async function publishResponse<TContext extends object | undefined>(
 						runId: drive.operationId,
 						reason: "deferred",
 						deferred: committed.deferred,
+						poll: settled.poll,
 						...(current.at === "deferred.effect_pending" ? options : {}),
 					});
 				}
@@ -450,6 +454,7 @@ export async function publishResponse<TContext extends object | undefined>(
 						error: failure,
 						fromTipId: meta.sourceTipId,
 						tipId: responseEntryId,
+						endedAt: record.endedAt,
 					});
 				}
 				return batch;

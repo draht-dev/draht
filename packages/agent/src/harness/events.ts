@@ -44,9 +44,14 @@ export class HarnessEventBus implements Events {
 		return delivery;
 	}
 
-	watch<T>(snapshot: T, filter: (event: HarnessEvent) => boolean, _context: Context): WatchHandle<T> {
+	watch<T>(
+		snapshot: T,
+		filter: (event: HarnessEvent) => boolean,
+		_context: Context,
+		resnapshot?: (context: Context) => Promise<T>,
+	): WatchHandle<T> {
 		if (this.closedError !== undefined) throw this.closedError;
-		return this.installWatcher(snapshot, filter);
+		return this.installWatcher(snapshot, filter, resnapshot);
 	}
 
 	async watchFromSnapshot<T>(
@@ -55,7 +60,7 @@ export class HarnessEventBus implements Events {
 		context: Context,
 	): Promise<WatchHandle<T>> {
 		if (this.closedError !== undefined) throw this.closedError;
-		const watcher = this.installWatcher<T>(undefined, filter);
+		const watcher = this.installWatcher<T>(undefined, filter, capture);
 		try {
 			watcher.setSnapshot(await capture(context));
 			return watcher;
@@ -76,8 +81,9 @@ export class HarnessEventBus implements Events {
 	private installWatcher<T>(
 		snapshot: T | undefined,
 		filter: (event: HarnessEvent) => boolean,
+		resnapshot: ((context: Context) => Promise<T>) | undefined,
 	): BufferedEventWatcher<T> {
-		const watcher = new BufferedEventWatcher(snapshot, async (error, event, context) => {
+		const watcher = new BufferedEventWatcher(snapshot, resnapshot, async (error, event, context) => {
 			if (event.type === "handler_error") return;
 			const normalized = error instanceof Error ? error : new Error(String(error));
 			const lane = "lane" in event && typeof event.lane === "string" ? event.lane : undefined;
@@ -134,6 +140,7 @@ export class HarnessEventBus implements Events {
 
 class BufferedEventWatcher<T> implements WatchHandle<T> {
 	snapshot: T;
+	private readonly resnapshotCallback: ((context: Context) => Promise<T>) | undefined;
 	private readonly onError: (error: unknown, event: HarnessEvent, context: Context) => void | Promise<void>;
 	private buffer: Array<{ event: HarnessEvent; context: Context }> = [];
 	private listener: EventListener | undefined;
@@ -143,9 +150,11 @@ class BufferedEventWatcher<T> implements WatchHandle<T> {
 
 	constructor(
 		snapshot: T | undefined,
+		resnapshot: ((context: Context) => Promise<T>) | undefined,
 		onError: (error: unknown, event: HarnessEvent, context: Context) => void | Promise<void>,
 	) {
 		this.snapshot = snapshot as T;
+		this.resnapshotCallback = resnapshot;
 		this.onError = onError;
 	}
 
@@ -160,6 +169,14 @@ class BufferedEventWatcher<T> implements WatchHandle<T> {
 		const buffered = this.buffer;
 		this.buffer = [];
 		for (const bufferedEvent of buffered) this.enqueue(bufferedEvent.event, bufferedEvent.context);
+	}
+
+	async resnapshot(context: Context): Promise<T> {
+		if (this.state === "unsubscribed") throw new Error("WatchHandle is unsubscribed");
+		if (this.resnapshotCallback === undefined) throw new Error("WatchHandle does not support resnapshot");
+		const snapshot = await this.resnapshotCallback(context);
+		this.snapshot = snapshot;
+		return snapshot;
 	}
 
 	unsubscribe(): void {

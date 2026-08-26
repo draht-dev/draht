@@ -3054,13 +3054,14 @@ The request function, not this block, owns registry dispatch, auth, and operatio
   const admittedContext = withAbortSignal(drive.gate.signal, context);
   return drive.gate.admit(() => models.streamSimple(model, aiContext, {
     ...options,
+    sessionId: `${session.metadata.id}:${lane.name}`,
     signal: admittedContext.abortSignal,
     telemetryContext: admittedContext.telemetryContext,
   }));
 }
 ```
 
-There is no yield between `Gate.admit` checking admission and invoking `Models.streamSimple()`. Its asynchronous auth/lazy/provider work is part of the admitted request and owns `admittedContext.abortSignal` (§4.2). A captured identity that disappears after intent becomes an in-band provider error under the reserved response/usage ids. An identity unavailable before intent becomes a non-retryable configuration failure with no fabricated response or usage (§3.7, §4.5). Existing summary helpers keep their separate `Models`-based generation logic, but gate their `Models` operation invocation the same way.
+There is no yield between `Gate.admit` checking admission and invoking `Models.streamSimple()`. Its asynchronous auth/lazy/provider work is part of the admitted request and owns `admittedContext.abortSignal` (§4.2). Ordinary assistant requests derive one stable provider cache/affinity identity as `Session metadata id + ":" + lane name`; lanes in one Session therefore never share it. Context-prefix changes may miss old cache entries but cannot incorrectly reuse them, so no durable lineage or rotation state exists. Structural summary requests retain fresh request identities with `cacheRetention: "none"`; deferred handle polling sends no cache identity. A captured identity that disappears after intent becomes an in-band provider error under the reserved response/usage ids. An identity unavailable before intent becomes a non-retryable configuration failure with no fabricated response or usage (§3.7, §4.5). Existing summary helpers keep their separate `Models`-based generation logic, but gate their `Models` operation invocation the same way.
 
 ### Tool phases
 

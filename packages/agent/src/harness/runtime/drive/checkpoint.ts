@@ -1,10 +1,9 @@
 import type { AgentMessage } from "../../../types.ts";
-import type { HarnessEvent, TerminalOperationOutcome } from "../../agent-harness.ts";
+import type { TerminalOperationOutcome } from "../../agent-harness.ts";
 import { insertEntry } from "../../session/commit.ts";
 import { buildSessionContext } from "../../session/context.ts";
 import { SessionInvariantError } from "../../session/session.ts";
 import {
-	checkpointDataOf,
 	type Entry,
 	type LaneLastResult,
 	type MessageEntry,
@@ -17,28 +16,21 @@ import {
 } from "../../session/types.ts";
 import { branchTip, deleteValue, pendingEntry, setValue } from "../../session/values.ts";
 import type { Lane } from "../lane.ts";
-import type { Drive, ProcedureResult } from "../types.ts";
+import { chainEntries, entryLifecycleEvents, readPendingMessages } from "../transcript.ts";
+import type { ContinueOperationResult, Drive, ProcedureResult } from "../types.ts";
 import { operationCleanupWrites } from "./terminal.ts";
+
+type FinishContinuation = Extract<RunCheckpointOperation["continuation"], { kind: "may_finish" }>;
 
 function isSettledAssistant(message: AgentMessage): message is SettledAssistantMessage {
 	return message.role === "assistant" && message.stopReason !== "pending";
-}
-
-function lifecycleEvents(entry: Entry, lane: string, runId: string): HarnessEvent[] {
-	return entry.type === "message"
-		? [
-				{ type: "message_start", lane, runId, message: entry.message },
-				{ type: "message_end", lane, runId, message: entry.message, entryId: entry.id },
-				{ type: "entry_added", lane, entry },
-			]
-		: [{ type: "entry_added", lane, entry }];
 }
 
 async function readRunContext<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
 	checkpoint: RunCheckpointOperation,
-): Promise<AgentMessage[] | undefined> {
+): Promise<ContinueOperationResult<AgentMessage[]>> {
 	const entries = await lane.continueOperation(
 		checkpoint,
 		async (state, _current, _meta, reader) => {
@@ -53,9 +45,15 @@ async function readRunContext<TContext extends object | undefined>(
 		},
 		drive.context,
 	);
-	return entries === undefined
-		? undefined
-		: buildSessionContext(entries, { entryProjectors: lane.readConfig().entryProjectors }, drive.context);
+	if (entries.kind === "cancel_requested") return entries;
+	return {
+		kind: "result",
+		value: await buildSessionContext(
+			entries.value,
+			{ entryProjectors: lane.readConfig().entryProjectors },
+			drive.context,
+		),
+	};
 }
 
 /** Consume before_run and commit the initial checkpoint. */
@@ -80,11 +78,11 @@ export async function startRun<TContext extends object | undefined>(
 		},
 		drive.context,
 	);
-	if (prompt === undefined) return { kind: "continue" };
+	if (prompt.kind === "cancel_requested") return { kind: "continue" };
 
 	const hook = await lane.hooks.runWithGate(
 		"before_run",
-		{ lane: lane.name, runId: drive.operationId, prompt, resources: lane.readConfig().resources },
+		{ lane: lane.name, runId: drive.operationId, prompt: prompt.value, resources: lane.readConfig().resources },
 		drive.gate,
 		drive.context,
 	);
@@ -99,13 +97,11 @@ export async function startRun<TContext extends object | undefined>(
 	const result = await lane.continueOperation(
 		run,
 		(state, current) => {
-			let parentId = state.tipId;
-			const entries = reserved.map(({ id, message }) => {
-				const entry: NewEntry<MessageEntry> = { id, parentId, type: "message", message };
-				parentId = id;
-				return entry;
-			});
-			const triggerEntryId = parentId;
+			const entries: NewEntry<MessageEntry>[] = chainEntries(
+				state.tipId,
+				reserved.map(({ id, message }) => ({ id, type: "message" as const, message })),
+			);
+			const triggerEntryId = entries.at(-1)?.id ?? state.tipId;
 			if (triggerEntryId === null) throw new SessionInvariantError("Run start has no trigger entry");
 			const nextState: RunCheckpointOperation = {
 				...runScopeOf(current),
@@ -124,7 +120,7 @@ export async function startRun<TContext extends object | undefined>(
 				materialize: () => ({ kind: "continue" }) as const,
 				events: (commit) =>
 					entries.flatMap((entry, index) =>
-						lifecycleEvents(
+						entryLifecycleEvents(
 							{ ...entry, seq: commit.seqs[index]!, timestamp: commit.timestamp },
 							lane.name,
 							drive.operationId,
@@ -134,7 +130,7 @@ export async function startRun<TContext extends object | undefined>(
 		},
 		drive.context,
 	);
-	return result ?? { kind: "continue" };
+	return result.kind === "cancel_requested" ? { kind: "continue" } : result.value;
 }
 
 async function applyPendingWrites<TContext extends object | undefined>(
@@ -173,12 +169,13 @@ async function applyPendingWrites<TContext extends object | undefined>(
 				}
 				return entry;
 			});
-			const scope = { ...runScopeOf(current), inbox: { ...current.inbox, writes: [] } };
+			const inbox = { ...current.inbox, writes: [] };
 			const nextState: RunCheckpointOperation =
 				triggerEntryId === undefined
-					? { ...scope, at: "run.checkpoint", ...checkpointDataOf(current) }
+					? { ...current, inbox }
 					: {
-							...scope,
+							...runScopeOf(current),
+							inbox,
 							at: "run.checkpoint",
 							continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
 							triggerEntryId,
@@ -196,7 +193,7 @@ async function applyPendingWrites<TContext extends object | undefined>(
 				materialize: () => ({ kind: "continue" }) as const,
 				events: (commit) =>
 					entries.flatMap((entry, index) =>
-						lifecycleEvents(
+						entryLifecycleEvents(
 							{ ...entry, seq: commit.seqs[index]!, timestamp: commit.timestamp } as Entry,
 							lane.name,
 							drive.operationId,
@@ -206,7 +203,7 @@ async function applyPendingWrites<TContext extends object | undefined>(
 		},
 		drive.context,
 	);
-	return result ?? { kind: "continue" };
+	return result.kind === "cancel_requested" ? { kind: "continue" } : result.value;
 }
 
 async function consumeQueuedMessages<TContext extends object | undefined>(
@@ -222,35 +219,21 @@ async function consumeQueuedMessages<TContext extends object | undefined>(
 			const mode = queue === "steer" ? current.settings.steeringMode : current.settings.followUpMode;
 			const ids = mode === "all" ? allIds : allIds.slice(0, 1);
 			if (ids.length === 0) return { kind: "return", result: { kind: "continue" } as const };
-			const readMessages = (queuedIds: readonly string[], description: string) =>
-				Promise.all(
-					queuedIds.map(async (id) => {
-						const value = await reader.getValue(pendingEntry(id), drive.context);
-						if (value?.value.type !== "message") {
-							throw new SessionInvariantError(`${description} ${id} is missing its message payload`);
-						}
-						return { entryId: id, message: value.value.payload };
-					}),
-				);
-			const messages = (await readMessages(ids, `Queued ${queue} entry`)).map(({ entryId, message }) => ({
-				id: entryId,
-				message,
-			}));
+			const messages = (await readPendingMessages(reader, ids, `Queued ${queue} entry`, drive.context)).map(
+				({ entryId, message }) => ({ id: entryId, message }),
+			);
 			const remainingSteerIds = queue === "steer" ? allIds.slice(ids.length) : current.inbox.steer;
 			const remainingFollowUpIds = queue === "followUp" ? allIds.slice(ids.length) : current.inbox.followUp;
 			const [remainingSteer, remainingFollowUp, nextRun] = await Promise.all([
-				readMessages(remainingSteerIds, "Steer entry"),
-				readMessages(remainingFollowUpIds, "Follow-up entry"),
-				readMessages(state.pendingNextRun, "Pending next-run entry"),
+				readPendingMessages(reader, remainingSteerIds, "Steer entry", drive.context),
+				readPendingMessages(reader, remainingFollowUpIds, "Follow-up entry", drive.context),
+				readPendingMessages(reader, state.pendingNextRun, "Pending next-run entry", drive.context),
 			]);
-			let parentId = state.tipId;
-			const entries = messages.map(({ id, message }) => {
-				const entry: NewEntry<MessageEntry> = { id, parentId, type: "message", message };
-				parentId = id;
-				return entry;
-			});
-			const triggerEntryId = entries.at(-1)?.id;
-			if (triggerEntryId === undefined) throw new SessionInvariantError("Queue drain produced no trigger entry");
+			const entries: NewEntry<MessageEntry>[] = chainEntries(
+				state.tipId,
+				messages.map(({ id, message }) => ({ id, type: "message" as const, message })),
+			);
+			const triggerEntryId = messages[messages.length - 1]!.id;
 			const nextState: RunCheckpointOperation = {
 				...runScopeOf(current),
 				at: "run.checkpoint",
@@ -271,7 +254,7 @@ async function consumeQueuedMessages<TContext extends object | undefined>(
 				materialize: () => ({ kind: "continue" }) as const,
 				events: (commit) => [
 					...entries.flatMap((entry, index) =>
-						lifecycleEvents(
+						entryLifecycleEvents(
 							{ ...entry, seq: commit.seqs[index]!, timestamp: commit.timestamp },
 							lane.name,
 							drive.operationId,
@@ -289,59 +272,62 @@ async function consumeQueuedMessages<TContext extends object | undefined>(
 		},
 		drive.context,
 	);
-	return result ?? { kind: "continue" };
+	return result.kind === "cancel_requested" ? { kind: "continue" } : result.value;
 }
 
 async function finishRun<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
 	checkpoint: RunCheckpointOperation,
+	continuation: FinishContinuation,
 ): Promise<ProcedureResult> {
 	const context = await readRunContext(lane, drive, checkpoint);
-	if (context === undefined) return { kind: "continue" };
+	if (context.kind === "cancel_requested") return { kind: "continue" };
 	const hook = await lane.hooks.runWithGate(
 		"before_run_end",
-		{ lane: lane.name, runId: drive.operationId, messages: context },
+		{ lane: lane.name, runId: drive.operationId, messages: context.value },
 		drive.gate,
 		drive.context,
 	);
-	const followUp = hook?.followUp;
-	const followUpId = followUp === undefined ? undefined : lane.session.idGenerator.next();
-	const followUpMessage: AgentMessage | undefined =
-		followUp === undefined ? undefined : { role: "user", content: followUp, timestamp: Date.now() };
+	const followUp =
+		hook?.followUp === undefined
+			? undefined
+			: {
+					id: lane.session.idGenerator.next(),
+					message: { role: "user" as const, content: hook.followUp, timestamp: Date.now() },
+				};
 
 	const result = await lane.continueOperation<RunCheckpointOperation, ProcedureResult>(
 		checkpoint,
 		async (state, current, _meta, reader) => {
 			if (
-				current.continuation.kind !== "may_finish" ||
 				current.inbox.steer.length !== 0 ||
 				current.inbox.followUp.length !== 0 ||
 				current.inbox.writes.length !== 0
 			) {
 				return { kind: "return", result: { kind: "continue" } as const };
 			}
-			if (followUpId !== undefined && followUpMessage !== undefined) {
+			if (followUp !== undefined) {
 				const nextState: RunCheckpointOperation = {
 					...runScopeOf(current),
 					at: "run.checkpoint",
 					continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
-					triggerEntryId: followUpId,
+					triggerEntryId: followUp.id,
 				};
 				const entry: NewEntry<MessageEntry> = {
-					id: followUpId,
+					id: followUp.id,
 					parentId: state.tipId,
 					type: "message",
-					message: followUpMessage,
+					message: followUp.message,
 				};
 				return {
 					kind: "commit",
-					writes: [insertEntry(entry), setValue(branchTip(lane.name), followUpId)],
+					writes: [insertEntry(entry), setValue(branchTip(lane.name), followUp.id)],
 					operationState: nextState,
-					lane: { tipId: followUpId },
+					lane: { tipId: followUp.id },
 					materialize: () => ({ kind: "continue" }) as const,
 					events: (commit) =>
-						lifecycleEvents(
+						entryLifecycleEvents(
 							{ ...entry, seq: commit.seqs[0]!, timestamp: commit.timestamp },
 							lane.name,
 							drive.operationId,
@@ -350,8 +336,8 @@ async function finishRun<TContext extends object | undefined>(
 			}
 
 			if (state.tipId === null) throw new SessionInvariantError("Completed run has no tip");
-			const finalId = current.continuation.includeFinalAssistant ? current.latestAssistantEntryId : null;
-			if (current.continuation.includeFinalAssistant && finalId === null) {
+			const finalId = continuation.includeFinalAssistant ? current.latestAssistantEntryId : null;
+			if (continuation.includeFinalAssistant && finalId === null) {
 				throw new SessionInvariantError("Completed run is missing its final assistant");
 			}
 			let finalEntry: { id: string; message: SettledAssistantMessage } | undefined;
@@ -403,7 +389,7 @@ async function finishRun<TContext extends object | undefined>(
 		},
 		drive.context,
 	);
-	return result ?? { kind: "continue" };
+	return result.kind === "cancel_requested" ? { kind: "continue" } : result.value;
 }
 
 /** Advance one durable run checkpoint by one visible transition. */
@@ -418,8 +404,9 @@ export async function runCheckpoint<TContext extends object | undefined>(
 	if (run.skipInboxOnce !== true && run.inbox.steer.length !== 0) {
 		return consumeQueuedMessages(lane, drive, run, "steer");
 	}
-	if (run.continuation.kind === "need_assistant") {
-		const overflowRecoveryUsed = run.continuation.overflowRecoveryUsed;
+	const continuation = run.continuation;
+	if (continuation.kind === "need_assistant") {
+		const overflowRecoveryUsed = continuation.overflowRecoveryUsed;
 		const config = lane.readConfig();
 		const retryPolicy = config.retryPolicy.enabled
 			? { maxAttempts: config.retryPolicy.maxRetries + 1, baseDelayMs: config.retryPolicy.baseDelayMs }
@@ -456,10 +443,10 @@ export async function runCheckpoint<TContext extends object | undefined>(
 			},
 			drive.context,
 		);
-		return result ?? { kind: "continue" };
+		return result.kind === "cancel_requested" ? { kind: "continue" } : result.value;
 	}
 	if (run.inbox.followUp.length !== 0) {
 		return consumeQueuedMessages(lane, drive, run, "followUp");
 	}
-	return finishRun(lane, drive, run);
+	return finishRun(lane, drive, run, continuation);
 }

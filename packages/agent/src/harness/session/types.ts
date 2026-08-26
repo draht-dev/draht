@@ -416,17 +416,6 @@ export function runScopeOf(state: RunOperationState): RunScope {
 	};
 }
 
-/** Copy only the checkpoint payload fields from a checkpoint-bearing state. */
-export function checkpointDataOf(state: CheckpointData): CheckpointData {
-	return {
-		continuation: state.continuation,
-		triggerEntryId: state.triggerEntryId,
-		...(state.thresholdCheckedTriggerEntryId === undefined
-			? {}
-			: { thresholdCheckedTriggerEntryId: state.thresholdCheckedTriggerEntryId }),
-		...(state.skipInboxOnce === undefined ? {} : { skipInboxOnce: state.skipInboxOnce }),
-	};
-}
 export type Operation = { meta: OperationMeta; state: OperationState };
 
 export interface LaneState {

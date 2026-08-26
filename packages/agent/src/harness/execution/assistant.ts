@@ -96,6 +96,42 @@ function isUpdateEvent(
 	return event.type !== "start" && event.type !== "done" && event.type !== "error";
 }
 
+export async function consumeAssistantStream(
+	stream: AssistantMessageEventStream,
+	observer: AssistantStreamObserver,
+	afterResponse:
+		| ((message: SettledAssistantMessage, context: Context) => Promise<SettledAssistantMessage>)
+		| undefined,
+	context: Context,
+): Promise<SettledAssistantMessage> {
+	let started = false;
+	for await (const event of stream) {
+		if (event.type === "start") {
+			if (started) throw new Error("Assistant message stream emitted more than one start event");
+			started = true;
+			await observer.start({ ...event.partial }, event, context);
+		} else if (isUpdateEvent(event)) {
+			if (!started) throw new Error(`Assistant message stream emitted ${event.type} before start`);
+			await observer.update({ ...event.partial }, event, context);
+		} else if (event.type === "done" && !started) {
+			throw new Error("Assistant message stream emitted done before start");
+		}
+	}
+
+	const settled = (await stream.result()) as SettledAssistantMessage;
+	let finalMessage = settled;
+	if (afterResponse !== undefined) {
+		try {
+			finalMessage = await afterResponse(settled, context);
+		} catch (error) {
+			if (!(error instanceof AbortRequested)) throw error;
+			await error.cancellation;
+		}
+	}
+	await observer.end(finalMessage, context);
+	return finalMessage;
+}
+
 /** Stream one assistant response without mutating the caller's message list. */
 export async function streamHarnessAssistant(
 	messages: AgentMessage[],
@@ -127,30 +163,13 @@ export async function streamHarnessAssistant(
 		context,
 	);
 
-	let started = false;
-	for await (const event of stream) {
-		if (event.type === "start") {
-			if (started) throw new Error("Assistant message stream emitted more than one start event");
-			started = true;
-			await config.observer.start({ ...event.partial }, event, context);
-		} else if (isUpdateEvent(event)) {
-			if (!started) throw new Error(`Assistant message stream emitted ${event.type} before start`);
-			await config.observer.update({ ...event.partial }, event, context);
-		} else if (event.type === "done" && !started) {
-			throw new Error("Assistant message stream emitted done before start");
-		}
-	}
-
-	const settled = (await stream.result()) as SettledAssistantMessage;
-	let finalMessage = settled;
-	if (config.afterResponse) {
-		try {
-			finalMessage = await config.afterResponse(settled, metadata, context);
-		} catch (error) {
-			if (!(error instanceof AbortRequested)) throw error;
-			await error.cancellation;
-		}
-	}
-	await config.observer.end(finalMessage, context);
-	return finalMessage;
+	const afterResponse = config.afterResponse;
+	return consumeAssistantStream(
+		stream,
+		config.observer,
+		afterResponse === undefined
+			? undefined
+			: (message, afterContext) => afterResponse(message, metadata, afterContext),
+		context,
+	);
 }

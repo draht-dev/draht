@@ -1856,18 +1856,20 @@ Parallel tool children are the exception: sibling call statuses genuinely race, 
 
 The task runs direct async procedures. There is no graph interpreter or action scheduler. The Lane supplies two concrete mutation operations:
 
-- `continueOperation` declines ordinary progress when current control is cancelled, pairs the next operation-state write with process-local projection publication, and otherwise exposes the procedure's writes/events;
-- `settleOperation` performs effect settlement and tool-child transitions against current control, and also owns the universal terminal suffix when the procedure returns a terminal decision.
+- `continueOperation` returns explicit `cancel_requested` without invoking the planner when current control is cancelled; otherwise it pairs the next operation-state write with process-local projection publication and returns the planner's result;
+- `settleOperation` performs already-admitted effect settlement and tool-child transitions despite cancellation, and also owns the universal terminal suffix when the procedure returns a terminal decision.
+
+Intent publishers use `continueOperation`; outcome publishers use `settleOperation`. Cancellation therefore prevents a new durable intent but cannot erase the result of work already admitted.
 
 A pass ends at a terminal result or durable wait. `activeDrive` is then cleared by that pass; no live pass is replaced in-process. A process crash or close destroys/detaches the continuation, and a later attachment rebuilds `Lane.state` from durable values before another pass starts.
 
 Normal procedures remain straight line:
 
 ```text
-prepare
-→ commit effect intent
-→ admit and await external effect
-→ commit output + next state
+prepare immutable inputs
+→ publish durable effect intent
+→ perform the external effect
+→ publish one durable outcome
 ```
 
 Recovery dispatches directly from the flat `state.at` leaf. Cancellation reconciliation runs before ordinary dispatch and never starts new ordinary effects.

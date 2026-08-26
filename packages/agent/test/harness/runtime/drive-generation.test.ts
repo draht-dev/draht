@@ -27,6 +27,7 @@ import {
 	type MessageEntry,
 	type RunAssistantEffectPendingOperation,
 	type RunAssistantReadyOperation,
+	type RunCheckpointOperation,
 	type RunOperationState,
 	runScopeOf,
 	type Session,
@@ -265,6 +266,53 @@ describe("runtime generation checkpoint", () => {
 			skipInboxOnce: true,
 		});
 		expect(drained.inbox.writes).toEqual([]);
+		await expectProjectionRestores(fixture);
+	});
+
+	it("preserves checkpoint routing when a custom-only pending write does not project", async () => {
+		const fixture = await createFixture();
+		await startFixtureRun(fixture);
+		const current = currentRun(fixture.lane);
+		if (current.at !== "run.checkpoint") throw new Error("missing checkpoint");
+		const customId = "01950000-0000-7000-8000-000000000012";
+		const checkpoint: RunCheckpointOperation = {
+			...current,
+			continuation: { kind: "may_finish", includeFinalAssistant: false },
+			thresholdCheckedTriggerEntryId: current.triggerEntryId,
+			skipInboxOnce: false,
+			inbox: { ...current.inbox, writes: [customId] },
+		};
+		await fixture.lane.command((state) => {
+			const operation = state.operation;
+			if (operation === null) throw new Error("missing operation");
+			return {
+				kind: "commit",
+				writes: [
+					storedValues.setValue(storedValues.pendingEntry(customId), {
+						type: "custom",
+						customType: "display-only",
+						payload: { value: true },
+					}),
+					storedValues.setValue(storedValues.operationState(operationId), checkpoint),
+				],
+				next: { ...state, operation: { meta: operation.meta, state: checkpoint } },
+				materialize: () => undefined,
+			};
+		}, BACKGROUND_CONTEXT);
+
+		await runCheckpoint(fixture.lane, fixture.drive, checkpoint);
+
+		const drained = currentRun(fixture.lane);
+		if (drained.at !== "run.checkpoint") throw new Error("missing drained checkpoint");
+		expect(fixture.lane.state.tipId).toBe(customId);
+		expect(drained).toMatchObject({
+			continuation: checkpoint.continuation,
+			triggerEntryId: checkpoint.triggerEntryId,
+			thresholdCheckedTriggerEntryId: checkpoint.triggerEntryId,
+			skipInboxOnce: false,
+			inbox: { writes: [] },
+		});
+		expect(await fixture.session.getValue(storedValues.pendingEntry(customId), BACKGROUND_CONTEXT)).toBeUndefined();
 		await expectProjectionRestores(fixture);
 	});
 });

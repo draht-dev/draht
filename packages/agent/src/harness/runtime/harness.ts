@@ -19,19 +19,10 @@ import { convertToLlm } from "../messages.ts";
 import { HarnessClosed, HarnessFault, InvalidLane, UnknownTarget } from "../result.ts";
 import { SessionInvariantError } from "../session/session.ts";
 import type { LaneConfiguration, Session } from "../session/types.ts";
-import {
-	branchTip,
-	deleteValue,
-	entryLabel,
-	laneConfig,
-	laneLastResult,
-	laneState,
-	sessionName,
-	setValue,
-} from "../session/values.ts";
+import { branchTip, deleteValue, entryLabel, laneConfig, laneState, sessionName, setValue } from "../session/values.ts";
 import type { AgentHarnessStreamOptions, AgentHarnessTool } from "../types.ts";
 import { Lane } from "./lane.ts";
-import { restoreLaneState, restoreSession } from "./restore.ts";
+import { readLaneStorage, restoreLaneState, restoreSession } from "./restore.ts";
 import { type Config, type LaneState, SliceNotImplemented } from "./types.ts";
 
 type GlobalConfigProperty = GlobalConfigEventPayload["property"];
@@ -112,29 +103,20 @@ export class Harness<TContext extends object | undefined> implements AgentHarnes
 				lane = this.lanesByName.get(name);
 				if (lane !== undefined) return;
 
-				const [tip, configuration, storedState, lastResult] = await Promise.all([
-					mutator.getValue(branchTip(name), context),
-					mutator.getValue(laneConfig(name), context),
-					mutator.getValue(laneState(name), context),
-					mutator.getValue(laneLastResult(name), context),
-				]);
-
-				if (tip !== undefined && configuration !== undefined && storedState !== undefined) {
-					const restored = await restoreLaneState(mutator, name, context);
+				const stored = await readLaneStorage(mutator, name, context);
+				if (stored.kind === "lane") {
+					const restored = await restoreLaneState(mutator, name, stored, context);
 					lane = this.buildLane(name, restored);
 					this.lanesByName.set(name, lane);
 					return;
 				}
 
-				if ((configuration === undefined) !== (storedState === undefined) || lastResult !== undefined) {
-					throw new SessionInvariantError(`Lane ${JSON.stringify(name)} has incomplete durable state`);
-				}
-				if (configuration !== undefined || storedState !== undefined) {
-					throw new SessionInvariantError(`Lane ${JSON.stringify(name)} has durable state without a branch`);
-				}
-
-				const tipId = tip?.value ?? options.createAt ?? null;
-				if (tip === undefined && tipId !== null && !(await mutator.getEntries([tipId], context)).has(tipId)) {
+				const tipId = stored.kind === "branch" ? stored.tip.value : (options.createAt ?? null);
+				if (
+					stored.kind === "absent" &&
+					tipId !== null &&
+					!(await mutator.getEntries([tipId], context)).has(tipId)
+				) {
 					throw new UnknownTarget({
 						targetId: tipId,
 						message: `Unknown target: ${tipId}`,
@@ -152,7 +134,7 @@ export class Harness<TContext extends object | undefined> implements AgentHarnes
 					operation: null,
 				};
 				const writes = [
-					...(tip === undefined ? [setValue(branchTip(name), tipId)] : []),
+					...(stored.kind === "absent" ? [setValue(branchTip(name), tipId)] : []),
 					setValue(laneConfig(name), attachedConfiguration),
 					setValue(laneState(name), {
 						currentOperationId: null,

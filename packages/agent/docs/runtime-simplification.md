@@ -6,6 +6,37 @@ Rework the real implementation under `packages/agent/src/harness/runtime/` and t
 
 Public drive remains disabled until the execution graph is total. Format 4 is still work in progress, so the durable type replacement requires no migration or compatibility representation.
 
+## Implementation status
+
+Completion measurements:
+
+- pre-simplification runtime at `eb1185d93`: 5,358 TypeScript lines;
+- runtime after the first simplification at `417905647`: 4,667 lines;
+- runtime after this pass: 4,654 lines;
+- total reduction: 704 lines (13.1%);
+- this pass versus `417905647`: -13 runtime lines.
+
+`npm run check` passes. The 13 focused assistant/runtime/type files pass with 128 tests.
+
+Implemented in the working tree:
+
+- explicit `ContinueOperationResult<T>` with `cancel_requested` instead of implicit `undefined`;
+- concrete generation, deferred-poll, and tool-call phases: prepare immutable input, publish durable intent, perform the effect, publish the durable outcome;
+- shared assistant stream protocol consumption and Drive response lifecycle;
+- `publishResponse` for common assistant/deferred durable publication and `publishConfigurationFailure` for their identical pre-intent failure transition;
+- source-order tool publication, one-read immutable source validation, and shared tool-batch reconstruction isolated in `runtime/drive/tool-placement.ts`;
+- same-call tool status defenses, unchecked `toolOperation()` casts, and their result unions removed; genuine sibling/progress/memo checks retained;
+- centralized lane-storage classification without duplicate projection reads;
+- checkpoint dead-check removal and exact checkpoint preservation;
+- shared transcript mechanics in `runtime/transcript.ts`;
+- narrower `LanePatch`, no redundant Drive promise-settlement flag, and no unused operation reject arm.
+
+Current largest files are `runtime/lane.ts` (~996), `runtime/drive/tools.ts` (~663), `runtime/drive/checkpoint.ts` (~452), and `runtime/drive/response.ts` (~417).
+
+Public drive remains disabled; M6–M8 have not started. Keep the visible durable procedure order:
+`prepare → publish intent → perform effect → publish outcome`.
+Do not introduce a generic Procedure interface, runner, scheduler, graph, callback plan, or dependency facade. Historical work-package documents remain unchanged.
+
 ## Core model
 
 A Lane is one process-local actor over one durable lane projection.
@@ -132,7 +163,7 @@ Used for ordinary non-terminal progress.
 
 - Enters the Session mutation line.
 - Receives the current authoritative Lane projection and operation state.
-- If control is cancelled, returns to the drive loop without invoking the semantic planner.
+- If control is cancelled, returns explicit `cancel_requested` without invoking the semantic planner; callers cannot confuse cancellation with a planner value.
 - The planner supplies procedure-specific writes, the next complete `OperationState`, materialization, and events.
 - The helper appends the `operationState` write and publishes the matching process-local operation projection.
 - It does not verify an expected state or `at` value.
@@ -148,6 +179,19 @@ Used after an admitted provider/tool/structural effect and for genuine parallel 
 - When the planner returns a terminal decision, appends `laneLastResult`, idle `laneState`, and the idle process-local projection.
 
 The caller supplies the typed outcome, cleanup/publication writes, last result, and event. Terminal business decisions remain visible in the owning procedure.
+
+## Durable procedure shape
+
+Effectful procedures expose four concrete phases:
+
+```text
+prepare immutable inputs
+→ publish durable effect intent
+→ perform the external effect
+→ publish one durable outcome
+```
+
+The intent phase must remain visible and precede the external effect. Otherwise a crash after the effect but before its intent would leave no recoverable unknown-outcome marker. Each procedure uses concrete functions such as `prepareGeneration`, `publishGenerationIntent`, `performGeneration`, and `publishResponse`; there is no generic Procedure abstraction.
 
 ## Drive lifecycle
 

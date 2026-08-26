@@ -68,8 +68,10 @@ export type LaneCommand<TResult> =
 	| { kind: "return"; result: TResult }
 	| { kind: "reject"; error: Error };
 
+export type ContinueOperationResult<TResult> = { kind: "cancel_requested" } | { kind: "result"; value: TResult };
+
 /** A durable operation transition. The Lane pairs the state write with projection publication. */
-type LanePatch = Partial<Pick<LaneState, "tipId" | "configuration" | "pendingNextRun" | "lastResult">>;
+type LanePatch = Partial<Pick<LaneState, "tipId" | "configuration">>;
 
 interface FinishDecision<TResult> {
 	kind: "finish";
@@ -83,8 +85,7 @@ interface FinishDecision<TResult> {
 export type OperationCommand<TResult> =
 	| (CommitDecision<TResult> & { operationState: OperationState; lane?: LanePatch })
 	| FinishDecision<TResult>
-	| { kind: "return"; result: TResult }
-	| { kind: "reject"; error: Error };
+	| { kind: "return"; result: TResult };
 
 /** One installed process-local drive pass. */
 export class Drive {
@@ -98,7 +99,6 @@ export class Drive {
 	private readonly control: GateControl;
 	private readonly resolveCompletion: (outcome: DriveOutcome) => void;
 	private readonly rejectCompletion: (error: unknown) => void;
-	private settled = false;
 
 	constructor(options: DriveOptions, context: Context) {
 		this.operationId = options.operationId;
@@ -120,14 +120,10 @@ export class Drive {
 	}
 
 	settle(outcome: DriveOutcome): void {
-		if (this.settled) return;
-		this.settled = true;
 		this.resolveCompletion(outcome);
 	}
 
 	fail(error: unknown): void {
-		if (this.settled) return;
-		this.settled = true;
 		this.rejectCompletion(error);
 	}
 

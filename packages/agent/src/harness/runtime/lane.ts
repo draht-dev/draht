@@ -9,7 +9,6 @@ import type {
 	ModelIdentity,
 	OperationAdmissionResult,
 	OperationRequest,
-	QueuedItem,
 	WatchHandle,
 } from "../agent-harness.ts";
 import type { Context } from "../context.ts";
@@ -50,14 +49,16 @@ import {
 	operationMeta as operationMetaValue,
 	operationState as operationStateValue,
 	operationToolArgs,
-	pendingAssistantFrames,
 	pendingEntry,
 	pendingToolOutput,
 	setValue,
 } from "../session/values.ts";
 import { formatSkillInvocation } from "../skills.ts";
+import { readAssistantFrames } from "./progress.ts";
+import { chainEntries, entryLifecycleEvents, readPendingMessages } from "./transcript.ts";
 import {
 	type Config,
+	type ContinueOperationResult,
 	type Drive,
 	type LaneCommand,
 	type LaneState,
@@ -280,7 +281,7 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 
 	/**
 	 * Run an ordinary operation command only while durable control is running. Use this before starting new hooks,
-	 * effects, or forward progress. Returns `undefined` without invoking the planner once cancellation is requested.
+	 * effects, or forward progress. Returns `cancel_requested` without invoking the planner once cancellation is requested.
 	 */
 	continueOperation<TState extends OperationState, TResult>(
 		capability: TState,
@@ -291,13 +292,22 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 			reader: SessionReader,
 		) => OperationCommand<TResult> | Promise<OperationCommand<TResult>>,
 		context: Context,
-	): Promise<TResult | undefined> {
-		return this.settleOperation<TState, TResult | undefined>(
+	): Promise<ContinueOperationResult<TResult>> {
+		return this.settleOperation<TState, ContinueOperationResult<TResult>>(
 			capability,
-			(state, latest, meta, reader) =>
-				latest.control.status === "cancel_requested"
-					? { kind: "return", result: undefined }
-					: plan(state, latest, meta, reader),
+			async (state, latest, meta, reader) => {
+				if (latest.control.status === "cancel_requested") {
+					return { kind: "return", result: { kind: "cancel_requested" } };
+				}
+				const decision = await plan(state, latest, meta, reader);
+				if (decision.kind === "return") {
+					return { kind: "return", result: { kind: "result", value: decision.result } };
+				}
+				return {
+					...decision,
+					materialize: (commit) => ({ kind: "result", value: decision.materialize(commit) }),
+				};
+			},
 			context,
 		);
 	}
@@ -398,18 +408,14 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 				};
 			}
 			const capturedIds = [...state.pendingNextRun];
-			const captured = await Promise.all(
-				capturedIds.map(async (id) => {
-					const stored = await reader.getValue(pendingEntry(id), context);
-					if (stored?.value.type !== "message") {
-						throw new SessionInvariantError(`Pending next-run entry ${id} is missing a message payload`);
-					}
-					if (stored.value.payload.role === "assistant" && stored.value.payload.stopReason === "pending") {
-						throw new SessionInvariantError(`Pending next-run entry ${id} contains a pending assistant message`);
-					}
-					return { id, message: stored.value.payload };
-				}),
+			const captured = (await readPendingMessages(reader, capturedIds, "Pending next-run entry", context)).map(
+				({ entryId, message }) => ({ id: entryId, message }),
 			);
+			for (const { id, message } of captured) {
+				if (message.role === "assistant" && message.stopReason === "pending") {
+					throw new SessionInvariantError(`Pending next-run entry ${id} contains a pending assistant message`);
+				}
+			}
 			const placed = [...captured, ...prompt];
 			if (placed.length === 0) {
 				return {
@@ -424,12 +430,11 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 				};
 			}
 
-			let parentId = state.tipId;
-			const entryWrites = placed.map(({ id, message }) => {
-				const write = insertEntry({ id, parentId, type: "message", message });
-				parentId = id;
-				return write;
-			});
+			const entries = chainEntries(
+				state.tipId,
+				placed.map(({ id, message }) => ({ id, type: "message" as const, message })),
+			);
+			const parentId = entries[entries.length - 1]!.id;
 			const meta = {
 				operationId,
 				lane: this.name,
@@ -458,7 +463,7 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 			return {
 				kind: "commit",
 				writes: [
-					...entryWrites,
+					...entries.map((entry) => insertEntry(entry)),
 					...capturedIds.map((id) => deleteValue(pendingEntry(id))),
 					setValue(branchTip(this.name), parentId),
 					setValue(operationMetaValue(operationId), meta),
@@ -469,26 +474,13 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 				materialize: () => Result.ok({ operationId, kind: "run", startedAt }),
 				events: (commit) => {
 					const events: HarnessEvent[] = [{ type: "run_start", runId: operationId, lane: this.name }];
-					for (const [index, item] of placed.entries()) {
-						const parent = index === 0 ? state.tipId : placed[index - 1]!.id;
-						const entry: Entry = {
-							id: item.id,
-							parentId: parent,
-							type: "message",
-							message: item.message,
-							seq: commit.seqs[index]!,
-							timestamp: commit.timestamp,
-						};
+					for (const [index, entry] of entries.entries()) {
 						events.push(
-							{ type: "message_start", runId: operationId, message: item.message, lane: this.name },
-							{
-								type: "message_end",
-								runId: operationId,
-								message: item.message,
-								entryId: item.id,
-								lane: this.name,
-							},
-							{ type: "entry_added", entry, lane: this.name },
+							...entryLifecycleEvents(
+								{ ...entry, seq: commit.seqs[index]!, timestamp: commit.timestamp },
+								this.name,
+								operationId,
+							),
 						);
 					}
 					if (captured.length !== 0) {
@@ -679,22 +671,22 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 									context,
 								)
 							).reverse();
-				const queuedItems = async (ids: readonly string[], description: string): Promise<QueuedItem[]> =>
-					Promise.all(
-						ids.map(async (entryId) => {
-							const stored = await reader.getValue(pendingEntry(entryId), context);
-							if (stored?.value.type !== "message") {
-								throw new SessionInvariantError(`${description} ${entryId} is missing a message payload`);
-							}
-							return { entryId, message: stored.value.payload };
-						}),
-					);
-				const nextRun = await queuedItems(captured.pendingNextRun, "Pending next-run entry");
+				const nextRun = await readPendingMessages(
+					reader,
+					captured.pendingNextRun,
+					"Pending next-run entry",
+					context,
+				);
 				const operation = captured.operation;
 				const runState = operation !== null && isRunOperationState(operation.state) ? operation.state : undefined;
-				const steer = runState === undefined ? [] : await queuedItems(runState.inbox.steer, "Steer entry");
+				const steer =
+					runState === undefined
+						? []
+						: await readPendingMessages(reader, runState.inbox.steer, "Steer entry", context);
 				const followUp =
-					runState === undefined ? [] : await queuedItems(runState.inbox.followUp, "Follow-up entry");
+					runState === undefined
+						? []
+						: await readPendingMessages(reader, runState.inbox.followUp, "Follow-up entry", context);
 				// TODO does a client really need pending writes? We wouldn't visualize those, any other uses for them?
 				const pendingWrites =
 					runState !== undefined
@@ -722,24 +714,10 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 					let streamingMessage: NonNullable<LaneSnapshot["operation"]>["streamingMessage"];
 					let retry: NonNullable<LaneSnapshot["operation"]>["retry"];
 					let deferred: NonNullable<LaneSnapshot["operation"]>["deferred"];
-					// TODO we should always read the full frame list here, assistant messages
-					// are never humongous
-					const readStreamingMessage = async (responseEntryId: string) => {
-						const frames = [];
-						let cursor: { seq: number } | undefined;
-						while (frames.length < 10_000) {
-							const limit = Math.min(1_000, 10_000 - frames.length);
-							const page = await reader.readList(
-								pendingAssistantFrames(operation.meta.operationId, responseEntryId),
-								{ order: "asc", limit, ...(cursor === undefined ? {} : { cursor }) },
-								context,
-							);
-							frames.push(...page.map(({ value }) => value));
-							if (page.length < limit) break;
-							cursor = { seq: page[page.length - 1]!.seq };
-						}
-						return reduceAssistantMessageFrames(frames);
-					};
+					const readStreamingMessage = async (responseEntryId: string) =>
+						reduceAssistantMessageFrames(
+							await readAssistantFrames(reader, operation.meta.operationId, responseEntryId, context),
+						);
 					const state = operation.state;
 					switch (state.at) {
 						case "run.assistant.retry_wait":
@@ -820,10 +798,17 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 					const drained =
 						operation.state.control.status === "cancel_requested"
 							? {
-									steer: await queuedItems(operation.state.control.drainedSteer, "Drained steer entry"),
-									followUp: await queuedItems(
+									steer: await readPendingMessages(
+										reader,
+										operation.state.control.drainedSteer,
+										"Drained steer entry",
+										context,
+									),
+									followUp: await readPendingMessages(
+										reader,
 										operation.state.control.drainedFollowUp,
 										"Drained follow-up entry",
+										context,
 									),
 								}
 							: undefined;

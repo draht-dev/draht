@@ -1,5 +1,7 @@
-import { isRetryableAssistantError } from "@draht/ai";
+import { type AssistantMessageEvent, AssistantMessageFrameEncoder, isRetryableAssistantError } from "@draht/ai";
 import type { HarnessEvent } from "../../agent-harness.ts";
+import type { Context } from "../../context.ts";
+import type { AssistantResponseMetadata, AssistantStreamObserver } from "../../execution/assistant.ts";
 import { insertEntry, insertUsage } from "../../session/commit.ts";
 import { SessionInvariantError } from "../../session/session.ts";
 import {
@@ -9,16 +11,111 @@ import {
 	type OperationState,
 	type RunAssistantEffectPendingOperation,
 	type RunDeferredEffectPendingOperation,
+	type RunOperationState,
 	runScopeOf,
 	type SettledAssistantMessage,
 	type ToolCall,
 	type UsageRow,
+	type Write,
 } from "../../session/types.ts";
 import { branchTip, deleteList, pendingAssistantFrames, setValue } from "../../session/values.ts";
 import type { Lane } from "../lane.ts";
+import { openFrameProgress } from "../progress.ts";
 import type { Drive, ProcedureResult } from "../types.ts";
 
+export type AssistantResponseLifecycle = {
+	observer: AssistantStreamObserver;
+	afterResponse(
+		message: SettledAssistantMessage,
+		metadata: AssistantResponseMetadata,
+		context: Context,
+	): Promise<SettledAssistantMessage>;
+	close(): Promise<void>;
+};
+
+export function openAssistantResponse<TContext extends object | undefined>(
+	lane: Lane<TContext>,
+	drive: Drive,
+	responseEntryId: string,
+	recovery = false,
+): AssistantResponseLifecycle {
+	const progress = openFrameProgress(lane, drive, responseEntryId);
+	const frameEncoder = new AssistantMessageFrameEncoder();
+	const eventContext = {
+		lane: lane.name,
+		runId: drive.operationId,
+		...(recovery ? { recovery: true as const } : {}),
+	};
+	const close = async () => {
+		progress.seal();
+		await progress.drain();
+	};
+	return {
+		observer: {
+			start(message, event, context) {
+				const frame = frameEncoder.encode(event);
+				if (frame !== undefined) progress.write(frame);
+				return lane.emitBatch([{ type: "message_start", ...eventContext, message }], context);
+			},
+			update(message, event: AssistantMessageEvent, context) {
+				const frame = frameEncoder.encode(event);
+				if (frame !== undefined) progress.write(frame);
+				return lane.emitBatch(
+					[{ type: "message_update", ...eventContext, message, event, ...(frame === undefined ? {} : { frame }) }],
+					context,
+				);
+			},
+			end(message, context) {
+				return lane.emitBatch(
+					[{ type: "message_end", ...eventContext, message, entryId: responseEntryId }],
+					context,
+				);
+			},
+		},
+		async afterResponse(message, metadata, context) {
+			await close();
+			const result = await lane.hooks.runWithGate(
+				"after_response",
+				{ lane: lane.name, runId: drive.operationId, ...metadata, message },
+				drive.gate,
+				context,
+			);
+			return result?.message ?? message;
+		},
+		close,
+	};
+}
+
 type ResponseIntent = RunAssistantEffectPendingOperation | RunDeferredEffectPendingOperation;
+
+/** Publish a non-retryable request-configuration failure before reserving response ids. */
+export async function publishConfigurationFailure<
+	TContext extends object | undefined,
+	TState extends RunOperationState,
+>(
+	lane: Lane<TContext>,
+	drive: Drive,
+	capability: TState,
+	error: OperationError,
+	writes: Write[] = [],
+): Promise<ProcedureResult> {
+	const result = await lane.continueOperation(
+		capability,
+		(_state, current) => ({
+			kind: "commit",
+			writes,
+			operationState: {
+				...runScopeOf(current),
+				at: "run.failure_drain",
+				error,
+				provenance: { kind: "configuration" },
+			},
+			materialize: () => ({ kind: "continue" }) as const,
+		}),
+		drive.context,
+	);
+	return result.kind === "cancel_requested" ? { kind: "continue" } : result.value;
+}
 
 function uuidV7Timestamp(id: string): number {
 	const timestamp = Number.parseInt(id.slice(0, 8) + id.slice(9, 13), 16);
@@ -75,7 +172,7 @@ function deferredHandleIsValid(
 }
 
 /** Classify and atomically settle one assistant-generation or deferred-poll response. */
-export function settleResponse<TContext extends object | undefined>(
+export function publishResponse<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
 	intent: ResponseIntent,

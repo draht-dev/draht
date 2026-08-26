@@ -37,6 +37,7 @@ import {
 	type Write,
 } from "../../../src/harness/session/types.ts";
 import * as storedValues from "../../../src/harness/session/values.ts";
+import { deferred } from "./test-utils.ts";
 
 const sessions: Session[] = [];
 const operationId = "01950000-0000-7000-8000-000000000001";
@@ -394,6 +395,45 @@ describe("runtime deferred polling", () => {
 		});
 		expect(fixture.faux.state.deferredFetchCount).toBe(1);
 		await expectProjectionRestores(fixture);
+	});
+
+	it("declines poll intent when cancellation wins preparation", async () => {
+		const fixture = await createFixture();
+		const suspended = await submitDeferred(fixture);
+		const drive = installDrive(fixture, { pollDeferred: true });
+		const hookStarted = deferred();
+		const releaseHook = deferred();
+		fixture.hooks.on("before_request", async (event) => {
+			if (event.step !== "deferred") return undefined;
+			hookStarted.resolve();
+			await releaseHook.promise;
+			return undefined;
+		});
+
+		const polling = runDeferredSuspended(fixture.lane, drive, suspended);
+		await hookStarted.promise;
+		await fixture.lane.command((state) => {
+			const operation = state.operation;
+			if (operation === null || !isRunOperationState(operation.state)) throw new Error("missing run");
+			const nextState: RunOperationState = {
+				...operation.state,
+				control: { status: "cancel_requested", requestedAt: 10, drainedSteer: [], drainedFollowUp: [] },
+			};
+			return {
+				kind: "commit",
+				writes: [storedValues.setValue(storedValues.operationState(operationId), nextState)],
+				next: { ...state, operation: { meta: operation.meta, state: nextState } },
+				materialize: () => undefined,
+			};
+		}, BACKGROUND_CONTEXT);
+		releaseHook.resolve();
+
+		expect(await polling).toEqual({ kind: "continue" });
+		expect(fixture.faux.state.deferredFetchCount).toBe(0);
+		expect(currentRun(fixture)).toMatchObject({
+			at: "run.deferred.suspended",
+			control: { status: "cancel_requested" },
+		});
 	});
 
 	it("plans ready deferred tool calls with the poll turn identity and follower result ids", async () => {

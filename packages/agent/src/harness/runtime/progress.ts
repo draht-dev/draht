@@ -1,14 +1,8 @@
 import type { AssistantMessageFrame } from "@draht/ai";
 import type { AgentToolResult } from "../../types.ts";
-import type { Write } from "../session/types.ts";
-import {
-	appendList,
-	deleteList,
-	deleteValue,
-	pendingAssistantFrames,
-	pendingToolOutput,
-	setValue,
-} from "../session/values.ts";
+import type { Context } from "../context.ts";
+import type { SessionReader, Write } from "../session/types.ts";
+import { appendList, pendingAssistantFrames, pendingToolOutput, setValue } from "../session/values.ts";
 import type { Lane } from "./lane.ts";
 import type { Drive, LaneState } from "./types.ts";
 
@@ -16,14 +10,32 @@ export interface ProgressChannel<T> {
 	write(item: T): void;
 	seal(): void;
 	drain(): Promise<void>;
-	clearWrite(): Write;
+}
+
+export async function readAssistantFrames(
+	reader: SessionReader,
+	operationId: string,
+	responseEntryId: string,
+	context: Context,
+): Promise<AssistantMessageFrame[]> {
+	const frames: AssistantMessageFrame[] = [];
+	let cursor: { seq: number } | undefined;
+	for (;;) {
+		const page = await reader.readList(
+			pendingAssistantFrames(operationId, responseEntryId),
+			{ order: "asc", limit: 1_000, ...(cursor === undefined ? {} : { cursor }) },
+			context,
+		);
+		frames.push(...page.map(({ value }) => value));
+		if (page.length < 1_000) return frames;
+		cursor = { seq: page[page.length - 1]!.seq };
+	}
 }
 
 function openProgress<TContext extends object | undefined, T>(
 	lane: Lane<TContext>,
 	drive: Drive,
 	commitWrite: (item: T) => Write,
-	clear: () => Write,
 	stillOwns: (state: LaneState) => boolean,
 ): ProgressChannel<T> {
 	let sealed = false;
@@ -51,7 +63,6 @@ function openProgress<TContext extends object | undefined, T>(
 		async drain() {
 			await latest;
 		},
-		clearWrite: clear,
 	};
 }
 
@@ -65,7 +76,6 @@ export function openFrameProgress<TContext extends object | undefined>(
 		lane,
 		drive,
 		(frame) => appendList(address, frame),
-		() => deleteList(address),
 		(state) => {
 			const run = state.operation?.state;
 			if (run === undefined) return false;
@@ -89,7 +99,6 @@ export function openToolProgress<TContext extends object | undefined>(
 		lane,
 		drive,
 		(snapshot) => setValue(address, snapshot),
-		() => deleteValue(address),
 		(state) => {
 			const operation = state.operation;
 			if (operation?.state.at !== "run.tools") return false;

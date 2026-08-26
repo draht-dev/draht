@@ -215,9 +215,6 @@ describe("runtime progress channels", () => {
 				)
 			).map(({ value }) => value),
 		).toEqual(frames);
-		expect(progress.clearWrite()).toEqual(
-			storedValues.deleteList(storedValues.pendingAssistantFrames(operationId, responseEntryId)),
-		);
 	});
 
 	it("declines a queued frame after the authoritative projection leaves its phase without control reads", async () => {

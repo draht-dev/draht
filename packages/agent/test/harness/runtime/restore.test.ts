@@ -262,6 +262,7 @@ describe("runtime lane restore", () => {
 			workerState: await session.getValue(storedValues.laneState("worker"), BACKGROUND_CONTEXT),
 		};
 		const mutate = vi.spyOn(session, "mutate");
+		const getValue = vi.spyOn(MemoryStorage.prototype, "getValue");
 		const readList = vi.spyOn(MemoryStorage.prototype, "readList");
 
 		const lanes = await restoreSession(session, BACKGROUND_CONTEXT);
@@ -273,7 +274,12 @@ describe("runtime lane restore", () => {
 			operation: { meta, state },
 		});
 		expect(mutate).toHaveBeenCalledTimes(1);
+		expect(getValue.mock.calls.map(([address]) => ({ namespace: address.namespace, key: address.key }))).toEqual([
+			{ namespace: storedValues.operationMeta("").namespace, key: operationId },
+			{ namespace: storedValues.operationState("").namespace, key: operationId },
+		]);
 		expect(readList).not.toHaveBeenCalled();
+		getValue.mockRestore();
 		expect({
 			leaves: await session.scanValues(storedValues.branchTipInventoryPrefix(), BACKGROUND_CONTEXT),
 			mainConfiguration: await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT),
@@ -295,6 +301,6 @@ describe("runtime lane restore", () => {
 			(mutator) => mutator.commit([storedValues.deleteValue(storedValues.branchTip("main"))], BACKGROUND_CONTEXT),
 			BACKGROUND_CONTEXT,
 		);
-		await expect(restoreSession(session, BACKGROUND_CONTEXT)).rejects.toThrow("incomplete durable state");
+		await expect(restoreSession(session, BACKGROUND_CONTEXT)).rejects.toThrow('Lane "main" is missing branch.tip');
 	});
 });

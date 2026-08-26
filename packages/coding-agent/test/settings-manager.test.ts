@@ -3,7 +3,7 @@ import { homedir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS } from "../src/core/http-dispatcher.ts";
-import { SettingsManager } from "../src/core/settings-manager.ts";
+import { type Settings, SettingsManager } from "../src/core/settings-manager.ts";
 
 describe("SettingsManager", () => {
 	const testDir = join(process.cwd(), "test-settings-tmp");
@@ -332,6 +332,25 @@ describe("SettingsManager", () => {
 
 			// And settings file should be created
 			expect(existsSync(join(projectDir, ".draht", "settings.json"))).toBe(true);
+		});
+	});
+
+	describe("terminal capability overrides", () => {
+		it("maps explicit values and omits auto values", () => {
+			const getOverrides = (terminal: NonNullable<Settings["terminal"]>) =>
+				SettingsManager.inMemory({ terminal }).getTerminalCapabilityOverrides();
+
+			expect(getOverrides({ images: false, trueColor: false, hyperlinks: false })).toEqual({
+				images: null,
+				trueColor: false,
+				hyperlinks: false,
+			});
+			expect(getOverrides({ images: "kitty", trueColor: true, hyperlinks: true })).toEqual({
+				images: "kitty",
+				trueColor: true,
+				hyperlinks: true,
+			});
+			expect(getOverrides({ images: "auto", trueColor: "auto", hyperlinks: "auto" })).toEqual({});
 		});
 	});
 

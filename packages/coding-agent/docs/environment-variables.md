@@ -87,6 +87,9 @@ These variables are read by draht itself:
 | `PI_CACHE_RETENTION` | Set to `long` for extended provider prompt caching where supported |
 | `DRAHT_SHARE_VIEWER_URL` | Override the base URL used by `/share` |
 | `DRAHT_HARDWARE_CURSOR` | Set to `1` to show the hardware cursor; see [Terminal setup](terminal-setup.md) |
+| `DRAHT_HYPERLINKS` | Override OSC 8 hyperlink detection with `1`, `0`, or `auto` |
+| `DRAHT_IMAGE_PROTOCOL` | Override inline image detection with `kitty`, `iterm2`, `none`, or `auto` |
+| `DRAHT_TRUE_COLOR` | Override truecolor detection with `1`, `0`, or `auto` |
 | `DRAHT_TUI_ESC_TIMEOUT` | How long to wait after a lone ESC before treating it as Escape, in milliseconds; defaults to `100` over SSH and `10` otherwise. Increase if Alt-key input is misread as Escape |
 | `VISUAL`, `EDITOR` | External editor fallback when `externalEditor` is unset |
 | `HTTP_PROXY`, `HTTPS_PROXY` | Proxy outbound HTTP requests |

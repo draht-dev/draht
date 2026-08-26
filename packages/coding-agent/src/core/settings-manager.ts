@@ -1,6 +1,6 @@
 import type { ThinkingLevel } from "@draht/agent-core";
 import type { Transport } from "@draht/ai";
-import type { TuiMode as RendererTuiMode, ScrollViewScrollbar } from "@draht/tui";
+import type { TuiMode as RendererTuiMode, ScrollViewScrollbar, TerminalCapabilities } from "@draht/tui";
 import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
@@ -47,6 +47,9 @@ export interface TerminalSettings {
 	imageWidthCells?: number; // default: 60 (preferred inline image width in terminal cells)
 	clearOnShrink?: boolean; // default: false (clear empty rows when content shrinks)
 	showTerminalProgress?: boolean; // default: false (OSC 9;4 terminal progress indicators)
+	hyperlinks?: boolean | "auto";
+	images?: "kitty" | "iterm2" | "auto" | false;
+	trueColor?: boolean | "auto";
 }
 
 export interface ImageSettings {
@@ -1156,6 +1159,16 @@ export class SettingsManager {
 
 	getThinkingBudgets(): ThinkingBudgetsSettings | undefined {
 		return this.settings.thinkingBudgets;
+	}
+
+	getTerminalCapabilityOverrides(): Partial<TerminalCapabilities> {
+		const terminal = this.settings.terminal;
+		const images = terminal?.images;
+		return {
+			...(images === "kitty" || images === "iterm2" ? { images } : images === false ? { images: null } : {}),
+			...(typeof terminal?.trueColor === "boolean" ? { trueColor: terminal.trueColor } : {}),
+			...(typeof terminal?.hyperlinks === "boolean" ? { hyperlinks: terminal.hyperlinks } : {}),
+		};
 	}
 
 	getShowImages(): boolean {

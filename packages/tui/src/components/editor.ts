@@ -633,7 +633,11 @@ export class Editor implements Component, Focusable {
 			return result ? { ...result, focus: true } : undefined;
 		}
 
-		if (event.type !== "press" || event.button !== "left") return undefined;
+		// Leave press/drag/release unhandled so the renderer's screen-level text
+		// selection can run over the editor rows (drag to select, release to copy).
+		// The renderer synthesizes a click when press and release land on the same
+		// cell without movement, which is the gesture that positions the cursor.
+		if (event.type !== "click" || event.button !== "left") return undefined;
 		if (event.y <= 0 || event.y > this.renderedVisibleLineCount) return { handled: true, focus: true };
 
 		const visualLines = this.buildVisualLineMap(this.lastWidth);

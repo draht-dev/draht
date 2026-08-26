@@ -150,4 +150,30 @@ describe("mouse-aware components", () => {
 		assert.strictEqual(tui.getFocusedComponent(), editor);
 		tui.stop();
 	});
+
+	it("selects and copies editor text on drag instead of moving the cursor", async () => {
+		const terminal = new VirtualTerminal(20, 6);
+		const copied: string[] = [];
+		const tui = new TuiAltScreen(terminal, undefined, undefined, {
+			copySelection: async (text) => {
+				copied.push(text);
+				return true;
+			},
+		});
+		const editor = new Editor(tui, editorTheme);
+		editor.setText("hello world");
+		tui.addChild(editor);
+		tui.start();
+		await terminal.waitForRender();
+		const cursorBefore = editor.getCursor();
+
+		terminal.sendInput("\x1b[<0;1;2M");
+		terminal.sendInput("\x1b[<32;5;2M");
+		terminal.sendInput("\x1b[<0;5;2m");
+		await terminal.waitForRender();
+
+		assert.deepStrictEqual(copied, ["hello"]);
+		assert.deepStrictEqual(editor.getCursor(), cursorBefore);
+		tui.stop();
+	});
 });

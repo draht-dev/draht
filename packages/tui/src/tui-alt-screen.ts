@@ -75,6 +75,9 @@ const MAX_CACHED_OFFSCREEN_KITTY_IMAGES = 16;
 const MAX_CACHED_OFFSCREEN_KITTY_TRANSMISSION_BYTES = 32 * 1024 * 1024;
 const MAX_CACHED_OFFSCREEN_KITTY_DECODED_BYTES = 64 * 1024 * 1024;
 const DOUBLE_CLICK_INTERVAL_MS = 500;
+// Regular mode delegates double-click selection to the terminal emulator. Fullscreen owns mouse selection,
+// so mirror common terminal word-selection behavior by keeping paths and kebab-case tokens whole.
+const TERMINAL_WORD_SELECTION_JOINERS = new Set(["/", "-"]);
 const wordSegmenter = getWordSegmenter();
 
 interface CachedKittyImage {
@@ -1039,18 +1042,39 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 
 	private getWordSelection(point: SelectionPoint): SelectionRange | undefined {
 		const line = stripTerminalSequences(this.getSelectionSourceLine(point));
+		const segments: Array<{ start: number; end: number; selectable: boolean; joiner: boolean }> = [];
 		let start = 0;
 		for (const segment of wordSegmenter.segment(line)) {
 			const end = start + visibleWidth(segment.segment);
-			if (point.col >= start && point.col < end) {
-				return {
-					start: { ...point, col: start },
-					end: { ...point, col: end, boundary: true },
-				};
-			}
+			const joiner = TERMINAL_WORD_SELECTION_JOINERS.has(segment.segment);
+			segments.push({ start, end, selectable: segment.isWordLike === true || joiner, joiner });
 			start = end;
 		}
-		return undefined;
+		const clickedSegmentIndex = segments.findIndex(
+			(segment) => point.col >= segment.start && point.col < segment.end,
+		);
+		if (clickedSegmentIndex < 0) return undefined;
+
+		const canJoin = (
+			left: { selectable: boolean; joiner: boolean },
+			right: { selectable: boolean; joiner: boolean },
+		): boolean => left.selectable && right.selectable && (left.joiner || right.joiner);
+		let selectionStart = segments[clickedSegmentIndex].start;
+		let selectionEnd = segments[clickedSegmentIndex].end;
+		for (let index = clickedSegmentIndex; index > 0 && canJoin(segments[index - 1], segments[index]); index--) {
+			selectionStart = segments[index - 1].start;
+		}
+		for (
+			let index = clickedSegmentIndex;
+			index < segments.length - 1 && canJoin(segments[index], segments[index + 1]);
+			index++
+		) {
+			selectionEnd = segments[index + 1].end;
+		}
+		return {
+			start: { ...point, col: selectionStart },
+			end: { ...point, col: selectionEnd, boundary: true },
+		};
 	}
 
 	private getLineSelection(point: SelectionPoint): SelectionRange {

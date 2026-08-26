@@ -48,6 +48,7 @@ export {
 	UnknownTarget,
 	UnknownTemplate,
 } from "./result.ts";
+export { SliceNotImplemented } from "./runtime/types.ts";
 
 import { createAgentHarness } from "./runtime/harness.ts";
 import type {

@@ -20,7 +20,7 @@ export class ServiceSliceNotImplemented extends Error {
 	readonly code = "service_not_implemented" as const;
 
 	constructor(operation: string) {
-		super(`${operation} is not implemented until its later plugin-service slice`);
+		super(`${operation} is not implemented until its later facet-service slice`);
 		this.name = "ServiceSliceNotImplemented";
 	}
 }

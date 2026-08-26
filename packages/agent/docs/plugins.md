@@ -1,16 +1,16 @@
-# Coding-Agent Application Hosts and Plugin Facets
+# Coding-Agent Application Hosts and Facets
 
-> **Status:** Tentative design input, not a normative contract or implementation handoff. The transport-neutral service token, provider, singleton `use()`, keyed `observe()`, and `ReplicatedState` substrate now have an experimental implementation, including a `Models` vertical slice. The remaining documented built-in service contracts — including the `Chat`, `SessionDirectory`, and `SessionManagement` vertical slices below — retain explicit `ServiceSliceNotImplemented` members and remain illustrative. The application host contexts, plugin kernel, references, telemetry propagation, and most other example facets remain illustrative. Plugin reload semantics are specified separately in [`plugin-reloading.md`](plugin-reloading.md). Reconcile this design with `rpc.md`, `telemetry.md`, and the final harness contract before adding it to `harness.md` or creating a work package.
+> **Status:** Design specification for the experimental facet and service architecture.
 
-This document assumes you already understand `AgentHarness`, `AgentLane`, `Session`, `Branch`, `SessionRepo`, invocation `Context`, and telemetry. Read `rpc.md` for wire frames, remote references, subscriptions, and trace carriers, `telemetry.md` for context propagation and cancellation semantics, and `plugin-reloading.md` for manifest-generation replacement and durable reconstruction.
+This document assumes you already understand `AgentHarness`, `AgentLane`, `Session`, `Branch`, `SessionRepo`, and invocation `Context`. Read `rpc.md` for service transport semantics and `telemetry.md` for the telemetry model.
 
 ## Bird's-eye view
 
-The new coding agent is assembled from an ordered plugin manifest, not a monolith with an extension API bolted on. Three layers:
+The coding agent is assembled independently in several processes. Three layers:
 
-1. The **plugin kernel** owns generic lifecycle mechanics: ordered setup, activation, scoped resource ownership, setup-failure cleanup, and reverse-order disposal. It knows nothing about Harness, tools, TUI components, RPC services, connections, or coding-agent policy.
-2. An **application host** owns one concrete runtime and contributes a runtime facet that provides its concrete services. The **session host** normally runs in a dedicated session worker and owns session authority — the real Harness. A **presentation host** (TUI today, web later) owns a user interface. A **server host** owns server-wide authority: session records (`SessionRepo`), session-worker management, authentication, attachment, and routing between presentations and session workers.
-3. A **plugin package** implements one feature as one or more host-specific **facets** — setup functions, one per host kind. Each facet can use only the services available in its host instance and process.
+1. The **facet kernel** owns service-aware lifecycle mechanics: synchronous setup, dependency assembly, local and connected service binding, activation, scoped resource ownership, setup-failure cleanup, reload, and reverse-order disposal. It knows about services and connections, but not about Harness, tools, TUI components, or coding-agent policy.
+2. An **application host** owns one concrete runtime and contributes runtime facets that provide its concrete services. The **session host** normally runs in a dedicated session worker and owns session authority — the real Harness. A **presentation host** (TUI today, web later) owns a user interface. A **server host** owns server-wide authority: session records (`SessionRepo`), session-worker management, authentication, attachment, and routing between presentations and session workers.
+3. An **extension** may distribute independent host-specific bundles containing **facets**. No aggregate extension object is loaded into all processes. Each host loads only facets built for that process and those facets can use only services available in that host graph.
 
 The initial topology has one server and no server-to-server links:
 
@@ -26,49 +26,46 @@ A presentation and a session worker each connect to the server. There is no dire
 
 A session worker normally owns one session, and each session facet is instantiated for that session. A server facet is instantiated once per server process and is shared across every session and presentation connected to it. Server facets should therefore be rare and limited to inherently server-wide concerns. Per-session feature state belongs in session facets; dedicated workers provide the preferred lifecycle, crash, and state isolation. Future co-location may preserve the same logical service graph without changing what objects a facet can access.
 
-**Host** and **client** are roles per connection, not fixed process kinds. The server hosts presentation and session-worker connections. A session worker serves its provided session services and may consume server-provided services over the same RPC binding mechanism. "Client" below always names the connection role, never a kind of plugin.
+**Host** and **client** are roles per connection, not fixed process kinds. The server hosts presentation and session-worker connections. A session worker serves its provided session services and may consume server-provided services over the same RPC binding mechanism. "Client" below always names the connection role, never a kind of extension.
 
 ## Why this shape
 
-- **Authority stays where it belongs.** Provider credentials, tool execution, and per-session plugin data exist only in the session worker; session records and worker control exist only in the server. Nothing reaches a presentation except through a deliberate contract.
-- **One feature stays coherent.** The question plugin's tool, dialog, and renderer ship in one package around one JSON contract, yet each facet is host-native code.
+- **Authority stays where it belongs.** Provider credentials, tool execution, and per-session extension data exist only in the session worker; session records and worker control exist only in the server. Nothing reaches a presentation except through a deliberate contract.
+- **One feature stays coherent.** The question extension's tool, dialog, and renderer ship in one package around one JSON contract, yet each facet is host-native code.
 - **A new surface is presentation-only work.** A web facet for the question dialog or the session picker registers against existing tokens; session and server code do not change.
 - **Server state stays server-wide.** A server facet is shared by all sessions and clients, so features use one only when their authority is inherently global to that server.
-- **No privileged built-ins.** Built-ins, runtime facets, and third-party plugins use the same environment, so shipping the product continuously exercises the extension API.
+- **One facet mechanism.** Built-ins, runtime capabilities, and extensions use the same facet environment in every host.
 - **Testable in pieces.** A facet tests against service-providing fixtures, a contract against loopback, and a routed TUI → server → session-worker path against a real transport — independently.
 
-## One feature, several host facets
+## One feature, several independently loaded facets
 
-A coding-agent plugin is a feature bundle that may provide a facet for any host:
+There is deliberately no `CodingAgentPlugin` runtime interface. A server, Session worker, TUI, and future web host execute different bundles in different processes, so they cannot share one loaded object containing all host facets.
+
+The in-process unit is one facet:
 
 ```ts
-interface CodingAgentPlugin {
+interface Facet {
 	readonly id: string;
-	readonly server?: PluginFacet;
-	readonly session?: PluginFacet;
-	readonly tui?: PluginFacet;
-	readonly web?: PluginFacet;
+	setup(env: FacetEnvironment): void;
 }
-
-type PluginFacet = (env: FacetEnvironment) => void;
 ```
 
-`PluginFacet` is the only plugin-facing shape the generic kernel needs. Each process loads its complete facet set: the server loads server facets, each Session worker loads Session facets, and each presentation loads its TUI or web facets. The host resolves every `env.use()` across facet-provided and connected services. Facets are optional: a `models.json` plugin has only a Session facet, a terminal theme only a TUI facet, and the Session directory has a server facet plus a TUI facet. Setup is a synchronous declaration phase; asynchronous initialization belongs in `onActivate`. Examples use an illustrative `definePlugin()` helper returning a `CodingAgentPlugin` — the loaded, in-process shape.
+Each process loads an ordered `Facet[]` appropriate to that process. Setup is synchronous declaration; asynchronous initialization belongs in `onActivate()`. A feature may consist of a shared contract bundle plus zero or more separately resolved server, Session, TUI, or web bundles. Their shared service IDs and wire contracts connect them, not an aggregate JavaScript object or a `definePlugin()` wrapper.
 
 A package keeps shared wire contracts separate from host dependencies:
 
 ```text
-question-plugin/
+question-extension/
   contract.ts       JSON DTOs and service tokens
   session.ts        dialog-service authority and tool contribution; imports agent/session code
   tui.ts            terminal dialog and renderer; imports TUI code
   web.ts            optional browser dialog and renderer
-  index.ts          loopback bundle; production hosts resolve one entry point per process kind
+  package exports   unresolved mapping from host kind to independently loadable bundles
 ```
 
 The browser build never imports `session.ts`; the session process never imports TUI or DOM code.
 
-The question plugin is this document's end-to-end example:
+The question extension is this document's end-to-end example:
 
 ```text
 model calls the question tool                                  (session facet)
@@ -81,107 +78,32 @@ model calls the question tool                                  (session facet)
 
 With no presentation connected, the question remains pending. A TUI or web facet that connects later obtains the same pending question.
 
-The models service in the next sections illustrates services and replicated state; the [server section](#the-server-directory-management-and-routing) covers server-wide services and session routing; the [question section](#session-owned-deferred-interactions-the-question-plugin) makes the full round trip concrete.
+The models service in the next sections illustrates services and replicated state; the [server section](#the-server-directory-management-and-routing) covers server-wide services and session routing; the [question section](#session-owned-deferred-interactions-the-question-extension) makes the full round trip concrete.
 
-## Starting and connecting hosts
+## Loading and connecting hosts
 
-Every host receives the same **logical manifest**: JSON-safe plugin identity, order, and version. It resolves only its own package entry points (`./server`, `./session`, `./tui`, or `./web`); a missing entry point means that plugin has no facet for the host. Resolution, not convention, enforces the dependency boundary.
-
-```ts
-const manifest: PluginManifestEntry[] = [
-	{ id: "@pi/session-core" },
-	{ id: "@pi/providers-builtin" },
-	{ id: "@pi/model-selection" },
-	{ id: "@pi/question" },
-];
-```
-
-Presentation and session-worker hosts do not discover servers or open sockets themselves. They receive one connection function; the server host receives a listener:
+The loader abstraction is intentionally smaller than an extension manifest:
 
 ```ts
-type Connect = (signal: AbortSignal) => Promise<Transport>;
-type Listen = (accept: (transport: Transport) => void) => () => void;
+interface LoadedFacets {
+	readonly facets: readonly Facet[];
+	dispose(): Promise<void>;
+}
 
-interface Transport {
-	send(frame: JsonValue): void;
-	receive(listener: (frame: JsonValue) => void): void;
-	close(): void;
-	readonly closed: Promise<void>;
+interface FacetLoader {
+	load(): Promise<LoadedFacets>;
 }
 ```
 
-`Connect` performs one connection attempt. Its closure owns the endpoint and credential, so the host never reads an address, environment variable, or secret. `Listen` lets the server accept presentation and session-worker connections. Both operate on the same bidirectional framed `Transport`.
+Each host receives one or more static, combined, or extension-backed loaders. A loader owns the resources for one loaded module generation; the facet host owns the active facet environments. Initial startup loads facets, assembles the service graph, activates it, and disposes the loaded generation only after the host retires.
 
-```ts
-declare const tuiAppHost: {
-	start(options: { manifest: Manifest; connect: Connect }): Promise<RunningHost>;
-};
+An extension resolver may add identity, ordering, version selection, package isolation, and process-specific source resolution. Its output remains independent `FacetLoader` inputs for each process rather than one cross-process extension object.
 
-declare const sessionAppHost: {
-	start(options: { manifest: Manifest; connect: Connect; identity: SessionIdentity }): Promise<RunningHost>;
-};
+After transport setup, a host gives the kernel its loaded facets, runtime facets that provide concrete local services, and any host-selected service connections. The kernel runs every `setup()` in loader order, validates the complete service graph, binds dependencies, and then activates providers before consumers. Setup failure and normal shutdown dispose resources in reverse dependency order.
 
-declare const serverAppHost: {
-	start(options: { manifest: Manifest; listen: Listen }): Promise<RunningServer>;
-};
+Exactly one process owns a Session's authority at a time. Worker replacement must close the old owner before a new process opens the same durable Session. Each presentation and Session worker uses one multiplexed connection to its server; facets never open private sockets or handle request IDs, cancellation frames, routing namespaces, or reconnect buffering.
 
-interface RunningHost {
-	readonly connection: ReplicatedState<ConnectionState>;
-	stop(): Promise<void>;
-}
-
-interface RunningServer {
-	readonly local: Connect; // connect another host in the same process
-	stop(): Promise<void>;
-}
-```
-
-Every deployment uses those three entry points:
-
-```ts
-// separate processes
-await serverAppHost.start({ manifest, listen: listenSocket(socketPath) });
-await sessionAppHost.start({ manifest, identity, connect: dialSocket(endpoint, token) });
-await tuiAppHost.start({ manifest, connect: dialSocket(endpoint, token) });
-
-// standalone: the same hosts and boundaries, without sockets
-const server = await serverAppHost.start({ manifest, listen: listenNothing() });
-await sessionAppHost.start({ manifest, identity, connect: server.local });
-await tuiAppHost.start({ manifest, connect: server.local });
-```
-
-This keeps deployment policy outside plugins:
-
-- reconnecting means calling `connect(signal)` again; the host owns retry timing, while `Connect` owns one attempt;
-- the accepting server assigns peer identity during its handshake from the presented credential; `SessionIdentity` identifies the durable session being run, not a trusted claim about the connection;
-- `server.local` makes standalone a deployment, not a separate mode or code path.
-
-The only connection state exposed to facets is:
-
-```ts
-type ConnectionState =
-	| { status: "connecting"; attempt: number }
-	| { status: "connected"; since: string }
-	| { status: "disconnected"; since: string; reason: string; retryAt: string | null };
-```
-
-After transport setup, each host gives the kernel its loaded facets plus a runtime facet that provides concrete host services. The kernel invokes every facet against the resulting service graph:
-
-```ts
-interface FacetLifecycle {
-	onActivate(callback: () => void | Promise<void>): void;
-	onDeactivate(callback: () => void | Promise<void>): void;
-	own(disposal: () => void | Promise<void>): void;
-}
-```
-
-Host infrastructure calls `own()` for every service, contribution, or subscription registered through the facet environment. Facets first register in manifest order; then `onActivate` callbacks start effects and the host exposes state snapshots. Failure and normal shutdown dispose environments in reverse dependency order. Duplicate services, missing dependencies, and dependency cycles are application-assembly errors.
-
-The prototype in `packages/coding-agent/test/fixtures/plugin-app/` demonstrates the composition model with an ad hoc RPC implementation; the shared RPC design in `rpc.md` should replace that transport without replacing the host/facet architecture.
-
-Exactly one process owns a Session's authority at a time. Worker replacement closes the old owner before a new process opens the same durable Session. Each presentation and session worker has one multiplexed connection to its server; plugins never open private sockets. Plugin authors never implement request IDs, sockets, trace carriers, cancellation frames, remote-reference registries, or reconnect buffering.
-
-Out of scope: arbitrary undeclared object remoting, serialized functions/classes/`Map`/`Set`, remote hook or tool execution, offline presentation writes or automatic mutation replay, a universal remote `AgentHarness` or serialized UI tree, and re-exposing forwarded frames, proxies, or references as plugin-visible objects.
+Out of scope: arbitrary undeclared object remoting, serialized functions/classes/`Map`/`Set`, remote hook or tool execution, offline presentation writes or automatic mutation replay, a universal remote `AgentHarness`, and a serialized UI tree.
 
 ## Services connect host facets
 
@@ -199,13 +121,13 @@ interface ServiceInstances<T> {
 }
 ```
 
-TypeScript types cannot produce runtime member metadata. Plugin authors nevertheless declare no parallel member descriptor. When an exposed `provide()` or `ServiceInstances.add()` implementation reaches the remote-service boundary, the runtime classifies functions as remote methods and recognizes branded `ReplicatedState` values. It rejects unsupported members and announces the resulting member table over the transport. Services used only inside one host may use arbitrary object contracts.
+TypeScript types cannot produce runtime member metadata. Facet authors nevertheless declare no parallel member descriptor. When an exposed `provide()` or `ServiceInstances.add()` implementation reaches the remote-service boundary, the runtime classifies functions as remote methods and recognizes branded `ReplicatedState` values. It rejects unsupported members and announces the resulting member table over the transport. Process-local services may use arbitrary object contracts.
 
-`use()` on a singleton returns a stable lazy proxy synchronously, even before a remote provider is attached. Member access creates local method, state, or event slots as they are used; attachment validates those slots against the provider-announced kinds. A mismatch is an assembly or protocol error. This runtime mechanism is implemented once by the host rather than repeated in every service declaration.
+`use()` on a singleton returns a stable lazy proxy synchronously, even before a remote provider is attached. Member access creates local method or state slots as they are used; attachment validates those slots against the provider-announced kinds. A mismatch is an assembly or protocol error. This runtime mechanism is implemented once by the host rather than repeated in every service declaration.
 
 ### Dependency declaration and assembly
 
-Service API calls made during facet setup are the dependency declarations. The kernel does not reflect on erased TypeScript interfaces, and plugin authors do not maintain parallel `requires` and `provides` lists. A `Service<T>` retains its stable ID at runtime, and the API call supplies the mode. `use()` and `observe()` initially return source-independent disconnected handles. After all setup completes, the host matches unresolved requirements against provider-generated connection catalogues and binds each token to its local provision or exactly one connection.
+Service API calls made during facet setup are the dependency declarations. The kernel does not reflect on erased TypeScript interfaces, and facet authors do not maintain parallel `requires` and `provides` lists. A `Service<T>` retains its stable ID at runtime, and the API call supplies the mode. `use()` and `observe()` initially return source-independent disconnected handles. After all setup completes, the host matches unresolved requirements against provider-generated connection catalogues and binds each token to its local provision or exactly one connection.
 
 The host records a private generation-scoped ledger:
 
@@ -225,9 +147,9 @@ env.observe(QuestionDialogs, handler)
 
 The first `provide()`, `provideMany()`, `use()`, or `observe()` for a token must occur during facet setup. Commands, hooks, event handlers, and activation callbacks use handles acquired during setup; they cannot introduce an undeclared service dependency later. Dynamic instances use the setup-owned `ServiceInstances` handle, so adding and closing instances do not change the graph.
 
-After every facet has registered, the host generates its outgoing catalogue from RPC-capable provisions, obtains catalogues from its connections, resolves requirements to local or connected provisions, rejects missing providers, duplicate offers or singleton owners, singleton/keyed mismatches, invalid dependency cycles, and invalid RPC service implementations, then records consumer-to-provider edges for lifecycle ordering. `use()` and `observe()` declare hard requirements; optional dependencies require a future distinct acquisition API rather than inference from call failure. The ledger and resulting graph are private kernel machinery, not a plugin-facing plan or second declaration format.
+After every facet has registered, the host generates its outgoing catalogue from RPC-capable provisions, obtains catalogues from its connections, resolves requirements to local or connected provisions, rejects missing providers, duplicate offers or singleton owners, singleton/keyed mismatches, invalid dependency cycles, and invalid RPC service implementations, then records consumer-to-provider edges for lifecycle ordering. `use()` and `observe()` declare hard requirements; optional dependencies require a future distinct acquisition API rather than inference from call failure. The ledger and resulting graph are private kernel machinery, not a facet-facing plan or second declaration format.
 
-Only dependencies acquired through `env.use()` or `env.observe()` belong to this lifecycle graph. Importing another plugin's live implementation bypasses ownership and is unsupported. The module loader separately owns the ordinary source import graph. Complete-generation reload avoids needing that module graph for partial invalidation; see [`plugin-reloading.md`](plugin-reloading.md).
+Only dependencies acquired through `env.use()` or `env.observe()` belong to this lifecycle graph. Importing another extension's live implementation bypasses ownership and is unsupported. The module loader separately owns the ordinary source import graph. Reload therefore needs both loaded-source ownership and the generated service graph; see [Reloading facets](#reloading-facets).
 
 The models service — the authority behind the model picker and thinking-level control — exercises methods, replicated state, and multiple consumers.
 
@@ -257,15 +179,17 @@ export interface Models {
 export const Models = defineService<Models>("pi.models");
 ```
 
-Everything transported in a remote contract is strict JSON: arguments, results, replicated state, and events. Business-level absence uses JSON `null`, never `undefined`. An unhydrated `ReplicatedState.value === undefined` is local control-plane readiness, not a transported state value. `Context` is control-plane data in a declared position; the proxy strips it and it is never serialized.
+Everything transported in a remote contract is strict JSON: arguments, results, and replicated state. Business-level absence uses JSON `null`, never `undefined`. An unhydrated `ReplicatedState.value === undefined` is local control-plane readiness, not a transported state value. `Context` is control-plane data in a declared position; the proxy strips it and it is never serialized.
 
 ### Session facet
 
+The snippets below use the facet shape but compress application details.
+
 ```ts
-export const providersBuiltin = definePlugin({
+export const providersBuiltinSessionFacet = defineFacet({
 	id: "@pi/providers-builtin",
 
-	session(env) {
+	setup(env) {
 		const providers = new ProviderRegistry(); // process-local, non-JSON
 		const state = env.replicatedState<ModelsState>(initialModelsState());
 
@@ -310,19 +234,20 @@ export const providersBuiltin = definePlugin({
 
 ### TUI facet
 
+This shows the generic command-service pattern.
+
 ```ts
-export const modelSelection = definePlugin({
+export const modelSelectionTuiFacet = defineFacet({
 	id: "@pi/model-selection",
 
-	tui: {
-		session(env) {
-			const models = env.use(Models);
-			const tui = env.use(Tui);
+	setup(env) {
+		const models = env.use(Models);
+		const tui = env.use(Tui);
 
-			tui.commands.register("models.select", async (context) => {
-				const current = models.state.value;
-				if (current === undefined) return;
-				const selected = await tui.select(
+		tui.commands.register("models.select", async (context) => {
+			const current = models.state.value;
+			if (current === undefined) return;
+			const selected = await tui.select(
 				"Models",
 				current.catalog.availableModels.map((model) => ({
 					label: model.name,
@@ -330,11 +255,10 @@ export const modelSelection = definePlugin({
 				})),
 				{ signal: context.abortSignal },
 			);
-				if (selected !== undefined) await models.select(selected, context);
-			});
-			tui.commands.register("models.cycle-thinking", (context) => models.cycleThinking(context));
-			env.own(models.state.subscribe((next) => renderModelSelector(next)));
-		},
+			if (selected !== undefined) await models.select(selected, context);
+		});
+		tui.commands.register("models.cycle-thinking", (context) => models.cycleThinking(context));
+		env.own(models.state.subscribe((next) => renderModelSelector(next)));
 	},
 });
 ```
@@ -343,7 +267,7 @@ The TUI facet has no credentials, registry, or refresh logic: it calls a typed l
 
 ### Service semantics
 
-A service has **one owner and many consumers**. In singleton mode, `providersBuiltin` provides `Models` and both model-selection commands consume it. In multi-instance mode, one owner may add instances `A` and `B`, and every observer sees the same two instances.
+A service has **one owner and many consumers**. In singleton mode, `providersBuiltinSessionFacet` provides `Models` and both model-selection commands consume it. In multi-instance mode, one owner may add instances `A` and `B`, and every observer sees the same two instances.
 
 `use()` behaves differently by locality:
 
@@ -352,7 +276,7 @@ A service has **one owner and many consumers**. In singleton mode, `providersBui
 
 Multi-instance services use `provideMany()` and `observe()`. The service is empty until its setup-owned `ServiceInstances` handle calls `add()`; observing it never creates an instance. `instances.add(key, implementation)` returns an idempotent close function, and the key must be unique among that service's live instances. `observe(service, handler)` reconciles a snapshot of current instances and then ordered additions, replacements, and removals. After an instance's initial state members hydrate, the host starts one handler task with a fresh `Context`. Closing the instance aborts that context, rejects new calls, and lets already-admitted calls return. Cancellation from the instance context is normal task cleanup; other handler failures follow host failure policy. Reusing a closed key creates a new host-owned generation, so stale proxies cannot address the replacement.
 
-An added instance member has structural identity `(service, key, generation, member)`. Its `ReplicatedState` members therefore need no independent IDs. The instance directory is control-plane metadata, not a plugin-visible `ReplicatedState` containing proxies. Switching sessions aborts all observed instance tasks before hydrating the selected session's current instances.
+An added instance member has structural identity `(service, key, generation, member)`. Its `ReplicatedState` members therefore need no independent IDs. The instance directory is control-plane metadata, not a facet-visible `ReplicatedState` containing proxies. Switching sessions aborts all observed instance tasks before hydrating the selected session's current instances.
 
 Every facet uses the same unqualified `env.use()` and `env.observe()` operations. A presentation host combines its local services with connected server and selected-Session services, then routes each token internally. Provider facets resolve services from the same host graph. Transport binding and routing remain host infrastructure rather than facet API.
 
@@ -365,47 +289,25 @@ This is the most important boundary in the design.
 ```ts
 interface ScopedSessionData {
 	readonly metadata: SessionMetadata;
-	getEntry(id: string, context: Context): Promise<Entry | undefined>;
-	getStats(context: Context): Promise<SessionStats>;
 	getValue<T>(address: Value<T>, context: Context): Promise<StoredValue<T> | undefined>;
-	scanValues<T>(prefix: Value<T>, context: Context): Promise<StoredValue<T>[]>;
-	readList<T>(address: ValueList<T>, options: ListReadOptions | undefined,
-		context: Context): Promise<ListElement<T>[]>;
-	setValue<T>(address: Value<T>, next: NoInfer<T>, context: Context): Promise<void>;
-	deleteValue<T>(address: Value<T>, context: Context): Promise<void>;
-	appendList<T>(address: ValueList<T>, element: NoInfer<T>, context: Context): Promise<void>;
-	deleteList<T>(address: ValueList<T>, context: Context): Promise<void>;
-	getName(context: Context): Promise<string | undefined>;
-	setName(name: string | undefined, context: Context): Promise<void>;
-	getLabel(targetId: string, context: Context): Promise<string | undefined>;
-	setLabel(targetId: string, label: string | undefined, context: Context): Promise<void>;
-	findEntries(query: EntryQuery | undefined, context: Context): Promise<Entry[]>;
-	findEntry(query: EntryQuery | undefined, context: Context): Promise<Entry | undefined>;
+	setValue<T>(address: Value<T>, value: T, context: Context): Promise<void>;
 }
 
-interface AgentPluginScope {
-	readonly identity: SessionIdentity; // sessionId + workspaceId
-	lane(name: string, context: Context): Promise<AgentLanePluginView>;
+interface AgentFacetScope {
+	readonly identity: SessionIdentity;
 	readonly session: ScopedSessionData;
 	readonly hooks: ScopedHooks;
-	readonly events: ScopedEvents;
+	lane(name: string, context: Context): Promise<AgentLaneFacetView>;
 }
 
-const Agent = defineService<AgentPluginScope>("pi.local.agent");
-const Providers = defineService<ProviderContributionRegistry>("pi.local.providers");
-const Tools = defineService<ToolContributionRegistry>("pi.local.tools");
-
-interface ClientLifecycle {
-	onAttach(callback: (clientId: string) => void): void;
-	onDetach(callback: (clientId: string) => void): void;
-}
-
-const Clients = defineService<ClientLifecycle>("pi.local.clients");
+const Agent = defineService<AgentFacetScope>("pi.local.agent", { rpc: false });
+const Providers = defineService<ProviderContributionRegistry>("pi.local.providers", { rpc: false });
+const Tools = defineService<ToolContributionRegistry>("pi.local.tools", { rpc: false });
 ```
 
-"Local" and "unrestricted" are separate decisions. The scope narrows authority for lifecycle and composition — hooks and event subscriptions registered through it are automatically owned by the plugin and disposed with it. `AgentLanePluginView` exposes Branch methods directly alongside agent operations. `ScopedSessionData` exposes purpose-bounded global value/list/name/label/query operations. The host keeps the unrestricted concrete instances and reserves: `AgentHarness.close()` and `Session.close()`; raw `Session.mutate()`, `beginMutation()`, and `SessionMutator` (unless a narrowly trusted durability plugin explicitly owns them); `idGenerator` and backend/storage objects; Branch creation; whole-registry setters such as `setTools()`; unscoped hook/event registration; transport exposure and remote-reference registration. This is a composition and lifecycle boundary, not a security sandbox: session facets are trusted code in the authoritative process. The manifest may explicitly grant broader local capability, but built-ins receive no implicit bypass.
+"Local" and "unrestricted" are separate decisions. The scope narrows authority for lifecycle and composition — hooks and event subscriptions registered through it are automatically owned by the facet and disposed with it. `AgentLaneFacetView` exposes Branch methods directly alongside agent operations. `ScopedSessionData` exposes purpose-bounded durable operations. The host keeps the unrestricted concrete instances and reserves: `AgentHarness.close()` and `Session.close()`; raw `Session.mutate()`, `beginMutation()`, and `SessionMutator` (unless a narrowly trusted durability extension explicitly owns them); `idGenerator` and backend/storage objects; Branch creation; whole-registry setters such as `setTools()`; unscoped hook/event registration; transport exposure and remote-reference registration. This is a composition and lifecycle boundary, not a security sandbox: session facets are trusted code in the authoritative process. A future extension policy may explicitly grant broader local capability, but built-ins should receive no implicit bypass.
 
-**Presentation facets hold none of this.** A TUI or web facet never receives the raw Harness, Session, tree, tool registry, hooks, or credentials. It uses host-local presentation services plus the semantic services, replicated state, and events deliberately exposed by a session or server facet.
+**Presentation facets hold none of this.** A TUI or web facet never receives the raw Harness, Session, tree, tool registry, hooks, or credentials. It uses host-local presentation services plus the semantic services and replicated state deliberately exposed by a Session or server facet.
 
 ```ts
 interface RemoteServiceInstance<T> {
@@ -421,7 +323,7 @@ interface FacetEnvironment extends FacetLifecycle {
 	): () => void;
 	provide<T>(service: Service<T>, implementation: T): void;
 	provideMany<T>(service: Service<T>): ServiceInstances<T>;
-	replicatedState<T extends JsonValue>(initial: T): MutableReplicatedState<T>;
+	replicatedState<T>(initial: T): MutableReplicatedState<T>;
 }
 
 type AttachmentState = { status: "detached" } | { status: "attaching" | "attached" | "degraded"; sessionId: string };
@@ -439,38 +341,41 @@ interface TuiModal {
 }
 
 interface TuiHost {
-	readonly connection: ReplicatedState<ConnectionState>;
 	readonly attachment: ReplicatedState<AttachmentState>;
 	readonly commands: CommandContributions;
-	readonly keybindings: KeybindingContributions;
 	readonly toolRenderers: ToolRendererContributions;
-	readonly slots: SlotContributions;
 	acquireModal(signal: AbortSignal): Promise<TuiModal>;
 	select<T>(title: string, items: SelectItem<T>[], options: { signal: AbortSignal }): Promise<T | undefined>;
-	// overlays and focus facilities
 }
 
-const Tui = defineService<TuiHost>("pi.local.tui");
+const Tui = defineService<TuiHost>("pi.local.tui", { rpc: false });
 ```
 
 `acquireModal()` waits in one presentation-owned queue and holds the modal slot across a multi-step interaction. Its signal removes a queued request or dismisses an active one, and `close()` is idempotent. `select()` is the one-step acquire/select/close convenience. Both return selected values directly, so feature code never recovers identity from a display label.
 
-The TUI loads all of its facets into one generation. Its host routes `env.use(SessionDirectory)` to the connected server and `env.use(Models)` to the selected Session. While detached, Session calls fail with `not_attached` and replicated state has no value. Connection and attachment health are host-local services because they describe presentation control state. A future web host similarly binds local services for routes, views, and DOM dialogs. Its server and Session facets still use unqualified service operations.
+The TUI loads all of its facets into one generation. Its host routes `env.use(SessionDirectory)` to the connected server and `env.use(Models)` to the selected Session. While detached, Session calls fail with `session_not_attached` and replicated state has no value. Connection and attachment health are host-local services because they describe presentation control state. A future web host similarly binds local services for routes, views, and DOM dialogs. Its server and Session facets still use unqualified service operations.
 
-Concretely, the minimum chat slice exposes `prompt(request, context)` returning `{ accepted, operationId, error }`, plus `requestAbort(operationId, context)`, and implements it with direct local lane capabilities. The experimental `Chat` contract also predeclares the later steer, follow-up, next-run, queue cancellation, resume, compaction, and navigation presentation operations; those members throw `ServiceSliceNotImplemented` until their Harness adapter slices land:
+The minimum `Chat` service exposes `prompt(request, context)` returning `{ accepted, operationId, error }`, plus `requestAbort(operationId, context)`. Its Session facet delegates through a process-local scoped Agent service. Additional queue, navigation, resume, and compaction operations should be added only with concrete presentation requirements.
+
+The scoped form is:
 
 ```ts
-session(env) {
-	const lane = env.use(Agent).main;
-	env.provide(Chat, {
-		async prompt(request, context) {
-			return toPromptResponse(await lane.prompt(request.message, context));
-		},
-		async requestAbort(operationId, context) {
-			await lane.requestAbort(operationId, context);
-		},
-	});
-}
+export const chatSessionFacet = defineFacet({
+	id: "@pi/chat",
+	setup(env) {
+		const agent = env.use(Agent);
+		env.provide(Chat, {
+			async prompt(request, context) {
+				const lane = await agent.lane("main", context);
+				return toPromptResponse(await lane.prompt(request.message, context));
+			},
+			async requestAbort(operationId, context) {
+				const lane = await agent.lane("main", context);
+				await lane.requestAbort(operationId, context);
+			},
+		});
+	},
+});
 ```
 
 Its TUI facet consumes `Chat` through `env.use()` exactly as the model picker consumes `Models`. Neither reveals the Harness object behind them; there is no universal remote Harness for arbitrary plugins. `rpc.md` may still define generic Harness proxies for other trusted integrations (an IDE bridge, an orchestrator) — deliberate, separate exposures, not the plugin boundary.
@@ -480,7 +385,7 @@ Its TUI facet consumes `Chat` through `env.use()` exactly as the model picker co
 Not every dependency should be remotely reachable. A **local service** is a token confined to its providing process. It may hold functions, native objects, credentials, or filesystem handles; remote `use()` cannot resolve it, and local services are never discoverable remotely. The pattern for sensitive state is a local full service plus a narrow remote facade:
 
 ```ts
-const Credentials = defineLocalService<CredentialStore>("credentials"); // get/set provider secrets
+const Credentials = defineService<CredentialStore>("credentials", { rpc: false }); // get/set provider secrets
 
 interface Accounts {
 	readonly state: ReplicatedState<{ providers: Array<{ provider: string; configured: boolean }> }>;
@@ -489,7 +394,7 @@ interface Accounts {
 const Accounts = defineService<Accounts>("pi.accounts");
 ```
 
-The auth plugin's session facet uses `Credentials` directly; presentations see provider IDs and `configured` booleans — never secrets. If some settings must not be remotely writable, split them the same way; do not rely on presentation-side convention.
+The auth extension's Session facet uses `Credentials` directly; presentations see provider IDs and `configured` booleans — never secrets. If some settings must not be remotely writable, split them the same way; do not rely on presentation-side convention.
 
 ## Replicated state: `ReplicatedState`
 
@@ -516,18 +421,18 @@ Required behavior:
 1. The providing host owns one initialized authoritative value; remote consumers call methods rather than writing the replica.
 2. A cold remote replica has no value. Its `.value` is `undefined`, and `subscribe()` registers the listener without invoking it. This `undefined` is local readiness state and never crosses the wire.
 3. **Hydration** installs a complete snapshot atomically before updates flow. Subscribing before hydration is valid, and updates emitted concurrently with the snapshot are buffered, so the listener observes snapshot then updates with no gap.
-4. Once hydrated, `.value` is synchronously readable and `subscribe()` immediately reports the current value, then future updates. The first snapshot callback uses a fresh **hydration context** parented to the subscription; an immediate callback for an already-present value uses a fresh local delivery context because the write that produced it may be long settled.
+4. Once hydrated, `.value` is synchronously readable and `subscribe()` immediately reports the current value, then future updates. Snapshot hydration uses a fresh delivery context parented to the subscription; later updates reconstruct fresh delivery contexts from source trace metadata.
 5. State values are borrowed immutable JSON. The state runtime does not defensively clone reads, writes, snapshots, or listener deliveries. Callers transfer ownership to `set()` and must not mutate or retain values returned by `.value` or passed to listeners; copy explicitly when ownership is required. Process and transport serialization may naturally produce a detached value, but callers must not depend on object identity or detachment.
-6. Disconnect may retain the last value as stale display data alongside connection or attachment state. Reconnecting to the same provider replaces it with a fresh snapshot. Reloading a singleton provider installs its complete replacement snapshot in the existing member facade. Switching routes to a different provider clears readiness and `.value` becomes `undefined` until that provider hydrates; route-bound presentation resources are disposed as part of the switch.
-7. `set(value, context)` carries source trace metadata; each live delivery invokes listeners with a reconstructed delivery `Context`. Background updates use an intentional background or lifecycle context, never a retained caller context.
+6. Disconnect, provider withdrawal, and route switching clear readiness, so `.value` becomes `undefined`. Reconnect or singleton replacement installs a complete fresh snapshot in the existing member facade before later updates flow. A presentation that wants stale display data must retain it separately alongside connection or attachment health.
+7. `set(value, context)` passes its context to local source listeners and publishes source trace metadata. Remote delivery reconstructs a fresh local `Context`; it never retains the source context object.
 
 Anything a consumer must recover after reconnect is exposed as replicated state or pulled through a remote method. Replicated state is latest-value replication, not by itself durable session storage; the providing facet must reconstruct its authoritative value after a worker restart.
 
-Prefer several coarse independent cells over one giant value or a universal patch language, so a catalogue refresh does not retransmit unrelated configuration. High-frequency data such as transcript streaming needs a future snapshot-and-delta design rather than overloading `ReplicatedState`. Revision metadata, gap recovery, unchanged-value suppression, and demand-driven subscription belong to that future protocol, not individual plugin authors.
+Prefer several coarse independent cells over one giant value or a universal patch language, so a catalogue refresh does not retransmit unrelated configuration. High-frequency data such as transcript streaming needs a future snapshot-and-delta design rather than overloading `ReplicatedState`. Revision metadata, gap recovery, unchanged-value suppression, and demand-driven subscription belong to that future protocol, not individual facet authors.
 
 ## Contribution registries: many contributors, one result
 
-Services fit one owner, many consumers. Providers and tools invert that: **many plugins contribute to one host-owned result**. A mutable global registry would make composition order-dependent and removal impossible. A contribution registry instead replays ordered contributions over a fresh draft:
+Services fit one owner, many consumers. Providers and tools invert that: **many extensions contribute to one host-owned result**. A mutable global registry would make composition order-dependent and removal impossible. A contribution registry instead replays ordered contributions over a fresh draft:
 
 ```text
 fresh ProviderDraft
@@ -538,7 +443,7 @@ fresh ProviderDraft
 → validated ProviderState
 ```
 
-Removing a plugin removes its contribution and rebuilds; nothing runs an inverse mutation. Tools follow the same model, including wrapping:
+Removing an extension removes its contribution and rebuilds; nothing runs an inverse mutation. Tools follow the same model, including wrapping:
 
 ```ts
 sessionContext.tools.add((draft) => {
@@ -550,15 +455,11 @@ sessionContext.tools.add((draft) => {
 });
 ```
 
-Ordered wrappers compose deterministically — `telemetry(permission(sandbox(coreBash)))` — and if the permission plugin disappears, rebuilding yields `telemetry(sandbox(coreBash))`. Only the host finalizes the draft and applies the complete registry to the Harness; plugins never call `setTools()`. Contributions configure rebuilt behavior; hooks intercept live operations — separate mechanisms.
+Ordered wrappers compose deterministically — `telemetry(permission(sandbox(coreBash)))` — and if the permission extension disappears, rebuilding yields `telemetry(sandbox(coreBash))`. Only the host finalizes the draft and applies the complete registry to the Harness; facets never call `setTools()`. Contributions configure rebuilt behavior; hooks intercept live operations — separate mechanisms.
 
-## Context, cancellation, and telemetry for plugin authors
+## Context, cancellation, and telemetry for facet authors
 
-`rpc.md` and `telemetry.md` own the mechanisms. What a plugin author needs to know:
-
-- Every remote method receives a `Context` in its declared position. The proxy strips it from the JSON arguments and uses it to parent `rpc.client`, inject the trace carrier, and map `context.abortSignal` to request cancellation.
-- The server never deserializes the client's context. It constructs a fresh one: a request-local abort signal, a telemetry parent extracted from the trace carrier, and server-created typed values such as the authenticated client identity. Clients cannot smuggle context values across.
-- No receiver-level defaults: shared service objects never retain a caller's context.
+Every remote method receives a fresh local `Context` in its declared position. The proxy strips the caller's context from JSON arguments and maps `context.abortSignal` to cancellation of that one request. The receiving endpoint constructs a request-local abort signal; it never deserializes the sender's `Context` or arbitrary typed values. Shared service objects must not retain a caller's context.
 
 The model refresh shows the whole author-visible surface:
 
@@ -570,7 +471,7 @@ await uiTelemetry.startSpan({ name: "ui.models.refresh" }, async (span) => {
 });
 ```
 
-The implementation may open its own span for lower work, producing the distributed trace:
+RPC telemetry composes with application spans as:
 
 ```text
 ui.models.refresh
@@ -591,7 +492,9 @@ A transport disconnect performs only the first for active requests and closes th
 
 ## Service-owned jobs
 
-Long-running work should return a capability rather than one method that blocks indefinitely:
+Private returned references are outside the initial service contract. Prefer `provideMany()` for discoverable live instances. Add caller-private references only after a concrete feature establishes their ownership and collection requirements.
+
+A possible long-running job contract is:
 
 ```ts
 interface IndexJob {
@@ -605,19 +508,19 @@ An `IndexService.start(root, context)` returning an `IndexJob` validates the roo
 
 ## The server: directory, management, and routing
 
-The server host does two jobs. It **owns server-wide services**—listing, creating, deleting, and attaching to sessions—and it **routes session traffic** between attached presentations and the session workers it manages. Routing is host infrastructure that plugin code does not implement.
+The server host does two jobs. It **owns server-wide services**—listing, creating, deleting, and attaching to sessions—and it **routes session traffic** between attached presentations and the session workers it manages. Routing is host infrastructure that facet code does not implement.
 
 A server facet is shared by every session and presentation connected to the server. It should be used only for inherently server-wide features. Per-session feature data belongs in session facets.
 
 ### Server host services
 
 ```ts
-interface FleetPluginScope {
+interface FleetFacetScope {
 	readonly managed: ManagedSessionsView;  // sessions managed by this server
 	readonly attachments: AttachmentsView;  // bind/unbind a client's selected session
 }
 
-const Fleet = defineService<FleetPluginScope>("pi.local.fleet");
+const Fleet = defineService<FleetFacetScope>("pi.local.fleet", { rpc: false });
 ```
 
 The raw `SessionRepo`, storage handles, unrestricted process-kill authority, routing map, and routing machinery stay with the server application:
@@ -629,8 +532,6 @@ interface ManagedSessionRecord {
 	workspaceId: string;
 	ownerId: string;
 	cwd: string; // ownerId and cwd never leave the server
-	status: "starting" | "active" | "idle" | "closed" | "unreachable";
-	updatedAt: string;
 }
 
 type ManagedSessionChange = { type: "created" | "changed" | "deleted"; record: ManagedSessionRecord };
@@ -651,9 +552,6 @@ The directory is read; management mutates and selects. Both are presentation-saf
 export interface SessionRecordSummary {
 	sessionId: string;
 	title: string;
-	workspaceId: string;
-	status: ManagedSessionRecord["status"];
-	updatedAt: string;
 }
 
 export interface SessionDirectory {
@@ -676,39 +574,44 @@ export const SessionManagement = defineService<SessionManagement>("pi.session-ma
 
 ```ts
 // server.ts
-export function sessionDirectoryServerFacet(env: FacetEnvironment) {
-	const { managed, attachments } = env.use(Fleet);
-	const state = env.replicatedState({ revision: 0, sessions: [] as SessionRecordSummary[] });
+export const sessionDirectoryServerFacet = defineFacet({
+	id: "@pi/session-directory",
+	setup(env) {
+		const { managed, attachments } = env.use(Fleet);
+		const state = env.replicatedState({ revision: 0, sessions: [] as SessionRecordSummary[] });
 
-	function publish(_change: ManagedSessionChange, context: Context) {
-		state.set({ revision: state.value.revision + 1, sessions: managed.snapshot().map(toSummary) }, context);
-	}
+		function publish(_change: ManagedSessionChange, context: Context) {
+			state.set({ revision: state.value.revision + 1, sessions: managed.snapshot().map(toSummary) }, context);
+		}
 
-	env.own(managed.onChanged(publish));
-	env.onActivate(() =>
-		state.set({ revision: 1, sessions: managed.snapshot().map(toSummary) }, BACKGROUND_CONTEXT),
-	);
+		env.own(managed.onChanged(publish));
+		env.onActivate(() =>
+			state.set({ revision: 1, sessions: managed.snapshot().map(toSummary) }, BACKGROUND_CONTEXT),
+		);
 
-	env.provide(SessionDirectory, { state });
-	env.provide(SessionManagement, {
-		async create(options, context) {
-			const client = requireClientIdentity(context);
-			return toSummary(await managed.create({ title: options.title, workspaceId: client.workspaceId }, context));
-		},
-		async remove(sessionId, context) {
-			authorizeTarget(requireClientIdentity(context), managed.snapshot(), sessionId);
-			await managed.remove(sessionId, context);
-		},
-		async attach(sessionId, context) {
-			const client = requireClientIdentity(context);
-			authorizeTarget(client, managed.snapshot(), sessionId);
-			await attachments.bind(client.clientId, sessionId, context);
-		},
-		async detach(context) {
-			await attachments.unbind(requireClientIdentity(context).clientId, context);
-		},
-	});
-}
+		env.provide(SessionDirectory, { state });
+		env.provide(SessionManagement, {
+			async create(options, context) {
+				const client = requireClientIdentity(context);
+				return toSummary(
+					await managed.create({ title: options.title, workspaceId: client.workspaceId }, context),
+				);
+			},
+			async remove(sessionId, context) {
+				authorizeTarget(requireClientIdentity(context), managed.snapshot(), sessionId);
+				await managed.remove(sessionId, context);
+			},
+			async attach(sessionId, context) {
+				const client = requireClientIdentity(context);
+				authorizeTarget(client, managed.snapshot(), sessionId);
+				await attachments.bind(client.clientId, sessionId, context);
+			},
+			async detach(context) {
+				await attachments.unbind(requireClientIdentity(context).clientId, context);
+			},
+		});
+	},
+});
 
 function authorizeTarget(client: ClientIdentity, records: ManagedSessionRecord[], sessionId: string) {
 	const record = records.find((candidate) => candidate.sessionId === sessionId);
@@ -717,8 +620,8 @@ function authorizeTarget(client: ClientIdentity, records: ManagedSessionRecord[]
 	}
 }
 
-function toSummary({ sessionId, title, workspaceId, status, updatedAt }: ManagedSessionRecord): SessionRecordSummary {
-	return { sessionId, title, workspaceId, status, updatedAt };
+function toSummary({ sessionId, title }: ManagedSessionRecord): SessionRecordSummary {
+	return { sessionId, title };
 }
 ```
 
@@ -728,28 +631,31 @@ Every call is authorized against the client identity that transport policy insta
 
 ```ts
 // tui.ts
-export function sessionPickerTuiFacet(env: FacetEnvironment) {
-	const directory = env.use(SessionDirectory);
-	const management = env.use(SessionManagement);
-	const tui = env.use(Tui);
+export const sessionPickerTuiFacet = defineFacet({
+	id: "@pi/session-picker",
+	setup(env) {
+		const directory = env.use(SessionDirectory);
+		const management = env.use(SessionManagement);
+		const tui = env.use(Tui);
 
-	tui.commands.register("sessions.switch", async (context) => {
-		const current = directory.state.value;
-		const attachment = tui.attachment.value;
-		if (current === undefined || attachment === undefined) return;
-		const selected = await tui.select(
-			"Sessions",
-			current.sessions.map((session) => ({
-				label: pickerLabel(session, attachment),
-				value: session.sessionId,
-			})),
-			{ signal: context.abortSignal },
-		);
-		if (selected !== undefined) await management.attach(selected, context);
-	});
+		tui.commands.register("sessions.switch", async (context) => {
+			const current = directory.state.value;
+			const attachment = tui.attachment.value;
+			if (current === undefined || attachment === undefined) return;
+			const selected = await tui.select(
+				"Sessions",
+				current.sessions.map((session) => ({
+					label: pickerLabel(session, attachment),
+					value: session.sessionId,
+				})),
+				{ signal: context.abortSignal },
+			);
+			if (selected !== undefined) await management.attach(selected, context);
+		});
 
-	env.own(directory.state.subscribe((next) => renderSessionList(next)));
-}
+		env.own(directory.state.subscribe((next) => renderSessionList(next)));
+	},
+});
 ```
 
 The TUI facet consumes a service provided by the one connected server. There is no session facet in this plugin because sessions do not own discovery or attachment.
@@ -759,7 +665,7 @@ The TUI facet consumes a service provided by the one connected server. There is 
 `attach(sessionId)` selects the session for this presentation connection:
 
 1. the server authorizes the client for one of its managed sessions;
-2. it closes the client's previous session-scoped requests, subscriptions, references, and observed instance tasks;
+2. it closes the client's previous session-scoped requests, subscriptions, and observed instance tasks;
 3. it binds the presentation host's Session services to the selected Session worker;
 4. the Session worker hydrates singleton state and current keyed instances from complete fresh snapshots; attachment state becomes `attached`.
 
@@ -774,15 +680,15 @@ S1: rpc.server chat.prompt — fresh local Context, validated JSON args → lane
 response returns S1 → server → TUI A
 ```
 
-Aborting the TUI request sends cancellation through the server to S1, aborting the session-side request controller. Trace carriers pass through routing; `Context` is reconstructed at the service endpoint.
+Aborting the TUI request sends cancellation through the server to S1, aborting the session-side request controller. `Context` and trace metadata are reconstructed at the service endpoint.
 
 ### Routing is host infrastructure
 
-The server routes session traffic contract-agnostically. It parses protocol envelopes—frame kind, request ID, service ID, optional instance key/generation, and selected session—but not plugin business payloads. Validation happens at service endpoints, so the server can route a session plugin service without loading that session facet.
+The server routes session traffic contract-agnostically. It parses protocol envelopes—frame kind, request ID, service ID, optional instance key/generation, and selected session—but not service business payloads. Validation happens at service endpoints, so the server can route a Session service without loading that session facet.
 
-The server stamps routed calls with the client identity it authenticated. The session worker keys connection-owned requests by that identity, preventing collisions and cross-client cancellation. No server facet participates in routing or re-provides session services.
+The server stamps routed calls with its authenticated client identity. The Session worker keys connection-owned requests per presentation route, preventing request-ID collisions and cross-client cancellation. No server facet participates in routing or re-provides session services.
 
-## Session-owned deferred interactions: the question plugin
+## Session-owned deferred interactions: the question extension
 
 Some session-side work must ask users for a decision. The existing `examples/extensions/question.ts` shows the experience: the model calls a `question` tool, a user selects an option or types an answer, and the tool returns that answer with a compact rendering.
 
@@ -841,55 +747,64 @@ function questionResult(request: QuestionRequest, answer: string | null, wasCust
 
 ```ts
 // session.ts
-export function questionSessionFacet(env: FacetEnvironment) {
-	const dialogs = env.provideMany(QuestionDialogs);
-	const tools = env.use(Tools);
+export const questionSessionFacet = defineFacet({
+	id: "@pi/question",
+	setup(env) {
+		const dialogs = env.provideMany(QuestionDialogs);
+		const tools = env.use(Tools);
 
-	tools.add((draft) => {
-		draft.set("question", {
-			label: "Question",
-			description: "Ask users a question and wait for an answer.",
-			executionMode: "sequential",
-			replay: "safe",
-			parameters: QuestionParamsSchema,
+		tools.add((draft) => {
+			draft.set("question", {
+				label: "Question",
+				description: "Ask users a question and wait for an answer.",
+				executionMode: "sequential",
+				replay: "safe",
+				parameters: QuestionParamsSchema,
 
-			async execute(_toolCallId, params, _onUpdate, _toolContext, invocation, context) {
-				if (params.options.length === 0) return questionResult(params, null, false, "No options provided");
-
-				const memoName = "pi.question.answer";
-				let response = (await invocation.getMemo(memoName)) as QuestionResponse | undefined;
-
-				if (response === undefined) {
-					const completion = Promise.withResolvers<QuestionResponse>();
-					const request = env.replicatedState<QuestionRequest>(params);
-					const close = dialogs.add(invocation.invocationId, {
-						request,
-						async submitAnswer(candidate, _answerContext) {
-							if (candidate.outcome === "selected" && params.options[candidate.index] === undefined) {
-								throw new Error("Question response selected an invalid option");
-							}
-							const committed = invocation.memoOnce(memoName, candidate);
-							completion.resolve(committed);
-							await committed;
-						},
-					});
-
-					try {
-						response = await awaitAbortable(completion.promise, context.abortSignal);
-					} finally {
-						close();
+				async execute(_toolCallId, params, _onUpdate, _toolContext, invocation, context) {
+					if (params.options.length === 0) {
+						return questionResult(params, null, false, "No options provided");
 					}
-				}
 
-				if (response.outcome === "cancelled") return questionResult(params, null, false, "User cancelled the question");
-				if (response.outcome === "custom") return questionResult(params, response.answer, true, `User wrote: ${response.answer}`);
-				const selected = params.options[response.index];
-				if (selected === undefined) throw new Error("Question response selected an invalid option");
-				return questionResult(params, selected.label, false, `User selected: ${response.index + 1}. ${selected.label}`);
-			},
+					const memoName = "pi.question.answer";
+					let response = (await invocation.getMemo(memoName)) as QuestionResponse | undefined;
+
+					if (response === undefined) {
+						const completion = Promise.withResolvers<QuestionResponse>();
+						const request = env.replicatedState<QuestionRequest>(params);
+						const close = dialogs.add(invocation.invocationId, {
+							request,
+							async submitAnswer(candidate, _answerContext) {
+								if (candidate.outcome === "selected" && params.options[candidate.index] === undefined) {
+									throw new Error("Question response selected an invalid option");
+								}
+								const committed = invocation.memoOnce(memoName, candidate);
+								completion.resolve(committed);
+								await committed;
+							},
+						});
+
+						try {
+							response = await awaitAbortable(completion.promise, context.abortSignal);
+						} finally {
+							close();
+						}
+					}
+
+					if (response.outcome === "cancelled") {
+						return questionResult(params, null, false, "User cancelled the question");
+					}
+					if (response.outcome === "custom") {
+						return questionResult(params, response.answer, true, `User wrote: ${response.answer}`);
+					}
+					const selected = params.options[response.index];
+					if (selected === undefined) throw new Error("Question response selected an invalid option");
+					return questionResult(params, selected.label, false, `User selected: ${response.index + 1}. ${selected.label}`);
+				},
+			});
 		});
-	});
-}
+	},
+});
 ```
 
 `dialogs.add()` installs the instance before `execute()` waits. The returned close function is the single normal, cancellation, and error cleanup path. Concurrent submissions call `memoOnce()`, whose atomic first-writer rule prevents overwrite and returns the same durable winner. `completion.resolve(committed)` makes the local wait follow that durable operation: success resumes the tool, while failure rejects it and runs the same cleanup instead of leaving it suspended. Each service call also awaits its own `committed` promise, so it cannot report success before durability or leave an ignored rejection. Calls through a closed instance or an old generation fail as stale service calls.
@@ -902,46 +817,49 @@ type QuestionChoice =
 	| { outcome: "selected"; index: number }
 	| { outcome: "custom" };
 
-export function questionTuiFacet(env: FacetEnvironment) {
-	const tui = env.use(Tui);
-	env.own(
-		env.observe(QuestionDialogs, async (dialog, context) => {
-			const request = dialog.service.request.value;
-			if (request === undefined) throw new Error("Question dialog was observed before hydration");
+export const questionTuiFacet = defineFacet({
+	id: "@pi/question",
+	setup(env) {
+		const tui = env.use(Tui);
+		env.own(
+			env.observe(QuestionDialogs, async (dialog, context) => {
+				const request = dialog.service.request.value;
+				if (request === undefined) throw new Error("Question dialog was observed before hydration");
 
-			const modal = await tui.acquireModal(context.abortSignal);
-			try {
-				const choice = await modal.select<QuestionChoice>(
-					request.question,
-					[
-						...request.options.map((option, index) => ({
-							label: option.label,
-							...(option.description === null ? {} : { description: option.description }),
-							value: { outcome: "selected" as const, index },
-						})),
-						{ label: "Write a custom answer", value: { outcome: "custom" as const } },
-					],
-				);
+				const modal = await tui.acquireModal(context.abortSignal);
+				try {
+					const choice = await modal.select<QuestionChoice>(
+						request.question,
+						[
+							...request.options.map((option, index) => ({
+								label: option.label,
+								...(option.description === null ? {} : { description: option.description }),
+								value: { outcome: "selected" as const, index },
+							})),
+							{ label: "Write a custom answer", value: { outcome: "custom" as const } },
+						],
+					);
 
-				let response: QuestionResponse;
-				if (choice === undefined) {
-					response = { outcome: "cancelled" };
-				} else if (choice.outcome === "selected") {
-					response = choice;
-				} else {
-					const answer = await modal.input(request.question);
-					response = answer === undefined ? { outcome: "cancelled" } : { outcome: "custom", answer };
+					let response: QuestionResponse;
+					if (choice === undefined) {
+						response = { outcome: "cancelled" };
+					} else if (choice.outcome === "selected") {
+						response = choice;
+					} else {
+						const answer = await modal.input(request.question);
+						response = answer === undefined ? { outcome: "cancelled" } : { outcome: "custom", answer };
+					}
+
+					await dialog.service.submitAnswer(response, context);
+				} finally {
+					modal.close();
 				}
+			}),
+		);
 
-				await dialog.service.submitAnswer(response, context);
-			} finally {
-				modal.close();
-			}
-		}),
-	);
-
-	tui.toolRenderers.add<QuestionDetails>("question", questionRenderer);
-}
+		tui.toolRenderers.add<QuestionDetails>("question", questionRenderer);
+	},
+});
 ```
 
 `observe()` runs one abortable task per open instance, including instances present in the hydration snapshot. Three concurrent tool invocations therefore produce three tasks keyed by their invocation IDs. The TUI modal queue displays them one at a time; a web host may render all three. Closing one instance aborts only its task in every presentation.
@@ -954,70 +872,111 @@ The service instance is live process state; the invocation memo is the replay re
 
 If the worker dies before the answer commit, the old instance and promise disappear. Safe replay reads no answer and adds the same logical key with a new generation. If it dies after the commit, replay reads the answer and returns without adding an instance. A client cannot answer while the worker is absent; calls through the old generation fail instead of locating an invocation by bare ID.
 
-The memo has the existing invocation lifetime. Staging the tool result as `outcome_ready` atomically deletes it; cancellation and external finalization use the same cleanup. The question request is not copied into another memo because the Harness already persisted the effective tool arguments. Source reload follows this same worker-replacement path; see [`plugin-reloading.md`](plugin-reloading.md).
+The memo has the existing invocation lifetime. Staging the tool result as `outcome_ready` atomically deletes it; cancellation and external finalization use the same cleanup. The question request is not copied into another memo because the Harness already persisted the effective tool arguments. Source reload uses this same durable worker-reconstruction path.
 
-## Lifecycle, disposal, and reload
+## Lifecycle and disposal
 
-Every facet-owned resource — singleton registrations, still-open service instances, contributions, state subscriptions, watchers, timers, in-flight RPCs, subprocesses, overlays — is owned by the facet environment and disposed when that environment closes, in reverse dependency order. Host capabilities enforce this automatically for hooks and event subscriptions; `onDeactivate` handles the rest. Contribution registries rebuild from the remaining ordered contributions instead of asking a plugin to reverse shared mutations.
+A facet environment owns service provisions, `provideMany()` instances, observations, and resources explicitly registered through `own()`. Facets must register state subscriptions, watchers, timers, subprocesses, overlays, and other external resources themselves. The host deactivates consumers before providers and runs each facet's owned cleanups in reverse registration order.
 
-Source reload replaces the affected facet environments while retaining unaffected consumers. The host stages each replacement against the existing dependency graph, disconnects its old provisions, deactivates the old facet, activates the replacement, and rebinds its provisions before unloading the old module generation. A singleton facade returned earlier by `use()` keeps its identity: local calls resolve the current implementation, and RPC consumers receive a complete replacement snapshot on the existing subscription. Reloads that change service requirements, provisions, modes, or manifest membership require graph reassembly before they can switch.
+Already-admitted inbound RPC calls may continue while their providing facet deactivates. Withdrawing a provider rejects new calls. Code that requires stronger fencing needs an explicit lifecycle-owned controller.
 
-Reload has no safety or rollback guarantee beyond ordinary facet shutdown and activation. Committed durable state survives, removed plugin data is retained, interrupted calls are not automatically replayed, and non-restartable process effects may fail. Hosts may temporarily run different source generations, so contracts remain forward compatible during convergence. See [`plugin-reloading.md`](plugin-reloading.md) for the complete design.
+## Reloading facets
+
+Reload means replacing loaded facet source. It is not a transaction over durable Session state or external effects.
+
+### Shape-preserving provider replacement
+
+`FacetHost.reload()` replaces facets by `Facet.id` only when each replacement declares exactly the same service requirements, provisions, and singleton/keyed modes as the active facet. The tested sequence is:
+
+```text
+load replacement facets
+→ run setup and validate the unchanged service shape
+→ withdraw replaced singleton provisions
+→ deactivate old facets in reverse dependency order
+→ activate replacements in dependency order
+→ rebind local implementation slots
+→ publish complete RPC singleton replacement snapshots
+→ dispose the retired LoadedFacets generation
+```
+
+The loader disposal is deliberately outside `FacetHost.reload()`: the coordinator that loaded a module owns that module. It must dispose the old `LoadedFacets` only after the old active facets retire, and dispose a failed candidate generation if setup or validation fails.
+
+A singleton facade belongs to its consumer rather than a provider generation. Existing local proxies and captured local methods dispatch to the replacement implementation. Existing RPC proxies, captured methods, and replicated-state facades retain identity. During replacement they are unavailable: calls fail instead of queueing, and state becomes unhydrated until the complete replacement snapshot arrives.
+
+Reload has no rollback guarantee after old-facet deactivation begins. A failed replacement leaves affected services unavailable or degraded. Already-admitted calls are not automatically replayed or cancelled; callers must reconcile uncertain durable outcomes through authoritative state or stable operation IDs.
+
+### Shape changes and process replacement
+
+Changing requirements, provisions, modes, facet membership, or process authority is structural. It requires a newly assembled graph or an ordinary process restart; `FacetHost.reload()` intentionally rejects it.
+
+A reload coordinator lives outside the facet graph it replaces and follows these rules:
+
+1. Reload control stays outside the facet graph being replaced.
+2. It chooses a desired source generation, then independently loads the affected server, Session, and presentation bundles. There is no aggregate cross-process extension object.
+3. Shape-preserving facets use the existing host reload primitive. Structural changes build and validate a candidate graph before switching. Session-authority changes stop the old worker and release Session ownership before opening the replacement.
+4. Hosts may converge at different times, so shared service contracts and durable records must tolerate temporary source-generation skew.
+5. Failure is reported without pretending to roll back committed Session records, filesystem writes, subprocess effects, or hosts that already switched.
+
+`ReplicatedState` is a projection rather than storage. A replacement provider reconstructs authoritative state from durable Session records, configuration, or another owned source and publishes a complete snapshot. Keyed instances that must survive a worker restart likewise need durable application records and return as fresh live generations. Provider-local transport sequences and keyed generations may restart after rebinding and are never globally monotonic.
+
+Exactly one worker may own an open Session. Worker replacement therefore has a route gap:
+
+```text
+old worker stops and releases Session ownership
+→ selected Session remains logically selected but unavailable
+→ replacement worker opens the Session and reconstructs services
+→ server creates a fresh attachment binding
+→ presentations hydrate fresh singleton and keyed snapshots
+```
+
+Reload never blindly retries an interrupted mutation. A request may have committed before its response was lost. Durable resumability belongs to Harness and application contracts, not facet cleanup.
 
 ## Connection loss, errors, and security
 
-Disconnect behavior, from the plugin author's perspective:
+Disconnect behavior, from the facet author's perspective:
 
-- **A presentation disconnects.** Its server aborts the client's active requests, closes its observed instance tasks and other session-routed resources, and the selected session's `onClientDetach` fires. Session-owned work continues per application policy. An added question dialog remains Session-owned; the disconnected presentation loses its proxy and any in-flight `submitAnswer()` call fails.
-- **A session worker disconnects or crashes.** Its server fails routed in-flight calls with `session_unavailable`, closes that worker's observed instance tasks, and updates the managed record's status. Attached presentations see `attachment.status === "degraded"` while the server connection stays healthy, so the picker still works and the user can attach elsewhere.
+- **A presentation disconnects.** Its server aborts the client's active requests and closes its observed instance tasks and other session-routed resources. Session-owned work continues per application policy. An added question dialog remains Session-owned; the disconnected presentation loses its proxy and any in-flight `submitAnswer()` call fails.
+- **A Session worker disconnects or crashes.** Its server fails routed in-flight calls and closes that worker's observed instance tasks. Attached presentations see `attachment.status === "degraded"` while the server connection stays healthy, so the directory still works and the user can attach elsewhere.
 - **A process loses its server connection.** Its connected server and Session services become unavailable. A Session worker loses server services and all attached presentations at once; unattended-Session policy decides whether it exits.
-- Reconnect and reattach always hydrate from a fresh authoritative snapshot; prior remote references are invalid unless the exposure has explicitly session-stable identity. **Never blindly replay a mutation after an uncertain disconnect** — a replayed `select()` is harmless, a replayed `prompt()` is not. Reconnect, hydrate, and reconcile, or design the operation around a stable operation ID with explicit lookup semantics.
+- Reconnect and reattach always hydrate from a fresh authoritative snapshot; prior keyed proxies and attachment-bound frames are invalid. **Never blindly replay a mutation after an uncertain disconnect** — a replayed `select()` is harmless, a replayed `prompt()` is not. Reconnect, hydrate, and reconcile, or design the operation around a stable operation ID with explicit lookup semantics.
 
-Errors cross the wire as a JSON envelope `{ code, message, data? }` with stable codes. Expected service errors use stable codes or result values; unexpected exceptions become an internal error with safe metadata — no stacks or sensitive causes by default. Experimental scaffold members use `service_not_implemented` until their implementation slice lands. Cancellation, disconnect, unknown service/method, invalid arguments/results, stale references, `not_attached`, `not_authorized`, `unknown_session`, and `session_unavailable` need distinct codes.
+Errors cross the wire as a JSON envelope `{ code, message }` with stable protocol and service codes. Unexpected exceptions become `internal_error` without exposing stacks. Authentication and application errors use registered stable codes.
 
-Security rules every providing host (session and server alike) must enforce:
+Boundary rules:
 
 - RPC-capable service IDs come from trusted loaded service tokens; the remote boundary accepts only implementation functions and branded replicated-state members, instance generations are host-owned, and `{ rpc: false }` services are never discoverable remotely;
-- business arguments, results, state, and events are validated as JSON; protocol envelopes cannot be forged as ordinary values;
-- clients cannot choose context position, server typed values, telemetry parents, or cancellation targets other than their own request IDs;
-- credentials, prompts, completions, tool arguments/results, and filesystem contents are not exposed unless an explicit contract permits them; state snapshots contain only client-safe data;
-- remote methods authorize server-side even when the TypeScript client surface hides them.
+- business arguments, results, and state are validated as JSON; protocol envelopes cannot be forged as ordinary values;
+- clients cannot choose context position, instance generations, selected-Session routing fields, or cancellation targets other than their own requests; and
+- credentials, prompts, completions, tool arguments/results, and filesystem contents are not exposed unless an explicit contract permits them.
 
-## The coding agent as a plugin manifest
+## Host composition
 
-The coding agent is one manifest of built-in and third-party plugins; each app host loads its facets through the same kernel in deterministic order. Server facets cover the directory/management services, authentication and client authorization, and worker spawn/stop policy and health. Session facets cover session creation/restoration and the scoped Harness facade; providers, model selection, and authentication; tools, wrappers, and permissions; prompt/steer/abort/compaction services; transcript persistence and snapshot projection; filesystem and subprocess effects; temporary service instances for deferred interactions; unattended-session policy; and server service consumption where a feature needs server-wide data. TUI facets cover the chat screen, transcript rendering, editor, commands, keybindings, pickers, renderers, screens/slots/dialogs, and themes; a web host carries analogous browser facets. Shared contracts are service tokens with JSON-safe DTOs, latest-value state, presentation-local screen/slot tokens, stable renderer discriminators, and portable structured errors.
-
-The generic kernel knows none of these domain concepts; each app host knows only its own.
+The facet kernel is service-aware but application-agnostic. A complete product should supply independently loaded facet sets for server authority, each Session worker, and each presentation. Shared contracts contain service tokens and JSON-safe DTOs; they do not imply that the providing and consuming facets share a bundle.
 
 ## Open decisions
 
-Before this becomes normative:
+Before the extension layer becomes normative:
 
-- the exact minimal kernel contract (environment shape, phase ordering, failure policy), the built-in manifest, and the concrete server/Session/TUI host services;
-- the logical-manifest format, per-host entry-point resolution, and cross-process version pinning;
-- whether directory state is projected per client (workspace-scoped snapshots) or one presentation-safe value plus method authorization;
-- multiple selected Sessions per presentation connection (a multi-pane web UI) — deferred; it requires explicit routing for services from more than one selected Session;
-- authentication of presentations and session workers, and protocol version negotiation;
-- the exact lazy `Service` member-discovery and provider-kind-validation API, and the context-position and JSON-safe optional-argument policy from `rpc.md`;
-- whether `ReplicatedState` is generic RPC infrastructure or host infrastructure; snapshot granularity; exact hydration/delivery-context semantics;
-- replicated-state flow control and per-client buffering at the server; reference lifetime and garbage collection;
-- the stable error envelope and expected-error registration; activation/disposal ordering, optional dependencies, and shared-proxy lifetime;
-- the exact singleton/keyed mode validation, keyed provider/observe APIs, instance-key and generation rules, instance hydration protocol, and answer authorization; general memo-name ownership remains with the invocation-memo design;
-- package boundaries between the generic kernel, agent plugin contracts, generic protocol machinery, and coding-agent host integration.
+- what an `Extension` identifies and how it maps a version to independently bundled host facets;
+- the manifest/source-selection format, ordering rules, package export convention, trust policy, and cross-process version skew;
+- how structural graph replacement preserves host control and reports partial convergence;
+- the concrete scoped server, Session, TUI, and future web capabilities;
+- whether directory state is projected per authenticated client or globally presentation-safe;
+- authentication, authorization, protocol version negotiation, and expected application error registration;
+- optional service dependencies, multi-Session presentations, replicated-state flow control, and gap recovery;
+- whether private returned references are needed after keyed services cover concrete features; and
+- package boundaries between the facet kernel, service RPC, coding-agent host integration, and extension contracts.
 
-## Testing strategy
+## Required tests
 
-The handoff should include a reusable two-transport test matrix (loopback plus a real framed transport) covering:
+The test matrix covers:
 
-- **Composition:** hosts start from one plugin manifest, not hard-coded features; per-host entry-point resolution with no Session modules reachable in a presentation bundle; setup-time `provide`/`provideMany`/`use`/`observe` calls produce the private dependency graph and provider-to-consumer edges; late service acquisition is rejected; provide/demand-resolve round trip; mixed singleton/keyed use rejected; shared proxy/replica across concurrent consumers; instance snapshot plus add/close/re-add reconciliation; local services unreachable remotely; duplicate/missing service failures; activation only after registration and dependency validation; reverse-order disposal.
-- **Connections:** `Connect` performs one abortable attempt and the host owns retries; peer identity comes from the accepting server's handshake; session and presentation hosts connect to that server, and `server.local` runs the same host boundaries without sockets.
-- **RPC and context:** JSON call and `void` result; invalid argument/result and unknown service/member rejection; client span → `rpc.client` → `rpc.server` → service span; per-call cancellation isolation; disconnect aborts active calls; no callback, context, signal, telemetry object, or secret in wire JSON.
-- **State and events:** a cold replica has `.value === undefined` and does not invoke subscribers before hydration; snapshot plus concurrent update has no gap; instance discovery and member-state hydration do not miss an addition, update, or close; hydrated subscriptions immediately receive the current borrowed value; update ordering without defensive cloning; reconnect replaces stale state; provider switching clears readiness; subscribe/unsubscribe and disconnect cleanup; deliveries carry reconstructed source contexts; first snapshot callbacks run under the hydration context.
-- **Registries:** ordered provider contributions rebuild deterministically; tool wrappers compose once and rebuild correctly after removal.
-- **Presentation:** typed selections return values rather than labels; modal leases do not interleave multi-step dialogs; closing a queued instance removes it before display; closing an active instance aborts and dismisses only that dialog; non-cancellation observer failures reach host failure policy.
-- **Routing:** attach authorizes at the server and rejects cross-workspace targets; attach/switch closes previous routed requests and instance tasks, then hydrates the selected session; a routed singleton or instance call reconstructs `Context` at the session worker, with cancellation and trace carriers traversing the server; stale instance generations are rejected; per-client keying prevents request-ID collisions; the server routes services whose contracts it does not load; session-worker failure leaves server services healthy and updates directory status; presentation disconnect cleanup reaches the session; summaries contain no `ownerId` or `cwd`.
-- **Reload:** changed facet implementations replace their matching active facets while stable service facades rebind to new local implementations or RPC singleton snapshots; structural graph changes reassemble the affected host; old Session ownership closes before worker replacement; logical selection survives a route gap and receives a fresh attachment ID; old calls and frames are fenced; events are not replayed; interrupted mutations are not retried; removed plugin data is retained; temporary generation skew remains compatible; and failed replacement stays degraded without rollback.
-- **Boundaries:** scoped agent and fleet capabilities cannot reach host ownership or whole-registry mutation; raw Harness/Session/SessionRepo capabilities unreachable from any client connection; job `wait` cancellation distinct from `job.cancel()`; stale/closed reference rejection; concurrent question invocations add distinct services visible in simultaneous TUI and web clients, survive having no connected presentation while the worker is live, disappear on worker loss, reappear under new generations when safe replay finds no answer memo, accept only one durable answer each, reject the tool wait rather than hang when the memo write fails, return committed answers without adding another instance on replay, clean up with durable tool-result staging, and close in every presentation; invocation cancellation writes no durable cancellation state.
+- setup-derived provisions and requirements, late-access guards, missing and duplicate providers, mode validation, cycles, activation order, and reverse disposal;
+- local and connected singleton calls, token-driven publication, strict JSON values, keyed instance hydration, generation fencing, cancellation, and selected-Session routing;
+- cold state, snapshot/update races, buffering, update order, disconnect cleanup, and complete replacement snapshots; and
+- static/combined loaders plus stable local and RPC singleton handles across shape-preserving provider reload.
+
+It also covers extension discovery and isolated process-specific bundle loading; structural graph reassembly and reload coordination; worker handoff with preserved logical selection and fresh attachment fencing; scoped host capabilities and contribution-registry rebuilds; authenticated routing and telemetry propagation; keyed-provider replacement and activation failure; and the question and collaborative-review examples below.
 
 ## Collaborative diff review: a durable shared sidebar
 
@@ -1038,7 +997,7 @@ DiffReviews[reviewId]                    keyed service
   submit()                               freeze, enqueue one prompt, close
 ```
 
-The keyed instance is the live, reactive projection. A plugin-owned record is the durable authority. Pending comments are not weakly persisted: each acknowledged comment survives a worker restart, but the record is deleted after its prompt is durably accepted.
+The keyed instance is the live, reactive projection. An extension-owned record is the durable authority. Pending comments are not weakly persisted: each acknowledged comment survives a worker restart, but the record is deleted after its prompt is durably accepted.
 
 ### Shared remote contract
 
@@ -1086,56 +1045,13 @@ The client never supplies a patch, author, or review ID. The session computes a 
 
 ### Narrow local durability capabilities
 
-Unlike a question, this interaction has no invocation memo. The session facet therefore depends on local services backed by session storage and the durable prompt lane:
-
-```ts
-type DiffReviewRecord =
-	| {
-			reviewId: string;
-			patch: string;
-			revision: number;
-			comments: DiffComment[];
-			status: "open";
-			submission: null;
-	  }
-	| {
-			reviewId: string;
-			patch: string;
-			revision: number;
-			comments: DiffComment[];
-			status: "submission_pending";
-			submission: { submissionId: string; prompt: string };
-	  };
-
-type OpenDiffReviewRecord = Extract<DiffReviewRecord, { status: "open" }>;
-type SubmittingDiffReviewRecord = Extract<DiffReviewRecord, { status: "submission_pending" }>;
-
-interface DiffSourceService {
-	snapshotWorkingTree(context: Context): Promise<string>;
-}
-
-interface DiffReviewRecordsService {
-	listPending(context: Context): Promise<DiffReviewRecord[]>;
-	create(patch: string, context: Context): Promise<OpenDiffReviewRecord>;
-	addComment(reviewId: string, input: DiffCommentInput, context: Context): Promise<OpenDiffReviewRecord>;
-	freezeForSubmission(reviewId: string, context: Context): Promise<SubmittingDiffReviewRecord>;
-	complete(reviewId: string, submissionId: string, context: Context): Promise<void>;
-}
-
-interface PromptQueueService {
-	enqueueOnce(submissionId: string, prompt: string, context: Context): Promise<void>;
-}
-
-const DiffSource = defineLocalService<DiffSourceService>("diff-source");
-const DiffReviewRecords = defineLocalService<DiffReviewRecordsService>("diff-review-records");
-const PromptQueue = defineLocalService<PromptQueueService>("prompt-queue");
-```
+Unlike a question, this interaction has no invocation memo. The Session facet uses three process-local capabilities: a diff source that snapshots the working tree, a review store that serializes record mutations, and a prompt queue with idempotent `enqueueOnce()`. One durable review record contains the immutable patch, revisioned comments, status, and an optional frozen `{ submissionId, prompt }`. These local capabilities are ordinary `{ rpc: false }` services; their repository APIs are not part of the extension's shared contract.
 
 `DiffReviewRecords` serializes mutations per review. `addComment()` validates the anchor against the stored patch, stamps the authenticated author, deduplicates `commentId`, commits, and then returns the new revision. `freezeForSubmission()` atomically excludes later comments and stores a stable submission ID plus a prompt containing the immutable patch and that exact comment snapshot. If submission was already frozen, it returns the same record. `PromptQueue.enqueueOnce()` returns only after that logical prompt is durably accepted; retrying its submission ID cannot enqueue a second prompt.
 
 ### Why record mutations need a critical region
 
-`DiffReviewRecords` builds on the facet's scoped Session data (`values.md`): typed durable values in a plugin-owned namespace. Each storage call is atomic, but an application read-modify-write cycle spans multiple calls and therefore multiple awaits. Concurrent service calls can interleave between them.
+`DiffReviewRecords` builds on the facet's scoped Session data (`values.md`): typed durable values in an extension-owned namespace. Each storage call is atomic, but an application read-modify-write cycle spans multiple calls and therefore multiple awaits. Concurrent service calls can interleave between them.
 
 Concrete failure without serialization — two users press submit at the same time:
 
@@ -1161,7 +1077,7 @@ async freezeForSubmission(reviewId, context) {
 		if (current.status === "submission_pending") return current; // idempotent retry
 
 		const submissionId = newSubmissionId();
-		const frozen: SubmittingDiffReviewRecord = {
+		const frozen = {
 			...current,
 			revision: current.revision + 1,
 			status: "submission_pending",
@@ -1184,66 +1100,25 @@ The requirement is one linearizable read-modify-write path per review, not speci
 
 ### Session facet
 
-```ts
-function toDiffReviewActivity(record: DiffReviewRecord): DiffReviewActivity {
-	return {
-		revision: record.revision,
-		comments: record.comments,
-		status: record.status === "open" ? "open" : "submitting",
-	};
-}
+The Session facet follows a short reconstruction algorithm:
 
-export function diffReviewSessionFacet(bindings: FacetEnvironment) {
-	const reviews = bindings.provideMany(DiffReviews);
-	const diffs = bindings.use(DiffSource);
-	const records = bindings.use(DiffReviewRecords);
-	const prompts = bindings.use(PromptQueue);
+```text
+activation
+→ list pending review records
+→ add one DiffReviews instance per record
+→ publish document and activity state
+→ resume any frozen submission through enqueueOnce()
 
-	function exposeReview(initial: DiffReviewRecord) {
-		const document = bindings.replicatedState({ reviewId: initial.reviewId, patch: initial.patch });
-		const activity = bindings.replicatedState(toDiffReviewActivity(initial));
+createReview()
+→ snapshot the diff
+→ create the durable record
+→ add its DiffReviews instance
 
-		function publish(next: DiffReviewRecord, context: Context) {
-			if (next.revision > activity.value.revision) activity.set(toDiffReviewActivity(next), context);
-		}
-
-		async function finish(record: SubmittingDiffReviewRecord, context: Context) {
-			await prompts.enqueueOnce(record.submission.submissionId, record.submission.prompt, context);
-			await records.complete(record.reviewId, record.submission.submissionId, context);
-			close();
-		}
-
-		const close = reviews.add(initial.reviewId, {
-			document,
-			activity,
-			async addComment(input, context) {
-				publish(await records.addComment(initial.reviewId, input, context), context);
-			},
-			async submit(context) {
-				const frozen = await records.freezeForSubmission(initial.reviewId, context);
-				publish(frozen, context);
-				await finish(frozen, context);
-			},
-		});
-
-		return { finish };
-	}
-
-	bindings.provide(DiffReviewManager, {
-		async createReview(context) {
-			const patch = await diffs.snapshotWorkingTree(context);
-			const record = await records.create(patch, context);
-			exposeReview(record);
-		},
-	});
-
-	bindings.onActivate(async () => {
-		for (const record of await records.listPending(BACKGROUND_CONTEXT)) {
-			const review = exposeReview(record);
-			if (record.status === "submission_pending") await review.finish(record, BACKGROUND_CONTEXT);
-		}
-	});
-}
+submit()
+→ atomically freeze comments and submission ID
+→ publish "submitting"
+→ enqueueOnce(submission ID, prompt)
+→ delete the completed record and close the instance
 ```
 
 Every mutation commits before `publish()`. Concurrent comment and submit calls are ordered by the record repository: a comment committed first is in the frozen prompt; a comment arriving after the freeze receives `review_closed`. `complete()` deletes only the matching frozen record, and `close()` is idempotent.
@@ -1252,64 +1127,7 @@ The startup scan reconstructs every open keyed instance from durable records. A 
 
 ### TUI and web facets
 
-The plugin owns its TUI and browser widgets. Both implement this local presentation interface; it is not an RPC contract:
-
-```ts
-type DiffReviewAction =
-	| { type: "add_comment"; input: DiffCommentInput; context: Context }
-	| { type: "submit"; context: Context };
-
-interface DiffReviewPanel {
-	render(activity: DiffReviewActivity): void;
-	nextAction(signal: AbortSignal): Promise<DiffReviewAction | undefined>;
-	close(): void;
-}
-
-function observeDiffReviews(
-	env: FacetEnvironment,
-	openPanel: (document: DiffReviewDocument) => DiffReviewPanel,
-) {
-	env.own(
-		env.observe(DiffReviews, async (review, context) => {
-			const document = review.service.document.value;
-			if (document === undefined) throw new Error("Diff review was observed before hydration");
-			const panel = openPanel(document);
-			const unsubscribe = review.service.activity.subscribe((activity) => panel.render(activity));
-
-			try {
-				while (true) {
-					const action = await panel.nextAction(context.abortSignal);
-					if (action === undefined) return;
-					if (action.type === "add_comment") {
-						await review.service.addComment(action.input, action.context);
-					} else {
-						await review.service.submit(action.context);
-					}
-				}
-			} finally {
-				unsubscribe();
-				panel.close();
-			}
-		}),
-	);
-}
-
-// tui.ts
-export function diffReviewTuiFacet(env: FacetEnvironment) {
-	const manager = env.use(DiffReviewManager);
-	const tui = env.use(Tui);
-	tui.commands.register("diff.review", (context) => manager.createReview(context));
-	observeDiffReviews(env, (document) => createTuiDiffReviewPanel(tui.slots, document));
-}
-
-// web.ts
-export function diffReviewWebFacet(env: FacetEnvironment) {
-	const manager = env.use(DiffReviewManager);
-	const views = env.use(WebViews);
-	observeDiffReviews(env, (document) => createWebDiffReviewPanel(views, document));
-	// The web plugin's "Review diff" button calls manager.createReview(context).
-}
-```
+The extension owns its TUI and browser widgets. TUI and web facets both `observe(DiffReviews, ...)`. Each observer opens a native panel from the hydrated document, subscribes to activity, forwards comment and submit actions to the service, and closes the panel when the instance context aborts. The TUI also registers a command that calls `DiffReviewManager.createReview()`; a web surface may expose the same operation as a button.
 
 `observe()` begins only after both state members hydrate. The panel receives the immutable document once, and subscribing to `activity` immediately renders current comments without retransmitting the patch on every edit. A late client sees the same pending review. Activity updates continue while `nextAction()` waits. Each sidebar action carries a fresh presentation-created `Context`; the longer-lived observation context controls only panel lifetime. When submission closes the keyed instance, every panel's observation context aborts and its `finally` block disposes the subscription and widget.
 
@@ -1330,58 +1148,18 @@ This is a shared review, not a generic room primitive. Keyed services provide di
 
 ## Deferred: delta-based replicated state
 
-> **Deferred:** `DeltaState` is not part of the initial plugin or RPC contract. Add it only after a concrete feature demonstrates that full-value `ReplicatedState` updates are too expensive and the same pattern appears in more than one feature.
+> **Deferred:** `DeltaState` is not part of the initial facet-service or RPC contract. Add it only after a concrete feature demonstrates that full-value `ReplicatedState` updates are too expensive and the same pattern appears in more than one feature.
 
 A real replication gap remains. Some authoritative values are large, change frequently, and must support late joiners. `ReplicatedState` hydrates and reconnects correctly but sends a complete value on every update.
 
-A canvas is one possible example: joining requires the complete document, while dragging a shape should ideally send only that operation. With today's primitives, the plugin must accept complete `ReplicatedState` updates or keep the high-frequency projection process-local. A concrete feature should establish the snapshot, delta, gap-recovery, and flow-control requirements before another remote primitive is added.
+A canvas is one possible example: joining requires the complete document, while dragging a shape should ideally send only that operation. With today's primitives, the facet must accept complete `ReplicatedState` updates or keep the high-frequency projection process-local. A concrete feature should establish the snapshot, delta, gap-recovery, and flow-control requirements before another remote primitive is added.
 
 ### Possible future primitive
 
-If repeated implementations justify extraction, a future `DeltaState` could provide `ReplicatedState` hydration while using deltas for steady-state transport:
-
-```ts
-interface CanvasShape {
-	shapeId: string;
-	kind: "rect" | "ellipse" | "path";
-	x: number;
-	y: number;
-	data: JsonValue;
-}
-
-type CanvasOp = { type: "upsert"; shape: CanvasShape } | { type: "delete"; shapeId: string };
-
-interface CanvasDocument {
-	shapes: Record<string, CanvasShape>;
-}
-
-interface CanvasDelta {
-	author: string;
-	ops: CanvasOp[];
-}
-
-const CanvasDocumentState = defineDeltaState<CanvasDocument, CanvasDelta>(
-	"canvas-document",
-	applyCanvasDelta,
-);
-
-interface DeltaState<S, D> {
-	/** `undefined` until the first authoritative snapshot arrives. */
-	readonly value: S | undefined;
-	subscribe(
-		listener: (value: S, change: { type: "snapshot" } | { type: "delta"; delta: D }, context: Context) => void,
-	): () => void;
-}
-
-interface MutableDeltaState<S, D> extends DeltaState<S, D> {
-	readonly value: S;
-	apply(delta: D, context: Context): void;
-	replace(value: S, context: Context): void;
-}
-```
+If repeated implementations justify extraction, a future `DeltaState<S, D>` could retain `ReplicatedState`'s synchronous value and snapshot hydration while delivering typed deltas after hydration. The provider would expose only `apply(delta, context)` and `replace(value, context)`; a shared pure reducer would update consumer replicas.
 
 The shared reducer is pure and deterministic. `apply()` synchronously reduces the provider's value and publishes one delta; `replace()` publishes a new authoritative snapshot. Business snapshots and deltas contain no transport revision. The host stamps revisions within the provider binding, buffers updates racing hydration, applies only consecutive frames, and requests a fresh snapshot after a gap or reconnect.
 
-Supporting this requires an explicit new RPC member kind. The providing object carries the `DeltaState` definition ID; the provider announces that ID in member metadata; and the consuming host resolves the same imported definition before applying deltas locally. Until `rpc.md` specifies that registration and hydration protocol, `bindings.deltaState()` does not exist.
+Supporting this requires an explicit RPC member kind. The providing object carries the `DeltaState` definition ID; the provider announces that ID in member metadata; and the consuming host resolves the same imported definition before applying deltas locally. The contract is adopted only together with that registration and hydration protocol.
 
 `DeltaState` would solve only live replication. It would not provide durable storage, mutation serialization, multi-writer merging, offline editing, or automatic mutation replay. A durable canvas would still serialize its own mutations, persist an admitted delta before publishing it, and coordinate log compaction with appends. Durable log cursors remain application/storage metadata and are independent of the host's transport revision.

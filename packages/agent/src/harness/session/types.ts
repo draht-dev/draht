@@ -125,8 +125,6 @@ export type Continuation =
 export interface CheckpointData {
 	continuation: Continuation;
 	triggerEntryId: string;
-	thresholdCheckedTriggerEntryId?: string;
-	skipInboxOnce?: boolean;
 }
 
 export type InboxItemKind = "steer" | "followUp" | "nextRun" | "write";

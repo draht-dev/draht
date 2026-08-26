@@ -238,7 +238,6 @@ export async function publishResponse<TContext extends object | undefined>(
 								resumeAfter: {
 									continuation: { kind: "need_assistant", overflowRecoveryUsed: true },
 									triggerEntryId: current.generationContext.triggerEntryId,
-									thresholdCheckedTriggerEntryId: current.generationContext.triggerEntryId,
 								},
 							},
 						},

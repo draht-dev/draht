@@ -1,6 +1,6 @@
 # WP05 — Direct durable drive
 
-**Status: M5 complete; M6 structural foundation committed; R1a lane-owned inbox relocation, R2 record-only outcomes, reviewed R3 family-neutral leaves, and R1b-1 structural boundary fusion implemented; R1b-2 next, then M7 (reconciliation), M8 (public surfaces), M9 (documentation reconciliation), and M10 (provider KV-cache identity review).**
+**Status: M5 complete; M6 structural foundation committed; R1a lane-owned inbox relocation, R2 record-only outcomes, reviewed R3 family-neutral leaves, and the reviewed R1b atomic boundary planner implemented; M7 reconciliation next, then M8 (public surfaces), M9 (documentation reconciliation), and M10 (provider KV-cache identity review).**
 
 WP06's Session/Branch/Lane separation is already part of the foundation. Public drive remains disabled until R1–R3, cancellation reconciliation, the total drive switch, every public execution surface, and the provider KV-cache identity review are complete.
 
@@ -434,6 +434,17 @@ Order:
 
 `steer`/`followUp`/`nextRun` are tag sugar over one enqueue and always admit. `queue_update` and `LaneSnapshot.queues`/`pendingWrites` expose one identical shape: the tagged ordered inbox (clients group by tag).
 
+### Client replication surface
+
+Findings from a working RPC-shaped client replica (mini TUI exercise) fold in here. The goal is one testable contract: a remote client renders exclusively from a replicated `LaneSnapshot` and the event stream, with no side-channel getters.
+
+- **Normative reducer.** Export `reduceLaneSnapshot(snapshot, event): LaneSnapshot | { rebase: true }` from `packages/agent`. It is the single supported event fold: in-run `compaction_start`/`compaction_end` are segments and must not clear `operation` (the fold knows the open operation's kind, so no event field is needed); `run_suspend` keeps `operation` non-null with `deferred` set; only `run_end`, `navigation_end`, and `compaction_end` under a compaction-kind operation are operation-terminal. `navigation_end` returns `{ rebase: true }` because the moved tip may lie outside the replica. Conformance assertion: for every non-navigation flow, folding a `watch()` snapshot over its own event stream equals a later `watch()` snapshot — this equivalence test is what keeps the event vocabulary complete.
+- **Snapshot completeness.** `LaneSnapshot` gains `configuration: LaneConfiguration`, `lastResult?: OperationResultRecord` (replacing the bare `lastOperationId` field), a real `faulted` flag (the current hardcoded `false` is a defect), and session `stats: SessionStats` as the usage baseline (usage events already carry `totals`; the snapshot supplies the value before the first event).
+- **Replicable configuration events.** Every `config_update` variant whose value is data carries `value`/`previous` (`streamOptions`, `retryPolicy`, `compactionSettings`, `steeringMode`, `followUpMode`, plus the existing lane variants); `tools`/`resources` remain notification-only because registries are code — clients re-fetch names.
+- **Identity-based `setModel`.** `setModel` accepts `ModelIdentity` (`{ provider, modelId }`); a live `Model` object is a process-local registry concern, and an unregistered identity fails in-band at generation exactly like any registry absence.
+- **Re-basing.** `WatchHandle.resnapshot(context): Promise<LaneSnapshot>` captures a fresh snapshot on the mutation line, serialized against the same stream — the recovery path after `{ rebase: true }` with no teardown/re-subscribe choreography.
+- **Start-event timestamps.** `run_start`/`compaction_start`/`navigation_start` carry `startedAt` (operation starts: `meta.startedAt`; in-run segment starts: the commit timestamp), so folds never invent times.
+
 ### Convenience compositions and continuation
 
 - `prompt`/`skill`/`promptFromTemplate`: accept + drive; return `Result<OperationResultRecord | SuspendedRun, …>` — the record for terminal outcomes, `SuspendedRun` when the run defers.
@@ -446,7 +457,7 @@ Order:
 
 ### Focused validation
 
-One install and same-id joins; stale-id isolation; record lookup for old ids; caller cancellation before/after installation; close/fault during cooperative and non-cooperative effects; accept/drive vs convenience equivalence including continuation via the public empty-prompt request; steer-only, followUp-only, and nextRun-only continuation each start run B; both continuation race orders; abort drain-and-return including the both-orders abort/settlement race; enqueue during every state through public surfaces; full crash matrix across all 13 leaves; no unhandled detached rejection; no `SliceNotImplemented` except `watchSession`.
+One install and same-id joins; stale-id isolation; record lookup for old ids; caller cancellation before/after installation; close/fault during cooperative and non-cooperative effects; accept/drive vs convenience equivalence including continuation via the public empty-prompt request; steer-only, followUp-only, and nextRun-only continuation each start run B; both continuation race orders; abort drain-and-return including the both-orders abort/settlement race; enqueue during every state through public surfaces; full crash matrix across all 13 leaves; no unhandled detached rejection; no `SliceNotImplemented` except `watchSession`; reducer fold-equivalence across every non-navigation flow (including in-run compaction segments, suspend/resume, retry waits, and reattach mid-stream); `navigation_end` fold returns rebase and `resnapshot` restores equivalence; snapshot `configuration`/`lastResult`/`faulted`/`stats` replicate through events alone.
 
 ## 11. M9 — Documentation reconciliation
 
@@ -465,7 +476,10 @@ Update `docs/harness.md` to the implemented state; it must again be normative on
 - §4.6 abort: drain-and-return, no drained control, and the client-visible consequence — drained steer/followUp payloads exist only in the returned result, so a crash or lost response in that window loses their content permanently;
 - §5.1 lane surface and all result types; §5.5 `queue_update` and end-event payloads (`compaction_end` as a segment event with `aborted`);
 - Part 9: invariants 12–16, 21, 26 (result-record lifetime, observation via records, continuation equivalence), the new terminal-control invariant (a non-aborted terminal status implies running terminal control), and the race catalog rows touching drained items, `cancelQueued`, and continuation;
-- Appendix A glossary (Inbox, Result record, Continuation run, Boundary pass; remove Drained).
+- Appendix A glossary (Inbox, Result record, Continuation run, Boundary pass; remove Drained);
+- §5.5 event taxonomy: state explicitly which events are operation-terminal (`run_end`, `navigation_end`, compaction-kind `compaction_end`) versus segment brackets (in-run `compaction_start`/`compaction_end`) versus non-terminal lifecycle (`run_suspend` leaves the operation durably open), and name `reduceLaneSnapshot` as the normative fold;
+- §2.5 branch-scan sharp edge: `stopAtType` applies after ordering, so `oldestFirst` + `stopAtType: "compaction"` returns the oldest segment; document the canonical context read as `newestFirst` + reverse;
+- serving-layer boundary statement: tree browsing, forks, labels inventory, and session listing are deliberately not `AgentLane` surface; an RPC facade composes a Session/repository read service beside the lane (protocol work, P1).
 
 Also update `docs/runtime-simplification.md` status and remove every remaining promotion reference in the repository's docs. Grep gate:
 
@@ -535,7 +549,9 @@ Do not introduce:
 - external finalization;
 - storage rereads of authoritative control state;
 - read caches, read budgets, or generic `getValues` batching;
-- compatibility aliases for any pre-redesign durable shape.
+- compatibility aliases for any pre-redesign durable shape;
+- a `phase`/segment discriminator field on structural events — the reducer derives segment-vs-terminal from the open operation's kind;
+- tree, fork, label-inventory, or repository methods on `AgentLane` — that surface lives beside the lane, not on it.
 
 Procedure-specific writes, effect admission, settlement classification, and event construction remain visible at their call sites.
 

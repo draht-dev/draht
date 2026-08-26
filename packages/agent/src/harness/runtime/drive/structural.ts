@@ -28,7 +28,6 @@ import {
 	type LaneConfiguration,
 	type NavigationReadyToCommitOperation,
 	type NewEntry,
-	type NormalizedRetryPolicy,
 	type OperationError,
 	operationScopeOf,
 	type ResultBoundary,
@@ -41,18 +40,19 @@ import {
 	type UsageRow,
 	type Write,
 } from "../../session/types.ts";
-import {
-	branchTip,
-	deleteValue,
-	entryLabel,
-	operationPreparation,
-	pendingEntry,
-	setValue,
-} from "../../session/values.ts";
+import { branchTip, entryLabel, operationPreparation, setValue } from "../../session/values.ts";
 import type { AgentHarnessStreamOptions } from "../../types.ts";
 import type { Lane } from "../lane.ts";
-import { committedEntryEvents, readBoundedEntries, readPendingMessages } from "../transcript.ts";
+import { committedEntryEvents, readBoundedEntries } from "../transcript.ts";
 import type { ContinueOperationResult, Drive, ProcedureResult } from "../types.ts";
+import {
+	assistantReadyAtBoundary,
+	type BoundaryFinishPending,
+	boundaryPlacementEvents,
+	finishRunBoundary,
+	normalizedRetryPolicy,
+	planBoundaryInbox,
+} from "./boundary.ts";
 import { retryDelay, retryNotBefore, waitUntil } from "./retry.ts";
 import { operationCleanupWrites, operationResultRecord } from "./terminal.ts";
 
@@ -61,13 +61,6 @@ class StructuralCancelled extends Error {
 		super("Structural generation was cancelled");
 		this.name = "StructuralCancelled";
 	}
-}
-
-function normalizedRetryPolicy<TContext extends object | undefined>(lane: Lane<TContext>): NormalizedRetryPolicy {
-	const retry = lane.readConfig().retryPolicy;
-	return retry.enabled
-		? { maxAttempts: retry.maxRetries + 1, baseDelayMs: retry.baseDelayMs }
-		: { maxAttempts: 1, baseDelayMs: retry.baseDelayMs };
 }
 
 function durableFileOperations(fileOps: CompactionPreparation["fileOps"]): DurableFileOperations {
@@ -212,6 +205,8 @@ type StructuralOutcome =
 	| { kind: "declined" }
 	| { kind: "failed"; error: OperationError };
 
+type StructuralPublication = ProcedureResult | BoundaryFinishPending;
+
 async function publishStructuralOutcome<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
@@ -226,7 +221,7 @@ async function publishStructuralOutcome<TContext extends object | undefined>(
 			: undefined;
 	const published = await lane.continueOperation<
 		SummaryDecidingOperation | SummaryReadyOperation | SummaryEffectPendingOperation,
-		ProcedureResult
+		StructuralPublication
 	>(
 		capability,
 		async (state, current, meta, reader) => {
@@ -309,99 +304,56 @@ async function publishStructuralOutcome<TContext extends object | undefined>(
 						(outcome.kind === "declined" && current.task.reason === "threshold")
 					) {
 						if (terminalTipId === null) throw new SessionInvariantError("Run compaction has no Branch tip");
-						const steer = state.inbox.filter((item) => item.kind === "steer");
-						const selectedSteer = new Set(
-							(current.settings.steeringMode === "all" ? steer : steer.slice(0, 1)).map((item) => item.entryId),
-						);
-						const selected = state.inbox.filter(
-							(item) => item.kind === "write" || (item.kind === "steer" && selectedSteer.has(item.entryId)),
-						);
-						const pending = await Promise.all(
-							selected.map(async (item) => {
-								const stored = await reader.getValue(pendingEntry(item.entryId), drive.context);
-								if (stored === undefined) {
-									throw new SessionInvariantError(
-										`Pending ${item.kind} entry ${item.entryId} is missing its payload`,
-									);
-								}
-								if (item.kind === "steer" && stored.value.type !== "message") {
-									throw new SessionInvariantError(`Queued steer entry ${item.entryId} is not a message`);
-								}
-								return { item, pending: stored.value };
-							}),
-						);
-						let parentId = terminalTipId;
-						let triggerEntryId: string | undefined;
-						const entries: NewEntry[] = pending.map(({ item, pending: value }) => {
-							const entry: NewEntry =
-								value.type === "message"
-									? { id: item.entryId, parentId, type: "message", message: value.payload }
-									: {
-											id: item.entryId,
-											parentId,
-											type: "custom",
-											customType: value.customType,
-											...(value.payload === undefined ? {} : { data: value.payload }),
-										};
-							parentId = item.entryId;
-							if (
-								value.type === "message" ||
-								lane.readConfig().entryProjectors[value.customType] !== undefined
-							) {
-								triggerEntryId = item.entryId;
-							}
-							return entry;
-						});
-						const selectedIds = new Set(selected.map((item) => item.entryId));
-						const inbox = state.inbox.filter((item) => !selectedIds.has(item.entryId));
-						const queueUpdate =
-							selectedSteer.size === 0
-								? undefined
-								: await Promise.all(
-										(["steer", "followUp", "nextRun"] as const).map((kind) =>
-											readPendingMessages(
-												reader,
-												inbox.filter((item) => item.kind === kind).map((item) => item.entryId),
-												`Pending ${kind} entry`,
-												drive.context,
-											),
-										),
-									);
-						const entryWriteIndex = writes.length;
-						writes.push(
-							...entries.map((entry) => insertEntry(entry)),
-							...selected.map((item) => deleteValue(pendingEntry(item.entryId))),
-							...(entries.length === 0 ? [] : [setValue(branchTip(lane.name), parentId)]),
-						);
 						const continuation = current.task.boundary.resumeAfter.continuation;
-						const operationState: AssistantReadyOperation | CheckpointOperation =
-							triggerEntryId !== undefined || continuation.kind === "need_assistant"
-								? {
-										...operationScopeOf(current),
-										at: "assistant.ready",
-										generationContext: {
-											stepId: lane.session.idGenerator.next(),
-											triggerEntryId: triggerEntryId ?? current.task.boundary.resumeAfter.triggerEntryId,
-											configuration: state.configuration,
-											streamOptions: lane.readConfig().streamOptions,
-											retryPolicy: normalizedRetryPolicy(lane),
-											overflowRecoveryUsed:
-												triggerEntryId === undefined && continuation.kind === "need_assistant"
-													? continuation.overflowRecoveryUsed
-													: false,
-										},
-										nextAttempt: 1,
-									}
-								: {
-										...operationScopeOf(current),
-										at: "checkpoint",
-										...current.task.boundary.resumeAfter,
-									};
+						const placement = await planBoundaryInbox(
+							lane,
+							drive,
+							state,
+							current,
+							reader,
+							terminalTipId,
+							outcome.kind === "declined" && continuation.kind === "may_finish",
+						);
+						if (
+							outcome.kind === "declined" &&
+							placement.triggerEntryId === undefined &&
+							continuation.kind === "may_finish"
+						) {
+							return {
+								kind: "return",
+								result: {
+									kind: "finish_pending",
+									entryIds: placement.entries.map((entry) => entry.id),
+								} as const,
+							};
+						}
+						const placementWriteIndex = writes.length;
+						writes.push(...placement.writes);
+						let operationState: AssistantReadyOperation | CheckpointOperation;
+						if (placement.triggerEntryId !== undefined || continuation.kind === "need_assistant") {
+							const overflowRecoveryUsed =
+								placement.triggerEntryId === undefined && continuation.kind === "need_assistant"
+									? continuation.overflowRecoveryUsed
+									: false;
+							operationState = assistantReadyAtBoundary(
+								lane,
+								state,
+								current,
+								placement.triggerEntryId ?? current.task.boundary.resumeAfter.triggerEntryId,
+								overflowRecoveryUsed,
+							);
+						} else {
+							operationState = {
+								...operationScopeOf(current),
+								at: "checkpoint",
+								...current.task.boundary.resumeAfter,
+							};
+						}
 						return {
 							kind: "commit",
 							writes,
 							operationState,
-							lane: { tipId: parentId, inbox },
+							lane: { tipId: placement.tipId, inbox: placement.inbox },
 							materialize: () => ({ kind: "continue" }) as const,
 							events: (commit) => [
 								...(outcome.kind === "compaction"
@@ -415,18 +367,13 @@ async function publishStructuralOutcome<TContext extends object | undefined>(
 												status: "declined" as const,
 											},
 										]),
-								...committedEntryEvents(entries, commit, lane.name, drive.operationId, entryWriteIndex),
-								...(queueUpdate === undefined
-									? []
-									: [
-											{
-												type: "queue_update" as const,
-												lane: lane.name,
-												steer: queueUpdate[0],
-												followUp: queueUpdate[1],
-												nextRun: queueUpdate[2],
-											},
-										]),
+								...boundaryPlacementEvents(
+									placement,
+									commit,
+									placementWriteIndex,
+									lane.name,
+									drive.operationId,
+								),
 							],
 						};
 					}
@@ -563,7 +510,21 @@ async function publishStructuralOutcome<TContext extends object | undefined>(
 		},
 		drive.context,
 	);
-	return published.kind === "cancel_requested" ? { kind: "continue" } : published.value;
+	if (published.kind === "cancel_requested") return { kind: "continue" };
+	if (published.value.kind !== "finish_pending") return published.value;
+	const boundary = capability.task.boundary;
+	if (boundary.kind !== "resume_checkpoint" || boundary.resumeAfter.continuation.kind !== "may_finish") {
+		throw new SessionInvariantError("Structural finish mediation requires a resumable finish boundary");
+	}
+	return finishRunBoundary(lane, drive, capability, boundary.resumeAfter.continuation, published.value.entryIds, [
+		{
+			type: "compaction_end",
+			lane: lane.name,
+			runId: drive.operationId,
+			reason: "threshold",
+			status: "declined",
+		},
+	]);
 }
 
 async function publishStructuralReady<TContext extends object | undefined>(
@@ -1102,72 +1063,41 @@ export async function recoverStructuralGeneration<TContext extends object | unde
 	return published.kind === "cancel_requested" ? { kind: "continue" } : published.value;
 }
 
-/** Check and durably mark one run checkpoint's threshold boundary. */
-export async function runCompactionThreshold<TContext extends object | undefined>(
+/** Prepare threshold compaction only when no newer compaction already guards this trigger. */
+export async function prepareCompactionThreshold<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
 	checkpoint: CheckpointOperation,
-): Promise<ProcedureResult> {
+): Promise<ContinueOperationResult<{ taskId: string; preparation: DurableStructuralPreparation } | undefined>> {
 	const settings = checkpoint.settings.compaction;
 	const identity = lane.state.configuration.model;
 	const model = lane.models.getModel(identity.provider, identity.modelId);
-	let preparation: CompactionPreparation | undefined;
-	if (settings.enabled && model !== undefined) {
-		const entries = await readBoundedEntries(lane, drive, checkpoint);
-		if (entries.kind === "cancel_requested") return { kind: "continue" };
-		const prepared = prepareCompaction(entries.value, settings);
-		if (!prepared.ok) throw prepared.error;
-		if (prepared.value !== undefined && shouldCompact(prepared.value.tokensBefore, model.contextWindow, settings)) {
-			preparation = prepared.value;
+	if (!settings.enabled || model === undefined) return { kind: "result", value: undefined };
+	const path = await readBoundedEntries(lane, drive, checkpoint);
+	if (path.kind === "cancel_requested") return path;
+	const triggerIndex = path.value.findIndex((entry) => entry.id === checkpoint.triggerEntryId);
+	let newestCompactionIndex = -1;
+	for (let index = path.value.length - 1; index >= 0; index--) {
+		if (path.value[index]!.type === "compaction") {
+			newestCompactionIndex = index;
+			break;
 		}
 	}
-	const taskId = preparation === undefined ? undefined : lane.session.idGenerator.next();
-	const published = await lane.continueOperation(
-		checkpoint,
-		(_state, current) => {
-			const marked: CheckpointOperation = {
-				...current,
-				thresholdCheckedTriggerEntryId: current.triggerEntryId,
-			};
-			if (preparation === undefined || taskId === undefined) {
-				return {
-					kind: "commit",
-					writes: [],
-					operationState: marked,
-					materialize: () => ({ kind: "continue" }) as const,
-				};
-			}
-			const resumeAfter = {
-				continuation: marked.continuation,
-				triggerEntryId: marked.triggerEntryId,
-				thresholdCheckedTriggerEntryId: marked.thresholdCheckedTriggerEntryId,
-				...(marked.skipInboxOnce === undefined ? {} : { skipInboxOnce: marked.skipInboxOnce }),
-			};
-			const deciding: SummaryDecidingOperation = {
-				...operationScopeOf(current),
-				at: "summary.deciding",
-				task: { taskId, reason: "threshold", boundary: { kind: "resume_checkpoint", resumeAfter } },
-			};
-			return {
-				kind: "commit",
-				writes: [
-					setValue(operationPreparation(drive.operationId, taskId), durableCompactionPreparation(preparation)),
-				],
-				operationState: deciding,
-				materialize: () => ({ kind: "continue" }) as const,
-				events: () => [
-					{
-						type: "compaction_start",
-						lane: lane.name,
-						runId: drive.operationId,
-						reason: "threshold",
-					},
-				],
-			};
-		},
-		drive.context,
-	);
-	return published.kind === "cancel_requested" ? { kind: "continue" } : published.value;
+	if (newestCompactionIndex >= triggerIndex && newestCompactionIndex !== -1) {
+		return { kind: "result", value: undefined };
+	}
+	if (triggerIndex === -1) {
+		throw new SessionInvariantError(`Checkpoint trigger ${checkpoint.triggerEntryId} is missing from its Branch`);
+	}
+	const prepared = prepareCompaction(path.value, settings);
+	if (!prepared.ok) throw prepared.error;
+	if (prepared.value === undefined || !shouldCompact(prepared.value.tokensBefore, model.contextWindow, settings)) {
+		return { kind: "result", value: undefined };
+	}
+	return {
+		kind: "result",
+		value: { taskId: lane.session.idGenerator.next(), preparation: durableCompactionPreparation(prepared.value) },
+	};
 }
 
 /** Prepare one overflow compaction before the response settlement transaction. */

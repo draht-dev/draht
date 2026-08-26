@@ -260,16 +260,17 @@ describe("runtime generation checkpoint", () => {
 		}, BACKGROUND_CONTEXT);
 		const run = currentRun(fixture.lane);
 		if (run.at !== "checkpoint") throw new Error("missing checkpoint");
+		fixture.storage.clearCommitAttempts();
 
 		await runCheckpoint(fixture.lane, fixture.drive, run);
 
-		const drained = currentRun(fixture.lane);
-		if (drained.at !== "checkpoint") throw new Error("missing drained checkpoint");
+		expect(fixture.storage.getCommitAttempts()).toHaveLength(1);
+		const routed = currentRun(fixture.lane);
+		if (routed.at !== "assistant.ready") throw new Error("pending writes did not route to generation");
 		expect(fixture.lane.state.tipId).toBe(customId);
-		expect(drained.triggerEntryId).toBe(messageId);
-		expect(drained).toMatchObject({
-			continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
-			skipInboxOnce: true,
+		expect(routed.generationContext).toMatchObject({
+			triggerEntryId: messageId,
+			overflowRecoveryUsed: false,
 		});
 		expect(fixture.lane.state.inbox).toEqual([]);
 		await expectProjectionRestores(fixture);
@@ -284,8 +285,6 @@ describe("runtime generation checkpoint", () => {
 		const checkpoint: CheckpointOperation = {
 			...current,
 			continuation: { kind: "may_finish", includeFinalAssistant: false },
-			thresholdCheckedTriggerEntryId: current.triggerEntryId,
-			skipInboxOnce: false,
 		};
 		await fixture.lane.command((state) => {
 			const operation = state.operation;
@@ -310,21 +309,81 @@ describe("runtime generation checkpoint", () => {
 				materialize: () => undefined,
 			};
 		}, BACKGROUND_CONTEXT);
+		fixture.hooks.on("before_run_end", () => ({ followUp: "continue after custom write" }));
 
-		await runCheckpoint(fixture.lane, fixture.drive, checkpoint);
+		expect(await runCheckpoint(fixture.lane, fixture.drive, checkpoint)).toEqual({ kind: "continue" });
 
-		const drained = currentRun(fixture.lane);
-		if (drained.at !== "checkpoint") throw new Error("missing drained checkpoint");
-		expect(fixture.lane.state.tipId).toBe(customId);
-		expect(drained).toMatchObject({
-			continuation: checkpoint.continuation,
-			triggerEntryId: checkpoint.triggerEntryId,
-			thresholdCheckedTriggerEntryId: checkpoint.triggerEntryId,
-			skipInboxOnce: false,
+		const ready = currentRun(fixture.lane);
+		if (ready.at !== "assistant.ready") throw new Error("hook follow-up did not route to generation");
+		const followUpId = ready.generationContext.triggerEntryId;
+		expect(followUpId).toBe(fixture.lane.state.tipId);
+		expect(await fixture.session.getEntry(customId, BACKGROUND_CONTEXT)).toMatchObject({ type: "custom" });
+		expect(await fixture.session.getEntry(followUpId, BACKGROUND_CONTEXT)).toMatchObject({
+			parentId: customId,
+			type: "message",
+			message: { role: "user", content: "continue after custom write" },
 		});
 		expect(fixture.lane.state.inbox).toEqual([]);
 		expect(await fixture.session.getValue(storedValues.pendingEntry(customId), BACKGROUND_CONTEXT)).toBeUndefined();
 		await expectProjectionRestores(fixture);
+	});
+
+	it("drops a stale finish-hook follow-up when input arrives during the hook", async () => {
+		const fixture = await createFixture();
+		await startFixtureRun(fixture);
+		const current = currentRun(fixture.lane);
+		if (current.at !== "checkpoint") throw new Error("missing checkpoint");
+		const checkpoint: CheckpointOperation = {
+			...current,
+			continuation: { kind: "may_finish", includeFinalAssistant: false },
+		};
+		await fixture.lane.command((state) => {
+			const operation = state.operation;
+			if (operation === null) throw new Error("missing operation");
+			return {
+				kind: "commit",
+				writes: [storedValues.setValue(storedValues.operationState(operationId), checkpoint)],
+				next: { ...state, operation: { meta: operation.meta, state: checkpoint } },
+				materialize: () => undefined,
+			};
+		}, BACKGROUND_CONTEXT);
+		const hookStarted = deferred();
+		const releaseHook = deferred();
+		fixture.hooks.on("before_run_end", async () => {
+			hookStarted.resolve();
+			await releaseHook.promise;
+			return { followUp: "stale hook follow-up" };
+		});
+
+		const running = runCheckpoint(fixture.lane, fixture.drive, checkpoint);
+		await hookStarted.promise;
+		await fixture.lane.command((state) => {
+			const inbox = [...state.inbox, { entryId: "steer-during-finish", kind: "steer" as const }];
+			return {
+				kind: "commit",
+				writes: [
+					storedValues.setValue(storedValues.pendingEntry("steer-during-finish"), {
+						type: "message",
+						payload: { role: "user", content: "new input", timestamp: 4 },
+					}),
+					storedValues.setValue(storedValues.laneState("main"), {
+						currentOperationId: operationId,
+						lastOperationId: null,
+						inbox,
+					}),
+				],
+				next: { ...state, inbox },
+				materialize: () => undefined,
+			};
+		}, BACKGROUND_CONTEXT);
+		releaseHook.resolve();
+
+		expect(await running).toEqual({ kind: "continue" });
+		const ready = currentRun(fixture.lane);
+		if (ready.at !== "assistant.ready") throw new Error("new input did not replace stale finish decision");
+		expect(ready.generationContext.triggerEntryId).toBe("steer-during-finish");
+		expect(fixture.lane.state.tipId).toBe("steer-during-finish");
+		expect((await fixture.session.getEntry("steer-during-finish", BACKGROUND_CONTEXT))?.type).toBe("message");
 	});
 });
 

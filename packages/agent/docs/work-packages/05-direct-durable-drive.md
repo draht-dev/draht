@@ -389,12 +389,13 @@ Create `src/harness/runtime/drive/reconcile.ts`, `src/harness/runtime/drive.ts`,
 
 Package-private expected-id primitive:
 
-1. synchronously `beginAbort` on a matching live Drive;
-2. one commit on the Session line: `control = cancel_requested` (with no drained fields) **plus** removal of steer/followUp-tagged ids from the lane inbox and deletion of their `pendingEntry` values; payloads are read in the same mutation and returned; nextRun/write items stay;
-3. `signalAbort` after the commit;
-4. return once cancellation is durable. Repeat calls observe the marker, drain nothing further, and report `newlyRequested: false`.
+1. reject with `OperationMismatch` when the expected id is not the current durable operation, including when that id already has a settled result record;
+2. synchronously `beginAbort` on a matching live Drive;
+3. one commit on the Session line: `control = cancel_requested` (with no drained fields) **plus** removal of steer/followUp-tagged ids from the lane inbox and deletion of their `pendingEntry` values; payloads are read in the same mutation and returned; nextRun/write items stay;
+4. `signalAbort` after the commit;
+5. after a newly requested abort commits, publish `{ type: "operation_abort", operationId, steer, followUp }` and return once cancellation is durable. This family-neutral event replaces `run_abort`/`runId`; the lane snapshot already identifies the operation kind. Repeat calls against the same current cancelled operation publish nothing, drain nothing further, and report `newlyRequested: false`.
 
-With no Drive it commits the same marker and starts no pass. There is no `control.drained*`; the drained payloads exist only in the returned result (accepted loss: a crash inside the abort window loses their content).
+With no Drive but a matching current durable operation, it commits the same marker and starts no pass. There is no `control.drained*`; the drained payloads exist only in the returned result (accepted loss: a crash inside the abort window loses their content).
 
 ### Reconciliation
 
@@ -405,11 +406,13 @@ Checked before `before_drive` and ordinary dispatch; a single switch over the 13
 - structural process-local results (discarded unless already atomically published);
 - cancelled summary boundaries finishing `aborted` without taking their `ResultBoundary` continuation;
 - retry waits, checkpoints, and suspended deferred work;
-- best-effort deferred-provider cancellation;
+- best-effort deferred-provider cancellation using the Drive's close-only signal, never its already-triggered operation-abort gate;
 - the aborted terminal transaction (result record `status: "aborted"`);
 - the terminal-control invariant test: no terminal path commits a non-aborted status under cancelled control (this keeps §10's continuation rule decidable from the record alone).
 
 Queued lane-inbox items are **not** applied or deleted by reconciliation; nextRun/write items simply remain queued.
+
+Each Drive owns a private close controller and exposes its signal to mandatory cleanup. `closeGate()` aborts that controller on harness close or fault; operation abort does not. Deferred-provider cancellation uses this close-only signal, so the cleanup request can start after durable operation cancellation but cannot outlive harness shutdown. Do not add a harness-global cancellation controller.
 
 ### Total switch
 

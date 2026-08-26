@@ -150,6 +150,14 @@ Path/identity/close items that share writer ownership belong in WP07. Determinis
 
 Define cross-backend query-limit semantics in agent conformance, then chunk SQLite ID lookups. This is a storage-contract hardening package, not part of lease fencing.
 
+### Harness contract and conformance closure
+
+- The public `OperationStatus` includes `"running"`, but lane inspection, snapshots, and `reduceLaneSnapshot` currently produce only `"open"` or `"aborting"`. Define and implement its producer or remove the dead variant.
+- The pre-rewrite abort contract bound/published `operation_abort` before resolving the cancellation promise and signalling the live gate. Current `Lane.command()` materializes the result — resolving/signalling — before constructing and binding the event batch, although it still binds recipients before releasing the Session mutation line. Decide whether to change the implementation or retain/document the current no-interleaving order; add an explicit ordering test.
+- Part 9 of `harness.md` is the required conformance matrix. Existing focused tests cover the graph extensively, including cancellation reconciliation over all 13 leaves, but there is no audited one-to-one proof that every close/reopen leaf case and every race row has both deterministic orders. Audit the matrix and add only the missing cases rather than claiming blanket completion.
+
+Keep this package separate from telemetry, RemoteSession, and M11; it is local contract/test closure.
+
 ### Disabled real worker persistence regression
 
 `packages/coding-agent/test/experimental-remote-runtime.test.ts` still skips “completes and persists a prompt through the worker-owned Harness” with the obsolete note “Re-enable with runtime no-tool execution.” No-tool execution now exists. Re-enable or replace it with a deterministic faux-provider real-worker persistence test; do not use a real paid provider.
@@ -229,15 +237,16 @@ These are not blockers for the durable Harness:
 The order is by data safety first, then dependencies. Independent tracks may proceed in parallel only when they do not edit the same contracts.
 
 1. **WP07 — SQLite ownership fencing.** Atomic lease assertion with commits, exclusive deletion, path/source identity, close draining, and documentation correction.
-2. **Remote Session decision (decision only).** Resolve the false normative boundary early. If process-local wins, repair the docs. If raw RemoteSession wins, later create a dedicated protocol/client/server/worker package; do not fold it into telemetry or R12.
-3. **Client watch/subscription staleness** and **repository lifecycle contract.** Small independent correctness packages; complete them before expanding server/worker lifecycle semantics. The lifecycle package must also address Memory's fail-fast repository close.
-4. **JSONL snapshot compaction.** Implement the already-normative physical reclamation path and metrics.
-5. **M11 durable frame volume.** Memory/SQLite measurement can start earlier; set final JSONL budgets only with compaction measured, and preserve all recovery boundaries.
-6. **R12 session-wide watch.** Complete the only Harness method stub before building revisioned Transcript/session-wide remote observation.
-7. **Telemetry, if retained:** reconcile schemas, then local instrumentation, then RPC propagation, then an optional exporter. RPC propagation follows the Remote Session/product-boundary decision.
-8. **SQLite branch/fork/query performance hardening.** Keep separate from lease correctness and require benchmarks.
-9. **S3 search.** Resolve its API/filter/cursor decisions, then implement catch-up and the standalone FTS projection.
-10. **R11 migrations.** Activate immediately before the first incompatible stabilized durable schema change, not earlier.
+2. **Harness contract/conformance closure.** Resolve `OperationStatus.running`, abort signal/event binding order, and the Part 9 coverage matrix.
+3. **Remote Session decision (decision only).** Resolve the false normative boundary early. If process-local wins, repair the docs. If raw RemoteSession wins, later create a dedicated protocol/client/server/worker package; do not fold it into telemetry or R12.
+4. **Client watch/subscription staleness** and **repository lifecycle contract.** Small independent correctness packages; complete them before expanding server/worker lifecycle semantics. The lifecycle package must also address Memory's fail-fast repository close.
+5. **JSONL snapshot compaction.** Implement the already-normative physical reclamation path and metrics.
+6. **M11 durable frame volume.** Memory/SQLite measurement can start earlier; set final JSONL budgets only with compaction measured, and preserve all recovery boundaries.
+7. **R12 session-wide watch.** Complete the only Harness method stub before building revisioned Transcript/session-wide remote observation.
+8. **Telemetry, if retained:** reconcile schemas, then local instrumentation, then RPC propagation, then an optional exporter. RPC propagation follows the Remote Session/product-boundary decision.
+9. **SQLite branch/fork/query performance hardening.** Keep separate from lease correctness and require benchmarks.
+10. **S3 search.** Resolve its API/filter/cursor decisions, then implement catch-up and the standalone FTS projection.
+11. **R11 migrations.** Activate immediately before the first incompatible stabilized durable schema change, not earlier.
 
 ## Stop conditions for roadmap accuracy
 

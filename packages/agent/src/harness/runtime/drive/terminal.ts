@@ -42,11 +42,6 @@ export async function operationCleanupWrites(
 			if (call.status === "outcome_ready") pendingIds.add(call.resultEntryId);
 		}
 	}
-	if (state.control.status === "cancel_requested") {
-		for (const id of state.control.drainedSteer) pendingIds.add(id);
-		for (const id of state.control.drainedFollowUp) pendingIds.add(id);
-	}
-
 	let frameDelete: Write | undefined;
 	if (state.at === "assistant.effect_pending" || state.at === "deferred.effect_pending") {
 		frameDelete = deleteList(pendingAssistantFrames(operationId, state.responseEntryId));

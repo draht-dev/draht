@@ -1,6 +1,6 @@
 # WP05 — Direct durable drive
 
-**Status: M5 complete; M6 structural foundation committed; R1a lane-owned inbox relocation, R2 record-only outcomes, reviewed R3 family-neutral leaves, and the reviewed R1b atomic boundary planner implemented; M7 reconciliation next, then M8 (public surfaces), M9 (documentation reconciliation), and M10 (provider KV-cache identity review).**
+**Status: M5 complete; M6 structural coverage complete; R1a lane-owned inbox relocation, R2 record-only outcomes, reviewed R3 family-neutral leaves, the reviewed R1b atomic boundary planner, and reviewed M7 cancellation reconciliation/total dispatch implemented; M8 public surfaces next, then M9 documentation reconciliation and M10 provider KV-cache identity review.**
 
 WP06's Session/Branch/Lane separation is already part of the foundation. Public drive remains disabled until R1–R3, cancellation reconciliation, the total drive switch, every public execution surface, and the provider KV-cache identity review are complete.
 
@@ -381,7 +381,7 @@ Everything the M6 foundation covered, re-expressed over neutral leaves, plus: re
 
 ### Goal
 
-Make the internal graph total without public wiring.
+**Implemented and reviewed.** Make the internal graph total without public wiring.
 
 Create `src/harness/runtime/drive/reconcile.ts`, `src/harness/runtime/drive.ts`, and focused reconciliation and switch tests.
 

@@ -1,6 +1,7 @@
 import { type Api, type ImageContent, type Model, type Models, reduceAssistantMessageFrames } from "@draht/ai";
 import type { AgentMessage, ThinkingLevel } from "../../types.ts";
 import type {
+	AbortRequestResult,
 	AgentLane,
 	HarnessEvent,
 	LaneConfigEventPayload,
@@ -596,6 +597,104 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 		throw new SliceNotImplemented("drive");
 	}
 
+	/** Package-private durable cancellation primitive. Public exposure remains guarded until M8. */
+	async requestOperationAbort(operationId: string, context: Context): Promise<AbortRequestResult> {
+		if (this.closedError instanceof HarnessClosed) {
+			return Result.err(new Closed({ message: this.closedError.message }));
+		}
+		this.assertOpen();
+
+		const drive = this.activeDrive?.operationId === operationId ? this.activeDrive : undefined;
+		let resolveCancellation!: () => void;
+		let rejectCancellation!: (error: unknown) => void;
+		const cancellation = new Promise<void>((resolve, reject) => {
+			resolveCancellation = resolve;
+			rejectCancellation = reject;
+		});
+		void cancellation.catch(() => {});
+		drive?.beginAbort(cancellation);
+		let gateSettled = false;
+		const settleGate = (signal: boolean): void => {
+			if (gateSettled) return;
+			gateSettled = true;
+			resolveCancellation();
+			if (signal) drive?.signalAbort();
+		};
+
+		try {
+			const result = await this.command<AbortRequestResult>(async (state, reader) => {
+				const operation = state.operation;
+				if (operation?.meta.operationId !== operationId) {
+					return {
+						kind: "return",
+						result: Result.err(
+							this.mismatch(operationId, operation?.meta.operationId ?? null, state.lastOperationId),
+						),
+					};
+				}
+				if (operation.state.control.status === "cancel_requested") {
+					return {
+						kind: "return",
+						result: Result.ok({ operationId, newlyRequested: false, steer: [], followUp: [] }),
+					};
+				}
+
+				const removed = state.inbox.filter((item) => item.kind === "steer" || item.kind === "followUp");
+				const payloads = await Promise.all(
+					removed.map(async (item) => {
+						const stored = await reader.getValue(pendingEntry(item.entryId), context);
+						if (stored?.value.type !== "message") {
+							throw new SessionInvariantError(
+								`Pending ${item.kind} entry ${item.entryId} is missing its message`,
+							);
+						}
+						return { item, message: stored.value.payload };
+					}),
+				);
+				const steer = payloads.filter(({ item }) => item.kind === "steer").map(({ message }) => message);
+				const followUp = payloads.filter(({ item }) => item.kind === "followUp").map(({ message }) => message);
+				const removedIds = new Set(removed.map((item) => item.entryId));
+				const inbox = state.inbox.filter((item) => !removedIds.has(item.entryId));
+				const operationState: OperationState = {
+					...operation.state,
+					control: { status: "cancel_requested", requestedAt: Date.now() },
+				};
+				return {
+					kind: "commit",
+					writes: [
+						...removed.map((item) => deleteValue(pendingEntry(item.entryId))),
+						setValue(operationStateValue(operationId), operationState),
+						setValue(laneStateValue(this.name), {
+							currentOperationId: operationId,
+							lastOperationId: state.lastOperationId,
+							inbox,
+						}),
+					],
+					next: { ...state, inbox, operation: { meta: operation.meta, state: operationState } },
+					materialize: () => {
+						settleGate(true);
+						return Result.ok({ operationId, newlyRequested: true, steer, followUp });
+					},
+					events: () => [
+						{
+							type: "operation_abort",
+							operationId,
+							steer,
+							followUp,
+							lane: this.name,
+						},
+					],
+				};
+			}, context);
+			// A fresh Drive may observe an already-durable marker; pull its gate on the repeat path too.
+			settleGate(result.ok && result.value.newlyRequested === false);
+			return result;
+		} catch (error) {
+			if (!gateSettled) rejectCancellation(error);
+			throw error;
+		}
+	}
+
 	async requestAbort(..._args: Parameters<AgentLane["requestAbort"]>): Promise<never> {
 		throw new SliceNotImplemented("requestAbort");
 	}
@@ -889,23 +988,6 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 							break;
 					}
 
-					const drained =
-						operation.state.control.status === "cancel_requested"
-							? {
-									steer: await readPendingMessages(
-										reader,
-										operation.state.control.drainedSteer,
-										"Drained steer entry",
-										context,
-									),
-									followUp: await readPendingMessages(
-										reader,
-										operation.state.control.drainedFollowUp,
-										"Drained follow-up entry",
-										context,
-									),
-								}
-							: undefined;
 					operationSnapshot = {
 						id: operation.meta.operationId,
 						kind: operation.meta.intent.kind,
@@ -913,7 +995,6 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 						status: operation.state.control.status === "cancel_requested" ? "aborting" : "open",
 						...(retry === undefined ? {} : { retry }),
 						...(deferred === undefined ? {} : { deferred }),
-						...(drained === undefined ? {} : { drained }),
 						...(streamingMessage === undefined ? {} : { streamingMessage }),
 						runningTools,
 					};
@@ -1049,6 +1130,7 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 
 	seal(error: Error): void {
 		this.closedError ??= error;
+		this.activeDrive?.closeGate(error);
 	}
 
 	assertOpen(): void {

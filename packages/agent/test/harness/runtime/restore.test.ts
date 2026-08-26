@@ -216,9 +216,29 @@ describe("runtime lane restore", () => {
 				accepted: true,
 			},
 			{
+				intent: { kind: "navigation", targetId: "target", summarize: false },
+				state: { ...operationScope(), at: "navigation.ready_to_commit", targetId: "different" },
+				accepted: false,
+			},
+			{
+				intent: { kind: "navigation", targetId: "target", summarize: false },
+				state: summaryState(navigation),
+				accepted: false,
+			},
+			{
 				intent: { kind: "navigation", targetId: "target", summarize: true },
 				state: summaryState(navigation),
 				accepted: true,
+			},
+			{
+				intent: { kind: "navigation", targetId: "different", summarize: true },
+				state: summaryState(navigation),
+				accepted: false,
+			},
+			{
+				intent: { kind: "navigation", targetId: "target", summarize: true },
+				state: { ...operationScope(), at: "navigation.ready_to_commit", targetId: "target" },
+				accepted: false,
 			},
 			{
 				intent: { kind: "navigation", targetId: "target", summarize: true },

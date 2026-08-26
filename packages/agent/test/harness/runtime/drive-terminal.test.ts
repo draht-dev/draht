@@ -114,16 +114,11 @@ describe("runtime terminal cleanup mechanics", () => {
 			usageId: "usage",
 			intendedOutputLimit: 100,
 			contextWindow: 1_000,
-			control: {
-				status: "cancel_requested",
-				requestedAt: 2,
-				drainedSteer: ["drained-steer"],
-				drainedFollowUp: ["drained-follow"],
-			},
+			control: { status: "cancel_requested", requestedAt: 2 },
 		};
 		await seedLeftovers(session, operationId, state);
 		await commit(session, [
-			...["steer", "follow", "write", "drained-steer", "drained-follow", "next"].map((id) =>
+			...["steer", "follow", "write", "next"].map((id) =>
 				storedValues.setValue(storedValues.pendingEntry(id), {
 					type: "custom",
 					customType: "test",
@@ -157,8 +152,6 @@ describe("runtime terminal cleanup mechanics", () => {
 			"value:delete:pi.op.preparation:run:task",
 			"value:delete:pi.pending.tool_output:run:invocation",
 			"list:delete:pi.pending.assistant_frame:run:response",
-			"value:delete:pi.pending.entry:drained-steer",
-			"value:delete:pi.pending.entry:drained-follow",
 		]);
 		await commit(session, writes);
 		for (const id of ["steer", "follow", "write", "next"]) {

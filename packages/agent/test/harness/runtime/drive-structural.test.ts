@@ -1,5 +1,5 @@
 import { createModels, fauxAssistantMessage, fauxProvider, type MutableModels } from "@draht/ai";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HarnessEvent, WatchHandle } from "../../../src/harness/agent-harness.ts";
 import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/compaction.ts";
 import { BACKGROUND_CONTEXT } from "../../../src/harness/context.ts";
@@ -269,12 +269,7 @@ async function cancelOperation(fixture: Fixture): Promise<void> {
 		if (operation === null) throw new Error("fixture has no operation");
 		const state: OperationState = {
 			...operation.state,
-			control: {
-				status: "cancel_requested",
-				requestedAt: 2,
-				drainedSteer: [],
-				drainedFollowUp: [],
-			},
+			control: { status: "cancel_requested", requestedAt: 2 },
 		};
 		return {
 			kind: "commit",
@@ -286,6 +281,7 @@ async function cancelOperation(fixture: Fixture): Promise<void> {
 }
 
 afterEach(async () => {
+	vi.useRealTimers();
 	for (const session of sessions.splice(0)) await session.close(BACKGROUND_CONTEXT);
 });
 
@@ -373,6 +369,29 @@ describe("runtime structural drive", () => {
 		if (ready.at !== "assistant.ready") throw new Error("newer compaction did not guard threshold re-entry");
 		expect(ready.generationContext.triggerEntryId).toBe("trigger");
 		expect(fixture.events.some((event) => event.type === "compaction_start")).toBe(false);
+	});
+
+	it("rejects a missing threshold trigger when no newer compaction guards it", async () => {
+		const fixture = await createFixture();
+		const model = fixture.faux.getModel();
+		const checkpoint: CheckpointOperation = {
+			...runScope({ enabled: true, reserveTokens: model.contextWindow, keepRecentTokens: 1 }),
+			at: "checkpoint",
+			continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
+			triggerEntryId: "missing-trigger",
+		};
+		await installOperation(
+			fixture,
+			checkpoint,
+			{ kind: "run", promptEntryIds: [] },
+			{
+				entries: [{ id: "tip", parentId: null, type: "message", message: user("history") }],
+			},
+		);
+
+		await expect(runCheckpoint(fixture.lane, fixture.drive, checkpoint)).rejects.toThrow(
+			"Checkpoint trigger missing-trigger is missing from its Branch",
+		);
 	});
 
 	it("finishes a may-finish run directly after threshold decline", async () => {
@@ -1026,11 +1045,13 @@ describe("runtime structural drive", () => {
 		expect(standalone.lane.state.operation).toBeNull();
 	});
 
-	it("durably schedules retryable structural failures and exposes the retry wait", async () => {
+	it("durably brackets a delayed structural retry through success", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(1_000);
 		const fixture = await createFixture();
 		const ready = summaryReady(runScope(), standaloneCompactionTask(), fixture.configuration, {
 			maxAttempts: 2,
-			baseDelayMs: 10_000,
+			baseDelayMs: 10,
 		});
 		await installOperation(
 			fixture,
@@ -1058,7 +1079,60 @@ describe("runtime structural drive", () => {
 				notBefore: retry.notBefore,
 			},
 		});
-		expect(fixture.events.map((event) => event.type)).toContain("retry_scheduled");
+		vi.setSystemTime(retry.notBefore);
+		expect(await runStructuralRetryWait(fixture.lane, fixture.drive, retry)).toEqual({ kind: "continue" });
+		const second = currentState(fixture);
+		if (second.at !== "summary.ready") throw new Error("elapsed retry did not become ready");
+		fixture.faux.setResponses([fauxAssistantMessage("summary")]);
+		expect(await runStructuralGeneration(fixture.lane, fixture.drive, second)).toMatchObject({
+			kind: "settled",
+			outcome: { status: "completed" },
+		});
+		expect(
+			fixture.events
+				.filter((event) => event.type.startsWith("retry_"))
+				.map((event) => ({ type: event.type, ...("success" in event ? { success: event.success } : {}) })),
+		).toEqual([{ type: "retry_scheduled" }, { type: "retry_start" }, { type: "retry_end", success: true }]);
+	});
+
+	it("closes an exhausted structural retry with its final error", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(2_000);
+		const fixture = await createFixture();
+		const ready = summaryReady(runScope(), standaloneCompactionTask(), fixture.configuration, {
+			maxAttempts: 2,
+			baseDelayMs: 10,
+		});
+		await installOperation(
+			fixture,
+			ready,
+			{ kind: "compaction" },
+			{
+				entries: [{ id: "tip", parentId: null, type: "message", message: user("history") }],
+				preparation: { taskId: "task", value: compactionPreparation() },
+			},
+		);
+		fixture.faux.setResponses([
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "rate limit exceeded" }),
+		]);
+		await runStructuralGeneration(fixture.lane, fixture.drive, ready);
+		const retry = currentState(fixture);
+		if (retry.at !== "summary.retry_wait") throw new Error("retryable failure did not wait");
+		vi.setSystemTime(retry.notBefore);
+		await runStructuralRetryWait(fixture.lane, fixture.drive, retry);
+		const second = currentState(fixture);
+		if (second.at !== "summary.ready") throw new Error("elapsed retry did not become ready");
+		fixture.faux.setResponses([
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "rate limit exceeded" }),
+		]);
+
+		expect(await runStructuralGeneration(fixture.lane, fixture.drive, second)).toMatchObject({
+			kind: "settled",
+			outcome: { status: "failed" },
+		});
+		expect(fixture.events.filter((event) => event.type === "retry_end")).toMatchObject([
+			{ attempt: 2, success: false, finalError: expect.stringContaining("rate limit exceeded") },
+		]);
 	});
 
 	it("finishes a standalone structural failure at the retry cap", async () => {
@@ -1087,6 +1161,37 @@ describe("runtime structural drive", () => {
 		});
 		expect(fixture.lane.state.operation).toBeNull();
 		expect(fixture.events.map((event) => event.type)).not.toContain("retry_scheduled");
+	});
+
+	it("rejects invalid unsummarized navigation state without committing", async () => {
+		for (const invalid of ["missing", "source", "root_label"] as const) {
+			const fixture = await createFixture();
+			const targetId = invalid === "missing" ? "missing" : invalid === "source" ? "source" : null;
+			const navigation = {
+				...runScope(),
+				at: "navigation.ready_to_commit",
+				targetId,
+				...(invalid === "root_label" ? { label: "invalid" } : {}),
+			} as const;
+			await installOperation(
+				fixture,
+				navigation,
+				{
+					kind: "navigation",
+					targetId,
+					summarize: false,
+					...(invalid === "root_label" ? { label: "invalid" } : {}),
+				},
+				{
+					entries: [{ id: "source", parentId: null, type: "message", message: user("source") }],
+					tipId: "source",
+				},
+			);
+
+			await expect(commitNavigation(fixture.lane, fixture.drive, navigation)).rejects.toThrow();
+			expect(fixture.storage.getCommitAttempts()).toEqual([]);
+			expect(fixture.lane.state.tipId).toBe("source");
+		}
 	});
 
 	it("moves an unsummarized navigation and cleans up in one terminal transaction", async () => {
@@ -1275,6 +1380,48 @@ describe("runtime structural drive", () => {
 				.flat()
 				.some((write) => write.kind === "usage"),
 		).toBe(false);
+		expect(fixture.events.at(-1)).toMatchObject({
+			type: "retry_scheduled",
+			attempt: 2,
+			recovery: true,
+		});
+	});
+
+	it("terminal-fails an orphaned structural attempt at the retry cap", async () => {
+		const fixture = await createFixture();
+		const effect = {
+			...runScope(),
+			at: "summary.effect_pending",
+			task: standaloneCompactionTask(),
+			summaryContext: {
+				resultEntryId: "summary-entry",
+				configuration: fixture.configuration,
+				streamOptions: {},
+				retryPolicy: { maxAttempts: 1, baseDelayMs: 10 },
+			},
+			attempt: 1,
+			request: { index: 0, usageId: "abandoned-usage" },
+			usageIds: [],
+		} satisfies SummaryEffectPendingOperation;
+		await installOperation(
+			fixture,
+			effect,
+			{ kind: "compaction" },
+			{
+				entries: [{ id: "tip", parentId: null, type: "message", message: user("history") }],
+				preparation: { taskId: "task", value: compactionPreparation() },
+			},
+		);
+
+		expect(await recoverStructuralGeneration(fixture.lane, fixture.drive, effect)).toMatchObject({
+			kind: "settled",
+			outcome: {
+				status: "failed",
+				error: { code: "structural_interrupted" },
+			},
+		});
+		expect(fixture.lane.state.operation).toBeNull();
+		expect(fixture.events.map((event) => event.type)).not.toContain("retry_scheduled");
 	});
 
 	it("rejects a preparation whose durable kind contradicts the structural state", async () => {

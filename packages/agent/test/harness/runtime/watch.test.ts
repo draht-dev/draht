@@ -142,7 +142,7 @@ describe("runtime lane watch", () => {
 		second.unsubscribe();
 	});
 
-	it("dereferences queues, pending writes, deferred handles, and abort drains", async () => {
+	it("dereferences queues, pending writes, and deferred handles", async () => {
 		const session = await createSession();
 		const handle = { provider: "provider", modelId: "model", api: "test", id: "deferred" };
 		const sourceMessage = fauxAssistantMessage([], { stopReason: "deferred", deferred: handle });
@@ -151,8 +151,6 @@ describe("runtime lane watch", () => {
 			steer: "steer",
 			follow: "follow",
 			write: "write",
-			drainedSteer: "drained-steer",
-			drainedFollow: "drained-follow",
 		};
 		const payload = (content: string) => ({
 			type: "message" as const,
@@ -160,12 +158,7 @@ describe("runtime lane watch", () => {
 		});
 		const operationId = session.idGenerator.next();
 		const state: OperationState = {
-			...runScope({
-				status: "cancel_requested",
-				requestedAt: 2,
-				drainedSteer: [ids.drainedSteer],
-				drainedFollowUp: [ids.drainedFollow],
-			}),
+			...runScope({ status: "cancel_requested", requestedAt: 2 }),
 			at: "deferred.suspended",
 			stepId: "step",
 			sourceEntryId: "source",
@@ -216,10 +209,6 @@ describe("runtime lane watch", () => {
 			id: operationId,
 			status: "aborting",
 			deferred: { handle, poll: 3 },
-			drained: {
-				steer: [{ entryId: ids.drainedSteer }],
-				followUp: [{ entryId: ids.drainedFollow }],
-			},
 			runningTools: [],
 		});
 		watch.unsubscribe();

@@ -212,7 +212,6 @@ export interface LaneSnapshot {
 		status: OperationStatus;
 		retry?: { attempt: number; maxAttempts: number; nextAttemptAt: number };
 		deferred?: { handle: DeferredHandle; poll: number };
-		drained?: { steer: QueuedItem[]; followUp: QueuedItem[] };
 		streamingMessage?: AssistantMessage;
 		runningTools: {
 			toolCallId: string;
@@ -241,7 +240,7 @@ export type HarnessEventPayload =
 	| { type: "run_start"; runId: string }
 	| { type: "run_resume"; runId: string }
 	| { type: "run_suspend"; runId: string; reason: "deferred"; deferred: DeferredHandle }
-	| { type: "run_abort"; runId: string; steer: AgentMessage[]; followUp: AgentMessage[] }
+	| { type: "operation_abort"; operationId: string; steer: AgentMessage[]; followUp: AgentMessage[] }
 	| ({ type: "run_end"; runId: string; fromTipId: string | null; tipId: string | null } & (
 			| { status: "completed" | "aborted"; error?: never }
 			| { status: "failed"; error: OperationError }

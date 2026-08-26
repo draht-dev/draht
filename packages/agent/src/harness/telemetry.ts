@@ -164,7 +164,7 @@ const EVENT_TYPES = [
 	"run_start",
 	"run_resume",
 	"run_suspend",
-	"run_abort",
+	"operation_abort",
 	"run_end",
 	"fault",
 	"handler_error",

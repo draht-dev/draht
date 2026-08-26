@@ -397,7 +397,7 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 		| "run_start"
 		| "run_resume"
 		| "run_suspend"
-		| "run_abort"
+		| "operation_abort"
 		| "run_end"
 		| "fault"
 		| "handler_error"

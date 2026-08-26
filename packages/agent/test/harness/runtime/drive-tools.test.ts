@@ -136,9 +136,7 @@ async function createFixture(options: FixtureOptions): Promise<Fixture> {
 		}));
 	const run: ToolsOperation = {
 		at: "tools",
-		control: options.cancelled
-			? { status: "cancel_requested", requestedAt: 30, drainedSteer: [], drainedFollowUp: [] }
-			: { status: "running" },
+		control: options.cancelled ? { status: "cancel_requested", requestedAt: 30 } : { status: "running" },
 		settings: {
 			compaction: DEFAULT_COMPACTION_SETTINGS,
 			steeringMode: "all",
@@ -594,7 +592,7 @@ describe("durable tool batch", () => {
 			if (operation === null) throw new Error("missing operation");
 			const nextRun: OperationState = {
 				...operation.state,
-				control: { status: "cancel_requested", requestedAt: 40, drainedSteer: [], drainedFollowUp: [] },
+				control: { status: "cancel_requested", requestedAt: 40 },
 			};
 			return {
 				kind: "commit",
@@ -648,7 +646,7 @@ describe("durable tool batch", () => {
 			if (operation === null) throw new Error("missing operation");
 			const nextRun: OperationState = {
 				...operation.state,
-				control: { status: "cancel_requested", requestedAt: 40, drainedSteer: [], drainedFollowUp: [] },
+				control: { status: "cancel_requested", requestedAt: 40 },
 			};
 			return {
 				kind: "commit",

@@ -1,5 +1,5 @@
 import type { Api, DeferredHandle, Model } from "@draht/ai";
-import { withAbortSignal } from "../../context.ts";
+import { type Context, withAbortSignal } from "../../context.ts";
 import { consumeAssistantStream } from "../../execution/assistant.ts";
 import { applyStreamOptionsPatch } from "../../hooks.ts";
 import { SessionInvariantError } from "../../session/session.ts";
@@ -10,6 +10,7 @@ import {
 	type OperationError,
 	type OperationScope,
 	operationScopeOf,
+	type SessionReader,
 	type SettledAssistantMessage,
 } from "../../session/types.ts";
 import { deleteList, pendingAssistantFrames } from "../../session/values.ts";
@@ -44,6 +45,33 @@ function configurationError(identity: LaneConfiguration["model"]): OperationErro
 	};
 }
 
+export async function readDeferredSourceHandle(
+	reader: SessionReader,
+	deferred: DeferredLeaf,
+	context: Context,
+): Promise<DeferredHandle> {
+	const source = (await reader.getEntries([deferred.sourceEntryId], context)).get(deferred.sourceEntryId);
+	if (
+		source?.type !== "message" ||
+		source.message.role !== "assistant" ||
+		source.message.stopReason !== "deferred" ||
+		source.message.deferred === undefined
+	) {
+		throw new SessionInvariantError(`Deferred source ${deferred.sourceEntryId} is missing its assistant handle`);
+	}
+	const handle = source.message.deferred;
+	const identity = deferred.configuration.model;
+	if (
+		handle.id.length === 0 ||
+		handle.provider !== identity.provider ||
+		handle.modelId !== identity.modelId ||
+		handle.api !== source.message.api
+	) {
+		throw new SessionInvariantError(`Deferred source ${deferred.sourceEntryId} has an invalid handle`);
+	}
+	return handle;
+}
+
 async function readSourceHandle<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
@@ -51,30 +79,10 @@ async function readSourceHandle<TContext extends object | undefined>(
 ): Promise<ContinueOperationResult<DeferredHandle>> {
 	return lane.continueOperation(
 		deferred,
-		async (_state, _current, _meta, reader) => {
-			const source = (await reader.getEntries([deferred.sourceEntryId], drive.context)).get(deferred.sourceEntryId);
-			if (
-				source?.type !== "message" ||
-				source.message.role !== "assistant" ||
-				source.message.stopReason !== "deferred" ||
-				source.message.deferred === undefined
-			) {
-				throw new SessionInvariantError(
-					`Deferred source ${deferred.sourceEntryId} is missing its assistant handle`,
-				);
-			}
-			const handle = source.message.deferred;
-			const identity = deferred.configuration.model;
-			if (
-				handle.id.length === 0 ||
-				handle.provider !== identity.provider ||
-				handle.modelId !== identity.modelId ||
-				handle.api !== source.message.api
-			) {
-				throw new SessionInvariantError(`Deferred source ${deferred.sourceEntryId} has an invalid handle`);
-			}
-			return { kind: "return", result: handle };
-		},
+		async (_state, _current, _meta, reader) => ({
+			kind: "return",
+			result: await readDeferredSourceHandle(reader, deferred, drive.context),
+		}),
 		drive.context,
 	);
 }

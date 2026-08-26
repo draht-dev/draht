@@ -259,17 +259,9 @@ async function publishStructuralOutcome<TContext extends object | undefined>(
 				const entryWriteIndex = writes.length;
 				writes.push(insertEntry(entry), setValue(branchTip(lane.name), outcome.resultEntryId));
 				terminalTipId = outcome.resultEntryId;
-				baseEvents.push((commit) => [
-					...committedEntryEvents([entry], commit, lane.name, drive.operationId, entryWriteIndex),
-					{
-						type: "compaction_end",
-						lane: lane.name,
-						runId: drive.operationId,
-						reason: compactionReason(current.task),
-						status: "completed",
-						entryId: outcome.resultEntryId,
-					},
-				]);
+				baseEvents.push((commit) =>
+					committedEntryEvents([entry], commit, lane.name, drive.operationId, entryWriteIndex),
+				);
 			} else if (outcome.kind === "branch_summary") {
 				const boundary = navigationBoundary(current.task);
 				const entry: NewEntry<BranchSummaryEntry> = {
@@ -292,6 +284,37 @@ async function publishStructuralOutcome<TContext extends object | undefined>(
 				);
 			}
 
+			const attempt =
+				current.at === "summary.ready"
+					? current.nextAttempt
+					: current.at === "summary.effect_pending"
+						? current.attempt
+						: undefined;
+			if (attempt !== undefined && attempt > 1) {
+				baseEvents.push(() => [
+					{
+						type: "retry_end",
+						lane: lane.name,
+						runId: drive.operationId,
+						step: current.task.taskId,
+						attempt,
+						success: outcome.kind === "compaction" || outcome.kind === "branch_summary",
+						...(outcome.kind === "failed" ? { finalError: outcome.error.message } : {}),
+					},
+				]);
+			}
+			if (outcome.kind === "compaction") {
+				baseEvents.push(() => [
+					{
+						type: "compaction_end",
+						lane: lane.name,
+						runId: drive.operationId,
+						reason: compactionReason(current.task),
+						status: "completed",
+						entryId: outcome.resultEntryId,
+					},
+				]);
+			}
 			const events = (commit: CommitResult): HarnessEvent[] =>
 				baseEvents.flatMap((materialize) => materialize(commit));
 			switch (current.task.boundary.kind) {
@@ -406,7 +429,8 @@ async function publishStructuralOutcome<TContext extends object | undefined>(
 						writes: [...writes, ...cleanup],
 						record,
 						materialize: () => ({ kind: "settled", outcome: record }) as const,
-						events: () => [
+						events: (commit) => [
+							...events(commit),
 							compactionEnd,
 							{
 								type: "run_end",

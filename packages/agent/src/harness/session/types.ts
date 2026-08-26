@@ -93,8 +93,6 @@ export type Control =
 	| {
 			status: "cancel_requested";
 			requestedAt: number;
-			drainedSteer: string[];
-			drainedFollowUp: string[];
 	  };
 
 export interface OperationError {

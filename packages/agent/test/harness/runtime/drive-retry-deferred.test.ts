@@ -416,7 +416,7 @@ describe("runtime deferred polling", () => {
 			if (operation === null) throw new Error("missing operation");
 			const nextState: OperationState = {
 				...operation.state,
-				control: { status: "cancel_requested", requestedAt: 10, drainedSteer: [], drainedFollowUp: [] },
+				control: { status: "cancel_requested", requestedAt: 10 },
 			};
 			return {
 				kind: "commit",

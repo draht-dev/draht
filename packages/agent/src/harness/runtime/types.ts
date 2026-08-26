@@ -88,9 +88,11 @@ export class Drive {
 	readonly gate: Gate;
 	readonly context: Context;
 	readonly waitForRetry: boolean;
+	readonly closeSignal: AbortSignal;
 	deferredPermits: number;
 
 	private readonly control: GateControl;
+	private readonly closeController: AbortController;
 	private readonly resolveCompletion: (outcome: DriveOutcome) => void;
 	private readonly rejectCompletion: (error: unknown) => void;
 
@@ -111,6 +113,8 @@ export class Drive {
 		const { gate, control } = createGate();
 		this.gate = gate;
 		this.control = control;
+		this.closeController = new AbortController();
+		this.closeSignal = this.closeController.signal;
 	}
 
 	settle(outcome: DriveOutcome): void {
@@ -131,6 +135,7 @@ export class Drive {
 
 	closeGate(error: Error): void {
 		this.control.close(error);
+		if (!this.closeSignal.aborted) this.closeController.abort(error);
 	}
 }
 

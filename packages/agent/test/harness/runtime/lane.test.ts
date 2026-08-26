@@ -315,12 +315,7 @@ describe("runtime Lane commands", () => {
 		if (operation?.state.at !== "starting") throw new Error("missing accepted operation");
 		const cancelled: StartingOperation = {
 			...operation.state,
-			control: {
-				status: "cancel_requested",
-				requestedAt: 1,
-				drainedSteer: [],
-				drainedFollowUp: [],
-			},
+			control: { status: "cancel_requested", requestedAt: 1 },
 		};
 		await lane.command(
 			(state) => ({

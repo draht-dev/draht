@@ -26,9 +26,16 @@ function isSummaryState(state: OperationState): state is Extract<OperationState,
 function stateMatchesIntent(intent: OperationMeta["intent"], state: OperationState): boolean {
 	if (intent.kind === "compaction") return isSummaryState(state) && state.task.boundary.kind === "finish";
 	if (intent.kind === "navigation") {
+		if (state.at === "navigation.ready_to_commit") {
+			return !intent.summarize && state.targetId === intent.targetId && state.label === intent.label;
+		}
 		return (
-			state.at === "navigation.ready_to_commit" ||
-			(isSummaryState(state) && state.task.boundary.kind === "commit_navigation")
+			intent.summarize &&
+			isSummaryState(state) &&
+			state.task.boundary.kind === "commit_navigation" &&
+			state.task.boundary.targetId === intent.targetId &&
+			state.task.boundary.label === intent.label &&
+			state.task.customInstructions === intent.customInstructions
 		);
 	}
 	return (

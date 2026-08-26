@@ -833,7 +833,7 @@ function buildParams(
 		applyAnthropicCacheControl(messages, params.tools, cacheControl);
 	}
 
-	if (options?.toolChoice && params.tools?.length) {
+	if (options?.toolChoice) {
 		params.tool_choice = options.toolChoice;
 	}
 

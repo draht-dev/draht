@@ -6,9 +6,9 @@ import type {
 	DurableStructuralPreparation,
 	JsonValue,
 	LaneConfiguration,
-	LaneLastResult,
 	LaneState,
 	OperationMeta,
+	OperationResultRecord,
 	OperationState,
 	PendingEntry,
 	SessionReader,
@@ -22,12 +22,12 @@ import {
 	entryLabel,
 	type ListElement,
 	laneConfig,
-	laneLastResult,
 	laneState,
 	list,
 	operationMeta,
 	operationPreparation,
 	operationPreparationPrefix,
+	operationResult,
 	operationState,
 	operationToolArgs,
 	operationToolArgsPrefix,
@@ -119,7 +119,7 @@ describe("built-in durable addresses", () => {
 		expectTypeOf(config).toEqualTypeOf<Value<LaneConfiguration>>();
 		expectTypeOf(branchTip("review")).toEqualTypeOf<Value<string | null>>();
 		expectTypeOf(laneState("review")).toEqualTypeOf<Value<LaneState>>();
-		expectTypeOf(laneLastResult("review")).toEqualTypeOf<Value<LaneLastResult>>();
+		expectTypeOf(operationResult("operation")).toEqualTypeOf<Value<OperationResultRecord>>();
 		expectTypeOf(meta).toEqualTypeOf<Value<OperationMeta>>();
 		expectTypeOf(state).toEqualTypeOf<Value<OperationState>>();
 		expectTypeOf(operationToolArgs("operation", "step", 2)).toEqualTypeOf<Value<Record<string, JsonValue>>>();
@@ -132,7 +132,7 @@ describe("built-in durable addresses", () => {
 			branchTip("review"),
 			laneConfig("review"),
 			laneState("review"),
-			laneLastResult("review"),
+			operationResult("operation"),
 			meta,
 			state,
 			operationToolArgs("operation", "step", 2),
@@ -147,7 +147,7 @@ describe("built-in durable addresses", () => {
 			{ kind: "value", namespace: "pi.branch.tip", key: "review" },
 			{ kind: "value", namespace: "pi.lane.config", key: "review" },
 			{ kind: "value", namespace: "pi.lane.state", key: "review" },
-			{ kind: "value", namespace: "pi.lane.lastResult", key: "review" },
+			{ kind: "value", namespace: "pi.result", key: "operation" },
 			{ kind: "value", namespace: "pi.op.meta", key: "operation" },
 			{ kind: "value", namespace: "pi.op.state", key: "operation" },
 			{ kind: "value", namespace: "pi.op.tool_args", key: "operation:step:2" },

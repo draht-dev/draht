@@ -1,4 +1,4 @@
-import type { AssistantMessage, AssistantMessageFrame, Usage } from "@draht/ai";
+import type { AssistantMessage, AssistantMessageFrame, DeferredHandle, Usage } from "@draht/ai";
 import { expectTypeOf, it } from "vitest";
 import * as storedValues from "../../src/harness/session/values.ts";
 import type {
@@ -23,25 +23,25 @@ import type {
 	Entry,
 	EntryProjector,
 	EntryWrite,
-	FailureProvenance,
 	GenerationContext,
 	HarnessEvent,
 	HookHandler,
 	HookMap,
 	HookName,
 	IdGenerator,
+	InboxItem,
 	LaneConfiguration,
 	LaneExecutionInfo,
-	LaneLastResult,
 	LaneSnapshot,
 	NewEntry,
 	OperationAdmissionResult,
 	OperationAt,
 	OperationMeta,
 	OperationRequest,
+	OperationResultRecord,
+	OperationScope,
 	OperationState,
 	RunResult,
-	RunScope,
 	SearchQuery,
 	Session,
 	SessionCreateOptions,
@@ -58,6 +58,8 @@ import type {
 	Storage,
 	StorageBranchScan,
 	SummaryContext,
+	SuspendedRun,
+	TerminalStatus,
 	ToolCall,
 	UsageRow,
 	UsageWrite,
@@ -82,13 +84,10 @@ const generationContext = {
 	overflowRecoveryUsed: false,
 } satisfies GenerationContext;
 const summaryContext = {
-	taskId: "task",
 	resultEntryId: "summary",
-	kind: "compaction",
 	configuration,
 	streamOptions: {},
 	retryPolicy,
-	reason: "manual",
 } satisfies SummaryContext;
 const checkpoint = {
 	continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
@@ -103,12 +102,6 @@ const toolCalls = [
 	{ status: "completed", sourceIndex: 3, resultEntryId: "result-3", terminate: false },
 ] satisfies ToolCall[];
 
-const provenances = [
-	{ kind: "response", entryId: "response" },
-	{ kind: "structural", taskId: "task" },
-	{ kind: "configuration" },
-] satisfies FailureProvenance[];
-
 const runScope = {
 	control: runningControl,
 	settings: {
@@ -117,19 +110,18 @@ const runScope = {
 		followUpMode: "one-at-a-time",
 		toolExecution: "parallel",
 	},
-	inbox: { steer: [], followUp: [], writes: [] },
 	latestAssistantEntryId: null,
-} satisfies RunScope;
+} satisfies OperationScope;
 
-const runState = { ...runScope, at: "run.starting" } satisfies OperationState;
+const runState = { ...runScope, at: "starting" } satisfies OperationState;
 // One value fixture per flat leaf; `satisfies OperationState[]` keeps every discriminant checked.
 const operationStates = [
 	runState,
-	{ ...runScope, at: "run.checkpoint", ...checkpoint },
-	{ ...runScope, at: "run.assistant.ready", generationContext, nextAttempt: 1 },
+	{ ...runScope, at: "checkpoint", ...checkpoint },
+	{ ...runScope, at: "assistant.ready", generationContext, nextAttempt: 1 },
 	{
 		...runScope,
-		at: "run.assistant.effect_pending",
+		at: "assistant.effect_pending",
 		generationContext,
 		attempt: 1,
 		responseEntryId: "response",
@@ -139,7 +131,7 @@ const operationStates = [
 	},
 	{
 		...runScope,
-		at: "run.assistant.retry_wait",
+		at: "assistant.retry_wait",
 		generationContext,
 		nextAttempt: 2,
 		notBefore: 10,
@@ -147,12 +139,12 @@ const operationStates = [
 	},
 	{
 		...runScope,
-		at: "run.tools",
+		at: "tools",
 		batch: { assistantEntryId: "assistant", configuration, turnId: "turn", calls: toolCalls },
 	},
 	{
 		...runScope,
-		at: "run.deferred.suspended",
+		at: "deferred.suspended",
 		stepId: "step",
 		sourceEntryId: "source",
 		poll: 0,
@@ -161,7 +153,7 @@ const operationStates = [
 	},
 	{
 		...runScope,
-		at: "run.deferred.effect_pending",
+		at: "deferred.effect_pending",
 		stepId: "step",
 		sourceEntryId: "source",
 		poll: 1,
@@ -170,20 +162,25 @@ const operationStates = [
 		configuration,
 		streamOptions: {},
 	},
-	{ ...runScope, at: "run.compaction.deciding", reason: "threshold", resumeAfter: checkpoint, taskId: "task" },
 	{
 		...runScope,
-		at: "run.compaction.ready",
-		reason: "threshold",
-		resumeAfter: checkpoint,
+		at: "summary.deciding",
+		task: { taskId: "task", reason: "threshold", boundary: { kind: "resume_checkpoint", resumeAfter: checkpoint } },
+	},
+	{
+		...runScope,
+		at: "summary.ready",
+		task: { taskId: "task", reason: "manual", customInstructions: "compact", boundary: { kind: "finish" } },
 		summaryContext,
 		nextAttempt: 1,
 	},
 	{
 		...runScope,
-		at: "run.compaction.effect_pending",
-		reason: "overflow",
-		resumeAfter: checkpoint,
+		at: "summary.effect_pending",
+		task: {
+			taskId: "task",
+			boundary: { kind: "commit_navigation", targetId: "target", label: "target" },
+		},
 		summaryContext,
 		attempt: 1,
 		request: { index: 0, usageId: "usage" },
@@ -191,51 +188,14 @@ const operationStates = [
 	},
 	{
 		...runScope,
-		at: "run.compaction.retry_wait",
-		reason: "overflow",
-		resumeAfter: checkpoint,
+		at: "summary.retry_wait",
+		task: { taskId: "task", reason: "overflow", boundary: { kind: "resume_checkpoint", resumeAfter: checkpoint } },
 		summaryContext,
 		nextAttempt: 2,
 		notBefore: 10,
 		errorMessage: "retry",
 	},
-	{
-		...runScope,
-		at: "run.failure_drain",
-		error: { code: "provider", message: "failed" },
-		provenance: provenances[0]!,
-	},
-	{ at: "compaction.deciding", control: runningControl, customInstructions: "compact", taskId: "task" },
-	{ at: "compaction.ready", control: runningControl, summaryContext, nextAttempt: 1 },
-	{ at: "compaction.effect_pending", control: runningControl, summaryContext, attempt: 1, usageIds: ["usage"] },
-	{
-		at: "compaction.retry_wait",
-		control: runningControl,
-		summaryContext,
-		nextAttempt: 2,
-		notBefore: 10,
-		errorMessage: "retry",
-	},
-	{ at: "navigation.ready_to_commit", control: runningControl, targetId: null, label: "target" },
-	{ at: "navigation.summary.deciding", control: runningControl, targetId: "target", taskId: "task" },
-	{ at: "navigation.summary.ready", control: runningControl, targetId: "target", summaryContext, nextAttempt: 1 },
-	{
-		at: "navigation.summary.effect_pending",
-		control: runningControl,
-		targetId: "target",
-		summaryContext,
-		attempt: 1,
-		usageIds: [],
-	},
-	{
-		at: "navigation.summary.retry_wait",
-		control: runningControl,
-		targetId: "target",
-		summaryContext,
-		nextAttempt: 2,
-		notBefore: 10,
-		errorMessage: "retry",
-	},
+	{ ...runScope, at: "navigation.ready_to_commit", targetId: null },
 ] satisfies OperationState[];
 const operations = [
 	{
@@ -261,19 +221,24 @@ const operations = [
 	},
 ] satisfies OperationMeta[];
 
-const lastResult = {
+const operationResult = {
 	operationId: "run",
 	kind: "run",
+	status: "completed",
+	fromTipId: null,
 	tipId: "leaf",
-	finalAssistantEntryId: "assistant",
-	outcome: "completed",
-	runCompletion: "assistant",
-} satisfies LaneLastResult;
+	startedAt: 1,
+	endedAt: 2,
+} satisfies OperationResultRecord;
 const valueWrites: ValueSetWrite[] = [
 	storedValues.setValue(storedValues.branchTip("main"), "leaf"),
 	storedValues.setValue(storedValues.laneConfig("main"), configuration),
-	storedValues.setValue(storedValues.laneState("main"), { currentOperationId: "run", pendingNextRun: [] }),
-	storedValues.setValue(storedValues.laneLastResult("main"), lastResult),
+	storedValues.setValue(storedValues.laneState("main"), {
+		currentOperationId: "run",
+		lastOperationId: null,
+		inbox: [],
+	}),
+	storedValues.setValue(storedValues.operationResult("run"), operationResult),
 	storedValues.setValue(storedValues.operationMeta("run"), operations[0]),
 	storedValues.setValue(storedValues.operationState("run"), runState),
 	storedValues.setValue(storedValues.operationToolArgs("run", "step", 0), { path: "file" }),
@@ -344,30 +309,30 @@ it("covers the complete durable storage and Part 3 discriminants", () => {
 	expectTypeOf<Control["status"]>().toEqualTypeOf<"running" | "cancel_requested">();
 	expectTypeOf<ToolCall["status"]>().toEqualTypeOf<"planned" | "effect_pending" | "outcome_ready" | "completed">();
 	expectTypeOf<OperationAt>().toEqualTypeOf<
-		| "run.starting"
-		| "run.checkpoint"
-		| "run.assistant.ready"
-		| "run.assistant.effect_pending"
-		| "run.assistant.retry_wait"
-		| "run.tools"
-		| "run.deferred.suspended"
-		| "run.deferred.effect_pending"
-		| "run.compaction.deciding"
-		| "run.compaction.ready"
-		| "run.compaction.effect_pending"
-		| "run.compaction.retry_wait"
-		| "run.failure_drain"
-		| "compaction.deciding"
-		| "compaction.ready"
-		| "compaction.effect_pending"
-		| "compaction.retry_wait"
+		| "starting"
+		| "checkpoint"
+		| "assistant.ready"
+		| "assistant.effect_pending"
+		| "assistant.retry_wait"
+		| "tools"
+		| "deferred.suspended"
+		| "deferred.effect_pending"
+		| "summary.deciding"
+		| "summary.ready"
+		| "summary.effect_pending"
+		| "summary.retry_wait"
+		| "summary.deciding"
+		| "summary.ready"
+		| "summary.effect_pending"
+		| "summary.retry_wait"
 		| "navigation.ready_to_commit"
-		| "navigation.summary.deciding"
-		| "navigation.summary.ready"
-		| "navigation.summary.effect_pending"
-		| "navigation.summary.retry_wait"
+		| "summary.deciding"
+		| "summary.ready"
+		| "summary.effect_pending"
+		| "summary.retry_wait"
 	>();
-	expectTypeOf<FailureProvenance["kind"]>().toEqualTypeOf<"response" | "structural" | "configuration">();
+	expectTypeOf<InboxItem["kind"]>().toEqualTypeOf<"steer" | "followUp" | "nextRun" | "write">();
+	expectTypeOf<TerminalStatus>().toEqualTypeOf<"completed" | "declined" | "aborted" | "failed">();
 	expectTypeOf<NewEntry["type"]>().toEqualTypeOf<"message" | "compaction" | "branch_summary" | "custom">();
 	void transaction;
 	void operationStates;
@@ -479,7 +444,12 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 		systemPrompt: string;
 	}>();
 	expectTypeOf<LaneSnapshot["operation"]>().not.toEqualTypeOf<SessionSnapshot>();
-	expectTypeOf<AgentLane["getLastResult"]>().returns.toEqualTypeOf<Promise<LaneLastResult | undefined>>();
+	expectTypeOf<AgentLane["getResult"]>().returns.toEqualTypeOf<Promise<OperationResultRecord | undefined>>();
+	expectTypeOf<SuspendedRun>().toEqualTypeOf<{
+		operationId: string;
+		status: "suspended";
+		deferred: DeferredHandle;
+	}>();
 	expectTypeOf<AgentLane["accept"]>().returns.toEqualTypeOf<Promise<OperationAdmissionResult>>();
 	expectTypeOf<AgentLane["drive"]>().returns.toEqualTypeOf<Promise<DriveResult>>();
 	expectTypeOf<keyof DriveOptions>().toEqualTypeOf<"operationId" | "waitForRetry" | "pollDeferred">();

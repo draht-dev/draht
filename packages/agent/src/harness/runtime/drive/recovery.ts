@@ -1,5 +1,5 @@
 import { type AssistantMessage, reduceAssistantMessageFrames } from "@draht/ai";
-import type { RunAssistantEffectPendingOperation, SettledAssistantMessage } from "../../session/types.ts";
+import type { AssistantEffectPendingOperation, SettledAssistantMessage } from "../../session/types.ts";
 import type { Lane } from "../lane.ts";
 import { readAssistantFrames } from "../progress.ts";
 import type { Drive, ProcedureResult } from "../types.ts";
@@ -15,7 +15,7 @@ const ZERO_USAGE = {
 };
 
 function interruptedAssistantMessage(
-	generation: RunAssistantEffectPendingOperation,
+	generation: AssistantEffectPendingOperation,
 	partial: AssistantMessage | undefined,
 ): SettledAssistantMessage {
 	const warning =
@@ -39,7 +39,7 @@ function interruptedAssistantMessage(
 export async function recoverAssistantGeneration<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	generation: RunAssistantEffectPendingOperation,
+	generation: AssistantEffectPendingOperation,
 ): Promise<ProcedureResult> {
 	const frames = await lane.continueOperation(
 		generation,

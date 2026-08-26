@@ -4,9 +4,12 @@ import { BACKGROUND_CONTEXT } from "../../../src/harness/context.ts";
 import { restoreLane, restoreSession } from "../../../src/harness/runtime/restore.ts";
 import { MemorySessionRepo, MemoryStorage } from "../../../src/harness/session/memory.ts";
 import type {
+	CheckpointOperation,
 	LaneConfiguration,
 	OperationMeta,
-	RunCheckpointOperation,
+	OperationScope,
+	OperationState,
+	ResultBoundary,
 	Session,
 } from "../../../src/harness/session/types.ts";
 import * as storedValues from "../../../src/harness/session/values.ts";
@@ -30,7 +33,8 @@ async function createSession(): Promise<Session> {
 					storedValues.setValue(storedValues.laneConfig("main"), configuration),
 					storedValues.setValue(storedValues.laneState("main"), {
 						currentOperationId: null,
-						pendingNextRun: [],
+						lastOperationId: null,
+						inbox: [],
 					}),
 				],
 				BACKGROUND_CONTEXT,
@@ -40,9 +44,8 @@ async function createSession(): Promise<Session> {
 	return session;
 }
 
-function runState(triggerEntryId: string): RunCheckpointOperation {
+function operationScope(): OperationScope {
 	return {
-		at: "run.checkpoint",
 		control: { status: "running" },
 		settings: {
 			compaction: DEFAULT_COMPACTION_SETTINGS,
@@ -50,10 +53,32 @@ function runState(triggerEntryId: string): RunCheckpointOperation {
 			followUpMode: "all",
 			toolExecution: "parallel",
 		},
+		latestAssistantEntryId: null,
+	};
+}
+
+function runState(triggerEntryId: string): CheckpointOperation {
+	return {
+		...operationScope(),
+		at: "checkpoint",
 		continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
 		triggerEntryId,
-		inbox: { steer: [], followUp: [], writes: [] },
-		latestAssistantEntryId: null,
+	};
+}
+
+function summaryState(boundary: ResultBoundary): OperationState {
+	return {
+		...operationScope(),
+		at: "summary.deciding",
+		task: {
+			taskId: "task",
+			...(boundary.kind === "finish"
+				? { reason: "manual" as const }
+				: boundary.kind === "resume_checkpoint"
+					? { reason: "threshold" as const }
+					: {}),
+			boundary,
+		},
 	};
 }
 
@@ -62,18 +87,30 @@ afterEach(async () => {
 });
 
 describe("runtime lane restore", () => {
-	it("restores an idle lane and its latest terminal result", async () => {
+	it("restores an idle lane's latest operation id without reading its result", async () => {
 		const session = await createSession();
 		const result = {
 			operationId: session.idGenerator.next(),
 			kind: "navigation" as const,
-			outcome: "completed" as const,
-			oldTipId: null,
+			status: "completed" as const,
+			fromTipId: null,
 			tipId: null,
+			startedAt: 1,
+			endedAt: 2,
 		};
 		await session.mutate(
 			(mutator) =>
-				mutator.commit([storedValues.setValue(storedValues.laneLastResult("main"), result)], BACKGROUND_CONTEXT),
+				mutator.commit(
+					[
+						storedValues.setValue(storedValues.operationResult(result.operationId), result),
+						storedValues.setValue(storedValues.laneState("main"), {
+							currentOperationId: null,
+							lastOperationId: result.operationId,
+							inbox: [],
+						}),
+					],
+					BACKGROUND_CONTEXT,
+				),
 			BACKGROUND_CONTEXT,
 		);
 
@@ -82,8 +119,8 @@ describe("runtime lane restore", () => {
 		expect(state).toEqual({
 			tipId: null,
 			configuration,
-			pendingNextRun: [],
-			lastResult: result,
+			inbox: [],
+			lastOperationId: result.operationId,
 			operation: null,
 		});
 	});
@@ -108,7 +145,8 @@ describe("runtime lane restore", () => {
 						storedValues.setValue(storedValues.operationState(operationId), state),
 						storedValues.setValue(storedValues.laneState("main"), {
 							currentOperationId: operationId,
-							pendingNextRun: [],
+							lastOperationId: null,
+							inbox: [],
 						}),
 					],
 					BACKGROUND_CONTEXT,
@@ -146,7 +184,8 @@ describe("runtime lane restore", () => {
 							storedValues.setValue(storedValues.operationState(operationId), runState("trigger")),
 							storedValues.setValue(storedValues.laneState("main"), {
 								currentOperationId: operationId,
-								pendingNextRun: [],
+								lastOperationId: null,
+								inbox: [],
 							}),
 						],
 						BACKGROUND_CONTEXT,
@@ -155,6 +194,79 @@ describe("runtime lane restore", () => {
 			);
 
 			await expect(restoreLane(session, "main", BACKGROUND_CONTEXT)).rejects.toBeInstanceOf(Error);
+		}
+	});
+
+	it("accepts exactly the family-neutral state reachability matrix", async () => {
+		const resume = { kind: "resume_checkpoint", resumeAfter: runState("trigger") } satisfies ResultBoundary;
+		const finish = { kind: "finish" } satisfies ResultBoundary;
+		const navigation = { kind: "commit_navigation", targetId: "target" } satisfies ResultBoundary;
+		const cases: { intent: OperationMeta["intent"]; state: OperationState; accepted: boolean }[] = [
+			{ intent: { kind: "run", promptEntryIds: [] }, state: runState("trigger"), accepted: true },
+			{ intent: { kind: "run", promptEntryIds: [] }, state: summaryState(resume), accepted: true },
+			{ intent: { kind: "run", promptEntryIds: [] }, state: summaryState(finish), accepted: false },
+			{ intent: { kind: "run", promptEntryIds: [] }, state: summaryState(navigation), accepted: false },
+			{ intent: { kind: "compaction" }, state: summaryState(finish), accepted: true },
+			{ intent: { kind: "compaction" }, state: summaryState(resume), accepted: false },
+			{ intent: { kind: "compaction" }, state: summaryState(navigation), accepted: false },
+			{ intent: { kind: "compaction" }, state: runState("trigger"), accepted: false },
+			{
+				intent: { kind: "navigation", targetId: null, summarize: false },
+				state: { ...operationScope(), at: "navigation.ready_to_commit", targetId: null },
+				accepted: true,
+			},
+			{
+				intent: { kind: "navigation", targetId: "target", summarize: true },
+				state: summaryState(navigation),
+				accepted: true,
+			},
+			{
+				intent: { kind: "navigation", targetId: "target", summarize: true },
+				state: summaryState(finish),
+				accepted: false,
+			},
+			{
+				intent: { kind: "navigation", targetId: "target", summarize: true },
+				state: summaryState(resume),
+				accepted: false,
+			},
+			{
+				intent: { kind: "navigation", targetId: "target", summarize: false },
+				state: runState("trigger"),
+				accepted: false,
+			},
+		];
+
+		for (const testCase of cases) {
+			const session = await createSession();
+			const operationId = session.idGenerator.next();
+			const meta: OperationMeta = {
+				operationId,
+				lane: "main",
+				sourceTipId: null,
+				startedAt: 1,
+				intent: testCase.intent,
+			};
+			await session.mutate(
+				(mutator) =>
+					mutator.commit(
+						[
+							storedValues.setValue(storedValues.operationMeta(operationId), meta),
+							storedValues.setValue(storedValues.operationState(operationId), testCase.state),
+							storedValues.setValue(storedValues.laneState("main"), {
+								currentOperationId: operationId,
+								lastOperationId: null,
+								inbox: [],
+							}),
+						],
+						BACKGROUND_CONTEXT,
+					),
+				BACKGROUND_CONTEXT,
+			);
+			const restored = restoreLane(session, "main", BACKGROUND_CONTEXT);
+			if (testCase.accepted)
+				await expect(restored).resolves.toMatchObject({ operation: { meta, state: testCase.state } });
+			else await expect(restored).rejects.toThrow("does not match state");
 		}
 	});
 
@@ -194,7 +306,8 @@ describe("runtime lane restore", () => {
 								: [storedValues.setValue(storedValues.operationState(operationId), state)]),
 							storedValues.setValue(storedValues.laneState("main"), {
 								currentOperationId: operationId,
-								pendingNextRun: [],
+								lastOperationId: null,
+								inbox: [],
 							}),
 						],
 						BACKGROUND_CONTEXT,
@@ -223,7 +336,8 @@ describe("runtime lane restore", () => {
 						storedValues.setValue(storedValues.laneConfig("worker"), workerConfiguration),
 						storedValues.setValue(storedValues.laneState("worker"), {
 							currentOperationId: null,
-							pendingNextRun: [],
+							lastOperationId: null,
+							inbox: [],
 						}),
 					],
 					BACKGROUND_CONTEXT,
@@ -247,7 +361,8 @@ describe("runtime lane restore", () => {
 						storedValues.setValue(storedValues.operationState(operationId), state),
 						storedValues.setValue(storedValues.laneState("worker"), {
 							currentOperationId: operationId,
-							pendingNextRun: [],
+							lastOperationId: null,
+							inbox: [],
 						}),
 					],
 					BACKGROUND_CONTEXT,

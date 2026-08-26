@@ -4,7 +4,6 @@ import {
 	branchTip,
 	entryLabel,
 	laneConfig,
-	laneLastResult,
 	laneState,
 	type StoredValue,
 	sessionName,
@@ -59,10 +58,7 @@ export function createForkSnapshot(source: ForkSourceSnapshot, options: ForkOpti
 		store(branchTip(destination.name), destination.tipId);
 		if (configuration !== undefined) {
 			store(laneConfig(destination.name), configuration.value);
-			store(laneState(destination.name), {
-				currentOperationId: null,
-				pendingNextRun: [],
-			});
+			store(laneState(destination.name), { currentOperationId: null, lastOperationId: null, inbox: [] });
 		}
 	}
 	const name = findStoredValue(source.scalarValues, sessionName);
@@ -146,8 +142,7 @@ function validateForkSourceSnapshot(
 	for (const stored of source.scalarValues) {
 		if (
 			(stored.address.namespace === laneConfig("").namespace ||
-				stored.address.namespace === laneState("").namespace ||
-				stored.address.namespace === laneLastResult("").namespace) &&
+				stored.address.namespace === laneState("").namespace) &&
 			!sourceTipKeys.has(stored.address.key)
 		) {
 			throw new Error(`Source session branch ${JSON.stringify(stored.address.key)} is missing branch.tip`);
@@ -156,12 +151,8 @@ function validateForkSourceSnapshot(
 	for (const tip of sourceTips) {
 		const configuration = findStoredValue(source.scalarValues, laneConfig(tip.address.key));
 		const state = findStoredValue(source.scalarValues, laneState(tip.address.key));
-		const lastResult = findStoredValue(source.scalarValues, laneLastResult(tip.address.key));
 		if ((configuration === undefined) !== (state === undefined)) {
 			throw new Error(`Source session branch ${JSON.stringify(tip.address.key)} has incomplete lane state`);
-		}
-		if (configuration === undefined && lastResult !== undefined) {
-			throw new Error(`Source session branch ${JSON.stringify(tip.address.key)} has a result without lane state`);
 		}
 		if (
 			(source.entriesComplete !== false || options.scope === "tree") &&

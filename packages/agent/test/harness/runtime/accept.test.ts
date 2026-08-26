@@ -37,7 +37,8 @@ async function createSession(storage = new InstrumentedStorage(new MemoryStorage
 					storedValues.setValue(storedValues.laneConfig("main"), configuration),
 					storedValues.setValue(storedValues.laneState("main"), {
 						currentOperationId: null,
-						pendingNextRun: [],
+						lastOperationId: null,
+						inbox: [],
 					}),
 				],
 				BACKGROUND_CONTEXT,
@@ -57,6 +58,7 @@ function options(session: Session) {
 async function createHarness(
 	beforeCreate?: (session: Session) => Promise<void>,
 	resources: Parameters<typeof createAgentHarness>[0]["resources"] = {},
+	queueModes: { steeringMode?: "all" | "one-at-a-time"; followUpMode?: "all" | "one-at-a-time" } = {},
 ): Promise<{
 	harness: Harness<object | undefined>;
 	lane: Lane<object | undefined>;
@@ -66,7 +68,7 @@ async function createHarness(
 }> {
 	const created = await createSession();
 	await beforeCreate?.(created.session);
-	const harnessOptions = { ...options(created.session), resources };
+	const harnessOptions = { ...options(created.session), resources, ...queueModes };
 	const { harness } = await createAgentHarness(harnessOptions, BACKGROUND_CONTEXT);
 	if (!(harness instanceof Harness)) throw new Error("Expected runtime Harness");
 	const lane = await harness.lane("main", BACKGROUND_CONTEXT);
@@ -113,7 +115,7 @@ describe("runtime atomic run acceptance", () => {
 
 		const admission = unwrap(await lane.accept(request, BACKGROUND_CONTEXT));
 		const operation = lane.state.operation;
-		if (operation?.state.at !== "run.starting") throw new Error("Expected accepted run");
+		if (operation?.state.at !== "starting") throw new Error("Expected accepted run");
 		const entryId = operation.meta.intent.kind === "run" ? operation.meta.intent.promptEntryIds[0] : undefined;
 		if (entryId === undefined) throw new Error("Expected prompt entry");
 		const entry = await session.getEntry(entryId, BACKGROUND_CONTEXT);
@@ -198,7 +200,11 @@ describe("runtime atomic run acceptance", () => {
 							}),
 							storedValues.setValue(storedValues.laneState("main"), {
 								currentOperationId: null,
-								pendingNextRun: [first, second],
+								lastOperationId: null,
+								inbox: [
+									{ entryId: first, kind: "nextRun" },
+									{ entryId: second, kind: "nextRun" },
+								],
 							}),
 						],
 						BACKGROUND_CONTEXT,
@@ -214,12 +220,12 @@ describe("runtime atomic run acceptance", () => {
 		unwrap(await lane.accept({ kind: "prompt", prompt: "" }, BACKGROUND_CONTEXT));
 
 		const operation = lane.state.operation;
-		if (operation?.meta.intent.kind !== "run" || operation.state.at !== "run.starting") {
+		if (operation?.meta.intent.kind !== "run" || operation.state.at !== "starting") {
 			throw new Error("Expected accepted run");
 		}
 		expect(operation.meta.intent.promptEntryIds).toEqual([]);
 		expect(operation.meta.sourceTipId).toBeNull();
-		expect(operation.state.inbox).toEqual({ steer: [], followUp: [], writes: [] });
+		expect(lane.state.inbox).toEqual([]);
 		expect(
 			(await session.scanBranch({ start: second, order: "oldestFirst" }, BACKGROUND_CONTEXT)).map(({ id }) => id),
 		).toEqual([first, second]);
@@ -231,6 +237,104 @@ describe("runtime atomic run acceptance", () => {
 				?.map((write) => (write.kind === "value" ? `${write.kind}:${write.op}` : write.kind)),
 		).toEqual(["entry", "entry", "value:delete", "value:delete", "value:set", "value:set", "value:set", "value:set"]);
 		expect(events).toEqual(["queue_update"]);
+	});
+
+	it("captures every eligible tag by mode and preserves admission order before the request", async () => {
+		const ids = {
+			write: "queued-write",
+			next: "queued-next",
+			steer1: "queued-steer-1",
+			steer2: "queued-steer-2",
+			follow1: "queued-follow-1",
+			follow2: "queued-follow-2",
+		};
+		const { lane, session } = await createHarness(
+			async (source) => {
+				await source.mutate(
+					(mutator) =>
+						mutator.commit(
+							[
+								storedValues.setValue(storedValues.pendingEntry(ids.write), {
+									type: "custom",
+									customType: "queued-write",
+								}),
+								...[ids.next, ids.steer1, ids.steer2, ids.follow1, ids.follow2].map((entryId) =>
+									storedValues.setValue(storedValues.pendingEntry(entryId), {
+										type: "message",
+										payload: { role: "user", content: entryId, timestamp: 1 },
+									}),
+								),
+								storedValues.setValue(storedValues.laneState("main"), {
+									currentOperationId: null,
+									lastOperationId: null,
+									inbox: [
+										{ entryId: ids.steer1, kind: "steer" },
+										{ entryId: ids.write, kind: "write" },
+										{ entryId: ids.next, kind: "nextRun" },
+										{ entryId: ids.follow1, kind: "followUp" },
+										{ entryId: ids.steer2, kind: "steer" },
+										{ entryId: ids.follow2, kind: "followUp" },
+									],
+								}),
+							],
+							BACKGROUND_CONTEXT,
+						),
+					BACKGROUND_CONTEXT,
+				);
+			},
+			{},
+			{ steeringMode: "one-at-a-time", followUpMode: "one-at-a-time" },
+		);
+
+		unwrap(await lane.accept({ kind: "prompt", prompt: "request" }, BACKGROUND_CONTEXT));
+
+		const tipId = lane.state.tipId;
+		if (tipId === null) throw new Error("Expected accepted tip");
+		const entries = await session.scanBranch({ start: tipId, order: "oldestFirst" }, BACKGROUND_CONTEXT);
+		expect(entries.map((entry) => entry.id)).toEqual([ids.steer1, ids.write, ids.next, ids.follow1, tipId]);
+		expect(lane.state.inbox).toEqual([
+			{ entryId: ids.steer2, kind: "steer" },
+			{ entryId: ids.follow2, kind: "followUp" },
+		]);
+		expect((await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value.inbox).toEqual(
+			lane.state.inbox,
+		);
+		for (const entryId of [ids.write, ids.next, ids.steer1, ids.follow1]) {
+			expect(await session.getValue(storedValues.pendingEntry(entryId), BACKGROUND_CONTEXT)).toBeUndefined();
+		}
+		for (const entryId of [ids.steer2, ids.follow2]) {
+			expect(await session.getValue(storedValues.pendingEntry(entryId), BACKGROUND_CONTEXT)).toBeDefined();
+		}
+	});
+
+	it("does not let a lone queued write validate empty acceptance", async () => {
+		const entryId = "queued-write";
+		const { lane, session } = await createHarness(async (source) => {
+			await source.mutate(
+				(mutator) =>
+					mutator.commit(
+						[
+							storedValues.setValue(storedValues.pendingEntry(entryId), {
+								type: "custom",
+								customType: "queued-write",
+							}),
+							storedValues.setValue(storedValues.laneState("main"), {
+								currentOperationId: null,
+								lastOperationId: null,
+								inbox: [{ entryId, kind: "write" }],
+							}),
+						],
+						BACKGROUND_CONTEXT,
+					),
+				BACKGROUND_CONTEXT,
+			);
+		});
+
+		const result = await lane.accept({ kind: "prompt", prompt: "" }, BACKGROUND_CONTEXT);
+
+		expect(result).toMatchObject({ ok: false, error: { _tag: "InvalidMessage", reason: "empty" } });
+		expect(lane.state.inbox).toEqual([{ entryId, kind: "write" }]);
+		expect(await session.getValue(storedValues.pendingEntry(entryId), BACKGROUND_CONTEXT)).toBeDefined();
 	});
 
 	it("formats skills and templates before acceptance", async () => {
@@ -312,7 +416,8 @@ describe("runtime atomic run acceptance", () => {
 						storedValues.setValue(storedValues.laneConfig("main"), configuration),
 						storedValues.setValue(storedValues.laneState("main"), {
 							currentOperationId: null,
-							pendingNextRun: [],
+							lastOperationId: null,
+							inbox: [],
 						}),
 					],
 					BACKGROUND_CONTEXT,
@@ -388,7 +493,8 @@ describe("runtime atomic run acceptance", () => {
 						storedValues.setValue(storedValues.laneConfig("main"), configuration),
 						storedValues.setValue(storedValues.laneState("main"), {
 							currentOperationId: null,
-							pendingNextRun: [],
+							lastOperationId: null,
+							inbox: [],
 						}),
 					],
 					BACKGROUND_CONTEXT,

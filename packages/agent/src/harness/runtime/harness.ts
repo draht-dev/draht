@@ -130,16 +130,14 @@ export class Harness<TContext extends object | undefined> implements AgentHarnes
 				const state: LaneState = {
 					tipId,
 					configuration: attachedConfiguration,
-					pendingNextRun: [],
+					inbox: [],
+					lastOperationId: null,
 					operation: null,
 				};
 				const writes = [
 					...(stored.kind === "absent" ? [setValue(branchTip(name), tipId)] : []),
 					setValue(laneConfig(name), attachedConfiguration),
-					setValue(laneState(name), {
-						currentOperationId: null,
-						pendingNextRun: [],
-					}),
+					setValue(laneState(name), { currentOperationId: null, lastOperationId: null, inbox: [] }),
 				];
 				await mutator.commit(writes, context);
 				lane = this.buildLane(name, state);

@@ -1,21 +1,18 @@
-import { fauxAssistantMessage } from "@draht/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BACKGROUND_CONTEXT } from "../../../src/harness/context.ts";
-import { hydrateTerminalOutcome, operationCleanupWrites } from "../../../src/harness/runtime/drive/terminal.ts";
-import { insertEntry } from "../../../src/harness/session/commit.ts";
+import { operationCleanupWrites, operationResultRecord } from "../../../src/harness/runtime/drive/terminal.ts";
 import { MemoryStorage } from "../../../src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
 import type {
-	CompactionDecidingOperation,
+	AssistantEffectPendingOperation,
 	LaneConfiguration,
-	LaneLastResult,
 	NavigationReadyToCommitOperation,
 	OperationMeta,
+	OperationScope,
 	OperationState,
-	RunAssistantEffectPendingOperation,
-	RunScope,
-	RunToolsOperation,
 	Session,
+	SummaryDecidingOperation,
+	ToolsOperation,
 	Write,
 } from "../../../src/harness/session/types.ts";
 import * as storedValues from "../../../src/harness/session/values.ts";
@@ -27,7 +24,7 @@ const configuration: LaneConfiguration = {
 	activeToolNames: [],
 };
 
-function runScope(): RunScope {
+function runScope(): OperationScope {
 	return {
 		control: { status: "running" },
 		settings: {
@@ -36,14 +33,13 @@ function runScope(): RunScope {
 			followUpMode: "all",
 			toolExecution: "parallel",
 		},
-		inbox: { steer: [], followUp: [], writes: [] },
 		latestAssistantEntryId: null,
 	};
 }
 
 function meta(operationId: string, state: OperationState): OperationMeta {
 	const intent: OperationMeta["intent"] =
-		state.at === "compaction.deciding"
+		state.at === "summary.deciding"
 			? { kind: "compaction" }
 			: state.at === "navigation.ready_to_commit"
 				? { kind: "navigation", targetId: state.targetId, summarize: false }
@@ -93,17 +89,18 @@ async function seedLeftovers(session: Session, operationId: string, state: Opera
 }
 
 afterEach(async () => {
+	vi.restoreAllMocks();
 	for (const session of sessions.splice(0)) await session.close(BACKGROUND_CONTEXT);
 });
 
 describe("runtime terminal cleanup mechanics", () => {
-	it("deletes every run-owned family and exact live frame list but preserves pendingNextRun", async () => {
+	it("deletes every operation-owned family and exact live frame list but preserves the lane inbox", async () => {
 		const { session } = await createSession();
 		const operationId = "run";
 		const responseEntryId = "response";
-		const state: RunAssistantEffectPendingOperation = {
+		const state: AssistantEffectPendingOperation = {
 			...runScope(),
-			at: "run.assistant.effect_pending",
+			at: "assistant.effect_pending",
 			generationContext: {
 				stepId: "step",
 				triggerEntryId: "trigger",
@@ -123,7 +120,6 @@ describe("runtime terminal cleanup mechanics", () => {
 				drainedSteer: ["drained-steer"],
 				drainedFollowUp: ["drained-follow"],
 			},
-			inbox: { steer: ["steer"], followUp: ["follow"], writes: ["write"] },
 		};
 		await seedLeftovers(session, operationId, state);
 		await commit(session, [
@@ -141,7 +137,13 @@ describe("runtime terminal cleanup mechanics", () => {
 			}),
 			storedValues.setValue(storedValues.laneState("main"), {
 				currentOperationId: operationId,
-				pendingNextRun: ["next"],
+				lastOperationId: null,
+				inbox: [
+					{ entryId: "steer", kind: "steer" },
+					{ entryId: "follow", kind: "followUp" },
+					{ entryId: "write", kind: "write" },
+					{ entryId: "next", kind: "nextRun" },
+				],
 			}),
 		]);
 
@@ -155,17 +157,19 @@ describe("runtime terminal cleanup mechanics", () => {
 			"value:delete:pi.op.preparation:run:task",
 			"value:delete:pi.pending.tool_output:run:invocation",
 			"list:delete:pi.pending.assistant_frame:run:response",
-			"value:delete:pi.pending.entry:steer",
-			"value:delete:pi.pending.entry:follow",
-			"value:delete:pi.pending.entry:write",
 			"value:delete:pi.pending.entry:drained-steer",
 			"value:delete:pi.pending.entry:drained-follow",
 		]);
 		await commit(session, writes);
-		expect(await session.getValue(storedValues.pendingEntry("next"), BACKGROUND_CONTEXT)).toBeDefined();
-		expect(
-			(await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value.pendingNextRun,
-		).toEqual(["next"]);
+		for (const id of ["steer", "follow", "write", "next"]) {
+			expect(await session.getValue(storedValues.pendingEntry(id), BACKGROUND_CONTEXT)).toBeDefined();
+		}
+		expect((await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value.inbox).toEqual([
+			{ entryId: "steer", kind: "steer" },
+			{ entryId: "follow", kind: "followUp" },
+			{ entryId: "write", kind: "write" },
+			{ entryId: "next", kind: "nextRun" },
+		]);
 		expect(
 			await session.readList(
 				storedValues.pendingAssistantFrames(operationId, responseEntryId),
@@ -178,9 +182,9 @@ describe("runtime terminal cleanup mechanics", () => {
 	it("deletes staged tool outcomes and leaves completed results alone", async () => {
 		const { session } = await createSession();
 		const operationId = "tools";
-		const state: RunToolsOperation = {
+		const state: ToolsOperation = {
 			...runScope(),
-			at: "run.tools",
+			at: "tools",
 			batch: {
 				assistantEntryId: "assistant",
 				configuration,
@@ -216,16 +220,16 @@ describe("runtime terminal cleanup mechanics", () => {
 		[
 			"compaction",
 			{
-				at: "compaction.deciding",
-				control: { status: "running" },
-				taskId: "task",
-			} satisfies CompactionDecidingOperation,
+				...runScope(),
+				at: "summary.deciding",
+				task: { taskId: "task", reason: "manual", boundary: { kind: "finish" } },
+			} satisfies SummaryDecidingOperation,
 		],
 		[
 			"navigation",
 			{
+				...runScope(),
 				at: "navigation.ready_to_commit",
-				control: { status: "running" },
 				targetId: null,
 			} satisfies NavigationReadyToCommitOperation,
 		],
@@ -246,113 +250,47 @@ describe("runtime terminal cleanup mechanics", () => {
 	});
 });
 
-describe("runtime terminal outcome hydration", () => {
-	it("hydrates run, compaction, and navigation outcomes from only their direct entry references", async () => {
-		const { session, storage } = await createSession();
-		const assistant = fauxAssistantMessage([{ type: "text", text: "done" }]);
-		await commit(session, [
-			insertEntry({ id: "assistant", parentId: null, type: "message", message: assistant }),
-			insertEntry({
-				id: "compaction",
-				parentId: null,
-				type: "compaction",
-				summary: "summary",
-				retainedTail: [],
-				tokensBefore: 10,
-				fromHook: false,
-			}),
-			insertEntry({
-				id: "summary",
-				parentId: null,
-				type: "branch_summary",
-				fromId: "old",
-				summary: "branch",
-				fromHook: false,
-			}),
-		]);
-		const getEntries = vi.spyOn(storage, "getEntries");
-		const results: LaneLastResult[] = [
+describe("runtime operation result records", () => {
+	it("constructs one flat immutable observation from terminal metadata", () => {
+		vi.spyOn(Date, "now").mockReturnValue(20);
+		const record = operationResultRecord(
 			{
 				operationId: "run",
-				kind: "run",
-				outcome: "completed",
-				tipId: "assistant",
-				finalAssistantEntryId: "assistant",
-				runCompletion: "assistant",
+				lane: "main",
+				sourceTipId: "source",
+				startedAt: 10,
+				intent: { kind: "run", promptEntryIds: ["prompt"] },
 			},
-			{ operationId: "compact", kind: "compaction", outcome: "completed", tipId: "compaction" },
-			{
-				operationId: "navigate",
-				kind: "navigation",
-				outcome: "completed",
-				oldTipId: "old",
-				tipId: "summary",
-				summaryEntryId: "summary",
-			},
-		];
-
-		const outcomes = await Promise.all(
-			results.map((result) => hydrateTerminalOutcome(session, result, BACKGROUND_CONTEXT)),
+			"failed",
+			"tip",
+			{ code: "provider", message: "failed" },
 		);
 
-		expect(outcomes).toEqual([
-			{
-				operation: "run",
-				runId: "run",
-				kind: "completed",
-				tipId: "assistant",
-				finalEntryId: "assistant",
-				finalMessage: assistant,
-			},
-			{
-				operation: "compaction",
-				runId: "compact",
-				kind: "completed",
-				tipId: "compaction",
-				entry: expect.objectContaining({ id: "compaction", type: "compaction", summary: "summary" }),
-			},
-			{
-				operation: "navigation",
-				runId: "navigate",
-				kind: "completed",
-				oldTipId: "old",
-				newTipId: "summary",
-				summaryEntry: expect.objectContaining({ id: "summary", type: "branch_summary", summary: "branch" }),
-			},
-		]);
-		expect(getEntries.mock.calls.map(([ids]) => ids)).toEqual([["assistant"], ["compaction"], ["summary"]]);
+		expect(record).toEqual({
+			operationId: "run",
+			kind: "run",
+			status: "failed",
+			error: { code: "provider", message: "failed" },
+			fromTipId: "source",
+			tipId: "tip",
+			startedAt: 10,
+			endedAt: 20,
+		});
 	});
 
-	it("hydrates entry-free outcomes without storage reads", async () => {
-		const { session, storage } = await createSession();
-		const getEntries = vi.spyOn(storage, "getEntries");
-		const results: LaneLastResult[] = [
-			{
-				operationId: "run",
-				kind: "run",
-				outcome: "completed",
-				tipId: "tool-result",
-				runCompletion: "terminated_tools",
-			},
-			{ operationId: "compact", kind: "compaction", outcome: "declined", tipId: "leaf" },
-			{
-				operationId: "navigate",
-				kind: "navigation",
-				outcome: "aborted",
-				oldTipId: "old",
-				tipId: "old",
-			},
-		];
-
-		const outcomes = await Promise.all(
-			results.map((result) => hydrateTerminalOutcome(session, result, BACKGROUND_CONTEXT)),
+	it("rejects errors on non-failed records and missing errors on failed records", () => {
+		const metadata: OperationMeta = {
+			operationId: "run",
+			lane: "main",
+			sourceTipId: null,
+			startedAt: 1,
+			intent: { kind: "run", promptEntryIds: [] },
+		};
+		expect(() => operationResultRecord(metadata, "completed", "tip", { code: "x", message: "x" })).toThrow(
+			"Only a failed operation result may carry an error",
 		);
-
-		expect(outcomes).toEqual([
-			{ operation: "run", runId: "run", kind: "completed", tipId: "tool-result" },
-			{ operation: "compaction", runId: "compact", kind: "declined", tipId: "leaf" },
-			{ operation: "navigation", runId: "navigate", kind: "aborted", tipId: "old" },
-		]);
-		expect(getEntries).not.toHaveBeenCalled();
+		expect(() => operationResultRecord(metadata, "failed", "tip")).toThrow(
+			"Only a failed operation result may carry an error",
+		);
 	});
 });

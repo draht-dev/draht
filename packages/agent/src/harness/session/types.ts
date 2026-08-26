@@ -103,6 +103,20 @@ export interface OperationError {
 	details?: JsonValue;
 }
 
+export type TerminalStatus = "completed" | "declined" | "aborted" | "failed";
+
+/** Immutable lane-lived observation record written by one terminal transaction. */
+export interface OperationResultRecord {
+	operationId: string;
+	kind: OperationMeta["intent"]["kind"];
+	status: TerminalStatus;
+	error?: OperationError;
+	fromTipId: string | null;
+	tipId: string | null;
+	startedAt: number;
+	endedAt: number;
+}
+
 export type Continuation =
 	| { kind: "need_assistant"; overflowRecoveryUsed: boolean }
 	| { kind: "may_finish"; includeFinalAssistant: boolean };
@@ -115,10 +129,11 @@ export interface CheckpointData {
 	skipInboxOnce?: boolean;
 }
 
-export interface Inbox {
-	steer: string[];
-	followUp: string[];
-	writes: string[];
+export type InboxItemKind = "steer" | "followUp" | "nextRun" | "write";
+
+export interface InboxItem {
+	entryId: string;
+	kind: InboxItemKind;
 }
 
 export interface NormalizedRetryPolicy {
@@ -157,23 +172,18 @@ export interface ToolBatch {
 }
 
 export interface SummaryContext {
-	taskId: string;
 	resultEntryId: string;
-	kind: "compaction" | "branch_summary";
 	configuration: LaneConfiguration;
 	streamOptions: AgentHarnessStreamOptions;
 	retryPolicy: NormalizedRetryPolicy;
-	reason?: "manual" | "threshold" | "overflow";
 }
 
 /*
- * Durable operation state is one flat union: a single `at` discriminator with one
- * namespaced literal per dispatcher leaf. There is no nested phase/status hierarchy.
- * ToolBatch/ToolCall remain the nested child collection state machine, and
- * cancellation stays orthogonal via `Control`.
+ * Durable operation state is one flat union with one family-neutral discriminator
+ * per dispatcher leaf. ToolBatch/ToolCall remain the nested child collection state
+ * machine, and cancellation stays orthogonal via Control.
  */
 
-/** Every leaf carries the orthogonal cancellation shape. */
 export interface Cancellable {
 	control: Control;
 }
@@ -185,37 +195,37 @@ export interface RunSettings {
 	toolExecution: "sequential" | "parallel";
 }
 
-/** Run-wide durable data shared by every `run.*` leaf. */
-export interface RunScope extends Cancellable {
+/** Uniform scope carried by every operation leaf. */
+export interface OperationScope extends Cancellable {
 	settings: RunSettings;
-	inbox: Inbox;
 	latestAssistantEntryId: string | null;
 }
 
-/** Failure origin. Payload datum only; never used for operation dispatch. */
-export type FailureProvenance =
-	| { kind: "response"; entryId: string }
-	| { kind: "structural"; taskId: string }
-	| { kind: "configuration" };
-
-/** Shared backoff data for any `*.retry_wait` leaf. */
+/** Shared backoff data for every retry-wait leaf. */
 export interface RetryWait {
 	nextAttempt: number;
 	notBefore: number;
 	errorMessage: string;
 }
 
-/** Assistant generation input shared by every `run.assistant.*` leaf. */
 export interface AssistantGenerationScope {
 	generationContext: GenerationContext;
 }
 
-/**
- * Summary generation input shared by every structural generating leaf. The structural
- * task id lives in `summaryContext.taskId`; only deciding leaves carry it explicitly
- * (via StructuralTask).
- */
+export type ResultBoundary =
+	| { kind: "resume_checkpoint"; resumeAfter: CheckpointData }
+	| { kind: "finish" }
+	| { kind: "commit_navigation"; targetId: string; label?: string };
+
+export interface SummaryTask {
+	taskId: string;
+	reason?: "manual" | "threshold" | "overflow";
+	customInstructions?: string;
+	boundary: ResultBoundary;
+}
+
 export interface SummaryGenerationScope {
+	task: SummaryTask;
 	summaryContext: SummaryContext;
 }
 
@@ -231,13 +241,7 @@ export interface SummaryGenerationEffectPending extends SummaryGenerationScope {
 
 export interface SummaryGenerationRetryWait extends SummaryGenerationScope, RetryWait {}
 
-/** Explicit structural task id for deciding leaves that have no SummaryContext yet. */
-export interface StructuralTask {
-	taskId: string;
-}
-
-/** Deferred-suspension durable data shared by both `run.deferred.*` leaves. */
-export interface DeferredScope extends RunScope {
+export interface DeferredScope extends OperationScope {
 	stepId: string;
 	sourceEntryId: string;
 	poll: number;
@@ -245,43 +249,21 @@ export interface DeferredScope extends RunScope {
 	streamOptions: AgentHarnessStreamOptions;
 }
 
-/** In-run compaction data: why it started and which checkpoint resumes after it. */
-export interface RunCompactionScope extends RunScope {
-	reason: "threshold" | "overflow";
-	resumeAfter: CheckpointData;
+export interface StartingOperation extends OperationScope {
+	at: "starting";
 }
 
-/** Standalone compaction shared data. */
-export interface CompactionScope extends Cancellable {
-	customInstructions?: string;
+export interface CheckpointOperation extends OperationScope, CheckpointData {
+	at: "checkpoint";
 }
 
-/** Navigation shared data. */
-export interface NavigationScope extends Cancellable {
-	label?: string;
-}
-
-/** Summarized navigation requires a concrete target entry. */
-export interface NavigationSummaryScope extends NavigationScope {
-	targetId: string;
-	customInstructions?: string;
-}
-
-export interface RunStartingOperation extends RunScope {
-	at: "run.starting";
-}
-
-export interface RunCheckpointOperation extends RunScope, CheckpointData {
-	at: "run.checkpoint";
-}
-
-export interface RunAssistantReadyOperation extends RunScope, AssistantGenerationScope {
-	at: "run.assistant.ready";
+export interface AssistantReadyOperation extends OperationScope, AssistantGenerationScope {
+	at: "assistant.ready";
 	nextAttempt: number;
 }
 
-export interface RunAssistantEffectPendingOperation extends RunScope, AssistantGenerationScope {
-	at: "run.assistant.effect_pending";
+export interface AssistantEffectPendingOperation extends OperationScope, AssistantGenerationScope {
+	at: "assistant.effect_pending";
 	attempt: number;
 	responseEntryId: string;
 	usageId: string;
@@ -289,129 +271,72 @@ export interface RunAssistantEffectPendingOperation extends RunScope, AssistantG
 	contextWindow: number;
 }
 
-export interface RunAssistantRetryWaitOperation extends RunScope, AssistantGenerationScope, RetryWait {
-	at: "run.assistant.retry_wait";
+export interface AssistantRetryWaitOperation extends OperationScope, AssistantGenerationScope, RetryWait {
+	at: "assistant.retry_wait";
 }
 
-export interface RunToolsOperation extends RunScope {
-	at: "run.tools";
-	/** Unchanged child collection state machine. */
+export interface ToolsOperation extends OperationScope {
+	at: "tools";
 	batch: ToolBatch;
 }
 
-export interface RunDeferredSuspendedOperation extends DeferredScope {
-	at: "run.deferred.suspended";
+export interface DeferredSuspendedOperation extends DeferredScope {
+	at: "deferred.suspended";
 }
 
-export interface RunDeferredEffectPendingOperation extends DeferredScope {
-	at: "run.deferred.effect_pending";
+export interface DeferredEffectPendingOperation extends DeferredScope {
+	at: "deferred.effect_pending";
 	responseEntryId: string;
 	usageId: string;
 }
 
-export interface RunCompactionDecidingOperation extends RunCompactionScope, StructuralTask {
-	at: "run.compaction.deciding";
+export interface SummaryDecidingOperation extends OperationScope {
+	at: "summary.deciding";
+	task: SummaryTask;
 }
 
-export interface RunCompactionReadyOperation extends RunCompactionScope, SummaryGenerationReady {
-	at: "run.compaction.ready";
+export interface SummaryReadyOperation extends OperationScope, SummaryGenerationReady {
+	at: "summary.ready";
 }
 
-export interface RunCompactionEffectPendingOperation extends RunCompactionScope, SummaryGenerationEffectPending {
-	at: "run.compaction.effect_pending";
+export interface SummaryEffectPendingOperation extends OperationScope, SummaryGenerationEffectPending {
+	at: "summary.effect_pending";
 }
 
-export interface RunCompactionRetryWaitOperation extends RunCompactionScope, SummaryGenerationRetryWait {
-	at: "run.compaction.retry_wait";
+export interface SummaryRetryWaitOperation extends OperationScope, SummaryGenerationRetryWait {
+	at: "summary.retry_wait";
 }
 
-export interface RunFailureDrainOperation extends RunScope {
-	at: "run.failure_drain";
-	error: OperationError;
-	provenance: FailureProvenance;
-}
-
-export interface CompactionDecidingOperation extends CompactionScope, StructuralTask {
-	at: "compaction.deciding";
-}
-
-export interface CompactionReadyOperation extends CompactionScope, SummaryGenerationReady {
-	at: "compaction.ready";
-}
-
-export interface CompactionEffectPendingOperation extends CompactionScope, SummaryGenerationEffectPending {
-	at: "compaction.effect_pending";
-}
-
-export interface CompactionRetryWaitOperation extends CompactionScope, SummaryGenerationRetryWait {
-	at: "compaction.retry_wait";
-}
-
-export interface NavigationReadyToCommitOperation extends NavigationScope {
+export interface NavigationReadyToCommitOperation extends OperationScope {
 	at: "navigation.ready_to_commit";
 	/** Unsummarized navigation may target the branch root (null). */
 	targetId: string | null;
+	label?: string;
 }
 
-export interface NavigationSummaryDecidingOperation extends NavigationSummaryScope, StructuralTask {
-	at: "navigation.summary.deciding";
-}
-
-export interface NavigationSummaryReadyOperation extends NavigationSummaryScope, SummaryGenerationReady {
-	at: "navigation.summary.ready";
-}
-
-export interface NavigationSummaryEffectPendingOperation
-	extends NavigationSummaryScope,
-		SummaryGenerationEffectPending {
-	at: "navigation.summary.effect_pending";
-}
-
-export interface NavigationSummaryRetryWaitOperation extends NavigationSummaryScope, SummaryGenerationRetryWait {
-	at: "navigation.summary.retry_wait";
-}
-
-/** Flat durable operation state: exactly one leaf per dispatcher target. */
+/** Flat durable operation state: exactly 13 family-neutral dispatcher leaves. */
 export type OperationState =
-	| RunStartingOperation
-	| RunCheckpointOperation
-	| RunAssistantReadyOperation
-	| RunAssistantEffectPendingOperation
-	| RunAssistantRetryWaitOperation
-	| RunToolsOperation
-	| RunDeferredSuspendedOperation
-	| RunDeferredEffectPendingOperation
-	| RunCompactionDecidingOperation
-	| RunCompactionReadyOperation
-	| RunCompactionEffectPendingOperation
-	| RunCompactionRetryWaitOperation
-	| RunFailureDrainOperation
-	| CompactionDecidingOperation
-	| CompactionReadyOperation
-	| CompactionEffectPendingOperation
-	| CompactionRetryWaitOperation
-	| NavigationReadyToCommitOperation
-	| NavigationSummaryDecidingOperation
-	| NavigationSummaryReadyOperation
-	| NavigationSummaryEffectPendingOperation
-	| NavigationSummaryRetryWaitOperation;
+	| StartingOperation
+	| CheckpointOperation
+	| AssistantReadyOperation
+	| AssistantEffectPendingOperation
+	| AssistantRetryWaitOperation
+	| ToolsOperation
+	| DeferredSuspendedOperation
+	| DeferredEffectPendingOperation
+	| SummaryDecidingOperation
+	| SummaryReadyOperation
+	| SummaryEffectPendingOperation
+	| SummaryRetryWaitOperation
+	| NavigationReadyToCommitOperation;
 
 export type OperationAt = OperationState["at"];
 
-export type RunOperationState = Extract<OperationState, { at: `run.${string}` }>;
-export type CompactionOperationState = Extract<OperationState, { at: `compaction.${string}` }>;
-export type NavigationOperationState = Extract<OperationState, { at: `navigation.${string}` }>;
-
-export function isRunOperationState(state: OperationState): state is RunOperationState {
-	return state.at.startsWith("run.");
-}
-
-/** Copy only the run-wide scope fields when constructing a successor leaf. */
-export function runScopeOf(state: RunOperationState): RunScope {
+/** Copy only the uniform operation scope when constructing a successor leaf. */
+export function operationScopeOf(state: OperationState): OperationScope {
 	return {
 		control: state.control,
 		settings: state.settings,
-		inbox: state.inbox,
 		latestAssistantEntryId: state.latestAssistantEntryId,
 	};
 }
@@ -420,68 +345,9 @@ export type Operation = { meta: OperationMeta; state: OperationState };
 
 export interface LaneState {
 	currentOperationId: string | null;
-	pendingNextRun: string[];
+	lastOperationId: string | null;
+	inbox: InboxItem[];
 }
-
-type FailedLaneLastResult = {
-	outcome: "failed";
-	error: OperationError;
-	runCompletion?: never;
-};
-type AbortedLaneLastResult = {
-	outcome: "aborted";
-	error?: never;
-	runCompletion?: never;
-};
-type StructuralLaneLastResultOutcome =
-	| FailedLaneLastResult
-	| AbortedLaneLastResult
-	| { outcome: "declined"; error?: never; runCompletion?: never }
-	| { outcome: "completed"; error?: never; runCompletion?: never };
-
-export type LaneLastResult =
-	| ({
-			operationId: string;
-			kind: "run";
-			tipId: string;
-			finalAssistantEntryId?: string;
-	  } & (
-			| FailedLaneLastResult
-			| AbortedLaneLastResult
-			| {
-					outcome: "completed";
-					error?: never;
-					runCompletion: "assistant" | "terminated_tools";
-			  }
-	  ))
-	| ({
-			operationId: string;
-			kind: "compaction";
-			tipId: string;
-			finalAssistantEntryId?: never;
-	  } & StructuralLaneLastResultOutcome)
-	| ({
-			operationId: string;
-			kind: "navigation";
-			tipId: string | null;
-			oldTipId: string | null;
-			finalAssistantEntryId?: never;
-	  } & (
-			| FailedLaneLastResult
-			| AbortedLaneLastResult
-			| {
-					outcome: "declined";
-					error?: never;
-					runCompletion?: never;
-					summaryEntryId?: never;
-			  }
-			| {
-					outcome: "completed";
-					error?: never;
-					runCompletion?: never;
-					summaryEntryId?: string;
-			  }
-	  ));
 
 export type PendingEntry =
 	| { type: "message"; payload: AgentMessage }

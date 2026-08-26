@@ -493,7 +493,7 @@ function normalizeLegacyV3Values(
 			seq: firstSeq + writes.length,
 			namespace: stateAddress.namespace,
 			key: stateAddress.key,
-			value: { currentOperationId: null, pendingNextRun: [] },
+			value: { currentOperationId: null, lastOperationId: null, inbox: [] },
 		});
 	}
 	return writes;

@@ -24,15 +24,13 @@ import { StorageBackedSession } from "../../../src/harness/session/session.ts";
 import { GatingStorage } from "../../../src/harness/session/testing/gating-storage.ts";
 import { InstrumentedStorage } from "../../../src/harness/session/testing/instrumented-storage.ts";
 import {
-	isRunOperationState,
+	type AssistantReadyOperation,
+	type AssistantRetryWaitOperation,
+	type DeferredEffectPendingOperation,
+	type DeferredSuspendedOperation,
 	type LaneConfiguration,
 	type OperationState,
-	type RunAssistantReadyOperation,
-	type RunAssistantRetryWaitOperation,
-	type RunDeferredEffectPendingOperation,
-	type RunDeferredSuspendedOperation,
-	type RunOperationState,
-	runScopeOf,
+	operationScopeOf,
 	type Session,
 	type Write,
 } from "../../../src/harness/session/types.ts";
@@ -89,7 +87,8 @@ async function createFixture(
 					storedValues.setValue(storedValues.laneConfig("main"), configuration),
 					storedValues.setValue(storedValues.laneState("main"), {
 						currentOperationId: null,
-						pendingNextRun: [],
+						lastOperationId: null,
+						inbox: [],
 					}),
 				],
 				BACKGROUND_CONTEXT,
@@ -139,21 +138,21 @@ async function createFixture(
 	return { backend, gating, storage, session, lane, drive, models, faux, hooks, events, config };
 }
 
-function currentRun(fixture: Fixture): RunOperationState {
+function currentRun(fixture: Fixture): OperationState {
 	const operation = fixture.lane.state.operation;
-	if (operation === null || !isRunOperationState(operation.state)) throw new Error("fixture has no run");
+	if (operation === null) throw new Error("fixture has no operation");
 	return operation.state;
 }
 
-async function advanceToReady(fixture: Fixture): Promise<RunAssistantReadyOperation> {
+async function advanceToReady(fixture: Fixture): Promise<AssistantReadyOperation> {
 	const starting = currentRun(fixture);
-	if (starting.at !== "run.starting") throw new Error("run did not start at its initial boundary");
+	if (starting.at !== "starting") throw new Error("run did not start at its initial boundary");
 	await startRun(fixture.lane, fixture.drive, starting);
 	let run = currentRun(fixture);
-	if (run.at !== "run.checkpoint") throw new Error("run did not reach checkpoint");
+	if (run.at !== "checkpoint") throw new Error("run did not reach checkpoint");
 	await runCheckpoint(fixture.lane, fixture.drive, run);
 	run = currentRun(fixture);
-	if (run.at !== "run.assistant.ready") {
+	if (run.at !== "assistant.ready") {
 		throw new Error("run did not reach ready generation");
 	}
 	return run;
@@ -162,7 +161,7 @@ async function advanceToReady(fixture: Fixture): Promise<RunAssistantReadyOperat
 async function replaceRunState(fixture: Fixture, nextState: OperationState, extraWrites: Write[] = []): Promise<void> {
 	await fixture.lane.command((state) => {
 		const operation = state.operation;
-		if (operation === null || !isRunOperationState(operation.state)) throw new Error("fixture has no run");
+		if (operation === null) throw new Error("fixture has no operation");
 		return {
 			kind: "commit",
 			writes: [...extraWrites, storedValues.setValue(storedValues.operationState(operationId), nextState)],
@@ -175,12 +174,12 @@ async function replaceRunState(fixture: Fixture, nextState: OperationState, extr
 async function submitDeferred(
 	fixture: Fixture,
 	response: AssistantMessage = fauxAssistantMessage("done", { timestamp: 20 }),
-): Promise<RunDeferredSuspendedOperation> {
+): Promise<DeferredSuspendedOperation> {
 	fixture.faux.setResponses([response]);
 	const ready = await advanceToReady(fixture);
 	await runGeneration(fixture.lane, fixture.drive, ready);
 	const run = currentRun(fixture);
-	if (run.at !== "run.deferred.suspended") {
+	if (run.at !== "deferred.suspended") {
 		throw new Error("initial request did not suspend");
 	}
 	return run;
@@ -188,11 +187,11 @@ async function submitDeferred(
 
 async function installUnknownPoll(
 	fixture: Fixture,
-	suspended: RunDeferredSuspendedOperation,
-): Promise<RunDeferredEffectPendingOperation> {
-	const effectPending: RunDeferredEffectPendingOperation = {
-		...runScopeOf(currentRun(fixture)),
-		at: "run.deferred.effect_pending",
+	suspended: DeferredSuspendedOperation,
+): Promise<DeferredEffectPendingOperation> {
+	const effectPending: DeferredEffectPendingOperation = {
+		...operationScopeOf(currentRun(fixture)),
+		at: "deferred.effect_pending",
 		stepId: suspended.stepId,
 		sourceEntryId: suspended.sourceEntryId,
 		poll: suspended.poll + 1,
@@ -211,9 +210,9 @@ async function installUnknownPoll(
 	return effectPending;
 }
 
-function currentDeferred(fixture: Fixture): RunDeferredSuspendedOperation | RunDeferredEffectPendingOperation {
+function currentDeferred(fixture: Fixture): DeferredSuspendedOperation | DeferredEffectPendingOperation {
 	const run = currentRun(fixture);
-	if (run.at !== "run.deferred.suspended" && run.at !== "run.deferred.effect_pending") {
+	if (run.at !== "deferred.suspended" && run.at !== "deferred.effect_pending") {
 		throw new Error("fixture has no deferred phase");
 	}
 	return run;
@@ -246,7 +245,7 @@ describe("runtime assistant retry wait", () => {
 			kind: "continue",
 		});
 		expect(currentRun(fixture)).toMatchObject({
-			at: "run.assistant.retry_wait",
+			at: "assistant.retry_wait",
 			nextAttempt: 2,
 			errorMessage: "503 service unavailable",
 		});
@@ -259,9 +258,9 @@ describe("runtime assistant retry wait", () => {
 		vi.setSystemTime(1_000);
 		const fixture = await createFixture({ deferredSubmission: false });
 		const ready = await advanceToReady(fixture);
-		const retryWait: RunAssistantRetryWaitOperation = {
-			...runScopeOf(ready),
-			at: "run.assistant.retry_wait",
+		const retryWait: AssistantRetryWaitOperation = {
+			...operationScopeOf(ready),
+			at: "assistant.retry_wait",
 			generationContext: ready.generationContext,
 			nextAttempt: 2,
 			notBefore: 1_100,
@@ -284,9 +283,9 @@ describe("runtime assistant retry wait", () => {
 		vi.setSystemTime(2_000);
 		const fixture = await createFixture({ deferredSubmission: false });
 		const ready = await advanceToReady(fixture);
-		const retryWait: RunAssistantRetryWaitOperation = {
-			...runScopeOf(ready),
-			at: "run.assistant.retry_wait",
+		const retryWait: AssistantRetryWaitOperation = {
+			...operationScopeOf(ready),
+			at: "assistant.retry_wait",
 			generationContext: ready.generationContext,
 			nextAttempt: 2,
 			notBefore: 2_000,
@@ -299,7 +298,7 @@ describe("runtime assistant retry wait", () => {
 			kind: "continue",
 		});
 		const next = currentRun(fixture);
-		if (next.at !== "run.assistant.ready") {
+		if (next.at !== "assistant.ready") {
 			throw new Error("retry did not become ready");
 		}
 		expect(fixture.events.at(-1)).toMatchObject({ type: "retry_start", attempt: 2 });
@@ -314,9 +313,9 @@ describe("runtime assistant retry wait", () => {
 		vi.setSystemTime(3_000);
 		const fixture = await createFixture({ deferredSubmission: false });
 		const ready = await advanceToReady(fixture);
-		const retryWait: RunAssistantRetryWaitOperation = {
-			...runScopeOf(ready),
-			at: "run.assistant.retry_wait",
+		const retryWait: AssistantRetryWaitOperation = {
+			...operationScopeOf(ready),
+			at: "assistant.retry_wait",
 			generationContext: ready.generationContext,
 			nextAttempt: 2,
 			notBefore: 3_100,
@@ -332,7 +331,7 @@ describe("runtime assistant retry wait", () => {
 		await vi.advanceTimersByTimeAsync(1);
 		expect(await waiting).toEqual({ kind: "continue" });
 		expect(currentRun(fixture)).toMatchObject({
-			at: "run.assistant.ready",
+			at: "assistant.ready",
 			nextAttempt: 2,
 		});
 	});
@@ -385,7 +384,7 @@ describe("runtime deferred polling", () => {
 		expect(hookOptions).toMatchObject({ deferred: false });
 		expect(fetchOptions).toMatchObject({ wait: 0 });
 		expect(fetchOptions?.signal).toBe(drive.gate.signal);
-		expect(currentDeferred(fixture)).toMatchObject({ at: "run.deferred.suspended", poll: 1 });
+		expect(currentDeferred(fixture)).toMatchObject({ at: "deferred.suspended", poll: 1 });
 		expect(fixture.faux.state.deferredFetchCount).toBe(1);
 		expect(fixture.events.slice(-2).map((event) => event.type)).toEqual(["turn_end", "run_suspend"]);
 
@@ -414,8 +413,8 @@ describe("runtime deferred polling", () => {
 		await hookStarted.promise;
 		await fixture.lane.command((state) => {
 			const operation = state.operation;
-			if (operation === null || !isRunOperationState(operation.state)) throw new Error("missing run");
-			const nextState: RunOperationState = {
+			if (operation === null) throw new Error("missing operation");
+			const nextState: OperationState = {
 				...operation.state,
 				control: { status: "cancel_requested", requestedAt: 10, drainedSteer: [], drainedFollowUp: [] },
 			};
@@ -431,7 +430,7 @@ describe("runtime deferred polling", () => {
 		expect(await polling).toEqual({ kind: "continue" });
 		expect(fixture.faux.state.deferredFetchCount).toBe(0);
 		expect(currentRun(fixture)).toMatchObject({
-			at: "run.deferred.suspended",
+			at: "deferred.suspended",
 			control: { status: "cancel_requested" },
 		});
 	});
@@ -451,7 +450,7 @@ describe("runtime deferred polling", () => {
 			kind: "continue",
 		});
 		const run = currentRun(fixture);
-		if (run.at !== "run.tools") throw new Error("deferred tool response did not create a batch");
+		if (run.at !== "tools") throw new Error("deferred tool response did not create a batch");
 		expect(run.batch).toMatchObject({
 			turnId: `${suspended.stepId}:poll:1`,
 			calls: [{ status: "planned", sourceIndex: 0 }],
@@ -480,8 +479,11 @@ describe("runtime deferred polling", () => {
 		expect(drive.deferredPermits).toBe(0);
 		await expect.poll(() => fixture.faux.state.deferredFetchCount).toBe(1);
 		await gating.next(2); // start frame, then response settlement
-		expect(await polling).toEqual({ kind: "continue" });
-		expect(currentRun(fixture).at).toBe("run.failure_drain");
+		expect(await polling).toMatchObject({
+			kind: "settled",
+			outcome: { operationId, kind: "run", status: "failed" },
+		});
+		expect(fixture.lane.state.operation).toBeNull();
 	});
 
 	it("leaves suspended state unchanged when the fresh intent is discarded", async () => {
@@ -500,7 +502,7 @@ describe("runtime deferred polling", () => {
 		expect(drive.deferredPermits).toBe(1);
 		expect(fixture.faux.state.deferredFetchCount).toBe(0);
 		const durable = await fixture.backend.getValue(storedValues.operationState(operationId), BACKGROUND_CONTEXT);
-		expect(durable?.value).toMatchObject({ at: "run.deferred.suspended", poll: 0 });
+		expect(durable?.value).toMatchObject({ at: "deferred.suspended", poll: 0 });
 	});
 
 	it("replaces an unknown poll under fresh ids at the same poll number and deletes old frames", async () => {
@@ -547,7 +549,7 @@ describe("runtime deferred polling", () => {
 		);
 		expect(intentState).toMatchObject({
 			value: {
-				at: "run.deferred.effect_pending",
+				at: "deferred.effect_pending",
 				poll: unknown.poll,
 				responseEntryId: expect.not.stringMatching(unknown.responseEntryId),
 				usageId: expect.not.stringMatching(unknown.usageId),
@@ -564,7 +566,7 @@ describe("runtime deferred polling", () => {
 				BACKGROUND_CONTEXT,
 			),
 		).toEqual([]);
-		expect(currentRun(fixture).at).toBe("run.checkpoint");
+		expect(currentRun(fixture).at).toBe("checkpoint");
 		expect(fixture.events.some((event) => "recovery" in event && event.recovery === true)).toBe(true);
 		await expectProjectionRestores(fixture);
 	});
@@ -577,16 +579,13 @@ describe("runtime deferred polling", () => {
 		fixture.storage.clearCommitAttempts();
 		const drive = installDrive(fixture, { pollDeferred: true });
 
-		expect(await recoverDeferredPoll(fixture.lane, drive, unknown)).toEqual({
-			kind: "continue",
+		expect(await recoverDeferredPoll(fixture.lane, drive, unknown)).toMatchObject({
+			kind: "settled",
+			outcome: { operationId, kind: "run", status: "failed", error: { code: "model_unavailable" } },
 		});
 		expect(drive.deferredPermits).toBe(1);
 		expect(fixture.faux.state.deferredFetchCount).toBe(0);
-		expect(currentRun(fixture)).toMatchObject({
-			at: "run.failure_drain",
-			error: { code: "model_unavailable" },
-			provenance: { kind: "configuration" },
-		});
+		expect(fixture.lane.state.operation).toBeNull();
 		expect(
 			fixture.storage
 				.getCommitAttempts()
@@ -596,7 +595,13 @@ describe("runtime deferred polling", () => {
 						? `${write.kind}:${write.op}:${write.namespace}`
 						: write.kind,
 				),
-		).toEqual(["list:delete:pi.pending.assistant_frame", "value:set:pi.op.state"]);
+		).toEqual([
+			"value:delete:pi.op.meta",
+			"value:delete:pi.op.state",
+			"list:delete:pi.pending.assistant_frame",
+			"value:set:pi.result",
+			"value:set:pi.lane.state",
+		]);
 		expect(
 			fixture.storage
 				.getCommitAttempts()

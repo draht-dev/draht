@@ -46,7 +46,7 @@ function preparedSnapshot(): ForkDestinationSnapshot {
 		]),
 		scalarValues: [
 			stored(storedValues.branchTip("main"), "root", 2),
-			stored(storedValues.laneState("main"), { currentOperationId: null, pendingNextRun: [] }, 3),
+			stored(storedValues.laneState("main"), { currentOperationId: null, lastOperationId: null, inbox: [] }, 3),
 			stored(storedValues.sessionName, "forked", 4),
 		],
 		nextSeq: 9,
@@ -72,7 +72,8 @@ describe("JsonlStorage snapshot creation", () => {
 		expect((await storage.getValue(storedValues.branchTip("main"), BACKGROUND_CONTEXT))?.value).toBe("root");
 		expect((await storage.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value).toEqual({
 			currentOperationId: null,
-			pendingNextRun: [],
+			lastOperationId: null,
+			inbox: [],
 		});
 		expect((await storage.getValue(storedValues.sessionName, BACKGROUND_CONTEXT))?.value).toBe("forked");
 		expect(await storage.getStats(BACKGROUND_CONTEXT)).toEqual({

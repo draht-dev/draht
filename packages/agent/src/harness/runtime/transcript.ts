@@ -4,7 +4,7 @@ import type { Context } from "../context.ts";
 import { materializeCommittedEntry } from "../session/commit.ts";
 import { buildSessionContext } from "../session/context.ts";
 import { SessionInvariantError } from "../session/session.ts";
-import type { CommitResult, Entry, NewEntry, RunOperationState, SessionReader } from "../session/types.ts";
+import type { CommitResult, Entry, NewEntry, OperationState, SessionReader } from "../session/types.ts";
 import { pendingEntry } from "../session/values.ts";
 import type { Lane } from "./lane.ts";
 import type { ContinueOperationResult, Drive } from "./types.ts";
@@ -20,11 +20,12 @@ export function chainEntries<T extends { id: string }>(
 	});
 }
 
-export function entryLifecycleEvents(entry: Entry, lane: string, runId: string): HarnessEvent[] {
+export function entryLifecycleEvents(entry: Entry, lane: string, runId?: string): HarnessEvent[] {
+	const operation = runId === undefined ? {} : { runId };
 	return entry.type === "message"
 		? [
-				{ type: "message_start", lane, runId, message: entry.message },
-				{ type: "message_end", lane, runId, message: entry.message, entryId: entry.id },
+				{ type: "message_start", lane, ...operation, message: entry.message },
+				{ type: "message_end", lane, ...operation, message: entry.message, entryId: entry.id },
 				{ type: "entry_added", lane, entry },
 			]
 		: [{ type: "entry_added", lane, entry }];
@@ -34,7 +35,7 @@ export function committedEntryEvents(
 	entries: readonly NewEntry[],
 	commit: CommitResult,
 	lane: string,
-	runId: string,
+	runId?: string,
 	firstWriteIndex = 0,
 ): HarnessEvent[] {
 	return entries.flatMap((entry, index) =>
@@ -46,7 +47,7 @@ export function committedEntryEvents(
 	);
 }
 
-export function readBoundedEntries<TContext extends object | undefined, TState extends RunOperationState>(
+export function readBoundedEntries<TContext extends object | undefined, TState extends OperationState>(
 	lane: Lane<TContext>,
 	drive: Drive,
 	capability: TState,
@@ -65,7 +66,7 @@ export function readBoundedEntries<TContext extends object | undefined, TState e
 	);
 }
 
-export async function readBoundedContext<TContext extends object | undefined, TState extends RunOperationState>(
+export async function readBoundedContext<TContext extends object | undefined, TState extends OperationState>(
 	lane: Lane<TContext>,
 	drive: Drive,
 	capability: TState,

@@ -5,13 +5,13 @@ import { type HarnessAssistantStreamConfig, streamHarnessAssistant } from "../..
 import { applyStreamOptionsPatch } from "../../hooks.ts";
 import { SessionInvariantError } from "../../session/session.ts";
 import {
+	type AssistantEffectPendingOperation,
+	type AssistantReadyOperation,
+	type AssistantRetryWaitOperation,
 	type JsonValue,
 	type OperationError,
-	type RunAssistantEffectPendingOperation,
-	type RunAssistantReadyOperation,
-	type RunAssistantRetryWaitOperation,
-	type RunScope,
-	runScopeOf,
+	type OperationScope,
+	operationScopeOf,
 	type SettledAssistantMessage,
 } from "../../session/types.ts";
 import type { AgentHarnessStreamOptions } from "../../types.ts";
@@ -22,7 +22,7 @@ import { openAssistantResponse, publishConfigurationFailure, publishResponse } f
 import { waitUntil } from "./retry.ts";
 
 /** Assistant effect-pending payload without the run-wide scope fields. */
-type AssistantEffectPending = Omit<RunAssistantEffectPendingOperation, keyof RunScope>;
+type AssistantEffectPending = Omit<AssistantEffectPendingOperation, keyof OperationScope>;
 
 type PreparedGeneration = {
 	kind: "ready";
@@ -68,7 +68,7 @@ async function resolveSystemPrompt<TContext extends object | undefined>(
 async function prepareGeneration<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	generation: RunAssistantReadyOperation,
+	generation: AssistantReadyOperation,
 ): Promise<GenerationPreparation> {
 	const identity = generation.generationContext.configuration.model;
 	const model = lane.models.getModel(identity.provider, identity.modelId);
@@ -132,12 +132,12 @@ async function prepareGeneration<TContext extends object | undefined>(
 async function publishGenerationIntent<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	ready: RunAssistantReadyOperation,
+	ready: AssistantReadyOperation,
 	prepared: PreparedGeneration,
-): Promise<ContinueOperationResult<RunAssistantEffectPendingOperation>> {
+): Promise<ContinueOperationResult<AssistantEffectPendingOperation>> {
 	const at = Date.now();
 	const pending: AssistantEffectPending = {
-		at: "run.assistant.effect_pending",
+		at: "assistant.effect_pending",
 		generationContext: ready.generationContext,
 		attempt: ready.nextAttempt,
 		responseEntryId: lane.session.idGenerator.next(at),
@@ -148,7 +148,7 @@ async function publishGenerationIntent<TContext extends object | undefined>(
 	return lane.continueOperation(
 		ready,
 		(_state, current) => {
-			const nextState: RunAssistantEffectPendingOperation = { ...runScopeOf(current), ...pending };
+			const nextState: AssistantEffectPendingOperation = { ...operationScopeOf(current), ...pending };
 			return {
 				kind: "commit",
 				writes: [],
@@ -174,7 +174,7 @@ async function publishGenerationIntent<TContext extends object | undefined>(
 async function performGeneration<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	intent: RunAssistantEffectPendingOperation,
+	intent: AssistantEffectPendingOperation,
 	prepared: PreparedGeneration,
 ): Promise<SettledAssistantMessage> {
 	const response = openAssistantResponse(lane, drive, intent.responseEntryId);
@@ -233,7 +233,7 @@ async function performGeneration<TContext extends object | undefined>(
 export async function runRetryWait<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	generation: RunAssistantRetryWaitOperation,
+	generation: AssistantRetryWaitOperation,
 ): Promise<ProcedureResult> {
 	if (Date.now() < generation.notBefore) {
 		if (!drive.waitForRetry) {
@@ -253,9 +253,9 @@ export async function runRetryWait<TContext extends object | undefined>(
 	const result = await lane.continueOperation(
 		generation,
 		(_state, current) => {
-			const nextState: RunAssistantReadyOperation = {
-				...runScopeOf(current),
-				at: "run.assistant.ready",
+			const nextState: AssistantReadyOperation = {
+				...operationScopeOf(current),
+				at: "assistant.ready",
 				generationContext: generation.generationContext,
 				nextAttempt: generation.nextAttempt,
 			};
@@ -284,9 +284,9 @@ export async function runRetryWait<TContext extends object | undefined>(
 export async function runGeneration<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	generation: RunAssistantReadyOperation | RunAssistantRetryWaitOperation,
+	generation: AssistantReadyOperation | AssistantRetryWaitOperation,
 ): Promise<ProcedureResult> {
-	if (generation.at === "run.assistant.retry_wait") return runRetryWait(lane, drive, generation);
+	if (generation.at === "assistant.retry_wait") return runRetryWait(lane, drive, generation);
 
 	const prepared = await prepareGeneration(lane, drive, generation);
 	if (prepared.kind === "configuration_failure") {

@@ -30,9 +30,9 @@ Implemented by the simplification pass:
 
 At simplification completion, the largest files were `runtime/lane.ts` (~996), `runtime/drive/tools.ts` (~663), `runtime/drive/checkpoint.ts` (~452), and `runtime/drive/response.ts` (~417).
 
-### M6 status
+### WP05 structural status
 
-M6 structural execution is underway on the simplified substrate. Its first coherent slice adds:
+M6 established structural execution on the simplified substrate. Its first coherent slice added:
 
 - shared compaction-bounded transcript/context reads and committed-entry event decoration;
 - caller-owned one-provider-request seams for compaction and branch summaries while preserving retrying behavior for existing non-harness callers;
@@ -41,7 +41,7 @@ M6 structural execution is underway on the simplified substrate. Its first coher
 - per-request structural intent and usage settlement, attempt retry/recovery, hook decisions, compaction/navigation publication, and terminal cleanup;
 - focused coverage for threshold/overflow entry, split-turn request accounting, generated and hook results, retry/cap/recovery, model absence, mid-request durable cancellation, navigation, and preparation corruption.
 
-The runtime is currently 6,149 lines including the new 1,460-line structural procedure module. `npm run check` passes, as do 168 tests across 16 focused files. Remaining M6 work is broader crash/state coverage and any corrections it reveals; M7 reconciliation/total dispatch and M8 public surfaces have not started.
+R1a, R2, and R3 then moved queued input to the lane, replaced hydrated family outcomes with immutable operation records, and collapsed the family cross-product to 13 neutral leaves. At the reviewed R3 checkpoint the runtime is 5,722 lines; `runtime/drive` is 3,757 lines; and the structural module is 1,141 lines, down 319 lines (21.8%) from its 1,460-line foundation. The focused runtime set passes 189 tests across 15 files, with 44 memory/JSONL and 30 SQLite repository-conformance tests also passing. R1b boundary planning, M7 reconciliation/total dispatch, and M8 public surfaces have not started.
 
 Public drive remains disabled. Keep the visible durable procedure order:
 `prepare → publish intent → perform effect → publish outcome`.
@@ -51,7 +51,7 @@ Do not introduce a generic Procedure interface, runner, scheduler, graph, callba
 
 A Lane is one process-local actor over one durable lane projection.
 
-- `Lane.state` is authoritative for tip, configuration, current operation, control, inbox IDs, and latest result.
+- `Lane.state` is authoritative for tip, configuration, current operation, control, inbox IDs, and the latest operation ID.
 - Every supported mutation commits through the Session mutation line and publishes the matching `Lane.state` before releasing it.
 - One lane-owned Drive is the sole writer that advances an operation state.
 - Same-operation callers observe the same Drive. No caller owns it.
@@ -63,32 +63,23 @@ A Lane is one process-local actor over one durable lane projection.
 
 ## Durable state
 
-`OperationState` has one discriminator, `at`, with 22 direct leaves:
+`OperationState` has one discriminator, `at`, with 13 direct leaves:
 
-- `run.starting`
-- `run.checkpoint`
-- `run.assistant.ready`
-- `run.assistant.effect_pending`
-- `run.assistant.retry_wait`
-- `run.tools`
-- `run.deferred.suspended`
-- `run.deferred.effect_pending`
-- `run.compaction.deciding`
-- `run.compaction.ready`
-- `run.compaction.effect_pending`
-- `run.compaction.retry_wait`
-- `run.failure_drain`
-- `compaction.deciding`
-- `compaction.ready`
-- `compaction.effect_pending`
-- `compaction.retry_wait`
+- `starting`
+- `checkpoint`
+- `assistant.ready`
+- `assistant.effect_pending`
+- `assistant.retry_wait`
+- `tools`
+- `deferred.suspended`
+- `deferred.effect_pending`
+- `summary.deciding`
+- `summary.ready`
+- `summary.effect_pending`
+- `summary.retry_wait`
 - `navigation.ready_to_commit`
-- `navigation.summary.deciding`
-- `navigation.summary.ready`
-- `navigation.summary.effect_pending`
-- `navigation.summary.retry_wait`
 
-Shared run, structural, and navigation data is factored with intersections. `Control` remains orthogonal. `ToolBatch` remains a child state machine because parallel tool children genuinely mutate sibling call statuses concurrently.
+Every leaf carries one uniform `OperationScope`. The summary quadruple carries one `SummaryTask`; its closed `ResultBoundary` selects in-run checkpoint resumption, standalone finish, or navigation commit. The summary algorithm is derived from that boundary rather than duplicated in state. `Control` remains orthogonal. `ToolBatch` remains a child state machine because parallel tool children genuinely mutate sibling call statuses concurrently.
 
 ## State and content boundary
 
@@ -99,7 +90,7 @@ Procedures never read these addresses to decide execution:
 - `operationState`
 - `branchTip`
 - `laneConfig`
-- `laneLastResult`
+- `operationResult`
 
 They use the current `Lane.state` supplied by the mutation line.
 
@@ -186,7 +177,7 @@ Used after an admitted provider/tool/structural effect and for genuine parallel 
 - Supplies current control/inbox fields and the process-local effect result to the semantic settlement planner.
 - Atomically commits payload, usage, tip movement, cleanup, and the classified next state.
 - Appends the canonical operation-state write and publishes the matching projection.
-- When the planner returns a terminal decision, appends `laneLastResult`, idle `laneState`, and the idle process-local projection.
+- When the planner returns a terminal decision, appends the immutable `operationResult`, idle `laneState` with `lastOperationId`, and the idle process-local projection.
 
 The caller supplies the typed outcome, cleanup/publication writes, last result, and event. Terminal business decisions remain visible in the owning procedure.
 

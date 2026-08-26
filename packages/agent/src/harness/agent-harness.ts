@@ -22,7 +22,6 @@ import type {
 	InvalidNavigation,
 	LaneBusy,
 	NoActiveOperation,
-	NoActiveRun,
 	NothingToCompact,
 	NothingToResume,
 	OperationMismatch,
@@ -53,14 +52,12 @@ export {
 import { createAgentHarness } from "./runtime/harness.ts";
 import type {
 	BranchScan,
-	BranchSummaryEntry,
-	CompactionEntry,
 	Entry,
 	EntryProjector,
 	EntryType,
 	JsonValue,
-	LaneLastResult,
 	OperationError,
+	OperationResultRecord,
 	Session,
 	SettledAssistantMessage,
 	UsageRow,
@@ -74,54 +71,27 @@ import type {
 	Skill,
 } from "./types.ts";
 
-export type OptionalFinalAssistant =
-	| { finalEntryId: string; finalMessage: AssistantMessage }
-	| { finalEntryId?: never; finalMessage?: never };
-
-export type RunOutcome =
-	| ({ kind: "completed"; tipId: string } & OptionalFinalAssistant)
-	| ({ kind: "aborted"; tipId: string } & OptionalFinalAssistant)
-	| ({ kind: "failed"; tipId: string; error: OperationError } & OptionalFinalAssistant)
-	| {
-			kind: "suspended";
-			reason: "deferred";
-			tipId: string;
-			finalEntryId: string;
-			deferred: DeferredHandle;
-	  };
-
-export type CompactionOutcome =
-	| { kind: "completed"; tipId: string; entry: CompactionEntry }
-	| { kind: "declined" | "aborted"; tipId: string }
-	| { kind: "failed"; tipId: string; error: OperationError };
-
-export type NavigationOutcome =
-	| {
-			kind: "completed";
-			oldTipId: string | null;
-			newTipId: string | null;
-			summaryEntry?: BranchSummaryEntry;
-	  }
-	| { kind: "declined" | "aborted"; tipId: string | null }
-	| { kind: "failed"; tipId: string | null; error: OperationError };
-
-export type RunOperationOutcome = { operation: "run"; runId: string } & RunOutcome;
-export type CompactionOperationOutcome = { operation: "compaction"; runId: string } & CompactionOutcome;
-export type NavigationOperationOutcome = { operation: "navigation"; runId: string } & NavigationOutcome;
-export type ResumeOutcome = RunOperationOutcome | CompactionOperationOutcome | NavigationOperationOutcome;
+/** Convenience-only suspended run observation, constructed when M8 exposes public drive. */
+export interface SuspendedRun {
+	operationId: string;
+	status: "suspended";
+	deferred: DeferredHandle;
+}
 
 export type RunResult = Result<
-	RunOperationOutcome,
+	OperationResultRecord | SuspendedRun,
 	LaneBusy | InvalidMessage | UnknownSkill | UnknownTemplate | Closed
 >;
-export type CompactionResult = Result<CompactionOperationOutcome, LaneBusy | NothingToCompact | Closed>;
+export type CompactionResult = Result<
+	{ compaction: OperationResultRecord; run?: OperationResultRecord | SuspendedRun },
+	LaneBusy | NothingToCompact | Closed
+>;
 export type NavigationResult = Result<
-	NavigationOperationOutcome,
+	{ navigation: OperationResultRecord; run?: OperationResultRecord | SuspendedRun },
 	LaneBusy | InvalidNavigation | UnknownTarget | Closed
 >;
-export type ResumeResult = Result<ResumeOutcome, NothingToResume | Closed>;
-export type QueueResult = Result<{ entryId: string }, NoActiveRun | InvalidMessage | Closed>;
-export type NextRunResult = Result<{ entryId: string }, InvalidMessage | Closed>;
+export type ResumeResult = Result<OperationResultRecord | SuspendedRun, NothingToResume | Closed>;
+export type QueueResult = Result<{ entryId: string }, InvalidMessage | Closed>;
 export type CancelQueuedResult = Result<{ kind: "cancelled" | "already_consumed" | "not_found" }, Closed>;
 export type AbortResult = Result<
 	{ runId: string; steer: AgentMessage[]; followUp: AgentMessage[] },
@@ -186,16 +156,11 @@ export interface LaneExecutionInfo {
 	tipId: string | null;
 	configuredModel: ModelIdentity;
 	current: CurrentOperationInfo | null;
-	lastResult?: LaneLastResult;
+	lastOperationId: string | null;
 }
 
-export type TerminalOperationOutcome =
-	| ({ operation: "run"; runId: string } & Exclude<RunOutcome, { kind: "suspended" }>)
-	| ({ operation: "compaction"; runId: string } & CompactionOutcome)
-	| ({ operation: "navigation"; runId: string } & NavigationOutcome);
-
 export type DriveOutcome =
-	| { kind: "settled"; operationId: string; outcome: TerminalOperationOutcome }
+	| { kind: "settled"; outcome: OperationResultRecord }
 	| { kind: "waiting"; operationId: string; reason: "retry"; notBefore: number }
 	| { kind: "waiting"; operationId: string; reason: "deferred"; deferred: DeferredHandle };
 export type DriveResult = Result<DriveOutcome, OperationMismatch | Closed>;
@@ -239,7 +204,7 @@ export interface LaneSnapshot {
 	lane: string;
 	transcript: Entry[];
 	tipId: string | null;
-	lastResult?: LaneLastResult;
+	lastOperationId: string | null;
 	operation: null | {
 		id: string;
 		kind: "run" | "compaction" | "navigation";
@@ -277,9 +242,9 @@ export type HarnessEventPayload =
 	| { type: "run_resume"; runId: string }
 	| { type: "run_suspend"; runId: string; reason: "deferred"; deferred: DeferredHandle }
 	| { type: "run_abort"; runId: string; steer: AgentMessage[]; followUp: AgentMessage[] }
-	| ({ type: "run_end"; runId: string; tipId: string | null } & (
-			| ({ outcome: "completed" | "aborted" } & OptionalFinalAssistant)
-			| ({ outcome: "failed"; error: OperationError } & OptionalFinalAssistant)
+	| ({ type: "run_end"; runId: string; fromTipId: string | null; tipId: string | null } & (
+			| { status: "completed" | "aborted"; error?: never }
+			| { status: "failed"; error: OperationError }
 	  ))
 	| { type: "fault"; code: string; message: string }
 	| ({ type: "handler_error"; error: string; stack?: string } & (
@@ -375,20 +340,14 @@ export type HarnessEventPayload =
 	  ))
 	| { type: "compaction_start"; runId: string; reason: "manual" | "threshold" | "overflow" }
 	| ({ type: "compaction_end"; runId: string; reason: "manual" | "threshold" | "overflow" } & (
-			| { outcome: "completed"; entry: CompactionEntry; fromHook: boolean }
-			| { outcome: "declined" | "aborted" }
-			| { outcome: "failed"; error: OperationError }
+			| { status: "completed"; entryId: string; error?: never }
+			| { status: "declined" | "aborted"; entryId?: never; error?: never }
+			| { status: "failed"; entryId?: never; error: OperationError }
 	  ))
 	| { type: "navigation_start"; runId: string; targetId: string | null }
-	| ({
-			type: "navigation_end";
-			runId: string;
-			oldTipId: string | null;
-			newTipId: string | null;
-	  } & (
-			| { outcome: "completed"; summaryEntry?: BranchSummaryEntry }
-			| { outcome: "declined" | "aborted"; summaryEntry?: never; error?: never }
-			| { outcome: "failed"; error: OperationError; summaryEntry?: never }
+	| ({ type: "navigation_end"; runId: string; fromTipId: string | null; tipId: string | null } & (
+			| { status: "completed" | "declined" | "aborted"; error?: never }
+			| { status: "failed"; error: OperationError }
 	  ))
 	| { type: "lane_created"; at: string | null }
 	| { type: "usage"; lane: string; row: UsageRow; totals: Usage };
@@ -549,7 +508,7 @@ export interface AgentLane {
 	findEntry(query: BranchScan | undefined, context: Context): Promise<Entry | undefined>;
 	appendMessage(message: AgentMessage, context: Context): Promise<string>;
 	appendCustomEntry(customType: string, data: JsonValue | undefined, context: Context): Promise<string>;
-	getLastResult(context: Context): Promise<LaneLastResult | undefined>;
+	getResult(operationId: string, context: Context): Promise<OperationResultRecord | undefined>;
 	accept(request: OperationRequest, context: Context): Promise<OperationAdmissionResult>;
 	drive(options: DriveOptions, context: Context): Promise<DriveResult>;
 	requestAbort(operationId: string, context: Context): Promise<AbortRequestResult>;
@@ -568,11 +527,7 @@ export interface AgentLane {
 	abort(context: Context): Promise<AbortResult>;
 	steer(message: string | AgentMessage, images: ImageContent[] | undefined, context: Context): Promise<QueueResult>;
 	followUp(message: string | AgentMessage, images: ImageContent[] | undefined, context: Context): Promise<QueueResult>;
-	nextRun(
-		message: string | AgentMessage,
-		images: ImageContent[] | undefined,
-		context: Context,
-	): Promise<NextRunResult>;
+	nextRun(message: string | AgentMessage, images: ImageContent[] | undefined, context: Context): Promise<QueueResult>;
 	cancelQueued(entryId: string, context: Context): Promise<CancelQueuedResult>;
 	recordUsage(
 		usage: Usage,

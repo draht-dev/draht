@@ -9,12 +9,7 @@ import { convertToLlm } from "../../../src/harness/messages.ts";
 import { Lane } from "../../../src/harness/runtime/lane.ts";
 import { restoreLane } from "../../../src/harness/runtime/restore.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
-import type {
-	LaneConfiguration,
-	OperationState,
-	RunStartingOperation,
-	Session,
-} from "../../../src/harness/session/types.ts";
+import type { LaneConfiguration, Session, StartingOperation } from "../../../src/harness/session/types.ts";
 import * as storedValues from "../../../src/harness/session/values.ts";
 import { ControlledMemoryStorage, deferred } from "./test-utils.ts";
 
@@ -45,7 +40,11 @@ async function createLane(
 				[
 					storedValues.setValue(storedValues.branchTip("main"), null),
 					storedValues.setValue(storedValues.laneConfig("main"), configuration),
-					storedValues.setValue(storedValues.laneState("main"), { currentOperationId: null, pendingNextRun: [] }),
+					storedValues.setValue(storedValues.laneState("main"), {
+						currentOperationId: null,
+						lastOperationId: null,
+						inbox: [],
+					}),
 				],
 				BACKGROUND_CONTEXT,
 			),
@@ -313,8 +312,8 @@ describe("runtime Lane commands", () => {
 		const accepted = await lane.accept({ kind: "prompt", prompt: "hello" }, BACKGROUND_CONTEXT);
 		expect(accepted.ok).toBe(true);
 		const operation = lane.state.operation;
-		if (operation?.state.at !== "run.starting") throw new Error("missing accepted operation");
-		const cancelled: RunStartingOperation = {
+		if (operation?.state.at !== "starting") throw new Error("missing accepted operation");
+		const cancelled: StartingOperation = {
 			...operation.state,
 			control: {
 				status: "cancel_requested",
@@ -348,26 +347,24 @@ describe("runtime Lane commands", () => {
 
 		const settled = await lane.settleOperation(
 			cancelled,
-			(_state, current) => {
+			(state, current) => {
 				expect(current.control.status).toBe("cancel_requested");
-				const operationState: OperationState = {
-					...current,
-					inbox: { ...current.inbox, writes: ["accepted-during-cancellation"] },
-				};
+				const inbox = [...state.inbox, { entryId: "accepted-during-cancellation", kind: "write" as const }];
 				return {
 					kind: "commit",
 					writes: [],
-					operationState,
-					materialize: () => operationState,
+					operationState: current,
+					lane: { inbox },
+					materialize: () => inbox,
 				};
 			},
 			BACKGROUND_CONTEXT,
 		);
-		expect(settled.inbox.writes).toEqual(["accepted-during-cancellation"]);
-		expect(lane.state.operation?.state).toEqual(settled);
-		expect(
-			(await session.getValue(storedValues.operationState(operation.meta.operationId), BACKGROUND_CONTEXT))?.value,
-		).toEqual(settled);
+		expect(settled).toEqual([{ entryId: "accepted-during-cancellation", kind: "write" }]);
+		expect(lane.state.inbox).toEqual(settled);
+		expect((await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value.inbox).toEqual(
+			settled,
+		);
 	});
 
 	it("plans queued commands from the latest committed memory", async () => {

@@ -80,7 +80,7 @@ export function openFrameProgress<TContext extends object | undefined>(
 			const run = state.operation?.state;
 			if (run === undefined) return false;
 			return (
-				(run.at === "run.assistant.effect_pending" || run.at === "run.deferred.effect_pending") &&
+				(run.at === "assistant.effect_pending" || run.at === "deferred.effect_pending") &&
 				run.responseEntryId === responseEntryId
 			);
 		},
@@ -101,7 +101,7 @@ export function openToolProgress<TContext extends object | undefined>(
 		(snapshot) => setValue(address, snapshot),
 		(state) => {
 			const operation = state.operation;
-			if (operation?.state.at !== "run.tools") return false;
+			if (operation?.state.at !== "tools") return false;
 			const batch = operation.state.batch;
 			return (
 				batch.turnId === turnId &&

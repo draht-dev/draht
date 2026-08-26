@@ -1,21 +1,15 @@
 import type { RetryPolicy } from "@draht/ai";
 import type { QueueMode } from "../../types.ts";
-import type {
-	AgentHarnessOptions,
-	DriveOptions,
-	DriveOutcome,
-	HarnessEvent,
-	Resources,
-	TerminalOperationOutcome,
-} from "../agent-harness.ts";
+import type { AgentHarnessOptions, DriveOptions, DriveOutcome, HarnessEvent, Resources } from "../agent-harness.ts";
 import type { CompactionSettings } from "../compaction/compaction.ts";
 import { type Context, withoutAbortSignal } from "../context.ts";
 import { createGate, type Gate, type GateControl } from "../execution/effect-gate.ts";
 import type {
 	CommitResult,
+	InboxItem,
 	LaneConfiguration,
-	LaneLastResult,
 	Operation,
+	OperationResultRecord,
 	OperationState,
 	Write,
 } from "../session/types.ts";
@@ -48,8 +42,8 @@ export interface Config<TContext extends object | undefined> {
 export interface LaneState {
 	readonly tipId: string | null;
 	readonly configuration: LaneConfiguration;
-	readonly pendingNextRun: string[];
-	readonly lastResult?: LaneLastResult;
+	readonly inbox: InboxItem[];
+	readonly lastOperationId: string | null;
 	readonly operation: Operation | null;
 }
 
@@ -71,12 +65,12 @@ export type LaneCommand<TResult> =
 export type ContinueOperationResult<TResult> = { kind: "cancel_requested" } | { kind: "result"; value: TResult };
 
 /** A durable operation transition. The Lane pairs the state write with projection publication. */
-type LanePatch = Partial<Pick<LaneState, "tipId" | "configuration">>;
+type LanePatch = Partial<Pick<LaneState, "tipId" | "configuration" | "inbox">>;
 
 interface FinishDecision<TResult> {
 	kind: "finish";
 	writes: Write[];
-	lastResult: LaneLastResult;
+	record: OperationResultRecord;
 	lane?: LanePatch;
 	materialize(commit: CommitResult): Synchronous<TResult>;
 	events?(commit: CommitResult): HarnessEvent[];
@@ -143,4 +137,4 @@ export class Drive {
 export type ProcedureResult =
 	| { kind: "continue" }
 	| { kind: "waiting"; outcome: DriveOutcome }
-	| { kind: "settled"; outcome: TerminalOperationOutcome };
+	| { kind: "settled"; outcome: OperationResultRecord };

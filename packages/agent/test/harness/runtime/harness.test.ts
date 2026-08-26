@@ -78,7 +78,8 @@ describe("runtime Harness lane management", () => {
 		expect(await lane.getActiveTools(BACKGROUND_CONTEXT)).toEqual(["read", "bash"]);
 		expect((await session.getValue(laneState("main"), BACKGROUND_CONTEXT))?.value).toEqual({
 			currentOperationId: null,
-			pendingNextRun: [],
+			lastOperationId: null,
+			inbox: [],
 		});
 		expect(events).toEqual(["main"]);
 		expect(await harness.lanes(BACKGROUND_CONTEXT)).toMatchObject([{ name: "main", tipId: null }]);
@@ -212,6 +213,46 @@ describe("runtime Harness lane management", () => {
 			customType: "pending",
 			payload: { queued: true },
 		});
+		expect((await session.getValue(laneState("main"), BACKGROUND_CONTEXT))?.value.inbox).toEqual([
+			{ entryId: pendingId, kind: "write" },
+		]);
+	});
+
+	it("flushes queued writes before a new idle append in one commit", async () => {
+		const session = await createSession();
+		const harness = await createHarness(session);
+		const lane = await harness.lane("main", BACKGROUND_CONTEXT);
+		if (!(lane instanceof Lane)) throw new Error("Expected runtime Lane");
+		const first = session.idGenerator.next();
+		const second = session.idGenerator.next();
+		await lane.command((state) => {
+			const inbox = [
+				{ entryId: first, kind: "write" as const },
+				{ entryId: second, kind: "write" as const },
+			];
+			return {
+				kind: "commit",
+				writes: [
+					setValue(pendingEntry(first), { type: "custom", customType: "queued-first" }),
+					setValue(pendingEntry(second), { type: "custom", customType: "queued-second" }),
+					setValue(laneState("main"), { currentOperationId: null, lastOperationId: null, inbox }),
+				],
+				next: { ...state, inbox },
+				materialize: () => undefined,
+			};
+		}, BACKGROUND_CONTEXT);
+
+		const appended = await lane.appendCustomEntry("new", undefined, BACKGROUND_CONTEXT);
+
+		expect((await lane.findEntries({ order: "oldestFirst" }, BACKGROUND_CONTEXT)).map((entry) => entry.id)).toEqual([
+			first,
+			second,
+			appended,
+		]);
+		expect(lane.state.inbox).toEqual([]);
+		expect((await session.getValue(laneState("main"), BACKGROUND_CONTEXT))?.value.inbox).toEqual([]);
+		expect(await session.getValue(pendingEntry(first), BACKGROUND_CONTEXT)).toBeUndefined();
+		expect(await session.getValue(pendingEntry(second), BACKGROUND_CONTEXT)).toBeUndefined();
 	});
 
 	it("restores complete lanes without requiring main", async () => {
@@ -224,7 +265,8 @@ describe("runtime Harness lane management", () => {
 						setValue(laneConfig("review"), configured),
 						setValue(laneState("review"), {
 							currentOperationId: null,
-							pendingNextRun: [],
+							lastOperationId: null,
+							inbox: [],
 						}),
 					],
 					BACKGROUND_CONTEXT,

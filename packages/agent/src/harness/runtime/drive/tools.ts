@@ -12,7 +12,7 @@ import {
 	prepareToolCall,
 } from "../../execution/tools.ts";
 import { SessionInvariantError } from "../../session/session.ts";
-import type { JsonValue, RunToolsOperation, ToolBatch, ToolCall } from "../../session/types.ts";
+import type { JsonValue, ToolBatch, ToolCall, ToolsOperation } from "../../session/types.ts";
 import {
 	deleteValue,
 	operationToolArgs,
@@ -52,9 +52,9 @@ class ToolInvocationEnded extends Error {
 
 function currentBatch<TContext extends object | undefined>(
 	lane: Lane<TContext>,
-): { run: RunToolsOperation; batch: ToolBatch } | undefined {
+): { run: ToolsOperation; batch: ToolBatch } | undefined {
 	const operation = lane.state.operation;
-	if (operation?.state.at !== "run.tools") return undefined;
+	if (operation?.state.at !== "tools") return undefined;
 	return { run: operation.state, batch: operation.state.batch };
 }
 
@@ -87,7 +87,7 @@ function invocationCapability<TContext extends object | undefined>(
 	let active = true;
 	const ownsEffect = (state: LaneState): boolean => {
 		const operation = state.operation;
-		if (operation?.state.at !== "run.tools") return false;
+		if (operation?.state.at !== "tools") return false;
 		return findCall(operation.state.batch, call.sourceIndex, call.resultEntryId)?.status === "effect_pending";
 	};
 	const ended = (): ToolInvocationEnded => new ToolInvocationEnded();
@@ -177,7 +177,7 @@ function outcomeFromFinalizedCall(finalized: FinalizedToolCall): ToolOutcome {
 async function publishToolIntent<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	run: RunToolsOperation,
+	run: ToolsOperation,
 	planned: Extract<ToolCall, { status: "planned" }>,
 	args: Record<string, JsonValue>,
 	replay: "never" | "safe",
@@ -205,7 +205,7 @@ async function publishToolIntent<TContext extends object | undefined>(
 async function publishToolOutcome<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	capability: RunToolsOperation,
+	capability: ToolsOperation,
 	call: ToolCall,
 	message: ToolResultMessage<unknown>,
 	terminate: boolean,
@@ -451,7 +451,7 @@ async function prepareToolInvocation<TContext extends object | undefined>(
 async function startToolInvocation<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	run: RunToolsOperation,
+	run: ToolsOperation,
 	sources: ToolBatchSource,
 	call: Extract<ToolCall, { status: "planned" }>,
 	tools: AgentHarnessTool<TContext>[],
@@ -493,7 +493,7 @@ async function startToolInvocation<TContext extends object | undefined>(
 async function recoverToolInvocation<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	run: RunToolsOperation,
+	run: ToolsOperation,
 	sources: ToolBatchSource,
 	call: Extract<ToolCall, { status: "effect_pending" }>,
 	toolsByName: Map<string, AgentHarnessTool<TContext>>,
@@ -520,7 +520,7 @@ async function recoverToolInvocation<TContext extends object | undefined>(
 async function runSequential<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	run: RunToolsOperation,
+	run: ToolsOperation,
 	sources: ToolBatchSource,
 	execution:
 		| {
@@ -582,7 +582,7 @@ async function runSequential<TContext extends object | undefined>(
 async function runParallel<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	run: RunToolsOperation,
+	run: ToolsOperation,
 	sources: ToolBatchSource,
 	tools: AgentHarnessTool<TContext>[],
 	toolsByName: Map<string, AgentHarnessTool<TContext>>,
@@ -627,7 +627,7 @@ async function runParallel<TContext extends object | undefined>(
 export async function runTools<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	run: RunToolsOperation,
+	run: ToolsOperation,
 ): Promise<ProcedureResult> {
 	const batch = run.batch;
 	const recovery = batch.calls.some((call) => call.status === "effect_pending" || call.status === "outcome_ready");

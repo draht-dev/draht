@@ -701,7 +701,8 @@ describe("JSONL v3 migration", () => {
 			});
 			expect((await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value).toEqual({
 				currentOperationId: null,
-				pendingNextRun: [],
+				lastOperationId: null,
+				inbox: [],
 			});
 			await session.close(BACKGROUND_CONTEXT);
 		});
@@ -757,7 +758,8 @@ describe("JSONL v3 migration", () => {
 			});
 			expect((await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value).toEqual({
 				currentOperationId: null,
-				pendingNextRun: [],
+				lastOperationId: null,
+				inbox: [],
 			});
 			await session.close(BACKGROUND_CONTEXT);
 		});
@@ -913,7 +915,8 @@ describe("JSONL v3 migration", () => {
 			});
 			expect((await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value).toEqual({
 				currentOperationId: null,
-				pendingNextRun: [],
+				lastOperationId: null,
+				inbox: [],
 			});
 			await session.close(BACKGROUND_CONTEXT);
 		});
@@ -945,7 +948,8 @@ describe("JSONL v3 migration", () => {
 			});
 			expect((await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value).toEqual({
 				currentOperationId: null,
-				pendingNextRun: [],
+				lastOperationId: null,
+				inbox: [],
 			});
 			await session.close(BACKGROUND_CONTEXT);
 		});

@@ -1,17 +1,13 @@
-import type { AgentMessage } from "../../../types.ts";
-import type { TerminalOperationOutcome } from "../../agent-harness.ts";
 import type { Context } from "../../context.ts";
 import { SessionInvariantError } from "../../session/session.ts";
-import {
-	type BranchSummaryEntry,
-	type CompactionEntry,
-	isRunOperationState,
-	type LaneLastResult,
-	type MessageEntry,
-	type OperationState,
-	type SessionReader,
-	type SettledAssistantMessage,
-	type Write,
+import type {
+	OperationError,
+	OperationMeta,
+	OperationResultRecord,
+	OperationState,
+	SessionReader,
+	TerminalStatus,
+	Write,
 } from "../../session/types.ts";
 import {
 	deleteList,
@@ -41,14 +37,9 @@ export async function operationCleanupWrites(
 	]);
 
 	const pendingIds = new Set<string>();
-	if (isRunOperationState(state)) {
-		for (const id of state.inbox.steer) pendingIds.add(id);
-		for (const id of state.inbox.followUp) pendingIds.add(id);
-		for (const id of state.inbox.writes) pendingIds.add(id);
-		if (state.at === "run.tools") {
-			for (const call of state.batch.calls) {
-				if (call.status === "outcome_ready") pendingIds.add(call.resultEntryId);
-			}
+	if (state.at === "tools") {
+		for (const call of state.batch.calls) {
+			if (call.status === "outcome_ready") pendingIds.add(call.resultEntryId);
 		}
 	}
 	if (state.control.status === "cancel_requested") {
@@ -57,7 +48,7 @@ export async function operationCleanupWrites(
 	}
 
 	let frameDelete: Write | undefined;
-	if (state.at === "run.assistant.effect_pending" || state.at === "run.deferred.effect_pending") {
+	if (state.at === "assistant.effect_pending" || state.at === "deferred.effect_pending") {
 		frameDelete = deleteList(pendingAssistantFrames(operationId, state.responseEntryId));
 	}
 
@@ -73,169 +64,24 @@ export async function operationCleanupWrites(
 	];
 }
 
-function isSettledAssistantMessage(message: AgentMessage): message is SettledAssistantMessage {
-	return message.role === "assistant" && message.stopReason !== "pending";
-}
-
-async function requireMessageEntry(
-	reader: SessionReader,
-	entryId: string,
-	context: Context,
-): Promise<MessageEntry & { message: SettledAssistantMessage }> {
-	const entry = (await reader.getEntries([entryId], context)).get(entryId);
-	if (entry?.type !== "message") {
-		throw new SessionInvariantError(`Terminal result references invalid assistant ${entryId}`);
-	}
-	const message = entry.message;
-	if (!isSettledAssistantMessage(message)) {
-		throw new SessionInvariantError(`Terminal result references invalid assistant ${entryId}`);
-	}
-	return { ...entry, message };
-}
-
-async function requireCompactionEntry(
-	reader: SessionReader,
-	entryId: string,
-	context: Context,
-): Promise<CompactionEntry> {
-	const entry = (await reader.getEntries([entryId], context)).get(entryId);
-	if (entry?.type !== "compaction") {
-		throw new SessionInvariantError(`Terminal result references invalid compaction ${entryId}`);
-	}
-	return entry;
-}
-
-async function requireSummaryEntry(
-	reader: SessionReader,
-	entryId: string,
-	context: Context,
-): Promise<BranchSummaryEntry> {
-	const entry = (await reader.getEntries([entryId], context)).get(entryId);
-	if (entry?.type !== "branch_summary") {
-		throw new SessionInvariantError(`Terminal result references invalid branch summary ${entryId}`);
-	}
-	return entry;
-}
-
-/** Hydrate one bounded public terminal outcome from the latest-result value's direct references. */
-export async function hydrateTerminalOutcome(
-	reader: SessionReader,
-	lastResult: LaneLastResult,
-	context: Context,
-): Promise<TerminalOperationOutcome> {
-	if (lastResult.kind === "run") {
-		if (lastResult.outcome === "completed") {
-			if (lastResult.runCompletion === "terminated_tools") {
-				if (lastResult.finalAssistantEntryId !== undefined) {
-					throw new SessionInvariantError("Terminated-tools result cannot reference a final assistant");
-				}
-				return {
-					operation: "run",
-					runId: lastResult.operationId,
-					kind: "completed",
-					tipId: lastResult.tipId,
-				};
-			}
-			if (lastResult.finalAssistantEntryId === undefined) {
-				throw new SessionInvariantError("Assistant-completed result is missing its final assistant");
-			}
-			const entry = await requireMessageEntry(reader, lastResult.finalAssistantEntryId, context);
-			return {
-				operation: "run",
-				runId: lastResult.operationId,
-				kind: "completed",
-				tipId: lastResult.tipId,
-				finalEntryId: entry.id,
-				finalMessage: entry.message,
-			};
-		}
-
-		const final =
-			lastResult.finalAssistantEntryId === undefined
-				? {}
-				: await requireMessageEntry(reader, lastResult.finalAssistantEntryId, context).then((entry) => ({
-						finalEntryId: entry.id,
-						finalMessage: entry.message,
-					}));
-		return lastResult.outcome === "failed"
-			? {
-					operation: "run",
-					runId: lastResult.operationId,
-					kind: "failed",
-					tipId: lastResult.tipId,
-					error: lastResult.error,
-					...final,
-				}
-			: {
-					operation: "run",
-					runId: lastResult.operationId,
-					kind: "aborted",
-					tipId: lastResult.tipId,
-					...final,
-				};
-	}
-
-	if (lastResult.kind === "compaction") {
-		if (lastResult.outcome === "completed") {
-			const entry = await requireCompactionEntry(reader, lastResult.tipId, context);
-			return {
-				operation: "compaction",
-				runId: lastResult.operationId,
-				kind: "completed",
-				tipId: lastResult.tipId,
-				entry,
-			};
-		}
-		if (lastResult.outcome === "failed") {
-			return {
-				operation: "compaction",
-				runId: lastResult.operationId,
-				kind: "failed",
-				tipId: lastResult.tipId,
-				error: lastResult.error,
-			};
-		}
-		return {
-			operation: "compaction",
-			runId: lastResult.operationId,
-			kind: lastResult.outcome,
-			tipId: lastResult.tipId,
-		};
-	}
-
-	if (lastResult.outcome === "completed") {
-		const summaryEntry =
-			lastResult.summaryEntryId === undefined
-				? undefined
-				: await requireSummaryEntry(reader, lastResult.summaryEntryId, context);
-		if (
-			summaryEntry !== undefined &&
-			(summaryEntry.id !== lastResult.tipId || summaryEntry.fromId !== lastResult.oldTipId)
-		) {
-			throw new SessionInvariantError("Completed navigation summary contradicts its terminal result");
-		}
-		return {
-			operation: "navigation",
-			runId: lastResult.operationId,
-			kind: "completed",
-			oldTipId: lastResult.oldTipId,
-			newTipId: lastResult.tipId,
-			...(summaryEntry === undefined ? {} : { summaryEntry }),
-		};
-	}
-	if (lastResult.outcome === "failed") {
-		return {
-			operation: "navigation",
-			runId: lastResult.operationId,
-			kind: "failed",
-			tipId: lastResult.tipId,
-			error: lastResult.error,
-		};
+/** Construct the immutable observation record for one terminal decision. */
+export function operationResultRecord(
+	meta: OperationMeta,
+	status: TerminalStatus,
+	tipId: string | null,
+	error?: OperationError,
+): OperationResultRecord {
+	if ((status === "failed") !== (error !== undefined)) {
+		throw new SessionInvariantError("Only a failed operation result may carry an error");
 	}
 	return {
-		operation: "navigation",
-		runId: lastResult.operationId,
-		kind: lastResult.outcome,
-		tipId: lastResult.tipId,
+		operationId: meta.operationId,
+		kind: meta.intent.kind,
+		status,
+		...(error === undefined ? {} : { error }),
+		fromTipId: meta.sourceTipId,
+		tipId,
+		startedAt: meta.startedAt,
+		endedAt: Date.now(),
 	};
 }

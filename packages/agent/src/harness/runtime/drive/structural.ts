@@ -5,7 +5,7 @@ import {
 	type Model,
 	type SimpleStreamOptions,
 } from "@draht/ai";
-import type { HarnessEvent, TerminalOperationOutcome } from "../../agent-harness.ts";
+import type { HarnessEvent } from "../../agent-harness.ts";
 import type { BranchPreparation, BranchSummaryResult } from "../../compaction/branch-summarization.ts";
 import { generateBranchSummaryWithRequest } from "../../compaction/branch-summarization.ts";
 import type { CompactionPreparation, CompactResult, SummaryRequest } from "../../compaction/compaction.ts";
@@ -16,35 +16,27 @@ import { applyStreamOptionsPatch } from "../../hooks.ts";
 import { insertEntry, insertUsage } from "../../session/commit.ts";
 import { SessionInvariantError } from "../../session/session.ts";
 import {
+	type AssistantEffectPendingOperation,
 	type BranchSummaryEntry,
+	type CheckpointOperation,
 	type CommitResult,
-	type CompactionDecidingOperation,
-	type CompactionEffectPendingOperation,
 	type CompactionEntry,
-	type CompactionReadyOperation,
-	type CompactionRetryWaitOperation,
 	type DurableFileOperations,
 	type DurableStructuralPreparation,
 	type JsonValue,
 	type LaneConfiguration,
-	type LaneLastResult,
 	type NavigationReadyToCommitOperation,
-	type NavigationSummaryDecidingOperation,
-	type NavigationSummaryEffectPendingOperation,
-	type NavigationSummaryReadyOperation,
-	type NavigationSummaryRetryWaitOperation,
 	type NewEntry,
 	type NormalizedRetryPolicy,
 	type OperationError,
-	type RunAssistantEffectPendingOperation,
-	type RunCheckpointOperation,
-	type RunCompactionDecidingOperation,
-	type RunCompactionEffectPendingOperation,
-	type RunCompactionReadyOperation,
-	type RunCompactionRetryWaitOperation,
-	type RunFailureDrainOperation,
-	runScopeOf,
+	operationScopeOf,
+	type ResultBoundary,
 	type SummaryContext,
+	type SummaryDecidingOperation,
+	type SummaryEffectPendingOperation,
+	type SummaryReadyOperation,
+	type SummaryRetryWaitOperation,
+	type SummaryTask,
 	type UsageRow,
 	type Write,
 } from "../../session/types.ts";
@@ -54,56 +46,7 @@ import type { Lane } from "../lane.ts";
 import { committedEntryEvents, readBoundedEntries } from "../transcript.ts";
 import type { ContinueOperationResult, Drive, ProcedureResult } from "../types.ts";
 import { retryDelay, retryNotBefore, waitUntil } from "./retry.ts";
-import { operationCleanupWrites } from "./terminal.ts";
-
-type StructuralDeciding =
-	| RunCompactionDecidingOperation
-	| CompactionDecidingOperation
-	| NavigationSummaryDecidingOperation;
-type StructuralReady = RunCompactionReadyOperation | CompactionReadyOperation | NavigationSummaryReadyOperation;
-type StructuralEffectPending =
-	| RunCompactionEffectPendingOperation
-	| CompactionEffectPendingOperation
-	| NavigationSummaryEffectPendingOperation;
-type StructuralRetryWait =
-	| RunCompactionRetryWaitOperation
-	| CompactionRetryWaitOperation
-	| NavigationSummaryRetryWaitOperation;
-type CompactionStructural =
-	| RunCompactionDecidingOperation
-	| RunCompactionReadyOperation
-	| RunCompactionEffectPendingOperation
-	| RunCompactionRetryWaitOperation
-	| CompactionDecidingOperation
-	| CompactionReadyOperation
-	| CompactionEffectPendingOperation
-	| CompactionRetryWaitOperation;
-type NavigationSummaryStructural =
-	| NavigationSummaryDecidingOperation
-	| NavigationSummaryReadyOperation
-	| NavigationSummaryEffectPendingOperation
-	| NavigationSummaryRetryWaitOperation;
-type RunCompactionStructural = Extract<CompactionStructural, { at: `run.compaction.${string}` }>;
-type StandaloneCompactionStructural = Extract<CompactionStructural, { at: `compaction.${string}` }>;
-type GeneratedStructural = StructuralReady | StructuralEffectPending;
-type RunGeneratedCompaction = Extract<GeneratedStructural, { at: `run.compaction.${string}` }>;
-type StandaloneGeneratedCompaction = Extract<GeneratedStructural, { at: `compaction.${string}` }>;
-
-function isRunGeneratedCompaction(state: GeneratedStructural): state is RunGeneratedCompaction {
-	return state.at.startsWith("run.compaction.");
-}
-
-function isStandaloneGeneratedCompaction(state: GeneratedStructural): state is StandaloneGeneratedCompaction {
-	return state.at.startsWith("compaction.");
-}
-
-function isRunCompaction(state: CompactionStructural): state is RunCompactionStructural {
-	return state.at.startsWith("run.compaction.");
-}
-
-function isStandaloneCompaction(state: CompactionStructural): state is StandaloneCompactionStructural {
-	return state.at.startsWith("compaction.");
-}
+import { operationCleanupWrites, operationResultRecord } from "./terminal.ts";
 
 class StructuralCancelled extends Error {
 	constructor() {
@@ -176,43 +119,54 @@ function branchPreparation(
 	};
 }
 
-async function readCompactionPreparation<TContext extends object | undefined>(
-	lane: Lane<TContext>,
-	drive: Drive,
-	deciding: RunCompactionDecidingOperation | CompactionDecidingOperation,
-): Promise<ContinueOperationResult<CompactionPreparation>> {
-	return lane.continueOperation(
-		deciding,
-		async (_state, current, _meta, reader) => {
-			const stored = await reader.getValue(operationPreparation(drive.operationId, current.taskId), drive.context);
-			if (stored?.value.kind !== "compaction") {
-				throw new SessionInvariantError(`Structural task ${current.taskId} is missing its compaction preparation`);
-			}
-			return { kind: "return", result: compactionPreparation(stored.value) };
-		},
-		drive.context,
-	);
+function summaryKind(task: SummaryTask): DurableStructuralPreparation["kind"] {
+	return task.boundary.kind === "commit_navigation" ? "branch_summary" : "compaction";
 }
 
-async function readBranchPreparation<TContext extends object | undefined>(
+function compactionReason(task: SummaryTask): "manual" | "threshold" | "overflow" {
+	if (task.reason !== undefined) return task.reason;
+	if (task.boundary.kind === "finish") return "manual";
+	throw new SessionInvariantError(`In-run compaction task ${task.taskId} is missing its reason`);
+}
+
+function navigationBoundary(task: SummaryTask): Extract<ResultBoundary, { kind: "commit_navigation" }> {
+	if (task.boundary.kind !== "commit_navigation") {
+		throw new SessionInvariantError(`Summary task ${task.taskId} is not a navigation`);
+	}
+	return task.boundary;
+}
+
+async function readStructuralPreparation<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	deciding: NavigationSummaryDecidingOperation,
-): Promise<ContinueOperationResult<BranchPreparation>> {
+	deciding: SummaryDecidingOperation,
+): Promise<ContinueOperationResult<CompactionPreparation | BranchPreparation>> {
 	return lane.continueOperation(
 		deciding,
 		async (_state, current, _meta, reader) => {
-			const [stored, target] = await Promise.all([
-				reader.getValue(operationPreparation(drive.operationId, current.taskId), drive.context),
-				reader.getEntries([current.targetId], drive.context),
-			]);
-			if (!target.has(current.targetId)) {
-				throw new SessionInvariantError(`Navigation target ${current.targetId} is missing`);
+			const expected = summaryKind(current.task);
+			const stored = await reader.getValue(
+				operationPreparation(drive.operationId, current.task.taskId),
+				drive.context,
+			);
+			if (stored?.value.kind !== expected) {
+				throw new SessionInvariantError(
+					`Structural task ${current.task.taskId} is missing its ${expected} preparation`,
+				);
 			}
-			if (stored?.value.kind !== "branch_summary") {
-				throw new SessionInvariantError(`Structural task ${current.taskId} is missing its branch preparation`);
+			if (current.task.boundary.kind === "commit_navigation") {
+				const targetId = current.task.boundary.targetId;
+				if (!(await reader.getEntries([targetId], drive.context)).has(targetId)) {
+					throw new SessionInvariantError(`Navigation target ${targetId} is missing`);
+				}
 			}
-			return { kind: "return", result: branchPreparation(stored.value) };
+			return {
+				kind: "return",
+				result:
+					stored.value.kind === "compaction"
+						? compactionPreparation(stored.value)
+						: branchPreparation(stored.value),
+			};
 		},
 		drive.context,
 	);
@@ -220,31 +174,15 @@ async function readBranchPreparation<TContext extends object | undefined>(
 
 function summaryContext<TContext extends object | undefined>(
 	lane: Lane<TContext>,
-	taskId: string,
 	resultEntryId: string,
-	kind: SummaryContext["kind"],
 	configuration: LaneConfiguration,
-	reason?: SummaryContext["reason"],
 ): SummaryContext {
 	return {
-		taskId,
 		resultEntryId,
-		kind,
 		configuration,
 		streamOptions: { ...lane.readConfig().streamOptions, deferred: false },
 		retryPolicy: normalizedRetryPolicy(lane),
-		...(reason === undefined ? {} : { reason }),
 	};
-}
-
-function structuralEntryEvents(
-	entry: NewEntry,
-	entryWriteIndex: number,
-	commit: CommitResult,
-	lane: string,
-	runId: string,
-): HarnessEvent[] {
-	return committedEntryEvents([entry], commit, lane, runId, entryWriteIndex);
 }
 
 function usageEvent(row: Omit<UsageRow, "seq">, writeIndex: number, commit: CommitResult, lane: string): HarnessEvent {
@@ -256,302 +194,273 @@ function usageEvent(row: Omit<UsageRow, "seq">, writeIndex: number, commit: Comm
 	};
 }
 
-function compactionReason(state: CompactionStructural): "manual" | "threshold" | "overflow" {
-	return isRunCompaction(state) ? state.reason : "manual";
-}
-
-function compactionCustomInstructions(state: CompactionStructural): string | undefined {
-	return isStandaloneCompaction(state) ? state.customInstructions : undefined;
-}
-
 function operationError(code: string, message: string, details?: JsonValue): OperationError {
 	return { code, message, ...(details === undefined ? {} : { details }) };
 }
 
-async function publishCompactionResult<TContext extends object | undefined>(
+type StructuralOutcome =
+	| { kind: "compaction"; resultEntryId: string; result: CompactResult; fromHook: boolean }
+	| { kind: "branch_summary"; resultEntryId: string; result: BranchSummaryResult; fromHook: boolean }
+	| { kind: "declined" }
+	| { kind: "failed"; error: OperationError };
+
+async function publishStructuralOutcome<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	capability: CompactionStructural,
-	resultEntryId: string,
-	result: CompactResult,
-	fromHook: boolean,
+	capability: SummaryDecidingOperation | SummaryReadyOperation | SummaryEffectPendingOperation,
+	outcome: StructuralOutcome,
 ): Promise<ProcedureResult> {
-	const hookUsageId = fromHook && result.usage !== undefined ? lane.session.idGenerator.next() : undefined;
-	const published = await lane.continueOperation<CompactionStructural, ProcedureResult>(
-		capability,
-		async (state, current, _meta, reader) => {
-			const entry: NewEntry<CompactionEntry> = {
-				id: resultEntryId,
-				parentId: state.tipId,
-				type: "compaction",
-				summary: result.summary,
-				retainedTail: result.retainedTail,
-				tokensBefore: result.tokensBefore,
-				...(result.details === undefined ? {} : { details: result.details }),
-				...(result.usage === undefined ? {} : { usage: result.usage }),
-				fromHook,
-			};
-			const writes: Write[] = [];
-			let hookUsage: { row: Omit<UsageRow, "seq">; writeIndex: number } | undefined;
-			if (hookUsageId !== undefined && result.usage !== undefined) {
-				const row: Omit<UsageRow, "seq"> = { id: hookUsageId, usage: result.usage, adjustment: false };
-				hookUsage = { row, writeIndex: writes.length };
-				writes.push(insertUsage(row));
-			}
-			const entryWriteIndex = writes.length;
-			writes.push(insertEntry(entry), setValue(branchTip(lane.name), resultEntryId));
-			const events = (commit: CommitResult): HarnessEvent[] => [
-				...(hookUsage === undefined ? [] : [usageEvent(hookUsage.row, hookUsage.writeIndex, commit, lane.name)]),
-				...structuralEntryEvents(entry, entryWriteIndex, commit, lane.name, drive.operationId),
-				{
-					type: "compaction_end",
-					lane: lane.name,
-					runId: drive.operationId,
-					reason: compactionReason(current),
-					outcome: "completed",
-					entry: { ...entry, seq: commit.seqs[entryWriteIndex]!, timestamp: commit.timestamp },
-					fromHook,
-				},
-			];
-
-			if (isRunCompaction(current)) {
-				const checkpoint: RunCheckpointOperation = {
-					...runScopeOf(current),
-					at: "run.checkpoint",
-					...current.resumeAfter,
-				};
-				return {
-					kind: "commit",
-					writes,
-					operationState: checkpoint,
-					lane: { tipId: resultEntryId },
-					materialize: () => ({ kind: "continue" }) as const,
-					events,
-				};
-			}
-
-			const cleanup = await operationCleanupWrites(reader, drive.operationId, current, drive.context);
-			const lastResult: LaneLastResult = {
-				operationId: drive.operationId,
-				kind: "compaction",
-				outcome: "completed",
-				tipId: resultEntryId,
-			};
-			return {
-				kind: "finish",
-				writes: [...writes, ...cleanup],
-				lastResult,
-				lane: { tipId: resultEntryId },
-				materialize: (commit) =>
-					({
-						kind: "settled",
-						outcome: {
-							operation: "compaction",
-							runId: drive.operationId,
-							kind: "completed",
-							tipId: resultEntryId,
-							entry: { ...entry, seq: commit.seqs[entryWriteIndex]!, timestamp: commit.timestamp },
-						},
-					}) as const,
-				events,
-			};
-		},
-		drive.context,
-	);
-	return published.kind === "cancel_requested" ? { kind: "continue" } : published.value;
-}
-
-async function publishNavigationSummary<TContext extends object | undefined>(
-	lane: Lane<TContext>,
-	drive: Drive,
-	capability: NavigationSummaryStructural,
-	resultEntryId: string,
-	result: BranchSummaryResult,
-	fromHook: boolean,
-): Promise<ProcedureResult> {
-	const hookUsageId = fromHook && result.usage !== undefined ? lane.session.idGenerator.next() : undefined;
-	const published = await lane.continueOperation<NavigationSummaryStructural, ProcedureResult>(
-		capability,
-		async (_state, current, meta, reader) => {
-			const entry: NewEntry<BranchSummaryEntry> = {
-				id: resultEntryId,
-				parentId: current.targetId,
-				type: "branch_summary",
-				fromId: meta.sourceTipId,
-				summary: result.summary,
-				details: { readFiles: result.readFiles, modifiedFiles: result.modifiedFiles },
-				...(result.usage === undefined ? {} : { usage: result.usage }),
-				fromHook,
-			};
-			const writes: Write[] = [];
-			let hookUsage: { row: Omit<UsageRow, "seq">; writeIndex: number } | undefined;
-			if (hookUsageId !== undefined && result.usage !== undefined) {
-				const row: Omit<UsageRow, "seq"> = { id: hookUsageId, usage: result.usage, adjustment: false };
-				hookUsage = { row, writeIndex: writes.length };
-				writes.push(insertUsage(row));
-			}
-			writes.push(setValue(branchTip(lane.name), current.targetId));
-			const entryWriteIndex = writes.length;
-			writes.push(insertEntry(entry), setValue(branchTip(lane.name), resultEntryId));
-			if (current.label !== undefined) writes.push(setValue(entryLabel(current.targetId), current.label));
-			const cleanup = await operationCleanupWrites(reader, drive.operationId, current, drive.context);
-			const lastResult: LaneLastResult = {
-				operationId: drive.operationId,
-				kind: "navigation",
-				outcome: "completed",
-				oldTipId: meta.sourceTipId,
-				tipId: resultEntryId,
-				summaryEntryId: resultEntryId,
-			};
-			const events = (commit: CommitResult): HarnessEvent[] => {
-				const committed = { ...entry, seq: commit.seqs[entryWriteIndex]!, timestamp: commit.timestamp };
-				return [
-					...(hookUsage === undefined ? [] : [usageEvent(hookUsage.row, hookUsage.writeIndex, commit, lane.name)]),
-					...structuralEntryEvents(entry, entryWriteIndex, commit, lane.name, drive.operationId),
-					{
-						type: "navigation_end",
-						lane: lane.name,
-						runId: drive.operationId,
-						oldTipId: meta.sourceTipId,
-						newTipId: resultEntryId,
-						outcome: "completed",
-						summaryEntry: committed,
-					},
-				];
-			};
-			return {
-				kind: "finish",
-				writes: [...writes, ...cleanup],
-				lastResult,
-				lane: { tipId: resultEntryId },
-				materialize: (commit) => {
-					const summaryEntry: BranchSummaryEntry = {
-						...entry,
-						seq: commit.seqs[entryWriteIndex]!,
-						timestamp: commit.timestamp,
-					};
-					return {
-						kind: "settled",
-						outcome: {
-							operation: "navigation",
-							runId: drive.operationId,
-							kind: "completed",
-							oldTipId: meta.sourceTipId,
-							newTipId: resultEntryId,
-							summaryEntry,
-						},
-					} as const;
-				},
-				events,
-			};
-		},
-		drive.context,
-	);
-	return published.kind === "cancel_requested" ? { kind: "continue" } : published.value;
-}
-
-async function publishStructuralDecline<TContext extends object | undefined>(
-	lane: Lane<TContext>,
-	drive: Drive,
-	capability: StructuralDeciding,
-): Promise<ProcedureResult> {
-	const published = await lane.continueOperation<StructuralDeciding, ProcedureResult>(
+	const hookUsageId =
+		(outcome.kind === "compaction" || outcome.kind === "branch_summary") &&
+		outcome.fromHook &&
+		outcome.result.usage !== undefined
+			? lane.session.idGenerator.next()
+			: undefined;
+	const published = await lane.continueOperation<
+		SummaryDecidingOperation | SummaryReadyOperation | SummaryEffectPendingOperation,
+		ProcedureResult
+	>(
 		capability,
 		async (state, current, meta, reader) => {
-			if (current.at === "run.compaction.deciding") {
-				const operationState: RunCheckpointOperation | RunFailureDrainOperation =
-					current.reason === "threshold"
-						? { ...runScopeOf(current), at: "run.checkpoint", ...current.resumeAfter }
-						: {
-								...runScopeOf(current),
-								at: "run.failure_drain",
-								error: operationError("compaction_declined", "Overflow compaction was declined"),
-								provenance: { kind: "structural", taskId: current.taskId },
-							};
-				return {
-					kind: "commit",
-					writes: [],
-					operationState,
-					materialize: () => ({ kind: "continue" }) as const,
-					events: () => [
-						{
-							type: "compaction_end",
-							lane: lane.name,
-							runId: drive.operationId,
-							reason: current.reason,
-							outcome: "declined",
-						},
-					],
-				};
+			const expected = summaryKind(current.task);
+			if ((outcome.kind === "compaction" || outcome.kind === "branch_summary") && outcome.kind !== expected) {
+				throw new SessionInvariantError(
+					`Structural ${outcome.kind} result does not match ${expected} task ${current.task.taskId}`,
+				);
 			}
 
-			const cleanup = await operationCleanupWrites(reader, drive.operationId, current, drive.context);
-			if (current.at === "compaction.deciding") {
-				if (state.tipId === null) throw new SessionInvariantError("Standalone compaction has no Branch tip");
-				const lastResult: LaneLastResult = {
-					operationId: drive.operationId,
-					kind: "compaction",
-					outcome: "declined",
-					tipId: state.tipId,
-				};
-				return {
-					kind: "finish",
-					writes: cleanup,
-					lastResult,
-					materialize: () =>
-						({
-							kind: "settled",
-							outcome: {
-								operation: "compaction",
-								runId: drive.operationId,
-								kind: "declined",
-								tipId: state.tipId!,
-							},
-						}) as const,
-					events: () => [
-						{
-							type: "compaction_end",
-							lane: lane.name,
-							runId: drive.operationId,
-							reason: "manual",
-							outcome: "declined",
-						},
-					],
-				};
+			const writes: Write[] = [];
+			const baseEvents: ((commit: CommitResult) => HarnessEvent[])[] = [];
+			let terminalTipId = state.tipId;
+			if (hookUsageId !== undefined && (outcome.kind === "compaction" || outcome.kind === "branch_summary")) {
+				const usage = outcome.result.usage;
+				if (usage === undefined) throw new SessionInvariantError("Hook usage id exists without structural usage");
+				const row: Omit<UsageRow, "seq"> = { id: hookUsageId, usage, adjustment: false };
+				const writeIndex = writes.length;
+				writes.push(insertUsage(row));
+				baseEvents.push((commit) => [usageEvent(row, writeIndex, commit, lane.name)]);
 			}
 
-			const lastResult: LaneLastResult = {
-				operationId: drive.operationId,
-				kind: "navigation",
-				outcome: "declined",
-				oldTipId: meta.sourceTipId,
-				tipId: state.tipId,
-			};
-			return {
-				kind: "finish",
-				writes: cleanup,
-				lastResult,
-				materialize: () =>
-					({
-						kind: "settled",
-						outcome: {
-							operation: "navigation",
-							runId: drive.operationId,
-							kind: "declined",
-							tipId: state.tipId,
-						},
-					}) as const,
-				events: () => [
+			if (outcome.kind === "compaction") {
+				const entry: NewEntry<CompactionEntry> = {
+					id: outcome.resultEntryId,
+					parentId: state.tipId,
+					type: "compaction",
+					summary: outcome.result.summary,
+					retainedTail: outcome.result.retainedTail,
+					tokensBefore: outcome.result.tokensBefore,
+					...(outcome.result.details === undefined ? {} : { details: outcome.result.details }),
+					...(outcome.result.usage === undefined ? {} : { usage: outcome.result.usage }),
+					fromHook: outcome.fromHook,
+				};
+				const entryWriteIndex = writes.length;
+				writes.push(insertEntry(entry), setValue(branchTip(lane.name), outcome.resultEntryId));
+				terminalTipId = outcome.resultEntryId;
+				baseEvents.push((commit) => [
+					...committedEntryEvents([entry], commit, lane.name, drive.operationId, entryWriteIndex),
 					{
-						type: "navigation_end",
+						type: "compaction_end",
 						lane: lane.name,
 						runId: drive.operationId,
-						oldTipId: meta.sourceTipId,
-						newTipId: state.tipId,
-						outcome: "declined",
+						reason: compactionReason(current.task),
+						status: "completed",
+						entryId: outcome.resultEntryId,
 					},
-				],
-			};
+				]);
+			} else if (outcome.kind === "branch_summary") {
+				const boundary = navigationBoundary(current.task);
+				const entry: NewEntry<BranchSummaryEntry> = {
+					id: outcome.resultEntryId,
+					parentId: boundary.targetId,
+					type: "branch_summary",
+					fromId: meta.sourceTipId,
+					summary: outcome.result.summary,
+					details: { readFiles: outcome.result.readFiles, modifiedFiles: outcome.result.modifiedFiles },
+					...(outcome.result.usage === undefined ? {} : { usage: outcome.result.usage }),
+					fromHook: outcome.fromHook,
+				};
+				writes.push(setValue(branchTip(lane.name), boundary.targetId));
+				const entryWriteIndex = writes.length;
+				writes.push(insertEntry(entry), setValue(branchTip(lane.name), outcome.resultEntryId));
+				if (boundary.label !== undefined) writes.push(setValue(entryLabel(boundary.targetId), boundary.label));
+				terminalTipId = outcome.resultEntryId;
+				baseEvents.push((commit) =>
+					committedEntryEvents([entry], commit, lane.name, drive.operationId, entryWriteIndex),
+				);
+			}
+
+			const events = (commit: CommitResult): HarnessEvent[] =>
+				baseEvents.flatMap((materialize) => materialize(commit));
+			switch (current.task.boundary.kind) {
+				case "resume_checkpoint": {
+					if (outcome.kind === "branch_summary") {
+						throw new SessionInvariantError("Run compaction boundary received a branch summary");
+					}
+					if (outcome.kind === "compaction") {
+						return {
+							kind: "commit",
+							writes,
+							operationState: {
+								...operationScopeOf(current),
+								at: "checkpoint",
+								...current.task.boundary.resumeAfter,
+							},
+							lane: { tipId: terminalTipId },
+							materialize: () => ({ kind: "continue" }) as const,
+							events,
+						};
+					}
+					if (outcome.kind === "declined" && current.task.reason === "threshold") {
+						return {
+							kind: "commit",
+							writes: [],
+							operationState: {
+								...operationScopeOf(current),
+								at: "checkpoint",
+								...current.task.boundary.resumeAfter,
+							},
+							materialize: () => ({ kind: "continue" }) as const,
+							events: () => [
+								{
+									type: "compaction_end",
+									lane: lane.name,
+									runId: drive.operationId,
+									reason: "threshold",
+									status: "declined",
+								},
+							],
+						};
+					}
+					if (state.tipId === null) throw new SessionInvariantError("Failed run has no Branch tip");
+					const error =
+						outcome.kind === "declined"
+							? operationError("compaction_declined", "Overflow compaction was declined")
+							: outcome.error;
+					const cleanup = await operationCleanupWrites(reader, drive.operationId, current, drive.context);
+					const record = operationResultRecord(meta, "failed", state.tipId, error);
+					const compactionEnd: HarnessEvent =
+						outcome.kind === "declined"
+							? {
+									type: "compaction_end",
+									lane: lane.name,
+									runId: drive.operationId,
+									reason: compactionReason(current.task),
+									status: "declined",
+								}
+							: {
+									type: "compaction_end",
+									lane: lane.name,
+									runId: drive.operationId,
+									reason: compactionReason(current.task),
+									status: "failed",
+									error: outcome.error,
+								};
+					return {
+						kind: "finish",
+						writes: [...writes, ...cleanup],
+						record,
+						materialize: () => ({ kind: "settled", outcome: record }) as const,
+						events: () => [
+							compactionEnd,
+							{
+								type: "run_end",
+								lane: lane.name,
+								runId: drive.operationId,
+								status: "failed",
+								error,
+								fromTipId: meta.sourceTipId,
+								tipId: state.tipId,
+							},
+						],
+					};
+				}
+				case "finish": {
+					if (outcome.kind === "branch_summary") {
+						throw new SessionInvariantError("Compaction finish boundary received a branch summary");
+					}
+					if (outcome.kind !== "compaction" && state.tipId === null) {
+						throw new SessionInvariantError("Standalone compaction has no Branch tip");
+					}
+					const error = outcome.kind === "failed" ? outcome.error : undefined;
+					const status =
+						outcome.kind === "declined" ? "declined" : outcome.kind === "failed" ? "failed" : "completed";
+					const cleanup = await operationCleanupWrites(reader, drive.operationId, current, drive.context);
+					const record = operationResultRecord(meta, status, terminalTipId, error);
+					const compactionEnd: HarnessEvent | undefined =
+						outcome.kind === "compaction"
+							? undefined
+							: outcome.kind === "declined"
+								? {
+										type: "compaction_end",
+										lane: lane.name,
+										runId: drive.operationId,
+										reason: "manual",
+										status: "declined",
+									}
+								: {
+										type: "compaction_end",
+										lane: lane.name,
+										runId: drive.operationId,
+										reason: "manual",
+										status: "failed",
+										error: outcome.error,
+									};
+					return {
+						kind: "finish",
+						writes: [...writes, ...cleanup],
+						record,
+						...(outcome.kind === "compaction" ? { lane: { tipId: terminalTipId } } : {}),
+						materialize: () => ({ kind: "settled", outcome: record }) as const,
+						events: (commit) => [...events(commit), ...(compactionEnd === undefined ? [] : [compactionEnd])],
+					};
+				}
+				case "commit_navigation": {
+					if (outcome.kind === "compaction") {
+						throw new SessionInvariantError("Navigation boundary received a compaction result");
+					}
+					const error = outcome.kind === "failed" ? outcome.error : undefined;
+					const status =
+						outcome.kind === "declined" ? "declined" : outcome.kind === "failed" ? "failed" : "completed";
+					const cleanup = await operationCleanupWrites(reader, drive.operationId, current, drive.context);
+					const record = operationResultRecord(meta, status, terminalTipId, error);
+					const navigationEnd: HarnessEvent =
+						outcome.kind === "branch_summary"
+							? {
+									type: "navigation_end",
+									lane: lane.name,
+									runId: drive.operationId,
+									status: "completed",
+									fromTipId: meta.sourceTipId,
+									tipId: terminalTipId,
+								}
+							: outcome.kind === "declined"
+								? {
+										type: "navigation_end",
+										lane: lane.name,
+										runId: drive.operationId,
+										status: "declined",
+										fromTipId: meta.sourceTipId,
+										tipId: terminalTipId,
+									}
+								: {
+										type: "navigation_end",
+										lane: lane.name,
+										runId: drive.operationId,
+										status: "failed",
+										error: outcome.error,
+										fromTipId: meta.sourceTipId,
+										tipId: terminalTipId,
+									};
+					return {
+						kind: "finish",
+						writes: [...writes, ...cleanup],
+						record,
+						...(outcome.kind === "branch_summary" ? { lane: { tipId: terminalTipId } } : {}),
+						materialize: () => ({ kind: "settled", outcome: record }) as const,
+						events: (commit) => [...events(commit), navigationEnd],
+					};
+				}
+			}
 		},
 		drive.context,
 	);
@@ -561,49 +470,19 @@ async function publishStructuralDecline<TContext extends object | undefined>(
 async function publishStructuralReady<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	deciding: StructuralDeciding,
+	deciding: SummaryDecidingOperation,
 ): Promise<ProcedureResult> {
-	const taskId = deciding.taskId;
 	const resultEntryId = lane.session.idGenerator.next();
-	const published = await lane.continueOperation<StructuralDeciding, ProcedureResult>(
+	const published = await lane.continueOperation(
 		deciding,
 		(state, current) => {
-			let operationState: StructuralReady;
-			if (current.at === "run.compaction.deciding") {
-				operationState = {
-					...runScopeOf(current),
-					at: "run.compaction.ready",
-					reason: current.reason,
-					resumeAfter: current.resumeAfter,
-					summaryContext: summaryContext(
-						lane,
-						taskId,
-						resultEntryId,
-						"compaction",
-						state.configuration,
-						current.reason,
-					),
-					nextAttempt: 1,
-				};
-			} else if (current.at === "compaction.deciding") {
-				operationState = {
-					at: "compaction.ready",
-					control: current.control,
-					...(current.customInstructions === undefined ? {} : { customInstructions: current.customInstructions }),
-					summaryContext: summaryContext(lane, taskId, resultEntryId, "compaction", state.configuration, "manual"),
-					nextAttempt: 1,
-				};
-			} else {
-				operationState = {
-					at: "navigation.summary.ready",
-					control: current.control,
-					targetId: current.targetId,
-					...(current.label === undefined ? {} : { label: current.label }),
-					...(current.customInstructions === undefined ? {} : { customInstructions: current.customInstructions }),
-					summaryContext: summaryContext(lane, taskId, resultEntryId, "branch_summary", state.configuration),
-					nextAttempt: 1,
-				};
-			}
+			const operationState: SummaryReadyOperation = {
+				...operationScopeOf(current),
+				at: "summary.ready",
+				task: current.task,
+				summaryContext: summaryContext(lane, resultEntryId, state.configuration),
+				nextAttempt: 1,
+			};
 			return {
 				kind: "commit",
 				writes: [],
@@ -620,165 +499,107 @@ async function publishStructuralReady<TContext extends object | undefined>(
 export async function runStructuralDecision<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	deciding: StructuralDeciding,
+	deciding: SummaryDecidingOperation,
 ): Promise<ProcedureResult> {
-	if (deciding.at === "navigation.summary.deciding") {
-		const preparation = await readBranchPreparation(lane, drive, deciding);
-		if (preparation.kind === "cancel_requested") return { kind: "continue" };
+	const preparation = await readStructuralPreparation(lane, drive, deciding);
+	if (preparation.kind === "cancel_requested") return { kind: "continue" };
+	if (deciding.task.boundary.kind === "commit_navigation") {
+		if (!("messages" in preparation.value)) {
+			throw new SessionInvariantError("Navigation task has invalid durable preparation");
+		}
 		const hook = await lane.hooks.runWithGate(
 			"before_navigation",
 			{
 				lane: lane.name,
 				runId: drive.operationId,
-				targetId: deciding.targetId,
+				targetId: deciding.task.boundary.targetId,
 				preparation: preparation.value,
-				...(deciding.customInstructions === undefined ? {} : { customInstructions: deciding.customInstructions }),
+				...(deciding.task.customInstructions === undefined
+					? {}
+					: { customInstructions: deciding.task.customInstructions }),
 			},
 			drive.gate,
 			drive.context,
 		);
-		if (hook?.decline === true) return publishStructuralDecline(lane, drive, deciding);
+		if (hook?.decline === true) return publishStructuralOutcome(lane, drive, deciding, { kind: "declined" });
 		if (hook?.summary !== undefined) {
-			return publishNavigationSummary(lane, drive, deciding, lane.session.idGenerator.next(), hook.summary, true);
+			return publishStructuralOutcome(lane, drive, deciding, {
+				kind: "branch_summary",
+				resultEntryId: lane.session.idGenerator.next(),
+				result: hook.summary,
+				fromHook: true,
+			});
 		}
 		return publishStructuralReady(lane, drive, deciding);
 	}
 
-	const preparation = await readCompactionPreparation(lane, drive, deciding);
-	if (preparation.kind === "cancel_requested") return { kind: "continue" };
-	const reason = deciding.at === "run.compaction.deciding" ? deciding.reason : "manual";
-	const customInstructions = deciding.at === "compaction.deciding" ? deciding.customInstructions : undefined;
+	if (!("messagesToSummarize" in preparation.value)) {
+		throw new SessionInvariantError("Compaction task has invalid durable preparation");
+	}
 	const hook = await lane.hooks.runWithGate(
 		"before_compaction",
 		{
 			lane: lane.name,
 			runId: drive.operationId,
-			reason,
+			reason: compactionReason(deciding.task),
 			preparation: preparation.value,
-			...(customInstructions === undefined ? {} : { customInstructions }),
+			...(deciding.task.customInstructions === undefined
+				? {}
+				: { customInstructions: deciding.task.customInstructions }),
 		},
 		drive.gate,
 		drive.context,
 	);
-	if (hook?.decline === true) return publishStructuralDecline(lane, drive, deciding);
+	if (hook?.decline === true) return publishStructuralOutcome(lane, drive, deciding, { kind: "declined" });
 	if (hook?.compaction !== undefined) {
-		return publishCompactionResult(lane, drive, deciding, lane.session.idGenerator.next(), hook.compaction, true);
+		return publishStructuralOutcome(lane, drive, deciding, {
+			kind: "compaction",
+			resultEntryId: lane.session.idGenerator.next(),
+			result: hook.compaction,
+			fromHook: true,
+		});
 	}
 	return publishStructuralReady(lane, drive, deciding);
 }
 
-function effectPendingFromReady(ready: StructuralReady): StructuralEffectPending {
-	switch (ready.at) {
-		case "run.compaction.ready":
-			return {
-				...runScopeOf(ready),
-				at: "run.compaction.effect_pending",
-				reason: ready.reason,
-				resumeAfter: ready.resumeAfter,
-				summaryContext: ready.summaryContext,
-				attempt: ready.nextAttempt,
-				usageIds: [],
-			};
-		case "compaction.ready":
-			return {
-				at: "compaction.effect_pending",
-				control: ready.control,
-				...(ready.customInstructions === undefined ? {} : { customInstructions: ready.customInstructions }),
-				summaryContext: ready.summaryContext,
-				attempt: ready.nextAttempt,
-				usageIds: [],
-			};
-		case "navigation.summary.ready":
-			return {
-				at: "navigation.summary.effect_pending",
-				control: ready.control,
-				targetId: ready.targetId,
-				...(ready.label === undefined ? {} : { label: ready.label }),
-				...(ready.customInstructions === undefined ? {} : { customInstructions: ready.customInstructions }),
-				summaryContext: ready.summaryContext,
-				attempt: ready.nextAttempt,
-				usageIds: [],
-			};
-	}
+function effectPendingFromReady(ready: SummaryReadyOperation): SummaryEffectPendingOperation {
+	return {
+		...operationScopeOf(ready),
+		at: "summary.effect_pending",
+		task: ready.task,
+		summaryContext: ready.summaryContext,
+		attempt: ready.nextAttempt,
+		usageIds: [],
+	};
 }
 
-function retryWaitFromEffect(effect: StructuralEffectPending, errorMessage: string): StructuralRetryWait {
-	const nextAttempt = effect.attempt + 1;
-	const notBefore = retryNotBefore(effect.summaryContext.retryPolicy.baseDelayMs, effect.attempt);
-	switch (effect.at) {
-		case "run.compaction.effect_pending":
-			return {
-				...runScopeOf(effect),
-				at: "run.compaction.retry_wait",
-				reason: effect.reason,
-				resumeAfter: effect.resumeAfter,
-				summaryContext: effect.summaryContext,
-				nextAttempt,
-				notBefore,
-				errorMessage,
-			};
-		case "compaction.effect_pending":
-			return {
-				at: "compaction.retry_wait",
-				control: effect.control,
-				...(effect.customInstructions === undefined ? {} : { customInstructions: effect.customInstructions }),
-				summaryContext: effect.summaryContext,
-				nextAttempt,
-				notBefore,
-				errorMessage,
-			};
-		case "navigation.summary.effect_pending":
-			return {
-				at: "navigation.summary.retry_wait",
-				control: effect.control,
-				targetId: effect.targetId,
-				...(effect.label === undefined ? {} : { label: effect.label }),
-				...(effect.customInstructions === undefined ? {} : { customInstructions: effect.customInstructions }),
-				summaryContext: effect.summaryContext,
-				nextAttempt,
-				notBefore,
-				errorMessage,
-			};
-	}
+function retryWaitFromEffect(effect: SummaryEffectPendingOperation, errorMessage: string): SummaryRetryWaitOperation {
+	return {
+		...operationScopeOf(effect),
+		at: "summary.retry_wait",
+		task: effect.task,
+		summaryContext: effect.summaryContext,
+		nextAttempt: effect.attempt + 1,
+		notBefore: retryNotBefore(effect.summaryContext.retryPolicy.baseDelayMs, effect.attempt),
+		errorMessage,
+	};
 }
 
-function readyFromRetryWait(retry: StructuralRetryWait): StructuralReady {
-	switch (retry.at) {
-		case "run.compaction.retry_wait":
-			return {
-				...runScopeOf(retry),
-				at: "run.compaction.ready",
-				reason: retry.reason,
-				resumeAfter: retry.resumeAfter,
-				summaryContext: retry.summaryContext,
-				nextAttempt: retry.nextAttempt,
-			};
-		case "compaction.retry_wait":
-			return {
-				at: "compaction.ready",
-				control: retry.control,
-				...(retry.customInstructions === undefined ? {} : { customInstructions: retry.customInstructions }),
-				summaryContext: retry.summaryContext,
-				nextAttempt: retry.nextAttempt,
-			};
-		case "navigation.summary.retry_wait":
-			return {
-				at: "navigation.summary.ready",
-				control: retry.control,
-				targetId: retry.targetId,
-				...(retry.label === undefined ? {} : { label: retry.label }),
-				...(retry.customInstructions === undefined ? {} : { customInstructions: retry.customInstructions }),
-				summaryContext: retry.summaryContext,
-				nextAttempt: retry.nextAttempt,
-			};
-	}
+function readyFromRetryWait(retry: SummaryRetryWaitOperation): SummaryReadyOperation {
+	return {
+		...operationScopeOf(retry),
+		at: "summary.ready",
+		task: retry.task,
+		summaryContext: retry.summaryContext,
+		nextAttempt: retry.nextAttempt,
+	};
 }
 
 async function publishAttemptIntent<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	ready: StructuralReady,
-): Promise<ContinueOperationResult<StructuralEffectPending>> {
+	ready: SummaryReadyOperation,
+): Promise<ContinueOperationResult<SummaryEffectPendingOperation>> {
 	return lane.continueOperation(
 		ready,
 		(_state, current) => {
@@ -797,10 +618,10 @@ async function publishAttemptIntent<TContext extends object | undefined>(
 async function publishNestedRequestIntent<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	effect: StructuralEffectPending,
+	effect: SummaryEffectPendingOperation,
 	index: number,
 	usageId: string,
-): Promise<ContinueOperationResult<StructuralEffectPending>> {
+): Promise<ContinueOperationResult<SummaryEffectPendingOperation>> {
 	return lane.continueOperation(
 		effect,
 		(_state, current) => {
@@ -819,7 +640,7 @@ async function publishNestedRequestIntent<TContext extends object | undefined>(
 async function publishNestedRequestOutcome<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	effect: StructuralEffectPending,
+	effect: SummaryEffectPendingOperation,
 	usageId: string,
 	response: AssistantMessage,
 ): Promise<void> {
@@ -866,7 +687,7 @@ function requestStreamOptions(
 async function performStructuralAttempt<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	effect: StructuralEffectPending,
+	effect: SummaryEffectPendingOperation,
 	model: Model<Api>,
 	preparation: CompactionPreparation | BranchPreparation,
 ): Promise<
@@ -886,7 +707,7 @@ async function performStructuralAttempt<TContext extends object | undefined>(
 					lane: lane.name,
 					runId: drive.operationId,
 					model,
-					step: effect.summaryContext.kind,
+					step: summaryKind(effect.task),
 					attempt: effect.attempt,
 					streamOptions: baseOptions,
 				},
@@ -937,10 +758,7 @@ async function performStructuralAttempt<TContext extends object | undefined>(
 	};
 
 	try {
-		if (effect.summaryContext.kind === "compaction") {
-			if (effect.at === "navigation.summary.effect_pending") {
-				throw new SessionInvariantError("Compaction summary has a navigation operation state");
-			}
+		if (summaryKind(effect.task) === "compaction") {
 			if (!("messagesToSummarize" in preparation)) {
 				throw new SessionInvariantError("Compaction summary has invalid durable preparation");
 			}
@@ -948,7 +766,7 @@ async function performStructuralAttempt<TContext extends object | undefined>(
 				preparation,
 				{
 					model,
-					customInstructions: compactionCustomInstructions(effect),
+					customInstructions: effect.task.customInstructions,
 					thinkingLevel: effect.summaryContext.configuration.thinkingLevel,
 				},
 				request,
@@ -968,17 +786,12 @@ async function performStructuralAttempt<TContext extends object | undefined>(
 			};
 		}
 
-		if (effect.at !== "navigation.summary.effect_pending") {
-			throw new SessionInvariantError("Branch summary has a compaction operation state");
-		}
 		if (!("messages" in preparation)) {
 			throw new SessionInvariantError("Branch summary has invalid durable preparation");
 		}
 		const result = await generateBranchSummaryWithRequest(
 			preparation,
-			{
-				customInstructions: effect.customInstructions,
-			},
+			{ customInstructions: effect.task.customInstructions },
 			request,
 			drive.context,
 		);
@@ -1003,19 +816,18 @@ async function performStructuralAttempt<TContext extends object | undefined>(
 async function readAttemptPreparation<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	ready: StructuralReady,
+	ready: SummaryReadyOperation,
 ): Promise<ContinueOperationResult<CompactionPreparation | BranchPreparation>> {
 	return lane.continueOperation(
 		ready,
 		async (_state, current, _meta, reader) => {
+			const expected = summaryKind(current.task);
 			const stored = await reader.getValue(
-				operationPreparation(drive.operationId, current.summaryContext.taskId),
+				operationPreparation(drive.operationId, current.task.taskId),
 				drive.context,
 			);
-			if (stored === undefined || stored.value.kind !== current.summaryContext.kind) {
-				throw new SessionInvariantError(
-					`Structural task ${current.summaryContext.taskId} has invalid durable preparation`,
-				);
+			if (stored === undefined || stored.value.kind !== expected) {
+				throw new SessionInvariantError(`Structural task ${current.task.taskId} has invalid durable preparation`);
 			}
 			return {
 				kind: "return",
@@ -1029,141 +841,28 @@ async function readAttemptPreparation<TContext extends object | undefined>(
 	);
 }
 
-async function publishStructuralFailure<TContext extends object | undefined>(
-	lane: Lane<TContext>,
-	drive: Drive,
-	capability: StructuralReady | StructuralEffectPending,
-	error: OperationError,
-	provenance: "structural" | "configuration" = "structural",
-): Promise<ProcedureResult> {
-	const published = await lane.continueOperation<StructuralReady | StructuralEffectPending, ProcedureResult>(
-		capability,
-		async (state, current, meta, reader) => {
-			if (isRunGeneratedCompaction(current)) {
-				const failure: RunFailureDrainOperation = {
-					...runScopeOf(current),
-					at: "run.failure_drain",
-					error,
-					provenance:
-						provenance === "configuration"
-							? { kind: "configuration" }
-							: { kind: "structural", taskId: current.summaryContext.taskId },
-				};
-				return {
-					kind: "commit",
-					writes: [],
-					operationState: failure,
-					materialize: () => ({ kind: "continue" }) as const,
-					events: () => [
-						{
-							type: "compaction_end",
-							lane: lane.name,
-							runId: drive.operationId,
-							reason: current.reason,
-							outcome: "failed",
-							error,
-						},
-					],
-				};
-			}
-
-			const cleanup = await operationCleanupWrites(reader, drive.operationId, current, drive.context);
-			if (isStandaloneGeneratedCompaction(current)) {
-				if (state.tipId === null) throw new SessionInvariantError("Standalone compaction has no Branch tip");
-				const lastResult: LaneLastResult = {
-					operationId: drive.operationId,
-					kind: "compaction",
-					outcome: "failed",
-					tipId: state.tipId,
-					error,
-				};
-				return {
-					kind: "finish",
-					writes: cleanup,
-					lastResult,
-					materialize: () =>
-						({
-							kind: "settled",
-							outcome: {
-								operation: "compaction",
-								runId: drive.operationId,
-								kind: "failed",
-								tipId: state.tipId!,
-								error,
-							},
-						}) as const,
-					events: () => [
-						{
-							type: "compaction_end",
-							lane: lane.name,
-							runId: drive.operationId,
-							reason: "manual",
-							outcome: "failed",
-							error,
-						},
-					],
-				};
-			}
-
-			const lastResult: LaneLastResult = {
-				operationId: drive.operationId,
-				kind: "navigation",
-				outcome: "failed",
-				oldTipId: meta.sourceTipId,
-				tipId: state.tipId,
-				error,
-			};
-			return {
-				kind: "finish",
-				writes: cleanup,
-				lastResult,
-				materialize: () =>
-					({
-						kind: "settled",
-						outcome: {
-							operation: "navigation",
-							runId: drive.operationId,
-							kind: "failed",
-							tipId: state.tipId,
-							error,
-						},
-					}) as const,
-				events: () => [
-					{
-						type: "navigation_end",
-						lane: lane.name,
-						runId: drive.operationId,
-						oldTipId: meta.sourceTipId,
-						newTipId: state.tipId,
-						outcome: "failed",
-						error,
-					},
-				],
-			};
-		},
-		drive.context,
-	);
-	return published.kind === "cancel_requested" ? { kind: "continue" } : published.value;
-}
-
 async function publishAttemptResult<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	effect: StructuralEffectPending,
+	effect: SummaryEffectPendingOperation,
 	result: Awaited<ReturnType<typeof performStructuralAttempt<TContext>>>,
 ): Promise<ProcedureResult> {
 	if (result.kind === "cancel_requested") return { kind: "continue" };
 	if (result.kind === "compaction") {
-		if (effect.at === "navigation.summary.effect_pending") {
-			throw new SessionInvariantError("Compaction result has a navigation operation state");
-		}
-		return publishCompactionResult(lane, drive, effect, effect.summaryContext.resultEntryId, result.result, false);
+		return publishStructuralOutcome(lane, drive, effect, {
+			kind: "compaction",
+			resultEntryId: effect.summaryContext.resultEntryId,
+			result: result.result,
+			fromHook: false,
+		});
 	}
 	if (result.kind === "branch_summary") {
-		if (effect.at !== "navigation.summary.effect_pending") {
-			throw new SessionInvariantError("Branch summary result has a compaction operation state");
-		}
-		return publishNavigationSummary(lane, drive, effect, effect.summaryContext.resultEntryId, result.result, false);
+		return publishStructuralOutcome(lane, drive, effect, {
+			kind: "branch_summary",
+			resultEntryId: effect.summaryContext.resultEntryId,
+			result: result.result,
+			fromHook: false,
+		});
 	}
 	if (result.error.code === "aborted" && lane.state.operation!.state.control.status === "running") {
 		throw new SessionInvariantError("Structural provider response is aborted while durable control is running");
@@ -1182,7 +881,7 @@ async function publishAttemptResult<TContext extends object | undefined>(
 						type: "retry_scheduled",
 						lane: lane.name,
 						runId: drive.operationId,
-						step: effect.summaryContext.taskId,
+						step: effect.task.taskId,
 						attempt: retryWait.nextAttempt,
 						maxAttempts: effect.summaryContext.retryPolicy.maxAttempts,
 						delayMs: retryDelay(effect.summaryContext.retryPolicy.baseDelayMs, effect.attempt),
@@ -1194,27 +893,24 @@ async function publishAttemptResult<TContext extends object | undefined>(
 		);
 		return published.kind === "cancel_requested" ? { kind: "continue" } : published.value;
 	}
-	return publishStructuralFailure(lane, drive, effect, result.error);
+	return publishStructuralOutcome(lane, drive, effect, { kind: "failed", error: result.error });
 }
 
 /** Execute one ready structural generation attempt. */
 export async function runStructuralGeneration<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	ready: StructuralReady,
+	ready: SummaryReadyOperation,
 ): Promise<ProcedureResult> {
 	const preparation = await readAttemptPreparation(lane, drive, ready);
 	if (preparation.kind === "cancel_requested") return { kind: "continue" };
 	const identity = ready.summaryContext.configuration.model;
 	const model = lane.models.getModel(identity.provider, identity.modelId);
 	if (model === undefined) {
-		return publishStructuralFailure(
-			lane,
-			drive,
-			ready,
-			operationError("model_unavailable", "The configured model is unavailable in this process", identity),
-			"configuration",
-		);
+		return publishStructuralOutcome(lane, drive, ready, {
+			kind: "failed",
+			error: operationError("model_unavailable", "The configured model is unavailable in this process", identity),
+		});
 	}
 	const intent = await publishAttemptIntent(lane, drive, ready);
 	if (intent.kind === "cancel_requested") return { kind: "continue" };
@@ -1226,7 +922,7 @@ export async function runStructuralGeneration<TContext extends object | undefine
 export async function runStructuralRetryWait<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	retry: StructuralRetryWait,
+	retry: SummaryRetryWaitOperation,
 ): Promise<ProcedureResult> {
 	if (Date.now() < retry.notBefore) {
 		if (!drive.waitForRetry) {
@@ -1256,7 +952,7 @@ export async function runStructuralRetryWait<TContext extends object | undefined
 						type: "retry_start",
 						lane: lane.name,
 						runId: drive.operationId,
-						step: current.summaryContext.taskId,
+						step: current.task.taskId,
 						attempt: current.nextAttempt,
 					},
 				],
@@ -1271,14 +967,14 @@ export async function runStructuralRetryWait<TContext extends object | undefined
 export async function recoverStructuralGeneration<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	effect: StructuralEffectPending,
+	effect: SummaryEffectPendingOperation,
 ): Promise<ProcedureResult> {
 	const error = operationError(
 		"structural_interrupted",
 		"Structural summary attempt was interrupted and its external outcome is unknown",
 	);
 	if (effect.attempt >= effect.summaryContext.retryPolicy.maxAttempts) {
-		return publishStructuralFailure(lane, drive, effect, error);
+		return publishStructuralOutcome(lane, drive, effect, { kind: "failed", error });
 	}
 	const retryWait = retryWaitFromEffect(effect, error.message);
 	const published = await lane.continueOperation(
@@ -1293,7 +989,7 @@ export async function recoverStructuralGeneration<TContext extends object | unde
 					type: "retry_scheduled",
 					lane: lane.name,
 					runId: drive.operationId,
-					step: effect.summaryContext.taskId,
+					step: effect.task.taskId,
 					attempt: retryWait.nextAttempt,
 					maxAttempts: effect.summaryContext.retryPolicy.maxAttempts,
 					delayMs: retryDelay(effect.summaryContext.retryPolicy.baseDelayMs, effect.attempt),
@@ -1311,7 +1007,7 @@ export async function recoverStructuralGeneration<TContext extends object | unde
 export async function runCompactionThreshold<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	checkpoint: RunCheckpointOperation,
+	checkpoint: CheckpointOperation,
 ): Promise<ProcedureResult> {
 	const settings = checkpoint.settings.compaction;
 	const identity = lane.state.configuration.model;
@@ -1330,7 +1026,7 @@ export async function runCompactionThreshold<TContext extends object | undefined
 	const published = await lane.continueOperation(
 		checkpoint,
 		(_state, current) => {
-			const marked: RunCheckpointOperation = {
+			const marked: CheckpointOperation = {
 				...current,
 				thresholdCheckedTriggerEntryId: current.triggerEntryId,
 			};
@@ -1348,12 +1044,10 @@ export async function runCompactionThreshold<TContext extends object | undefined
 				thresholdCheckedTriggerEntryId: marked.thresholdCheckedTriggerEntryId,
 				...(marked.skipInboxOnce === undefined ? {} : { skipInboxOnce: marked.skipInboxOnce }),
 			};
-			const deciding: RunCompactionDecidingOperation = {
-				...runScopeOf(current),
-				at: "run.compaction.deciding",
-				reason: "threshold",
-				resumeAfter,
-				taskId,
+			const deciding: SummaryDecidingOperation = {
+				...operationScopeOf(current),
+				at: "summary.deciding",
+				task: { taskId, reason: "threshold", boundary: { kind: "resume_checkpoint", resumeAfter } },
 			};
 			return {
 				kind: "commit",
@@ -1381,7 +1075,7 @@ export async function runCompactionThreshold<TContext extends object | undefined
 export async function prepareOverflowCompaction<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	generation: RunAssistantEffectPendingOperation,
+	generation: AssistantEffectPendingOperation,
 ): Promise<{ taskId: string; preparation: DurableStructuralPreparation } | undefined> {
 	if (generation.generationContext.overflowRecoveryUsed) return undefined;
 	const path = await readBoundedEntries(lane, drive, generation);
@@ -1422,34 +1116,21 @@ export function commitNavigation<TContext extends object | undefined>(
 					writes.push(setValue(entryLabel(current.targetId), current.label));
 				}
 				const cleanup = await operationCleanupWrites(reader, drive.operationId, current, drive.context);
-				const lastResult: LaneLastResult = {
-					operationId: drive.operationId,
-					kind: "navigation",
-					outcome: "completed",
-					oldTipId: meta.sourceTipId,
-					tipId: current.targetId,
-				};
-				const outcome: TerminalOperationOutcome = {
-					operation: "navigation",
-					runId: drive.operationId,
-					kind: "completed",
-					oldTipId: meta.sourceTipId,
-					newTipId: current.targetId,
-				};
+				const record = operationResultRecord(meta, "completed", current.targetId);
 				return {
 					kind: "finish",
 					writes: [...writes, ...cleanup],
-					lastResult,
+					record,
 					lane: { tipId: current.targetId },
-					materialize: () => ({ kind: "settled", outcome }) as const,
+					materialize: () => ({ kind: "settled", outcome: record }) as const,
 					events: () => [
 						{
 							type: "navigation_end",
 							lane: lane.name,
 							runId: drive.operationId,
-							oldTipId: meta.sourceTipId,
-							newTipId: current.targetId,
-							outcome: "completed",
+							status: "completed",
+							fromTipId: meta.sourceTipId,
+							tipId: current.targetId,
 						},
 					],
 				};

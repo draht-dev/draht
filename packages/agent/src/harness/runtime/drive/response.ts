@@ -11,19 +11,18 @@ import type { AssistantResponseMetadata, AssistantStreamObserver } from "../../e
 import { insertEntry, insertUsage } from "../../session/commit.ts";
 import { SessionInvariantError } from "../../session/session.ts";
 import {
+	type AssistantEffectPendingOperation,
+	type CommitResult,
+	type DeferredEffectPendingOperation,
 	type MessageEntry,
 	type NewEntry,
 	type OperationError,
 	type OperationState,
-	type RunAssistantEffectPendingOperation,
-	type RunCompactionDecidingOperation,
-	type RunDeferredEffectPendingOperation,
-	type RunOperationState,
-	runScopeOf,
+	operationScopeOf,
 	type SettledAssistantMessage,
+	type SummaryDecidingOperation,
 	type ToolCall,
 	type UsageRow,
-	type Write,
 } from "../../session/types.ts";
 import { branchTip, deleteList, operationPreparation, pendingAssistantFrames, setValue } from "../../session/values.ts";
 import type { Lane } from "../lane.ts";
@@ -31,6 +30,7 @@ import { openFrameProgress } from "../progress.ts";
 import type { Drive, ProcedureResult } from "../types.ts";
 import { retryDelay, retryNotBefore } from "./retry.ts";
 import { prepareOverflowCompaction } from "./structural.ts";
+import { operationCleanupWrites, operationResultRecord } from "./terminal.ts";
 
 export type AssistantResponseLifecycle = {
 	observer: AssistantStreamObserver;
@@ -95,32 +95,41 @@ export function openAssistantResponse<TContext extends object | undefined>(
 	};
 }
 
-type ResponseIntent = RunAssistantEffectPendingOperation | RunDeferredEffectPendingOperation;
+type ResponseIntent = AssistantEffectPendingOperation | DeferredEffectPendingOperation;
+type ConfigurationFailureState = Extract<
+	OperationState,
+	{ at: "assistant.ready" | "assistant.retry_wait" | "deferred.suspended" | "deferred.effect_pending" }
+>;
 
 /** Publish a non-retryable request-configuration failure before reserving response ids. */
 export async function publishConfigurationFailure<
 	TContext extends object | undefined,
-	TState extends RunOperationState,
->(
-	lane: Lane<TContext>,
-	drive: Drive,
-	capability: TState,
-	error: OperationError,
-	writes: Write[] = [],
-): Promise<ProcedureResult> {
+	TState extends ConfigurationFailureState,
+>(lane: Lane<TContext>, drive: Drive, capability: TState, error: OperationError): Promise<ProcedureResult> {
 	const result = await lane.continueOperation(
 		capability,
-		(_state, current) => ({
-			kind: "commit",
-			writes,
-			operationState: {
-				...runScopeOf(current),
-				at: "run.failure_drain",
-				error,
-				provenance: { kind: "configuration" },
-			},
-			materialize: () => ({ kind: "continue" }) as const,
-		}),
+		async (state, current, meta, reader) => {
+			if (state.tipId === null) throw new SessionInvariantError("Failed run has no Branch tip");
+			const record = operationResultRecord(meta, "failed", state.tipId, error);
+			const cleanup = await operationCleanupWrites(reader, drive.operationId, current, drive.context);
+			return {
+				kind: "finish",
+				writes: cleanup,
+				record,
+				materialize: () => ({ kind: "settled", outcome: record }) as const,
+				events: () => [
+					{
+						type: "run_end",
+						lane: lane.name,
+						runId: drive.operationId,
+						status: "failed",
+						error,
+						fromTipId: meta.sourceTipId,
+						tipId: state.tipId,
+					},
+				],
+			};
+		},
 		drive.context,
 	);
 	return result.kind === "cancel_requested" ? { kind: "continue" } : result.value;
@@ -154,10 +163,7 @@ function normalizeAborted(source: "assistant" | "deferred", message: SettledAssi
 	};
 }
 
-function deferredHandleIsValid(
-	message: SettledAssistantMessage,
-	generation: RunAssistantEffectPendingOperation,
-): boolean {
+function deferredHandleIsValid(message: SettledAssistantMessage, generation: AssistantEffectPendingOperation): boolean {
 	const handle = message.deferred;
 	const identity = generation.generationContext.configuration.model;
 	return (
@@ -179,34 +185,33 @@ export async function publishResponse<TContext extends object | undefined>(
 	options: { recovery?: true } = {},
 ): Promise<ProcedureResult> {
 	const overflow =
-		intent.at === "run.assistant.effect_pending" &&
+		intent.at === "assistant.effect_pending" &&
 		(isContextOverflow(response, intent.contextWindow) || isRecoverableLength(response, intent.intendedOutputLimit));
 	const overflowPreparation =
 		overflow && !intent.generationContext.overflowRecoveryUsed
 			? await prepareOverflowCompaction(lane, drive, intent)
 			: undefined;
-	return lane.settleOperation(
+	return lane.settleOperation<ResponseIntent, ProcedureResult>(
 		intent,
-		(state, current) => {
-			const source = current.at === "run.assistant.effect_pending" ? "assistant" : "deferred";
+		async (state, current, meta, reader) => {
+			const source = current.at === "assistant.effect_pending" ? "assistant" : "deferred";
 			const responseEntryId = intent.responseEntryId;
 			const configuration =
-				current.at === "run.assistant.effect_pending"
-					? current.generationContext.configuration
-					: current.configuration;
+				current.at === "assistant.effect_pending" ? current.generationContext.configuration : current.configuration;
 			const turnId =
-				current.at === "run.assistant.effect_pending"
+				current.at === "assistant.effect_pending"
 					? current.generationContext.stepId
 					: `${current.stepId}:poll:${current.poll}`;
-			const scope = { ...runScopeOf(current), latestAssistantEntryId: responseEntryId };
+			const scope = { ...operationScopeOf(current), latestAssistantEntryId: responseEntryId };
 			let committed = response;
-			let settled: OperationState;
+			let settled: OperationState | undefined;
+			let failure: OperationError | undefined;
 
 			if (current.control.status === "cancel_requested") {
 				committed = normalizeAborted(source, response);
 				settled = {
 					...scope,
-					at: "run.checkpoint",
+					at: "checkpoint",
 					continuation: { kind: "may_finish", includeFinalAssistant: true },
 					triggerEntryId: responseEntryId,
 				};
@@ -214,38 +219,38 @@ export async function publishResponse<TContext extends object | undefined>(
 				throw new SessionInvariantError(
 					`${source === "assistant" ? "Assistant" : "Deferred"} response is aborted while durable control is running`,
 				);
-			} else if (current.at === "run.assistant.effect_pending" && overflow) {
+			} else if (current.at === "assistant.effect_pending" && overflow) {
 				committed = normalizeError(
 					response,
 					response.errorMessage ?? "Assistant request exceeded the context window",
 				);
 				if (current.generationContext.overflowRecoveryUsed || overflowPreparation === undefined) {
-					settled = {
-						...scope,
-						at: "run.failure_drain",
-						error: providerError(source, committed),
-						provenance: { kind: "response", entryId: responseEntryId },
-					};
+					failure = providerError(source, committed);
 				} else {
-					const structural: RunCompactionDecidingOperation = {
+					const structural: SummaryDecidingOperation = {
 						...scope,
-						at: "run.compaction.deciding",
-						reason: "overflow",
-						resumeAfter: {
-							continuation: { kind: "need_assistant", overflowRecoveryUsed: true },
-							triggerEntryId: current.generationContext.triggerEntryId,
-							thresholdCheckedTriggerEntryId: current.generationContext.triggerEntryId,
+						at: "summary.deciding",
+						task: {
+							taskId: overflowPreparation.taskId,
+							reason: "overflow",
+							boundary: {
+								kind: "resume_checkpoint",
+								resumeAfter: {
+									continuation: { kind: "need_assistant", overflowRecoveryUsed: true },
+									triggerEntryId: current.generationContext.triggerEntryId,
+									thresholdCheckedTriggerEntryId: current.generationContext.triggerEntryId,
+								},
+							},
 						},
-						taskId: overflowPreparation.taskId,
 					};
 					settled = structural;
 				}
 			} else if (response.stopReason === "deferred") {
-				if (current.at === "run.assistant.effect_pending") {
+				if (current.at === "assistant.effect_pending") {
 					if (deferredHandleIsValid(response, current)) {
 						settled = {
 							...scope,
-							at: "run.deferred.suspended",
+							at: "deferred.suspended",
 							stepId: current.generationContext.stepId,
 							sourceEntryId: responseEntryId,
 							poll: 0,
@@ -254,17 +259,12 @@ export async function publishResponse<TContext extends object | undefined>(
 						};
 					} else {
 						committed = normalizeError(response, "Provider returned an invalid deferred handle");
-						settled = {
-							...scope,
-							at: "run.failure_drain",
-							error: providerError(source, committed),
-							provenance: { kind: "response", entryId: responseEntryId },
-						};
+						failure = providerError(source, committed);
 					}
 				} else {
 					settled = {
 						...scope,
-						at: "run.deferred.suspended",
+						at: "deferred.suspended",
 						stepId: current.stepId,
 						sourceEntryId: responseEntryId,
 						poll: current.poll,
@@ -274,25 +274,20 @@ export async function publishResponse<TContext extends object | undefined>(
 				}
 			} else if (response.stopReason === "error") {
 				if (
-					current.at === "run.assistant.effect_pending" &&
+					current.at === "assistant.effect_pending" &&
 					(options.recovery === true || isRetryableAssistantError(response)) &&
 					current.attempt < current.generationContext.retryPolicy.maxAttempts
 				) {
 					settled = {
 						...scope,
-						at: "run.assistant.retry_wait",
+						at: "assistant.retry_wait",
 						generationContext: current.generationContext,
 						nextAttempt: current.attempt + 1,
 						notBefore: retryNotBefore(current.generationContext.retryPolicy.baseDelayMs, current.attempt),
 						errorMessage: response.errorMessage ?? "Assistant request failed",
 					};
 				} else {
-					settled = {
-						...scope,
-						at: "run.failure_drain",
-						error: providerError(source, response),
-						provenance: { kind: "response", entryId: responseEntryId },
-					};
+					failure = providerError(source, response);
 				}
 			} else {
 				const calls = response.content.flatMap((content, sourceIndex) =>
@@ -307,21 +302,16 @@ export async function publishResponse<TContext extends object | undefined>(
 					}));
 					settled = {
 						...scope,
-						at: "run.tools",
+						at: "tools",
 						batch: { assistantEntryId: responseEntryId, configuration, turnId, calls: planned },
 					};
 				} else if (response.stopReason === "toolUse") {
 					committed = normalizeError(response, "Provider reported tool use without any tool calls");
-					settled = {
-						...scope,
-						at: "run.failure_drain",
-						error: providerError(source, committed),
-						provenance: { kind: "response", entryId: responseEntryId },
-					};
+					failure = providerError(source, committed);
 				} else {
 					settled = {
 						...scope,
-						at: "run.checkpoint",
+						at: "checkpoint",
 						continuation: { kind: "may_finish", includeFinalAssistant: true },
 						triggerEntryId: responseEntryId,
 					};
@@ -340,119 +330,149 @@ export async function publishResponse<TContext extends object | undefined>(
 				entryId: responseEntryId,
 				adjustment: false,
 			};
-			return {
-				kind: "commit",
-				writes: [
-					insertEntry(responseEntry),
-					insertUsage(usageRow),
-					setValue(branchTip(lane.name), responseEntryId),
-					deleteList(pendingAssistantFrames(drive.operationId, responseEntryId)),
-					...(settled.at === "run.compaction.deciding" && overflowPreparation !== undefined
-						? [
-								setValue(
-									operationPreparation(drive.operationId, overflowPreparation.taskId),
-									overflowPreparation.preparation,
-								),
-							]
-						: []),
-				],
-				operationState: settled,
-				lane: { tipId: responseEntryId },
-				materialize: () => ({ kind: "continue" }) as const,
-				events: (commit) => {
-					const entry: MessageEntry = {
-						...responseEntry,
-						seq: commit.seqs[0]!,
-						timestamp: commit.timestamp,
-					};
-					const events: HarnessEvent[] = [
-						{ type: "entry_added", lane: lane.name, entry, ...options },
-						{
-							type: "usage",
+			if (settled === undefined && failure === undefined) {
+				throw new SessionInvariantError("Response settlement has no durable disposition");
+			}
+			const record =
+				failure === undefined ? undefined : operationResultRecord(meta, "failed", responseEntryId, failure);
+			const cleanup =
+				record === undefined ? [] : await operationCleanupWrites(reader, drive.operationId, current, drive.context);
+			const writes = [
+				insertEntry(responseEntry),
+				insertUsage(usageRow),
+				setValue(branchTip(lane.name), responseEntryId),
+				...(record === undefined
+					? [deleteList(pendingAssistantFrames(drive.operationId, responseEntryId))]
+					: cleanup),
+				...(settled?.at === "summary.deciding" && overflowPreparation !== undefined
+					? [
+							setValue(
+								operationPreparation(drive.operationId, overflowPreparation.taskId),
+								overflowPreparation.preparation,
+							),
+						]
+					: []),
+			];
+			const materializeEntry = (commit: CommitResult): MessageEntry => ({
+				...responseEntry,
+				seq: commit.seqs[0]!,
+				timestamp: commit.timestamp,
+			});
+			const events = (commit: CommitResult): HarnessEvent[] => {
+				const entry = materializeEntry(commit);
+				const batch: HarnessEvent[] = [
+					{ type: "entry_added", lane: lane.name, entry, ...options },
+					{
+						type: "usage",
+						lane: lane.name,
+						row: { ...usageRow, seq: commit.seqs[1]! },
+						totals: commit.stats.usage,
+					},
+				];
+				if (current.at === "assistant.effect_pending") {
+					if (options.recovery !== true && current.attempt > 1 && settled?.at !== "assistant.retry_wait") {
+						const success = committed.stopReason !== "error" && committed.stopReason !== "aborted";
+						batch.push({
+							type: "retry_end",
 							lane: lane.name,
-							row: { ...usageRow, seq: commit.seqs[1]! },
-							totals: commit.stats.usage,
-						},
-					];
-					if (current.at === "run.assistant.effect_pending") {
-						if (options.recovery !== true && current.attempt > 1 && settled.at !== "run.assistant.retry_wait") {
-							const success = committed.stopReason !== "error" && committed.stopReason !== "aborted";
-							events.push({
-								type: "retry_end",
-								lane: lane.name,
-								runId: drive.operationId,
-								step: turnId,
-								attempt: current.attempt,
-								success,
-								...(success
-									? {}
-									: {
-											finalError:
-												committed.errorMessage ?? `Assistant request ended with ${committed.stopReason}`,
-										}),
-							});
-						}
-						if (options.recovery !== true && settled.at === "run.assistant.retry_wait") {
-							events.push({
-								type: "retry_scheduled",
-								lane: lane.name,
-								runId: drive.operationId,
-								step: turnId,
-								attempt: settled.nextAttempt,
-								maxAttempts: settled.generationContext.retryPolicy.maxAttempts,
-								delayMs: retryDelay(current.generationContext.retryPolicy.baseDelayMs, current.attempt),
-								errorMessage: settled.errorMessage,
-							});
-						}
-						if (
-							options.recovery !== true &&
-							settled.at !== "run.tools" &&
-							settled.at !== "run.assistant.retry_wait"
-						) {
-							events.push({
-								type: "turn_end",
-								lane: lane.name,
-								runId: drive.operationId,
-								turnId,
-								message: committed,
-								toolResults: [],
-							});
-						}
-						if (settled.at === "run.compaction.deciding") {
-							events.push({
-								type: "compaction_start",
-								lane: lane.name,
-								runId: drive.operationId,
-								reason: "overflow",
-							});
-						}
-					} else if (settled.at !== "run.tools") {
-						events.push({
+							runId: drive.operationId,
+							step: turnId,
+							attempt: current.attempt,
+							success,
+							...(success
+								? {}
+								: {
+										finalError:
+											committed.errorMessage ?? `Assistant request ended with ${committed.stopReason}`,
+									}),
+						});
+					}
+					if (options.recovery !== true && settled?.at === "assistant.retry_wait") {
+						batch.push({
+							type: "retry_scheduled",
+							lane: lane.name,
+							runId: drive.operationId,
+							step: turnId,
+							attempt: settled.nextAttempt,
+							maxAttempts: settled.generationContext.retryPolicy.maxAttempts,
+							delayMs: retryDelay(current.generationContext.retryPolicy.baseDelayMs, current.attempt),
+							errorMessage: settled.errorMessage,
+						});
+					}
+					if (options.recovery !== true && settled?.at !== "tools" && settled?.at !== "assistant.retry_wait") {
+						batch.push({
 							type: "turn_end",
 							lane: lane.name,
 							runId: drive.operationId,
 							turnId,
 							message: committed,
 							toolResults: [],
-							...options,
 						});
 					}
-					if (
-						(current.at === "run.deferred.effect_pending" || options.recovery !== true) &&
-						settled.at === "run.deferred.suspended" &&
-						committed.deferred !== undefined
-					) {
-						events.push({
-							type: "run_suspend",
+					if (settled?.at === "summary.deciding") {
+						batch.push({
+							type: "compaction_start",
 							lane: lane.name,
 							runId: drive.operationId,
-							reason: "deferred",
-							deferred: committed.deferred,
-							...(current.at === "run.deferred.effect_pending" ? options : {}),
+							reason: "overflow",
 						});
 					}
-					return events;
-				},
+				} else if (settled?.at !== "tools") {
+					batch.push({
+						type: "turn_end",
+						lane: lane.name,
+						runId: drive.operationId,
+						turnId,
+						message: committed,
+						toolResults: [],
+						...options,
+					});
+				}
+				if (
+					(current.at === "deferred.effect_pending" || options.recovery !== true) &&
+					settled?.at === "deferred.suspended" &&
+					committed.deferred !== undefined
+				) {
+					batch.push({
+						type: "run_suspend",
+						lane: lane.name,
+						runId: drive.operationId,
+						reason: "deferred",
+						deferred: committed.deferred,
+						...(current.at === "deferred.effect_pending" ? options : {}),
+					});
+				}
+				if (record !== undefined && failure !== undefined) {
+					batch.push({
+						type: "run_end",
+						lane: lane.name,
+						runId: drive.operationId,
+						status: "failed",
+						error: failure,
+						fromTipId: meta.sourceTipId,
+						tipId: responseEntryId,
+					});
+				}
+				return batch;
+			};
+			if (record !== undefined) {
+				return {
+					kind: "finish",
+					writes,
+					record,
+					lane: { tipId: responseEntryId },
+					materialize: () => ({ kind: "settled", outcome: record }) as const,
+					events,
+				};
+			}
+			if (settled === undefined) throw new SessionInvariantError("Response settlement is missing its next state");
+			return {
+				kind: "commit",
+				writes,
+				operationState: settled,
+				lane: { tipId: responseEntryId },
+				materialize: () => ({ kind: "continue" }) as const,
+				events,
 			};
 		},
 		drive.context,

@@ -16,11 +16,11 @@ import {
 	branchTip,
 	entryLabel,
 	laneConfig,
-	laneLastResult,
 	laneState,
 	list,
 	operationMeta,
 	operationPreparation,
+	operationResult,
 	operationState,
 	operationToolArgs,
 	pendingEntry,
@@ -38,7 +38,8 @@ const OPERATION_ID = "00000000-0000-7000-8000-000000000005";
 const PENDING_ID = "00000000-0000-7000-8000-000000000006";
 const idleLaneState = {
 	currentOperationId: null,
-	pendingNextRun: [],
+	lastOperationId: null,
+	inbox: [],
 } satisfies LaneState;
 const applicationValue = value<JsonValue>("test.application.value");
 const applicationList = list<JsonValue>("test.application.list");
@@ -364,14 +365,17 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 								setValue(laneConfig("main"), configuration),
 								setValue(laneState("main"), {
 									currentOperationId: OPERATION_ID,
-									pendingNextRun: [PENDING_ID],
+									lastOperationId: "previous",
+									inbox: [{ entryId: PENDING_ID, kind: "write" }],
 								}),
-								setValue(laneLastResult("main"), {
+								setValue(operationResult("previous"), {
 									operationId: "previous",
 									kind: "navigation",
+									status: "completed",
+									fromTipId: ROOT_ID,
 									tipId: CHILD_ID,
-									oldTipId: ROOT_ID,
-									outcome: "completed",
+									startedAt: 1,
+									endedAt: 2,
 								}),
 								setValue(sessionName, "source name"),
 								setValue(applicationValue, { copied: false }),
@@ -390,9 +394,16 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 									intent: { kind: "compaction" },
 								}),
 								setValue(operationState(OPERATION_ID), {
-									at: "compaction.deciding",
+									at: "summary.deciding",
 									control: { status: "running" },
-									taskId: OPERATION_ID,
+									settings: {
+										compaction: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+										steeringMode: "all",
+										followUpMode: "all",
+										toolExecution: "sequential",
+									},
+									latestAssistantEntryId: null,
+									task: { taskId: OPERATION_ID, reason: "manual", boundary: { kind: "finish" } },
 								}),
 								setValue(operationToolArgs(OPERATION_ID, ROOT_ID, 0), {
 									argument: true,
@@ -436,7 +447,7 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 				deepStrictEqual(await fork.readList(applicationList, undefined, BACKGROUND_CONTEXT), []);
 				strictEqual(await fork.getLabel(ROOT_ID, BACKGROUND_CONTEXT), "root label");
 				strictEqual(await fork.getLabel(SIBLING_ID, BACKGROUND_CONTEXT), undefined);
-				strictEqual(await fork.getValue(laneLastResult("main"), BACKGROUND_CONTEXT), undefined);
+				strictEqual(await fork.getValue(operationResult("previous"), BACKGROUND_CONTEXT), undefined);
 				strictEqual(await fork.getValue(pendingEntry(PENDING_ID), BACKGROUND_CONTEXT), undefined);
 				strictEqual(await fork.getValue(operationMeta(OPERATION_ID), BACKGROUND_CONTEXT), undefined);
 				strictEqual(await fork.getValue(operationState(OPERATION_ID), BACKGROUND_CONTEXT), undefined);

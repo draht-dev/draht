@@ -26,27 +26,29 @@ import {
 } from "../result.ts";
 import { insertEntry } from "../session/commit.ts";
 import { SessionInvariantError, SessionPendingAssistantMessageError } from "../session/session.ts";
-import {
-	type BranchScan,
-	type Entry,
-	isRunOperationState,
-	type JsonValue,
-	type LaneLastResult,
-	type Operation,
-	type OperationMeta,
-	type OperationState,
-	type PendingEntry,
-	type RunStartingOperation,
-	type Session,
-	type SessionReader,
+import type {
+	BranchScan,
+	Entry,
+	InboxItem,
+	InboxItemKind,
+	JsonValue,
+	NewEntry,
+	Operation,
+	OperationMeta,
+	OperationResultRecord,
+	OperationState,
+	PendingEntry,
+	Session,
+	SessionReader,
+	StartingOperation,
 } from "../session/types.ts";
 import {
 	branchTip,
 	deleteValue,
 	laneConfig,
-	laneLastResult as laneLastResultValue,
 	laneState as laneStateValue,
 	operationMeta as operationMetaValue,
+	operationResult as operationResultValue,
 	operationState as operationStateValue,
 	operationToolArgs,
 	pendingEntry,
@@ -79,27 +81,68 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
 	return "then" in value && typeof value.then === "function";
 }
 
+function inboxItems(inbox: readonly InboxItem[], kind: InboxItemKind): InboxItem[] {
+	return inbox.filter((item) => item.kind === kind);
+}
+
+function withoutInboxItems(inbox: readonly InboxItem[], removed: readonly InboxItem[]): InboxItem[] {
+	const removedIds = new Set(removed.map((item) => item.entryId));
+	return inbox.filter((item) => !removedIds.has(item.entryId));
+}
+
+function selectAcceptedInbox(
+	inbox: readonly InboxItem[],
+	steeringMode: "all" | "one-at-a-time",
+	followUpMode: "all" | "one-at-a-time",
+): { selected: InboxItem[]; remainder: InboxItem[] } {
+	let steerTaken = false;
+	let followUpTaken = false;
+	const selected: InboxItem[] = [];
+	const remainder: InboxItem[] = [];
+	for (const item of inbox) {
+		const eligible =
+			item.kind === "write" ||
+			item.kind === "nextRun" ||
+			(item.kind === "steer" && (steeringMode === "all" || !steerTaken)) ||
+			(item.kind === "followUp" && (followUpMode === "all" || !followUpTaken));
+		if (eligible) {
+			selected.push(item);
+			if (item.kind === "steer") steerTaken = true;
+			if (item.kind === "followUp") followUpTaken = true;
+		} else {
+			remainder.push(item);
+		}
+	}
+	return { selected, remainder };
+}
+
+function pendingEntryWrite(entryId: string, pending: PendingEntry): NewEntry {
+	return pending.type === "message"
+		? { id: entryId, parentId: null, type: "message", message: pending.payload }
+		: {
+				id: entryId,
+				parentId: null,
+				type: "custom",
+				customType: pending.customType,
+				...(pending.payload === undefined ? {} : { data: pending.payload }),
+			};
+}
+
 function capturedModel(operation: Operation): ModelIdentity | undefined {
 	const { state } = operation;
 	switch (state.at) {
-		case "run.assistant.ready":
-		case "run.assistant.effect_pending":
-		case "run.assistant.retry_wait":
+		case "assistant.ready":
+		case "assistant.effect_pending":
+		case "assistant.retry_wait":
 			return state.generationContext.configuration.model;
-		case "run.tools":
+		case "tools":
 			return state.batch.configuration.model;
-		case "run.deferred.suspended":
-		case "run.deferred.effect_pending":
+		case "deferred.suspended":
+		case "deferred.effect_pending":
 			return state.configuration.model;
-		case "run.compaction.ready":
-		case "run.compaction.effect_pending":
-		case "run.compaction.retry_wait":
-		case "compaction.ready":
-		case "compaction.effect_pending":
-		case "compaction.retry_wait":
-		case "navigation.summary.ready":
-		case "navigation.summary.effect_pending":
-		case "navigation.summary.retry_wait":
+		case "summary.ready":
+		case "summary.effect_pending":
+		case "summary.retry_wait":
 			return state.summaryContext.configuration.model;
 		default:
 			return undefined;
@@ -149,21 +192,21 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 		return this.state.tipId;
 	}
 
-	async getLastResult(_context: Context): Promise<LaneLastResult | undefined> {
+	async getResult(operationId: string, context: Context): Promise<OperationResultRecord | undefined> {
 		this.assertOpen();
-		return this.state.lastResult;
+		return (await this.session.getValue(operationResultValue(operationId), context))?.value;
 	}
 
 	readConfig(): Config<TContext> {
 		return this.config();
 	}
 
-	mismatch(expected: string, currentOperationId: string | null, last: LaneLastResult | undefined): OperationMismatch {
+	mismatch(expected: string, currentOperationId: string | null, lastOperationId: string | null): OperationMismatch {
 		return new OperationMismatch({
 			lane: this.name,
 			expectedOperationId: expected,
 			...(currentOperationId === null ? {} : { currentOperationId }),
-			...(last === undefined ? {} : { lastOperationId: last.operationId }),
+			...(lastOperationId === null ? {} : { lastOperationId }),
 			message: `Operation ${expected} does not own lane ${JSON.stringify(this.name)}`,
 		});
 	}
@@ -251,6 +294,15 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 					writes: [
 						...decision.writes,
 						setValue(operationStateValue(operation.meta.operationId), decision.operationState),
+						...(decision.lane?.inbox === undefined
+							? []
+							: [
+									setValue(laneStateValue(this.name), {
+										currentOperationId: operation.meta.operationId,
+										lastOperationId: state.lastOperationId,
+										inbox: decision.lane.inbox,
+									}),
+								]),
 					],
 					next: {
 						...state,
@@ -262,17 +314,25 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 				};
 			}
 			if (decision.kind !== "finish") return decision;
+			const inbox = decision.lane?.inbox ?? state.inbox;
 			return {
 				kind: "commit",
 				writes: [
 					...decision.writes,
-					setValue(laneLastResultValue(this.name), decision.lastResult),
+					setValue(operationResultValue(operation.meta.operationId), decision.record),
 					setValue(laneStateValue(this.name), {
 						currentOperationId: null,
-						pendingNextRun: state.pendingNextRun,
+						lastOperationId: operation.meta.operationId,
+						inbox,
 					}),
 				],
-				next: { ...state, ...decision.lane, lastResult: decision.lastResult, operation: null },
+				next: {
+					...state,
+					...decision.lane,
+					inbox,
+					lastOperationId: operation.meta.operationId,
+					operation: null,
+				},
 				materialize: decision.materialize,
 				...(decision.events === undefined ? {} : { events: decision.events }),
 			};
@@ -407,17 +467,34 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 					),
 				};
 			}
-			const capturedIds = [...state.pendingNextRun];
-			const captured = (await readPendingMessages(reader, capturedIds, "Pending next-run entry", context)).map(
-				({ entryId, message }) => ({ id: entryId, message }),
+			const { selected: selectedItems, remainder: inbox } = selectAcceptedInbox(
+				state.inbox,
+				acceptanceConfig.steeringMode,
+				acceptanceConfig.followUpMode,
 			);
-			for (const { id, message } of captured) {
-				if (message.role === "assistant" && message.stopReason === "pending") {
-					throw new SessionInvariantError(`Pending next-run entry ${id} contains a pending assistant message`);
-				}
-			}
-			const placed = [...captured, ...prompt];
-			if (placed.length === 0) {
+			const captured = await Promise.all(
+				selectedItems.map(async (item) => {
+					const stored = await reader.getValue(pendingEntry(item.entryId), context);
+					if (stored === undefined) {
+						throw new SessionInvariantError(`Pending ${item.kind} entry ${item.entryId} is missing its payload`);
+					}
+					if (item.kind !== "write" && stored.value.type !== "message") {
+						throw new SessionInvariantError(`Pending ${item.kind} entry ${item.entryId} is not a message`);
+					}
+					if (
+						stored.value.type === "message" &&
+						stored.value.payload.role === "assistant" &&
+						stored.value.payload.stopReason === "pending"
+					) {
+						throw new SessionInvariantError(
+							`Pending ${item.kind} entry ${item.entryId} contains a pending assistant`,
+						);
+					}
+					return { item, pending: stored.value };
+				}),
+			);
+			const hasCapturedConversation = selectedItems.some((item) => item.kind !== "write");
+			if (prompt.length === 0 && !hasCapturedConversation) {
 				return {
 					kind: "return",
 					result: Result.err(
@@ -430,10 +507,10 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 				};
 			}
 
-			const entries = chainEntries(
-				state.tipId,
-				placed.map(({ id, message }) => ({ id, type: "message" as const, message })),
-			);
+			const entries = chainEntries(state.tipId, [
+				...captured.map(({ item, pending }) => pendingEntryWrite(item.entryId, pending)),
+				...prompt.map(({ id, message }) => ({ id, parentId: null, type: "message" as const, message })),
+			]);
 			const parentId = entries[entries.length - 1]!.id;
 			const meta = {
 				operationId,
@@ -442,8 +519,8 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 				startedAt,
 				intent: { kind: "run" as const, promptEntryIds: prompt.map(({ id }) => id) },
 			};
-			const operationState: RunStartingOperation = {
-				at: "run.starting",
+			const operationState: StartingOperation = {
+				at: "starting",
 				control: { status: "running" },
 				settings: {
 					compaction: acceptanceConfig.compaction,
@@ -451,24 +528,47 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 					followUpMode: acceptanceConfig.followUpMode,
 					toolExecution: acceptanceConfig.toolExecution,
 				},
-				inbox: { steer: [], followUp: [], writes: [] },
 				latestAssistantEntryId: null,
 			};
+			const [remainingSteer, remainingFollowUp, remainingNextRun] = await Promise.all([
+				readPendingMessages(
+					reader,
+					inboxItems(inbox, "steer").map((item) => item.entryId),
+					"Steer entry",
+					context,
+				),
+				readPendingMessages(
+					reader,
+					inboxItems(inbox, "followUp").map((item) => item.entryId),
+					"Follow-up entry",
+					context,
+				),
+				readPendingMessages(
+					reader,
+					inboxItems(inbox, "nextRun").map((item) => item.entryId),
+					"Pending next-run entry",
+					context,
+				),
+			]);
 			const next: LaneState = {
 				...state,
 				tipId: parentId,
-				pendingNextRun: [],
+				inbox,
 				operation: { meta, state: operationState },
 			};
 			return {
 				kind: "commit",
 				writes: [
 					...entries.map((entry) => insertEntry(entry)),
-					...capturedIds.map((id) => deleteValue(pendingEntry(id))),
+					...selectedItems.map((item) => deleteValue(pendingEntry(item.entryId))),
 					setValue(branchTip(this.name), parentId),
 					setValue(operationMetaValue(operationId), meta),
 					setValue(operationStateValue(operationId), operationState),
-					setValue(laneStateValue(this.name), { currentOperationId: operationId, pendingNextRun: [] }),
+					setValue(laneStateValue(this.name), {
+						currentOperationId: operationId,
+						lastOperationId: state.lastOperationId,
+						inbox,
+					}),
 				],
 				next,
 				materialize: () => Result.ok({ operationId, kind: "run", startedAt }),
@@ -477,12 +577,12 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 						{ type: "run_start", runId: operationId, lane: this.name },
 						...committedEntryEvents(entries, commit, this.name, operationId),
 					];
-					if (captured.length !== 0) {
+					if (hasCapturedConversation) {
 						events.push({
 							type: "queue_update",
-							steer: [],
-							followUp: [],
-							nextRun: [],
+							steer: remainingSteer,
+							followUp: remainingFollowUp,
+							nextRun: remainingNextRun,
 							lane: this.name,
 						});
 					}
@@ -524,7 +624,7 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 					tipId: state.tipId,
 					configuredModel: state.configuration.model,
 					current,
-					...(state.lastResult === undefined ? {} : { lastResult: state.lastResult }),
+					lastOperationId: state.lastOperationId,
 				},
 			};
 		}, context);
@@ -665,42 +765,44 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 									context,
 								)
 							).reverse();
-				const nextRun = await readPendingMessages(
-					reader,
-					captured.pendingNextRun,
-					"Pending next-run entry",
-					context,
+				const [steer, followUp, nextRun] = await Promise.all([
+					readPendingMessages(
+						reader,
+						inboxItems(captured.inbox, "steer").map((item) => item.entryId),
+						"Steer entry",
+						context,
+					),
+					readPendingMessages(
+						reader,
+						inboxItems(captured.inbox, "followUp").map((item) => item.entryId),
+						"Follow-up entry",
+						context,
+					),
+					readPendingMessages(
+						reader,
+						inboxItems(captured.inbox, "nextRun").map((item) => item.entryId),
+						"Pending next-run entry",
+						context,
+					),
+				]);
+				// TODO does a client really need pending writes? We wouldn't visualize those, any other uses for them?
+				const pendingWrites = await Promise.all(
+					inboxItems(captured.inbox, "write").map(async ({ entryId }) => {
+						const stored = await reader.getValue(pendingEntry(entryId), context);
+						if (stored === undefined) {
+							throw new SessionInvariantError(`Pending write ${entryId} is missing its payload`);
+						}
+						return stored.value.type === "message"
+							? { entryId, type: "message" as const, message: stored.value.payload }
+							: {
+									entryId,
+									type: "custom" as const,
+									customType: stored.value.customType,
+									...(stored.value.payload === undefined ? {} : { data: stored.value.payload }),
+								};
+					}),
 				);
 				const operation = captured.operation;
-				const runState = operation !== null && isRunOperationState(operation.state) ? operation.state : undefined;
-				const steer =
-					runState === undefined
-						? []
-						: await readPendingMessages(reader, runState.inbox.steer, "Steer entry", context);
-				const followUp =
-					runState === undefined
-						? []
-						: await readPendingMessages(reader, runState.inbox.followUp, "Follow-up entry", context);
-				// TODO does a client really need pending writes? We wouldn't visualize those, any other uses for them?
-				const pendingWrites =
-					runState !== undefined
-						? await Promise.all(
-								runState.inbox.writes.map(async (entryId) => {
-									const stored = await reader.getValue(pendingEntry(entryId), context);
-									if (stored === undefined) {
-										throw new SessionInvariantError(`Pending write ${entryId} is missing its payload`);
-									}
-									return stored.value.type === "message"
-										? { entryId, type: "message" as const, message: stored.value.payload }
-										: {
-												entryId,
-												type: "custom" as const,
-												customType: stored.value.customType,
-												...(stored.value.payload === undefined ? {} : { data: stored.value.payload }),
-											};
-								}),
-							)
-						: [];
 
 				let operationSnapshot: NonNullable<LaneSnapshot["operation"]> | null = null;
 				if (operation !== null) {
@@ -714,18 +816,18 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 						);
 					const state = operation.state;
 					switch (state.at) {
-						case "run.assistant.retry_wait":
+						case "assistant.retry_wait":
 							retry = {
 								attempt: state.nextAttempt,
 								maxAttempts: state.generationContext.retryPolicy.maxAttempts,
 								nextAttemptAt: state.notBefore,
 							};
 							break;
-						case "run.assistant.effect_pending":
+						case "assistant.effect_pending":
 							streamingMessage = await readStreamingMessage(state.responseEntryId);
 							break;
-						case "run.deferred.suspended":
-						case "run.deferred.effect_pending": {
+						case "deferred.suspended":
+						case "deferred.effect_pending": {
 							const source = (await reader.getEntries([state.sourceEntryId], context)).get(state.sourceEntryId);
 							if (
 								source?.type !== "message" ||
@@ -735,12 +837,12 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 								throw new SessionInvariantError("Deferred source is missing its assistant handle");
 							}
 							deferred = { handle: source.message.deferred, poll: state.poll };
-							if (state.at === "run.deferred.effect_pending") {
+							if (state.at === "deferred.effect_pending") {
 								streamingMessage = await readStreamingMessage(state.responseEntryId);
 							}
 							break;
 						}
-						case "run.tools": {
+						case "tools": {
 							const { batch } = state;
 							const assistant = (await reader.getEntries([batch.assistantEntryId], context)).get(
 								batch.assistantEntryId,
@@ -776,9 +878,7 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 							}
 							break;
 						}
-						case "run.compaction.retry_wait":
-						case "compaction.retry_wait":
-						case "navigation.summary.retry_wait":
+						case "summary.retry_wait":
 							retry = {
 								attempt: state.nextAttempt,
 								maxAttempts: state.summaryContext.retryPolicy.maxAttempts,
@@ -823,7 +923,7 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 					lane: this.name,
 					transcript,
 					tipId: captured.tipId,
-					...(captured.lastResult === undefined ? {} : { lastResult: captured.lastResult }),
+					lastOperationId: captured.lastOperationId,
 					operation: operationSnapshot,
 					queues: { steer, followUp, nextRun },
 					pendingWrites,
@@ -888,78 +988,51 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 			return Promise.reject(new SessionPendingAssistantMessageError());
 		}
 		const id = this.session.idGenerator.next();
-		return this.command((state) => {
+		return this.command(async (state, reader) => {
 			if (state.operation === null) {
+				const queued = inboxItems(state.inbox, "write");
+				const captured = await Promise.all(
+					queued.map(async (item) => {
+						const stored = await reader.getValue(pendingEntry(item.entryId), context);
+						if (stored === undefined) {
+							throw new SessionInvariantError(`Pending write ${item.entryId} is missing its payload`);
+						}
+						return pendingEntryWrite(item.entryId, stored.value);
+					}),
+				);
+				const inbox = withoutInboxItems(state.inbox, queued);
+				const entries = chainEntries(state.tipId, [...captured, pendingEntryWrite(id, pending)]);
 				return {
 					kind: "commit",
 					writes: [
-						insertEntry(
-							pending.type === "message"
-								? { id, parentId: state.tipId, type: "message", message: pending.payload }
-								: {
-										id,
-										parentId: state.tipId,
-										type: "custom",
-										customType: pending.customType,
-										...(pending.payload === undefined ? {} : { data: pending.payload }),
-									},
-						),
+						...entries.map((entry) => insertEntry(entry)),
+						...queued.map((item) => deleteValue(pendingEntry(item.entryId))),
 						setValue(branchTip(this.name), id),
+						setValue(laneStateValue(this.name), {
+							currentOperationId: null,
+							lastOperationId: state.lastOperationId,
+							inbox,
+						}),
 					],
-					next: { ...state, tipId: id },
+					next: { ...state, tipId: id, inbox },
 					materialize: () => id,
-					events: (commit) => {
-						const entry: Entry =
-							pending.type === "message"
-								? {
-										id,
-										parentId: state.tipId,
-										type: "message",
-										message: pending.payload,
-										seq: commit.seqs[0]!,
-										timestamp: commit.timestamp,
-									}
-								: {
-										id,
-										parentId: state.tipId,
-										type: "custom",
-										customType: pending.customType,
-										...(pending.payload === undefined ? {} : { data: pending.payload }),
-										seq: commit.seqs[0]!,
-										timestamp: commit.timestamp,
-									};
-						return pending.type === "message"
-							? [
-									{ type: "message_start", message: pending.payload, lane: this.name },
-									{ type: "message_end", message: pending.payload, entryId: id, lane: this.name },
-									{ type: "entry_added", entry, lane: this.name },
-								]
-							: [{ type: "entry_added", entry, lane: this.name }];
-					},
+					events: (commit) => committedEntryEvents(entries, commit, this.name),
 				};
 			}
 
 			const operation = state.operation;
-			if (!isRunOperationState(operation.state)) {
-				return {
-					kind: "reject",
-					error: new Error(`Cannot append while structural operation ${operation.meta.operationId} is active`),
-				};
-			}
-			const operationState = {
-				...operation.state,
-				inbox: {
-					...operation.state.inbox,
-					writes: [...operation.state.inbox.writes, id],
-				},
-			};
+			const inbox = [...state.inbox, { entryId: id, kind: "write" as const }];
 			return {
 				kind: "commit",
 				writes: [
 					setValue(pendingEntry(id), pending),
-					setValue(operationStateValue(operation.meta.operationId), operationState),
+					setValue(laneStateValue(this.name), {
+						currentOperationId: operation.meta.operationId,
+						lastOperationId: state.lastOperationId,
+						inbox,
+					}),
 				],
-				next: { ...state, operation: { meta: operation.meta, state: operationState } },
+				next: { ...state, inbox },
 				materialize: () => id,
 				events: () => [
 					{

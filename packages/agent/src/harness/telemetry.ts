@@ -319,7 +319,7 @@ export const HARNESS_TELEMETRY_SCHEMA = {
 				"pi.checkpoint.kind": {
 					type: "string",
 					required: true,
-					values: ["normal", "failure_drain", "abort_reconcile"],
+					values: ["normal", "abort_reconcile"],
 					description: "Checkpoint purpose",
 				},
 			},

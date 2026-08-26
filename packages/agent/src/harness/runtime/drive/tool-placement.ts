@@ -4,14 +4,14 @@ import type { HarnessEvent } from "../../agent-harness.ts";
 import { insertEntry, insertUsage } from "../../session/commit.ts";
 import { SessionInvariantError } from "../../session/session.ts";
 import {
+	type CheckpointOperation,
 	type MessageEntry,
 	type NewEntry,
 	type OperationState,
-	type RunCheckpointOperation,
-	type RunToolsOperation,
-	runScopeOf,
+	operationScopeOf,
 	type ToolBatch,
 	type ToolCall,
+	type ToolsOperation,
 	type UsageRow,
 	type Write,
 } from "../../session/types.ts";
@@ -77,8 +77,8 @@ export function toolCallFor(sources: ToolBatchSource, call: ToolCall): AgentTool
 	return source;
 }
 
-export function withToolBatch(run: RunToolsOperation, batch: ToolBatch): RunToolsOperation {
-	return { ...runScopeOf(run), at: "run.tools", batch };
+export function withToolBatch(run: ToolsOperation, batch: ToolBatch): ToolsOperation {
+	return { ...operationScopeOf(run), at: "tools", batch };
 }
 
 async function readPlacement<TContext extends object | undefined>(
@@ -88,7 +88,7 @@ async function readPlacement<TContext extends object | undefined>(
 ): Promise<PlacementRead | undefined> {
 	return lane.command<PlacementRead | undefined>(async (state, reader) => {
 		const operation = state.operation;
-		if (operation?.state.at !== "run.tools") return { kind: "return", result: undefined };
+		if (operation?.state.at !== "tools") return { kind: "return", result: undefined };
 		const current = operation.state.batch;
 		let first = current.calls.findIndex((call) => call.status !== "completed");
 		if (first === -1) return { kind: "return", result: undefined };
@@ -144,13 +144,13 @@ async function readPlacement<TContext extends object | undefined>(
 async function commitPlacement<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	capability: RunToolsOperation,
+	capability: ToolsOperation,
 	read: PlacementRead,
 ): Promise<boolean> {
 	const usageIds = read.items.map((item) =>
 		item.message.usage === undefined ? undefined : lane.session.idGenerator.next(),
 	);
-	return lane.settleOperation<RunToolsOperation, boolean>(
+	return lane.settleOperation<ToolsOperation, boolean>(
 		capability,
 		async (state, run, _meta, reader) => {
 			const current = run.batch;
@@ -219,9 +219,9 @@ async function commitPlacement<TContext extends object | undefined>(
 			let nextRun: OperationState;
 			if (complete) {
 				const allTerminate = completedCalls.every((call) => call.status === "completed" && call.terminate);
-				const checkpoint: RunCheckpointOperation = {
-					...runScopeOf(run),
-					at: "run.checkpoint",
+				const checkpoint: CheckpointOperation = {
+					...operationScopeOf(run),
+					at: "checkpoint",
 					continuation: allTerminate
 						? { kind: "may_finish", includeFinalAssistant: false }
 						: { kind: "need_assistant", overflowRecoveryUsed: false },
@@ -280,7 +280,7 @@ async function commitPlacement<TContext extends object | undefined>(
 export async function materializeReady<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	capability: RunToolsOperation,
+	capability: ToolsOperation,
 	sources: ToolBatchSource,
 	recovery: boolean,
 ): Promise<void> {

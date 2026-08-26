@@ -4,9 +4,9 @@ import type {
 	DurableStructuralPreparation,
 	JsonValue,
 	LaneConfiguration,
-	LaneLastResult,
 	LaneState,
 	OperationMeta,
+	OperationResultRecord,
 	OperationState,
 	PendingEntry,
 } from "./types.ts";
@@ -159,7 +159,7 @@ export const branchTip = (branch: string) => value<string | null>("pi.branch.tip
 export const branchTipInventoryPrefix = () => value<string | null>("pi.branch.tip");
 export const laneConfig = (lane: string) => value<LaneConfiguration>("pi.lane.config", lane);
 export const laneState = (lane: string) => value<LaneState>("pi.lane.state", lane);
-export const laneLastResult = (lane: string) => value<LaneLastResult>("pi.lane.lastResult", lane);
+export const operationResult = (operationId: string) => value<OperationResultRecord>("pi.result", operationId);
 
 export const operationMeta = (operationId: string) => value<OperationMeta>("pi.op.meta", operationId);
 export const operationState = (operationId: string) => value<OperationState>("pi.op.state", operationId);

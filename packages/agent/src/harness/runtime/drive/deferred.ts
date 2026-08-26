@@ -4,12 +4,12 @@ import { consumeAssistantStream } from "../../execution/assistant.ts";
 import { applyStreamOptionsPatch } from "../../hooks.ts";
 import { SessionInvariantError } from "../../session/session.ts";
 import {
+	type DeferredEffectPendingOperation,
+	type DeferredSuspendedOperation,
 	type LaneConfiguration,
 	type OperationError,
-	type RunDeferredEffectPendingOperation,
-	type RunDeferredSuspendedOperation,
-	type RunScope,
-	runScopeOf,
+	type OperationScope,
+	operationScopeOf,
 	type SettledAssistantMessage,
 } from "../../session/types.ts";
 import { deleteList, pendingAssistantFrames } from "../../session/values.ts";
@@ -18,9 +18,9 @@ import type { Lane } from "../lane.ts";
 import type { ContinueOperationResult, Drive, ProcedureResult } from "../types.ts";
 import { openAssistantResponse, publishConfigurationFailure, publishResponse } from "./response.ts";
 
-type DeferredLeaf = RunDeferredSuspendedOperation | RunDeferredEffectPendingOperation;
+type DeferredLeaf = DeferredSuspendedOperation | DeferredEffectPendingOperation;
 /** Deferred effect payload without the run-wide scope fields. */
-type EffectPendingFields = Omit<RunDeferredEffectPendingOperation, keyof RunScope>;
+type EffectPendingFields = Omit<DeferredEffectPendingOperation, keyof OperationScope>;
 
 type PreparedDeferredPoll = {
 	kind: "ready";
@@ -92,7 +92,7 @@ async function prepareDeferredPoll<TContext extends object | undefined>(
 	const model = lane.models.getModel(identity.provider, identity.modelId);
 	if (model === undefined) return { kind: "configuration_failure" };
 	const baseOptions: AgentHarnessStreamOptions = { ...expected.streamOptions, deferred: false };
-	const poll = expected.at === "run.deferred.suspended" ? expected.poll + 1 : expected.poll;
+	const poll = expected.at === "deferred.suspended" ? expected.poll + 1 : expected.poll;
 	const beforeRequest = await lane.hooks.runWithGate(
 		"before_request",
 		{
@@ -126,10 +126,10 @@ async function publishPollIntent<TContext extends object | undefined>(
 	deferred: DeferredLeaf,
 	prepared: PreparedDeferredPoll,
 	recovery: boolean,
-): Promise<ContinueOperationResult<RunDeferredEffectPendingOperation>> {
+): Promise<ContinueOperationResult<DeferredEffectPendingOperation>> {
 	const at = Date.now();
 	const next: EffectPendingFields = {
-		at: "run.deferred.effect_pending",
+		at: "deferred.effect_pending",
 		stepId: deferred.stepId,
 		sourceEntryId: deferred.sourceEntryId,
 		poll: prepared.poll,
@@ -141,11 +141,11 @@ async function publishPollIntent<TContext extends object | undefined>(
 	return lane.continueOperation(
 		deferred,
 		(_state, current) => {
-			const nextState: RunDeferredEffectPendingOperation = { ...runScopeOf(current), ...next };
+			const nextState: DeferredEffectPendingOperation = { ...operationScopeOf(current), ...next };
 			return {
 				kind: "commit",
 				writes:
-					deferred.at === "run.deferred.effect_pending"
+					deferred.at === "deferred.effect_pending"
 						? [deleteList(pendingAssistantFrames(drive.operationId, deferred.responseEntryId))]
 						: [],
 				operationState: nextState,
@@ -172,7 +172,7 @@ async function performDeferredPoll<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
 	prepared: PreparedDeferredPoll,
-	intent: RunDeferredEffectPendingOperation,
+	intent: DeferredEffectPendingOperation,
 	recovery: boolean,
 ): Promise<SettledAssistantMessage> {
 	const response = openAssistantResponse(lane, drive, intent.responseEntryId, recovery);
@@ -234,15 +234,7 @@ async function pollDeferred<TContext extends object | undefined>(
 		};
 	}
 	if (prepared.kind === "configuration_failure") {
-		return publishConfigurationFailure(
-			lane,
-			drive,
-			expected,
-			configurationError(expected.configuration.model),
-			expected.at === "run.deferred.effect_pending"
-				? [deleteList(pendingAssistantFrames(drive.operationId, expected.responseEntryId))]
-				: [],
-		);
+		return publishConfigurationFailure(lane, drive, expected, configurationError(expected.configuration.model));
 	}
 
 	const intent = await publishPollIntent(lane, drive, expected, prepared, recovery);
@@ -255,7 +247,7 @@ async function pollDeferred<TContext extends object | undefined>(
 export function runDeferredSuspended<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	deferred: RunDeferredSuspendedOperation,
+	deferred: DeferredSuspendedOperation,
 ): Promise<ProcedureResult> {
 	return pollDeferred(lane, drive, deferred, false);
 }
@@ -264,7 +256,7 @@ export function runDeferredSuspended<TContext extends object | undefined>(
 export function recoverDeferredPoll<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	deferred: RunDeferredEffectPendingOperation,
+	deferred: DeferredEffectPendingOperation,
 ): Promise<ProcedureResult> {
 	return pollDeferred(lane, drive, deferred, true);
 }
@@ -273,9 +265,9 @@ export function recoverDeferredPoll<TContext extends object | undefined>(
 export function runDeferred<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	deferred: RunDeferredSuspendedOperation | RunDeferredEffectPendingOperation,
+	deferred: DeferredSuspendedOperation | DeferredEffectPendingOperation,
 ): Promise<ProcedureResult> {
-	return deferred.at === "run.deferred.suspended"
+	return deferred.at === "deferred.suspended"
 		? runDeferredSuspended(lane, drive, deferred)
 		: recoverDeferredPoll(lane, drive, deferred);
 }

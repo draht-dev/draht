@@ -10,11 +10,10 @@ import { type Config, Drive, type LaneState as RuntimeLaneState } from "../../..
 import { MemoryStorage } from "../../../src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
 import {
-	isRunOperationState,
+	type AssistantEffectPendingOperation,
+	type CheckpointOperation,
 	type OperationState,
-	type RunAssistantEffectPendingOperation,
-	type RunCheckpointOperation,
-	runScopeOf,
+	operationScopeOf,
 	type Session,
 	type Write,
 } from "../../../src/harness/session/types.ts";
@@ -77,10 +76,10 @@ function runScope() {
 	};
 }
 
-function assistantEffectPending(responseEntryId: string): RunAssistantEffectPendingOperation {
+function assistantEffectPending(responseEntryId: string): AssistantEffectPendingOperation {
 	return {
 		...runScope(),
-		at: "run.assistant.effect_pending",
+		at: "assistant.effect_pending",
 		generationContext: {
 			stepId: "step",
 			triggerEntryId: "trigger",
@@ -116,7 +115,8 @@ async function createFixture(
 	const projection: RuntimeLaneState = {
 		tipId: null,
 		configuration,
-		pendingNextRun: [],
+		inbox: [],
+		lastOperationId: null,
 		operation: { meta, state },
 	};
 	const lane = new Lane<undefined>(
@@ -138,7 +138,8 @@ async function createFixture(
 					storedValues.setValue(storedValues.laneConfig("main"), configuration),
 					storedValues.setValue(storedValues.laneState("main"), {
 						currentOperationId: operationId,
-						pendingNextRun: [],
+						lastOperationId: null,
+						inbox: [],
 					}),
 					storedValues.setValue(storedValues.operationMeta(operationId), meta),
 					storedValues.setValue(storedValues.operationState(operationId), state),
@@ -230,10 +231,10 @@ describe("runtime progress channels", () => {
 		const getValue = vi.spyOn(storage, "getValue");
 		const moving = lane.command((state) => {
 			const operation = state.operation;
-			if (operation === null || !isRunOperationState(operation.state)) throw new Error("missing run");
-			const nextState: RunCheckpointOperation = {
-				...runScopeOf(operation.state),
-				at: "run.checkpoint",
+			if (operation === null) throw new Error("missing operation");
+			const nextState: CheckpointOperation = {
+				...operationScopeOf(operation.state),
+				at: "checkpoint",
 				continuation: { kind: "may_finish", includeFinalAssistant: true },
 				triggerEntryId: responseEntryId,
 			};
@@ -279,7 +280,8 @@ describe("runtime progress channels", () => {
 					storedValues.deleteValue(storedValues.operationState(operationId)),
 					storedValues.setValue(storedValues.laneState("main"), {
 						currentOperationId: null,
-						pendingNextRun: state.pendingNextRun,
+						lastOperationId: null,
+						inbox: state.inbox,
 					}),
 				],
 				next: { ...state, operation: null },
@@ -307,7 +309,7 @@ describe("runtime progress channels", () => {
 		const invocationId = "result";
 		const { lane, drive } = await createFixture({
 			...runScope(),
-			at: "run.tools",
+			at: "tools",
 			batch: {
 				assistantEntryId: "assistant",
 				configuration,

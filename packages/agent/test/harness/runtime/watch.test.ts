@@ -10,8 +10,8 @@ import { MemoryStorage } from "../../../src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
 import type {
 	OperationMeta,
+	OperationScope,
 	OperationState,
-	RunScope,
 	Session,
 	StorageBranchScan,
 	Write,
@@ -40,7 +40,8 @@ async function createSession(storage: MemoryStorage = new MemoryStorage()): Prom
 					storedValues.setValue(storedValues.laneConfig("main"), configuration),
 					storedValues.setValue(storedValues.laneState("main"), {
 						currentOperationId: null,
-						pendingNextRun: [],
+						lastOperationId: null,
+						inbox: [],
 					}),
 				],
 				BACKGROUND_CONTEXT,
@@ -54,7 +55,7 @@ async function commit(session: Session, writes: Write[]): Promise<void> {
 	await session.mutate((mutator) => mutator.commit(writes, BACKGROUND_CONTEXT), BACKGROUND_CONTEXT);
 }
 
-function runScope(control: RunScope["control"] = { status: "running" }): RunScope {
+function runScope(control: OperationScope["control"] = { status: "running" }): OperationScope {
 	return {
 		control,
 		settings: {
@@ -63,7 +64,6 @@ function runScope(control: RunScope["control"] = { status: "running" }): RunScop
 			followUpMode: "all",
 			toolExecution: "parallel",
 		},
-		inbox: { steer: [], followUp: [], writes: [] },
 		latestAssistantEntryId: null,
 	};
 }
@@ -166,13 +166,12 @@ describe("runtime lane watch", () => {
 				drainedSteer: [ids.drainedSteer],
 				drainedFollowUp: [ids.drainedFollow],
 			}),
-			at: "run.deferred.suspended",
+			at: "deferred.suspended",
 			stepId: "step",
 			sourceEntryId: "source",
 			poll: 3,
 			configuration,
 			streamOptions: {},
-			inbox: { steer: [ids.steer], followUp: [ids.follow], writes: [ids.write] },
 		};
 		const meta: OperationMeta = {
 			operationId,
@@ -194,7 +193,13 @@ describe("runtime lane watch", () => {
 			storedValues.setValue(storedValues.branchTip("main"), "source"),
 			storedValues.setValue(storedValues.laneState("main"), {
 				currentOperationId: operationId,
-				pendingNextRun: [ids.next],
+				lastOperationId: null,
+				inbox: [
+					{ entryId: ids.next, kind: "nextRun" },
+					{ entryId: ids.steer, kind: "steer" },
+					{ entryId: ids.follow, kind: "followUp" },
+					{ entryId: ids.write, kind: "write" },
+				],
 			}),
 		]);
 		const harness = await attach(session);
@@ -233,7 +238,7 @@ describe("runtime lane watch", () => {
 			}),
 			storedValues.setValue(storedValues.operationState(operationId), {
 				...runScope(),
-				at: "run.assistant.effect_pending",
+				at: "assistant.effect_pending",
 				generationContext: {
 					stepId: "step",
 					triggerEntryId: "trigger",
@@ -250,7 +255,8 @@ describe("runtime lane watch", () => {
 			}),
 			storedValues.setValue(storedValues.laneState("main"), {
 				currentOperationId: operationId,
-				pendingNextRun: [],
+				lastOperationId: null,
+				inbox: [],
 			}),
 		]);
 		const harness = await attach(session);
@@ -280,7 +286,7 @@ describe("runtime lane watch", () => {
 			}),
 			storedValues.setValue(storedValues.operationState(frameOperationId), {
 				...runScope(),
-				at: "run.assistant.effect_pending",
+				at: "assistant.effect_pending",
 				generationContext: {
 					stepId: "step",
 					triggerEntryId: "trigger",
@@ -300,7 +306,8 @@ describe("runtime lane watch", () => {
 			),
 			storedValues.setValue(storedValues.laneState("main"), {
 				currentOperationId: frameOperationId,
-				pendingNextRun: [],
+				lastOperationId: null,
+				inbox: [],
 			}),
 		]);
 		const frameHarness = await attach(frameSession);
@@ -326,7 +333,7 @@ describe("runtime lane watch", () => {
 			}),
 			storedValues.setValue(storedValues.operationState(toolOperationId), {
 				...runScope(),
-				at: "run.tools",
+				at: "tools",
 				batch: {
 					assistantEntryId: "assistant",
 					configuration,
@@ -353,7 +360,8 @@ describe("runtime lane watch", () => {
 			storedValues.setValue(storedValues.branchTip("main"), "assistant"),
 			storedValues.setValue(storedValues.laneState("main"), {
 				currentOperationId: toolOperationId,
-				pendingNextRun: [],
+				lastOperationId: null,
+				inbox: [],
 			}),
 		]);
 		const toolHarness = await attach(toolSession);
@@ -380,7 +388,8 @@ describe("runtime lane watch", () => {
 		await commit(session, [
 			storedValues.setValue(storedValues.laneState("main"), {
 				currentOperationId: null,
-				pendingNextRun: ["missing"],
+				lastOperationId: null,
+				inbox: [{ entryId: "missing", kind: "nextRun" }],
 			}),
 		]);
 		const harness = await attach(session);

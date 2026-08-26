@@ -22,15 +22,17 @@ import { MemoryStorage } from "../../../src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
 import { InstrumentedStorage } from "../../../src/harness/session/testing/instrumented-storage.ts";
 import type {
-	CompactionEffectPendingOperation,
+	CheckpointOperation,
 	DurableStructuralPreparation,
 	LaneConfiguration,
 	NewEntry,
 	OperationMeta,
+	OperationScope,
 	OperationState,
-	RunCheckpointOperation,
-	RunScope,
 	Session,
+	SummaryEffectPendingOperation,
+	SummaryReadyOperation,
+	SummaryTask,
 	Write,
 } from "../../../src/harness/session/types.ts";
 import * as storedValues from "../../../src/harness/session/values.ts";
@@ -56,7 +58,7 @@ function unusedWatch<T>(): WatchHandle<T> {
 	throw new Error("watch is not used by structural tests");
 }
 
-function runScope(compaction = DEFAULT_COMPACTION_SETTINGS): RunScope {
+function runScope(compaction = DEFAULT_COMPACTION_SETTINGS): OperationScope {
 	return {
 		control: { status: "running" },
 		settings: {
@@ -65,13 +67,50 @@ function runScope(compaction = DEFAULT_COMPACTION_SETTINGS): RunScope {
 			followUpMode: "all",
 			toolExecution: "parallel",
 		},
-		inbox: { steer: [], followUp: [], writes: [] },
 		latestAssistantEntryId: null,
 	};
 }
 
 function user(content: string, timestamp = 1) {
 	return { role: "user" as const, content, timestamp };
+}
+
+function standaloneCompactionTask(customInstructions?: string): SummaryTask {
+	return {
+		taskId: "task",
+		reason: "manual",
+		...(customInstructions === undefined ? {} : { customInstructions }),
+		boundary: { kind: "finish" },
+	};
+}
+
+function runCompactionTask(
+	reason: "threshold" | "overflow",
+	resumeAfter: Omit<CheckpointOperation, keyof OperationScope | "at">,
+): SummaryTask {
+	return { taskId: "task", reason, boundary: { kind: "resume_checkpoint", resumeAfter } };
+}
+
+function navigationSummaryTask(targetId: string, label?: string): SummaryTask {
+	return {
+		taskId: "task",
+		boundary: { kind: "commit_navigation", targetId, ...(label === undefined ? {} : { label }) },
+	};
+}
+
+function summaryReady(
+	scope: OperationScope,
+	task: SummaryTask,
+	configuration: LaneConfiguration,
+	retryPolicy = { maxAttempts: 2, baseDelayMs: 10 },
+): SummaryReadyOperation {
+	return {
+		...scope,
+		at: "summary.ready",
+		task,
+		summaryContext: { resultEntryId: "summary-entry", configuration, streamOptions: {}, retryPolicy },
+		nextAttempt: 1,
+	};
 }
 
 function compactionPreparation(
@@ -123,7 +162,8 @@ async function createFixture(): Promise<Fixture> {
 					storedValues.setValue(storedValues.laneConfig("main"), configuration),
 					storedValues.setValue(storedValues.laneState("main"), {
 						currentOperationId: null,
-						pendingNextRun: [],
+						lastOperationId: null,
+						inbox: [],
 					}),
 				],
 				BACKGROUND_CONTEXT,
@@ -196,7 +236,8 @@ async function installOperation(
 			storedValues.setValue(storedValues.operationState(operationId), state),
 			storedValues.setValue(storedValues.laneState("main"), {
 				currentOperationId: operationId,
-				pendingNextRun: projection.pendingNextRun,
+				lastOperationId: null,
+				inbox: projection.inbox,
 			}),
 			...(options.preparation === undefined
 				? []
@@ -258,9 +299,9 @@ describe("runtime structural drive", () => {
 			reserveTokens: model.contextWindow,
 			keepRecentTokens: 1,
 		};
-		const checkpoint: RunCheckpointOperation = {
+		const checkpoint: CheckpointOperation = {
 			...runScope(settings),
-			at: "run.checkpoint",
+			at: "checkpoint",
 			continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
 			triggerEntryId: "assistant",
 		};
@@ -278,11 +319,12 @@ describe("runtime structural drive", () => {
 
 		expect(await runCompactionThreshold(fixture.lane, fixture.drive, checkpoint)).toEqual({ kind: "continue" });
 		const deciding = currentState(fixture);
-		if (deciding.at !== "run.compaction.deciding") throw new Error("threshold did not enter compaction");
-		expect(deciding.resumeAfter.thresholdCheckedTriggerEntryId).toBe("assistant");
+		if (deciding.at !== "summary.deciding") throw new Error("threshold did not enter compaction");
+		if (deciding.task.boundary.kind !== "resume_checkpoint") throw new Error("threshold has wrong boundary");
+		expect(deciding.task.boundary.resumeAfter.thresholdCheckedTriggerEntryId).toBe("assistant");
 		expect(
 			await fixture.session.getValue(
-				storedValues.operationPreparation(operationId, deciding.taskId),
+				storedValues.operationPreparation(operationId, deciding.task.taskId),
 				BACKGROUND_CONTEXT,
 			),
 		).toBeDefined();
@@ -290,7 +332,7 @@ describe("runtime structural drive", () => {
 		fixture.hooks.on("before_compaction", () => ({ decline: true }));
 		expect(await runStructuralDecision(fixture.lane, fixture.drive, deciding)).toEqual({ kind: "continue" });
 		const restored = currentState(fixture);
-		if (restored.at !== "run.checkpoint") throw new Error("threshold decline did not restore checkpoint");
+		if (restored.at !== "checkpoint") throw new Error("threshold decline did not restore checkpoint");
 		expect(restored.thresholdCheckedTriggerEntryId).toBe(restored.triggerEntryId);
 		expect(fixture.events.filter((event) => event.type === "compaction_start")).toHaveLength(1);
 		expect(fixture.events.filter((event) => event.type === "compaction_end")).toHaveLength(1);
@@ -302,14 +344,12 @@ describe("runtime structural drive", () => {
 			const fixture = await createFixture();
 			const deciding = {
 				...runScope(),
-				at: "run.compaction.deciding",
-				reason: "threshold",
-				resumeAfter: {
+				at: "summary.deciding",
+				task: runCompactionTask("threshold", {
 					continuation: { kind: "may_finish", includeFinalAssistant: true },
 					triggerEntryId: "tip",
 					thresholdCheckedTriggerEntryId: "tip",
-				},
-				taskId: "task",
+				}),
 			} as const;
 			await installOperation(
 				fixture,
@@ -337,14 +377,8 @@ describe("runtime structural drive", () => {
 			await hookStarted.promise;
 			await fixture.lane.command((projection) => {
 				const operation = projection.operation;
-				if (operation?.state.at !== "run.compaction.deciding") throw new Error("missing run compaction");
-				const state = {
-					...operation.state,
-					inbox: {
-						...operation.state.inbox,
-						[queue]: ["queued"],
-					},
-				};
+				if (operation?.state.at !== "summary.deciding") throw new Error("missing run compaction");
+				const inbox = [...projection.inbox, { entryId: "queued", kind: queue }];
 				return {
 					kind: "commit",
 					writes: [
@@ -352,9 +386,13 @@ describe("runtime structural drive", () => {
 							type: "message",
 							payload: user(`${queue} during compaction`),
 						}),
-						storedValues.setValue(storedValues.operationState(operationId), state),
+						storedValues.setValue(storedValues.laneState("main"), {
+							currentOperationId: operationId,
+							lastOperationId: null,
+							inbox,
+						}),
 					],
-					next: { ...projection, operation: { meta: operation.meta, state } },
+					next: { ...projection, inbox },
 					materialize: () => undefined,
 				};
 			}, BACKGROUND_CONTEXT);
@@ -362,23 +400,54 @@ describe("runtime structural drive", () => {
 			expect(await running).toEqual({ kind: "continue" });
 
 			let checkpoint = currentState(fixture);
-			if (checkpoint.at !== "run.checkpoint") throw new Error("compaction did not restore checkpoint");
-			expect(checkpoint.inbox[queue]).toEqual(["queued"]);
+			if (checkpoint.at !== "checkpoint") throw new Error("compaction did not restore checkpoint");
+			expect(fixture.lane.state.inbox).toEqual([{ entryId: "queued", kind: queue }]);
 			expect(await runCheckpoint(fixture.lane, fixture.drive, checkpoint)).toEqual({ kind: "continue" });
 			checkpoint = currentState(fixture);
-			if (checkpoint.at !== "run.checkpoint") throw new Error("queued input did not reach checkpoint");
+			if (checkpoint.at !== "checkpoint") throw new Error("queued input did not reach checkpoint");
 			expect(checkpoint.continuation).toEqual({ kind: "need_assistant", overflowRecoveryUsed: false });
-			expect(checkpoint.inbox[queue]).toEqual([]);
+			expect(fixture.lane.state.inbox).toEqual([]);
 			expect(await runCheckpoint(fixture.lane, fixture.drive, checkpoint)).toEqual({ kind: "continue" });
-			expect(currentState(fixture).at).toBe("run.assistant.ready");
+			expect(currentState(fixture).at).toBe("assistant.ready");
 		},
 	);
+
+	it("queues writes during standalone structural work without changing the operation", async () => {
+		const fixture = await createFixture();
+		const deciding = {
+			...runScope(),
+			at: "summary.deciding",
+			task: standaloneCompactionTask(),
+		} as const;
+		await installOperation(
+			fixture,
+			deciding,
+			{ kind: "compaction" },
+			{
+				entries: [{ id: "tip", parentId: null, type: "message", message: user("history") }],
+				preparation: { taskId: "task", value: compactionPreparation() },
+			},
+		);
+
+		const entryId = await fixture.lane.appendCustomEntry("note", { pending: true }, BACKGROUND_CONTEXT);
+
+		expect(currentState(fixture)).toEqual(deciding);
+		expect(fixture.lane.state.tipId).toBe("tip");
+		expect(fixture.lane.state.inbox).toEqual([{ entryId, kind: "write" }]);
+		expect((await fixture.session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value).toEqual({
+			currentOperationId: operationId,
+			lastOperationId: null,
+			inbox: [{ entryId, kind: "write" }],
+		});
+		expect(await fixture.session.getValue(storedValues.pendingEntry(entryId), BACKGROUND_CONTEXT)).toBeDefined();
+		expect(fixture.events.at(-1)).toMatchObject({ type: "write_pending", entryId });
+	});
 
 	it("publishes overflow preparation with the normalized response settlement", async () => {
 		const fixture = await createFixture();
 		const ready = {
 			...runScope({ enabled: true, reserveTokens: 1_000, keepRecentTokens: 1 }),
-			at: "run.assistant.ready",
+			at: "assistant.ready",
 			generationContext: {
 				stepId: "step",
 				triggerEntryId: "tip",
@@ -406,16 +475,17 @@ describe("runtime structural drive", () => {
 
 		expect(await runGeneration(fixture.lane, fixture.drive, ready)).toEqual({ kind: "continue" });
 		const deciding = currentState(fixture);
-		if (deciding.at !== "run.compaction.deciding") throw new Error("overflow did not enter compaction");
-		expect(deciding.reason).toBe("overflow");
-		expect(deciding.resumeAfter).toMatchObject({
+		if (deciding.at !== "summary.deciding") throw new Error("overflow did not enter compaction");
+		expect(deciding.task.reason).toBe("overflow");
+		if (deciding.task.boundary.kind !== "resume_checkpoint") throw new Error("overflow has wrong boundary");
+		expect(deciding.task.boundary.resumeAfter).toMatchObject({
 			continuation: { kind: "need_assistant", overflowRecoveryUsed: true },
 			triggerEntryId: "tip",
 			thresholdCheckedTriggerEntryId: "tip",
 		});
 		expect(
 			await fixture.session.getValue(
-				storedValues.operationPreparation(operationId, deciding.taskId),
+				storedValues.operationPreparation(operationId, deciding.task.taskId),
 				BACKGROUND_CONTEXT,
 			),
 		).toBeDefined();
@@ -427,10 +497,9 @@ describe("runtime structural drive", () => {
 	it("publishes a hook compaction and terminal cleanup atomically without assistant lifecycle", async () => {
 		const fixture = await createFixture();
 		const deciding = {
-			at: "compaction.deciding",
-			control: { status: "running" },
-			taskId: "task",
-			customInstructions: "focus",
+			...runScope(),
+			at: "summary.deciding",
+			task: { taskId: "task", customInstructions: "focus", boundary: { kind: "finish" } },
 		} as const;
 		await installOperation(
 			fixture,
@@ -451,7 +520,10 @@ describe("runtime structural drive", () => {
 		}));
 
 		const result = await runStructuralDecision(fixture.lane, fixture.drive, deciding);
-		expect(result).toMatchObject({ kind: "settled", outcome: { operation: "compaction", kind: "completed" } });
+		expect(result).toMatchObject({
+			kind: "settled",
+			outcome: { operationId, kind: "compaction", status: "completed" },
+		});
 		expect(fixture.lane.state.operation).toBeNull();
 		const entry = await fixture.session.getEntry(fixture.lane.state.tipId!, BACKGROUND_CONTEXT);
 		expect(entry).toMatchObject({
@@ -471,24 +543,69 @@ describe("runtime structural drive", () => {
 			false,
 		);
 		expect(fixture.events.map((event) => event.type)).toContain("entry_added");
+		expect(fixture.events.at(-1)).toMatchObject({ type: "compaction_end", reason: "manual", status: "completed" });
+	});
+
+	it("terminal-declines standalone compaction without publishing an entry", async () => {
+		const fixture = await createFixture();
+		const deciding = { ...runScope(), at: "summary.deciding", task: standaloneCompactionTask() } as const;
+		await installOperation(
+			fixture,
+			deciding,
+			{ kind: "compaction" },
+			{
+				entries: [{ id: "tip", parentId: null, type: "message", message: user("history") }],
+				preparation: { taskId: "task", value: compactionPreparation() },
+			},
+		);
+		fixture.hooks.on("before_compaction", () => ({ decline: true }));
+
+		expect(await runStructuralDecision(fixture.lane, fixture.drive, deciding)).toMatchObject({
+			kind: "settled",
+			outcome: { operationId, kind: "compaction", status: "declined", tipId: "tip" },
+		});
+		expect(fixture.lane.state.operation).toBeNull();
+		expect(fixture.lane.state.tipId).toBe("tip");
+		expect(fixture.events.at(-1)).toMatchObject({ type: "compaction_end", status: "declined" });
+	});
+
+	it("terminal-fails overflow decline while preserving lane-owned input", async () => {
+		const fixture = await createFixture();
+		const deciding = {
+			...runScope(),
+			at: "summary.deciding",
+			task: runCompactionTask("overflow", {
+				continuation: { kind: "need_assistant", overflowRecoveryUsed: true },
+				triggerEntryId: "tip",
+			}),
+		} as const;
+		await installOperation(
+			fixture,
+			deciding,
+			{ kind: "run", promptEntryIds: ["tip"] },
+			{
+				entries: [{ id: "tip", parentId: null, type: "message", message: user("history") }],
+				preparation: { taskId: "task", value: compactionPreparation() },
+			},
+		);
+		const queuedId = await fixture.lane.appendCustomEntry("retained", { value: true }, BACKGROUND_CONTEXT);
+		fixture.hooks.on("before_compaction", () => ({ decline: true }));
+
+		expect(await runStructuralDecision(fixture.lane, fixture.drive, deciding)).toMatchObject({
+			kind: "settled",
+			outcome: { operationId, kind: "run", status: "failed", error: { code: "compaction_declined" } },
+		});
+		expect(fixture.lane.state.inbox).toEqual([{ entryId: queuedId, kind: "write" }]);
+		expect(await fixture.session.getValue(storedValues.pendingEntry(queuedId), BACKGROUND_CONTEXT)).toBeDefined();
+		expect(fixture.events.slice(-2)).toMatchObject([
+			{ type: "compaction_end", status: "declined" },
+			{ type: "run_end", status: "failed" },
+		]);
 	});
 
 	it("gives each split-turn provider request its own durable intent and usage row", async () => {
 		const fixture = await createFixture();
-		const ready = {
-			at: "compaction.ready",
-			control: { status: "running" },
-			summaryContext: {
-				taskId: "task",
-				resultEntryId: "summary-entry",
-				kind: "compaction",
-				configuration: fixture.configuration,
-				streamOptions: {},
-				retryPolicy: { maxAttempts: 2, baseDelayMs: 10 },
-				reason: "manual",
-			},
-			nextAttempt: 1,
-		} as const;
+		const ready = summaryReady(runScope(), standaloneCompactionTask(), fixture.configuration);
 		await installOperation(
 			fixture,
 			ready,
@@ -508,7 +625,10 @@ describe("runtime structural drive", () => {
 		fixture.faux.setResponses([fauxAssistantMessage("history summary"), fauxAssistantMessage("turn prefix summary")]);
 
 		const result = await runStructuralGeneration(fixture.lane, fixture.drive, ready);
-		expect(result).toMatchObject({ kind: "settled", outcome: { operation: "compaction", kind: "completed" } });
+		expect(result).toMatchObject({
+			kind: "settled",
+			outcome: { operationId, kind: "compaction", status: "completed" },
+		});
 		const attempts = fixture.storage.getCommitAttempts();
 		const requestIndices = attempts.flatMap((writes) =>
 			writes.flatMap((write) =>
@@ -539,33 +659,22 @@ describe("runtime structural drive", () => {
 
 	it("restores the captured run checkpoint after generated threshold compaction", async () => {
 		const fixture = await createFixture();
-		const resumeAfter: RunCheckpointOperation = {
+		const resumeAfter: CheckpointOperation = {
 			...runScope(),
-			at: "run.checkpoint",
+			at: "checkpoint",
 			continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
 			triggerEntryId: "tip",
 			thresholdCheckedTriggerEntryId: "tip",
 		};
-		const ready = {
-			...runScope(),
-			at: "run.compaction.ready",
-			reason: "threshold",
-			resumeAfter: {
+		const ready = summaryReady(
+			runScope(),
+			runCompactionTask("threshold", {
 				continuation: resumeAfter.continuation,
 				triggerEntryId: resumeAfter.triggerEntryId,
 				thresholdCheckedTriggerEntryId: resumeAfter.thresholdCheckedTriggerEntryId,
-			},
-			summaryContext: {
-				taskId: "task",
-				resultEntryId: "summary-entry",
-				kind: "compaction",
-				configuration: fixture.configuration,
-				streamOptions: {},
-				retryPolicy: { maxAttempts: 2, baseDelayMs: 10 },
-				reason: "threshold",
-			},
-			nextAttempt: 1,
-		} as const;
+			}),
+			fixture.configuration,
+		);
 		await installOperation(
 			fixture,
 			ready,
@@ -579,7 +688,7 @@ describe("runtime structural drive", () => {
 
 		expect(await runStructuralGeneration(fixture.lane, fixture.drive, ready)).toEqual({ kind: "continue" });
 		const restored = currentState(fixture);
-		if (restored.at !== "run.checkpoint") throw new Error("generated compaction did not restore checkpoint");
+		if (restored.at !== "checkpoint") throw new Error("generated compaction did not restore checkpoint");
 		expect(restored).toMatchObject({
 			continuation: resumeAfter.continuation,
 			triggerEntryId: "tip",
@@ -592,20 +701,7 @@ describe("runtime structural drive", () => {
 
 	it("settles structural usage without faulting when durable cancellation aborts the request", async () => {
 		const fixture = await createFixture();
-		const ready = {
-			at: "compaction.ready",
-			control: { status: "running" },
-			summaryContext: {
-				taskId: "task",
-				resultEntryId: "summary-entry",
-				kind: "compaction",
-				configuration: fixture.configuration,
-				streamOptions: {},
-				retryPolicy: { maxAttempts: 2, baseDelayMs: 10 },
-				reason: "manual",
-			},
-			nextAttempt: 1,
-		} as const;
+		const ready = summaryReady(runScope(), standaloneCompactionTask(), fixture.configuration);
 		await installOperation(
 			fixture,
 			ready,
@@ -639,7 +735,7 @@ describe("runtime structural drive", () => {
 
 		expect(await running).toEqual({ kind: "continue" });
 		const cancelled = currentState(fixture);
-		if (cancelled.at !== "compaction.effect_pending") {
+		if (cancelled.at !== "summary.effect_pending") {
 			throw new Error("cancelled generation did not remain effect-pending for reconciliation");
 		}
 		expect(cancelled.control.status).toBe("cancel_requested");
@@ -655,29 +751,15 @@ describe("runtime structural drive", () => {
 
 	it("fails missing in-run structural models with configuration provenance", async () => {
 		const fixture = await createFixture();
-		const ready = {
-			...runScope(),
-			at: "run.compaction.ready",
-			reason: "threshold",
-			resumeAfter: {
+		const ready = summaryReady(
+			runScope(),
+			runCompactionTask("threshold", {
 				continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
 				triggerEntryId: "tip",
 				thresholdCheckedTriggerEntryId: "tip",
-			},
-			summaryContext: {
-				taskId: "task",
-				resultEntryId: "summary-entry",
-				kind: "compaction",
-				configuration: {
-					...fixture.configuration,
-					model: { provider: "missing", modelId: "missing" },
-				},
-				streamOptions: {},
-				retryPolicy: { maxAttempts: 2, baseDelayMs: 10 },
-				reason: "threshold",
-			},
-			nextAttempt: 1,
-		} as const;
+			}),
+			{ ...fixture.configuration, model: { provider: "missing", modelId: "missing" } },
+		);
 		await installOperation(
 			fixture,
 			ready,
@@ -688,13 +770,11 @@ describe("runtime structural drive", () => {
 			},
 		);
 
-		expect(await runStructuralGeneration(fixture.lane, fixture.drive, ready)).toEqual({ kind: "continue" });
-		const failure = currentState(fixture);
-		if (failure.at !== "run.failure_drain") throw new Error("missing model did not fail the run");
-		expect(failure).toMatchObject({
-			error: { code: "model_unavailable" },
-			provenance: { kind: "configuration" },
+		expect(await runStructuralGeneration(fixture.lane, fixture.drive, ready)).toMatchObject({
+			kind: "settled",
+			outcome: { operationId, kind: "run", status: "failed", error: { code: "model_unavailable" } },
 		});
+		expect(fixture.lane.state.operation).toBeNull();
 		expect(
 			fixture.storage
 				.getCommitAttempts()
@@ -703,23 +783,10 @@ describe("runtime structural drive", () => {
 		).toBe(false);
 
 		const standalone = await createFixture();
-		const standaloneReady = {
-			at: "compaction.ready",
-			control: { status: "running" },
-			summaryContext: {
-				taskId: "task",
-				resultEntryId: "summary-entry",
-				kind: "compaction",
-				configuration: {
-					...standalone.configuration,
-					model: { provider: "missing", modelId: "missing" },
-				},
-				streamOptions: {},
-				retryPolicy: { maxAttempts: 2, baseDelayMs: 10 },
-				reason: "manual",
-			},
-			nextAttempt: 1,
-		} as const;
+		const standaloneReady = summaryReady(runScope(), standaloneCompactionTask(), {
+			...standalone.configuration,
+			model: { provider: "missing", modelId: "missing" },
+		});
 		await installOperation(
 			standalone,
 			standaloneReady,
@@ -731,27 +798,17 @@ describe("runtime structural drive", () => {
 		);
 		expect(await runStructuralGeneration(standalone.lane, standalone.drive, standaloneReady)).toMatchObject({
 			kind: "settled",
-			outcome: { operation: "compaction", kind: "failed", error: { code: "model_unavailable" } },
+			outcome: { operationId, kind: "compaction", status: "failed", error: { code: "model_unavailable" } },
 		});
 		expect(standalone.lane.state.operation).toBeNull();
 	});
 
 	it("durably schedules retryable structural failures and exposes the retry wait", async () => {
 		const fixture = await createFixture();
-		const ready = {
-			at: "compaction.ready",
-			control: { status: "running" },
-			summaryContext: {
-				taskId: "task",
-				resultEntryId: "summary-entry",
-				kind: "compaction",
-				configuration: fixture.configuration,
-				streamOptions: {},
-				retryPolicy: { maxAttempts: 2, baseDelayMs: 10_000 },
-				reason: "manual",
-			},
-			nextAttempt: 1,
-		} as const;
+		const ready = summaryReady(runScope(), standaloneCompactionTask(), fixture.configuration, {
+			maxAttempts: 2,
+			baseDelayMs: 10_000,
+		});
 		await installOperation(
 			fixture,
 			ready,
@@ -767,7 +824,7 @@ describe("runtime structural drive", () => {
 
 		expect(await runStructuralGeneration(fixture.lane, fixture.drive, ready)).toEqual({ kind: "continue" });
 		const retry = currentState(fixture);
-		if (retry.at !== "compaction.retry_wait") throw new Error("retryable failure did not wait");
+		if (retry.at !== "summary.retry_wait") throw new Error("retryable failure did not wait");
 		expect(retry.nextAttempt).toBe(2);
 		expect(await runStructuralRetryWait(fixture.lane, fixture.drive, retry)).toEqual({
 			kind: "waiting",
@@ -783,20 +840,10 @@ describe("runtime structural drive", () => {
 
 	it("finishes a standalone structural failure at the retry cap", async () => {
 		const fixture = await createFixture();
-		const ready = {
-			at: "compaction.ready",
-			control: { status: "running" },
-			summaryContext: {
-				taskId: "task",
-				resultEntryId: "summary-entry",
-				kind: "compaction",
-				configuration: fixture.configuration,
-				streamOptions: {},
-				retryPolicy: { maxAttempts: 1, baseDelayMs: 10 },
-				reason: "manual",
-			},
-			nextAttempt: 1,
-		} as const;
+		const ready = summaryReady(runScope(), standaloneCompactionTask(), fixture.configuration, {
+			maxAttempts: 1,
+			baseDelayMs: 10,
+		});
 		await installOperation(
 			fixture,
 			ready,
@@ -813,7 +860,7 @@ describe("runtime structural drive", () => {
 		const result = await runStructuralGeneration(fixture.lane, fixture.drive, ready);
 		expect(result).toMatchObject({
 			kind: "settled",
-			outcome: { operation: "compaction", kind: "failed", error: { code: "summarization_failed" } },
+			outcome: { operationId, kind: "compaction", status: "failed", error: { code: "summarization_failed" } },
 		});
 		expect(fixture.lane.state.operation).toBeNull();
 		expect(fixture.events.map((event) => event.type)).not.toContain("retry_scheduled");
@@ -822,8 +869,8 @@ describe("runtime structural drive", () => {
 	it("moves an unsummarized navigation and cleans up in one terminal transaction", async () => {
 		const fixture = await createFixture();
 		const navigation = {
+			...runScope(),
 			at: "navigation.ready_to_commit",
-			control: { status: "running" },
 			targetId: "target",
 			label: "chosen",
 		} as const;
@@ -841,14 +888,14 @@ describe("runtime structural drive", () => {
 			},
 		);
 		const result = await commitNavigation(fixture.lane, fixture.drive, navigation);
-		expect(result).toEqual({
+		expect(result).toMatchObject({
 			kind: "settled",
 			outcome: {
-				operation: "navigation",
-				runId: operationId,
-				kind: "completed",
-				oldTipId: "source",
-				newTipId: "target",
+				operationId,
+				kind: "navigation",
+				status: "completed",
+				fromTipId: "source",
+				tipId: "target",
 			},
 		});
 		expect(fixture.lane.state.tipId).toBe("target");
@@ -857,17 +904,16 @@ describe("runtime structural drive", () => {
 		expect(
 			writes.some((write) => write.kind === "value" && write.namespace === "pi.op.state" && write.op === "delete"),
 		).toBe(true);
-		expect(writes.some((write) => write.kind === "value" && write.namespace === "pi.lane.lastResult")).toBe(true);
+		expect(writes.some((write) => write.kind === "value" && write.namespace === "pi.result")).toBe(true);
 		expect(writes.some((write) => write.kind === "value" && write.namespace === "pi.lane.state")).toBe(true);
 	});
 
 	it("publishes a hook navigation summary with the target parent and source identity", async () => {
 		const fixture = await createFixture();
 		const deciding = {
-			at: "navigation.summary.deciding",
-			control: { status: "running" },
-			targetId: "target",
-			taskId: "task",
+			...runScope(),
+			at: "summary.deciding",
+			task: navigationSummaryTask("target"),
 		} as const;
 		await installOperation(
 			fixture,
@@ -888,7 +934,10 @@ describe("runtime structural drive", () => {
 		}));
 
 		const result = await runStructuralDecision(fixture.lane, fixture.drive, deciding);
-		expect(result).toMatchObject({ kind: "settled", outcome: { operation: "navigation", kind: "completed" } });
+		expect(result).toMatchObject({
+			kind: "settled",
+			outcome: { operationId, kind: "navigation", status: "completed" },
+		});
 		const entry = await fixture.session.getEntry(fixture.lane.state.tipId!, BACKGROUND_CONTEXT);
 		expect(entry).toMatchObject({
 			type: "branch_summary",
@@ -899,22 +948,36 @@ describe("runtime structural drive", () => {
 		});
 	});
 
+	it("terminal-declines summarized navigation without moving the tip", async () => {
+		const fixture = await createFixture();
+		const deciding = { ...runScope(), at: "summary.deciding", task: navigationSummaryTask("target") } as const;
+		await installOperation(
+			fixture,
+			deciding,
+			{ kind: "navigation", targetId: "target", summarize: true },
+			{
+				entries: [
+					{ id: "root", parentId: null, type: "message", message: user("root") },
+					{ id: "source", parentId: "root", type: "message", message: user("source") },
+					{ id: "target", parentId: "root", type: "message", message: user("target") },
+				],
+				tipId: "source",
+				preparation: { taskId: "task", value: branchPreparation() },
+			},
+		);
+		fixture.hooks.on("before_navigation", () => ({ decline: true }));
+
+		expect(await runStructuralDecision(fixture.lane, fixture.drive, deciding)).toMatchObject({
+			kind: "settled",
+			outcome: { operationId, kind: "navigation", status: "declined", tipId: "source" },
+		});
+		expect(fixture.lane.state.tipId).toBe("source");
+		expect(fixture.events.at(-1)).toMatchObject({ type: "navigation_end", status: "declined" });
+	});
+
 	it("generates and atomically publishes a navigation summary", async () => {
 		const fixture = await createFixture();
-		const ready = {
-			at: "navigation.summary.ready",
-			control: { status: "running" },
-			targetId: "target",
-			summaryContext: {
-				taskId: "task",
-				resultEntryId: "summary-entry",
-				kind: "branch_summary",
-				configuration: fixture.configuration,
-				streamOptions: {},
-				retryPolicy: { maxAttempts: 2, baseDelayMs: 10 },
-			},
-			nextAttempt: 1,
-		} as const;
+		const ready = summaryReady(runScope(), navigationSummaryTask("target"), fixture.configuration);
 		await installOperation(
 			fixture,
 			ready,
@@ -935,10 +998,11 @@ describe("runtime structural drive", () => {
 		expect(result).toMatchObject({
 			kind: "settled",
 			outcome: {
-				operation: "navigation",
-				kind: "completed",
-				oldTipId: "source",
-				newTipId: "summary-entry",
+				operationId,
+				kind: "navigation",
+				status: "completed",
+				fromTipId: "source",
+				tipId: "summary-entry",
 			},
 		});
 		const entry = await fixture.session.getEntry("summary-entry", BACKGROUND_CONTEXT);
@@ -954,21 +1018,19 @@ describe("runtime structural drive", () => {
 	it("consumes an orphaned structural attempt and never resumes its nested request", async () => {
 		const fixture = await createFixture();
 		const effect = {
-			at: "compaction.effect_pending",
-			control: { status: "running" },
+			...runScope(),
+			at: "summary.effect_pending",
+			task: standaloneCompactionTask(),
 			summaryContext: {
-				taskId: "task",
 				resultEntryId: "summary-entry",
-				kind: "compaction",
 				configuration: fixture.configuration,
 				streamOptions: {},
 				retryPolicy: { maxAttempts: 2, baseDelayMs: 10 },
-				reason: "manual",
 			},
 			attempt: 1,
 			request: { index: 1, usageId: "abandoned-usage" },
 			usageIds: ["settled-usage"],
-		} satisfies CompactionEffectPendingOperation;
+		} satisfies SummaryEffectPendingOperation;
 		await installOperation(
 			fixture,
 			effect,
@@ -981,7 +1043,7 @@ describe("runtime structural drive", () => {
 
 		expect(await recoverStructuralGeneration(fixture.lane, fixture.drive, effect)).toEqual({ kind: "continue" });
 		const retry = currentState(fixture);
-		if (retry.at !== "compaction.retry_wait") throw new Error("orphan did not enter retry wait");
+		if (retry.at !== "summary.retry_wait") throw new Error("orphan did not enter retry wait");
 		expect(retry.nextAttempt).toBe(2);
 		expect("request" in retry).toBe(false);
 		expect(
@@ -995,9 +1057,9 @@ describe("runtime structural drive", () => {
 	it("rejects a preparation whose durable kind contradicts the structural state", async () => {
 		const fixture = await createFixture();
 		const deciding = {
-			at: "compaction.deciding",
-			control: { status: "running" },
-			taskId: "task",
+			...runScope(),
+			at: "summary.deciding",
+			task: standaloneCompactionTask(),
 		} as const;
 		await installOperation(
 			fixture,

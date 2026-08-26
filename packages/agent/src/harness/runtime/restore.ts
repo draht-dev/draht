@@ -3,7 +3,8 @@ import { SessionInvariantError } from "../session/session.ts";
 import type {
 	LaneState as DurableLaneState,
 	LaneConfiguration,
-	LaneLastResult,
+	OperationMeta,
+	OperationState,
 	Session,
 	SessionReader,
 } from "../session/types.ts";
@@ -11,7 +12,6 @@ import {
 	branchTip,
 	branchTipInventoryPrefix,
 	laneConfig,
-	laneLastResult,
 	laneState as laneStateValue,
 	operationMeta,
 	operationState,
@@ -19,11 +19,28 @@ import {
 } from "../session/values.ts";
 import type { LaneState } from "./types.ts";
 
+function isSummaryState(state: OperationState): state is Extract<OperationState, { at: `summary.${string}` }> {
+	return state.at.startsWith("summary.");
+}
+
+function stateMatchesIntent(intent: OperationMeta["intent"], state: OperationState): boolean {
+	if (intent.kind === "compaction") return isSummaryState(state) && state.task.boundary.kind === "finish";
+	if (intent.kind === "navigation") {
+		return (
+			state.at === "navigation.ready_to_commit" ||
+			(isSummaryState(state) && state.task.boundary.kind === "commit_navigation")
+		);
+	}
+	return (
+		state.at !== "navigation.ready_to_commit" &&
+		(!isSummaryState(state) || state.task.boundary.kind === "resume_checkpoint")
+	);
+}
+
 type LaneValues = {
 	tip: StoredValue<string | null> | undefined;
 	configuration: StoredValue<LaneConfiguration> | undefined;
 	laneState: StoredValue<DurableLaneState> | undefined;
-	lastResult: StoredValue<LaneLastResult> | undefined;
 };
 
 export type ClassifiedLaneStorage =
@@ -34,22 +51,21 @@ export type ClassifiedLaneStorage =
 			tip: StoredValue<string | null>;
 			configuration: StoredValue<LaneConfiguration>;
 			laneState: StoredValue<DurableLaneState>;
-			lastResult: StoredValue<LaneLastResult> | undefined;
 	  };
 
 function classifyLaneStorage(lane: string, values: LaneValues): ClassifiedLaneStorage {
-	const { tip, configuration, laneState, lastResult } = values;
-	if (tip === undefined && configuration === undefined && laneState === undefined && lastResult === undefined) {
+	const { tip, configuration, laneState } = values;
+	if (tip === undefined && configuration === undefined && laneState === undefined) {
 		return { kind: "absent" };
 	}
-	if (tip !== undefined && configuration === undefined && laneState === undefined && lastResult === undefined) {
+	if (tip !== undefined && configuration === undefined && laneState === undefined) {
 		return { kind: "branch", tip };
 	}
 	if (tip === undefined) throw new SessionInvariantError(`Lane ${JSON.stringify(lane)} is missing branch.tip`);
 	if (configuration === undefined)
 		throw new SessionInvariantError(`Lane ${JSON.stringify(lane)} is missing lane.config`);
 	if (laneState === undefined) throw new SessionInvariantError(`Lane ${JSON.stringify(lane)} is missing lane.state`);
-	return { kind: "lane", tip, configuration, laneState, lastResult };
+	return { kind: "lane", tip, configuration, laneState };
 }
 
 export async function readLaneStorage(
@@ -57,41 +73,32 @@ export async function readLaneStorage(
 	lane: string,
 	context: Context,
 ): Promise<ClassifiedLaneStorage> {
-	const [tip, configuration, laneState, lastResult] = await Promise.all([
+	const [tip, configuration, laneState] = await Promise.all([
 		reader.getValue(branchTip(lane), context),
 		reader.getValue(laneConfig(lane), context),
 		reader.getValue(laneStateValue(lane), context),
-		reader.getValue(laneLastResult(lane), context),
 	]);
-	return classifyLaneStorage(lane, { tip, configuration, laneState, lastResult });
+	return classifyLaneStorage(lane, { tip, configuration, laneState });
 }
 
 /** Restore every complete configured AgentLane in one coherent Session read. */
 export function restoreSession(session: Session, context: Context): Promise<Map<string, LaneState>> {
 	return session.mutate(async (reader) => {
-		const [tips, configurations, states, lastResults] = await Promise.all([
+		const [tips, configurations, states] = await Promise.all([
 			reader.scanValues(branchTipInventoryPrefix(), context),
 			reader.scanValues(laneConfig(""), context),
 			reader.scanValues(laneStateValue(""), context),
-			reader.scanValues(laneLastResult(""), context),
 		]);
 		const tipByLane = new Map(tips.map((value) => [value.address.key, value]));
 		const configurationByLane = new Map(configurations.map((value) => [value.address.key, value]));
 		const stateByLane = new Map(states.map((value) => [value.address.key, value]));
-		const lastResultByLane = new Map(lastResults.map((value) => [value.address.key, value]));
-		const names = new Set([
-			...tipByLane.keys(),
-			...configurationByLane.keys(),
-			...stateByLane.keys(),
-			...lastResultByLane.keys(),
-		]);
+		const names = new Set([...tipByLane.keys(), ...configurationByLane.keys(), ...stateByLane.keys()]);
 		const restored = new Map<string, LaneState>();
 		for (const lane of names) {
 			const stored = classifyLaneStorage(lane, {
 				tip: tipByLane.get(lane),
 				configuration: configurationByLane.get(lane),
 				laneState: stateByLane.get(lane),
-				lastResult: lastResultByLane.get(lane),
 			});
 			if (stored.kind !== "lane") continue;
 			restored.set(lane, await restoreLaneState(reader, lane, stored, context));
@@ -139,7 +146,7 @@ export async function restoreLaneState(
 				`Operation ${operationId} belongs to lane ${JSON.stringify(meta.value.lane)}, not ${JSON.stringify(lane)}`,
 			);
 		}
-		if (!state.value.at.startsWith(`${meta.value.intent.kind}.`)) {
+		if (!stateMatchesIntent(meta.value.intent, state.value)) {
 			throw new SessionInvariantError(
 				`Operation ${operationId} intent ${meta.value.intent.kind} does not match state ${state.value.at}`,
 			);
@@ -150,8 +157,8 @@ export async function restoreLaneState(
 	return {
 		tipId: stored.tip.value,
 		configuration: stored.configuration.value,
-		pendingNextRun: stored.laneState.value.pendingNextRun,
-		...(stored.lastResult === undefined ? {} : { lastResult: stored.lastResult.value }),
+		inbox: stored.laneState.value.inbox,
+		lastOperationId: stored.laneState.value.lastOperationId,
 		operation,
 	};
 }

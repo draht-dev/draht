@@ -107,7 +107,7 @@ type WatchHandler = <T>(
 	snapshot: T,
 	filter: (event: HarnessEvent) => boolean,
 	context: Context,
-	resnapshot: (context: Context) => Promise<T>,
+	resnapshot: (context: Context, markBoundary: () => void) => Promise<T>,
 ) => WatchHandle<T>;
 type FaultHandler = (cause: unknown, context: Context) => Error;
 
@@ -303,6 +303,27 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 	 * before close may finish its commit, publish memory, and resolve without another open check. Never invoke providers,
 	 * tools, hooks, timers, event handlers, or wait for task completion here; perform those after `command()` returns.
 	 */
+	private async readLane<TResult>(
+		read: (state: LaneState, reader: SessionReader) => TResult | Promise<TResult>,
+		context: Context,
+	): Promise<TResult> {
+		this.assertOpen();
+		try {
+			return await this.session.mutate(async (reader) => {
+				this.assertOpen();
+				try {
+					return await read(this.state, reader);
+				} catch (error) {
+					if (this.closedError !== undefined) throw this.closedError;
+					throw this.onFault(error, context);
+				}
+			}, context);
+		} catch (error) {
+			if (this.closedError !== undefined) throw this.closedError;
+			throw error;
+		}
+	}
+
 	async command<TResult>(
 		plan: (state: LaneState, reader: SessionReader) => LaneCommand<TResult> | Promise<LaneCommand<TResult>>,
 		context: Context,
@@ -1082,7 +1103,7 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 	}
 
 	inspectExecution(context: Context): Promise<LaneExecutionInfo> {
-		return this.command((state) => {
+		return this.readLane((state) => {
 			const operation = state.operation;
 			const captured = operation === null ? undefined : capturedModel(operation);
 			const current =
@@ -1099,14 +1120,11 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 							...(captured === undefined ? {} : { capturedModel: captured }),
 						};
 			return {
-				kind: "return",
-				result: {
-					lane: this.name,
-					tipId: state.tipId,
-					configuredModel: state.configuration.model,
-					current,
-					lastOperationId: state.lastOperationId,
-				},
+				lane: this.name,
+				tipId: state.tipId,
+				configuredModel: state.configuration.model,
+				current,
+				lastOperationId: state.lastOperationId,
 			};
 		}, context);
 	}
@@ -1333,7 +1351,7 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 		if (!driven.ok) {
 			if (driven.error._tag === "Closed") return Result.err(driven.error);
 			throw this.onFault(
-				new SessionInvariantError(`Deferred operation ${inspected.value.operationId} no longer matches its lane`),
+				new SessionInvariantError(`Operation ${inspected.value.operationId} no longer matches its lane`),
 				context,
 			);
 		}
@@ -1346,7 +1364,7 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 			});
 		}
 		throw this.onFault(
-			new SessionInvariantError(`Deferred operation ${inspected.value.operationId} returned an unwaited retry`),
+			new SessionInvariantError(`Operation ${inspected.value.operationId} returned an unwaited retry`),
 			context,
 		);
 	}
@@ -1684,23 +1702,21 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 	}
 
 	watch(context: Context): Promise<WatchHandle<LaneSnapshot>> {
-		return this.command(async (state, reader) => {
+		return this.readLane(async (state, reader) => {
 			const watcher = this.installWatch<LaneSnapshot>(
 				{} as LaneSnapshot,
 				(event) => event.type === "usage" || !("lane" in event) || event.lane === this.name,
 				context,
-				(resnapshotContext) =>
-					this.command(
-						async (latest, latestReader) => ({
-							kind: "return",
-							result: await this.captureLaneSnapshot(latest, latestReader, resnapshotContext),
-						}),
-						resnapshotContext,
-					),
+				(resnapshotContext, markBoundary) =>
+					this.readLane(async (latest, latestReader) => {
+						const snapshot = await this.captureLaneSnapshot(latest, latestReader, resnapshotContext);
+						markBoundary();
+						return snapshot;
+					}, resnapshotContext),
 			);
 			try {
 				watcher.snapshot = await this.captureLaneSnapshot(state, reader, context);
-				return { kind: "return", result: watcher };
+				return watcher;
 			} catch (error) {
 				watcher.unsubscribe();
 				throw error;

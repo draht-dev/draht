@@ -4,7 +4,7 @@
 
 Rework the real implementation under `packages/agent/src/harness/runtime/` and the canonical durable types in `packages/agent/src/harness/session/types.ts`. This is not the isolated scratch spike.
 
-Public drive remains disabled until the execution graph is total. Format 4 is still work in progress, so the durable type replacement requires no migration or compatibility representation.
+The execution graph is total and public drive is enabled. Format 4 is still work in progress, so the durable type replacement required no migration or compatibility representation.
 
 ## Implementation status
 
@@ -41,9 +41,11 @@ M6 established structural execution on the simplified substrate. Its first coher
 - per-request structural intent and usage settlement, attempt retry/recovery, hook decisions, compaction/navigation publication, and terminal cleanup;
 - focused coverage for threshold/overflow entry, split-turn request accounting, generated and hook results, retry/cap/recovery, model absence, mid-request durable cancellation, navigation, and preparation corruption.
 
-R1a, R2, and R3 then moved queued input to the lane, replaced hydrated family outcomes with immutable operation records, and collapsed the family cross-product to 13 neutral leaves. R1b replaced the transitional checkpoint drains and marker fields with one shared atomic boundary planner, a transcript-derived threshold guard, and off-line finish-hook replanning. M7 removed drained control, added atomic drain-and-return cancellation, reconciled all 13 leaves, and installed the total direct dispatcher. At the reviewed M7 checkpoint the runtime is 6,280 lines; `runtime/drive` is 4,115 lines; `structural.ts` is 1,194 lines, still down 266 lines (18.2%) from its 1,460-line foundation; and the new total dispatcher plus reconciliation are 274 lines. M8 public surfaces have not started.
+R1a, R2, and R3 then moved queued input to the lane, replaced hydrated family outcomes with immutable operation records, and collapsed the family cross-product to 13 neutral leaves. R1b replaced transitional checkpoint drains and marker fields with one shared atomic boundary planner, a transcript-derived threshold guard, and off-line finish-hook replanning. M7 removed drained control, added atomic drain-and-return cancellation, reconciled all 13 leaves, and installed the total direct dispatcher.
 
-Public drive remains disabled. Keep the visible durable procedure order:
+M8 added primitive/convenience lane surfaces, one ordered tagged inbox, idle ownership, snapshot/event replication, `reduceLaneSnapshot`, and remote resnapshot. M9 reconciled the normative specification. M10 forwards exactly one stable ordinary-provider identity derived from Session metadata id plus lane name; structural summaries keep fresh request identities. At M10 completion the runtime is 7,410 lines, `runtime/drive` is 4,147, `lane.ts` is 1,992, `structural.ts` is 1,221, and the new normative reducer is 193 lines. Relative to the reviewed M7 checkpoint, the public/replication surface added 1,130 runtime lines; the durable 13-leaf procedure model stayed unchanged.
+
+Keep the visible durable procedure order:
 `prepare → publish intent → perform effect → publish outcome`.
 Do not introduce a generic Procedure interface, runner, scheduler, graph, callback plan, or dependency facade. Historical work-package documents remain unchanged.
 
@@ -236,7 +238,7 @@ Do not remove validation of external or referenced content:
 
 These validate data or genuine child concurrency. They are not defensive revalidation of the operation state machine.
 
-## Staged implementation plan
+## Completed staged implementation plan
 
 ### Stage 1 — Canonical flat durable types
 
@@ -377,7 +379,7 @@ After every code stage:
 npm run check
 ```
 
-Run each modified focused test file from the package root. Do not run the full Vitest suite directly. Public drive remains disabled until the final stage.
+Run each modified focused test file from the package root. Do not run the full Vitest suite directly. Public drive was enabled only after the final stage made every leaf total.
 
 Final audit:
 

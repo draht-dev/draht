@@ -180,7 +180,6 @@ const EVENT_TYPES = [
 	"tool_update",
 	"tool_end",
 	"entry_added",
-	"write_pending",
 	"queue_update",
 	"value_update",
 	"config_update",

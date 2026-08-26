@@ -184,8 +184,8 @@ export const laneConfig = (lane: string) =>
   value<LaneConfiguration>("pi.lane.config", lane);
 export const laneState = (lane: string) =>
   value<LaneState>("pi.lane.state", lane);
-export const laneLastResult = (lane: string) =>
-  value<LaneLastResult>("pi.lane.lastResult", lane);
+export const operationResult = (operationId: string) =>
+  value<OperationResultRecord>("pi.result", operationId);
 
 /** Used only by scanValues() to enumerate Branch names. */
 export const branchTipInventoryPrefix = () =>
@@ -593,6 +593,7 @@ Deleted lists produce no snapshot records. Snapshot rewrites persist `nextSeq` i
 Fork and precise-rewrite code decides policy per concrete address grammar:
 
 - operation-owned `pi.op.*` scalar values are not copied into an idle fork;
+- immutable `pi.result` operation records are not copied by forks;
 - `pi.pending.entry`, `pi.pending.tool_output`, and `pi.pending.assistant_frame` values/lists are not copied;
 - lane and semantic session values follow their existing scope rules;
 - application-defined values/lists are not copied by the generic fork; a consuming feature must add an explicit address-specific policy before relying on copied application state.

@@ -409,6 +409,18 @@ describe("runtime public drive", () => {
 		await lane.drive({ operationId: admission.value.operationId }, BACKGROUND_CONTEXT);
 	});
 
+	it("allows coherent lane reads from an idle callback", async () => {
+		const { lane } = await createFixture();
+
+		await lane.runWhenIdle(async (context) => {
+			const execution = await lane.inspectExecution(context);
+			const watch = await lane.watch(context);
+			expect(execution.current).toBeNull();
+			expect(watch.snapshot.operation).toBeNull();
+			watch.unsubscribe();
+		}, BACKGROUND_CONTEXT);
+	});
+
 	it("releases idle ownership when the callback fails", async () => {
 		const { lane } = await createFixture();
 		const failure = new Error("callback failed");

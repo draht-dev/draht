@@ -1,18 +1,18 @@
 # WP05 — Direct durable drive
 
-**Status: M5 complete; M6 structural coverage complete; R1a lane-owned inbox relocation, R2 record-only outcomes, reviewed R3 family-neutral leaves, the reviewed R1b atomic boundary planner, and reviewed M7 cancellation reconciliation/total dispatch implemented; M8 public surfaces next, then M9 documentation reconciliation and M10 provider KV-cache identity review.**
+**Status: WP05 complete through M10: lane-owned inbox, immutable result records, 13 family-neutral leaves, atomic boundary planning, total cancellation/dispatch, public and replicated lane surfaces, documentation reconciliation, and lane-safe provider cache identity. M11 is a tracked storage-amplification follow-up outside the public-drive gate.**
 
-WP06's Session/Branch/Lane separation is already part of the foundation. Public drive remains disabled until R1–R3, cancellation reconciliation, the total drive switch, every public execution surface, and the provider KV-cache identity review are complete.
+WP06's Session/Branch/Lane separation is part of the foundation. Public drive is enabled; `watchSession` is the sole deferred Harness method.
 
 Format 4 remains work in progress. Every durable type replacement in this package requires no migration and no compatibility decoder for the pre-redesign shapes.
 
-The standalone-compaction inbox/promotion design previously in this document is **withdrawn** (§5). R1–R3 and the updated M7/M8 replace it. Where `docs/harness.md` contradicts this document, this document wins until M9 reconciles them.
+The standalone-compaction inbox/promotion design previously in this document is **withdrawn** (§5). R1–R3 and M7/M8 replace it. M9 reconciled `docs/harness.md`, which is normative on its own again.
 
 ## 0. Mandatory reading
 
 Read completely before implementation work:
 
-1. `packages/agent/docs/harness.md` (normative except where superseded here; M9 reconciles)
+1. `packages/agent/docs/harness.md` (normative; reconciled by M9)
 2. `packages/agent/docs/runtime-simplification.md` (its 22-leaf list is replaced by R3)
 3. `packages/agent/src/harness/session/types.ts`
 4. `packages/agent/src/harness/session/values.ts`
@@ -158,7 +158,7 @@ Complete. Breakpoints, manual drive, and drive deadlines are absent.
 
 ### M1–M2 — Foundations and terminal mechanics
 
-Complete. Includes the split effect gate, deterministic gated storage, authoritative process-local Lane projection, commit-result usage totals, progress channels, terminal cleanup, and bounded latest-result hydration.
+Complete. Includes the split effect gate, deterministic gated storage, authoritative process-local Lane projection, commit-result usage totals, progress channels, terminal cleanup, and immutable operation-result observation.
 
 ### M3 — Assistant generation and recovery
 
@@ -190,7 +190,7 @@ Replacement, spread across this package:
 - continuation after standalone compaction/navigation is a **second ordinary run operation** with a fresh id, composed in the convenience layer (M8);
 - each operation delivers exactly one result; both results are returned by the convenience call and both are durable records (R2).
 
-No code implements promotion; nothing needs removal beyond this document's previous text and the harness.md references (M9).
+No code implements promotion. M9 removed the withdrawn design from `harness.md`; this section remains only as the historical decision record.
 
 ## 6. R1 — Lane-owned tagged inbox
 
@@ -422,7 +422,7 @@ Public methods remain guarded through M7.
 
 ## 10. M8 — Public surfaces
 
-Remove execution guards only after every leaf and reconciliation path is total.
+**Implemented.** Execution guards were removed only after every leaf and reconciliation path became total.
 
 Order:
 
@@ -435,7 +435,7 @@ Order:
 
 ### Queues
 
-`steer`/`followUp`/`nextRun` are tag sugar over one enqueue and always admit. `queue_update` and `LaneSnapshot.queues`/`pendingWrites` expose one identical shape: the tagged ordered inbox (clients group by tag).
+`steer`/`followUp`/`nextRun` are tag sugar over one enqueue and always admit. `queue_update` and `LaneSnapshot.queues` expose the same tagged ordered inbox, including pending writes; clients group by tag without reordering it.
 
 ### Client replication surface
 
@@ -464,7 +464,7 @@ One install and same-id joins; stale-id isolation; record lookup for old ids; ca
 
 ## 11. M9 — Documentation reconciliation
 
-Update `docs/harness.md` to the implemented state; it must again be normative on its own. Sections that change:
+**Implemented.** `docs/harness.md` is reconciled to the runtime and normative on its own. Updated sections include:
 
 - §1.3 address table and lifetime grammar: new lane-lived `pi.result` namespace, `laneLastResult` removed, `LaneState.inbox`/`lastOperationId`; `pi.op.*` stays strictly operation-lived;
 - §1.7 JSONL/SQLite examples referencing `pi.lane.lastResult`; state the bounded growth tradeoff — one small immutable record per operation, retained forever, carried through JSONL snapshot compaction;
@@ -482,7 +482,7 @@ Update `docs/harness.md` to the implemented state; it must again be normative on
 - Appendix A glossary (Inbox, Result record, Continuation run, Boundary pass; remove Drained);
 - §5.5 event taxonomy: state explicitly which events are operation-terminal (`run_end`, `navigation_end`, compaction-kind `compaction_end`) versus segment brackets (in-run `compaction_start`/`compaction_end`) versus non-terminal lifecycle (`run_suspend` leaves the operation durably open), and name `reduceLaneSnapshot` as the normative fold;
 - §2.5 branch-scan sharp edge: `stopAtType` applies after ordering, so `oldestFirst` + `stopAtType: "compaction"` returns the oldest segment; document the canonical context read as `newestFirst` + reverse;
-- serving-layer boundary statement: tree browsing, forks, labels inventory, and session listing are deliberately not `AgentLane` surface; an RPC facade composes a Session/repository read service beside the lane (protocol work, P1).
+- serving-layer boundary statement: branch-relative reads/appends remain on `AgentLane`, while whole-tree browsing, forks, label inventory, and session listing live beside it in Session/repository services composed by an RPC facade.
 
 Also update `docs/runtime-simplification.md` status and remove every remaining promotion reference in the repository's docs. Grep gate:
 
@@ -496,11 +496,11 @@ rg -i 'promotion|drainedSteer|drainedFollowUp|laneLastResult|lastResult|skipInbo
 
 ### Goal
 
-Audit and fix the provider-facing cache/affinity identity before public drive is considered complete. Core Session identity is not a valid provider cache lineage: several lanes may issue concurrent requests over divergent transcripts, so forwarding one shared session id can cause incorrect KV-cache reuse, affinity collisions, or shared transport resources across unrelated lane histories. M10 must complete before M8 finishes removing the public execution guards (M8 step 6); public drive is not exposed on an unreviewed cache policy.
+**Implemented and reviewed.** Core Session identity alone is not a valid provider cache lineage: several lanes may issue concurrent requests over divergent transcripts. Ordinary assistant requests therefore derive identity from Session metadata id plus lane name; structural requests remain isolated.
 
 ### Review scope
 
-- Inventory every harness and pi-ai path that sets, preserves, derives, or consumes `SimpleStreamOptions.sessionId`, including prompt-cache keys, affinity headers, WebSocket/session-resource caches, deferred requests, and structural summary requests. Current facts: no harness runtime path forwards a session id today; the sole forwarder is the legacy `src/agent.ts:451`, and `src/harness/compaction/compaction.ts:123` already mints a fresh id per request — M10 therefore establishes the lineage policy rather than preserving an existing one.
+- Inventory every harness and pi-ai path that sets, preserves, derives, or consumes `SimpleStreamOptions.sessionId`, including prompt-cache keys, affinity headers, WebSocket/session-resource caches, deferred requests, and structural summary requests. Ordinary harness generation now forwards the derived lane identity; legacy `src/agent.ts` keeps its independent conversation id; structural summary requests mint fresh ids.
 - Define a provider-request cache lineage distinct from the durable Session id and operation id. Concurrent lanes must never share one lineage merely because they belong to the same Session.
 - Derive ordinary assistant lineage as `Session metadata id + ":" + lane name`; do not store another durable identifier. It remains stable for the lane's lifetime and differs across lanes in one Session.
 - Preserve same-lane reuse across ordinary assistant turns and retries. Compaction, navigation, branch replacement, and model changes may miss an old prefix, but cannot incorrectly reuse it; do not add rotation machinery.
@@ -523,7 +523,7 @@ Ordinary assistant requests use the derived lane identity, structural requests k
 
 ## 13. M11 — Bound durable streaming-frame volume
 
-**Tracked follow-up; not part of the M8/M10 public-drive gate.** A trivial mini coding-agent Session produced an approximately 300 KB JSONL file because live assistant streaming persists many `pi.pending.frames` list appends. Logical frame cleanup does not reclaim bytes already appended to the JSONL history, so short conversations can have disproportionate durable storage and replay cost.
+**Tracked follow-up; not part of the M8/M10 public-drive gate.** A trivial mini coding-agent Session produced an approximately 300 KB JSONL file because live assistant streaming persists many `pi.pending.assistant_frame` list appends. Logical frame cleanup does not reclaim bytes already appended to the JSONL history, so short conversations can have disproportionate durable storage and replay cost.
 
 M11 must measure frame count and encoded-byte growth across Memory, JSONL, and SQLite, then bound amplification without weakening the existing crash contract: an admitted assistant effect remains reconstructible, progress observation remains useful, and settlement still removes operation-owned pending-frame state. Investigate coalesced durable checkpoints, bounded frame snapshots plus a short delta tail, and JSONL snapshot-compaction interaction. Do not solve this by dropping unknown-outcome recovery, persisting only the final response, or adding a generic retention framework.
 
@@ -566,7 +566,7 @@ Do not introduce:
 - read caches, read budgets, or generic `getValues` batching;
 - compatibility aliases for any pre-redesign durable shape;
 - a `phase`/segment discriminator field on structural events — the reducer derives segment-vs-terminal from the open operation's kind;
-- tree, fork, label-inventory, or repository methods on `AgentLane` — that surface lives beside the lane, not on it.
+- whole-tree, fork, label-inventory, or repository methods on `AgentLane`; branch-relative reads/appends remain part of the lane facade, while broader administration lives beside it.
 
 Procedure-specific writes, effect admission, settlement classification, and event construction remain visible at their call sites.
 

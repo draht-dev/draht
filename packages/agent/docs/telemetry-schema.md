@@ -164,7 +164,7 @@ One run checkpoint
 |---|---|---:|---|---|---|
 | `pi.lane.name` | `string` | yes |  | high cardinality | Lane name |
 | `pi.operation.id` | `string` | yes |  | high cardinality | Durable operation id |
-| `pi.checkpoint.kind` | `string` | yes | normal, failure_drain, abort_reconcile |  | Checkpoint purpose |
+| `pi.checkpoint.kind` | `string` | yes | normal, abort_reconcile |  | Checkpoint purpose |
 
 #### End attributes
 
@@ -336,7 +336,7 @@ One passive event listener invocation
 
 | Name | Type | Required | Values | Notes | Description |
 |---|---|---:|---|---|---|
-| `pi.event.type` | `string` | yes | run_start, run_resume, run_suspend, run_abort, run_end, fault, handler_error, turn_start, turn_end, retry_scheduled, retry_start, retry_end, message_start, message_update, message_end, tool_start, tool_update, tool_end, entry_added, write_pending, queue_update, value_update, config_update, compaction_start, compaction_end, navigation_start, navigation_end, lane_created, usage | low cardinality | Delivered harness event type |
+| `pi.event.type` | `string` | yes | run_start, run_resume, run_suspend, operation_abort, run_end, fault, handler_error, turn_start, turn_end, retry_scheduled, retry_start, retry_end, message_start, message_update, message_end, tool_start, tool_update, tool_end, entry_added, queue_update, value_update, config_update, compaction_start, compaction_end, navigation_start, navigation_end, lane_created, usage | low cardinality | Delivered harness event type |
 | `pi.lane.name` | `string` | no |  | high cardinality | Lane name for lane-scoped events |
 
 #### End attributes

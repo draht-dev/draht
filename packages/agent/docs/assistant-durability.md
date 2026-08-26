@@ -162,7 +162,7 @@ If no start frame committed, the harness constructs the same synthetic error wit
 The synthetic response follows ordinary assistant error classification:
 
 - attempts remain → insert the error response and enter the ordinary retry-wait/next-attempt path;
-- cap reached → insert it and enter `failure_drain`.
+- cap reached → insert it and terminal-fail the operation in the same settlement transaction.
 
 Error responses remain durable transcript history but are omitted from later provider context by the existing projection rule. Partial tool calls inside the interrupted error response never execute.
 

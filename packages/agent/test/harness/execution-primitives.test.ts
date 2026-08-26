@@ -383,6 +383,83 @@ describe("HarnessEventBus", () => {
 		expect(seen).toHaveLength(2);
 	});
 
+	it("drops pre-snapshot delivery and holds later events when resnapshotting inside a listener", async () => {
+		const bus = new HarnessEventBus();
+		const listenerStarted = deferred();
+		const releaseListener = deferred();
+		const resnapshotDone = deferred();
+		const watcher = bus.watch(
+			{ version: "old" },
+			() => true,
+			BACKGROUND_CONTEXT,
+			async (_context, markBoundary) => {
+				markBoundary();
+				return { version: "fresh" };
+			},
+		);
+		const queueEvents: string[] = [];
+		watcher.start(async (event, context) => {
+			if (event.type === "run_start" && event.runId === "blocking") {
+				listenerStarted.resolve();
+				await releaseListener.promise;
+			} else if (event.type === "navigation_end") {
+				await watcher.resnapshot(context);
+				resnapshotDone.resolve();
+			} else if (event.type === "queue_update") {
+				queueEvents.push(event.queues[0]?.entryId ?? "empty");
+			}
+		});
+		await bus.emit({ type: "run_start", runId: "blocking", startedAt: 1, lane: "main" }, BACKGROUND_CONTEXT);
+		await listenerStarted.promise;
+		const queued = bus.emitBatch(
+			[
+				{
+					type: "navigation_end",
+					runId: "navigation",
+					status: "completed",
+					fromTipId: null,
+					tipId: null,
+					endedAt: 2,
+					lane: "main",
+				},
+				{
+					type: "queue_update",
+					queues: [
+						{
+							entryId: "stale",
+							kind: "nextRun",
+							type: "message",
+							message: { role: "user", content: "stale", timestamp: 2 },
+						},
+					],
+					lane: "main",
+				},
+			],
+			BACKGROUND_CONTEXT,
+		);
+		releaseListener.resolve();
+		await Promise.all([queued, resnapshotDone.promise]);
+
+		expect(watcher.snapshot).toEqual({ version: "fresh" });
+		expect(queueEvents).toEqual([]);
+		await bus.emit(
+			{
+				type: "queue_update",
+				queues: [
+					{
+						entryId: "later",
+						kind: "nextRun",
+						type: "message",
+						message: { role: "user", content: "later", timestamp: 3 },
+					},
+				],
+				lane: "main",
+			},
+			BACKGROUND_CONTEXT,
+		);
+		await expect.poll(() => queueEvents).toEqual(["later"]);
+	});
+
 	it("isolates each listener from payload mutation", async () => {
 		const bus = new HarnessEventBus();
 		let observed: string[] = [];

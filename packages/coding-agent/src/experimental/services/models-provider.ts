@@ -1,32 +1,9 @@
-import {
-	type AgentLane,
-	BACKGROUND_CONTEXT,
-	type Context,
-	defineService,
-	type MutableReplicatedState,
-} from "@draht/agent-core";
+import { type AgentLane, BACKGROUND_CONTEXT, type Context, type MutableReplicatedState } from "@draht/agent-core";
 import { getSupportedThinkingLevels } from "@draht/ai";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
-import { defineFacet } from "../facets.ts";
-import { Lane } from "./harness.ts";
+import type { SettingsManager } from "../../core/settings-manager.ts";
+import { defineFacet, type Facet } from "../facets.ts";
 import { Models, type Models as ModelsService, type ModelsState } from "./models.ts";
-
-export interface ModelsRuntime {
-	getAvailableSnapshot(): ReturnType<ModelRuntime["getAvailableSnapshot"]>;
-	refresh(options?: Parameters<ModelRuntime["refresh"]>[0]): ReturnType<ModelRuntime["refresh"]> | undefined;
-	getModel(...args: Parameters<ModelRuntime["getModel"]>): ReturnType<ModelRuntime["getModel"]>;
-}
-export const ModelsRuntime = defineService<ModelsRuntime>("pi.local.models-runtime", { rpc: false });
-
-export function createModelsRuntime(runtime: ModelRuntime | undefined): ModelsRuntime {
-	return (
-		runtime ?? {
-			getAvailableSnapshot: () => [],
-			refresh: () => undefined,
-			getModel: () => undefined,
-		}
-	);
-}
 
 export interface ModelsServiceRuntime {
 	readonly service: ModelsService;
@@ -35,7 +12,8 @@ export interface ModelsServiceRuntime {
 
 export function createModelsService(
 	lane: AgentLane,
-	modelRuntime: ModelsRuntime,
+	modelRuntime: ModelRuntime | undefined,
+	settingsManager: SettingsManager | undefined,
 	createState: (initial: ModelsState) => MutableReplicatedState<ModelsState>,
 ): ModelsServiceRuntime {
 	let catalogRevision = 0;
@@ -53,7 +31,7 @@ export function createModelsService(
 	};
 	const readCatalog = async (context: Context): Promise<ModelsState["catalog"]> => {
 		const selected = await lane.getModel(context);
-		const available = modelRuntime.getAvailableSnapshot();
+		const available = modelRuntime?.getAvailableSnapshot() ?? [];
 		const catalog =
 			selected === undefined || includesModel(available, selected) ? available : [...available, selected];
 		catalogRevision += 1;
@@ -81,7 +59,7 @@ export function createModelsService(
 		},
 		async refresh(context) {
 			state.set({ ...state.value, refresh: { status: "refreshing" } }, context);
-			const refresh = modelRuntime.refresh({ signal: context.abortSignal });
+			const refresh = modelRuntime?.refresh({ signal: context.abortSignal });
 			if (refresh === undefined) {
 				state.set(
 					{
@@ -107,9 +85,11 @@ export function createModelsService(
 			);
 		},
 		async select(model, context) {
-			const selected = modelRuntime.getModel(model.provider, model.modelId);
+			const selected = modelRuntime?.getModel(model.provider, model.modelId);
 			if (selected === undefined) throw new Error(`Unknown model: ${model.provider}/${model.modelId}`);
 			await lane.setModel({ provider: selected.provider, modelId: selected.id }, context);
+			settingsManager?.setDefaultModelAndProvider(selected.provider, selected.id);
+			await settingsManager?.flush();
 			state.set({ ...state.value, configuration: await readConfiguration(context) }, context);
 		},
 	};
@@ -122,14 +102,25 @@ export function createModelsService(
 	};
 }
 
-export const modelsServiceFacet = defineFacet({
-	id: "@pi/models",
-	setup(env) {
-		const runtime = createModelsService(env.use(Lane), env.use(ModelsRuntime), env.replicatedState);
-		env.provide(Models, runtime.service);
-		env.onActivate(() => runtime.activate(BACKGROUND_CONTEXT));
-	},
-});
+export function createModelsServiceFacet(options: {
+	readonly lane: AgentLane;
+	readonly modelRuntime: ModelRuntime | undefined;
+	readonly settingsManager?: SettingsManager;
+}): Facet {
+	return defineFacet({
+		id: "@pi/models",
+		setup(env) {
+			const runtime = createModelsService(
+				options.lane,
+				options.modelRuntime,
+				options.settingsManager,
+				env.replicatedState,
+			);
+			env.provide(Models, runtime.service);
+			env.onActivate(() => runtime.activate(BACKGROUND_CONTEXT));
+		},
+	});
+}
 
 function includesModel(
 	models: readonly { readonly provider: string; readonly id: string }[],

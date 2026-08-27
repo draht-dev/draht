@@ -154,6 +154,7 @@ Define cross-backend query-limit semantics in agent conformance, then chunk SQLi
 
 - The public `OperationStatus` includes `"running"`, but lane inspection, snapshots, and `reduceLaneSnapshot` currently produce only `"open"` or `"aborting"`. Define and implement its producer or remove the dead variant.
 - The pre-rewrite abort contract bound/published `operation_abort` before resolving the cancellation promise and signalling the live gate. Current `Lane.command()` materializes the result — resolving/signalling — before constructing and binding the event batch, although it still binds recipients before releasing the Session mutation line. Decide whether to change the implementation or retain/document the current no-interleaving order; add an explicit ordering test.
+- The production gate-close contract permits only `HarnessClosed | HarnessFault`, but the private source primitive accepts any `Error` and isolated tests use that wider type. Narrow the source declaration and fixtures or explicitly retain the private widening.
 - Part 9 of `harness.md` is the required conformance matrix. Existing focused tests cover the graph extensively, including cancellation reconciliation over all 13 leaves, but there is no audited one-to-one proof that every close/reopen leaf case and every race row has both deterministic orders. Audit the matrix and add only the missing cases rather than claiming blanket completion.
 
 Keep this package separate from telemetry, RemoteSession, and M11; it is local contract/test closure.
@@ -237,7 +238,7 @@ These are not blockers for the durable Harness:
 The order is by data safety first, then dependencies. Independent tracks may proceed in parallel only when they do not edit the same contracts.
 
 1. **WP07 — SQLite ownership fencing.** Atomic lease assertion with commits, exclusive deletion, path/source identity, close draining, and documentation correction.
-2. **Harness contract/conformance closure.** Resolve `OperationStatus.running`, abort signal/event binding order, and the Part 9 coverage matrix.
+2. **Harness contract/conformance closure.** Resolve `OperationStatus.running`, abort signal/event binding order, gate-close typing, and the Part 9 coverage matrix.
 3. **Remote Session decision (decision only).** Resolve the false normative boundary early. If process-local wins, repair the docs. If raw RemoteSession wins, later create a dedicated protocol/client/server/worker package; do not fold it into telemetry or R12.
 4. **Client watch/subscription staleness** and **repository lifecycle contract.** Small independent correctness packages; complete them before expanding server/worker lifecycle semantics. The lifecycle package must also address Memory's fail-fast repository close.
 5. **JSONL snapshot compaction.** Implement the already-normative physical reclamation path and metrics.

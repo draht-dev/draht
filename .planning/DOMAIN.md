@@ -180,6 +180,9 @@ There are no SQL tables anywhere in the monorepo (inferred). State lives as: (a)
 | Variant | geist | One sibling worktree in a `variants n` comparison; may carry its own harness. |
 | room-glass / content-glass | geist | The two-material design system (spec §13): opaque/alpha-smoke panel chrome vs. full blur+refraction inside panels — split because Quest cannot sample passthrough. |
 | Target ring | geist | Target signature UI from the spec; not implemented in the current picker/console/Quest code. |
+| Drahtgeist mobile console | geist | The native phone presentation of the typed Geist fleet and session control plane; it never exposes a remote shell. |
+| Aggregate Live Activity | geist / iOS | One temporary projection of all currently active Drahtgeist sessions into Dynamic Island, Lock Screen, and StandBy system surfaces. |
+| Push coordinator | geist / iOS | A trusted APNs sender that receives only the redacted fleet projection required to update iPhone system surfaces while the app is suspended. |
 | Component | Unified Distribution | An installable unit the engine manages (`claude-plugin`, `codex-plugin`, `coding-agent`, `installer`); registered as data in the component index, never as engine code. |
 | Component index | Unified Distribution | Zod-validated data (`packages/install/src/components.json`) mapping component ids to kind/npmName/default-membership; the extensibility seam for future packages. |
 | Adapter | Unified Distribution | The per-`kind` code seam that stages payloads and drives host registration (claude-plugin / codex-plugin / global-cli); the only place host specifics live. |

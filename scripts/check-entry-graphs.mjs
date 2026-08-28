@@ -19,6 +19,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Workspace package name -> its source root, so cross-package imports are followed. */
 const WORKSPACE = {
+	"@draht/chord": "packages/chord/src",
 	"@draht/ai": "packages/ai/src",
 	"@draht/agent-core": "packages/agent/src",
 	"@draht/telemetry": "packages/telemetry/src",

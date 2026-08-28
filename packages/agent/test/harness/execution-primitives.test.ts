@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	BACKGROUND_CONTEXT,
 	createContextKey,
+	getTelemetryContext,
 	withAbortSignal,
 	withContextValue,
 	withTelemetryContext,
@@ -161,7 +162,7 @@ describe("HookRegistry", () => {
 		let receivedValue: string | undefined;
 		hooks.on("before_tool", async (_event, context) => {
 			receivedValue = context.value(valueKey);
-			await context.telemetryContext.startSpan({ name: "handler.child" }, () => undefined);
+			await getTelemetryContext(context).startSpan({ name: "handler.child" }, () => undefined);
 			return undefined;
 		});
 

@@ -21,6 +21,7 @@ const run = (cmd, cwd = ROOT) => {
 };
 
 // 1. Build workspace deps + coding-agent
+run("cd packages/chord && bun run build");
 run("cd packages/tui && bun run build");
 run("cd packages/telemetry && bun run build");
 run("cd packages/ai && bun run build");

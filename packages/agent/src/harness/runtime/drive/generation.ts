@@ -1,6 +1,6 @@
 import type { Api, Model, Tool } from "@draht/ai";
 import type { AgentMessage } from "../../../types.ts";
-import { type Context, withAbortSignal } from "../../context.ts";
+import { type Context, getTelemetryContext, withAbortSignal } from "../../context.ts";
 import { type HarnessAssistantStreamConfig, streamHarnessAssistant } from "../../execution/assistant.ts";
 import { applyStreamOptionsPatch } from "../../hooks.ts";
 import { SessionInvariantError } from "../../session/session.ts";
@@ -217,7 +217,7 @@ async function performGeneration<TContext extends object | undefined>(
 							...options,
 							sessionId: `${lane.session.metadata.id}:${lane.name}`,
 							signal: admitted.abortSignal,
-							telemetryContext: admitted.telemetryContext,
+							telemetryContext: getTelemetryContext(admitted),
 						}),
 					);
 				},

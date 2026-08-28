@@ -10,7 +10,7 @@ import type {
 	Tool,
 } from "@draht/ai";
 import type { AgentMessage, ThinkingLevel } from "../../types.ts";
-import type { Context } from "../context.ts";
+import { type Context, getTelemetryContext } from "../context.ts";
 import type { SettledAssistantMessage } from "../session/types.ts";
 import type { AgentHarnessStreamOptions } from "../types.ts";
 import { AbortRequested } from "./effect-gate.ts";
@@ -79,7 +79,7 @@ function createRequestOptions(
 		deferred: options.deferred,
 		...(config.thinkingLevel === "off" ? {} : { reasoning: config.thinkingLevel }),
 		signal: context.abortSignal,
-		telemetryContext: context.telemetryContext,
+		telemetryContext: getTelemetryContext(context),
 		onPayload:
 			config.beforePayload === undefined
 				? undefined

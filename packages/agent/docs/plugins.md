@@ -351,6 +351,10 @@ interface TuiHost {
 const Tui = defineService<TuiHost>("pi.local.tui", { local: true });
 ```
 
+The first implemented presentation hookpoint is narrower than this eventual `TuiHost`: a process-local `SlashCommands` registry. Built-in presentation facets and plugin presentation facets acquire the same registry and add command metadata plus callbacks during activation. The returned cleanup removes the contribution, so facet reload and unload update autocomplete and dispatch without rebuilding the TUI. Command callbacks receive narrow selection, status, and prompt-submission operations rather than the raw renderer or editor.
+
+Each plugin host facet is an independent loader entry. The example `/hello` presentation facet has one default facet export; a future package build emits that facet as one pre-bundled file. Session, server, web, and other presentation facets from the same plugin are separate bundle entries connected by shared service IDs, not one aggregate runtime plugin object.
+
 `acquireModal()` waits in one presentation-owned queue and holds the modal slot across a multi-step interaction. Its signal removes a queued request or dismisses an active one, and `close()` is idempotent. `select()` is the one-step acquire/select/close convenience. Both return selected values directly, so feature code never recovers identity from a display label.
 
 The TUI loads all of its facets into one generation. Its host routes `env.use(SessionDirectory)` to the connected server and `env.use(Models)` to the selected Session. While detached, Session calls fail with `session_not_attached` and replicated state has no value. Connection and attachment health are host-local services because they describe presentation control state. A future web host similarly binds local services for routes, views, and DOM dialogs. Its server and Session facets still use unqualified service operations.

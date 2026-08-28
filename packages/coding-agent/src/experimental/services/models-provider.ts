@@ -1,4 +1,10 @@
-import { type AgentLane, BACKGROUND_CONTEXT, type Context, type MutableReplicatedState } from "@draht/agent-core";
+import {
+	type AgentLane,
+	BACKGROUND_CONTEXT,
+	type Context,
+	type MutableReplicatedState,
+	type ThinkingLevel,
+} from "@draht/agent-core";
 import { getSupportedThinkingLevels } from "@draht/ai";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
 import type { SettingsManager } from "../../core/settings-manager.ts";
@@ -29,6 +35,10 @@ export function createModelsService(
 			thinkingLevel,
 		};
 	};
+	const readThinkingLevels = async (context: Context): Promise<ThinkingLevel[]> => {
+		const selected = await lane.getModel(context);
+		return selected === undefined ? ["off"] : getSupportedThinkingLevels(selected);
+	};
 	const readCatalog = async (context: Context): Promise<ModelsState["catalog"]> => {
 		const selected = await lane.getModel(context);
 		const available = modelRuntime?.getAvailableSnapshot() ?? [];
@@ -48,14 +58,15 @@ export function createModelsService(
 	const service: ModelsService = {
 		state,
 		async cycleThinking(context) {
-			const selected = await lane.getModel(context);
-			if (selected === undefined) return;
-			const levels = getSupportedThinkingLevels(selected);
+			const levels = await readThinkingLevels(context);
 			const current = await lane.getThinkingLevel(context);
 			const index = levels.indexOf(current);
 			const next = levels[(index + 1) % levels.length] ?? "off";
 			await lane.setThinkingLevel(next, context);
 			state.set({ ...state.value, configuration: await readConfiguration(context) }, context);
+		},
+		async getThinkingLevels(context) {
+			return [...(await readThinkingLevels(context))];
 		},
 		async refresh(context) {
 			state.set({ ...state.value, refresh: { status: "refreshing" } }, context);
@@ -90,6 +101,14 @@ export function createModelsService(
 			await lane.setModel({ provider: selected.provider, modelId: selected.id }, context);
 			settingsManager?.setDefaultModelAndProvider(selected.provider, selected.id);
 			await settingsManager?.flush();
+			state.set({ ...state.value, configuration: await readConfiguration(context) }, context);
+		},
+		async selectThinking(level, context) {
+			const levels = await readThinkingLevels(context);
+			if (!levels.includes(level)) {
+				throw new Error(`Thinking level ${level} is unavailable; choose one of: ${levels.join(", ")}`);
+			}
+			await lane.setThinkingLevel(level, context);
 			state.set({ ...state.value, configuration: await readConfiguration(context) }, context);
 		},
 	};

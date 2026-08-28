@@ -25,8 +25,10 @@ export interface ModelsState {
 export interface Models {
 	readonly state: ReplicatedState<ModelsState>;
 	cycleThinking(context: Context): Promise<void>;
+	getThinkingLevels(context: Context): Promise<ThinkingLevel[]>;
 	refresh(context: Context): Promise<void>;
 	select(model: ModelRef, context: Context): Promise<void>;
+	selectThinking(level: ThinkingLevel, context: Context): Promise<void>;
 }
 
 export const Models = defineService<Models>("pi.models");

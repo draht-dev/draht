@@ -14,7 +14,7 @@ interface GenerationValue {
 }
 
 const LocalGenerationValue = defineService<GenerationValue>("test.experimental.local-generation-value", {
-	rpc: false,
+	local: true,
 });
 const RemoteGenerationValue = defineService<GenerationValue>("test.experimental.remote-generation-value");
 

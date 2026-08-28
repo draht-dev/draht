@@ -78,23 +78,24 @@ export type RemoteServiceContract<T> = InvalidRemoteMemberNames<T> extends never
 /** Stable identity for one shared TypeScript service contract. */
 export interface Service<T> {
 	readonly id: string;
-	readonly rpc: boolean;
+	/** Process-local services accept unrestricted object contracts and are never published remotely. */
+	readonly local: boolean;
 	readonly [SERVICE_TYPE]?: (value: T) => T;
 }
 
 export type ServiceType<TService> = TService extends Service<infer T> ? T : never;
 
-export function defineService<T>(id: string, options: { readonly rpc: false }): Service<T>;
+export function defineService<T>(id: string, options: { readonly local: true }): Service<T>;
 export function defineService<T>(
 	id: string,
 	...options: [RemoteServiceContract<T>] extends [never]
 		? readonly [options: never]
-		: readonly [options?: { readonly rpc?: true }]
+		: readonly [options?: { readonly local?: false }]
 ): Service<T>;
-export function defineService(id: string, options?: { readonly rpc?: boolean }): Service<unknown> {
+export function defineService(id: string, options?: { readonly local?: boolean }): Service<unknown> {
 	if (id.length === 0) throw new TypeError("Service ID must not be empty");
 	if (id.startsWith("$pi.")) throw new TypeError("Service IDs beginning with $pi. are reserved");
-	return Object.freeze({ id, rpc: options?.rpc ?? true });
+	return Object.freeze({ id, local: options?.local ?? false });
 }
 
 export interface ServiceInstanceAddress {

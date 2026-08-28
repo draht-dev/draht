@@ -32,10 +32,11 @@ interface QuestionDialogs {
 const QuestionDialogs = defineService<QuestionDialogs>("test.question-dialog");
 
 describe("plugin remote services", () => {
-	test("marks services RPC-capable by default and permits explicit local services", () => {
-		const local = defineService<{ readonly value: string }>("test.local", { rpc: false });
-		expect(Models.rpc).toBe(true);
-		expect(local.rpc).toBe(false);
+	test("marks services remotable by default and permits explicit local services", () => {
+		const local = defineService<{ readonly value: string }>("test.local", { local: true });
+		expect(Models.local).toBe(false);
+		expect(local.local).toBe(true);
+		expect(() => new RemoteServiceProvider([local])).toThrow("cannot be published remotely");
 	});
 
 	test("does not defensively clone borrowed state values", () => {

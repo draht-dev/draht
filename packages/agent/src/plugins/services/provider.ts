@@ -84,6 +84,11 @@ export class RemoteServiceProvider {
 		const definitions = entries.map(
 			(entry): ServiceProviderDefinition => ("service" in entry ? entry : { service: entry, mode: "singleton" }),
 		);
+		for (const { service } of definitions) {
+			if ("local" in service && service.local === true) {
+				throw new TypeError(`Local service ${service.id} cannot be published remotely`);
+			}
+		}
 		const ids = definitions.map(({ service }) => service.id);
 		if (new Set(ids).size !== ids.length) throw new TypeError("Remote service catalogue contains duplicate IDs");
 		this.#allowlist = new Set(ids);
@@ -107,6 +112,7 @@ export class RemoteServiceProvider {
 
 	provide<T>(service: Service<T>, implementation: NoInfer<RemoteServiceContract<T>>): void {
 		this.#assertActive();
+		this.#assertRemotable(service);
 		this.#assertAllowed(service.id);
 		const registration = this.#registration(service.id, "singleton", true);
 		if (registration.singleton !== undefined) {
@@ -119,6 +125,7 @@ export class RemoteServiceProvider {
 	/** Disconnect one singleton while preserving its active subscriptions and remote facades. */
 	withdraw<T>(service: Service<T>): void {
 		this.#assertActive();
+		this.#assertRemotable(service);
 		this.#assertAllowed(service.id);
 		const registration = this.#registration(service.id, "singleton", false);
 		const previous = registration.singleton;
@@ -132,6 +139,7 @@ export class RemoteServiceProvider {
 	/** Replace one singleton while preserving its active subscriptions and remote facades. */
 	replace<T>(service: Service<T>, implementation: NoInfer<RemoteServiceContract<T>>): void {
 		this.#assertActive();
+		this.#assertRemotable(service);
 		this.#assertAllowed(service.id);
 		const registration = this.#registration(service.id, "singleton", false);
 		const replacement = this.#classifyInstance(registration, implementation, undefined);
@@ -146,6 +154,7 @@ export class RemoteServiceProvider {
 
 	use<T>(service: Service<T>): T {
 		this.#assertActive();
+		this.#assertRemotable(service);
 		this.#assertAllowed(service.id);
 		const registration = this.#registrations.get(service.id);
 		if (registration?.mode !== "singleton" || registration.singleton === undefined) {
@@ -156,6 +165,7 @@ export class RemoteServiceProvider {
 
 	spawn<T>(service: Service<T>, key: string, implementation: NoInfer<RemoteServiceContract<T>>): () => void {
 		this.#assertActive();
+		this.#assertRemotable(service);
 		this.#assertAllowed(service.id);
 		if (key.length === 0) throw new TypeError("Remote service instance key must not be empty");
 		const registration = this.#registration(service.id, "keyed", true);
@@ -424,6 +434,10 @@ export class RemoteServiceProvider {
 			if (subscriber.active) subscriber.listener(entry.update, entry.context);
 			else subscriber.buffer.push(entry);
 		}
+	}
+
+	#assertRemotable(service: { readonly id: string; readonly local: boolean }): void {
+		if (service.local) throw new RemoteServiceError("service_not_allowed", `Service ${service.id} is process-local`);
 	}
 
 	#assertAllowed(serviceId: string): void {

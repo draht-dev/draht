@@ -1,21 +1,20 @@
 import {
 	BACKGROUND_CONTEXT,
 	type Context,
-	createLoopbackServiceConnection,
 	type MutableReplicatedState,
 	type RemoteServiceContract,
 	type RemoteServiceInstance,
-	RemoteServiceNamespace,
 	RemoteServiceProvider,
 	type RemoteServices,
 	replicatedState,
 	type Service,
 	type ServiceCatalogueEntry,
 	type ServiceMode,
+	withCancel,
 } from "@draht/agent-core";
 
 export interface ServiceInstances<T> {
-	add(key: string, implementation: RemoteServiceContract<T>): () => void;
+	add(key: string, implementation: T): () => void;
 }
 
 interface FacetServiceReference {
@@ -57,8 +56,8 @@ export interface FacetEnvironment {
 	 * Declare and install this facet's singleton implementation of a service.
 	 *
 	 * Call this synchronously during setup. The declaration lets the host reject duplicate
-	 * providers and order consumers after this facet. RPC-capable tokens are published
-	 * automatically; `{ rpc: false }` tokens remain process-local. Reloading this facet swaps
+	 * providers and order consumers after this facet. Remotable tokens are published
+	 * automatically; `{ local: true }` tokens remain process-local. Reloading this facet swaps
 	 * the implementation behind existing consumer handles.
 	 */
 	provide<T>(service: Service<T>, implementation: NoInfer<T>): void;
@@ -232,11 +231,55 @@ class FacetLedger {
 	}
 }
 
-interface SingletonServiceHandle {
-	bind(implementation: object): void;
-	unbind(): void;
-	bindRemote(services: RemoteServices): void;
+class FacetServiceHandle {
+	readonly #serviceId: string;
+	readonly #assertAccess: () => void;
+	readonly #methods = new Map<PropertyKey, unknown>();
 	readonly proxy: object;
+	#implementation: object | undefined;
+	#remote = false;
+
+	constructor(serviceId: string, assertAccess: () => void) {
+		this.#serviceId = serviceId;
+		this.#assertAccess = assertAccess;
+		this.proxy = new Proxy(
+			{},
+			{
+				get: (_target, property) => {
+					this.#assertAccess();
+					if (this.#implementation === undefined) throw new Error(`Service ${this.#serviceId} is disconnected`);
+					const value: unknown = Reflect.get(this.#implementation, property, this.#implementation);
+					if (this.#remote || typeof value !== "function") return value;
+					let method = this.#methods.get(property);
+					if (method === undefined) {
+						method = (...args: unknown[]) => {
+							this.#assertAccess();
+							if (this.#implementation === undefined) {
+								throw new Error(`Service ${this.#serviceId} is disconnected`);
+							}
+							const current: unknown = Reflect.get(this.#implementation, property, this.#implementation);
+							if (typeof current !== "function") {
+								throw new TypeError(`Service ${this.#serviceId}.${String(property)} is not a method`);
+							}
+							return Reflect.apply(current, this.#implementation, args);
+						};
+						this.#methods.set(property, method);
+					}
+					return method;
+				},
+			},
+		);
+	}
+
+	bind(implementation: object, remote = false): void {
+		this.#implementation = implementation;
+		this.#remote = remote;
+	}
+
+	unbind(): void {
+		this.#implementation = undefined;
+		this.#remote = false;
+	}
 }
 
 interface StagedObservation {
@@ -244,10 +287,160 @@ interface StagedObservation {
 	stop(): void;
 }
 
+interface KeyedServiceSource {
+	observe<T>(
+		service: Service<T>,
+		handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
+	): () => void;
+}
+
+interface LocalKeyedInstance {
+	readonly key: string;
+	readonly generation: number;
+	readonly handle: FacetServiceHandle;
+}
+
+interface LocalKeyedObserver {
+	readonly handler: (instance: RemoteServiceInstance<unknown>, context: Context) => void | Promise<void>;
+	readonly tasks: Map<string, { readonly cancel: (reason?: unknown) => void }>;
+	closed: boolean;
+}
+
+interface LocalKeyedRegistration {
+	readonly serviceId: string;
+	readonly generations: Map<string, number>;
+	readonly instances: Map<string, LocalKeyedInstance>;
+	readonly observers: Set<LocalKeyedObserver>;
+}
+
+class LocalKeyedServiceRegistry implements KeyedServiceSource {
+	readonly #registrations = new Map<string, LocalKeyedRegistration>();
+	readonly #assertAccess: () => void;
+	readonly #onError: (error: Error) => void;
+	#disposed = false;
+
+	constructor(
+		services: readonly { readonly id: string }[],
+		assertAccess: () => void,
+		onError: (error: Error) => void,
+	) {
+		const ids = services.map(({ id }) => id);
+		if (new Set(ids).size !== ids.length) throw new TypeError("Local keyed service registry has duplicate IDs");
+		for (const serviceId of ids) {
+			this.#registrations.set(serviceId, {
+				serviceId,
+				generations: new Map(),
+				instances: new Map(),
+				observers: new Set(),
+			});
+		}
+		this.#assertAccess = assertAccess;
+		this.#onError = onError;
+	}
+
+	spawn<T>(service: Service<T>, key: string, implementation: T): () => void {
+		this.#assertActive();
+		if (key.length === 0) throw new TypeError("Local service instance key must not be empty");
+		if (typeof implementation !== "object" || implementation === null || Array.isArray(implementation)) {
+			throw new TypeError(`Local service ${service.id} implementation must be an object`);
+		}
+		const registration = this.#registration(service.id);
+		if (registration.instances.has(key)) {
+			throw new Error(`Local service ${service.id} already has a live instance with key ${key}`);
+		}
+		const generation = (registration.generations.get(key) ?? 0) + 1;
+		registration.generations.set(key, generation);
+		const handle = new FacetServiceHandle(service.id, this.#assertAccess);
+		handle.bind(implementation);
+		const instance = { key, generation, handle };
+		registration.instances.set(key, instance);
+		for (const observer of registration.observers) this.#startTask(observer, instance);
+		let closed = false;
+		return () => {
+			if (closed) return;
+			closed = true;
+			if (registration.instances.get(key) !== instance) return;
+			registration.instances.delete(key);
+			instance.handle.unbind();
+			const taskKey = localInstanceTaskKey(instance);
+			for (const observer of registration.observers) {
+				observer.tasks.get(taskKey)?.cancel();
+				observer.tasks.delete(taskKey);
+			}
+		};
+	}
+
+	observe<T>(
+		service: Service<T>,
+		handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
+	): () => void {
+		this.#assertActive();
+		const registration = this.#registration(service.id);
+		const observer: LocalKeyedObserver = {
+			handler: handler as unknown as LocalKeyedObserver["handler"],
+			tasks: new Map(),
+			closed: false,
+		};
+		registration.observers.add(observer);
+		for (const instance of registration.instances.values()) this.#startTask(observer, instance);
+		return () => {
+			if (observer.closed) return;
+			observer.closed = true;
+			for (const task of observer.tasks.values()) task.cancel();
+			observer.tasks.clear();
+			registration.observers.delete(observer);
+		};
+	}
+
+	dispose(): void {
+		if (this.#disposed) return;
+		this.#disposed = true;
+		for (const registration of this.#registrations.values()) {
+			for (const observer of registration.observers) {
+				observer.closed = true;
+				for (const task of observer.tasks.values()) task.cancel();
+				observer.tasks.clear();
+			}
+			registration.observers.clear();
+			for (const instance of registration.instances.values()) instance.handle.unbind();
+			registration.instances.clear();
+		}
+		this.#registrations.clear();
+	}
+
+	#startTask(observer: LocalKeyedObserver, instance: LocalKeyedInstance): void {
+		if (observer.closed) return;
+		const taskKey = localInstanceTaskKey(instance);
+		if (observer.tasks.has(taskKey)) return;
+		const { context, cancel } = withCancel(BACKGROUND_CONTEXT);
+		observer.tasks.set(taskKey, { cancel });
+		try {
+			void Promise.resolve(observer.handler({ key: instance.key, service: instance.handle.proxy }, context)).catch(
+				(error: unknown) => {
+					if (!context.abortSignal?.aborted) this.#onError(toError(error));
+				},
+			);
+		} catch (error) {
+			if (!context.abortSignal?.aborted) this.#onError(toError(error));
+		}
+	}
+
+	#registration(serviceId: string): LocalKeyedRegistration {
+		const registration = this.#registrations.get(serviceId);
+		if (registration === undefined) throw new Error(`Local keyed service ${serviceId} is not registered`);
+		return registration;
+	}
+
+	#assertActive(): void {
+		if (this.#disposed) throw new Error("Local keyed service registry is disposed");
+	}
+}
+
 class FacetServiceHandles {
 	readonly #assertAccess: () => void;
-	readonly #singletons = new Map<string, SingletonServiceHandle>();
-	readonly #keyedSources = new Map<string, RemoteServices>();
+	readonly #singletons = new Map<string, FacetServiceHandle>();
+	readonly #singletonServices = new Map<string, Service<unknown>>();
+	readonly #keyedSources = new Map<string, KeyedServiceSource>();
 
 	constructor(assertAccess: () => void) {
 		this.#assertAccess = assertAccess;
@@ -256,50 +449,9 @@ class FacetServiceHandles {
 	use<T>(service: Service<T>): T {
 		let handle = this.#singletons.get(service.id);
 		if (handle === undefined) {
-			let implementation: object | undefined;
-			let remote = false;
-			const methods = new Map<PropertyKey, unknown>();
-			const proxy = new Proxy(
-				{},
-				{
-					get: (_target, property) => {
-						this.#assertAccess();
-						if (implementation === undefined) throw new Error(`Service ${service.id} is disconnected`);
-						const value: unknown = Reflect.get(implementation, property, implementation);
-						if (remote || typeof value !== "function") return value;
-						let method = methods.get(property);
-						if (method === undefined) {
-							method = (...args: unknown[]) => {
-								this.#assertAccess();
-								if (implementation === undefined) throw new Error(`Service ${service.id} is disconnected`);
-								const current: unknown = Reflect.get(implementation, property, implementation);
-								if (typeof current !== "function") {
-									throw new TypeError(`Service ${service.id}.${String(property)} is not a method`);
-								}
-								return Reflect.apply(current, implementation, args);
-							};
-							methods.set(property, method);
-						}
-						return method;
-					},
-				},
-			);
-			handle = {
-				proxy,
-				bind: (target) => {
-					implementation = target;
-					remote = false;
-				},
-				unbind: () => {
-					implementation = undefined;
-					remote = false;
-				},
-				bindRemote: (services) => {
-					implementation = services.use(service) as object;
-					remote = true;
-				},
-			};
+			handle = new FacetServiceHandle(service.id, this.#assertAccess);
 			this.#singletons.set(service.id, handle);
+			this.#singletonServices.set(service.id, service as Service<unknown>);
 		}
 		return handle.proxy as T;
 	}
@@ -337,40 +489,44 @@ class FacetServiceHandles {
 
 	bindRemoteSingleton(serviceId: string, services: RemoteServices): void {
 		const handle = this.#singletons.get(serviceId);
-		if (handle === undefined) throw new Error(`Service ${serviceId} has no singleton handle`);
-		handle.bindRemote(services);
+		const service = this.#singletonServices.get(serviceId);
+		if (handle === undefined || service === undefined)
+			throw new Error(`Service ${serviceId} has no singleton handle`);
+		handle.bind(services.use(service) as object, true);
 	}
 
-	bindKeyed(serviceId: string, services: RemoteServices): void {
+	bindKeyed(serviceId: string, services: KeyedServiceSource): void {
 		this.#keyedSources.set(serviceId, services);
 	}
 
 	dispose(): void {
+		for (const handle of this.#singletons.values()) handle.unbind();
 		this.#singletons.clear();
+		this.#singletonServices.clear();
 		this.#keyedSources.clear();
 	}
 }
 
-class StagedServiceInstances<T> implements ServiceInstances<T> {
-	readonly #service: Service<T>;
-	readonly #lifecycle: FacetLifecycle;
-	readonly #providers: RemoteServiceProvider[] = [];
+type ServiceInstanceInstaller<T> = (key: string, implementation: T) => () => void;
 
-	constructor(service: Service<T>, lifecycle: FacetLifecycle) {
-		this.#service = service;
+class StagedServiceInstances<T> implements ServiceInstances<T> {
+	readonly #lifecycle: FacetLifecycle;
+	readonly #installers: ServiceInstanceInstaller<T>[] = [];
+
+	constructor(lifecycle: FacetLifecycle) {
 		this.#lifecycle = lifecycle;
 	}
 
-	connect(provider: RemoteServiceProvider): void {
-		this.#providers.push(provider);
+	connect(installer: ServiceInstanceInstaller<T>): void {
+		this.#installers.push(installer);
 	}
 
-	add(key: string, implementation: RemoteServiceContract<T>): () => void {
+	add(key: string, implementation: T): () => void {
 		this.#lifecycle.assertActive("add service instances");
-		if (this.#providers.length === 0) throw new Error("Facet service provider is not connected");
+		if (this.#installers.length === 0) throw new Error("Facet service provider is not connected");
 		const closes: Array<() => void> = [];
 		try {
-			for (const provider of this.#providers) closes.push(provider.spawn(this.#service, key, implementation));
+			for (const install of this.#installers) closes.push(install(key, implementation));
 		} catch (error) {
 			for (const close of closes.reverse()) close();
 			throw error;
@@ -388,7 +544,7 @@ class StagedServiceInstances<T> implements ServiceInstances<T> {
 
 interface SingletonProvision {
 	readonly facetId: string;
-	readonly service: { readonly id: string; readonly rpc: boolean };
+	readonly service: { readonly id: string; readonly local: boolean };
 	readonly implementation: object;
 	install(provider: RemoteServiceProvider): void;
 	withdraw(provider: RemoteServiceProvider): void;
@@ -397,8 +553,9 @@ interface SingletonProvision {
 
 interface KeyedProvision {
 	readonly facetId: string;
-	readonly service: { readonly id: string; readonly rpc: boolean };
-	connect(provider: RemoteServiceProvider): void;
+	readonly service: { readonly id: string; readonly local: boolean };
+	connectLocal(registry: LocalKeyedServiceRegistry): void;
+	connectRemote(provider: RemoteServiceProvider): void;
 }
 
 export interface FacetConnection {
@@ -449,8 +606,7 @@ class FacetKernel {
 	readonly #connectionBindings = new Map<FacetConnection, RemoteServices>();
 	#activationOrder: readonly string[] = [];
 	#provider: RemoteServiceProvider | undefined;
-	#keyedProvider: RemoteServiceProvider | undefined;
-	#localKeyedServices: RemoteServiceNamespace | undefined;
+	#localKeyedServices: LocalKeyedServiceRegistry | undefined;
 	#phase: GenerationPhase = "setup";
 
 	constructor(options: FacetOptions) {
@@ -493,10 +649,9 @@ class FacetKernel {
 			this.#bindServices(externalServices);
 
 			this.#phase = "connecting";
-			await Promise.all([
-				this.#localKeyedNamespace.activate(BACKGROUND_CONTEXT),
-				...[...this.#connectionBindings.values()].map((services) => services.activate(BACKGROUND_CONTEXT)),
-			]);
+			await Promise.all(
+				[...this.#connectionBindings.values()].map((services) => services.activate(BACKGROUND_CONTEXT)),
+			);
 
 			this.#phase = "activating";
 			for (const id of this.#activationOrder) await this.#lifecycles.get(id)!.activate();
@@ -505,13 +660,12 @@ class FacetKernel {
 			const cleanupErrors = await this.#disposeLifecycles();
 			this.#phase = "disposing";
 			try {
-				await this.#localKeyedServices?.dispose(BACKGROUND_CONTEXT);
+				await this.#localKeyedServices?.dispose();
 			} catch (cleanupError) {
 				cleanupErrors.push(cleanupError);
 			}
 			cleanupErrors.push(...(await this.#disposeConnectionBindings()));
 			this.#handles.dispose();
-			this.#keyedProvider?.dispose();
 			this.#provider?.dispose();
 			this.#phase = "dead";
 			if (cleanupErrors.length > 0) {
@@ -579,7 +733,7 @@ class FacetKernel {
 		for (const candidate of candidates) {
 			for (const provision of candidate.singletons) {
 				this.#handles.unbindSingleton(provision.service.id);
-				if (provision.service.rpc) provision.withdraw(this.provider);
+				if (!provision.service.local) provision.withdraw(this.provider);
 			}
 		}
 		const disposalErrors: unknown[] = [];
@@ -616,8 +770,8 @@ class FacetKernel {
 		try {
 			for (const candidate of candidates) {
 				for (const provision of candidate.keyed) {
-					provision.connect(this.#keyedProvider!);
-					if (provision.service.rpc) provision.connect(this.provider);
+					provision.connectLocal(this.#localKeyedRegistry);
+					if (!provision.service.local) provision.connectRemote(this.provider);
 				}
 				this.#singletons.push(...candidate.singletons);
 				this.#keyed.push(...candidate.keyed);
@@ -630,7 +784,7 @@ class FacetKernel {
 				await candidate.lifecycle.activate();
 				for (const provision of candidate.singletons) {
 					this.#handles.bindSingleton(provision.service.id, provision.implementation);
-					if (provision.service.rpc) provision.replace(this.provider);
+					if (!provision.service.local) provision.replace(this.provider);
 				}
 			}
 		} finally {
@@ -644,13 +798,12 @@ class FacetKernel {
 		const errors = await this.#disposeLifecycles();
 		this.#phase = "disposing";
 		try {
-			await this.#localKeyedServices?.dispose(BACKGROUND_CONTEXT);
+			await this.#localKeyedServices?.dispose();
 		} catch (error) {
 			errors.push(error);
 		}
 		errors.push(...(await this.#disposeConnectionBindings()));
 		this.#handles.dispose();
-		this.#keyedProvider?.dispose();
 		this.#provider?.dispose();
 		this.#phase = "dead";
 		if (errors.length === 1) throw errors[0];
@@ -660,14 +813,14 @@ class FacetKernel {
 	#validateReplacementProvisions(singletons: readonly SingletonProvision[], keyed: readonly KeyedProvision[]): void {
 		const definitions = [
 			...singletons
-				.filter(({ service }) => service.rpc)
+				.filter(({ service }) => !service.local)
 				.map(({ service }) => ({ service, mode: "singleton" as const })),
-			...keyed.filter(({ service }) => service.rpc).map(({ service }) => ({ service, mode: "keyed" as const })),
+			...keyed.filter(({ service }) => !service.local).map(({ service }) => ({ service, mode: "keyed" as const })),
 		];
 		const provider = new RemoteServiceProvider(definitions);
 		try {
 			for (const provision of singletons) {
-				if (provision.service.rpc) provision.install(provider);
+				if (!provision.service.local) provision.install(provider);
 			}
 		} finally {
 			provider.dispose();
@@ -699,8 +852,17 @@ class FacetKernel {
 			provideMany: <T>(service: Service<T>): ServiceInstances<T> => {
 				lifecycle.assertSettingUp("provide service instances");
 				ledger.provide(service, "keyed");
-				const instances = new StagedServiceInstances(service, lifecycle);
-				keyed.push({ facetId: lifecycle.id, service, connect: (target) => instances.connect(target) });
+				const instances = new StagedServiceInstances<T>(lifecycle);
+				keyed.push({
+					facetId: lifecycle.id,
+					service,
+					connectLocal: (registry) =>
+						instances.connect((key, implementation) => registry.spawn(service, key, implementation)),
+					connectRemote: (provider) =>
+						instances.connect((key, implementation) =>
+							provider.spawn(service, key, implementation as NoInfer<RemoteServiceContract<T>>),
+						),
+				});
 				return instances;
 			},
 			use: <T>(service: Service<T>): T => {
@@ -788,30 +950,28 @@ class FacetKernel {
 	}
 
 	#assembleProviders(): void {
-		const rpcServices = [
+		const remotelyPublishedServices = [
 			...this.#singletons
-				.filter(({ service }) => service.rpc)
+				.filter(({ service }) => !service.local)
 				.map(({ service }) => ({ service, mode: "singleton" as const })),
 			...this.#keyed
-				.filter(({ service }) => service.rpc)
+				.filter(({ service }) => !service.local)
 				.map(({ service }) => ({ service, mode: "keyed" as const })),
 		];
-		const provider = new RemoteServiceProvider(rpcServices);
-		const keyedProvider = new RemoteServiceProvider(this.#keyed.map(({ service }) => ({ service, mode: "keyed" })));
+		const provider = new RemoteServiceProvider(remotelyPublishedServices);
+		const localKeyedServices = new LocalKeyedServiceRegistry(
+			this.#keyed.map(({ service }) => service),
+			() => this.#assertServiceAccess(),
+			this.#onError,
+		);
 		this.#provider = provider;
-		this.#keyedProvider = keyedProvider;
-		this.#localKeyedServices = new RemoteServiceNamespace({
-			services: this.#keyed.map(({ service }) => service),
-			connection: createLoopbackServiceConnection(keyedProvider),
-			assertAccess: () => this.#assertServiceAccess(),
-			onError: this.#onError,
-		});
+		this.#localKeyedServices = localKeyedServices;
 		for (const provision of this.#singletons) {
-			if (provision.service.rpc) provision.install(provider);
+			if (!provision.service.local) provision.install(provider);
 		}
 		for (const provision of this.#keyed) {
-			provision.connect(keyedProvider);
-			if (provision.service.rpc) provision.connect(provider);
+			provision.connectLocal(localKeyedServices);
+			if (!provision.service.local) provision.connectRemote(provider);
 		}
 	}
 
@@ -822,7 +982,7 @@ class FacetKernel {
 			this.#handles.bindSingleton(provision.service.id, provision.implementation);
 		}
 		for (const provision of this.#keyed) {
-			this.#handles.bindKeyed(provision.service.id, this.#localKeyedNamespace);
+			this.#handles.bindKeyed(provision.service.id, this.#localKeyedRegistry);
 		}
 		for (const [serviceId, { mode, connection }] of externalServices) {
 			const services = this.#connectionBindings.get(connection);
@@ -832,7 +992,7 @@ class FacetKernel {
 		}
 	}
 
-	get #localKeyedNamespace(): RemoteServiceNamespace {
+	get #localKeyedRegistry(): LocalKeyedServiceRegistry {
 		if (this.#localKeyedServices === undefined) throw new Error("Facet keyed services are not assembled");
 		return this.#localKeyedServices;
 	}
@@ -956,6 +1116,14 @@ function sameReferences(left: readonly FacetServiceReference[], right: readonly 
 
 function referenceKey(reference: FacetServiceReference): string {
 	return `${reference.serviceId}\0${reference.mode}`;
+}
+
+function localInstanceTaskKey(instance: LocalKeyedInstance): string {
+	return `${instance.key}\0${instance.generation}`;
+}
+
+function toError(error: unknown): Error {
+	return error instanceof Error ? error : new Error(String(error));
 }
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {

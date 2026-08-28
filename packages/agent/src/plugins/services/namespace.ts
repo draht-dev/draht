@@ -570,6 +570,7 @@ export class RemoteServiceNamespace implements RemoteServices {
 	}
 
 	use<T>(service: Service<T>): T {
+		this.#assertRemotable(service);
 		this.#assertAvailable(service.id, "singleton");
 		let binding = this.#singletons.get(service.id);
 		if (binding !== undefined) return binding.facade.proxy as T;
@@ -601,6 +602,7 @@ export class RemoteServiceNamespace implements RemoteServices {
 		service: Service<T>,
 		handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
 	): () => void {
+		this.#assertRemotable(service);
 		this.#assertAvailable(service.id, "keyed");
 		let binding = this.#keyed.get(service.id) as KeyedBinding<T> | undefined;
 		if (binding === undefined) {
@@ -739,6 +741,10 @@ export class RemoteServiceNamespace implements RemoteServices {
 		}
 		binding.facade.install(snapshot.instances[0]!, freshDeliveryContext());
 		subscription.activate();
+	}
+
+	#assertRemotable(service: { readonly id: string; readonly local: boolean }): void {
+		if (service.local) throw new RemoteServiceError("service_not_allowed", `Service ${service.id} is process-local`);
 	}
 
 	#assertAvailable(serviceId: string, mode: "singleton" | "keyed"): void {

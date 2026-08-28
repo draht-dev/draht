@@ -110,10 +110,10 @@ Out of scope: arbitrary undeclared object remoting, serialized functions/classes
 Facets communicate across processes through **services**. One token type gives a service contract its identity:
 
 ```ts
-function defineService<T>(id: string, options?: { rpc?: boolean }): Service<T>;
+function defineService<T>(id: string, options?: { local?: boolean }): Service<T>;
 ```
 
-The declaration lives in the shared contract module and creates nothing. Services are RPC-capable by default; a process-local token declares `{ rpc: false }`. `provide(service, implementation)` adds one singleton to the host service graph. `provideMany(service)` registers ownership of a multi-instance service during facet setup and returns an owned collection whose later `add(key, implementation)` calls add instances. The host automatically publishes provided RPC-capable services across its process boundary. Consumers select the same modes with `use(service)` or `observe(service, handler)`. Within one facet generation, a token must stay in one mode: mixing `provide`/`use` with `provideMany`/`observe` is an assembly or protocol error.
+The declaration lives in the shared contract module and creates nothing. Services are remotely publishable by default; a process-local token declares `{ local: true }`. `provide(service, implementation)` adds one singleton to the host service graph. `provideMany(service)` registers ownership of a multi-instance service during facet setup and returns an owned collection whose later `add(key, implementation)` calls add instances. The host publishes every non-local provision across its process boundary. Consumers select the same modes with `use(service)` or `observe(service, handler)`. Within one facet generation, a token must stay in one mode: mixing `provide`/`use` with `provideMany`/`observe` is an assembly or protocol error.
 
 ```ts
 interface ServiceInstances<T> {
@@ -147,7 +147,7 @@ env.observe(QuestionDialogs, handler)
 
 The first `provide()`, `provideMany()`, `use()`, or `observe()` for a token must occur during facet setup. Commands, hooks, event handlers, and activation callbacks use handles acquired during setup; they cannot introduce an undeclared service dependency later. Dynamic instances use the setup-owned `ServiceInstances` handle, so adding and closing instances do not change the graph.
 
-After every facet has registered, the host generates its outgoing catalogue from RPC-capable provisions, obtains catalogues from its connections, resolves requirements to local or connected provisions, rejects missing providers, duplicate offers or singleton owners, singleton/keyed mismatches, invalid dependency cycles, and invalid RPC service implementations, then records consumer-to-provider edges for lifecycle ordering. `use()` and `observe()` declare hard requirements; optional dependencies require a future distinct acquisition API rather than inference from call failure. The ledger and resulting graph are private kernel machinery, not a facet-facing plan or second declaration format.
+After every facet has registered, the host generates its outgoing catalogue from non-local provisions, obtains catalogues from its connections, resolves requirements to local or connected provisions, rejects missing providers, duplicate offers or singleton owners, singleton/keyed mismatches, invalid dependency cycles, and invalid remote service implementations, then records consumer-to-provider edges for lifecycle ordering. `use()` and `observe()` declare hard requirements; optional dependencies require a future distinct acquisition API rather than inference from call failure. The ledger and resulting graph are private kernel machinery, not a facet-facing plan or second declaration format.
 
 Only dependencies acquired through `env.use()` or `env.observe()` belong to this lifecycle graph. Importing another extension's live implementation bypasses ownership and is unsupported. The module loader separately owns the ordinary source import graph. Reload therefore needs both loaded-source ownership and the generated service graph; see [Reloading facets](#reloading-facets).
 
@@ -271,10 +271,10 @@ A service has **one owner and many consumers**. In singleton mode, `providersBui
 
 `use()` behaves differently by locality:
 
-- **Local:** `use()` returns a stable lazy proxy backed by an in-process connection. During synchronous setup it is disconnected; after assembly it binds to the local implementation without requiring provider-before-consumer setup order.
+- **Local:** `use()` returns a stable lazy proxy backed by a direct process-local implementation slot. During synchronous setup it is disconnected; after assembly it binds to the local implementation without requiring provider-before-consumer setup order. Reload unbinds and rebinds that same slot.
 - **Remote:** across a connection, `use()` returns the same kind of stable lazy proxy. Calls made while disconnected fail when invoked; state has no value until hydrated. Concurrent consumers of one token in one process share one proxy, one state replica, and one remote subscription.
 
-Multi-instance services use `provideMany()` and `observe()`. The service is empty until its setup-owned `ServiceInstances` handle calls `add()`; observing it never creates an instance. `instances.add(key, implementation)` returns an idempotent close function, and the key must be unique among that service's live instances. `observe(service, handler)` reconciles a snapshot of current instances and then ordered additions, replacements, and removals. After an instance's initial state members hydrate, the host starts one handler task with a fresh `Context`. Closing the instance aborts that context, rejects new calls, and lets already-admitted calls return. Cancellation from the instance context is normal task cleanup; other handler failures follow host failure policy. Reusing a closed key creates a new host-owned generation, so stale proxies cannot address the replacement.
+Multi-instance services use `provideMany()` and `observe()`. The service is empty until its setup-owned `ServiceInstances` handle calls `add()`; observing it never creates an instance. `instances.add(key, implementation)` returns an idempotent close function, and the key must be unique among that service's live instances. Local observers use a direct process-local instance registry; non-local provisions additionally publish the same instance through RPC. `observe(service, handler)` reconciles current instances and then ordered additions, replacements, and removals. After an instance's initial state members hydrate, the host starts one handler task with a fresh `Context`. Closing the instance aborts that context, rejects new calls, and lets already-admitted calls return. Cancellation from the instance context is normal task cleanup; other handler failures follow host failure policy. Reusing a closed key creates a new host-owned generation, so stale proxies cannot address the replacement.
 
 An added instance member has structural identity `(service, key, generation, member)`. Its `ReplicatedState` members therefore need no independent IDs. The instance directory is control-plane metadata, not a facet-visible `ReplicatedState` containing proxies. Switching sessions aborts all observed instance tasks before hydrating the selected session's current instances.
 
@@ -300,9 +300,9 @@ interface AgentFacetScope {
 	lane(name: string, context: Context): Promise<AgentLaneFacetView>;
 }
 
-const Agent = defineService<AgentFacetScope>("pi.local.agent", { rpc: false });
-const Providers = defineService<ProviderContributionRegistry>("pi.local.providers", { rpc: false });
-const Tools = defineService<ToolContributionRegistry>("pi.local.tools", { rpc: false });
+const Agent = defineService<AgentFacetScope>("pi.local.agent", { local: true });
+const Providers = defineService<ProviderContributionRegistry>("pi.local.providers", { local: true });
+const Tools = defineService<ToolContributionRegistry>("pi.local.tools", { local: true });
 ```
 
 "Local" and "unrestricted" are separate decisions. The scope narrows authority for lifecycle and composition — hooks and event subscriptions registered through it are automatically owned by the facet and disposed with it. `AgentLaneFacetView` exposes Branch methods directly alongside agent operations. `ScopedSessionData` exposes purpose-bounded durable operations. The host keeps the unrestricted concrete instances and reserves: `AgentHarness.close()` and `Session.close()`; raw `Session.mutate()`, `beginMutation()`, and `SessionMutator` (unless a narrowly trusted durability extension explicitly owns them); `idGenerator` and backend/storage objects; Branch creation; whole-registry setters such as `setTools()`; unscoped hook/event registration; transport exposure and remote-reference registration. This is a composition and lifecycle boundary, not a security sandbox: session facets are trusted code in the authoritative process. A future extension policy may explicitly grant broader local capability, but built-ins should receive no implicit bypass.
@@ -348,7 +348,7 @@ interface TuiHost {
 	select<T>(title: string, items: SelectItem<T>[], options: { signal: AbortSignal }): Promise<T | undefined>;
 }
 
-const Tui = defineService<TuiHost>("pi.local.tui", { rpc: false });
+const Tui = defineService<TuiHost>("pi.local.tui", { local: true });
 ```
 
 `acquireModal()` waits in one presentation-owned queue and holds the modal slot across a multi-step interaction. Its signal removes a queued request or dismisses an active one, and `close()` is idempotent. `select()` is the one-step acquire/select/close convenience. Both return selected values directly, so feature code never recovers identity from a display label.
@@ -382,10 +382,10 @@ Its TUI facet consumes `Chat` through `env.use()` exactly as the model picker co
 
 ## Local services and narrow remote facades
 
-Not every dependency should be remotely reachable. A **local service** is a token confined to its providing process. It may hold functions, native objects, credentials, or filesystem handles; remote `use()` cannot resolve it, and local services are never discoverable remotely. The pattern for sensitive state is a local full service plus a narrow remote facade:
+Not every dependency should be remotely reachable. A **local service** is a token declared with `{ local: true }` and confined to its providing process. It may use synchronous methods and hold functions, classes, native objects, credentials, filesystem handles, or other non-JSON values. Remote `use()` cannot resolve it, and local services are never discoverable remotely. Local and non-local provisions share dependency ordering, stable handles, keyed generations, activation, disposal, and provider-facet reload; non-local services only add validation, replication, and RPC publication. The pattern for sensitive state is a local full service plus a narrow remote facade:
 
 ```ts
-const Credentials = defineService<CredentialStore>("credentials", { rpc: false }); // get/set provider secrets
+const Credentials = defineService<CredentialStore>("credentials", { local: true }); // get/set provider secrets
 
 interface Accounts {
 	readonly state: ReplicatedState<{ providers: Array<{ provider: string; configured: boolean }> }>;
@@ -520,7 +520,7 @@ interface FleetFacetScope {
 	readonly attachments: AttachmentsView;  // bind/unbind a client's selected session
 }
 
-const Fleet = defineService<FleetFacetScope>("pi.local.fleet", { rpc: false });
+const Fleet = defineService<FleetFacetScope>("pi.local.fleet", { local: true });
 ```
 
 The raw `SessionRepo`, storage handles, unrestricted process-kill authority, routing map, and routing machinery stay with the server application:
@@ -944,7 +944,7 @@ Errors cross the wire as a JSON envelope `{ code, message }` with stable protoco
 
 Boundary rules:
 
-- RPC-capable service IDs come from trusted loaded service tokens; the remote boundary accepts only implementation functions and branded replicated-state members, instance generations are host-owned, and `{ rpc: false }` services are never discoverable remotely;
+- remotely publishable service IDs come from trusted loaded service tokens; the remote boundary accepts only implementation functions and branded replicated-state members, instance generations are host-owned, and `{ local: true }` services are never discoverable remotely;
 - business arguments, results, and state are validated as JSON; protocol envelopes cannot be forged as ordinary values;
 - clients cannot choose context position, instance generations, selected-Session routing fields, or cancellation targets other than their own requests; and
 - credentials, prompts, completions, tool arguments/results, and filesystem contents are not exposed unless an explicit contract permits them.
@@ -1045,7 +1045,7 @@ The client never supplies a patch, author, or review ID. The session computes a 
 
 ### Narrow local durability capabilities
 
-Unlike a question, this interaction has no invocation memo. The Session facet uses three process-local capabilities: a diff source that snapshots the working tree, a review store that serializes record mutations, and a prompt queue with idempotent `enqueueOnce()`. One durable review record contains the immutable patch, revisioned comments, status, and an optional frozen `{ submissionId, prompt }`. These local capabilities are ordinary `{ rpc: false }` services; their repository APIs are not part of the extension's shared contract.
+Unlike a question, this interaction has no invocation memo. The Session facet uses three process-local capabilities: a diff source that snapshots the working tree, a review store that serializes record mutations, and a prompt queue with idempotent `enqueueOnce()`. One durable review record contains the immutable patch, revisioned comments, status, and an optional frozen `{ submissionId, prompt }`. These local capabilities are ordinary `{ local: true }` services; their repository APIs are not part of the extension's shared contract.
 
 `DiffReviewRecords` serializes mutations per review. `addComment()` validates the anchor against the stored patch, stamps the authenticated author, deduplicates `commentId`, commits, and then returns the new revision. `freezeForSubmission()` atomically excludes later comments and stores a stable submission ID plus a prompt containing the immutable patch and that exact comment snapshot. If submission was already frozen, it returns the same record. `PromptQueue.enqueueOnce()` returns only after that logical prompt is durably accepted; retrying its submission ID cannot enqueue a second prompt.
 

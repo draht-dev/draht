@@ -32,6 +32,11 @@ interface HostValues {
 	readonly use: string;
 }
 
+interface LocalKeyedValue {
+	readonly metadata: Map<string, string>;
+	read(): string;
+}
+
 interface LeftValue {
 	read(context: Context): Promise<string>;
 }
@@ -48,7 +53,8 @@ const Source = defineService<Source>("test.experimental.source");
 const Projection = defineService<Projection>("test.experimental.projection");
 const KeyedValue = defineService<KeyedValue>("test.experimental.keyed-value");
 const Watched = defineService<Watched>("test.experimental.watched");
-const HostValues = defineService<HostValues>("test.experimental.host-values", { rpc: false });
+const HostValues = defineService<HostValues>("test.experimental.host-values", { local: true });
+const LocalKeyedValue = defineService<LocalKeyedValue>("test.experimental.local-keyed-value", { local: true });
 const LeftValue = defineService<LeftValue>("test.experimental.left-value");
 const RightValue = defineService<RightValue>("test.experimental.right-value");
 const CombinedValue = defineService<CombinedValue>("test.experimental.combined-value");
@@ -134,7 +140,61 @@ describe("experimental facet host", () => {
 		await vi.waitFor(() => expect(trace).toContain("observe one"));
 
 		expect(trace).toEqual(["activate provider", "activate observer", "observe one"]);
+		const remoteServices = new RemoteServiceNamespace({
+			services: [KeyedValue],
+			connection: createLoopbackServiceConnection(host.services),
+		});
+		const remoteValues: string[] = [];
+		remoteServices.observe(KeyedValue, async (instance, context) => {
+			remoteValues.push(await instance.service.read(context));
+		});
+		await remoteServices.ready(BACKGROUND_CONTEXT);
+		await vi.waitFor(() => expect(remoteValues).toEqual(["one"]));
+
+		await remoteServices.dispose(BACKGROUND_CONTEXT);
 		await host.dispose();
+	});
+
+	test("keeps unrestricted local keyed services process-local across provider reloads", async () => {
+		const observed: Array<{ service: LocalKeyedValue; context: Context }> = [];
+		const consumer = defineFacet({
+			id: "local-keyed-consumer",
+			setup(env) {
+				env.observe(LocalKeyedValue, (instance, context) => {
+					observed.push({ service: instance.service, context });
+				});
+			},
+		});
+		const provider = (value: string) =>
+			defineFacet({
+				id: "local-keyed-provider",
+				setup(env) {
+					const values = env.provideMany(LocalKeyedValue);
+					env.onActivate(() => {
+						values.add("current", {
+							metadata: new Map([["value", value]]),
+							read: () => value,
+						});
+					});
+				},
+			});
+		const host = await createFacetHost({ facets: [consumer, provider("A")] });
+		await vi.waitFor(() => expect(observed).toHaveLength(1));
+		const first = observed[0]!;
+		expect(first.service.read()).toBe("A");
+		expect(first.service.metadata.get("value")).toBe("A");
+		expect(host.services.catalogue).not.toContainEqual({ serviceId: LocalKeyedValue.id, mode: "keyed" });
+		expect(() => host.services.use(LocalKeyedValue)).toThrow("process-local");
+
+		await host.reload([provider("B")]);
+		await vi.waitFor(() => expect(observed).toHaveLength(2));
+		expect(first.context.abortSignal?.aborted).toBe(true);
+		expect(() => first.service.read()).toThrow(`Service ${LocalKeyedValue.id} is disconnected`);
+		expect(observed[1]!.service.read()).toBe("B");
+		expect(observed[1]!.service.metadata.get("value")).toBe("B");
+
+		await host.dispose();
+		expect(observed[1]!.context.abortSignal?.aborted).toBe(true);
 	});
 
 	test("owns resources registered during activation", async () => {
@@ -191,9 +251,7 @@ describe("experimental facet host", () => {
 			},
 		});
 		const host = await createFacetHost({ facets: [consumer, provider] });
-		expect(() => host.services.use(HostValues)).toThrow(
-			"Remote service test.experimental.host-values is not allowlisted",
-		);
+		expect(() => host.services.use(HostValues)).toThrow("Service test.experimental.host-values is process-local");
 		await host.dispose();
 	});
 

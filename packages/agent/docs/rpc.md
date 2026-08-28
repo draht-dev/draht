@@ -20,15 +20,17 @@ Do not serialize `Context`, `AbortSignal`, telemetry objects, callbacks, tools, 
 
 ## Service contracts and typed facades
 
-A service token is a shared TypeScript contract and stable service ID. It is not a generated descriptor and creates no provider. Tokens are RPC-capable by default; process-local tokens declare `{ rpc: false }`. `provide()` adds one singleton implementation to the host graph. `provideMany()` registers one keyed-service owner during facet setup and returns a `ServiceInstances` handle whose later `add()` calls add instances. The host automatically publishes every provided RPC-capable service. A token has one mode in one host service graph: mixing singleton and keyed use is an error.
+A service token is a shared TypeScript contract and stable service ID. It is not a generated descriptor and creates no provider. Tokens are remotely publishable by default; process-local tokens declare `{ local: true }`. `provide()` adds one singleton implementation to the host graph. `provideMany()` registers one keyed-service owner during facet setup and returns a `ServiceInstances` handle whose later `add()` calls add instances. The host automatically publishes every non-local provision. A token has one mode in one host service graph: mixing singleton and keyed use is an error.
 
 The provider classifies every exposed implementation member as a method or branded `ReplicatedState` and publishes that member table in subscription snapshots. The consumer obtains member names from ordinary property access—for example, a JavaScript `Proxy` receives `"state"` for `models.state` and `"refresh"` for `models.refresh(context)`. Accessed slots are validated against the provider-announced kind when the facade binds.
 
-Local and remote `use()` both return a stable, lazy typed facade shared by consumers of that token. During synchronous facet setup the facade is disconnected, so setup can capture it but cannot invoke methods, read state, or register member subscriptions. After assembly, a local facade resolves to its facet-provided implementation and a remote facade binds through the host's connected services. Reloading the providing facet temporarily marks that same facade unavailable, then swaps its target; RPC singletons clear readiness and install a complete replacement snapshot on their existing subscription so captured methods and member facades address the replacement. While no provider is bound, invoking a method fails and state remains unhydrated; no call is queued merely because it was made through a proxy.
+Local and remote `use()` both return a stable, lazy typed facade shared by consumers of that token. During synchronous facet setup the facade is disconnected, so setup can capture it but cannot invoke methods, read state, or register member subscriptions. After assembly, a local facade resolves through a direct process-local implementation slot and a remote facade binds through the host's connected services. Reloading the providing facet temporarily marks that same facade unavailable, then swaps its target; RPC singletons clear readiness and install a complete replacement snapshot on their existing subscription so captured methods and member facades address the replacement. While no provider is bound, invoking a method fails and state remains unhydrated; no call is queued merely because it was made through a proxy.
 
 Remote methods return promises and accept and return strict JSON apart from their declared `Context`; `void` is a successful response without a result field. Private returned references are not supported. The client removes the context before transport and the receiving host constructs a fresh local context. The contract position is host-controlled and must be consistent; the examples use one required trailing `Context`. Business absence is JSON `null` or an options object, never transported `undefined`.
 
 Use static assertions and runtime validation. Static checks constrain remote methods and replicated-state members; runtime boundaries reject unsupported members and non-JSON arguments, results, and state values. TypeScript supplies typed facades but does not authenticate a peer or create runtime metadata.
+
+`{ local: true }` removes only remote publication and its wire-contract restrictions. Local and non-local provisions otherwise use the same dependency ledger, activation order, stable singleton slots, keyed-instance generations, observer cancellation, disposal, and provider-facet reload. Local singleton slots and the local keyed registry hold arbitrary object contracts directly; non-local provisions additionally install their implementations in the remote provider.
 
 ## Dependency ledger
 
@@ -109,7 +111,7 @@ Three cancellation domains remain separate: aborting one RPC invocation; explici
 
 ## Security and lifecycle
 
-Only loaded service tokens marked RPC-capable may be registered at the remote boundary. Only the owning `ServiceInstances` handle may add instances. Services marked `{ rpc: false }` are never discoverable remotely. Providers validate member kinds and every JSON business value; clients cannot forge control envelopes as ordinary values, choose instance generations, select a different Session route in a service call, or cancel another client's request.
+Only loaded service tokens not marked local may be registered at the remote boundary. Only the owning `ServiceInstances` handle may add instances. Services marked `{ local: true }` are never discoverable remotely. Local services may use unrestricted object contracts, while remote providers validate member kinds and every JSON business value. Clients cannot forge control envelopes as ordinary values, choose instance generations, select a different Session route in a service call, or cancel another client's request.
 
 The server authenticates connections, authorizes attachment, and reconstructs client identity in the service `Context`. Ordinary business arguments never carry authority. Credentials, prompts, completions, tool data, filesystem contents, and other sensitive values require an explicit presentation-safe contract.
 
@@ -119,7 +121,7 @@ Facet environments own registrations, added service instances, observations, and
 
 The facet-facing semantics are tested over loopback and framed transports:
 
-- setup-time dependency-ledger ownership, rejection of late acquisition, local and remote `use()`, keyed-provider ownership, singleton/keyed mode validation, token-driven RPC publication, lazy member access, stable local and RPC singleton facades across provider-facet replacement, and `{ rpc: false }` services remaining unreachable remotely;
+- setup-time dependency-ledger ownership, rejection of late acquisition, local and remote `use()`, keyed-provider ownership, singleton/keyed mode validation, token-driven RPC publication, lazy member access, stable local and RPC singleton facades across provider-facet replacement, and `{ local: true }` services remaining unreachable remotely;
 - strict JSON boundaries, method context reconstruction, and request cancellation isolation without serializing context values;
 - server/Session facet isolation, selected-Session switching, stale-frame rejection, and worker-side per-client request correlation;
 - cold and hydrated `ReplicatedState`, snapshot/update race freedom, fresh delivery contexts, and clearing/re-hydration on disconnect, reconnect, and provider replacement;

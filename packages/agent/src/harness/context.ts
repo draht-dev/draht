@@ -1,19 +1,28 @@
+import type { Context, ContextKey } from "@draht/chord";
 import {
+	awaitWithContext,
 	BACKGROUND_CONTEXT,
-	type Context,
-	type ContextKey,
-	INTERNAL_CONTEXT_OPERATIONS,
+	createContextKey,
 	TODO_CONTEXT,
+	withAbortSignal,
+	withCancel,
+	withContextValue,
+	withoutAbortSignal,
 } from "@draht/chord/context";
 import { NOOP_TELEMETRY_CONTEXT, type TelemetryContext } from "@draht/telemetry";
 
-export { BACKGROUND_CONTEXT, type Context, type ContextKey, TODO_CONTEXT };
-export const awaitWithContext = INTERNAL_CONTEXT_OPERATIONS.awaitWithContext;
-export const createContextKey = INTERNAL_CONTEXT_OPERATIONS.createContextKey;
-export const withAbortSignal = INTERNAL_CONTEXT_OPERATIONS.withAbortSignal;
-export const withCancel = INTERNAL_CONTEXT_OPERATIONS.withCancel;
-export const withContextValue = INTERNAL_CONTEXT_OPERATIONS.withContextValue;
-export const withoutAbortSignal = INTERNAL_CONTEXT_OPERATIONS.withoutAbortSignal;
+export {
+	awaitWithContext,
+	BACKGROUND_CONTEXT,
+	type Context,
+	type ContextKey,
+	createContextKey,
+	TODO_CONTEXT,
+	withAbortSignal,
+	withCancel,
+	withContextValue,
+	withoutAbortSignal,
+};
 
 const TELEMETRY_CONTEXT_KEY = createContextKey<TelemetryContext>("pi.telemetryContext");
 

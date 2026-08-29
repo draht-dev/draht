@@ -14,7 +14,7 @@ import type {
 	ServiceSubscriptionSnapshot,
 } from "../types.ts";
 import { RemoteServiceError } from "./errors.ts";
-import { createDeliveryContext } from "./state.ts";
+import { serviceDeliveryContext } from "./state.ts";
 import { getReplicatedStateInternals, type ReplicatedStateInternals } from "./state-internals.ts";
 
 type RemoteMethod = (...args: unknown[]) => unknown;
@@ -364,7 +364,7 @@ export class RemoteServiceProvider {
 
 	#emit(registration: ServiceRegistration, update: ServiceProviderUpdate, context?: Context): void {
 		if (registration.subscribers.size === 0) return;
-		const deliveryContext = context ?? createDeliveryContext();
+		const deliveryContext = context ?? serviceDeliveryContext();
 		for (const subscriber of registration.subscribers) {
 			if (subscriber.closed) continue;
 			const entry = { update, context: deliveryContext };

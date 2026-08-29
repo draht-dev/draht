@@ -1,27 +1,17 @@
 /**
- * Chord is a standalone application-composition runtime.
- *
- * Its public API is under development.
+ * Chord is a standalone application-composition runtime for agentic applications.
  */
 export {
-	awaitWithContext,
 	combineFacetLoaders,
-	createContextKey,
 	createFacetHost,
 	createLoopbackServiceConnection,
 	createRemoteServiceBinding,
 	createStaticFacetLoader,
 	defineFacet,
 	defineService,
-	freshDeliveryContext,
 	getServiceInstanceKey,
 	replicatedState,
-	withAbortSignal,
-	withCancel,
-	withContextValue,
-	withoutAbortSignal,
 } from "./api.ts";
-export { BACKGROUND_CONTEXT, TODO_CONTEXT } from "./context/index.ts";
 export { RemoteServiceError } from "./services/errors.ts";
 export { RemoteServiceProvider } from "./services/provider.ts";
 export type {

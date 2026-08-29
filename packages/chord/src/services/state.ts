@@ -1,4 +1,4 @@
-import { BACKGROUND_CONTEXT, deriveCancellableContext } from "../context/index.ts";
+import { BACKGROUND_CONTEXT } from "../context/index.ts";
 import type { Context, JsonValue, MutableReplicatedState, ReplicatedState } from "../types.ts";
 import { registerReplicatedStateInternals } from "./state-internals.ts";
 
@@ -41,7 +41,7 @@ export class MutableReplicatedStateImpl<T> implements MutableReplicatedState<T> 
 
 	subscribe(listener: (value: T, context: Context) => void): () => void {
 		this.#listeners.add(listener);
-		listener(this.value, createDeliveryContext());
+		listener(this.value, serviceDeliveryContext());
 		return () => this.#listeners.delete(listener);
 	}
 }
@@ -63,7 +63,7 @@ export class ReplicatedStateReplica<T extends JsonValue = JsonValue> implements 
 
 	subscribe(listener: (value: T, context: Context) => void): () => void {
 		this.#listeners.add(listener);
-		if (this.#value !== undefined) this.#deliver(listener, this.#value, createDeliveryContext());
+		if (this.#value !== undefined) this.#deliver(listener, this.#value, serviceDeliveryContext());
 		return () => this.#listeners.delete(listener);
 	}
 
@@ -101,8 +101,10 @@ export class ReplicatedStateReplica<T extends JsonValue = JsonValue> implements 
 	}
 }
 
-export function createDeliveryContext(): Context {
-	return deriveCancellableContext(BACKGROUND_CONTEXT).context;
+/** @internal Context for synthetic service deliveries without a caller. */
+export function serviceDeliveryContext(): Context {
+	// TODO: Add delivery-scoped cancellation or metadata if deliveries gain an owned lifecycle.
+	return BACKGROUND_CONTEXT;
 }
 
 function toError(error: unknown): Error {

@@ -1,19 +1,10 @@
-import {
-	deriveCancellableContext,
-	deriveContextValue,
-	deriveContextWithAbortSignal,
-	deriveContextWithoutAbortSignal,
-	waitWithContext,
-} from "./context/index.ts";
 import { FacetKernel } from "./facets/host.ts";
 import { disposeLoadedFacets } from "./facets/loader.ts";
 import { RemoteServiceBindingImpl } from "./services/consumer.ts";
 import { lookupServiceInstanceKey } from "./services/instances.ts";
 import type { RemoteServiceProvider } from "./services/provider.ts";
-import { createDeliveryContext, MutableReplicatedStateImpl } from "./services/state.ts";
+import { MutableReplicatedStateImpl, serviceDeliveryContext } from "./services/state.ts";
 import type {
-	Context,
-	ContextKey,
 	Facet,
 	FacetHost,
 	FacetLoader,
@@ -26,44 +17,6 @@ import type {
 	RemoteServiceContract,
 	Service,
 } from "./types.ts";
-
-export function createContextKey<T>(description: string): ContextKey<T> {
-	return Object.freeze({ token: Symbol(description) });
-}
-
-/** Derive a context containing one additional or replaced value. */
-export function withContextValue<T>(key: ContextKey<T>, value: T, parent: Context): Context {
-	return deriveContextValue(key, value, parent);
-}
-
-/**
- * Derive a context cancelled by either the parent signal or the supplied signal.
- * The parent context remains unchanged.
- */
-export function withAbortSignal(signal: AbortSignal, context: Context): Context {
-	return deriveContextWithAbortSignal(signal, context);
-}
-
-/** Derive a context retaining all values except caller cancellation. Intended for mandatory cleanup only. */
-export function withoutAbortSignal(context: Context): Context {
-	return deriveContextWithoutAbortSignal(context);
-}
-
-/** Derive an independently cancellable child context. */
-export function withCancel(context: Context): {
-	readonly context: Context;
-	readonly cancel: (reason?: unknown) => void;
-} {
-	return deriveCancellableContext(context);
-}
-
-/**
- * Observe a promise until it settles or the invocation is cancelled.
- * Cancellation rejects only this waiter; it does not cancel the underlying promise.
- */
-export function awaitWithContext<T>(promise: Promise<T>, context: Context): Promise<T> {
-	return waitWithContext(promise, context);
-}
 
 /** Create an active host for one complete set of facets. */
 export async function createFacetHost(options: FacetOptions): Promise<FacetHost> {
@@ -151,7 +104,7 @@ export function createLoopbackServiceConnection(provider: RemoteServiceProvider)
 		invoke: (call, context) => provider.invoke(call, context),
 		subscribe: async (serviceId, mode, listener) => {
 			const subscription = provider.subscribe(serviceId, mode, (update) =>
-				listener(update, createDeliveryContext()),
+				listener(update, serviceDeliveryContext()),
 			);
 			return {
 				snapshot: subscription.snapshot,
@@ -164,9 +117,4 @@ export function createLoopbackServiceConnection(provider: RemoteServiceProvider)
 
 export function replicatedState<T>(initial: T): MutableReplicatedState<T> {
 	return new MutableReplicatedStateImpl(initial);
-}
-
-/** @publicApiReview Delivery contexts may only be an internal service-replication concern. */
-export function freshDeliveryContext(): Context {
-	return createDeliveryContext();
 }

@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
+import { BACKGROUND_CONTEXT } from "../src/context/index.ts";
 import {
-	BACKGROUND_CONTEXT,
 	type Context,
 	createFacetHost,
 	createLoopbackServiceConnection,

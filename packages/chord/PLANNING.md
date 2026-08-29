@@ -583,10 +583,10 @@ This is a planning aid, not a requirement to create all files immediately.
 packages/chord/
   src/
     index.ts                 platform-neutral public API
-    api.ts                   public functions
-    types.ts                 public types, including strict JSON values
+    api.ts                   root-exported functions
+    types.ts                 root-exported types, including strict JSON values
     context/
-      index.ts               invocation context internals and compatibility entry
+      index.ts               invocation context constants and functions
     errors.ts                lifecycle, service, and RPC errors
     services/
       types.ts               tokens, contracts, modes, snapshots

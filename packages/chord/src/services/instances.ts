@@ -1,4 +1,4 @@
-import { BACKGROUND_CONTEXT, deriveCancellableContext } from "../context/index.ts";
+import { BACKGROUND_CONTEXT, withCancel } from "../context/index.ts";
 import type { Context } from "../types.ts";
 
 const instanceKeys = new WeakMap<object, string>();
@@ -134,7 +134,7 @@ export class InstanceDirectory<TEntry extends InstanceDirectoryEntry> {
 
 	#start(observer: Observer, entry: TEntry): void {
 		if (observer.closed || observer.tasks.has(entry)) return;
-		const { context, cancel } = deriveCancellableContext(BACKGROUND_CONTEXT);
+		const { context, cancel } = withCancel(BACKGROUND_CONTEXT);
 		observer.tasks.set(entry, { cancel });
 		try {
 			void Promise.resolve(observer.handler(entry.service, context)).catch((error: unknown) => {

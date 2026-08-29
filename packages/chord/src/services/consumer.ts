@@ -1,4 +1,4 @@
-import { BACKGROUND_CONTEXT, waitWithContext } from "../context/index.ts";
+import { awaitWithContext, BACKGROUND_CONTEXT } from "../context/index.ts";
 import type {
 	Context,
 	JsonValue,
@@ -14,7 +14,7 @@ import type {
 } from "../types.ts";
 import { RemoteServiceError } from "./errors.ts";
 import { InstanceDirectory, type InstanceDirectoryEntry } from "./instances.ts";
-import { createDeliveryContext, ReplicatedStateReplica } from "./state.ts";
+import { ReplicatedStateReplica, serviceDeliveryContext } from "./state.ts";
 
 type ErrorReporter = (error: Error) => void;
 type ServiceMemberKind = ServiceMemberSnapshot["kind"];
@@ -346,7 +346,7 @@ class KeyedBinding<T> {
 		if (subscription.snapshot.mode !== "keyed" || subscription.snapshot.serviceId !== this.#service.id) {
 			throw new Error(`Remote service ${this.#service.id} returned the wrong keyed snapshot`);
 		}
-		for (const snapshot of subscription.snapshot.instances) this.#spawn(snapshot, createDeliveryContext());
+		for (const snapshot of subscription.snapshot.instances) this.#spawn(snapshot, serviceDeliveryContext());
 		this.#instances.ready();
 		subscription.activate();
 	}
@@ -500,7 +500,7 @@ export class RemoteServiceBindingImpl implements RemoteServiceBinding {
 				),
 				...[...this.#keyed.values()].map((binding) => binding.ready()),
 			];
-			await waitWithContext(
+			await awaitWithContext(
 				Promise.all(starts).then(() => undefined),
 				context,
 			);
@@ -595,7 +595,7 @@ export class RemoteServiceBindingImpl implements RemoteServiceBinding {
 		if (snapshot.mode !== "singleton" || snapshot.serviceId !== serviceId || snapshot.instances.length !== 1) {
 			throw new Error(`Remote service ${serviceId} returned an invalid singleton snapshot`);
 		}
-		binding.facade.install(snapshot.instances[0]!, createDeliveryContext());
+		binding.facade.install(snapshot.instances[0]!, serviceDeliveryContext());
 		subscription.activate();
 	}
 

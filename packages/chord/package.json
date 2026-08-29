@@ -7,8 +7,19 @@
 	"types": "./dist/index.d.ts",
 	"exports": {
 		".": {
+			"source": "./src/index.ts",
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
+		},
+		"./context": {
+			"source": "./src/context.ts",
+			"types": "./dist/context.d.ts",
+			"import": "./dist/context.js"
+		},
+		"./json": {
+			"source": "./src/json.ts",
+			"types": "./dist/json.d.ts",
+			"import": "./dist/json.js"
 		},
 		"./package.json": "./package.json"
 	},

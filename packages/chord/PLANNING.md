@@ -1,6 +1,6 @@
 # Chord implementation plan
 
-> **Status:** Planning document. This describes the intended scope and implementation sequence; it is not a public API contract yet.
+> **Status:** Active implementation plan. Context, strict JSON, replicated state, service publication/consumption, and the facet host/loader now live in Chord. Symmetric RPC, generation loading, and bundling remain planned. This is not a stable public API contract yet.
 
 ## 1. Goal
 
@@ -90,13 +90,13 @@ Applications may define their own context keys. A Pi adapter can carry telemetry
 
 A context object never crosses RPC as a business value. The calling peer sends cancellation control and, if configured, an opaque strict-JSON metadata carrier. The receiving adapter constructs a fresh local context. The adapter, not remote business arguments, installs authenticated local identity.
 
-Chord will own a strict `JsonValue` type and runtime check. Remote arguments, results, errors, snapshots, updates, catalogues, and RPC envelopes must be finite strict JSON:
+Chord owns the static `JsonValue` contract. The current implementation deliberately performs no recursive runtime validation; concrete serializers are responsible for rejecting unsupported values. Remote arguments, results, errors, snapshots, updates, catalogues, and RPC envelopes are expected to be finite strict JSON:
 
 - finite numbers only;
 - no `undefined`, sparse arrays, symbols, prototypes, cycles, classes, functions, `Map`, or `Set`; and
 - `null`, rather than `undefined`, for business-level absence.
 
-Application schema validation remains the application's responsibility. Chord validates generic envelopes and the strict-JSON boundary, not every application's DTO shape.
+Application schema validation remains the application's responsibility. Chord validates structural control envelopes, but runtime enforcement of the strict-JSON boundary is currently deferred to serializers.
 
 ## 5. Plugins and lifecycle
 

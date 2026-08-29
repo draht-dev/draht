@@ -1,7 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
-const chordSrcIndex = fileURLToPath(new URL("../chord/src/index.ts", import.meta.url));
 const telemetrySrcIndex = fileURLToPath(new URL("../telemetry/src/index.ts", import.meta.url));
 const aiSrcIndex = fileURLToPath(new URL("../ai/src/index.ts", import.meta.url));
 const aiSrcCompat = fileURLToPath(new URL("../ai/src/compat.ts", import.meta.url));
@@ -22,8 +21,8 @@ export default defineConfig({
 		// giving tests a second copy of module state — the provider registry the harness
 		// tests mutate via `createModels()` / `models.setProvider()` would not be the one the
 		// agent runtime reads. See packages/coding-agent/vitest.config.ts for the same fix.
+		conditions: ["source"],
 		alias: [
-			{ find: /^@draht\/chord$/, replacement: chordSrcIndex },
 			{ find: /^@draht\/telemetry$/, replacement: telemetrySrcIndex },
 			{ find: /^@draht\/agent-core$/, replacement: agentSrcIndex },
 			{ find: /^@draht\/ai$/, replacement: aiSrcIndex },
@@ -31,4 +30,5 @@ export default defineConfig({
 			{ find: /^@draht\/ai\/providers\/(.+)$/, replacement: `${aiSrcProviders}/$1.ts` },
 		],
 	},
+	ssr: { resolve: { conditions: ["source"] } },
 });

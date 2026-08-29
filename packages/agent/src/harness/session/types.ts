@@ -1,4 +1,5 @@
 import type { AssistantMessage, StopReason, Usage } from "@draht/ai";
+import type { JsonValue } from "@draht/chord/json";
 import type { AgentMessage, QueueMode, ThinkingLevel } from "../../types.ts";
 import type { BranchPreparation } from "../compaction/branch-summarization.ts";
 import type { CompactionPreparation, CompactionSettings } from "../compaction/compaction.ts";
@@ -6,7 +7,7 @@ import type { Context } from "../context.ts";
 import type { AgentHarnessStreamOptions } from "../types.ts";
 import type { ListElement, ListReadOptions, ListWrite, StoredValue, Value, ValueList, ValueWrite } from "./values.ts";
 
-export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+export type { JsonValue } from "@draht/chord/json";
 
 export type SettledAssistantMessage = AssistantMessage & {
 	stopReason: Exclude<StopReason, "pending">;

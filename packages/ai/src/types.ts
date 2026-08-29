@@ -1,3 +1,4 @@
+import type { JsonValue } from "@draht/chord/json";
 import type { TelemetryContext } from "@draht/telemetry";
 import type { AnthropicOptions } from "./api/anthropic-messages.ts";
 import type { AzureOpenAIResponsesOptions } from "./api/azure-openai-responses.ts";
@@ -404,7 +405,7 @@ export interface Usage {
 
 export type StopReason = "pending" | "stop" | "length" | "toolUse" | "error" | "aborted" | "deferred";
 
-export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+export type { JsonValue } from "@draht/chord/json";
 
 export interface DeferredHandle {
 	provider: string;

@@ -1,4 +1,4 @@
-import type { Facet } from "./facets.ts";
+import type { Facet } from "./types.ts";
 
 export interface LoadedFacets {
 	readonly facets: readonly Facet[];

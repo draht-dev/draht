@@ -137,7 +137,6 @@ export {
 } from "./harness/types.ts";
 export * from "./harness/utils/shell-output.ts";
 export * from "./harness/utils/truncate.ts";
-export * from "./plugins/services/index.ts";
 export * from "./proxy.ts";
 export * from "./search/index.ts";
 export { setDefaultStreamFn } from "./stream-fn.ts";

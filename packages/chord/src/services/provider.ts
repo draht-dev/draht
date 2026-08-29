@@ -1,48 +1,20 @@
-import type { Context } from "../../harness/context.ts";
-import type { JsonValue } from "../../harness/session/types.ts";
-import {
-	freshDeliveryContext,
-	getReplicatedStateInternals,
-	type ReplicatedStateInternals,
-} from "./replicated-state.ts";
-import {
-	cloneJson,
-	isJsonValue,
-	type RemoteServiceConnection,
-	type RemoteServiceContract,
-	type Service,
-	type ServiceCall,
-	type ServiceCatalogueEntry,
-	type ServiceInstanceAddress,
-	type ServiceInstanceSnapshot,
-	type ServiceMemberDescription,
-	type ServiceMode,
-	type ServiceProviderDefinition,
-	type ServiceProviderSubscription,
-	type ServiceProviderUpdate,
-	type ServiceSubscriptionSnapshot,
-} from "./types.ts";
-
-export type RemoteServiceErrorCode =
-	| "service_not_allowed"
-	| "service_not_found"
-	| "service_mode_mismatch"
-	| "service_member_not_found"
-	| "service_member_mismatch"
-	| "service_instance_not_found"
-	| "service_stale_instance"
-	| "service_invalid_value"
-	| "service_not_implemented";
-
-export class RemoteServiceError extends Error {
-	readonly code: RemoteServiceErrorCode;
-
-	constructor(code: RemoteServiceErrorCode, message: string) {
-		super(message);
-		this.name = "RemoteServiceError";
-		this.code = code;
-	}
-}
+import type { Context } from "../context.ts";
+import type { JsonValue } from "../json.ts";
+import { freshDeliveryContext } from "../state.ts";
+import { getReplicatedStateInternals, type ReplicatedStateInternals } from "../state-internals.ts";
+import type { RemoteServiceContract, Service, ServiceMode } from "./contracts.ts";
+import { RemoteServiceError } from "./errors.ts";
+import type {
+	RemoteServiceConnection,
+	ServiceCall,
+	ServiceCatalogueEntry,
+	ServiceInstanceAddress,
+	ServiceInstanceSnapshot,
+	ServiceMemberSnapshot,
+	ServiceProviderUpdate,
+	ServiceSubscription,
+	ServiceSubscriptionSnapshot,
+} from "./protocol.ts";
 
 type RemoteMethod = (...args: unknown[]) => unknown;
 
@@ -65,6 +37,11 @@ interface ProviderSubscriber {
 	closed: boolean;
 }
 
+interface ServiceProviderDefinition {
+	readonly service: { readonly id: string; readonly local?: boolean };
+	readonly mode: ServiceMode;
+}
+
 interface ServiceRegistration {
 	readonly serviceId: string;
 	readonly mode: ServiceMode;
@@ -75,7 +52,6 @@ interface ServiceRegistration {
 }
 
 export class RemoteServiceProvider {
-	readonly #allowlist: ReadonlySet<string>;
 	readonly #catalogue: readonly ServiceCatalogueEntry[];
 	readonly #registrations = new Map<string, ServiceRegistration>();
 	#disposed = false;
@@ -91,7 +67,6 @@ export class RemoteServiceProvider {
 		}
 		const ids = definitions.map(({ service }) => service.id);
 		if (new Set(ids).size !== ids.length) throw new TypeError("Remote service catalogue contains duplicate IDs");
-		this.#allowlist = new Set(ids);
 		this.#catalogue = Object.freeze(
 			definitions.map(({ service, mode }) => Object.freeze({ serviceId: service.id, mode })),
 		);
@@ -114,7 +89,7 @@ export class RemoteServiceProvider {
 		this.#assertActive();
 		this.#assertRemotable(service);
 		this.#assertAllowed(service.id);
-		const registration = this.#registration(service.id, "singleton", true);
+		const registration = this.#registration(service.id, "singleton");
 		if (registration.singleton !== undefined) {
 			throw new RemoteServiceError("service_mode_mismatch", `Remote service ${service.id} already has a provider`);
 		}
@@ -127,7 +102,7 @@ export class RemoteServiceProvider {
 		this.#assertActive();
 		this.#assertRemotable(service);
 		this.#assertAllowed(service.id);
-		const registration = this.#registration(service.id, "singleton", false);
+		const registration = this.#registration(service.id, "singleton");
 		const previous = registration.singleton;
 		if (previous === undefined) return;
 		previous.active = false;
@@ -141,7 +116,7 @@ export class RemoteServiceProvider {
 		this.#assertActive();
 		this.#assertRemotable(service);
 		this.#assertAllowed(service.id);
-		const registration = this.#registration(service.id, "singleton", false);
+		const registration = this.#registration(service.id, "singleton");
 		const replacement = this.#classifyInstance(registration, implementation, undefined);
 		const previous = registration.singleton;
 		if (previous !== undefined) {
@@ -168,7 +143,7 @@ export class RemoteServiceProvider {
 		this.#assertRemotable(service);
 		this.#assertAllowed(service.id);
 		if (key.length === 0) throw new TypeError("Remote service instance key must not be empty");
-		const registration = this.#registration(service.id, "keyed", true);
+		const registration = this.#registration(service.id, "keyed");
 		if (registration.instances.has(key)) {
 			throw new RemoteServiceError(
 				"service_mode_mismatch",
@@ -196,9 +171,6 @@ export class RemoteServiceProvider {
 	async invoke(call: ServiceCall, context: Context): Promise<JsonValue | undefined> {
 		this.#assertActive();
 		this.#assertAllowed(call.serviceId);
-		if (!call.args.every(isJsonValue)) {
-			throw new RemoteServiceError("service_invalid_value", "Remote service arguments must be strict JSON");
-		}
 		const registration = this.#registrations.get(call.serviceId);
 		if (registration === undefined) {
 			throw new RemoteServiceError("service_not_found", `Unknown remote service ${call.serviceId}`);
@@ -217,23 +189,18 @@ export class RemoteServiceProvider {
 				`Remote service member ${call.serviceId}.${call.member} is not a method`,
 			);
 		}
-		const args = call.args.map((value) => cloneJson(value));
-		const result: unknown = await Reflect.apply(member.method, instance.implementation, [...args, context]);
-		if (result === undefined) return undefined;
-		if (!isJsonValue(result)) {
-			throw new RemoteServiceError("service_invalid_value", "Remote service result must be strict JSON or void");
-		}
-		return cloneJson(result);
+		const result: unknown = await Reflect.apply(member.method, instance.implementation, [...call.args, context]);
+		return result as JsonValue | undefined;
 	}
 
 	subscribe(
 		serviceId: string,
 		mode: ServiceMode,
 		listener: (update: ServiceProviderUpdate, context: Context) => void,
-	): ServiceProviderSubscription {
+	): ServiceSubscription {
 		this.#assertActive();
 		this.#assertAllowed(serviceId);
-		const registration = this.#registration(serviceId, mode, mode === "keyed");
+		const registration = this.#registration(serviceId, mode);
 		if (registration.mode === "singleton" && registration.singleton === undefined) {
 			throw new RemoteServiceError("service_not_found", `Remote service ${serviceId} has no provider`);
 		}
@@ -277,26 +244,17 @@ export class RemoteServiceProvider {
 		this.#registrations.clear();
 	}
 
-	#registration(serviceId: string, mode: ServiceMode, create: boolean): ServiceRegistration {
-		const existing = this.#registrations.get(serviceId);
-		if (existing !== undefined) {
-			if (existing.mode !== mode) {
-				throw new RemoteServiceError(
-					"service_mode_mismatch",
-					`Remote service ${serviceId} is ${existing.mode}, not ${mode}`,
-				);
-			}
-			return existing;
+	#registration(serviceId: string, mode: ServiceMode): ServiceRegistration {
+		const registration = this.#registrations.get(serviceId);
+		if (registration === undefined) {
+			throw new RemoteServiceError("service_not_found", `Unknown remote service ${serviceId}`);
 		}
-		if (!create) throw new RemoteServiceError("service_not_found", `Unknown remote service ${serviceId}`);
-		const registration: ServiceRegistration = {
-			serviceId,
-			mode,
-			instances: new Map(),
-			generations: new Map(),
-			subscribers: new Set(),
-		};
-		this.#registrations.set(serviceId, registration);
+		if (registration.mode !== mode) {
+			throw new RemoteServiceError(
+				"service_mode_mismatch",
+				`Remote service ${serviceId} is ${registration.mode}, not ${mode}`,
+			);
+		}
 		return registration;
 	}
 
@@ -305,57 +263,34 @@ export class RemoteServiceProvider {
 		implementation: unknown,
 		address: ServiceInstanceAddress | undefined,
 	): ProviderInstance {
-		if (typeof implementation !== "object" || implementation === null || Array.isArray(implementation)) {
-			throw new TypeError(`Remote service ${registration.serviceId} implementation must be an object`);
-		}
-		const members = new Map<string, InstanceMember>();
+		const classified = classifyRemoteServiceImplementation(registration.serviceId, implementation);
 		const removeMemberListeners: (() => void)[] = [];
 		const instance: ProviderInstance = {
 			...(address === undefined ? {} : { address }),
-			implementation,
-			members,
+			implementation: classified.implementation,
+			members: classified.members,
 			removeMemberListeners,
 			active: true,
 		};
-		for (const name of Object.keys(implementation).sort()) {
-			const descriptor = Object.getOwnPropertyDescriptor(implementation, name);
-			if (descriptor === undefined || !("value" in descriptor)) {
-				throw new TypeError(`Remote service member ${registration.serviceId}.${name} must be a data property`);
-			}
-			if (typeof descriptor.value === "function") {
-				members.set(name, { kind: "method", method: descriptor.value as RemoteMethod });
-				continue;
-			}
-			const state = getReplicatedStateInternals(descriptor.value);
-			if (state !== undefined) {
-				members.set(name, { kind: "state", state });
-				removeMemberListeners.push(
-					state.subscribe((value, sequence, context) => {
-						if (!instance.active) return;
-						if (!isJsonValue(value)) {
-							throw new RemoteServiceError(
-								"service_invalid_value",
-								"Replicated state update must be strict JSON",
-							);
-						}
-						this.#emit(
-							registration,
-							{
-								type: "state",
-								...(address === undefined ? {} : { instance: address }),
-								member: name,
-								sequence,
-								value,
-							},
-							context,
-						);
-					}),
-				);
-				continue;
-			}
-			throw new TypeError(`Remote service member ${registration.serviceId}.${name} is not remotely exposable`);
+		for (const [name, member] of classified.members) {
+			if (member.kind !== "state") continue;
+			removeMemberListeners.push(
+				member.state.subscribe((value, sequence, context) => {
+					if (!instance.active) return;
+					this.#emit(
+						registration,
+						{
+							type: "state",
+							...(address === undefined ? {} : { instance: address }),
+							member: name,
+							sequence,
+							value: value as JsonValue,
+						},
+						context,
+					);
+				}),
+			);
 		}
-		if (members.size === 0) throw new TypeError(`Remote service ${registration.serviceId} has no members`);
 		return instance;
 	}
 
@@ -407,21 +342,22 @@ export class RemoteServiceProvider {
 	}
 
 	#snapshotInstance(instance: ProviderInstance): ServiceInstanceSnapshot {
-		const members: ServiceMemberDescription[] = [];
-		const states: Record<string, { sequence: number; value: JsonValue }> = {};
+		const members: ServiceMemberSnapshot[] = [];
 		for (const [name, member] of instance.members) {
-			members.push({ name, kind: member.kind });
-			if (member.kind === "state") {
-				if (!isJsonValue(member.state.value)) {
-					throw new RemoteServiceError("service_invalid_value", "Replicated state snapshot must be strict JSON");
-				}
-				states[name] = { sequence: member.state.sequence, value: member.state.value };
+			if (member.kind === "method") {
+				members.push({ name, kind: "method" });
+			} else {
+				members.push({
+					name,
+					kind: "state",
+					sequence: member.state.sequence,
+					value: member.state.value as JsonValue,
+				});
 			}
 		}
 		return {
 			...(instance.address === undefined ? {} : { instance: instance.address }),
 			members,
-			states,
 		};
 	}
 
@@ -441,7 +377,7 @@ export class RemoteServiceProvider {
 	}
 
 	#assertAllowed(serviceId: string): void {
-		if (!this.#allowlist.has(serviceId)) {
+		if (!this.#registrations.has(serviceId)) {
 			throw new RemoteServiceError("service_not_allowed", `Remote service ${serviceId} is not allowlisted`);
 		}
 	}
@@ -449,6 +385,38 @@ export class RemoteServiceProvider {
 	#assertActive(): void {
 		if (this.#disposed) throw new Error("Remote service provider is disposed");
 	}
+}
+
+export function validateRemoteServiceImplementation(serviceId: string, implementation: unknown): void {
+	void classifyRemoteServiceImplementation(serviceId, implementation);
+}
+
+function classifyRemoteServiceImplementation(
+	serviceId: string,
+	implementation: unknown,
+): { readonly implementation: object; readonly members: Map<string, InstanceMember> } {
+	if (typeof implementation !== "object" || implementation === null || Array.isArray(implementation)) {
+		throw new TypeError(`Remote service ${serviceId} implementation must be an object`);
+	}
+	const members = new Map<string, InstanceMember>();
+	for (const name of Object.keys(implementation).sort()) {
+		const descriptor = Object.getOwnPropertyDescriptor(implementation, name);
+		if (descriptor === undefined || !("value" in descriptor)) {
+			throw new TypeError(`Remote service member ${serviceId}.${name} must be a data property`);
+		}
+		if (typeof descriptor.value === "function") {
+			members.set(name, { kind: "method", method: descriptor.value as RemoteMethod });
+			continue;
+		}
+		const state = getReplicatedStateInternals(descriptor.value);
+		if (state !== undefined) {
+			members.set(name, { kind: "state", state });
+			continue;
+		}
+		throw new TypeError(`Remote service member ${serviceId}.${name} is not remotely exposable`);
+	}
+	if (members.size === 0) throw new TypeError(`Remote service ${serviceId} has no members`);
+	return { implementation, members };
 }
 
 export function createLoopbackServiceConnection(provider: RemoteServiceProvider): RemoteServiceConnection {

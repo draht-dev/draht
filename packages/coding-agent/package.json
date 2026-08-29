@@ -47,6 +47,7 @@
 		"prepublishOnly": "node ../../scripts/sync-draht-tools.mjs && bun run clean && bun run build"
 	},
 	"dependencies": {
+		"@draht/chord": "workspace:*",
 		"@mariozechner/jiti": "^2.6.2",
 		"@draht/agent-core": "workspace:*",
 		"@draht/ai": "workspace:*",

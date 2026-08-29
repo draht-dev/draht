@@ -1,5 +1,9 @@
 # Coding-Agent Application Hosts and Facets
 
+The application-neutral facet, service, and replicated-state runtime is provided by
+`@draht/chord`. This document specifies how Pi composes that runtime with Pi-owned
+service contracts, process roles, routing, and lifecycle policy.
+
 > **Status:** Design specification for the experimental facet and service architecture.
 
 This document assumes you already understand `AgentHarness`, `AgentLane`, `Session`, `Branch`, `SessionRepo`, and invocation `Context`. Read `rpc.md` for service transport semantics and `telemetry.md` for the telemetry model.

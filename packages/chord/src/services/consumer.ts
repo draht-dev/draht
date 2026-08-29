@@ -1,80 +1,32 @@
-import { awaitWithContext, BACKGROUND_CONTEXT, type Context, withCancel } from "../../harness/context.ts";
-import type { JsonValue } from "../../harness/session/types.ts";
-import { RemoteServiceError } from "./provider.ts";
-import { freshDeliveryContext } from "./replicated-state.ts";
-import {
-	cloneJson,
-	isJsonValue,
-	type RemoteServiceConnection,
-	type RemoteServiceInstance,
-	type RemoteServiceNamespaceOptions,
-	type RemoteServiceSubscription,
-	type RemoteServices,
-	type ReplicatedState,
-	type Service,
-	type ServiceInstanceAddress,
-	type ServiceInstanceSnapshot,
-	type ServiceMemberDescription,
-	type ServiceMemberKind,
-	type ServiceProviderUpdate,
-	type ServiceStateSnapshot,
-} from "./types.ts";
+import { awaitWithContext, BACKGROUND_CONTEXT, type Context } from "../context.ts";
+import type { JsonValue } from "../json.ts";
+import { freshDeliveryContext, ReplicatedStateReplica } from "../state.ts";
+import type { RemoteServiceInstance, RemoteServices, Service } from "./contracts.ts";
+import { RemoteServiceError } from "./errors.ts";
+import { InstanceDirectory, type InstanceDirectoryEntry } from "./instances.ts";
+import type {
+	RemoteServiceConnection,
+	ServiceInstanceAddress,
+	ServiceInstanceSnapshot,
+	ServiceMemberSnapshot,
+	ServiceProviderUpdate,
+	ServiceSubscription,
+} from "./protocol.ts";
+
+export interface RemoteServiceBindingOptions {
+	readonly services: readonly { readonly id: string }[];
+	readonly connection: RemoteServiceConnection;
+	readonly bound?: boolean;
+	readonly onError?: (error: Error) => void;
+	readonly assertAccess?: () => void;
+}
+
+export interface RemoteServiceBinding extends RemoteServices {
+	rebind(bound: boolean, context: Context): Promise<void>;
+}
 
 type ErrorReporter = (error: Error) => void;
-
-class ReplicatedStateReplica implements ReplicatedState<JsonValue> {
-	readonly #listeners = new Set<(value: JsonValue, context: Context) => void>();
-	readonly #reportError: ErrorReporter;
-	#value: JsonValue | undefined;
-	#sequence: number | undefined;
-
-	constructor(reportError: ErrorReporter) {
-		this.#reportError = reportError;
-	}
-
-	get value(): JsonValue | undefined {
-		return this.#value;
-	}
-
-	subscribe(listener: (value: JsonValue, context: Context) => void): () => void {
-		this.#listeners.add(listener);
-		if (this.#value !== undefined) this.#deliver(listener, this.#value, freshDeliveryContext());
-		return () => this.#listeners.delete(listener);
-	}
-
-	hydrate(snapshot: ServiceStateSnapshot, context: Context): void {
-		this.#sequence = snapshot.sequence;
-		this.#value = snapshot.value;
-		this.#deliverAll(context);
-	}
-
-	update(sequence: number, value: JsonValue, context: Context): void {
-		if (this.#sequence === undefined) throw new Error("Replicated state received an update before hydration");
-		if (sequence <= this.#sequence) return;
-		if (sequence !== this.#sequence + 1) throw new Error("Replicated state update sequence has a gap");
-		this.#sequence = sequence;
-		this.#value = value;
-		this.#deliverAll(context);
-	}
-
-	clear(): void {
-		this.#value = undefined;
-		this.#sequence = undefined;
-	}
-
-	#deliverAll(context: Context): void {
-		if (this.#value === undefined) return;
-		for (const listener of this.#listeners) this.#deliver(listener, this.#value, context);
-	}
-
-	#deliver(listener: (value: JsonValue, context: Context) => void, value: JsonValue, context: Context): void {
-		try {
-			listener(value, context);
-		} catch (error) {
-			this.#reportError(toError(error));
-		}
-	}
-}
+type ServiceMemberKind = ServiceMemberSnapshot["kind"];
 
 class MemberSlot {
 	readonly #serviceId: string;
@@ -131,9 +83,9 @@ class MemberSlot {
 		}
 	}
 
-	hydrate(snapshot: ServiceStateSnapshot, context: Context): void {
+	hydrate(sequence: number, value: JsonValue, context: Context): void {
 		this.setDescription("state");
-		this.#state.hydrate(snapshot, context);
+		this.#state.hydrate(sequence, value, context);
 	}
 
 	update(sequence: number, value: JsonValue, context: Context): void {
@@ -187,19 +139,8 @@ class MemberSlot {
 				),
 			);
 		}
-		const businessArgs = args.slice(0, -1);
-		if (!businessArgs.every(isJsonValue)) {
-			return Promise.reject(
-				new RemoteServiceError(
-					"service_invalid_value",
-					`Remote service method ${this.#serviceId}.${this.#member} arguments must be strict JSON`,
-				),
-			);
-		}
-		return this.#invoke(
-			businessArgs.map((value) => cloneJson(value)),
-			context,
-		);
+		const businessArgs = args.slice(0, -1) as JsonValue[];
+		return this.#invoke(businessArgs, context);
 	}
 }
 
@@ -210,7 +151,6 @@ class ServiceFacade {
 	readonly #reportError: ErrorReporter;
 	readonly #slots = new Map<string, MemberSlot>();
 	readonly #descriptions = new Map<string, ServiceMemberKind>();
-	readonly #stateSnapshots = new Map<string, ServiceStateSnapshot>();
 	readonly #isActive: () => boolean;
 	readonly #assertAccess: () => void;
 	readonly proxy: object;
@@ -240,29 +180,24 @@ class ServiceFacade {
 	install(snapshot: ServiceInstanceSnapshot, context: Context): void {
 		if (!sameAddress(snapshot.instance, this.#address))
 			throw new Error("Remote service snapshot has the wrong address");
-		const descriptions = validateMemberDescriptions(snapshot.members);
+		const members = validateMembers(snapshot.members);
 		for (const name of this.#slots.keys()) {
-			if (!descriptions.has(name)) {
+			if (!members.has(name)) {
 				throw new RemoteServiceError(
 					"service_member_not_found",
 					`Unknown remote service member ${this.#serviceId}.${name}`,
 				);
 			}
 		}
-		for (const [name, kind] of descriptions) {
-			if ((kind === "state") !== Object.hasOwn(snapshot.states, name)) {
-				throw new Error(`Remote service snapshot has invalid state metadata for ${this.#serviceId}.${name}`);
-			}
-		}
 		this.#descriptions.clear();
-		for (const [name, kind] of descriptions) {
-			this.#descriptions.set(name, kind);
-			this.#slots.get(name)?.setDescription(kind);
-		}
-		this.#stateSnapshots.clear();
-		for (const [name, state] of Object.entries(snapshot.states)) {
-			this.#stateSnapshots.set(name, state);
-			this.#slot(name).hydrate(state, context);
+		for (const [name, member] of members) this.#descriptions.set(name, member.kind);
+		for (const member of members.values()) {
+			const slot = this.#slots.get(member.name);
+			if (member.kind === "state") {
+				(slot ?? this.#slot(member.name)).hydrate(member.sequence, member.value, context);
+			} else {
+				slot?.setDescription(member.kind);
+			}
 		}
 	}
 
@@ -270,14 +205,11 @@ class ServiceFacade {
 		if (this.#descriptions.get(member) !== "state") {
 			throw new Error(`Remote service update targets non-state member ${this.#serviceId}.${member}`);
 		}
-		const snapshot = { sequence, value };
-		this.#stateSnapshots.set(member, snapshot);
 		this.#slot(member).update(sequence, value, context);
 	}
 
 	clear(): void {
 		for (const slot of this.#slots.values()) slot.clear();
-		this.#stateSnapshots.clear();
 	}
 
 	#slot(member: string): MemberSlot {
@@ -302,8 +234,6 @@ class ServiceFacade {
 		);
 		const kind = this.#descriptions.get(member);
 		if (kind !== undefined) slot.setDescription(kind);
-		const state = this.#stateSnapshots.get(member);
-		if (state !== undefined) slot.hydrate(state, freshDeliveryContext());
 		this.#slots.set(member, slot);
 		return slot;
 	}
@@ -311,26 +241,14 @@ class ServiceFacade {
 
 interface SingletonBinding {
 	facade: ServiceFacade;
-	subscription?: RemoteServiceSubscription;
+	subscription?: ServiceSubscription;
 	starting?: Promise<void>;
 	active: boolean;
 	revision: number;
 }
 
-interface KeyedInstance {
-	readonly address: ServiceInstanceAddress;
-	facade: ServiceFacade;
-	active: boolean;
-}
-
-interface ObserverTask {
-	readonly cancel: (reason?: unknown) => void;
-}
-
-interface ObserverRegistration<T> {
-	readonly handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>;
-	readonly tasks: Map<string, ObserverTask>;
-	closed: boolean;
+interface KeyedInstance extends InstanceDirectoryEntry {
+	readonly facade: ServiceFacade;
 }
 
 class KeyedBinding<T> {
@@ -339,13 +257,11 @@ class KeyedBinding<T> {
 	readonly #reportError: ErrorReporter;
 	readonly #assertAccess: () => void;
 	readonly #onEmpty: () => void;
-	readonly #instances = new Map<string, KeyedInstance>();
-	readonly #observers = new Set<ObserverRegistration<T>>();
-	#subscription: RemoteServiceSubscription | undefined;
+	readonly #instances: InstanceDirectory<KeyedInstance>;
+	#subscription: ServiceSubscription | undefined;
 	#starting: Promise<void> | undefined;
 	#closed = false;
 	#bound: boolean;
-	#hydrated = false;
 	#revision = 0;
 
 	constructor(
@@ -362,15 +278,12 @@ class KeyedBinding<T> {
 		this.#assertAccess = assertAccess;
 		this.#onEmpty = onEmpty;
 		this.#bound = bound;
+		this.#instances = new InstanceDirectory({ ready: false, onError: reportError });
 	}
 
-	observe(handler: ObserverRegistration<T>["handler"]): () => void {
+	observe(handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>): () => void {
 		if (this.#closed) throw new Error("Remote keyed service binding is closed");
-		const observer: ObserverRegistration<T> = { handler, tasks: new Map(), closed: false };
-		this.#observers.add(observer);
-		if (this.#hydrated) {
-			for (const instance of this.#instances.values()) this.#startTask(observer, instance);
-		}
+		const stop = this.#instances.observe(handler);
 		if (this.#bound && this.#starting === undefined) {
 			const revision = this.#revision;
 			const starting = this.#start(revision);
@@ -379,13 +292,12 @@ class KeyedBinding<T> {
 				if (!this.#closed && this.#revision === revision && this.#bound) this.#reportError(toError(error));
 			});
 		}
+		let stopped = false;
 		return () => {
-			if (observer.closed) return;
-			observer.closed = true;
-			for (const task of observer.tasks.values()) task.cancel();
-			observer.tasks.clear();
-			this.#observers.delete(observer);
-			if (this.#observers.size === 0) this.#onEmpty();
+			if (stopped) return;
+			stopped = true;
+			stop();
+			if (this.#instances.observerCount === 0) this.#onEmpty();
 		};
 	}
 
@@ -395,7 +307,7 @@ class KeyedBinding<T> {
 		const revision = ++this.#revision;
 		await this.#reset(context, false);
 		if (this.#closed || this.#revision !== revision || this.#bound !== bound) return;
-		if (bound && this.#observers.size > 0) {
+		if (bound && this.#instances.observerCount > 0) {
 			const starting = this.#start(revision);
 			this.#starting = starting;
 			await starting;
@@ -411,21 +323,11 @@ class KeyedBinding<T> {
 		this.#closed = true;
 		this.#revision += 1;
 		await this.#reset(context, true);
-		for (const observer of this.#observers) observer.closed = true;
-		this.#observers.clear();
+		this.#instances.dispose();
 	}
 
 	async #reset(context: Context, waitForStarting: boolean): Promise<void> {
-		for (const observer of this.#observers) {
-			for (const task of observer.tasks.values()) task.cancel();
-			observer.tasks.clear();
-		}
-		for (const instance of this.#instances.values()) {
-			instance.active = false;
-			instance.facade.clear();
-		}
-		this.#instances.clear();
-		this.#hydrated = false;
+		this.#instances.reset();
 		const starting = this.#starting;
 		this.#starting = undefined;
 		const subscription = this.#subscription;
@@ -453,11 +355,8 @@ class KeyedBinding<T> {
 		if (subscription.snapshot.mode !== "keyed" || subscription.snapshot.serviceId !== this.#service.id) {
 			throw new Error(`Remote service ${this.#service.id} returned the wrong keyed snapshot`);
 		}
-		for (const snapshot of subscription.snapshot.instances) this.#spawn(snapshot, freshDeliveryContext(), false);
-		this.#hydrated = true;
-		for (const observer of this.#observers) {
-			for (const instance of this.#instances.values()) this.#startTask(observer, instance);
-		}
+		for (const snapshot of subscription.snapshot.instances) this.#spawn(snapshot, freshDeliveryContext());
+		this.#instances.ready();
 		subscription.activate();
 	}
 
@@ -469,15 +368,17 @@ class KeyedBinding<T> {
 				case "replaced":
 					throw new Error("Keyed service received a singleton lifecycle update");
 				case "spawned":
-					this.#spawn(update.instance, context, true);
+					this.#spawn(update.instance, context);
 					break;
-				case "closed":
-					this.#closeInstance(update.instance);
+				case "closed": {
+					const instance = this.#instances.get(update.instance.key);
+					if (instance?.generation === update.instance.generation) this.#instances.remove(instance);
 					break;
+				}
 				case "state": {
 					if (update.instance === undefined) throw new Error("Keyed state update has no instance address");
 					const instance = this.#instances.get(update.instance.key);
-					if (instance?.address.generation !== update.instance.generation) return;
+					if (instance?.generation !== update.instance.generation) return;
 					instance.facade.update(update.member, update.sequence, update.value, context);
 					break;
 				}
@@ -487,66 +388,33 @@ class KeyedBinding<T> {
 		}
 	}
 
-	#spawn(snapshot: ServiceInstanceSnapshot, context: Context, startTasks: boolean): void {
+	#spawn(snapshot: ServiceInstanceSnapshot, context: Context): void {
 		const address = snapshot.instance;
 		if (address === undefined) throw new Error("Keyed service instance snapshot has no address");
-		const previous = this.#instances.get(address.key);
-		if (previous !== undefined) {
-			if (previous.address.generation === address.generation)
-				throw new Error("Keyed service repeated a live generation");
-			this.#closeInstance(previous.address);
-		}
-		const instance: KeyedInstance = {
-			address,
-			active: true,
-			facade: undefined as unknown as ServiceFacade,
-		};
-		instance.facade = new ServiceFacade(
+		let active = true;
+		const facade = new ServiceFacade(
 			this.#service.id,
 			address,
 			this.#connection,
-			() => instance.active && !this.#closed,
+			() => active && !this.#closed,
 			this.#assertAccess,
 			this.#reportError,
 		);
-		instance.facade.install(snapshot, context);
-		this.#instances.set(address.key, instance);
-		if (startTasks && this.#hydrated) {
-			for (const observer of this.#observers) this.#startTask(observer, instance);
-		}
-	}
-
-	#closeInstance(address: ServiceInstanceAddress): void {
-		const instance = this.#instances.get(address.key);
-		if (instance?.address.generation !== address.generation) return;
-		instance.active = false;
-		instance.facade.clear();
-		this.#instances.delete(address.key);
-		const taskKey = instanceTaskKey(address);
-		for (const observer of this.#observers) {
-			observer.tasks.get(taskKey)?.cancel();
-			observer.tasks.delete(taskKey);
-		}
-	}
-
-	#startTask(observer: ObserverRegistration<T>, instance: KeyedInstance): void {
-		if (observer.closed || !instance.active) return;
-		const key = instanceTaskKey(instance.address);
-		if (observer.tasks.has(key)) return;
-		const { context, cancel } = withCancel(BACKGROUND_CONTEXT);
-		observer.tasks.set(key, { cancel });
-		const exposed = { key: instance.address.key, service: instance.facade.proxy as T };
-		try {
-			void Promise.resolve(observer.handler(exposed, context)).catch((error: unknown) => {
-				if (!context.abortSignal?.aborted) this.#reportError(toError(error));
-			});
-		} catch (error) {
-			if (!context.abortSignal?.aborted) this.#reportError(toError(error));
-		}
+		facade.install(snapshot, context);
+		this.#instances.replace({
+			key: address.key,
+			generation: address.generation,
+			service: facade.proxy,
+			facade,
+			deactivate: () => {
+				active = false;
+				facade.clear();
+			},
+		});
 	}
 }
 
-export class RemoteServiceNamespace implements RemoteServices {
+class RemoteServiceBindingImpl implements RemoteServiceBinding {
 	readonly #connection: RemoteServiceConnection;
 	readonly #allowlist = new Set<string>();
 	readonly #reportError: ErrorReporter;
@@ -559,10 +427,10 @@ export class RemoteServiceNamespace implements RemoteServices {
 	#bindingTransition = Promise.resolve();
 	#disposed = false;
 
-	constructor(options: RemoteServiceNamespaceOptions) {
+	constructor(options: RemoteServiceBindingOptions) {
 		this.#connection = options.connection;
 		const ids = options.services.map(({ id }) => id);
-		if (new Set(ids).size !== ids.length) throw new TypeError("Remote service namespace has duplicate service IDs");
+		if (new Set(ids).size !== ids.length) throw new TypeError("Remote service binding has duplicate service IDs");
 		for (const id of ids) this.#allowlist.add(id);
 		this.#reportError = options.onError ?? (() => {});
 		this.#assertAccess = options.assertAccess ?? (() => {});
@@ -634,7 +502,7 @@ export class RemoteServiceNamespace implements RemoteServices {
 	}
 
 	async ready(context: Context): Promise<void> {
-		if (this.#disposed) throw new Error("Remote service namespace is disposed");
+		if (this.#disposed) throw new Error("Remote service binding is disposed");
 		while (true) {
 			const revision = this.#readinessRevision;
 			const starts = [
@@ -648,13 +516,13 @@ export class RemoteServiceNamespace implements RemoteServices {
 				Promise.all(starts).then(() => undefined),
 				context,
 			);
-			if (this.#disposed) throw new Error("Remote service namespace is disposed");
+			if (this.#disposed) throw new Error("Remote service binding is disposed");
 			if (revision === this.#readinessRevision) return;
 		}
 	}
 
 	async rebind(bound: boolean, context: Context): Promise<void> {
-		if (this.#disposed) throw new Error("Remote service namespace is disposed");
+		if (this.#disposed) throw new Error("Remote service binding is disposed");
 		this.#bound = bound;
 		this.#readinessRevision += 1;
 		const transitions: Promise<void>[] = [];
@@ -748,7 +616,7 @@ export class RemoteServiceNamespace implements RemoteServices {
 	}
 
 	#assertAvailable(serviceId: string, mode: "singleton" | "keyed"): void {
-		if (this.#disposed) throw new Error("Remote service namespace is disposed");
+		if (this.#disposed) throw new Error("Remote service binding is disposed");
 		if (!this.#allowlist.has(serviceId)) {
 			throw new RemoteServiceError("service_not_allowed", `Remote service ${serviceId} is not allowlisted`);
 		}
@@ -763,13 +631,17 @@ export class RemoteServiceNamespace implements RemoteServices {
 	}
 }
 
-function validateMemberDescriptions(
-	descriptions: readonly ServiceMemberDescription[],
-): ReadonlyMap<string, ServiceMemberKind> {
-	const result = new Map<string, ServiceMemberKind>();
-	for (const { name, kind } of descriptions) {
-		if (name.length === 0 || result.has(name)) throw new Error("Remote service has invalid member descriptions");
-		result.set(name, kind);
+export function createRemoteServiceBinding(options: RemoteServiceBindingOptions): RemoteServiceBinding {
+	return new RemoteServiceBindingImpl(options);
+}
+
+function validateMembers(members: readonly ServiceMemberSnapshot[]): ReadonlyMap<string, ServiceMemberSnapshot> {
+	const result = new Map<string, ServiceMemberSnapshot>();
+	for (const member of members) {
+		if (member.name.length === 0 || result.has(member.name)) {
+			throw new Error("Remote service has invalid member descriptions");
+		}
+		result.set(member.name, member);
 	}
 	return result;
 }
@@ -777,10 +649,6 @@ function validateMemberDescriptions(
 function sameAddress(left: ServiceInstanceAddress | undefined, right: ServiceInstanceAddress | undefined): boolean {
 	if (left === undefined || right === undefined) return left === right;
 	return left.key === right.key && left.generation === right.generation;
-}
-
-function instanceTaskKey(address: ServiceInstanceAddress): string {
-	return `${address.key}\0${address.generation}`;
 }
 
 function isContext(value: unknown): value is Context {

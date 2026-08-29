@@ -1,15 +1,17 @@
+import { describe, expect, test, vi } from "vitest";
 import {
 	BACKGROUND_CONTEXT,
 	type Context,
+	createFacetHost,
 	createLoopbackServiceConnection,
+	createRemoteServiceBinding,
+	defineFacet,
 	defineService,
+	type FacetConnection,
 	type MutableReplicatedState,
-	RemoteServiceNamespace,
 	RemoteServiceProvider,
 	type ReplicatedState,
-} from "@draht/agent-core";
-import { describe, expect, test, vi } from "vitest";
-import { createFacetHost, defineFacet, type FacetConnection } from "../src/experimental/facets.ts";
+} from "../src/index.ts";
 
 interface Source {
 	read(context: Context): Promise<string>;
@@ -59,7 +61,7 @@ const LeftValue = defineService<LeftValue>("test.experimental.left-value");
 const RightValue = defineService<RightValue>("test.experimental.right-value");
 const CombinedValue = defineService<CombinedValue>("test.experimental.combined-value");
 
-describe("experimental facet host", () => {
+describe("facet host", () => {
 	test("discovers setup dependencies before connecting stable service handles", async () => {
 		const trace: string[] = [];
 		let sourceHandle: Source | undefined;
@@ -140,7 +142,7 @@ describe("experimental facet host", () => {
 		await vi.waitFor(() => expect(trace).toContain("observe one"));
 
 		expect(trace).toEqual(["activate provider", "activate observer", "observe one"]);
-		const remoteServices = new RemoteServiceNamespace({
+		const remoteServices = createRemoteServiceBinding({
 			services: [KeyedValue],
 			connection: createLoopbackServiceConnection(host.services),
 		});
@@ -268,12 +270,12 @@ describe("experimental facet host", () => {
 				return "right";
 			},
 		});
-		const leftNamespace = new RemoteServiceNamespace({
+		const leftNamespace = createRemoteServiceBinding({
 			services: [LeftValue],
 			connection: createLoopbackServiceConnection(leftProvider),
 			bound: false,
 		});
-		const rightNamespace = new RemoteServiceNamespace({
+		const rightNamespace = createRemoteServiceBinding({
 			services: [RightValue],
 			connection: createLoopbackServiceConnection(rightProvider),
 			bound: false,
@@ -362,7 +364,7 @@ describe("experimental facet host", () => {
 			},
 			open(options) {
 				opened += 1;
-				const namespace = new RemoteServiceNamespace({
+				const namespace = createRemoteServiceBinding({
 					services: options.services,
 					connection: createLoopbackServiceConnection(currentProvider),
 					bound: false,

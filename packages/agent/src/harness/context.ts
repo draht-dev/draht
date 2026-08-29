@@ -1,4 +1,4 @@
-import { type Context, createContextKey, withContextValue } from "@draht/chord";
+import { type Context, createContextKey, withContextValue } from "@draht/chord/context";
 import { NOOP_TELEMETRY_CONTEXT, type TelemetryContext } from "@draht/telemetry";
 
 export {
@@ -12,7 +12,7 @@ export {
 	withCancel,
 	withContextValue,
 	withoutAbortSignal,
-} from "@draht/chord";
+} from "@draht/chord/context";
 
 const TELEMETRY_CONTEXT_KEY = createContextKey<TelemetryContext>("pi.telemetryContext");
 

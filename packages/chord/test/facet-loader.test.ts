@@ -1,13 +1,16 @@
+import { describe, expect, test, vi } from "vitest";
 import {
 	BACKGROUND_CONTEXT,
 	type Context,
+	combineFacetLoaders,
+	createFacetHost,
 	createLoopbackServiceConnection,
+	createRemoteServiceBinding,
+	createStaticFacetLoader,
+	defineFacet,
 	defineService,
-	RemoteServiceNamespace,
-} from "@draht/agent-core";
-import { describe, expect, test, vi } from "vitest";
-import { combineFacetLoaders, createStaticFacetLoader, type FacetLoader } from "../src/experimental/facet-loader.ts";
-import { createFacetHost, defineFacet } from "../src/experimental/facets.ts";
+	type FacetLoader,
+} from "../src/index.ts";
 
 interface GenerationValue {
 	read(context: Context): Promise<string>;
@@ -21,7 +24,7 @@ const RemoteGenerationValue = defineService<GenerationValue>("test.experimental.
 const firstFacet = defineFacet({ id: "first", setup() {} });
 const secondFacet = defineFacet({ id: "second", setup() {} });
 
-describe("experimental facet loader", () => {
+describe("facet loader", () => {
 	test("combines loaded facets in loader order and disposes generations in reverse", async () => {
 		const trace: string[] = [];
 		const first: FacetLoader = {
@@ -138,7 +141,7 @@ describe("experimental facet loader", () => {
 		const host = await createFacetHost({ facets: [consumer, ...loadedA.facets] });
 		const originalLocalHandle = localValue!;
 		const localRead = originalLocalHandle.read;
-		const remoteServices = new RemoteServiceNamespace({
+		const remoteServices = createRemoteServiceBinding({
 			services: [RemoteGenerationValue],
 			connection: createLoopbackServiceConnection(host.services),
 		});

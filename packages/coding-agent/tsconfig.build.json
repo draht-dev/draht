@@ -3,6 +3,7 @@
 	"compilerOptions": {
 		"outDir": "./dist",
 		"paths": {
+			"@draht/chord": ["../chord/dist/index.d.ts"],
 			"@draht/agent-core": ["../agent/dist/index.d.ts"],
 			"@draht/agent-core/*": ["../agent/dist/*.d.ts"],
 			"@draht/ai": ["../ai/dist/index.d.ts"],

@@ -1,15 +1,16 @@
 import { describe, expect, test, vi } from "vitest";
-import type { Context } from "../../src/harness/context.ts";
 import {
 	BACKGROUND_CONTEXT,
+	type Context,
 	createLoopbackServiceConnection,
+	createRemoteServiceBinding,
 	defineService,
+	type JsonValue,
 	type RemoteServiceConnection,
-	RemoteServiceNamespace,
 	RemoteServiceProvider,
 	type ReplicatedState,
 	replicatedState,
-} from "../../src/index.ts";
+} from "../src/index.ts";
 
 type ModelRef = { provider: string; modelId: string };
 type ModelsState = {
@@ -31,11 +32,51 @@ interface QuestionDialogs {
 
 const QuestionDialogs = defineService<QuestionDialogs>("test.question-dialog");
 
-describe("plugin remote services", () => {
-	test("marks services remotable by default and permits explicit local services", () => {
+type EchoPayload = { value: string };
+interface Echo {
+	echo(payload: EchoPayload, context: Context): Promise<EchoPayload>;
+}
+
+const Echo = defineService<Echo>("test.echo");
+
+interface JsonPassthrough {
+	call(value: JsonValue, context: Context): Promise<JsonValue>;
+}
+
+interface NonJsonArgument {
+	call(value: Date, context: Context): Promise<void>;
+}
+
+interface NonJsonResult {
+	call(context: Context): Promise<bigint>;
+}
+
+interface NonJsonState {
+	readonly state: ReplicatedState<{ value: undefined }>;
+}
+
+describe("remote services", () => {
+	test("checks remote JSON contracts only at compile time", () => {
+		expect(defineService<JsonPassthrough>("test.json-passthrough").local).toBe(false);
+		const defineInvalidContracts = (): void => {
+			// @ts-expect-error Remote service arguments must be JSON-compatible.
+			defineService<NonJsonArgument>("test.non-json-argument");
+			// @ts-expect-error Remote service results must be JSON-compatible.
+			defineService<NonJsonResult>("test.non-json-result");
+			// @ts-expect-error Replicated state must be JSON-compatible.
+			defineService<NonJsonState>("test.non-json-state");
+		};
+		expect(defineInvalidContracts).not.toThrow();
+		expect(defineService<NonJsonArgument>("test.local-non-json", { local: true }).local).toBe(true);
+	});
+
+	test("marks services remotable by default and reserves Chord service IDs", () => {
 		const local = defineService<{ readonly value: string }>("test.local", { local: true });
 		expect(Models.local).toBe(false);
 		expect(local.local).toBe(true);
+		expect(() => defineService("$chord.internal", { local: true })).toThrow(
+			"Service IDs beginning with $chord. are reserved",
+		);
 		expect(() => new RemoteServiceProvider([local])).toThrow("cannot be published remotely");
 	});
 
@@ -56,6 +97,31 @@ describe("plugin remote services", () => {
 		unsubscribe();
 	});
 
+	test("does not defensively clone method arguments or results", async () => {
+		const provider = new RemoteServiceProvider([Echo]);
+		let received: EchoPayload | undefined;
+		const response: EchoPayload = { value: "response" };
+		provider.provide(Echo, {
+			async echo(payload) {
+				received = payload;
+				return response;
+			},
+		});
+		const namespace = createRemoteServiceBinding({
+			services: [Echo],
+			connection: createLoopbackServiceConnection(provider),
+		});
+		const echo = namespace.use(Echo);
+		await namespace.ready(BACKGROUND_CONTEXT);
+		const request: EchoPayload = { value: "request" };
+
+		await expect(echo.echo(request, BACKGROUND_CONTEXT)).resolves.toBe(response);
+		expect(received).toBe(request);
+
+		await namespace.dispose(BACKGROUND_CONTEXT);
+		provider.dispose();
+	});
+
 	test("provides and consumes one singleton with replicated state", async () => {
 		const provider = new RemoteServiceProvider([Models]);
 		expect(provider.catalogue).toEqual([{ serviceId: Models.id, mode: "singleton" }]);
@@ -70,7 +136,7 @@ describe("plugin remote services", () => {
 			},
 		});
 		const errors: Error[] = [];
-		const namespace = new RemoteServiceNamespace({
+		const namespace = createRemoteServiceBinding({
 			services: [Models],
 			connection: createLoopbackServiceConnection(provider),
 			onError: (error) => errors.push(error),
@@ -97,7 +163,7 @@ describe("plugin remote services", () => {
 		]);
 		expect(errors).toEqual([]);
 
-		const lateNamespace = new RemoteServiceNamespace({
+		const lateNamespace = createRemoteServiceBinding({
 			services: [Models],
 			connection: createLoopbackServiceConnection(provider),
 		});
@@ -116,7 +182,7 @@ describe("plugin remote services", () => {
 			state: replicatedState<ModelsState>({ selected: null, revision: 1 }),
 			async select() {},
 		});
-		const namespace = new RemoteServiceNamespace({
+		const namespace = createRemoteServiceBinding({
 			services: [Models],
 			connection: createLoopbackServiceConnection(provider),
 		});
@@ -155,7 +221,7 @@ describe("plugin remote services", () => {
 			async select() {},
 		});
 		let active = false;
-		const namespace = new RemoteServiceNamespace({
+		const namespace = createRemoteServiceBinding({
 			services: [Models],
 			connection: createLoopbackServiceConnection(provider),
 			bound: false,
@@ -183,7 +249,7 @@ describe("plugin remote services", () => {
 	test("rejects namespace readiness when initial hydration fails", async () => {
 		const failure = new Error("initial hydration failed");
 		const errors: Error[] = [];
-		const namespace = new RemoteServiceNamespace({
+		const namespace = createRemoteServiceBinding({
 			services: [Models],
 			connection: {
 				invoke: () => Promise.reject(new Error("unexpected invocation")),
@@ -218,7 +284,7 @@ describe("plugin remote services", () => {
 				};
 			},
 		};
-		const namespace = new RemoteServiceNamespace({ services: [Models], connection });
+		const namespace = createRemoteServiceBinding({ services: [Models], connection });
 		const models = namespace.use(Models);
 		const revisions: number[] = [];
 		models.state.subscribe((value) => revisions.push(value.revision));
@@ -236,7 +302,7 @@ describe("plugin remote services", () => {
 			state,
 			async select() {},
 		});
-		const namespace = new RemoteServiceNamespace({
+		const namespace = createRemoteServiceBinding({
 			services: [Models],
 			connection: createLoopbackServiceConnection(provider),
 			bound: false,
@@ -271,7 +337,7 @@ describe("plugin remote services", () => {
 		expect(provider.catalogue).toEqual([{ serviceId: QuestionDialogs.id, mode: "keyed" }]);
 		const connection = createLoopbackServiceConnection(provider);
 		const errors: Error[] = [];
-		const namespace = new RemoteServiceNamespace({
+		const namespace = createRemoteServiceBinding({
 			services: [QuestionDialogs],
 			connection,
 			onError: (error) => errors.push(error),
@@ -331,7 +397,7 @@ describe("plugin remote services", () => {
 		provider.dispose();
 	});
 
-	test("rejects mode mixing, unsupported members, and non-JSON values", async () => {
+	test("rejects mode mixing and unsupported members", () => {
 		const provider = new RemoteServiceProvider([Models, { service: QuestionDialogs, mode: "keyed" }]);
 		provider.provide(Models, {
 			state: replicatedState<ModelsState>({ selected: null, revision: 0 }),
@@ -346,16 +412,6 @@ describe("plugin remote services", () => {
 				},
 			}),
 		).toThrow(/not remotely exposable/);
-		await expect(
-			provider.invoke(
-				{
-					serviceId: "test.models",
-					member: "select",
-					args: [Number.NaN as unknown as number],
-				},
-				BACKGROUND_CONTEXT,
-			),
-		).rejects.toMatchObject({ code: "service_invalid_value" });
 		provider.dispose();
 	});
 });

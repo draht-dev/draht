@@ -116,8 +116,8 @@ describe("facet host", () => {
 		const observer = defineFacet({
 			id: "observer",
 			setup(env) {
-				env.observe(KeyedValue, async (instance, context) => {
-					trace.push(`observe ${await instance.service.read(context)}`);
+				env.observe(KeyedValue, async (service, context) => {
+					trace.push(`observe ${await service.read(context)}`);
 				});
 				env.onActivate(() => {
 					trace.push("activate observer");
@@ -130,7 +130,7 @@ describe("facet host", () => {
 				const values = env.provideMany(KeyedValue);
 				env.onActivate(() => {
 					trace.push("activate provider");
-					values.add("one", {
+					values.spawn("one", {
 						async read() {
 							return "one";
 						},
@@ -147,8 +147,8 @@ describe("facet host", () => {
 			connection: createLoopbackServiceConnection(host.services),
 		});
 		const remoteValues: string[] = [];
-		remoteServices.observe(KeyedValue, async (instance, context) => {
-			remoteValues.push(await instance.service.read(context));
+		remoteServices.observe(KeyedValue, async (service, context) => {
+			remoteValues.push(await service.read(context));
 		});
 		await remoteServices.ready(BACKGROUND_CONTEXT);
 		await vi.waitFor(() => expect(remoteValues).toEqual(["one"]));
@@ -162,8 +162,8 @@ describe("facet host", () => {
 		const consumer = defineFacet({
 			id: "local-keyed-consumer",
 			setup(env) {
-				env.observe(LocalKeyedValue, (instance, context) => {
-					observed.push({ service: instance.service, context });
+				env.observe(LocalKeyedValue, (service, context) => {
+					observed.push({ service, context });
 				});
 			},
 		});
@@ -173,7 +173,7 @@ describe("facet host", () => {
 				setup(env) {
 					const values = env.provideMany(LocalKeyedValue);
 					env.onActivate(() => {
-						values.add("current", {
+						values.spawn("current", {
 							metadata: new Map([["value", value]]),
 							read: () => value,
 						});

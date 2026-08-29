@@ -1,5 +1,5 @@
 import { BACKGROUND_CONTEXT, type Context, withCancel } from "../context.ts";
-import type { RemoteServiceInstance } from "./contracts.ts";
+import { registerServiceInstance } from "./metadata.ts";
 
 export interface InstanceDirectoryEntry {
 	readonly key: string;
@@ -9,7 +9,7 @@ export interface InstanceDirectoryEntry {
 }
 
 interface Observer {
-	readonly handler: (instance: RemoteServiceInstance<unknown>, context: Context) => void | Promise<void>;
+	readonly handler: (service: object, context: Context) => void | Promise<void>;
 	readonly tasks: Map<InstanceDirectoryEntry, { readonly cancel: (reason?: unknown) => void }>;
 	closed: boolean;
 }
@@ -41,6 +41,7 @@ export class InstanceDirectory<TEntry extends InstanceDirectoryEntry> {
 			throw new Error(`Keyed service already has a live instance with key ${entry.key}`);
 		}
 		this.#entries.set(entry.key, entry);
+		registerServiceInstance(entry.service, entry.key);
 		if (this.#ready) this.#startAll(entry);
 	}
 
@@ -54,6 +55,7 @@ export class InstanceDirectory<TEntry extends InstanceDirectoryEntry> {
 			this.#remove(previous);
 		}
 		this.#entries.set(entry.key, entry);
+		registerServiceInstance(entry.service, entry.key);
 		if (this.#ready) this.#startAll(entry);
 	}
 
@@ -75,7 +77,7 @@ export class InstanceDirectory<TEntry extends InstanceDirectoryEntry> {
 		for (const entry of [...this.#entries.values()]) this.#remove(entry);
 	}
 
-	observe<T>(handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>): () => void {
+	observe<T>(handler: (service: T, context: Context) => void | Promise<void>): () => void {
 		this.#assertActive();
 		const observer: Observer = {
 			handler: handler as Observer["handler"],
@@ -129,11 +131,9 @@ export class InstanceDirectory<TEntry extends InstanceDirectoryEntry> {
 		const { context, cancel } = withCancel(BACKGROUND_CONTEXT);
 		observer.tasks.set(entry, { cancel });
 		try {
-			void Promise.resolve(observer.handler({ key: entry.key, service: entry.service }, context)).catch(
-				(error: unknown) => {
-					if (!context.abortSignal?.aborted) this.#reportError(toError(error));
-				},
-			);
+			void Promise.resolve(observer.handler(entry.service, context)).catch((error: unknown) => {
+				if (!context.abortSignal?.aborted) this.#reportError(toError(error));
+			});
 		} catch (error) {
 			if (!context.abortSignal?.aborted) this.#reportError(toError(error));
 		}

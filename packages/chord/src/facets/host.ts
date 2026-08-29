@@ -1,16 +1,10 @@
 import { BACKGROUND_CONTEXT, type Context } from "../context.ts";
-import type {
-	RemoteServiceContract,
-	RemoteServiceInstance,
-	RemoteServices,
-	Service,
-	ServiceMode,
-} from "../services/contracts.ts";
+import type { RemoteServiceContract, RemoteServices, Service, ServiceMode } from "../services/contracts.ts";
 import { ServiceHandle } from "../services/handle.ts";
 import { InstanceDirectory, type InstanceDirectoryEntry } from "../services/instances.ts";
 import { RemoteServiceProvider, validateRemoteServiceImplementation } from "../services/provider.ts";
 import { replicatedState } from "../state.ts";
-import type { Facet, FacetConnection, FacetEnvironment, FacetHost, FacetOptions, ServiceInstances } from "./types.ts";
+import type { Facet, FacetConnection, FacetEnvironment, FacetHost, FacetOptions, ServiceSpawner } from "./types.ts";
 
 interface FacetServiceReference {
 	readonly serviceId: string;
@@ -121,10 +115,7 @@ interface StagedObservation {
 }
 
 interface KeyedServiceSource {
-	observe<T>(
-		service: Service<T>,
-		handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
-	): () => void;
+	observe<T>(service: Service<T>, handler: (service: T, context: Context) => void | Promise<void>): () => void;
 }
 
 interface LocalKeyedRegistration {
@@ -182,10 +173,7 @@ class LocalKeyedServiceRegistry implements KeyedServiceSource {
 		};
 	}
 
-	observe<T>(
-		service: Service<T>,
-		handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
-	): () => void {
+	observe<T>(service: Service<T>, handler: (service: T, context: Context) => void | Promise<void>): () => void {
 		this.#assertActive();
 		return this.#registration(service.id).directory.observe(handler);
 	}
@@ -228,10 +216,7 @@ class FacetServiceHandles {
 		return handle.proxy as T;
 	}
 
-	observe<T>(
-		service: Service<T>,
-		handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
-	): StagedObservation {
+	observe<T>(service: Service<T>, handler: (service: T, context: Context) => void | Promise<void>): StagedObservation {
 		let close: (() => void) | undefined;
 		let closed = false;
 		const stop = (): void => {
@@ -281,7 +266,7 @@ class FacetServiceHandles {
 
 type ServiceInstanceInstaller<T> = (key: string, implementation: T) => () => void;
 
-class StagedServiceInstances<T> implements ServiceInstances<T> {
+class StagedServiceSpawner<T> implements ServiceSpawner<T> {
 	readonly #lifecycle: FacetLifecycle;
 	readonly #installers: ServiceInstanceInstaller<T>[] = [];
 
@@ -293,8 +278,8 @@ class StagedServiceInstances<T> implements ServiceInstances<T> {
 		this.#installers.push(installer);
 	}
 
-	add(key: string, implementation: T): () => void {
-		this.#lifecycle.assertActive("add service instances");
+	spawn(key: string, implementation: T): () => void {
+		this.#lifecycle.assertActive("spawn service instances");
 		if (this.#installers.length === 0) throw new Error("Facet service provider is not connected");
 		const closes: Array<() => void> = [];
 		try {
@@ -570,10 +555,10 @@ class FacetKernel {
 					replace: (provider) => provider.replace(service, implementation as NoInfer<RemoteServiceContract<T>>),
 				});
 			},
-			provideMany: <T>(service: Service<T>): ServiceInstances<T> => {
+			provideMany: <T>(service: Service<T>): ServiceSpawner<T> => {
 				lifecycle.assertSettingUp("provide service instances");
 				recordServiceReference(runtime.provides, service, "keyed");
-				const instances = new StagedServiceInstances<T>(lifecycle);
+				const instances = new StagedServiceSpawner<T>(lifecycle);
 				provisions.push({
 					kind: "keyed",
 					service,
@@ -593,7 +578,7 @@ class FacetKernel {
 			},
 			observe: <T>(
 				service: Service<T>,
-				handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
+				handler: (service: T, context: Context) => void | Promise<void>,
 			): (() => void) => {
 				lifecycle.assertSettingUp("observe services");
 				recordServiceReference(runtime.requires, service, "keyed");

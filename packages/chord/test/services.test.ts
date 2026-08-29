@@ -5,6 +5,7 @@ import {
 	createLoopbackServiceConnection,
 	createRemoteServiceBinding,
 	defineService,
+	getServiceInstanceKey,
 	type JsonValue,
 	type RemoteServiceConnection,
 	RemoteServiceProvider,
@@ -348,11 +349,11 @@ describe("remote services", () => {
 			service: QuestionDialogs;
 			context: Context;
 		}[] = [];
-		const stop = namespace.observe(QuestionDialogs, (instance, context) => {
+		const stop = namespace.observe(QuestionDialogs, (service, context) => {
 			observed.push({
-				key: instance.key,
-				question: instance.service.request.value,
-				service: instance.service,
+				key: getServiceInstanceKey(service)!,
+				question: service.request.value,
+				service,
 				context,
 			});
 		});

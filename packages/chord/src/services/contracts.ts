@@ -65,17 +65,9 @@ export function defineService(id: string, options?: { readonly local?: boolean }
 	return Object.freeze({ id, local: options?.local ?? false });
 }
 
-export interface RemoteServiceInstance<T> {
-	readonly key: string;
-	readonly service: T;
-}
-
 export interface RemoteServices {
 	use<T>(service: Service<T>): T;
-	observe<T>(
-		service: Service<T>,
-		handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
-	): () => void;
+	observe<T>(service: Service<T>, handler: (service: T, context: Context) => void | Promise<void>): () => void;
 	/** Activate this service set and wait for every acquired service to become ready. */
 	activate(context: Context): Promise<void>;
 	/** Wait until every currently acquired service has installed its initial snapshot. */

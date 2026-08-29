@@ -1,7 +1,7 @@
 import { awaitWithContext, BACKGROUND_CONTEXT, type Context } from "../context.ts";
 import type { JsonValue } from "../json.ts";
 import { freshDeliveryContext, ReplicatedStateReplica } from "../state.ts";
-import type { RemoteServiceInstance, RemoteServices, Service } from "./contracts.ts";
+import type { RemoteServices, Service } from "./contracts.ts";
 import { RemoteServiceError } from "./errors.ts";
 import { InstanceDirectory, type InstanceDirectoryEntry } from "./instances.ts";
 import type {
@@ -281,7 +281,7 @@ class KeyedBinding<T> {
 		this.#instances = new InstanceDirectory({ ready: false, onError: reportError });
 	}
 
-	observe(handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>): () => void {
+	observe(handler: (service: T, context: Context) => void | Promise<void>): () => void {
 		if (this.#closed) throw new Error("Remote keyed service binding is closed");
 		const stop = this.#instances.observe(handler);
 		if (this.#bound && this.#starting === undefined) {
@@ -466,10 +466,7 @@ class RemoteServiceBindingImpl implements RemoteServiceBinding {
 		return binding.facade.proxy as T;
 	}
 
-	observe<T>(
-		service: Service<T>,
-		handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
-	): () => void {
+	observe<T>(service: Service<T>, handler: (service: T, context: Context) => void | Promise<void>): () => void {
 		this.#assertRemotable(service);
 		this.#assertAvailable(service.id, "keyed");
 		let binding = this.#keyed.get(service.id) as KeyedBinding<T> | undefined;

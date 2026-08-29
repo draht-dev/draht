@@ -342,7 +342,7 @@ Required behavior:
 
 ### 7.5 Keyed services
 
-`provideMany(token)` declares one keyed owner during setup and returns a generation-owned collection handle. While active, `add(key, implementation)`:
+`provideMany(token)` declares one keyed owner during setup and returns a generation-owned `ServiceSpawner`. While active, `spawn(key, implementation)`:
 
 - requires a non-empty key unique among live instances;
 - creates a host-owned monotonically increasing generation for that key;

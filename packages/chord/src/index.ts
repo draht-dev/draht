@@ -18,7 +18,7 @@ export {
 	type FacetEnvironment,
 	type FacetHost,
 	type FacetOptions,
-	type ServiceInstances,
+	type ServiceSpawner,
 } from "./facets/types.ts";
 export type { JsonValue } from "./json.ts";
 export {
@@ -26,14 +26,9 @@ export {
 	type RemoteServiceBinding,
 	type RemoteServiceBindingOptions,
 } from "./services/consumer.ts";
-export {
-	defineService,
-	type RemoteServiceInstance,
-	type RemoteServices,
-	type Service,
-	type ServiceMode,
-} from "./services/contracts.ts";
+export { defineService, type RemoteServices, type Service, type ServiceMode } from "./services/contracts.ts";
 export { RemoteServiceError, type RemoteServiceErrorCode } from "./services/errors.ts";
+export { getServiceInstanceKey } from "./services/metadata.ts";
 export type {
 	RemoteServiceConnection,
 	ServiceCall,

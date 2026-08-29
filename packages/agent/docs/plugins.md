@@ -117,15 +117,15 @@ Facets communicate across processes through **services**. One token type gives a
 function defineService<T>(id: string, options?: { local?: boolean }): Service<T>;
 ```
 
-The declaration lives in the shared contract module and creates nothing. Services are remotely publishable by default; a process-local token declares `{ local: true }`. `provide(service, implementation)` adds one singleton to the host service graph. `provideMany(service)` registers ownership of a multi-instance service during facet setup and returns an owned collection whose later `add(key, implementation)` calls add instances. The host publishes every non-local provision across its process boundary. Consumers select the same modes with `use(service)` or `observe(service, handler)`. Within one facet generation, a token must stay in one mode: mixing `provide`/`use` with `provideMany`/`observe` is an assembly or protocol error.
+The declaration lives in the shared contract module and creates nothing. Services are remotely publishable by default; a process-local token declares `{ local: true }`. `provide(service, implementation)` adds one singleton to the host service graph. `provideMany(service)` registers ownership of a multi-instance service during facet setup and returns a `ServiceSpawner` whose later `spawn(key, implementation)` calls publish instances. The host publishes every non-local provision across its process boundary. Consumers select the same modes with `use(service)` or `observe(service, handler)`. Within one facet generation, a token must stay in one mode: mixing `provide`/`use` with `provideMany`/`observe` is an assembly or protocol error.
 
 ```ts
-interface ServiceInstances<T> {
-	add(key: string, implementation: T): () => void;
+interface ServiceSpawner<T> {
+	spawn(key: string, implementation: T): () => void;
 }
 ```
 
-TypeScript types cannot produce runtime member metadata. Facet authors nevertheless declare no parallel member descriptor. When an exposed `provide()` or `ServiceInstances.add()` implementation reaches the remote-service boundary, the runtime classifies functions as remote methods and recognizes branded `ReplicatedState` values. It rejects unsupported members and announces the resulting member table over the transport. Process-local services may use arbitrary object contracts.
+TypeScript types cannot produce runtime member metadata. Facet authors nevertheless declare no parallel member descriptor. When an exposed `provide()` implementation or `ServiceSpawner.spawn()` instance reaches the remote-service boundary, the runtime classifies functions as remote methods and recognizes Chord-created `ReplicatedState` values. It rejects unsupported members and announces the resulting member table over the transport. Process-local services may use arbitrary object contracts.
 
 `use()` on a singleton returns a stable lazy proxy synchronously, even before a remote provider is attached. Member access creates local method or state slots as they are used; attachment validates those slots against the provider-announced kinds. A mismatch is an assembly or protocol error. This runtime mechanism is implemented once by the host rather than repeated in every service declaration.
 
@@ -149,7 +149,7 @@ env.observe(QuestionDialogs, handler)
 → @pi/question:tui requires pi.question-dialog/keyed
 ```
 
-The first `provide()`, `provideMany()`, `use()`, or `observe()` for a token must occur during facet setup. Commands, hooks, event handlers, and activation callbacks use handles acquired during setup; they cannot introduce an undeclared service dependency later. Dynamic instances use the setup-owned `ServiceInstances` handle, so adding and closing instances do not change the graph.
+The first `provide()`, `provideMany()`, `use()`, or `observe()` for a token must occur during facet setup. Commands, hooks, event handlers, and activation callbacks use handles acquired during setup; they cannot introduce an undeclared service dependency later. Dynamic instances use the setup-owned `ServiceSpawner`, so spawning and closing instances do not change the graph.
 
 After every facet has registered, the host generates its outgoing catalogue from non-local provisions, obtains catalogues from its connections, resolves requirements to local or connected provisions, rejects missing providers, duplicate offers or singleton owners, singleton/keyed mismatches, invalid dependency cycles, and invalid remote service implementations, then records consumer-to-provider edges for lifecycle ordering. `use()` and `observe()` declare hard requirements; optional dependencies require a future distinct acquisition API rather than inference from call failure. The ledger and resulting graph are private kernel machinery, not a facet-facing plan or second declaration format.
 
@@ -271,14 +271,14 @@ The TUI facet has no credentials, registry, or refresh logic: it calls a typed l
 
 ### Service semantics
 
-A service has **one owner and many consumers**. In singleton mode, `providersBuiltinSessionFacet` provides `Models` and both model-selection commands consume it. In multi-instance mode, one owner may add instances `A` and `B`, and every observer sees the same two instances.
+A service has **one owner and many consumers**. In singleton mode, `providersBuiltinSessionFacet` provides `Models` and both model-selection commands consume it. In multi-instance mode, one owner may spawn instances `A` and `B`, and every observer sees the same two instances.
 
 `use()` behaves differently by locality:
 
 - **Local:** `use()` returns a stable lazy proxy backed by a direct process-local implementation slot. During synchronous setup it is disconnected; after assembly it binds to the local implementation without requiring provider-before-consumer setup order. Reload unbinds and rebinds that same slot.
 - **Remote:** across a connection, `use()` returns the same kind of stable lazy proxy. Calls made while disconnected fail when invoked; state has no value until hydrated. Concurrent consumers of one token in one process share one proxy, one state replica, and one remote subscription.
 
-Multi-instance services use `provideMany()` and `observe()`. The service is empty until its setup-owned `ServiceInstances` handle calls `add()`; observing it never creates an instance. `instances.add(key, implementation)` returns an idempotent close function, and the key must be unique among that service's live instances. Local observers use a direct process-local instance registry; non-local provisions additionally publish the same instance through RPC. `observe(service, handler)` reconciles current instances and then ordered additions, replacements, and removals. After an instance's initial state members hydrate, the host starts one handler task with a fresh `Context`. Closing the instance aborts that context, rejects new calls, and lets already-admitted calls return. Cancellation from the instance context is normal task cleanup; other handler failures follow host failure policy. Reusing a closed key creates a new host-owned generation, so stale proxies cannot address the replacement.
+Multi-instance services use `provideMany()` and `observe()`. The service is empty until its setup-owned `ServiceSpawner` calls `spawn()`; observing it never creates an instance. `spawner.spawn(key, implementation)` returns an idempotent close function, and the key must be unique among that service's live instances. Local observers use a direct process-local instance registry; non-local provisions additionally publish the same instance through RPC. `observe(service, handler)` reconciles current instances and then ordered additions, replacements, and removals. The handler receives the same `T` proxy shape as `use()`; `getServiceInstanceKey(proxy)` exposes its keyed application identity when needed. After an instance's initial state members hydrate, the host starts one handler task with a fresh `Context`. Closing the instance aborts that context, rejects new calls, and lets already-admitted calls return. Cancellation from the instance context is normal task cleanup; other handler failures follow host failure policy. Reusing a closed key creates a new host-owned generation, so stale proxies cannot address the replacement.
 
 An added instance member has structural identity `(service, key, generation, member)`. Its `ReplicatedState` members therefore need no independent IDs. The instance directory is control-plane metadata, not a facet-visible `ReplicatedState` containing proxies. Switching sessions aborts all observed instance tasks before hydrating the selected session's current instances.
 
@@ -314,19 +314,14 @@ const Tools = defineService<ToolContributionRegistry>("pi.local.tools", { local:
 **Presentation facets hold none of this.** A TUI or web facet never receives the raw Harness, Session, tree, tool registry, hooks, or credentials. It uses host-local presentation services plus the semantic services and replicated state deliberately exposed by a Session or server facet.
 
 ```ts
-interface RemoteServiceInstance<T> {
-	readonly key: string;
-	readonly service: T;
-}
-
 interface FacetEnvironment extends FacetLifecycle {
 	use<T>(service: Service<T>): T;
 	observe<T>(
 		service: Service<T>,
-		handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
+		handler: (service: T, context: Context) => void | Promise<void>,
 	): () => void;
 	provide<T>(service: Service<T>, implementation: T): void;
-	provideMany<T>(service: Service<T>): ServiceInstances<T>;
+	provideMany<T>(service: Service<T>): ServiceSpawner<T>;
 	replicatedState<T>(initial: T): MutableReplicatedState<T>;
 }
 
@@ -512,7 +507,7 @@ interface IndexJob {
 }
 ```
 
-An `IndexService.start(root, context)` returning an `IndexJob` validates the root, creates its own `AbortController` and a detached telemetry root, and returns the job. The job crosses the wire as a private **remote object reference** (`rpc.md`) known only to that caller. If every attached presentation must discover a job, register a multi-instance service with `provideMany()` during setup and add an instance instead. Discovery is the distinction: returned references are passed explicitly; added instances appear in `observe()` hydration. Both make the cancellation domains concrete, and both need explicit lifetime cleanup.
+An `IndexService.start(root, context)` returning an `IndexJob` validates the root, creates its own `AbortController` and a detached telemetry root, and returns the job. The job crosses the wire as a private **remote object reference** (`rpc.md`) known only to that caller. If every attached presentation must discover a job, register a multi-instance service with `provideMany()` during setup and spawn an instance instead. Discovery is the distinction: returned references are passed explicitly; spawned instances appear in `observe()` hydration. Both make the cancellation domains concrete, and both need explicit lifetime cleanup.
 
 ## The server: directory, management, and routing
 
@@ -780,7 +775,7 @@ export const questionSessionFacet = defineFacet({
 					if (response === undefined) {
 						const completion = Promise.withResolvers<QuestionResponse>();
 						const request = env.replicatedState<QuestionRequest>(params);
-						const close = dialogs.add(invocation.invocationId, {
+						const close = dialogs.spawn(invocation.invocationId, {
 							request,
 							async submitAnswer(candidate, _answerContext) {
 								if (candidate.outcome === "selected" && params.options[candidate.index] === undefined) {
@@ -815,7 +810,7 @@ export const questionSessionFacet = defineFacet({
 });
 ```
 
-`dialogs.add()` installs the instance before `execute()` waits. The returned close function is the single normal, cancellation, and error cleanup path. Concurrent submissions call `memoOnce()`, whose atomic first-writer rule prevents overwrite and returns the same durable winner. `completion.resolve(committed)` makes the local wait follow that durable operation: success resumes the tool, while failure rejects it and runs the same cleanup instead of leaving it suspended. Each service call also awaits its own `committed` promise, so it cannot report success before durability or leave an ignored rejection. Calls through a closed instance or an old generation fail as stale service calls.
+`dialogs.spawn()` installs the instance before `execute()` waits. The returned close function is the single normal, cancellation, and error cleanup path. Concurrent submissions call `memoOnce()`, whose atomic first-writer rule prevents overwrite and returns the same durable winner. `completion.resolve(committed)` makes the local wait follow that durable operation: success resumes the tool, while failure rejects it and runs the same cleanup instead of leaving it suspended. Each service call also awaits its own `committed` promise, so it cannot report success before durability or leave an ignored rejection. Calls through a closed instance or an old generation fail as stale service calls.
 
 ### TUI and web facets: observe every dialog instance
 

@@ -9,10 +9,10 @@ runtime rejection of unsupported values to the concrete serializer.
 
 ## Role
 
-`provide()`/`use()` and `provideMany().add()`/`observe()` are the facet system's hidden RPC. Facets share TypeScript service contracts, while the transport carries service/member identifiers, strict JSON values, request/subscription correlation, keyed generations, and binding control messages. Hosts construct the typed local implementation or facade; TypeScript types and arbitrary objects never cross the wire. Independently loaded processes may temporarily run different source generations, so their service contracts must remain forward compatible across the supported skew window; version negotiation remains deferred.
+`provide()`/`use()` and `provideMany().spawn()`/`observe()` are the facet system's hidden RPC. Facets share TypeScript service contracts, while the transport carries service/member identifiers, strict JSON values, request/subscription correlation, keyed generations, and binding control messages. Hosts construct the typed local implementation or facade; TypeScript types and arbitrary objects never cross the wire. Independently loaded processes may temporarily run different source generations, so their service contracts must remain forward compatible across the supported skew window; version negotiation remains deferred.
 
 ```text
-session/server facet: provide() / provideMany().add()
+session/server facet: provide() / provideMany().spawn()
                     ↕ hidden service RPC
 presentation/session facet: use() / observe()
 ```
@@ -25,9 +25,9 @@ Do not serialize `Context`, `AbortSignal`, telemetry objects, callbacks, tools, 
 
 ## Service contracts and typed facades
 
-A service token is a shared TypeScript contract and stable service ID. It is not a generated descriptor and creates no provider. Tokens are remotely publishable by default; process-local tokens declare `{ local: true }`. `provide()` adds one singleton implementation to the host graph. `provideMany()` registers one keyed-service owner during facet setup and returns a `ServiceInstances` handle whose later `add()` calls add instances. The host automatically publishes every non-local provision. A token has one mode in one host service graph: mixing singleton and keyed use is an error.
+A service token is a shared TypeScript contract and stable service ID. It is not a generated descriptor and creates no provider. Tokens are remotely publishable by default; process-local tokens declare `{ local: true }`. `provide()` adds one singleton implementation to the host graph. `provideMany()` registers one multi-instance service owner during facet setup and returns a `ServiceSpawner` whose later `spawn()` calls publish instances. The host automatically publishes every non-local provision. A token has one mode in one host service graph: mixing singleton and keyed use is an error.
 
-The provider classifies every exposed implementation member as a method or branded `ReplicatedState` and publishes that member table in subscription snapshots. The consumer obtains member names from ordinary property access—for example, a JavaScript `Proxy` receives `"state"` for `models.state` and `"refresh"` for `models.refresh(context)`. Accessed slots are validated against the provider-announced kind when the facade binds.
+The provider classifies every exposed implementation member as a method or Chord-created `ReplicatedState` and publishes that member table in subscription snapshots. The consumer obtains member names from ordinary property access—for example, a JavaScript `Proxy` receives `"state"` for `models.state` and `"refresh"` for `models.refresh(context)`. Accessed slots are validated against the provider-announced kind when the facade binds.
 
 Local and remote `use()` both return a stable, lazy typed facade shared by consumers of that token. During synchronous facet setup the facade is disconnected, so setup can capture it but cannot invoke methods, read state, or register member subscriptions. After assembly, a local facade resolves through a direct process-local implementation slot and a remote facade binds through the host's connected services. Reloading the providing facet temporarily marks that same facade unavailable, then swaps its target; RPC singletons clear readiness and install a complete replacement snapshot on their existing subscription so captured methods and member facades address the replacement. While no provider is bound, invoking a method fails and state remains unhydrated; no call is queued merely because it was made through a proxy.
 
@@ -48,7 +48,7 @@ Type erasure does not hide service identity: every service token retains its sta
 
 Facets always call unqualified `env.use()` or `env.observe()`; routing is not encoded in the call. These operations return source-independent disconnected handles during setup. After setup, each connection returns its provider-generated service catalogue, and the host binds every requirement to its local provision or exactly one connected provider. The method supplies the mode and the token supplies the ID. The host therefore needs no reflection over the erased `T` and no handwritten parallel dependency list.
 
-First acquisition or provision is permitted only during facet setup. Later commands, hooks, and activation callbacks use setup-acquired singleton facades, observer registrations, or `ServiceInstances` handles. In particular, dynamic instances are added through the handle returned by `provideMany()`; a late direct addition cannot introduce a previously undeclared provision.
+First acquisition or provision is permitted only during facet setup. Later commands, hooks, and activation callbacks use setup-acquired singleton facades, observer registrations, or `ServiceSpawner` capabilities. In particular, dynamic instances are spawned through the capability returned by `provideMany()`; late spawning cannot introduce a previously undeclared provision.
 
 After setup, each host privately resolves the recorded requirements against local provisions and connection catalogues to reject missing providers, duplicate remote offers, and mode mismatches and to derive lifecycle edges. A selected-Session connection with no live attachment may provisionally accept unresolved requirements as unavailable; attachment validates them against the worker's generated catalogue and caches that catalogue for later detached generations. Connection bindings are generation-owned and include only selected requirements, so failed or retired generations release their subscriptions without disposing the underlying transport connection. This internal service graph is distinct from the module loader's source import graph; it is not a facet-authored or facet-visible plan.
 
@@ -116,7 +116,7 @@ Three cancellation domains remain separate: aborting one RPC invocation; explici
 
 ## Security and lifecycle
 
-Only loaded service tokens not marked local may be registered at the remote boundary. Only the owning `ServiceInstances` handle may add instances. Services marked `{ local: true }` are never discoverable remotely. Local services may use unrestricted object contracts, while remote providers validate member kinds and every JSON business value. Clients cannot forge control envelopes as ordinary values, choose instance generations, select a different Session route in a service call, or cancel another client's request.
+Only loaded service tokens not marked local may be registered at the remote boundary. Only the owning `ServiceSpawner` may spawn instances. Services marked `{ local: true }` are never discoverable remotely. Local services may use unrestricted object contracts. Remote providers validate member kinds, while concrete serializers enforce JSON business values. Clients cannot forge control envelopes as ordinary values, choose instance generations, select a different Session route in a service call, or cancel another client's request.
 
 The server authenticates connections, authorizes attachment, and reconstructs client identity in the service `Context`. Ordinary business arguments never carry authority. Credentials, prompts, completions, tool data, filesystem contents, and other sensitive values require an explicit presentation-safe contract.
 

@@ -1,25 +1,22 @@
 import type { Context } from "../context.ts";
-import type { RemoteServiceInstance, RemoteServices, Service } from "../services/contracts.ts";
+import type { RemoteServices, Service } from "../services/contracts.ts";
 import type { ServiceCatalogueEntry } from "../services/protocol.ts";
 import type { RemoteServiceProvider } from "../services/provider.ts";
 import type { MutableReplicatedState } from "../state.ts";
 
-export interface ServiceInstances<T> {
-	add(key: string, implementation: T): () => void;
+export interface ServiceSpawner<T> {
+	spawn(key: string, implementation: T): () => void;
 }
 
 export interface FacetEnvironment {
 	/** Declare a hard dependency on one singleton service and return its stable handle. */
 	use<T>(service: Service<T>): T;
 	/** Declare a hard dependency on a keyed service and observe each live instance. */
-	observe<T>(
-		service: Service<T>,
-		handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
-	): () => void;
+	observe<T>(service: Service<T>, handler: (service: T, context: Context) => void | Promise<void>): () => void;
 	/** Declare and install this facet's singleton implementation of a service. */
 	provide<T>(service: Service<T>, implementation: NoInfer<T>): void;
-	/** Declare ownership of a keyed service and return its live-instance collection. */
-	provideMany<T>(service: Service<T>): ServiceInstances<T>;
+	/** Declare ownership of a multi-instance service and return its deferred spawning capability. */
+	provideMany<T>(service: Service<T>): ServiceSpawner<T>;
 	/** Create initialized mutable state suitable for exposing through a service implementation. */
 	replicatedState<T>(initial: T): MutableReplicatedState<T>;
 	/** Give the facet ownership of a resource cleanup function. */

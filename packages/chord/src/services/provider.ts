@@ -23,6 +23,13 @@ type InstanceMember =
 	| { readonly kind: "method"; readonly method: RemoteMethod }
 	| { readonly kind: "state"; readonly state: ReplicatedStateInternals };
 
+type ServiceMemberKind = InstanceMember["kind"];
+
+interface ClassifiedRemoteServiceImplementation {
+	readonly implementation: object;
+	readonly members: Map<string, InstanceMember>;
+}
+
 interface ProviderInstance {
 	readonly address?: ServiceInstanceAddress;
 	readonly implementation: object;
@@ -35,6 +42,7 @@ interface ProviderSubscriber {
 	readonly listener: (update: ServiceProviderUpdate, context: Context) => void;
 	readonly buffer: { readonly update: ServiceProviderUpdate; readonly context: Context }[];
 	active: boolean;
+	terminated: boolean;
 	closed: boolean;
 }
 
@@ -47,6 +55,7 @@ interface ServiceRegistration {
 	readonly serviceId: string;
 	readonly mode: ServiceMode;
 	singleton?: ProviderInstance;
+	singletonShape?: ReadonlyMap<string, ServiceMemberKind>;
 	readonly instances: Map<string, ProviderInstance>;
 	readonly generations: Map<string, number>;
 	readonly subscribers: Set<ProviderSubscriber>;
@@ -94,8 +103,11 @@ export class RemoteServiceProvider {
 		if (registration.singleton !== undefined) {
 			throw new RemoteServiceError("service_mode_mismatch", `Remote service ${service.id} already has a provider`);
 		}
-		const instance = this.#classifyInstance(registration, implementation, undefined);
-		registration.singleton = instance;
+		const classified = classifyRemoteServiceImplementation(registration.serviceId, implementation);
+		const shape = serviceMemberShape(classified.members);
+		this.#assertSingletonShape(registration, shape);
+		registration.singleton = this.#createInstance(registration, classified, undefined);
+		registration.singletonShape = shape;
 	}
 
 	/** Disconnect one singleton while preserving its active subscriptions and remote facades. */
@@ -112,19 +124,33 @@ export class RemoteServiceProvider {
 		this.#emit(registration, { type: "unavailable" });
 	}
 
+	/** Check a singleton replacement without changing the active provider. */
+	validateReplacement<T>(service: Service<T>, implementation: NoInfer<RemoteServiceContract<T>>): void {
+		this.#assertActive();
+		this.#assertRemotable(service);
+		this.#assertAllowed(service.id);
+		const registration = this.#registration(service.id, "singleton");
+		const classified = classifyRemoteServiceImplementation(registration.serviceId, implementation);
+		this.#assertSingletonShape(registration, serviceMemberShape(classified.members));
+	}
+
 	/** Replace one singleton while preserving its active subscriptions and remote facades. */
 	replace<T>(service: Service<T>, implementation: NoInfer<RemoteServiceContract<T>>): void {
 		this.#assertActive();
 		this.#assertRemotable(service);
 		this.#assertAllowed(service.id);
 		const registration = this.#registration(service.id, "singleton");
-		const replacement = this.#classifyInstance(registration, implementation, undefined);
+		const classified = classifyRemoteServiceImplementation(registration.serviceId, implementation);
+		const shape = serviceMemberShape(classified.members);
+		this.#assertSingletonShape(registration, shape);
+		const replacement = this.#createInstance(registration, classified, undefined);
 		const previous = registration.singleton;
 		if (previous !== undefined) {
 			previous.active = false;
 			for (const remove of previous.removeMemberListeners) remove();
 		}
 		registration.singleton = replacement;
+		registration.singletonShape = shape;
 		this.#emit(registration, { type: "replaced", snapshot: this.#snapshotInstance(replacement) });
 	}
 
@@ -154,7 +180,8 @@ export class RemoteServiceProvider {
 		const generation = (registration.generations.get(key) ?? 0) + 1;
 		registration.generations.set(key, generation);
 		const address = { key, generation } satisfies ServiceInstanceAddress;
-		const instance = this.#classifyInstance(registration, implementation, address);
+		const classified = classifyRemoteServiceImplementation(registration.serviceId, implementation);
+		const instance = this.#createInstance(registration, classified, address);
 		registration.instances.set(key, instance);
 		this.#emit(registration, { type: "spawned", instance: this.#snapshotInstance(instance) });
 		let closed = false;
@@ -205,7 +232,13 @@ export class RemoteServiceProvider {
 		if (registration.mode === "singleton" && registration.singleton === undefined) {
 			throw new RemoteServiceError("service_not_found", `Remote service ${serviceId} has no provider`);
 		}
-		const subscriber: ProviderSubscriber = { listener, buffer: [], active: false, closed: false };
+		const subscriber: ProviderSubscriber = {
+			listener,
+			buffer: [],
+			active: false,
+			terminated: false,
+			closed: false,
+		};
 		registration.subscribers.add(subscriber);
 		const snapshot = this.#snapshot(registration);
 		return {
@@ -213,7 +246,11 @@ export class RemoteServiceProvider {
 			activate: () => {
 				if (subscriber.closed || subscriber.active) return;
 				subscriber.active = true;
-				for (const entry of subscriber.buffer.splice(0)) listener(entry.update, entry.context);
+				try {
+					for (const entry of subscriber.buffer.splice(0)) listener(entry.update, entry.context);
+				} finally {
+					if (subscriber.terminated) subscriber.closed = true;
+				}
 			},
 			close: () => {
 				if (subscriber.closed) return;
@@ -227,22 +264,42 @@ export class RemoteServiceProvider {
 	dispose(): void {
 		if (this.#disposed) return;
 		this.#disposed = true;
+		const errors: unknown[] = [];
 		for (const registration of this.#registrations.values()) {
-			for (const subscriber of registration.subscribers) {
-				subscriber.closed = true;
-				subscriber.buffer.length = 0;
+			const singleton = registration.singleton;
+			if (singleton !== undefined) {
+				singleton.active = false;
+				for (const remove of singleton.removeMemberListeners) remove();
+				delete registration.singleton;
+				try {
+					this.#emit(registration, { type: "unavailable" });
+				} catch (error) {
+					errors.push(error);
+				}
 			}
-			registration.subscribers.clear();
-			const instances = [registration.singleton, ...registration.instances.values()];
-			for (const instance of instances) {
-				if (!instance) continue;
+			for (const [key, instance] of [...registration.instances]) {
 				instance.active = false;
 				for (const remove of instance.removeMemberListeners) remove();
+				registration.instances.delete(key);
+				try {
+					this.#emit(registration, { type: "closed", instance: instance.address! });
+				} catch (error) {
+					errors.push(error);
+				}
 			}
-			registration.instances.clear();
-			delete registration.singleton;
+			for (const subscriber of registration.subscribers) {
+				if (subscriber.active) {
+					subscriber.closed = true;
+					subscriber.buffer.length = 0;
+				} else {
+					subscriber.terminated = true;
+				}
+			}
+			registration.subscribers.clear();
 		}
 		this.#registrations.clear();
+		if (errors.length === 1) throw errors[0];
+		if (errors.length > 1) throw new AggregateError(errors, "Failed to dispose remote service provider");
 	}
 
 	#registration(serviceId: string, mode: ServiceMode): ServiceRegistration {
@@ -259,12 +316,11 @@ export class RemoteServiceProvider {
 		return registration;
 	}
 
-	#classifyInstance(
+	#createInstance(
 		registration: ServiceRegistration,
-		implementation: unknown,
+		classified: ClassifiedRemoteServiceImplementation,
 		address: ServiceInstanceAddress | undefined,
 	): ProviderInstance {
-		const classified = classifyRemoteServiceImplementation(registration.serviceId, implementation);
 		const removeMemberListeners: (() => void)[] = [];
 		const instance: ProviderInstance = {
 			...(address === undefined ? {} : { address }),
@@ -293,6 +349,15 @@ export class RemoteServiceProvider {
 			);
 		}
 		return instance;
+	}
+
+	#assertSingletonShape(registration: ServiceRegistration, replacement: ReadonlyMap<string, ServiceMemberKind>): void {
+		const current = registration.singletonShape;
+		if (current === undefined || sameServiceMemberShape(current, replacement)) return;
+		throw new RemoteServiceError(
+			"service_member_mismatch",
+			`Remote service ${registration.serviceId} replacement must preserve its member shape`,
+		);
 	}
 
 	#resolveInstance(registration: ServiceRegistration, address: ServiceInstanceAddress | undefined): ProviderInstance {
@@ -395,7 +460,7 @@ export function validateRemoteServiceImplementation(serviceId: string, implement
 function classifyRemoteServiceImplementation(
 	serviceId: string,
 	implementation: unknown,
-): { readonly implementation: object; readonly members: Map<string, InstanceMember> } {
+): ClassifiedRemoteServiceImplementation {
 	if (typeof implementation !== "object" || implementation === null || Array.isArray(implementation)) {
 		throw new TypeError(`Remote service ${serviceId} implementation must be an object`);
 	}
@@ -418,4 +483,15 @@ function classifyRemoteServiceImplementation(
 	}
 	if (members.size === 0) throw new TypeError(`Remote service ${serviceId} has no members`);
 	return { implementation, members };
+}
+
+function serviceMemberShape(members: ReadonlyMap<string, InstanceMember>): ReadonlyMap<string, ServiceMemberKind> {
+	return new Map([...members].map(([name, member]) => [name, member.kind]));
+}
+
+function sameServiceMemberShape(
+	left: ReadonlyMap<string, ServiceMemberKind>,
+	right: ReadonlyMap<string, ServiceMemberKind>,
+): boolean {
+	return left.size === right.size && [...left].every(([name, kind]) => right.get(name) === kind);
 }

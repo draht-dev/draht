@@ -209,9 +209,76 @@ describe("remote services", () => {
 		expect(state.value?.revision).toBe(2);
 		await select({ provider: "test", modelId: "replacement" }, BACKGROUND_CONTEXT);
 		expect(replacementSelect).toHaveBeenCalledOnce();
+		expect(() =>
+			provider.replace(Models, {
+				async select() {},
+			} as unknown as Models),
+		).toThrow("replacement must preserve its member shape");
+		expect(() =>
+			provider.replace(Models, {
+				async state() {},
+				async select() {},
+			} as unknown as Models),
+		).toThrow("replacement must preserve its member shape");
+		expect(state.value?.revision).toBe(2);
 
 		await namespace.dispose(BACKGROUND_CONTEXT);
 		provider.dispose();
+	});
+
+	test("clears retained facades when providers and bindings are disposed", async () => {
+		const provider = new RemoteServiceProvider([Models]);
+		provider.provide(Models, {
+			state: replicatedState<ModelsState>({ selected: null, revision: 1 }),
+			async select() {},
+		});
+		const namespace = createRemoteServiceBinding({
+			services: [Models],
+			transport: createLoopbackServiceTransport(provider),
+		});
+		const models = namespace.use(Models);
+		const state = models.state;
+		await namespace.ready(BACKGROUND_CONTEXT);
+		expect(state.value?.revision).toBe(1);
+
+		provider.dispose();
+		expect(state.value).toBeUndefined();
+		await expect(models.select({ provider: "test", modelId: "one" }, BACKGROUND_CONTEXT)).rejects.toThrow(
+			"Remote service provider is disposed",
+		);
+
+		await namespace.dispose(BACKGROUND_CONTEXT);
+		expect(() => state.value).toThrow("Remote service binding is disposed");
+	});
+
+	test("applies provider disposal buffered while subscriptions are starting", async () => {
+		const provider = new RemoteServiceProvider([Models, { service: QuestionDialogs, mode: "keyed" }]);
+		provider.provide(Models, {
+			state: replicatedState<ModelsState>({ selected: null, revision: 1 }),
+			async select() {},
+		});
+		provider.spawn(QuestionDialogs, "pending", {
+			request: replicatedState<Question>({ question: "Pending?" }),
+			async submit() {
+				return { accepted: true };
+			},
+		});
+		const namespace = createRemoteServiceBinding({
+			services: [Models, QuestionDialogs],
+			transport: createLoopbackServiceTransport(provider),
+		});
+		const models = namespace.use(Models);
+		const observed: QuestionDialogs[] = [];
+		namespace.observe(QuestionDialogs, (service) => {
+			observed.push(service);
+		});
+
+		provider.dispose();
+		await namespace.ready(BACKGROUND_CONTEXT);
+		expect(models.state.value).toBeUndefined();
+		expect(observed).toEqual([]);
+
+		await namespace.dispose(BACKGROUND_CONTEXT);
 	});
 
 	test("keeps deferred service handles inaccessible until host activation", async () => {
@@ -371,11 +438,11 @@ describe("remote services", () => {
 		await expect(firstService.submit("yes", BACKGROUND_CONTEXT)).resolves.toEqual({ accepted: true });
 		expect(firstSubmit).toHaveBeenCalledWith("yes", expect.objectContaining({ abortSignal: undefined }));
 
+		const retainedFirstSubmit = firstService.submit;
 		closeFirst();
 		expect(observed[0]!.context.abortSignal?.aborted).toBe(true);
-		await expect(firstService.submit("late", BACKGROUND_CONTEXT)).rejects.toMatchObject({
-			code: "service_stale_instance",
-		});
+		expect(() => firstService.request.value).toThrow("observation is closed");
+		expect(() => retainedFirstSubmit("late", BACKGROUND_CONTEXT)).toThrow("observation is closed");
 
 		const secondRequest = replicatedState<Question>({ question: "Again?" });
 		const closeSecond = provider.spawn(QuestionDialogs, "invocation-1", {
@@ -386,11 +453,16 @@ describe("remote services", () => {
 		});
 		await vi.waitFor(() => expect(observed).toHaveLength(2));
 		expect(observed[1]).toMatchObject({ question: { question: "Again?" } });
-		expect(observed[1]!.service).not.toBe(firstService);
+		expect(Object.is(observed[1]!.service, firstService)).toBe(false);
 		expect(errors).toEqual([]);
 
-		closeSecond();
+		const secondService = observed[1]!.service;
+		const retainedSecondSubmit = secondService.submit;
 		stop();
+		expect(observed[1]!.context.abortSignal?.aborted).toBe(true);
+		expect(() => secondService.request.value).toThrow("observation is closed");
+		expect(() => retainedSecondSubmit("late", BACKGROUND_CONTEXT)).toThrow("observation is closed");
+		closeSecond();
 		await namespace.dispose(BACKGROUND_CONTEXT);
 		provider.dispose();
 	});

@@ -202,6 +202,95 @@ describe("facet loader", () => {
 		]);
 	});
 
+	test("rejects remote singleton member shape changes before reload cutover", async () => {
+		let retained: GenerationValue | undefined;
+		let providerDisposed = false;
+		const consumer = defineFacet({
+			id: "shape-consumer",
+			setup(env) {
+				retained = env.use(RemoteGenerationValue);
+			},
+		});
+		const provider = defineFacet({
+			id: "shape-provider",
+			setup(env) {
+				env.provide(RemoteGenerationValue, {
+					async read() {
+						return "A";
+					},
+				});
+				env.onDeactivate(() => {
+					providerDisposed = true;
+				});
+			},
+		});
+		const host = await createFacetHost({ facets: [consumer, provider] });
+
+		await expect(
+			host.reload([
+				defineFacet({
+					id: "shape-provider",
+					setup(env) {
+						env.provide(RemoteGenerationValue, {
+							async renamed() {
+								return "B";
+							},
+						} as unknown as GenerationValue);
+					},
+				}),
+			]),
+		).rejects.toThrow("replacement must preserve its member shape");
+		expect(providerDisposed).toBe(false);
+		await expect(retained!.read(BACKGROUND_CONTEXT)).resolves.toBe("A");
+
+		await host.dispose();
+		expect(providerDisposed).toBe(true);
+	});
+
+	test("terminates the host when replacement activation fails after cutover", async () => {
+		const failure = new Error("replacement activation failed");
+		const trace: string[] = [];
+		let retained: GenerationValue | undefined;
+		const consumer = defineFacet({
+			id: "terminal-consumer",
+			setup(env) {
+				retained = env.use(RemoteGenerationValue);
+				env.onDeactivate(() => {
+					trace.push("deactivate consumer");
+				});
+			},
+		});
+		const provider = (name: string, fail: boolean) =>
+			defineFacet({
+				id: "terminal-provider",
+				setup(env) {
+					env.provide(RemoteGenerationValue, {
+						async read() {
+							return name;
+						},
+					});
+					env.onActivate(() => {
+						trace.push(`activate ${name}`);
+						if (fail) throw failure;
+					});
+					env.onDeactivate(() => {
+						trace.push(`deactivate ${name}`);
+					});
+				},
+			});
+		const host = await createFacetHost({ facets: [consumer, provider("A", false)] });
+		await expect(retained!.read(BACKGROUND_CONTEXT)).resolves.toBe("A");
+
+		await expect(host.reload([provider("B", true)])).rejects.toBe(failure);
+		expect(trace).toEqual(["activate A", "deactivate A", "activate B", "deactivate consumer", "deactivate B"]);
+		expect(() => retained!.read(BACKGROUND_CONTEXT)).toThrow(
+			"Facet terminal-consumer service handles cannot be used while dead",
+		);
+		await expect(host.reload([])).rejects.toThrow("Facet host cannot reload while dead");
+		expect(() => host.services.use(RemoteGenerationValue)).toThrow("Remote service provider is disposed");
+		await host.dispose();
+	});
+
 	test("creates a reusable static loader", async () => {
 		const loader = createStaticFacetLoader([firstFacet]);
 		const first = await loader.load();

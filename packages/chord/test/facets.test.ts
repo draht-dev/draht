@@ -71,7 +71,7 @@ describe("facet host", () => {
 				trace.push("setup projection");
 				sourceHandle = env.use(Source);
 				expect(() => sourceHandle!.read(BACKGROUND_CONTEXT)).toThrow(
-					"Facet service handles cannot be used during setup",
+					"Facet projection service handles cannot be used while setting_up",
 				);
 				env.provide(Projection, {
 					read: (context) => sourceHandle!.read(context),
@@ -157,6 +157,45 @@ describe("facet host", () => {
 		await host.dispose();
 	});
 
+	test("routes remotely exposable keyed services through the host provider", async () => {
+		const observed: Array<{ service: KeyedValue; context: Context }> = [];
+		const consumer = defineFacet({
+			id: "remote-keyed-consumer",
+			setup(env) {
+				env.observe(KeyedValue, (service, context) => {
+					observed.push({ service, context });
+				});
+			},
+		});
+		const provider = (value: string) =>
+			defineFacet({
+				id: "remote-keyed-provider",
+				setup(env) {
+					const values = env.provideMany(KeyedValue);
+					env.onActivate(() => {
+						values.spawn("current", {
+							async read() {
+								return value;
+							},
+						});
+					});
+				},
+			});
+		const host = await createFacetHost({ facets: [consumer, provider("A")] });
+		await vi.waitFor(() => expect(observed).toHaveLength(1));
+		const first = observed[0]!;
+		await expect(first.service.read(first.context)).resolves.toBe("A");
+
+		await host.reload([provider("B")]);
+		await vi.waitFor(() => expect(observed).toHaveLength(2));
+		expect(first.context.abortSignal?.aborted).toBe(true);
+		expect(() => first.service.read(first.context)).toThrow("observation is closed");
+		await expect(observed[1]!.service.read(observed[1]!.context)).resolves.toBe("B");
+
+		await host.dispose();
+		expect(observed[1]!.context.abortSignal?.aborted).toBe(true);
+	});
+
 	test("keeps unrestricted local keyed services process-local across provider reloads", async () => {
 		const observed: Array<{ service: LocalKeyedValue; context: Context }> = [];
 		const consumer = defineFacet({
@@ -191,12 +230,112 @@ describe("facet host", () => {
 		await host.reload([provider("B")]);
 		await vi.waitFor(() => expect(observed).toHaveLength(2));
 		expect(first.context.abortSignal?.aborted).toBe(true);
-		expect(() => first.service.read()).toThrow(`Service ${LocalKeyedValue.id} is disconnected`);
+		expect(() => first.service.read()).toThrow(`Keyed service ${LocalKeyedValue.id} observation is closed`);
 		expect(observed[1]!.service.read()).toBe("B");
 		expect(observed[1]!.service.metadata.get("value")).toBe("B");
 
 		await host.dispose();
 		expect(observed[1]!.context.abortSignal?.aborted).toBe(true);
+	});
+
+	test("keeps remotely exposable local state replicas stable across provider reloads", async () => {
+		const sources: MutableReplicatedState<{ value: number }>[] = [];
+		const revisions: number[] = [];
+		let watched: Watched | undefined;
+		const consumer = defineFacet({
+			id: "state-consumer",
+			setup(env) {
+				watched = env.use(Watched);
+				env.onActivate(() => {
+					env.own(watched!.state.subscribe(({ value }) => revisions.push(value)));
+				});
+			},
+		});
+		const provider = (value: number) =>
+			defineFacet({
+				id: "state-provider",
+				setup(env) {
+					const state = env.replicatedState({ value });
+					sources.push(state);
+					env.provide(Watched, { state });
+				},
+			});
+		const host = await createFacetHost({ facets: [consumer, provider(1)] });
+		const retainedState = watched!.state;
+		expect(retainedState.value).toEqual({ value: 1 });
+		expect(revisions).toEqual([1]);
+
+		await host.reload([provider(2)]);
+		expect(watched!.state).toBe(retainedState);
+		expect(retainedState.value).toEqual({ value: 2 });
+		expect(revisions).toEqual([1, 2]);
+		sources[0]!.set({ value: 3 }, BACKGROUND_CONTEXT);
+		expect(retainedState.value).toEqual({ value: 2 });
+		expect(revisions).toEqual([1, 2]);
+
+		await host.dispose();
+		expect(() => retainedState.value).toThrow("Facet state-consumer service handles cannot be used while dead");
+	});
+
+	test("scopes singleton service views to each facet lifecycle", async () => {
+		const consumerHandles: Source[] = [];
+		const cleanupValues: string[] = [];
+		let peerHandle: Source | undefined;
+		const consumer = (generation: string) =>
+			defineFacet({
+				id: "scoped-consumer",
+				setup(env) {
+					const source = env.use(Source);
+					expect(env.use(Source)).toBe(source);
+					consumerHandles.push(source);
+					expect(() => source.read(BACKGROUND_CONTEXT)).toThrow(
+						"Facet scoped-consumer service handles cannot be used while setting_up",
+					);
+					env.onDeactivate(async () => {
+						cleanupValues.push(`${generation}:${await source.read(BACKGROUND_CONTEXT)}`);
+					});
+				},
+			});
+		const peer = defineFacet({
+			id: "peer-consumer",
+			setup(env) {
+				peerHandle = env.use(Source);
+			},
+		});
+		const provider = defineFacet({
+			id: "scoped-provider",
+			setup(env) {
+				env.provide(Source, {
+					async read() {
+						return "value";
+					},
+				});
+			},
+		});
+		const host = await createFacetHost({ facets: [consumer("A"), peer, provider] });
+		expect(consumerHandles[0]).not.toBe(peerHandle);
+		const retainedOldRead = consumerHandles[0]!.read;
+
+		await host.reload([consumer("B")]);
+		expect(cleanupValues).toEqual(["A:value"]);
+		expect(Object.is(consumerHandles[1], consumerHandles[0])).toBe(false);
+		expect(() => consumerHandles[0]!.read(BACKGROUND_CONTEXT)).toThrow(
+			"Facet scoped-consumer service handles cannot be used while dead",
+		);
+		expect(() => retainedOldRead(BACKGROUND_CONTEXT)).toThrow(
+			"Facet scoped-consumer service handles cannot be used while dead",
+		);
+		await expect(consumerHandles[1]!.read(BACKGROUND_CONTEXT)).resolves.toBe("value");
+		await expect(peerHandle!.read(BACKGROUND_CONTEXT)).resolves.toBe("value");
+
+		await host.dispose();
+		expect(cleanupValues).toEqual(["A:value", "B:value"]);
+		expect(() => consumerHandles[1]!.read(BACKGROUND_CONTEXT)).toThrow(
+			"Facet scoped-consumer service handles cannot be used while dead",
+		);
+		expect(() => peerHandle!.read(BACKGROUND_CONTEXT)).toThrow(
+			"Facet peer-consumer service handles cannot be used while dead",
+		);
 	});
 
 	test("owns resources registered during activation", async () => {
@@ -238,7 +377,9 @@ describe("facet host", () => {
 			id: "host-service-consumer",
 			setup(env) {
 				const hostValues = env.use(HostValues);
-				expect(() => hostValues.use).toThrow("Facet service handles cannot be used during setup");
+				expect(() => hostValues.use).toThrow(
+					"Facet host-service-consumer service handles cannot be used while setting_up",
+				);
 				env.onActivate(() => {
 					expect(hostValues).not.toBe(values);
 					expect(hostValues.name).toBe("session");

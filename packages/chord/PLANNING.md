@@ -197,8 +197,9 @@ Host updates are serialized and have two forms.
 A targeted replacement is shape-preserving when each replaced plugin keeps the same:
 
 - plugin ID;
-- required service IDs and modes; and
-- provided service IDs and modes.
+- required service IDs and modes;
+- provided service IDs and modes; and
+- remotely exposable singleton member names and kinds.
 
 The sequence is:
 
@@ -220,8 +221,9 @@ Properties:
 - captured local methods dispatch to the replacement;
 - captured remote methods and replicated-state facades address the replacement;
 - while withdrawn, calls fail rather than queue and replicated state is unhydrated;
-- keyed instances from the old plugin close; instances reconstructed by the replacement use fresh generations; and
-- setup or shape-validation failure leaves the active generation unchanged.
+- keyed instances from the old plugin close; instances reconstructed by the replacement use fresh generations;
+- setup or shape-validation failure leaves the active generation unchanged; and
+- a failure after provider withdrawal begins disposes the complete host instead of exposing a partially active graph.
 
 There is no rollback guarantee after old-plugin deactivation begins. Committed application effects are outside the reload transaction.
 
@@ -241,7 +243,7 @@ load and synchronously set up the complete desired generation
 Rules:
 
 - validation failure before cutover leaves the old graph active;
-- after cutover starts, failure may leave the host degraded and is not described as rollback;
+- after cutover starts, failure disposes the complete host because the retired graph cannot be restored;
 - removing a provider while retaining a hard consumer is rejected during candidate validation;
 - service facades owned outside plugin lifecycles remain stable when service ID and mode survive the replacement;
 - removed services become permanently disconnected for the retired generation; and
@@ -304,6 +306,8 @@ Process-local services:
 
 A local singleton consumer receives a stable lazy facade, not the provider object. This removes setup-order dependence and lets provider replacement update captured methods.
 
+Remotely exposable services use the provider/binding path even when provider and consumer share a host. An internal loopback binding keeps replacement, replicated-state, and keyed-generation semantics independent of placement. Only explicitly process-local services bypass that path.
+
 ### 7.3 Remote service contracts
 
 A remotely exposable implementation may contain only own data properties classified as:
@@ -328,16 +332,16 @@ Arbitrary returned object references, callbacks, function serialization, and gen
 
 ### 7.4 Stable singleton facades
 
-`use(token)` returns one source-independent facade per host service slot. Member slots are created lazily on property access and validated against provider metadata when bound.
+`use(token)` returns a facet-owned capability view over a source-independent host service slot. Repeated acquisition within one facet returns the same view; different facet lifecycles receive different views. Member slots are created lazily on property access and validated against provider metadata when bound.
 
 Required behavior:
 
-- inaccessible during setup;
+- inaccessible during setup and after the owning facet lifecycle ends;
 - directly bound after local graph assembly or remote hydration;
 - stable across provider withdrawal and replacement;
 - method invocation fails while disconnected;
 - state reads return `undefined` while unhydrated;
-- replacement cannot change an already-observed member between method and state; and
+- a remotely exposable replacement preserves the complete member name/kind table; and
 - a provider omitting an already-accessed member is a binding error.
 
 ### 7.5 Keyed services
@@ -357,7 +361,8 @@ An instance address is `(service ID, key, generation)`. Reusing a closed key cre
 - reconciles a complete initial instance directory;
 - starts one task per instance only after all initial state members hydrate;
 - preserves ordered additions, replacements, and removals;
-- aborts the instance task on close, replacement, disconnect, or observation disposal; and
+- aborts the instance task on close, replacement, disconnect, or observation disposal;
+- gives each observation an observer-lifetime service view that becomes inaccessible when its task is aborted; and
 - never represents service facades inside replicated JSON state.
 
 ## 8. Replicated state

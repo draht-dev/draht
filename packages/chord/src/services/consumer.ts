@@ -13,6 +13,7 @@ import type {
 	ServiceSubscription,
 } from "../types.ts";
 import { RemoteServiceError } from "./errors.ts";
+import { ServiceSlot } from "./handle.ts";
 import { InstanceDirectory, type InstanceDirectoryEntry } from "./instances.ts";
 import { ReplicatedStateReplica, serviceDeliveryContext } from "./state.ts";
 
@@ -274,7 +275,23 @@ class KeyedBinding<T> {
 
 	observe(handler: (service: T, context: Context) => void | Promise<void>): () => void {
 		if (this.#closed) throw new Error("Remote keyed service binding is closed");
-		const stop = this.#instances.observe(handler);
+		let stopped = false;
+		const stop = this.#instances.observe<T>((service, context) => {
+			const slot = new ServiceSlot(this.#service.id, true);
+			slot.bind(service as object);
+			return handler(
+				slot.view<T>(() => {
+					this.#assertAccess();
+					if (stopped || context.abortSignal?.aborted) {
+						throw new RemoteServiceError(
+							"service_stale_instance",
+							`Remote service ${this.#service.id} observation is closed`,
+						);
+					}
+				}),
+				context,
+			);
+		});
 		if (this.#bound && this.#starting === undefined) {
 			const revision = this.#revision;
 			const starting = this.#start(revision);
@@ -283,7 +300,6 @@ class KeyedBinding<T> {
 				if (!this.#closed && this.#revision === revision && this.#bound) this.#reportError(toError(error));
 			});
 		}
-		let stopped = false;
 		return () => {
 			if (stopped) return;
 			stopped = true;
@@ -347,8 +363,8 @@ class KeyedBinding<T> {
 			throw new Error(`Remote service ${this.#service.id} returned the wrong keyed snapshot`);
 		}
 		for (const snapshot of subscription.snapshot.instances) this.#spawn(snapshot, serviceDeliveryContext());
-		this.#instances.ready();
 		subscription.activate();
+		this.#instances.ready();
 	}
 
 	#update(update: ServiceProviderUpdate, context: Context): void {
@@ -439,7 +455,7 @@ export class RemoteServiceBindingImpl implements RemoteServiceBinding {
 			undefined,
 			this.#transport,
 			() => binding!.active && !this.#disposed && this.#bound,
-			() => this.#assertAccess(),
+			() => this.#assertHandleAccess(),
 			this.#reportError,
 		);
 		this.#singletons.set(service.id, binding);
@@ -466,7 +482,7 @@ export class RemoteServiceBindingImpl implements RemoteServiceBinding {
 				service,
 				this.#transport,
 				this.#reportError,
-				() => this.#assertAccess(),
+				() => this.#assertHandleAccess(),
 				() => {
 					if (this.#keyed.get(service.id) !== binding) return;
 					this.#keyed.delete(service.id);
@@ -589,6 +605,11 @@ export class RemoteServiceBindingImpl implements RemoteServiceBinding {
 		}
 		binding.facade.install(snapshot.instances[0]!, serviceDeliveryContext());
 		subscription.activate();
+	}
+
+	#assertHandleAccess(): void {
+		if (this.#disposed) throw new Error("Remote service binding is disposed");
+		this.#assertAccess();
 	}
 
 	#assertRemotable(service: { readonly id: string; readonly local: boolean }): void {

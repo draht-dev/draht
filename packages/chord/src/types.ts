@@ -93,12 +93,8 @@ export interface ServiceSpawner<T> {
 export interface RemoteServices {
 	use<T>(service: Service<T>): T;
 	observe<T>(service: Service<T>, handler: (service: T, context: Context) => void | Promise<void>): () => void;
-	/** Activate this service set and wait for every acquired service to become ready. */
-	activate(context: Context): Promise<void>;
 	/** Wait until every currently acquired service has installed its initial snapshot. */
 	ready(context: Context): Promise<void>;
-	/** Install a host lifecycle guard for proxy member access. */
-	setAccessGuard(assertAccess: () => void): void;
 	dispose(context: Context): Promise<void>;
 }
 
@@ -207,7 +203,7 @@ export interface FacetEnvironment {
 	/** Declare a hard dependency on one singleton service and return its stable handle. */
 	use<T>(service: Service<T>): T;
 	/** Declare a hard dependency on a keyed service and observe each live instance. */
-	observe<T>(service: Service<T>, handler: (service: T, context: Context) => void | Promise<void>): () => void;
+	observe<T>(service: Service<T>, handler: (service: T, context: Context) => void | Promise<void>): void;
 	/** Declare and install this facet's singleton implementation of a service. */
 	provide<T>(service: Service<T>, implementation: NoInfer<T>): void;
 	/** Declare ownership of a multi-instance service and return its deferred spawning capability. */

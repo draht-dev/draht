@@ -410,7 +410,7 @@ export class RemoteServiceBindingImpl implements RemoteServiceBinding {
 	readonly #allowlist = new Set<string>();
 	readonly #reportError: ErrorReporter;
 	readonly #modes = new Map<string, "singleton" | "keyed">();
-	#assertAccess: () => void;
+	readonly #assertAccess: () => void;
 	readonly #singletons = new Map<string, SingletonBinding>();
 	readonly #keyed = new Map<string, KeyedBinding<unknown>>();
 	#bound: boolean;
@@ -479,14 +479,6 @@ export class RemoteServiceBindingImpl implements RemoteServiceBinding {
 			this.#readinessRevision += 1;
 		}
 		return binding.observe(handler);
-	}
-
-	setAccessGuard(assertAccess: () => void): void {
-		this.#assertAccess = assertAccess;
-	}
-
-	async activate(context: Context): Promise<void> {
-		await this.ready(context);
 	}
 
 	async ready(context: Context): Promise<void> {

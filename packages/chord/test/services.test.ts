@@ -2,16 +2,15 @@ import { describe, expect, test, vi } from "vitest";
 import { BACKGROUND_CONTEXT } from "../src/context/index.ts";
 import {
 	type Context,
-	createLoopbackServiceConnection,
 	createRemoteServiceBinding,
 	defineService,
-	getServiceInstanceKey,
 	type JsonValue,
 	type RemoteServiceConnection,
 	RemoteServiceProvider,
 	type ReplicatedState,
 	replicatedState,
 } from "../src/index.ts";
+import { createLoopbackServiceConnection } from "./helpers.ts";
 
 type ModelRef = { provider: string; modelId: string };
 type ModelsState = {
@@ -344,14 +343,12 @@ describe("remote services", () => {
 			onError: (error) => errors.push(error),
 		});
 		const observed: {
-			key: string;
 			question: Question | undefined;
 			service: QuestionDialogs;
 			context: Context;
 		}[] = [];
 		const stop = namespace.observe(QuestionDialogs, (service, context) => {
 			observed.push({
-				key: getServiceInstanceKey(service)!,
 				question: service.request.value,
 				service,
 				context,
@@ -366,7 +363,7 @@ describe("remote services", () => {
 			submit: firstSubmit,
 		});
 		await vi.waitFor(() => expect(observed).toHaveLength(1));
-		expect(observed[0]).toMatchObject({ key: "invocation-1", question: { question: "First?" } });
+		expect(observed[0]).toMatchObject({ question: { question: "First?" } });
 
 		const firstService = observed[0]!.service;
 		firstRequest.set({ question: "Updated?" }, BACKGROUND_CONTEXT);
@@ -388,7 +385,7 @@ describe("remote services", () => {
 			},
 		});
 		await vi.waitFor(() => expect(observed).toHaveLength(2));
-		expect(observed[1]).toMatchObject({ key: "invocation-1", question: { question: "Again?" } });
+		expect(observed[1]).toMatchObject({ question: { question: "Again?" } });
 		expect(observed[1]!.service).not.toBe(firstService);
 		expect(errors).toEqual([]);
 

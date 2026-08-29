@@ -1,9 +1,7 @@
 import { FacetKernel } from "./facets/host.ts";
 import { disposeLoadedFacets } from "./facets/loader.ts";
 import { RemoteServiceBindingImpl } from "./services/consumer.ts";
-import { lookupServiceInstanceKey } from "./services/instances.ts";
-import type { RemoteServiceProvider } from "./services/provider.ts";
-import { MutableReplicatedStateImpl, serviceDeliveryContext } from "./services/state.ts";
+import { MutableReplicatedStateImpl } from "./services/state.ts";
 import type {
 	Facet,
 	FacetHost,
@@ -13,7 +11,6 @@ import type {
 	MutableReplicatedState,
 	RemoteServiceBinding,
 	RemoteServiceBindingOptions,
-	RemoteServiceConnection,
 	RemoteServiceContract,
 	Service,
 } from "./types.ts";
@@ -87,32 +84,6 @@ export function defineService(id: string, options?: { readonly local?: boolean }
 /** @publicApiReview Consider hiding this low-level remote binding factory behind facet connections. */
 export function createRemoteServiceBinding(options: RemoteServiceBindingOptions): RemoteServiceBinding {
 	return new RemoteServiceBindingImpl(options);
-}
-
-/**
- * Return the application key for a keyed service proxy, or undefined for a singleton.
- *
- * @publicApiReview Consider passing the key directly to keyed observers instead of exposing proxy metadata.
- */
-export function getServiceInstanceKey(service: object): string | undefined {
-	return lookupServiceInstanceKey(service);
-}
-
-/** @publicApiReview Consider keeping this loopback transport adapter in testing support. */
-export function createLoopbackServiceConnection(provider: RemoteServiceProvider): RemoteServiceConnection {
-	return {
-		invoke: (call, context) => provider.invoke(call, context),
-		subscribe: async (serviceId, mode, listener) => {
-			const subscription = provider.subscribe(serviceId, mode, (update) =>
-				listener(update, serviceDeliveryContext()),
-			);
-			return {
-				snapshot: subscription.snapshot,
-				activate: () => subscription.activate(),
-				close: () => subscription.close(),
-			};
-		},
-	};
 }
 
 export function replicatedState<T>(initial: T): MutableReplicatedState<T> {

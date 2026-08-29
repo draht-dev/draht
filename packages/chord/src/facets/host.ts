@@ -119,11 +119,6 @@ class FacetLifecycle {
 	}
 }
 
-interface StagedObservation {
-	start(): () => void;
-	stop(): void;
-}
-
 interface KeyedServiceSource {
 	observe<T>(service: Service<T>, handler: (service: T, context: Context) => void | Promise<void>): () => void;
 }
@@ -226,23 +221,11 @@ class FacetServiceHandles {
 		return handle.proxy as T;
 	}
 
-	observe<T>(service: Service<T>, handler: (service: T, context: Context) => void | Promise<void>): StagedObservation {
-		let close: (() => void) | undefined;
-		let closed = false;
-		const stop = (): void => {
-			if (closed) return;
-			closed = true;
-			close?.();
-		};
-		return {
-			start: () => {
-				if (closed) return () => {};
-				const source = this.#keyedSources.get(service.id);
-				if (source === undefined) throw new Error(`Service ${service.id} is disconnected`);
-				close = source.observe(service, handler);
-				return stop;
-			},
-			stop,
+	observe<T>(service: Service<T>, handler: (service: T, context: Context) => void | Promise<void>): () => Disposal {
+		return () => {
+			const source = this.#keyedSources.get(service.id);
+			if (source === undefined) throw new Error(`Service ${service.id} is disconnected`);
+			return source.observe(service, handler);
 		};
 	}
 
@@ -390,7 +373,7 @@ export class FacetKernel {
 
 			this.#phase = "connecting";
 			await Promise.all(
-				[...this.#connectionBindings.values()].map((services) => services.activate(BACKGROUND_CONTEXT)),
+				[...this.#connectionBindings.values()].map((services) => services.ready(BACKGROUND_CONTEXT)),
 			);
 
 			this.#phase = "activating";
@@ -575,15 +558,10 @@ export class FacetKernel {
 				recordServiceReference(runtime.requires, service, "singleton");
 				return this.#handles.use(service);
 			},
-			observe: <T>(
-				service: Service<T>,
-				handler: (service: T, context: Context) => void | Promise<void>,
-			): (() => void) => {
+			observe: <T>(service: Service<T>, handler: (service: T, context: Context) => void | Promise<void>): void => {
 				lifecycle.assertSettingUp("observe services");
 				recordServiceReference(runtime.requires, service, "keyed");
-				const observation = this.#handles.observe(service, handler);
-				lifecycle.observe(() => observation.start());
-				return observation.stop;
+				lifecycle.observe(this.#handles.observe(service, handler));
 			},
 			replicatedState: <T>(initial: T) => {
 				lifecycle.assertRunning("create replicated state");

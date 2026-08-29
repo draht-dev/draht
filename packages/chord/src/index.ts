@@ -4,12 +4,10 @@
 export {
 	combineFacetLoaders,
 	createFacetHost,
-	createLoopbackServiceConnection,
 	createRemoteServiceBinding,
 	createStaticFacetLoader,
 	defineFacet,
 	defineService,
-	getServiceInstanceKey,
 	replicatedState,
 } from "./api.ts";
 export { RemoteServiceError } from "./services/errors.ts";

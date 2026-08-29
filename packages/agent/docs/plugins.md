@@ -278,7 +278,7 @@ A service has **one owner and many consumers**. In singleton mode, `providersBui
 - **Local:** `use()` returns a stable lazy proxy backed by a direct process-local implementation slot. During synchronous setup it is disconnected; after assembly it binds to the local implementation without requiring provider-before-consumer setup order. Reload unbinds and rebinds that same slot.
 - **Remote:** across a connection, `use()` returns the same kind of stable lazy proxy. Calls made while disconnected fail when invoked; state has no value until hydrated. Concurrent consumers of one token in one process share one proxy, one state replica, and one remote subscription.
 
-Multi-instance services use `provideMany()` and `observe()`. The service is empty until its setup-owned `ServiceSpawner` calls `spawn()`; observing it never creates an instance. `spawner.spawn(key, implementation)` returns an idempotent close function, and the key must be unique among that service's live instances. Local observers use a direct process-local instance registry; non-local provisions additionally publish the same instance through RPC. `observe(service, handler)` reconciles current instances and then ordered additions, replacements, and removals. The handler receives the same `T` proxy shape as `use()`; `getServiceInstanceKey(proxy)` exposes its keyed application identity when needed. After an instance's initial state members hydrate, the host starts one handler task with a fresh `Context`. Closing the instance aborts that context, rejects new calls, and lets already-admitted calls return. Cancellation from the instance context is normal task cleanup; other handler failures follow host failure policy. Reusing a closed key creates a new host-owned generation, so stale proxies cannot address the replacement.
+Multi-instance services use `provideMany()` and `observe()`. The service is empty until its setup-owned `ServiceSpawner` calls `spawn()`; observing it never creates an instance. `spawner.spawn(key, implementation)` returns an idempotent close function, and the key must be unique among that service's live instances. Local observers use a direct process-local instance registry; non-local provisions additionally publish the same instance through RPC. `observe(service, handler)` reconciles current instances and then ordered additions, replacements, and removals. The handler receives the same `T` proxy shape as `use()`; instance keys remain provider-side addressing details. After an instance's initial state members hydrate, the host starts one handler task with a fresh `Context`. The facet lifecycle owns that observation. Closing the instance aborts its task context, rejects new calls, and lets already-admitted calls return. Cancellation from the instance context is normal task cleanup; other handler failures follow host failure policy. Reusing a closed key creates a new host-owned generation, so stale proxies cannot address the replacement.
 
 An added instance member has structural identity `(service, key, generation, member)`. Its `ReplicatedState` members therefore need no independent IDs. The instance directory is control-plane metadata, not a facet-visible `ReplicatedState` containing proxies. Switching sessions aborts all observed instance tasks before hydrating the selected session's current instances.
 
@@ -319,7 +319,7 @@ interface FacetEnvironment extends FacetLifecycle {
 	observe<T>(
 		service: Service<T>,
 		handler: (service: T, context: Context) => void | Promise<void>,
-	): () => void;
+	): void;
 	provide<T>(service: Service<T>, implementation: T): void;
 	provideMany<T>(service: Service<T>): ServiceSpawner<T>;
 	replicatedState<T>(initial: T): MutableReplicatedState<T>;
@@ -824,41 +824,39 @@ export const questionTuiFacet = defineFacet({
 	id: "@pi/question",
 	setup(env) {
 		const tui = env.use(Tui);
-		env.own(
-			env.observe(QuestionDialogs, async (dialog, context) => {
-				const request = dialog.service.request.value;
-				if (request === undefined) throw new Error("Question dialog was observed before hydration");
+		env.observe(QuestionDialogs, async (dialog, context) => {
+			const request = dialog.request.value;
+			if (request === undefined) throw new Error("Question dialog was observed before hydration");
 
-				const modal = await tui.acquireModal(context.abortSignal);
-				try {
-					const choice = await modal.select<QuestionChoice>(
-						request.question,
-						[
-							...request.options.map((option, index) => ({
-								label: option.label,
-								...(option.description === null ? {} : { description: option.description }),
-								value: { outcome: "selected" as const, index },
-							})),
-							{ label: "Write a custom answer", value: { outcome: "custom" as const } },
-						],
-					);
+			const modal = await tui.acquireModal(context.abortSignal);
+			try {
+				const choice = await modal.select<QuestionChoice>(
+					request.question,
+					[
+						...request.options.map((option, index) => ({
+							label: option.label,
+							...(option.description === null ? {} : { description: option.description }),
+							value: { outcome: "selected" as const, index },
+						})),
+						{ label: "Write a custom answer", value: { outcome: "custom" as const } },
+					],
+				);
 
-					let response: QuestionResponse;
-					if (choice === undefined) {
-						response = { outcome: "cancelled" };
-					} else if (choice.outcome === "selected") {
-						response = choice;
-					} else {
-						const answer = await modal.input(request.question);
-						response = answer === undefined ? { outcome: "cancelled" } : { outcome: "custom", answer };
-					}
-
-					await dialog.service.submitAnswer(response, context);
-				} finally {
-					modal.close();
+				let response: QuestionResponse;
+				if (choice === undefined) {
+					response = { outcome: "cancelled" };
+				} else if (choice.outcome === "selected") {
+					response = choice;
+				} else {
+					const answer = await modal.input(request.question);
+					response = answer === undefined ? { outcome: "cancelled" } : { outcome: "custom", answer };
 				}
-			}),
-		);
+
+				await dialog.submitAnswer(response, context);
+			} finally {
+				modal.close();
+			}
+		});
 
 		tui.toolRenderers.add<QuestionDetails>("question", questionRenderer);
 	},

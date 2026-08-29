@@ -4,13 +4,13 @@ import {
 	type Context,
 	combineFacetLoaders,
 	createFacetHost,
-	createLoopbackServiceConnection,
 	createRemoteServiceBinding,
 	createStaticFacetLoader,
 	defineFacet,
 	defineService,
 	type FacetLoader,
 } from "../src/index.ts";
+import { createLoopbackServiceConnection } from "./helpers.ts";
 
 interface GenerationValue {
 	read(context: Context): Promise<string>;

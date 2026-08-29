@@ -3,7 +3,6 @@ import { BACKGROUND_CONTEXT } from "../src/context/index.ts";
 import {
 	type Context,
 	createFacetHost,
-	createLoopbackServiceConnection,
 	createRemoteServiceBinding,
 	defineFacet,
 	defineService,
@@ -12,6 +11,7 @@ import {
 	RemoteServiceProvider,
 	type ReplicatedState,
 } from "../src/index.ts";
+import { createLoopbackServiceConnection } from "./helpers.ts";
 
 interface Source {
 	read(context: Context): Promise<string>;
@@ -283,8 +283,9 @@ describe("facet host", () => {
 		const connections = [
 			{ namespace: leftNamespace, provider: leftProvider },
 			{ namespace: rightNamespace, provider: rightProvider },
-		].map(({ namespace, provider }) =>
-			Object.assign(namespace, {
+		].map(({ namespace, provider }) => {
+			const ready = namespace.ready.bind(namespace);
+			return Object.assign(namespace, {
 				acceptsUnavailableServices: false,
 				async catalogue() {
 					return provider.catalogue;
@@ -292,12 +293,12 @@ describe("facet host", () => {
 				open() {
 					return namespace;
 				},
-				async activate(context: Context) {
+				async ready(context: Context) {
 					await namespace.rebind(true, context);
-					await namespace.ready(context);
+					await ready(context);
 				},
-			}),
-		);
+			});
+		});
 		const facet = defineFacet({
 			id: "combined",
 			setup(env) {
@@ -371,11 +372,12 @@ describe("facet host", () => {
 					assertAccess: options.assertAccess,
 					onError: options.onError,
 				});
+				const ready = namespace.ready.bind(namespace);
 				const dispose = namespace.dispose.bind(namespace);
 				return Object.assign(namespace, {
-					async activate(context: Context) {
+					async ready(context: Context) {
 						await namespace.rebind(true, context);
-						await namespace.ready(context);
+						await ready(context);
 					},
 					async dispose(context: Context) {
 						disposed += 1;

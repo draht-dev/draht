@@ -1,12 +1,6 @@
 import { BACKGROUND_CONTEXT, withCancel } from "../context/index.ts";
 import type { Context } from "../types.ts";
 
-const instanceKeys = new WeakMap<object, string>();
-
-export function lookupServiceInstanceKey(service: object): string | undefined {
-	return instanceKeys.get(service);
-}
-
 export interface InstanceDirectoryEntry {
 	readonly key: string;
 	readonly generation: number;
@@ -47,7 +41,6 @@ export class InstanceDirectory<TEntry extends InstanceDirectoryEntry> {
 			throw new Error(`Keyed service already has a live instance with key ${entry.key}`);
 		}
 		this.#entries.set(entry.key, entry);
-		registerServiceInstance(entry.service, entry.key);
 		if (this.#ready) this.#startAll(entry);
 	}
 
@@ -61,7 +54,6 @@ export class InstanceDirectory<TEntry extends InstanceDirectoryEntry> {
 			this.#remove(previous);
 		}
 		this.#entries.set(entry.key, entry);
-		registerServiceInstance(entry.service, entry.key);
 		if (this.#ready) this.#startAll(entry);
 	}
 
@@ -148,10 +140,6 @@ export class InstanceDirectory<TEntry extends InstanceDirectoryEntry> {
 	#assertActive(): void {
 		if (this.#disposed) throw new Error("Keyed service directory is disposed");
 	}
-}
-
-function registerServiceInstance(service: object, key: string): void {
-	instanceKeys.set(service, key);
 }
 
 function toError(error: unknown): Error {

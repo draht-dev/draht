@@ -1,20 +1,10 @@
-/** Typed identity for one value carried by a {@link Context}. */
-export interface ContextKey<T> {
-	readonly token: symbol;
-	/** Type-only marker that prevents keys with different value types from being interchangeable. */
-	readonly valueType?: (value: T) => T;
-}
+import type { Context, ContextKey } from "../types.ts";
 
-const ABORT_SIGNAL_CONTEXT_KEY: ContextKey<AbortSignal | undefined> = Object.freeze({
+export type { Context, ContextKey } from "../types.ts";
+
+export const ABORT_SIGNAL_CONTEXT_KEY: ContextKey<AbortSignal | undefined> = Object.freeze({
 	token: Symbol("chord.abortSignal"),
 });
-
-/** Immutable invocation-scoped values passed explicitly through operations. */
-export interface Context {
-	readonly abortSignal: AbortSignal | undefined;
-	value<T>(key: ContextKey<T>): T | undefined;
-	toString(): string;
-}
 
 abstract class BaseContext implements Context {
 	abstract value<T>(key: ContextKey<T>): T | undefined;
@@ -42,7 +32,6 @@ class EmptyContext extends BaseContext {
 	}
 }
 
-/** One copy-on-write value layered over a parent context. */
 class ContextValue<T> extends BaseContext {
 	readonly #parent: Context;
 	readonly #key: ContextKey<T>;
@@ -65,53 +54,39 @@ class ContextValue<T> extends BaseContext {
 	}
 }
 
-/** Root context for work that has no caller. */
 export const BACKGROUND_CONTEXT: Context = new EmptyContext("[Context BACKGROUND_CONTEXT]");
-
-/** Temporary root context marking a call site that still needs context propagation. */
 export const TODO_CONTEXT: Context = new EmptyContext("[Context TODO_CONTEXT]");
 
-export function createContextKey<T>(description: string): ContextKey<T> {
+function createContextKey<T>(description: string): ContextKey<T> {
 	return Object.freeze({ token: Symbol(description) });
 }
 
-/** Derive a context containing one additional or replaced value. */
-export function withContextValue<T>(key: ContextKey<T>, value: T, parent: Context): Context {
+export function deriveContextValue<T>(key: ContextKey<T>, value: T, parent: Context): Context {
 	return new ContextValue(parent, key, value);
 }
 
-/**
- * Derive a context cancelled by either the parent signal or the supplied signal.
- * The parent context remains unchanged.
- */
-export function withAbortSignal(signal: AbortSignal, context: Context): Context {
+export function deriveContextWithAbortSignal(signal: AbortSignal, context: Context): Context {
 	const parentSignal = context.abortSignal;
 	const combined = parentSignal === undefined ? signal : AbortSignal.any([parentSignal, signal]);
-	return withContextValue(ABORT_SIGNAL_CONTEXT_KEY, combined, context);
+	return deriveContextValue(ABORT_SIGNAL_CONTEXT_KEY, combined, context);
 }
 
-/** Derive a context retaining all values except caller cancellation. Intended for mandatory cleanup only. */
-export function withoutAbortSignal(context: Context): Context {
-	return withContextValue(ABORT_SIGNAL_CONTEXT_KEY, undefined, context);
+export function deriveContextWithoutAbortSignal(context: Context): Context {
+	return deriveContextValue(ABORT_SIGNAL_CONTEXT_KEY, undefined, context);
 }
 
-/** Derive an independently cancellable child context. */
-export function withCancel(context: Context): {
+export function deriveCancellableContext(context: Context): {
 	readonly context: Context;
 	readonly cancel: (reason?: unknown) => void;
 } {
 	const controller = new AbortController();
 	return {
-		context: withAbortSignal(controller.signal, context),
+		context: deriveContextWithAbortSignal(controller.signal, context),
 		cancel: (reason?: unknown) => controller.abort(reason),
 	};
 }
 
-/**
- * Observe a promise until it settles or the invocation is cancelled.
- * Cancellation rejects only this waiter; it does not cancel the underlying promise.
- */
-export function awaitWithContext<T>(promise: Promise<T>, context: Context): Promise<T> {
+export function waitWithContext<T>(promise: Promise<T>, context: Context): Promise<T> {
 	const signal = context.abortSignal;
 	if (signal === undefined) return promise;
 	if (signal.aborted) return Promise.reject(abortError(signal));
@@ -135,3 +110,13 @@ function abortError(signal: AbortSignal): Error {
 	const reason: unknown = signal.reason;
 	return reason instanceof Error ? reason : new DOMException("The operation was aborted", "AbortError");
 }
+
+/** @internal Narrow compatibility surface for the legacy context entry point. */
+export const INTERNAL_CONTEXT_OPERATIONS = Object.freeze({
+	awaitWithContext: waitWithContext,
+	createContextKey,
+	withAbortSignal: deriveContextWithAbortSignal,
+	withCancel: deriveCancellableContext,
+	withContextValue: deriveContextValue,
+	withoutAbortSignal: deriveContextWithoutAbortSignal,
+});

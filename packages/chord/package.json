@@ -11,15 +11,20 @@
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
 		},
-		"./context": {
-			"source": "./src/context.ts",
-			"types": "./dist/context.d.ts",
-			"import": "./dist/context.js"
+		"./api": {
+			"source": "./src/api.ts",
+			"types": "./dist/api.d.ts",
+			"import": "./dist/api.js"
 		},
-		"./json": {
-			"source": "./src/json.ts",
-			"types": "./dist/json.d.ts",
-			"import": "./dist/json.js"
+		"./context": {
+			"source": "./src/context/index.ts",
+			"types": "./dist/context/index.d.ts",
+			"import": "./dist/context/index.js"
+		},
+		"./types": {
+			"source": "./src/types.ts",
+			"types": "./dist/types.d.ts",
+			"import": "./dist/types.js"
 		},
 		"./package.json": "./package.json"
 	},

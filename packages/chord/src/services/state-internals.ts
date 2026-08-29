@@ -1,4 +1,4 @@
-import type { Context } from "./context.ts";
+import type { Context } from "../types.ts";
 
 export interface ReplicatedStateInternals {
 	readonly sequence: number;

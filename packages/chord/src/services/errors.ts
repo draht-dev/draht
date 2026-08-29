@@ -1,12 +1,4 @@
-export type RemoteServiceErrorCode =
-	| "service_not_allowed"
-	| "service_not_found"
-	| "service_mode_mismatch"
-	| "service_member_not_found"
-	| "service_member_mismatch"
-	| "service_instance_not_found"
-	| "service_stale_instance"
-	| "service_invalid_value";
+import type { RemoteServiceErrorCode } from "../types.ts";
 
 export class RemoteServiceError extends Error {
 	readonly code: RemoteServiceErrorCode;

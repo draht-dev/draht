@@ -3,42 +3,55 @@
  *
  * Its public API is under development.
  */
-export * from "./context.ts";
-export { createFacetHost } from "./facets/host.ts";
 export {
+	awaitWithContext,
 	combineFacetLoaders,
-	createStaticFacetLoader,
-	type FacetLoader,
-	type LoadedFacets,
-} from "./facets/loader.ts";
-export {
-	defineFacet,
-	type Facet,
-	type FacetConnection,
-	type FacetEnvironment,
-	type FacetHost,
-	type FacetOptions,
-	type ServiceSpawner,
-} from "./facets/types.ts";
-export type { JsonValue } from "./json.ts";
-export {
+	createContextKey,
+	createFacetHost,
+	createLoopbackServiceConnection,
 	createRemoteServiceBinding,
-	type RemoteServiceBinding,
-	type RemoteServiceBindingOptions,
-} from "./services/consumer.ts";
-export { defineService, type RemoteServices, type Service, type ServiceMode } from "./services/contracts.ts";
-export { RemoteServiceError, type RemoteServiceErrorCode } from "./services/errors.ts";
-export { getServiceInstanceKey } from "./services/metadata.ts";
+	createStaticFacetLoader,
+	defineFacet,
+	defineService,
+	freshDeliveryContext,
+	getServiceInstanceKey,
+	replicatedState,
+	withAbortSignal,
+	withCancel,
+	withContextValue,
+	withoutAbortSignal,
+} from "./api.ts";
+export { BACKGROUND_CONTEXT, TODO_CONTEXT } from "./context/index.ts";
+export { RemoteServiceError } from "./services/errors.ts";
+export { RemoteServiceProvider } from "./services/provider.ts";
 export type {
+	Context,
+	ContextKey,
+	Facet,
+	FacetConnection,
+	FacetEnvironment,
+	FacetHost,
+	FacetLoader,
+	FacetOptions,
+	JsonValue,
+	LoadedFacets,
+	MutableReplicatedState,
+	RemoteServiceBinding,
+	RemoteServiceBindingOptions,
 	RemoteServiceConnection,
+	RemoteServiceContract,
+	RemoteServiceErrorCode,
+	RemoteServices,
+	ReplicatedState,
+	Service,
 	ServiceCall,
 	ServiceCatalogueEntry,
 	ServiceInstanceAddress,
 	ServiceInstanceSnapshot,
 	ServiceMemberSnapshot,
+	ServiceMode,
 	ServiceProviderUpdate,
+	ServiceSpawner,
 	ServiceSubscription,
 	ServiceSubscriptionSnapshot,
-} from "./services/protocol.ts";
-export { createLoopbackServiceConnection, RemoteServiceProvider } from "./services/provider.ts";
-export { freshDeliveryContext, type MutableReplicatedState, type ReplicatedState, replicatedState } from "./state.ts";
+} from "./types.ts";

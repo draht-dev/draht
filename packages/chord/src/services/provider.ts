@@ -1,20 +1,21 @@
-import type { Context } from "../context.ts";
-import type { JsonValue } from "../json.ts";
-import { freshDeliveryContext } from "../state.ts";
-import { getReplicatedStateInternals, type ReplicatedStateInternals } from "../state-internals.ts";
-import type { RemoteServiceContract, Service, ServiceMode } from "./contracts.ts";
-import { RemoteServiceError } from "./errors.ts";
 import type {
-	RemoteServiceConnection,
+	Context,
+	JsonValue,
+	RemoteServiceContract,
+	Service,
 	ServiceCall,
 	ServiceCatalogueEntry,
 	ServiceInstanceAddress,
 	ServiceInstanceSnapshot,
 	ServiceMemberSnapshot,
+	ServiceMode,
 	ServiceProviderUpdate,
 	ServiceSubscription,
 	ServiceSubscriptionSnapshot,
-} from "./protocol.ts";
+} from "../types.ts";
+import { RemoteServiceError } from "./errors.ts";
+import { createDeliveryContext } from "./state.ts";
+import { getReplicatedStateInternals, type ReplicatedStateInternals } from "./state-internals.ts";
 
 type RemoteMethod = (...args: unknown[]) => unknown;
 
@@ -363,7 +364,7 @@ export class RemoteServiceProvider {
 
 	#emit(registration: ServiceRegistration, update: ServiceProviderUpdate, context?: Context): void {
 		if (registration.subscribers.size === 0) return;
-		const deliveryContext = context ?? freshDeliveryContext();
+		const deliveryContext = context ?? createDeliveryContext();
 		for (const subscriber of registration.subscribers) {
 			if (subscriber.closed) continue;
 			const entry = { update, context: deliveryContext };
@@ -417,18 +418,4 @@ function classifyRemoteServiceImplementation(
 	}
 	if (members.size === 0) throw new TypeError(`Remote service ${serviceId} has no members`);
 	return { implementation, members };
-}
-
-export function createLoopbackServiceConnection(provider: RemoteServiceProvider): RemoteServiceConnection {
-	return {
-		invoke: (call, context) => provider.invoke(call, context),
-		subscribe: async (serviceId, mode, listener) => {
-			const subscription = provider.subscribe(serviceId, mode, (update) => listener(update, freshDeliveryContext()));
-			return {
-				snapshot: subscription.snapshot,
-				activate: () => subscription.activate(),
-				close: () => subscription.close(),
-			};
-		},
-	};
 }

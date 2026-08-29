@@ -1,5 +1,11 @@
-import { BACKGROUND_CONTEXT, type Context, withCancel } from "../context.ts";
-import { registerServiceInstance } from "./metadata.ts";
+import { BACKGROUND_CONTEXT, deriveCancellableContext } from "../context/index.ts";
+import type { Context } from "../types.ts";
+
+const instanceKeys = new WeakMap<object, string>();
+
+export function lookupServiceInstanceKey(service: object): string | undefined {
+	return instanceKeys.get(service);
+}
 
 export interface InstanceDirectoryEntry {
 	readonly key: string;
@@ -128,7 +134,7 @@ export class InstanceDirectory<TEntry extends InstanceDirectoryEntry> {
 
 	#start(observer: Observer, entry: TEntry): void {
 		if (observer.closed || observer.tasks.has(entry)) return;
-		const { context, cancel } = withCancel(BACKGROUND_CONTEXT);
+		const { context, cancel } = deriveCancellableContext(BACKGROUND_CONTEXT);
 		observer.tasks.set(entry, { cancel });
 		try {
 			void Promise.resolve(observer.handler(entry.service, context)).catch((error: unknown) => {
@@ -142,6 +148,10 @@ export class InstanceDirectory<TEntry extends InstanceDirectoryEntry> {
 	#assertActive(): void {
 		if (this.#disposed) throw new Error("Keyed service directory is disposed");
 	}
+}
+
+function registerServiceInstance(service: object, key: string): void {
+	instanceKeys.set(service, key);
 }
 
 function toError(error: unknown): Error {

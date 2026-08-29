@@ -583,12 +583,15 @@ This is a planning aid, not a requirement to create all files immediately.
 packages/chord/
   src/
     index.ts                 platform-neutral public API
-    context.ts               neutral invocation context and cancellation
-    json.ts                  strict JSON types and validation
+    api.ts                   public functions
+    types.ts                 public types, including strict JSON values
+    context/
+      index.ts               invocation context internals and compatibility entry
     errors.ts                lifecycle, service, and RPC errors
-    state.ts                 source and replica state primitives
     services/
       types.ts               tokens, contracts, modes, snapshots
+      state.ts               source and replica state primitives
+      state-internals.ts     private replicated-state metadata
       provider.ts            singleton/keyed provider runtime
       facade.ts              stable local and remote facades
       host-bindings.ts       graph-facing service slots

@@ -1,21 +1,8 @@
-import { BACKGROUND_CONTEXT, type Context, withCancel } from "./context.ts";
-import type { JsonValue } from "./json.ts";
+import { BACKGROUND_CONTEXT, deriveCancellableContext } from "../context/index.ts";
+import type { Context, JsonValue, MutableReplicatedState, ReplicatedState } from "../types.ts";
 import { registerReplicatedStateInternals } from "./state-internals.ts";
 
-export interface ReplicatedState<T> {
-	/** Borrowed immutable value, or undefined until hydration. Do not mutate or retain it. */
-	readonly value: T | undefined;
-	/** Listener values are borrowed and must not be mutated or retained. */
-	subscribe(listener: (value: T, context: Context) => void): () => void;
-}
-
-export interface MutableReplicatedState<T> extends ReplicatedState<T> {
-	readonly value: T;
-	/** Transfers the JSON value to the state; the caller must not subsequently mutate it. */
-	set(value: T, context: Context): void;
-}
-
-class MutableReplicatedStateImpl<T> implements MutableReplicatedState<T> {
+export class MutableReplicatedStateImpl<T> implements MutableReplicatedState<T> {
 	readonly #listeners = new Set<(value: T, context: Context) => void>();
 	readonly #sourceListeners = new Set<(value: T, sequence: number, context: Context) => void>();
 	#value: T;
@@ -54,7 +41,7 @@ class MutableReplicatedStateImpl<T> implements MutableReplicatedState<T> {
 
 	subscribe(listener: (value: T, context: Context) => void): () => void {
 		this.#listeners.add(listener);
-		listener(this.value, freshDeliveryContext());
+		listener(this.value, createDeliveryContext());
 		return () => this.#listeners.delete(listener);
 	}
 }
@@ -76,7 +63,7 @@ export class ReplicatedStateReplica<T extends JsonValue = JsonValue> implements 
 
 	subscribe(listener: (value: T, context: Context) => void): () => void {
 		this.#listeners.add(listener);
-		if (this.#value !== undefined) this.#deliver(listener, this.#value, freshDeliveryContext());
+		if (this.#value !== undefined) this.#deliver(listener, this.#value, createDeliveryContext());
 		return () => this.#listeners.delete(listener);
 	}
 
@@ -114,12 +101,8 @@ export class ReplicatedStateReplica<T extends JsonValue = JsonValue> implements 
 	}
 }
 
-export function replicatedState<T>(initial: T): MutableReplicatedState<T> {
-	return new MutableReplicatedStateImpl(initial);
-}
-
-export function freshDeliveryContext(): Context {
-	return withCancel(BACKGROUND_CONTEXT).context;
+export function createDeliveryContext(): Context {
+	return deriveCancellableContext(BACKGROUND_CONTEXT).context;
 }
 
 function toError(error: unknown): Error {

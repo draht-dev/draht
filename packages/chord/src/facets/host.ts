@@ -1,10 +1,20 @@
-import { BACKGROUND_CONTEXT, type Context } from "../context.ts";
-import type { RemoteServiceContract, RemoteServices, Service, ServiceMode } from "../services/contracts.ts";
+import { BACKGROUND_CONTEXT } from "../context/index.ts";
 import { ServiceHandle } from "../services/handle.ts";
 import { InstanceDirectory, type InstanceDirectoryEntry } from "../services/instances.ts";
 import { RemoteServiceProvider, validateRemoteServiceImplementation } from "../services/provider.ts";
-import { replicatedState } from "../state.ts";
-import type { Facet, FacetConnection, FacetEnvironment, FacetHost, FacetOptions, ServiceSpawner } from "./types.ts";
+import { MutableReplicatedStateImpl } from "../services/state.ts";
+import type {
+	Context,
+	Facet,
+	FacetConnection,
+	FacetEnvironment,
+	FacetOptions,
+	RemoteServiceContract,
+	RemoteServices,
+	Service,
+	ServiceMode,
+	ServiceSpawner,
+} from "../types.ts";
 
 interface FacetServiceReference {
 	readonly serviceId: string;
@@ -315,19 +325,8 @@ type FacetProvision =
 			connectRemote(provider: RemoteServiceProvider): void;
 	  };
 
-/** Create an active host for one complete set of facets. */
-export async function createFacetHost(options: FacetOptions): Promise<FacetHost> {
-	const kernel = new FacetKernel(options);
-	await kernel.activate();
-	return Object.freeze({
-		services: kernel.provider,
-		reload: (facets: readonly Facet[]) => kernel.reload(facets),
-		dispose: () => kernel.dispose(),
-	});
-}
-
 /** Private lifecycle and dependency kernel behind the atomic host entry point. */
-class FacetKernel {
+export class FacetKernel {
 	readonly #initialFacets: readonly Facet[];
 	readonly #connections: readonly FacetConnection[];
 	readonly #onError: (error: Error) => void;
@@ -588,7 +587,7 @@ class FacetKernel {
 			},
 			replicatedState: <T>(initial: T) => {
 				lifecycle.assertRunning("create replicated state");
-				return replicatedState(initial);
+				return new MutableReplicatedStateImpl(initial);
 			},
 			own: (disposal) => lifecycle.own(disposal),
 			onActivate: (callback) => lifecycle.onActivate(callback),

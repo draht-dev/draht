@@ -4,7 +4,7 @@ import type {
 	JsonValue,
 	RemoteServiceBinding,
 	RemoteServiceBindingOptions,
-	RemoteServiceConnection,
+	RemoteServiceTransport,
 	Service,
 	ServiceInstanceAddress,
 	ServiceInstanceSnapshot,
@@ -138,7 +138,7 @@ class MemberSlot {
 class ServiceFacade {
 	readonly #serviceId: string;
 	readonly #address: ServiceInstanceAddress | undefined;
-	readonly #connection: RemoteServiceConnection;
+	readonly #transport: RemoteServiceTransport;
 	readonly #reportError: ErrorReporter;
 	readonly #slots = new Map<string, MemberSlot>();
 	readonly #descriptions = new Map<string, ServiceMemberKind>();
@@ -149,14 +149,14 @@ class ServiceFacade {
 	constructor(
 		serviceId: string,
 		address: ServiceInstanceAddress | undefined,
-		connection: RemoteServiceConnection,
+		transport: RemoteServiceTransport,
 		isActive: () => boolean,
 		assertAccess: () => void,
 		reportError: ErrorReporter,
 	) {
 		this.#serviceId = serviceId;
 		this.#address = address;
-		this.#connection = connection;
+		this.#transport = transport;
 		this.#isActive = isActive;
 		this.#assertAccess = assertAccess;
 		this.#reportError = reportError;
@@ -210,7 +210,7 @@ class ServiceFacade {
 			this.#serviceId,
 			member,
 			(args, context) =>
-				this.#connection.invoke(
+				this.#transport.invoke(
 					{
 						serviceId: this.#serviceId,
 						...(this.#address === undefined ? {} : { instance: this.#address }),
@@ -244,7 +244,7 @@ interface KeyedInstance extends InstanceDirectoryEntry {
 
 class KeyedBinding<T> {
 	readonly #service: Service<T>;
-	readonly #connection: RemoteServiceConnection;
+	readonly #transport: RemoteServiceTransport;
 	readonly #reportError: ErrorReporter;
 	readonly #assertAccess: () => void;
 	readonly #onEmpty: () => void;
@@ -257,14 +257,14 @@ class KeyedBinding<T> {
 
 	constructor(
 		service: Service<T>,
-		connection: RemoteServiceConnection,
+		transport: RemoteServiceTransport,
 		reportError: ErrorReporter,
 		assertAccess: () => void,
 		onEmpty: () => void,
 		bound: boolean,
 	) {
 		this.#service = service;
-		this.#connection = connection;
+		this.#transport = transport;
 		this.#reportError = reportError;
 		this.#assertAccess = assertAccess;
 		this.#onEmpty = onEmpty;
@@ -330,7 +330,7 @@ class KeyedBinding<T> {
 	}
 
 	async #start(revision: number): Promise<void> {
-		const subscription = await this.#connection.subscribe(
+		const subscription = await this.#transport.subscribe(
 			this.#service.id,
 			"keyed",
 			(update, context) => {
@@ -386,7 +386,7 @@ class KeyedBinding<T> {
 		const facade = new ServiceFacade(
 			this.#service.id,
 			address,
-			this.#connection,
+			this.#transport,
 			() => active && !this.#closed,
 			this.#assertAccess,
 			this.#reportError,
@@ -406,7 +406,7 @@ class KeyedBinding<T> {
 }
 
 export class RemoteServiceBindingImpl implements RemoteServiceBinding {
-	readonly #connection: RemoteServiceConnection;
+	readonly #transport: RemoteServiceTransport;
 	readonly #allowlist = new Set<string>();
 	readonly #reportError: ErrorReporter;
 	readonly #modes = new Map<string, "singleton" | "keyed">();
@@ -419,7 +419,7 @@ export class RemoteServiceBindingImpl implements RemoteServiceBinding {
 	#disposed = false;
 
 	constructor(options: RemoteServiceBindingOptions) {
-		this.#connection = options.connection;
+		this.#transport = options.transport;
 		const ids = options.services.map(({ id }) => id);
 		if (new Set(ids).size !== ids.length) throw new TypeError("Remote service binding has duplicate service IDs");
 		for (const id of ids) this.#allowlist.add(id);
@@ -437,7 +437,7 @@ export class RemoteServiceBindingImpl implements RemoteServiceBinding {
 		binding.facade = new ServiceFacade(
 			service.id,
 			undefined,
-			this.#connection,
+			this.#transport,
 			() => binding!.active && !this.#disposed && this.#bound,
 			() => this.#assertAccess(),
 			this.#reportError,
@@ -464,7 +464,7 @@ export class RemoteServiceBindingImpl implements RemoteServiceBinding {
 		if (binding === undefined) {
 			binding = new KeyedBinding(
 				service,
-				this.#connection,
+				this.#transport,
 				this.#reportError,
 				() => this.#assertAccess(),
 				() => {
@@ -556,7 +556,7 @@ export class RemoteServiceBindingImpl implements RemoteServiceBinding {
 	}
 
 	async #startSingleton(serviceId: string, binding: SingletonBinding, revision: number): Promise<void> {
-		const subscription = await this.#connection.subscribe(
+		const subscription = await this.#transport.subscribe(
 			serviceId,
 			"singleton",
 			(update, context) => {

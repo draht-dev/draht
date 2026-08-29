@@ -81,7 +81,6 @@ export function defineService(id: string, options?: { readonly local?: boolean }
 	return Object.freeze({ id, local: options?.local ?? false });
 }
 
-/** @publicApiReview Consider hiding this low-level remote binding factory behind facet connections. */
 export function createRemoteServiceBinding(options: RemoteServiceBindingOptions): RemoteServiceBinding {
 	return new RemoteServiceBindingImpl(options);
 }

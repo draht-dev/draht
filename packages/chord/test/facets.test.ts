@@ -6,12 +6,12 @@ import {
 	createRemoteServiceBinding,
 	defineFacet,
 	defineService,
-	type FacetConnection,
 	type MutableReplicatedState,
 	RemoteServiceProvider,
+	type RemoteServiceSource,
 	type ReplicatedState,
 } from "../src/index.ts";
-import { createLoopbackServiceConnection } from "./helpers.ts";
+import { createLoopbackServiceTransport } from "./helpers.ts";
 
 interface Source {
 	read(context: Context): Promise<string>;
@@ -144,7 +144,7 @@ describe("facet host", () => {
 		expect(trace).toEqual(["activate provider", "activate observer", "observe one"]);
 		const remoteServices = createRemoteServiceBinding({
 			services: [KeyedValue],
-			connection: createLoopbackServiceConnection(host.services),
+			transport: createLoopbackServiceTransport(host.services),
 		});
 		const remoteValues: string[] = [];
 		remoteServices.observe(KeyedValue, async (service, context) => {
@@ -272,15 +272,15 @@ describe("facet host", () => {
 		});
 		const leftNamespace = createRemoteServiceBinding({
 			services: [LeftValue],
-			connection: createLoopbackServiceConnection(leftProvider),
+			transport: createLoopbackServiceTransport(leftProvider),
 			bound: false,
 		});
 		const rightNamespace = createRemoteServiceBinding({
 			services: [RightValue],
-			connection: createLoopbackServiceConnection(rightProvider),
+			transport: createLoopbackServiceTransport(rightProvider),
 			bound: false,
 		});
-		const connections = [
+		const serviceSources = [
 			{ namespace: leftNamespace, provider: leftProvider },
 			{ namespace: rightNamespace, provider: rightProvider },
 		].map(({ namespace, provider }) => {
@@ -312,7 +312,7 @@ describe("facet host", () => {
 			},
 		});
 
-		const host = await createFacetHost({ facets: [facet], connections });
+		const host = await createFacetHost({ facets: [facet], serviceSources });
 		await expect(host.services.use(CombinedValue).read(BACKGROUND_CONTEXT)).resolves.toBe("left right");
 
 		await host.dispose();
@@ -321,28 +321,28 @@ describe("facet host", () => {
 		rightProvider.dispose();
 	});
 
-	test("rejects a service offered by multiple connections", async () => {
+	test("rejects a service offered by multiple sources", async () => {
 		const duplicate = {
 			acceptsUnavailableServices: false,
 			async catalogue() {
 				return [{ serviceId: LeftValue.id, mode: "singleton" as const }];
 			},
 			open() {
-				throw new Error("Ambiguous connections must not open");
+				throw new Error("Ambiguous sources must not open");
 			},
-		} satisfies FacetConnection;
+		} satisfies RemoteServiceSource;
 		const consumer = defineFacet({
 			id: "duplicate-consumer",
 			setup(env) {
 				env.use(LeftValue);
 			},
 		});
-		await expect(createFacetHost({ facets: [consumer], connections: [duplicate, duplicate] })).rejects.toThrow(
-			`Facet host service ${LeftValue.id} is offered by more than one connection`,
+		await expect(createFacetHost({ facets: [consumer], serviceSources: [duplicate, duplicate] })).rejects.toThrow(
+			`Facet host service ${LeftValue.id} is offered by more than one source`,
 		);
 	});
 
-	test("reopens connection bindings from changed catalogues for a replacement generation", async () => {
+	test("reopens source bindings from changed catalogues for a replacement generation", async () => {
 		const leftProvider = new RemoteServiceProvider([LeftValue]);
 		leftProvider.provide(LeftValue, {
 			async read() {
@@ -358,7 +358,7 @@ describe("facet host", () => {
 		let currentProvider = leftProvider;
 		let opened = 0;
 		let disposed = 0;
-		const connection = {
+		const source = {
 			acceptsUnavailableServices: false,
 			async catalogue() {
 				return currentProvider.catalogue;
@@ -367,7 +367,7 @@ describe("facet host", () => {
 				opened += 1;
 				const namespace = createRemoteServiceBinding({
 					services: options.services,
-					connection: createLoopbackServiceConnection(currentProvider),
+					transport: createLoopbackServiceTransport(currentProvider),
 					bound: false,
 					assertAccess: options.assertAccess,
 					onError: options.onError,
@@ -385,7 +385,7 @@ describe("facet host", () => {
 					},
 				});
 			},
-		} satisfies FacetConnection;
+		} satisfies RemoteServiceSource;
 		const values: string[] = [];
 		const leftConsumer = defineFacet({
 			id: "left-consumer",
@@ -396,7 +396,7 @@ describe("facet host", () => {
 				});
 			},
 		});
-		const first = await createFacetHost({ facets: [leftConsumer], connections: [connection] });
+		const first = await createFacetHost({ facets: [leftConsumer], serviceSources: [source] });
 		await first.dispose();
 
 		currentProvider = rightProvider;
@@ -409,7 +409,7 @@ describe("facet host", () => {
 				});
 			},
 		});
-		const second = await createFacetHost({ facets: [rightConsumer], connections: [connection] });
+		const second = await createFacetHost({ facets: [rightConsumer], serviceSources: [source] });
 		await second.dispose();
 
 		expect(values).toEqual(["left", "right"]);

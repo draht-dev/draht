@@ -10,7 +10,7 @@ import {
 	defineService,
 	type FacetLoader,
 } from "../src/index.ts";
-import { createLoopbackServiceConnection } from "./helpers.ts";
+import { createLoopbackServiceTransport } from "./helpers.ts";
 
 interface GenerationValue {
 	read(context: Context): Promise<string>;
@@ -143,7 +143,7 @@ describe("facet loader", () => {
 		const localRead = originalLocalHandle.read;
 		const remoteServices = createRemoteServiceBinding({
 			services: [RemoteGenerationValue],
-			connection: createLoopbackServiceConnection(host.services),
+			transport: createLoopbackServiceTransport(host.services),
 		});
 		const originalRemoteHandle = remoteServices.use(RemoteGenerationValue);
 		const remoteRead = originalRemoteHandle.read;

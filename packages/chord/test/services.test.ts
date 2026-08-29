@@ -5,12 +5,12 @@ import {
 	createRemoteServiceBinding,
 	defineService,
 	type JsonValue,
-	type RemoteServiceConnection,
 	RemoteServiceProvider,
+	type RemoteServiceTransport,
 	type ReplicatedState,
 	replicatedState,
 } from "../src/index.ts";
-import { createLoopbackServiceConnection } from "./helpers.ts";
+import { createLoopbackServiceTransport } from "./helpers.ts";
 
 type ModelRef = { provider: string; modelId: string };
 type ModelsState = {
@@ -109,7 +109,7 @@ describe("remote services", () => {
 		});
 		const namespace = createRemoteServiceBinding({
 			services: [Echo],
-			connection: createLoopbackServiceConnection(provider),
+			transport: createLoopbackServiceTransport(provider),
 		});
 		const echo = namespace.use(Echo);
 		await namespace.ready(BACKGROUND_CONTEXT);
@@ -138,7 +138,7 @@ describe("remote services", () => {
 		const errors: Error[] = [];
 		const namespace = createRemoteServiceBinding({
 			services: [Models],
-			connection: createLoopbackServiceConnection(provider),
+			transport: createLoopbackServiceTransport(provider),
 			onError: (error) => errors.push(error),
 		});
 
@@ -165,7 +165,7 @@ describe("remote services", () => {
 
 		const lateNamespace = createRemoteServiceBinding({
 			services: [Models],
-			connection: createLoopbackServiceConnection(provider),
+			transport: createLoopbackServiceTransport(provider),
 		});
 		const lateModels = lateNamespace.use(Models);
 		await lateNamespace.ready(BACKGROUND_CONTEXT);
@@ -184,7 +184,7 @@ describe("remote services", () => {
 		});
 		const namespace = createRemoteServiceBinding({
 			services: [Models],
-			connection: createLoopbackServiceConnection(provider),
+			transport: createLoopbackServiceTransport(provider),
 		});
 		const models = namespace.use(Models);
 		const state = models.state;
@@ -223,7 +223,7 @@ describe("remote services", () => {
 		let active = false;
 		const namespace = createRemoteServiceBinding({
 			services: [Models],
-			connection: createLoopbackServiceConnection(provider),
+			transport: createLoopbackServiceTransport(provider),
 			bound: false,
 			assertAccess() {
 				if (!active) throw new Error("Service handles are not active");
@@ -251,7 +251,7 @@ describe("remote services", () => {
 		const errors: Error[] = [];
 		const namespace = createRemoteServiceBinding({
 			services: [Models],
-			connection: {
+			transport: {
 				invoke: () => Promise.reject(new Error("unexpected invocation")),
 				subscribe: () => Promise.reject(failure),
 			},
@@ -272,7 +272,7 @@ describe("remote services", () => {
 			state,
 			async select() {},
 		});
-		const connection: RemoteServiceConnection = {
+		const transport: RemoteServiceTransport = {
 			invoke: (call, context) => provider.invoke(call, context),
 			subscribe: async (serviceId, mode, listener) => {
 				const subscription = provider.subscribe(serviceId, mode, listener);
@@ -284,7 +284,7 @@ describe("remote services", () => {
 				};
 			},
 		};
-		const namespace = createRemoteServiceBinding({ services: [Models], connection });
+		const namespace = createRemoteServiceBinding({ services: [Models], transport });
 		const models = namespace.use(Models);
 		const revisions: number[] = [];
 		models.state.subscribe((value) => revisions.push(value.revision));
@@ -304,7 +304,7 @@ describe("remote services", () => {
 		});
 		const namespace = createRemoteServiceBinding({
 			services: [Models],
-			connection: createLoopbackServiceConnection(provider),
+			transport: createLoopbackServiceTransport(provider),
 			bound: false,
 		});
 		const models = namespace.use(Models);
@@ -335,11 +335,11 @@ describe("remote services", () => {
 	test("hydrates keyed state before observe handlers and fences reused keys", async () => {
 		const provider = new RemoteServiceProvider([{ service: QuestionDialogs, mode: "keyed" }]);
 		expect(provider.catalogue).toEqual([{ serviceId: QuestionDialogs.id, mode: "keyed" }]);
-		const connection = createLoopbackServiceConnection(provider);
+		const transport = createLoopbackServiceTransport(provider);
 		const errors: Error[] = [];
 		const namespace = createRemoteServiceBinding({
 			services: [QuestionDialogs],
-			connection,
+			transport,
 			onError: (error) => errors.push(error),
 		});
 		const observed: {

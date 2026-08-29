@@ -135,9 +135,9 @@ The host records setup calls in a private generation ledger. Plugin authors do n
 
 After every plugin has completed setup, the host must:
 
-1. collect local provisions and catalogues from configured connections;
+1. collect local provisions and catalogues from configured remote service sources;
 2. resolve every hard requirement to exactly one local or connected provision;
-3. reject missing providers, duplicate providers, ambiguous connection offers, and singleton/keyed mismatches;
+3. reject missing providers, duplicate providers, ambiguous source offers, and singleton/keyed mismatches;
 4. reject duplicate plugin IDs;
 5. derive provider-to-consumer lifecycle edges;
 6. reject dependency cycles;

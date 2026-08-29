@@ -1,5 +1,5 @@
 export type {
-	RemoteServiceConnection,
+	RemoteServiceTransport,
 	ServiceCall,
 	ServiceCatalogueEntry,
 	ServiceInstanceAddress,

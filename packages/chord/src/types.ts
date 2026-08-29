@@ -38,7 +38,6 @@ export type ServiceMode = "singleton" | "keyed";
 
 /** Stable identity for one shared TypeScript service contract. */
 export interface Service<T> {
-	/** @publicApiReview Decide whether Chord should expose and own service identifiers. */
 	readonly id: string;
 	/** Process-local services accept unrestricted object contracts and are never published remotely. */
 	readonly local: boolean;
@@ -79,17 +78,12 @@ type InvalidRemoteMemberNames<T> = {
 	[TKey in keyof T]-?: InvalidRemoteMember<T[TKey]> extends never ? never : TKey;
 }[keyof T];
 
-/** @publicApiReview Consider keeping this contract-validation helper internal. */
 export type RemoteServiceContract<T> = InvalidRemoteMemberNames<T> extends never ? T : never;
 
 export interface ServiceSpawner<T> {
 	spawn(key: string, implementation: T): () => void;
 }
 
-/**
- * @publicApiReview This host-facing binding interface may be better hidden behind
- * higher-level facet connection APIs.
- */
 export interface RemoteServices {
 	use<T>(service: Service<T>): T;
 	observe<T>(service: Service<T>, handler: (service: T, context: Context) => void | Promise<void>): () => void;
@@ -98,37 +92,31 @@ export interface RemoteServices {
 	dispose(context: Context): Promise<void>;
 }
 
-/** @publicApiReview Consider hiding this low-level transport type behind the connection API. */
 export type ServiceCatalogueEntry = {
 	readonly serviceId: string;
 	readonly mode: ServiceMode;
 };
 
-/** @publicApiReview Consider hiding this low-level transport type behind the connection API. */
 export type ServiceInstanceAddress = {
 	readonly key: string;
 	readonly generation: number;
 };
 
-/** @publicApiReview Consider hiding this low-level transport type behind the connection API. */
 export type ServiceMemberSnapshot =
 	| { readonly name: string; readonly kind: "method" }
 	| { readonly name: string; readonly kind: "state"; readonly sequence: number; readonly value: JsonValue };
 
-/** @publicApiReview Consider hiding this low-level transport type behind the connection API. */
 export type ServiceInstanceSnapshot = {
 	readonly instance?: ServiceInstanceAddress;
 	readonly members: readonly ServiceMemberSnapshot[];
 };
 
-/** @publicApiReview Consider hiding this low-level transport type behind the connection API. */
 export type ServiceSubscriptionSnapshot = {
 	readonly serviceId: string;
 	readonly mode: ServiceMode;
 	readonly instances: readonly ServiceInstanceSnapshot[];
 };
 
-/** @publicApiReview Consider hiding this low-level transport type behind the connection API. */
 export type ServiceProviderUpdate =
 	| {
 			readonly type: "state";
@@ -142,7 +130,6 @@ export type ServiceProviderUpdate =
 	| { readonly type: "spawned"; readonly instance: ServiceInstanceSnapshot }
 	| { readonly type: "closed"; readonly instance: ServiceInstanceAddress };
 
-/** @publicApiReview Consider hiding this low-level transport type behind the connection API. */
 export type ServiceCall = {
 	readonly serviceId: string;
 	readonly instance?: ServiceInstanceAddress;
@@ -151,7 +138,6 @@ export type ServiceCall = {
 	readonly args: readonly JsonValue[];
 };
 
-/** @publicApiReview Consider hiding this low-level transport type behind the connection API. */
 export interface ServiceSubscription {
 	readonly snapshot: ServiceSubscriptionSnapshot;
 	activate(): void;
@@ -165,9 +151,8 @@ export interface ServiceSubscription {
  * boundary must remain strict JSON. Chord does not clone values or require a particular application wire protocol;
  * adapters own serialization and any isolation copies they require.
  *
- * @publicApiReview Consider replacing this low-level transport boundary with a higher-level adapter API.
  */
-export interface RemoteServiceConnection {
+export interface RemoteServiceTransport {
 	invoke(call: ServiceCall, context: Context): Promise<JsonValue | undefined>;
 	subscribe(
 		serviceId: string,
@@ -179,7 +164,7 @@ export interface RemoteServiceConnection {
 
 export interface RemoteServiceBindingOptions {
 	readonly services: readonly { readonly id: string }[];
-	readonly connection: RemoteServiceConnection;
+	readonly transport: RemoteServiceTransport;
 	readonly bound?: boolean;
 	readonly onError?: (error: Error) => void;
 	readonly assertAccess?: () => void;
@@ -223,8 +208,8 @@ export interface Facet {
 	setup(env: FacetEnvironment): void;
 }
 
-export interface FacetConnection {
-	/** Whether this currently unavailable route may provisionally own absent requirements. */
+export interface RemoteServiceSource {
+	/** Whether this currently unavailable source may provisionally own absent requirements. */
 	readonly acceptsUnavailableServices: boolean;
 	catalogue(context: Context): Promise<readonly ServiceCatalogueEntry[]>;
 	open(options: {
@@ -236,7 +221,7 @@ export interface FacetConnection {
 
 export interface FacetOptions {
 	readonly facets: readonly Facet[];
-	readonly connections?: readonly FacetConnection[];
+	readonly serviceSources?: readonly RemoteServiceSource[];
 	readonly onError?: (error: Error) => void;
 }
 

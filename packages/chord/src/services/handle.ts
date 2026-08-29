@@ -1,10 +1,9 @@
 export class ServiceHandle {
 	readonly #serviceId: string;
 	readonly #assertAccess: () => void;
-	readonly #methods = new Map<PropertyKey, unknown>();
+	readonly #members = new Map<PropertyKey, unknown>();
 	readonly proxy: object;
 	#implementation: object | undefined;
-	#remote = false;
 
 	constructor(serviceId: string, assertAccess: () => void) {
 		this.#serviceId = serviceId;
@@ -13,38 +12,46 @@ export class ServiceHandle {
 			{},
 			{
 				get: (_target, property) => {
-					this.#assertAccess();
-					if (this.#implementation === undefined) throw new Error(`Service ${this.#serviceId} is disconnected`);
-					const value: unknown = Reflect.get(this.#implementation, property, this.#implementation);
-					if (this.#remote || typeof value !== "function") return value;
-					let method = this.#methods.get(property);
-					if (method === undefined) {
-						method = (...args: unknown[]) => {
-							this.#assertAccess();
-							if (this.#implementation === undefined) {
-								throw new Error(`Service ${this.#serviceId} is disconnected`);
-							}
-							const current: unknown = Reflect.get(this.#implementation, property, this.#implementation);
+					const value = this.#getMember(property);
+					if (typeof value !== "function") return value;
+					let member = this.#members.get(property);
+					if (member === undefined) {
+						const invoke = (...args: unknown[]): unknown => {
+							const implementation = this.#implementation;
+							const current = this.#getMember(property);
 							if (typeof current !== "function") {
-								throw new TypeError(`Service ${this.#serviceId}.${String(property)} is not a method`);
+								throw new TypeError(`Service ${this.#serviceId}.${String(property)} is not callable`);
 							}
-							return Reflect.apply(current, this.#implementation, args);
+							return Reflect.apply(current, implementation, args);
 						};
-						this.#methods.set(property, method);
+						member = new Proxy(invoke, {
+							get: (_target, memberProperty) => {
+								const current = this.#getMember(property);
+								if (typeof current !== "function") {
+									throw new TypeError(`Service ${this.#serviceId}.${String(property)} is not callable`);
+								}
+								return Reflect.get(current, memberProperty, current);
+							},
+						});
+						this.#members.set(property, member);
 					}
-					return method;
+					return member;
 				},
 			},
 		);
 	}
 
-	bind(implementation: object, remote = false): void {
+	bind(implementation: object): void {
 		this.#implementation = implementation;
-		this.#remote = remote;
 	}
 
 	unbind(): void {
 		this.#implementation = undefined;
-		this.#remote = false;
+	}
+
+	#getMember(property: PropertyKey): unknown {
+		this.#assertAccess();
+		if (this.#implementation === undefined) throw new Error(`Service ${this.#serviceId} is disconnected`);
+		return Reflect.get(this.#implementation, property, this.#implementation);
 	}
 }

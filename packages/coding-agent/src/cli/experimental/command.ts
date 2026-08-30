@@ -16,6 +16,7 @@ export type CommandOptionParseResult<TValue> =
 
 export interface CommandOption<TValue> {
 	readonly name: `-${string}`;
+	readonly flag?: boolean;
 	readonly repeatable?: boolean;
 	parse(value: string): CommandOptionParseResult<TValue>;
 }
@@ -33,6 +34,10 @@ export function stringOption(
 	options: { readonly repeatable?: boolean } = {},
 ): CommandOption<string> {
 	return valueOption(name, (value) => ({ ok: true, value }), options);
+}
+
+export function flagOption(name: `-${string}`): CommandOption<boolean> {
+	return { name, flag: true, parse: () => ({ ok: true, value: true }) };
 }
 
 export interface ParsedCommandInput {
@@ -179,17 +184,27 @@ export class Command<
 				break;
 			}
 
-			let value = equals === -1 ? undefined : argument.slice(equals + 1);
-			if (value === undefined) {
-				const next = argv[index + 1];
-				if (next !== undefined && !next.startsWith("-")) {
-					value = next;
-					index++;
+			let value: string;
+			if (option.flag === true) {
+				if (equals !== -1) {
+					parsed.errors.push(`${name} does not take a value`);
+					continue;
 				}
-			}
-			if (value === undefined || value === "") {
-				parsed.errors.push(`${name} requires a value`);
-				continue;
+				value = "";
+			} else {
+				let candidate = equals === -1 ? undefined : argument.slice(equals + 1);
+				if (candidate === undefined) {
+					const next = argv[index + 1];
+					if (next !== undefined && !next.startsWith("-")) {
+						candidate = next;
+						index++;
+					}
+				}
+				if (candidate === undefined || candidate === "") {
+					parsed.errors.push(`${name} requires a value`);
+					continue;
+				}
+				value = candidate;
 			}
 
 			const values = parsed.values.get(name) ?? [];

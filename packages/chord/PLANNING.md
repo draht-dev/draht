@@ -1,6 +1,6 @@
 # Chord implementation plan
 
-> **Status:** Active implementation plan. Context, strict JSON, replicated state, service publication/consumption, and the facet host/loader now live in Chord. Symmetric RPC, generation loading, and bundling remain planned. This is not a stable public API contract yet.
+> **Status:** Active implementation plan. Context, strict JSON, replicated state, service publication/consumption, the facet host/loader, and initial Node facet bundling and generation loading now live in Chord. Symmetric RPC and structural generation replacement remain planned. This is not a stable public API contract yet.
 
 ## 1. Goal
 

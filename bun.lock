@@ -77,6 +77,9 @@
     "packages/chord": {
       "name": "@draht/chord",
       "version": "2026.7.30",
+      "dependencies": {
+        "esbuild": "^0.28.1",
+      },
       "devDependencies": {
         "shx": "0.4.0",
         "vitest": "^3.2.4",

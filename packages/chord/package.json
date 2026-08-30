@@ -16,6 +16,16 @@
 			"types": "./dist/context/index.d.ts",
 			"import": "./dist/context/index.js"
 		},
+		"./bundler": {
+			"source": "./src/bundler.ts",
+			"types": "./dist/bundler.d.ts",
+			"import": "./dist/bundler.js"
+		},
+		"./node": {
+			"source": "./src/node.ts",
+			"types": "./dist/node.d.ts",
+			"import": "./dist/node.js"
+		},
 		"./package.json": "./package.json"
 	},
 	"sideEffects": false,
@@ -45,6 +55,9 @@
 	},
 	"engines": {
 		"node": ">=22.19.0"
+	},
+	"dependencies": {
+		"esbuild": "^0.28.1"
 	},
 	"devDependencies": {
 		"shx": "0.4.0",

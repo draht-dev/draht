@@ -7,7 +7,9 @@
 		"paths": {
 			"*": ["./*"],
 			"@draht/chord": ["./packages/chord/src/index.ts"],
+			"@draht/chord/bundler": ["./packages/chord/src/bundler.ts"],
 			"@draht/chord/context": ["./packages/chord/src/context/index.ts"],
+			"@draht/chord/node": ["./packages/chord/src/node.ts"],
 			"@draht/telemetry": ["./packages/telemetry/src/index.ts"],
 			"@draht/telemetry/testing": ["./packages/telemetry/src/testing/index.ts"],
 			"@draht/ai": ["./packages/ai/src/index.ts"],

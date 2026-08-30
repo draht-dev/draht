@@ -17,6 +17,7 @@ const banner = {
 };
 const allowedExternalPackages = new Set([
 	"@draht/chord",
+	"@draht/chord/bundler",
 	"@draht/chord/context",
 	"@draht/chord/node",
 	"@silvia-odwyer/photon-node",

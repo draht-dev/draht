@@ -15,19 +15,24 @@ export type CommandOptionParseResult<TValue> =
 	| { readonly ok: false; readonly error: string };
 
 export interface CommandOption<TValue> {
-	readonly name: `--${string}`;
+	readonly name: `-${string}`;
+	readonly repeatable?: boolean;
 	parse(value: string): CommandOptionParseResult<TValue>;
 }
 
 export function valueOption<TValue>(
-	name: `--${string}`,
+	name: `-${string}`,
 	parse: (value: string) => CommandOptionParseResult<TValue>,
+	options: { readonly repeatable?: boolean } = {},
 ): CommandOption<TValue> {
-	return { name, parse };
+	return { name, parse, ...options };
 }
 
-export function stringOption(name: `--${string}`): CommandOption<string> {
-	return valueOption(name, (value) => ({ ok: true, value }));
+export function stringOption(
+	name: `-${string}`,
+	options: { readonly repeatable?: boolean } = {},
+): CommandOption<string> {
+	return valueOption(name, (value) => ({ ok: true, value }), options);
 }
 
 export interface ParsedCommandInput {
@@ -188,7 +193,7 @@ export class Command<
 			}
 
 			const values = parsed.values.get(name) ?? [];
-			if (values.length > 0) {
+			if (values.length > 0 && option.repeatable !== true) {
 				parsed.errors.push(`${name} may only be specified once`);
 				continue;
 			}

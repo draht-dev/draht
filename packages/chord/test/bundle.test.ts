@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test } from "vitest";
-import { bundleFacets } from "../src/bundler.ts";
+import { bundleFacetPackage, bundleFacets } from "../src/bundler.ts";
 import { createFacetHost, defineFacet, defineService } from "../src/index.ts";
 import {
 	createFacetBundleArtifactLoader,
@@ -114,6 +114,79 @@ describe("facet bundles", () => {
 
 		await host.dispose();
 		await loadedB.dispose();
+	});
+
+	test("builds plugin packages from conventional and configured facet entries", async () => {
+		const directory = await mkdtemp(join(packageDirectory, ".bundle-package-test-"));
+		temporaryDirectories.push(directory);
+		const sourceDirectory = join(directory, "src");
+		await mkdir(sourceDirectory);
+		await Promise.all([
+			writeFile(
+				join(directory, "package.json"),
+				`${JSON.stringify({
+					name: "@example/conventional-plugin",
+					version: "1.2.3",
+					peerDependencies: { "@example/host": "^1.0.0" },
+				})}\n`,
+			),
+			writeFile(
+				join(sourceDirectory, "session.ts"),
+				'import "@example/host/plugin"; export default { id: "package-session", setup() {} };\n',
+			),
+			writeFile(join(sourceDirectory, "tui.ts"), 'export default { id: "package-tui", setup() {} };\n'),
+			writeFile(join(sourceDirectory, "contract.ts"), "export const ignored = true;\n"),
+			writeFile(join(sourceDirectory, "presentation.ts"), 'export default { id: "configured-tui", setup() {} };\n'),
+		]);
+
+		const conventional = await bundleFacetPackage({
+			packagePath: directory,
+			outdir: join(directory, "build"),
+			defaultFacets: { session: "src/session.ts", tui: "src/tui.ts", browser: "src/browser.ts" },
+		});
+		expect(conventional.packageDirectory).toBe(directory);
+		expect(conventional.manifest.plugin).toEqual({ id: "@example/conventional-plugin", version: "1.2.3" });
+		expect(Object.keys(conventional.manifest.entries)).toEqual(["session", "tui"]);
+		expect(conventional.manifest.entries.session?.externalImports).toEqual(["@example/host/plugin"]);
+		expect(conventional.manifest.entries.tui?.sourceMap).toMatch(/\.js\.map$/u);
+
+		await writeFile(
+			join(directory, "package.json"),
+			`${JSON.stringify({
+				name: "@example/conventional-plugin",
+				version: "2.0.0",
+				chord: { facets: { session: false, tui: "src/presentation.ts" }, sourceMap: false },
+			})}\n`,
+		);
+		const configured = await bundleFacetPackage({
+			packagePath: join(directory, "package.json"),
+			outdir: join(directory, "build"),
+			defaultFacets: { session: "src/session.ts", tui: "src/tui.ts" },
+		});
+		expect(Object.keys(configured.manifest.entries)).toEqual(["tui"]);
+		expect(configured.manifest.entries.tui?.sourceMap).toBeUndefined();
+		const loaded = await createFacetBundleLoader({
+			manifestPath: configured.manifestPath,
+			entry: "tui",
+		}).load();
+		expect(loaded.facets.map(({ id }) => id)).toEqual(["configured-tui"]);
+		await loaded.dispose();
+	});
+
+	test("rejects invalid plugin package entry configuration", async () => {
+		const directory = await mkdtemp(join(packageDirectory, ".bundle-package-test-"));
+		temporaryDirectories.push(directory);
+		await writeFile(
+			join(directory, "package.json"),
+			`${JSON.stringify({
+				name: "invalid-plugin",
+				version: "1.0.0",
+				chord: { facets: { tui: "../outside.ts" } },
+			})}\n`,
+		);
+		await expect(bundleFacetPackage({ packagePath: directory, outdir: join(directory, "build") })).rejects.toThrow(
+			"escapes the package directory",
+		);
 	});
 
 	test("rejects corrupt entries and invalid module exports", async () => {

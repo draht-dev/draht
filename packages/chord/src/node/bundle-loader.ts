@@ -16,15 +16,23 @@ import {
 	type FacetBundleManifest,
 } from "./manifest.ts";
 
+export type FacetBundleExternalResolver = (specifier: string) => string | URL | undefined;
+
 export interface FacetBundleLoaderOptions {
 	readonly manifestPath: string | URL;
 	readonly entry: string;
 	/** Verify the entry's SHA-256 integrity before evaluating it. Defaults to true. */
 	readonly verifyIntegrity?: boolean;
+	/** Resolve host-provided external imports when the bundle is outside the host's package tree. */
+	readonly resolveExternal?: FacetBundleExternalResolver;
+	/** Parent directory for materialized module generations. Defaults to the operating system temp directory. */
+	readonly temporaryDirectory?: string;
 }
 
 export interface FacetBundleArtifactLoaderOptions {
 	readonly artifact: unknown;
+	/** Resolve host-provided external imports against the receiving application. */
+	readonly resolveExternal?: FacetBundleExternalResolver;
 	/** Parent directory for materialized module generations. Defaults to the operating system temp directory. */
 	readonly temporaryDirectory?: string;
 }
@@ -84,7 +92,7 @@ export function createFacetBundleArtifactLoader(options: FacetBundleArtifactLoad
 			await mkdir(temporaryParent, { recursive: true });
 			const directory = await mkdtemp(join(temporaryParent, "chord-facet-"));
 			try {
-				await materializeArtifact(directory, artifact);
+				await materializeArtifact(directory, artifact, options.resolveExternal);
 				const loaded = await createFacetBundleLoader({
 					manifestPath: join(directory, FACET_BUNDLE_MANIFEST_FILE),
 					entry: artifact.entryName,
@@ -128,6 +136,7 @@ export function createFacetBundleArtifactLoader(options: FacetBundleArtifactLoad
 export function createFacetBundleLoader(options: FacetBundleLoaderOptions): FacetLoader {
 	if (options.entry.length === 0) throw new TypeError("Facet bundle entry name must not be empty");
 	const manifestPath = toFilePath(options.manifestPath);
+	const temporaryParent = resolve(options.temporaryDirectory ?? tmpdir());
 	const loaderId = randomUUID();
 	let generation = 0;
 	return {
@@ -137,30 +146,68 @@ export function createFacetBundleLoader(options: FacetBundleLoaderOptions): Face
 			if (entry === undefined) {
 				throw new Error(`Facet bundle ${manifest.plugin.id} has no entry named ${options.entry}`);
 			}
-			const modulePath = resolveBundleFile(manifestPath, entry.file, "entry");
-			if (options.verifyIntegrity !== false) await verifyEntry(modulePath, entry);
-			const moduleUrl = pathToFileURL(modulePath);
-			moduleUrl.searchParams.set("chordGeneration", `${loaderId}-${++generation}`);
-			let imported: unknown;
+			const originalModulePath = resolveBundleFile(manifestPath, entry.file, "entry");
+			if (options.verifyIntegrity !== false) await verifyEntry(originalModulePath, entry);
+			let generationDirectory: string | undefined;
+			let modulePath = originalModulePath;
 			try {
-				imported = await importModule(moduleUrl.href);
+				if (options.resolveExternal !== undefined && entry.externalImports.length > 0) {
+					await mkdir(temporaryParent, { recursive: true });
+					generationDirectory = await mkdtemp(join(temporaryParent, "chord-facet-"));
+					const source = await readFile(originalModulePath, "utf8");
+					const sourceMapContents =
+						entry.sourceMap === undefined
+							? undefined
+							: await readFile(resolveBundleFile(manifestPath, entry.sourceMap, "source map"), "utf8");
+					await materializeArtifact(
+						generationDirectory,
+						{
+							format: FACET_BUNDLE_ARTIFACT_FORMAT,
+							formatVersion: FACET_BUNDLE_ARTIFACT_FORMAT_VERSION,
+							plugin: manifest.plugin,
+							entryName: options.entry,
+							entry,
+							source,
+							...(sourceMapContents === undefined ? {} : { sourceMapContents }),
+						},
+						options.resolveExternal,
+					);
+					modulePath = join(generationDirectory, entry.file);
+				}
+				const moduleUrl = pathToFileURL(modulePath);
+				moduleUrl.searchParams.set("chordGeneration", `${loaderId}-${++generation}`);
+				const imported = await importModule(moduleUrl.href);
+				let facets = facetsFromModule(imported, manifest.plugin.id, options.entry);
+				let disposed = false;
+				return {
+					get facets() {
+						return facets;
+					},
+					async dispose() {
+						if (disposed) return;
+						disposed = true;
+						facets = Object.freeze([]);
+						if (generationDirectory !== undefined) {
+							await rm(generationDirectory, { force: true, recursive: true });
+						}
+					},
+				};
 			} catch (error) {
-				throw new Error(`Could not load facet bundle entry ${manifest.plugin.id}/${options.entry}`, {
+				if (generationDirectory !== undefined) {
+					try {
+						await rm(generationDirectory, { force: true, recursive: true });
+					} catch (cleanupError) {
+						throw new AggregateError(
+							[error, cleanupError],
+							`Could not load facet bundle entry ${manifest.plugin.id}/${options.entry}`,
+						);
+					}
+				}
+				const detail = error instanceof Error ? `: ${error.message}` : "";
+				throw new Error(`Could not load facet bundle entry ${manifest.plugin.id}/${options.entry}${detail}`, {
 					cause: error,
 				});
 			}
-			let facets = facetsFromModule(imported, manifest.plugin.id, options.entry);
-			let disposed = false;
-			return {
-				get facets() {
-					return facets;
-				},
-				async dispose() {
-					if (disposed) return;
-					disposed = true;
-					facets = Object.freeze([]);
-				},
-			};
 		},
 	};
 }
@@ -263,7 +310,11 @@ function validateArtifact(value: unknown): FacetBundleArtifact {
 	});
 }
 
-async function materializeArtifact(directory: string, artifact: FacetBundleArtifact): Promise<void> {
+async function materializeArtifact(
+	directory: string,
+	artifact: FacetBundleArtifact,
+	resolveExternal?: FacetBundleExternalResolver,
+): Promise<void> {
 	const manifest: FacetBundleManifest = {
 		format: FACET_BUNDLE_FORMAT,
 		formatVersion: FACET_BUNDLE_FORMAT_VERSION,
@@ -276,11 +327,15 @@ async function materializeArtifact(directory: string, artifact: FacetBundleArtif
 		...(artifact.entry.sourceMap === undefined
 			? []
 			: [writeFile(join(directory, artifact.entry.sourceMap), artifact.sourceMapContents!, "utf8")]),
-		materializeExternalProxies(directory, artifact.entry.externalImports),
+		materializeExternalProxies(directory, artifact.entry.externalImports, resolveExternal),
 	]);
 }
 
-async function materializeExternalProxies(directory: string, specifiers: readonly string[]): Promise<void> {
+async function materializeExternalProxies(
+	directory: string,
+	specifiers: readonly string[],
+	resolveExternal?: FacetBundleExternalResolver,
+): Promise<void> {
 	const packages = new Map<string, Map<string, string>>();
 	for (const specifier of specifiers) {
 		if (isBuiltin(specifier)) continue;
@@ -290,7 +345,7 @@ async function materializeExternalProxies(directory: string, specifiers: readonl
 			entries = new Map();
 			packages.set(parsed.packageName, entries);
 		}
-		entries.set(parsed.exportName, resolveExternalTarget(specifier));
+		entries.set(parsed.exportName, resolveExternalTarget(specifier, resolveExternal));
 	}
 	for (const [packageName, entries] of packages) {
 		const packageDirectory = join(directory, "node_modules", ...packageName.split("/"));
@@ -320,7 +375,9 @@ async function materializeExternalProxies(directory: string, specifiers: readonl
 	}
 }
 
-function resolveExternalTarget(specifier: string): string {
+function resolveExternalTarget(specifier: string, resolver?: FacetBundleExternalResolver): string {
+	const resolved = resolver?.(specifier);
+	if (resolved !== undefined) return typeof resolved === "string" ? resolved : resolved.href;
 	const extension = import.meta.url.endsWith(".ts") ? "ts" : "js";
 	if (specifier === "@draht/chord") return new URL(`../index.${extension}`, import.meta.url).href;
 	if (specifier === "@draht/chord/context") {

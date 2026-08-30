@@ -1,4 +1,8 @@
-export type { FacetBundleArtifactLoaderOptions, FacetBundleLoaderOptions } from "./node/bundle-loader.ts";
+export type {
+	FacetBundleArtifactLoaderOptions,
+	FacetBundleExternalResolver,
+	FacetBundleLoaderOptions,
+} from "./node/bundle-loader.ts";
 export {
 	createFacetBundleArtifactLoader,
 	createFacetBundleLoader,

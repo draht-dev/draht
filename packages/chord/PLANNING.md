@@ -505,6 +505,8 @@ The initial bundler should accept:
 - source-map and minification options; and
 - optional define/platform settings needed for Node ESM.
 
+The package-level API additionally accepts a plugin package directory, derives identity and version from `package.json`, applies application-supplied conventional entry paths when those files exist, and lets `chord.facets` override or disable conventions. Package discovery does not install dependencies or run lifecycle scripts.
+
 It should emit:
 
 - one content-addressed ESM file per entry;
@@ -519,7 +521,7 @@ Writes should use a temporary output directory followed by an atomic rename so a
 ### 10.3 Bundle rules
 
 - `@draht/chord` must be externalized so a plugin uses the host's one runtime and branding symbols.
-- Other dependencies are bundled by default unless the application explicitly externalizes them.
+- Other dependencies are bundled by default. The explicit bundler API uses an application external allowlist; the package-level API also externalizes peer dependencies because the host provides them.
 - Built-in module use may be allowed for Node entries but is not a trust or sandbox policy.
 - Dynamic imports and unresolved externals must be reported deterministically.
 - Bundle output must not depend on Pi's repository path aliases.

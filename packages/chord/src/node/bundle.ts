@@ -35,7 +35,7 @@ export interface BundleFacetsResult {
 	readonly manifestPath: string;
 }
 
-/** Bundle each opaque facet entry into an independent content-addressed ESM file. */
+/** Bundle each opaque facet entry into an independent content-addressed CommonJS file. */
 export async function bundleFacets(options: BundleFacetsOptions): Promise<BundleFacetsResult> {
 	validateOptions(options);
 	const workingDirectory = resolve(options.workingDirectory ?? process.cwd());
@@ -86,24 +86,28 @@ async function bundleEntry(input: {
 	readonly options: BundleFacetsOptions;
 }): Promise<FacetBundleEntry> {
 	const entryPrefix = `facet-${shortHash(input.entryName)}`;
+	const requestedPlatform = input.options.platform ?? "node";
 	const buildOptions: BuildOptions = {
 		absWorkingDir: input.workingDirectory,
+		banner: { js: '"use strict";' },
 		bundle: true,
 		define: input.options.define,
 		entryNames: `${entryPrefix}-[hash]`,
 		entryPoints: [input.source],
 		external: [...new Set(["@draht/chord", "@draht/chord/*", ...(input.options.external ?? [])])],
-		format: "esm",
+		format: "cjs",
 		legalComments: "none",
 		logLevel: "silent",
 		metafile: true,
 		minify: input.options.minify ?? false,
 		outdir: input.temporaryDirectory,
-		platform: input.options.platform ?? "node",
+		outExtension: { ".js": ".cjs" },
+		platform: requestedPlatform,
 		sourcemap: input.options.sourceMap === true ? "external" : false,
+		supported: { "dynamic-import": false },
 		target:
 			input.options.target === undefined
-				? input.options.platform === undefined || input.options.platform === "node"
+				? requestedPlatform === "node"
 					? "node22.19"
 					: "es2022"
 				: typeof input.options.target === "string"
@@ -122,7 +126,7 @@ async function bundleEntry(input: {
 	const metafile = result.metafile;
 	if (metafile === undefined) throw new Error(`Facet entry ${input.entryName} produced no build metadata`);
 	const outputs = Object.entries(metafile.outputs).filter(
-		([path, output]) => output.entryPoint !== undefined && extname(path) === ".js",
+		([path, output]) => output.entryPoint !== undefined && extname(path) === ".cjs",
 	);
 	if (outputs.length !== 1)
 		throw new Error(`Facet entry ${input.entryName} did not produce exactly one JavaScript file`);

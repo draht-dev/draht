@@ -184,7 +184,7 @@ Required loaders:
 
 The loader owns one source generation. The host owns active plugin lifecycles. A coordinator must deactivate a retired generation before disposing its `LoadedPlugins`.
 
-JavaScript ESM cannot be physically unloaded. Chord's unload contract means deactivation, removal of service reachability, cleanup, and release of loader-owned references/resources. Reloaded code must use a new content-addressed module URL or other loader generation identity instead of relying on the ESM cache.
+Node's default ESM loader retains every imported module generation in its process-wide cache. Chord therefore bundles Node facets as CommonJS and compiles each generation directly with `node:vm`, without inserting plugin code into either Node module cache. Chord's unload contract remains deactivation, removal of service reachability, cleanup, and release of loader-owned references/resources. Once no plugin-created timer, listener, callback, or other escaped reference remains, V8 can garbage-collect the compiled generation; collection timing is not deterministic.
 
 ## 6. Loading, unloading, and reload
 
@@ -490,7 +490,7 @@ Member and DTO compatibility across plugin-generation skew is an application res
 
 ### 10.1 Purpose
 
-The bundler turns one or more application-declared plugin entries into independently loadable Node ESM artifacts. It is not a package manager or plugin registry.
+The bundler turns one or more application-declared ESM or TypeScript plugin entries into independently loadable Node CommonJS artifacts. It is not a package manager or plugin registry.
 
 Each entry is built independently. Chord does not assume names such as `server`, `session`, `tui`, or `web`; entry names are opaque application data.
 
@@ -503,18 +503,18 @@ The initial bundler should accept:
 - an output directory;
 - an application-supplied external-module allowlist;
 - source-map and minification options; and
-- optional define/platform settings needed for Node ESM.
+- optional define/platform settings needed for the Node CommonJS build.
 
 The package-level API additionally accepts a plugin package directory, derives identity and version from `package.json`, applies application-supplied conventional entry paths when those files exist, and lets `chord.facets` override or disable conventions. Package discovery does not install dependencies or run lifecycle scripts.
 
 It should emit:
 
-- one content-addressed ESM file per entry;
+- one content-addressed CommonJS file per entry;
 - source maps when enabled;
 - a versioned strict-JSON manifest;
 - content hashes or integrity values;
 - declared external imports; and
-- enough metadata for diagnostics and cache-busting generation loads.
+- enough metadata for diagnostics and fresh generation loads.
 
 Writes should use a temporary output directory followed by an atomic rename so a loader never sees a half-written generation.
 
@@ -523,12 +523,12 @@ Writes should use a temporary output directory followed by an atomic rename so a
 - `@draht/chord` must be externalized so a plugin uses the host's one runtime and branding symbols.
 - Other dependencies are bundled by default. The explicit bundler API uses an application external allowlist; the package-level API also externalizes peer dependencies because the host provides them.
 - Built-in module use may be allowed for Node entries but is not a trust or sandbox policy.
-- Dynamic imports and unresolved externals must be reported deterministically.
+- Dynamic imports must be lowered through the loader's restricted `require`, and unresolved externals must be reported deterministically.
 - Bundle output must not depend on Pi's repository path aliases.
 - Rebuilding unchanged inputs should produce stable content except for documented metadata.
 - Diagnostics must identify the entry and original source location.
 
-The concrete bundler engine is an implementation detail. Select it with a spike covering TypeScript, ESM, source maps, externals, content hashing, and programmatic diagnostics before adding a dependency.
+The concrete bundler engine is an implementation detail. Select it with a spike covering TypeScript and ESM inputs, CommonJS output, source maps, externals, content hashing, and programmatic diagnostics before adding a dependency.
 
 ### 10.4 Bundle loading
 
@@ -537,7 +537,7 @@ The bundle loader must:
 1. parse and validate the manifest;
 2. select one application-requested entry;
 3. verify integrity before activation when integrity is present;
-4. load it under a fresh generation identity;
+4. compile it directly with `node:vm` as a fresh generation outside Node's module caches;
 5. validate that its exports are plugins with unique non-empty IDs;
 6. return `LoadedPlugins`; and
 7. provide idempotent loader disposal.
@@ -614,7 +614,7 @@ packages/chord/
       host.ts                start, update, reload, dispose
       loader.ts              static and combined loaders
     node/
-      bundle.ts              Node ESM bundler
+      bundle.ts              Node CommonJS bundler
       bundle-loader.ts       manifest validation and generation loading
   test/
     ...
@@ -729,7 +729,7 @@ Deliver:
 
 Tests include load failure cleanup, setup failure with old generation retained, unload with retained hard consumer rejection, provider gaps, captured local and remote methods, replacement snapshots, activation failure after cutover, disposal failure aggregation, concurrent update/dispose, and old-generation late publication.
 
-### WP7 — Node ESM bundler and bundle loader
+### WP7 — Node CommonJS bundler and bundle loader
 
 Deliver:
 
@@ -741,7 +741,7 @@ Deliver:
 - Chord externalization;
 - atomic output replacement;
 - manifest/integrity validation; and
-- fresh-generation loading.
+- fresh VM-compiled generation loading outside Node's module caches.
 
 Tests bundle an application-neutral fixture with two opaque entries and a third-party dependency, load each independently, activate it, reload changed source, prove unchanged source hashes are stable, reject corrupt manifests/integrity, and prove output resolves no Pi packages.
 
@@ -812,7 +812,7 @@ The standalone suite must cover at least:
 ### Loading and bundling
 
 - loader order and reverse disposal;
-- generation cache busting;
+- fresh generation evaluation and garbage-collection eligibility;
 - manifest validation and integrity;
 - independent entries;
 - dependency bundling and explicit externals;

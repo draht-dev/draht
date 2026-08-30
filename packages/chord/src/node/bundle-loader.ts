@@ -1,9 +1,10 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { isBuiltin } from "node:module";
+import { createRequire, isBuiltin } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { compileFunction } from "node:vm";
 import type { Facet, FacetLoader, LoadedFacets } from "../types.ts";
 import {
 	FACET_BUNDLE_ARTIFACT_FORMAT,
@@ -25,8 +26,6 @@ export interface FacetBundleLoaderOptions {
 	readonly verifyIntegrity?: boolean;
 	/** Resolve host-provided external imports when the bundle is outside the host's package tree. */
 	readonly resolveExternal?: FacetBundleExternalResolver;
-	/** Parent directory for materialized module generations. Defaults to the operating system temp directory. */
-	readonly temporaryDirectory?: string;
 }
 
 export interface FacetBundleArtifactLoaderOptions {
@@ -37,11 +36,9 @@ export interface FacetBundleArtifactLoaderOptions {
 	readonly temporaryDirectory?: string;
 }
 
-type DynamicImport = (specifier: string) => Promise<unknown>;
-
-// ESM has no static API for a runtime-selected module. Keeping the dynamic import here also keeps
-// Node-specific loading out of Chord's platform-neutral root entry.
-const importModule: DynamicImport = (specifier) => import(specifier);
+interface CommonJsModule {
+	exports: unknown;
+}
 
 /** Read and validate a versioned facet bundle manifest. */
 export async function readFacetBundleManifest(path: string | URL): Promise<FacetBundleManifest> {
@@ -83,7 +80,7 @@ export async function readFacetBundleArtifact(options: {
 	});
 }
 
-/** Materialize a transported artifact and create a fresh Node ESM generation for each load. */
+/** Materialize a transported artifact and create a fresh VM-compiled CommonJS generation for each load. */
 export function createFacetBundleArtifactLoader(options: FacetBundleArtifactLoaderOptions): FacetLoader {
 	const artifact = validateArtifact(options.artifact);
 	const temporaryParent = resolve(options.temporaryDirectory ?? tmpdir());
@@ -92,10 +89,11 @@ export function createFacetBundleArtifactLoader(options: FacetBundleArtifactLoad
 			await mkdir(temporaryParent, { recursive: true });
 			const directory = await mkdtemp(join(temporaryParent, "chord-facet-"));
 			try {
-				await materializeArtifact(directory, artifact, options.resolveExternal);
+				await materializeArtifact(directory, artifact);
 				const loaded = await createFacetBundleLoader({
 					manifestPath: join(directory, FACET_BUNDLE_MANIFEST_FILE),
 					entry: artifact.entryName,
+					resolveExternal: options.resolveExternal,
 				}).load();
 				let disposed = false;
 				return {
@@ -136,9 +134,6 @@ export function createFacetBundleArtifactLoader(options: FacetBundleArtifactLoad
 export function createFacetBundleLoader(options: FacetBundleLoaderOptions): FacetLoader {
 	if (options.entry.length === 0) throw new TypeError("Facet bundle entry name must not be empty");
 	const manifestPath = toFilePath(options.manifestPath);
-	const temporaryParent = resolve(options.temporaryDirectory ?? tmpdir());
-	const loaderId = randomUUID();
-	let generation = 0;
 	return {
 		async load(): Promise<LoadedFacets> {
 			const manifest = await readFacetBundleManifest(manifestPath);
@@ -146,38 +141,12 @@ export function createFacetBundleLoader(options: FacetBundleLoaderOptions): Face
 			if (entry === undefined) {
 				throw new Error(`Facet bundle ${manifest.plugin.id} has no entry named ${options.entry}`);
 			}
-			const originalModulePath = resolveBundleFile(manifestPath, entry.file, "entry");
-			if (options.verifyIntegrity !== false) await verifyEntry(originalModulePath, entry);
-			let generationDirectory: string | undefined;
-			let modulePath = originalModulePath;
+			const modulePath = resolveBundleFile(manifestPath, entry.file, "entry");
 			try {
-				if (options.resolveExternal !== undefined && entry.externalImports.length > 0) {
-					await mkdir(temporaryParent, { recursive: true });
-					generationDirectory = await mkdtemp(join(temporaryParent, "chord-facet-"));
-					const source = await readFile(originalModulePath, "utf8");
-					const sourceMapContents =
-						entry.sourceMap === undefined
-							? undefined
-							: await readFile(resolveBundleFile(manifestPath, entry.sourceMap, "source map"), "utf8");
-					await materializeArtifact(
-						generationDirectory,
-						{
-							format: FACET_BUNDLE_ARTIFACT_FORMAT,
-							formatVersion: FACET_BUNDLE_ARTIFACT_FORMAT_VERSION,
-							plugin: manifest.plugin,
-							entryName: options.entry,
-							entry,
-							source,
-							...(sourceMapContents === undefined ? {} : { sourceMapContents }),
-						},
-						options.resolveExternal,
-					);
-					modulePath = join(generationDirectory, entry.file);
-				}
-				const moduleUrl = pathToFileURL(modulePath);
-				moduleUrl.searchParams.set("chordGeneration", `${loaderId}-${++generation}`);
-				const imported = await importModule(moduleUrl.href);
-				let facets = facetsFromModule(imported, manifest.plugin.id, options.entry);
+				const source = await readFile(modulePath, "utf8");
+				if (options.verifyIntegrity !== false) verifySource(source, entry);
+				const exported = executeCommonJsModule(source, modulePath, entry.externalImports, options.resolveExternal);
+				let facets = facetsFromModule(exported, manifest.plugin.id, options.entry);
 				let disposed = false;
 				return {
 					get facets() {
@@ -187,22 +156,9 @@ export function createFacetBundleLoader(options: FacetBundleLoaderOptions): Face
 						if (disposed) return;
 						disposed = true;
 						facets = Object.freeze([]);
-						if (generationDirectory !== undefined) {
-							await rm(generationDirectory, { force: true, recursive: true });
-						}
 					},
 				};
 			} catch (error) {
-				if (generationDirectory !== undefined) {
-					try {
-						await rm(generationDirectory, { force: true, recursive: true });
-					} catch (cleanupError) {
-						throw new AggregateError(
-							[error, cleanupError],
-							`Could not load facet bundle entry ${manifest.plugin.id}/${options.entry}`,
-						);
-					}
-				}
 				const detail = error instanceof Error ? `: ${error.message}` : "";
 				throw new Error(`Could not load facet bundle entry ${manifest.plugin.id}/${options.entry}${detail}`, {
 					cause: error,
@@ -210,6 +166,53 @@ export function createFacetBundleLoader(options: FacetBundleLoaderOptions): Face
 			}
 		},
 	};
+}
+
+function executeCommonJsModule(
+	source: string,
+	modulePath: string,
+	externalImports: readonly string[],
+	resolver?: FacetBundleExternalResolver,
+): unknown {
+	const requireFromModule = createRequire(modulePath);
+	const externalTargets = new Map<string, string>();
+	for (const specifier of externalImports) {
+		if (!isBuiltin(specifier)) validatePackageSpecifier(specifier);
+		externalTargets.set(specifier, toRequireSpecifier(resolveExternalTarget(specifier, resolver)));
+	}
+	const targetFor = (specifier: string): string => {
+		const target = externalTargets.get(specifier);
+		if (target === undefined) throw new Error(`Facet bundle required undeclared external import: ${specifier}`);
+		return target;
+	};
+	const requireExternal = Object.assign((specifier: string): unknown => requireFromModule(targetFor(specifier)), {
+		resolve: (specifier: string): string => requireFromModule.resolve(targetFor(specifier)),
+	});
+	const commonJsModule: CommonJsModule = { exports: Object.create(null) };
+	const compiled = compileFunction(source, ["exports", "require", "module", "__filename", "__dirname"], {
+		filename: modulePath,
+	});
+	Reflect.apply(compiled, commonJsModule.exports, [
+		commonJsModule.exports,
+		requireExternal,
+		commonJsModule,
+		modulePath,
+		dirname(modulePath),
+	]);
+	return commonJsModule.exports;
+}
+
+function toRequireSpecifier(target: string): string {
+	if (isAbsolute(target) || isBuiltin(target)) return target;
+	let url: URL;
+	try {
+		url = new URL(target);
+	} catch {
+		return target;
+	}
+	if (url.protocol === "file:") return fileURLToPath(url);
+	if (url.protocol === "node:") return url.href;
+	throw new Error(`Facet bundle external target must be a file, package, or built-in module: ${target}`);
 }
 
 function toFilePath(path: string | URL): string {
@@ -223,13 +226,6 @@ function resolveBundleFile(manifestPath: string, file: string, label: string): s
 		throw new Error(`Facet bundle ${label} must be a filename relative to its manifest`);
 	}
 	return resolve(dirname(manifestPath), file);
-}
-
-async function verifyEntry(path: string, entry: FacetBundleEntry): Promise<void> {
-	const contents = await readFile(path);
-	const expected = parseIntegrity(entry.integrity);
-	const actual = createHash("sha256").update(contents).digest("base64");
-	if (actual !== expected) throw new Error(`Facet bundle integrity check failed for ${entry.file}`);
 }
 
 function verifySource(source: string, entry: FacetBundleEntry): void {
@@ -310,11 +306,7 @@ function validateArtifact(value: unknown): FacetBundleArtifact {
 	});
 }
 
-async function materializeArtifact(
-	directory: string,
-	artifact: FacetBundleArtifact,
-	resolveExternal?: FacetBundleExternalResolver,
-): Promise<void> {
+async function materializeArtifact(directory: string, artifact: FacetBundleArtifact): Promise<void> {
 	const manifest: FacetBundleManifest = {
 		format: FACET_BUNDLE_FORMAT,
 		formatVersion: FACET_BUNDLE_FORMAT_VERSION,
@@ -327,52 +319,7 @@ async function materializeArtifact(
 		...(artifact.entry.sourceMap === undefined
 			? []
 			: [writeFile(join(directory, artifact.entry.sourceMap), artifact.sourceMapContents!, "utf8")]),
-		materializeExternalProxies(directory, artifact.entry.externalImports, resolveExternal),
 	]);
-}
-
-async function materializeExternalProxies(
-	directory: string,
-	specifiers: readonly string[],
-	resolveExternal?: FacetBundleExternalResolver,
-): Promise<void> {
-	const packages = new Map<string, Map<string, string>>();
-	for (const specifier of specifiers) {
-		if (isBuiltin(specifier)) continue;
-		const parsed = parsePackageSpecifier(specifier);
-		let entries = packages.get(parsed.packageName);
-		if (entries === undefined) {
-			entries = new Map();
-			packages.set(parsed.packageName, entries);
-		}
-		entries.set(parsed.exportName, resolveExternalTarget(specifier, resolveExternal));
-	}
-	for (const [packageName, entries] of packages) {
-		const packageDirectory = join(directory, "node_modules", ...packageName.split("/"));
-		await mkdir(packageDirectory, { recursive: true });
-		const exports: Record<string, string> = {};
-		const writes: Promise<void>[] = [];
-		let index = 0;
-		for (const [exportName, target] of entries) {
-			const file = `proxy-${index++}.js`;
-			exports[exportName] = `./${file}`;
-			writes.push(
-				writeFile(
-					join(packageDirectory, file),
-					`import * as target from ${JSON.stringify(target)};\nexport * from ${JSON.stringify(target)};\nexport default target.default;\n`,
-					"utf8",
-				),
-			);
-		}
-		writes.push(
-			writeFile(
-				join(packageDirectory, "package.json"),
-				`${JSON.stringify({ name: packageName, type: "module", exports }, null, 2)}\n`,
-				"utf8",
-			),
-		);
-		await Promise.all(writes);
-	}
 }
 
 function resolveExternalTarget(specifier: string, resolver?: FacetBundleExternalResolver): string {
@@ -387,7 +334,7 @@ function resolveExternalTarget(specifier: string, resolver?: FacetBundleExternal
 	return import.meta.resolve(specifier);
 }
 
-function parsePackageSpecifier(specifier: string): { packageName: string; exportName: string } {
+function validatePackageSpecifier(specifier: string): void {
 	const segments = specifier.split("/");
 	const packageParts = specifier.startsWith("@") ? 2 : 1;
 	if (
@@ -401,9 +348,6 @@ function parsePackageSpecifier(specifier: string): { packageName: string; export
 	) {
 		throw new Error(`Facet bundle artifact has an unsupported external import: ${specifier}`);
 	}
-	const packageName = segments.slice(0, packageParts).join("/");
-	const subpath = segments.slice(packageParts).join("/");
-	return { packageName, exportName: subpath.length === 0 ? "." : `./${subpath}` };
 }
 
 function validateManifest(value: unknown, path: string): FacetBundleManifest {

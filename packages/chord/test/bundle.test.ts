@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, test } from "vitest";
 import { bundleFacetPackage, bundleFacets } from "../src/bundler.ts";
 import { createFacetHost, defineFacet, defineService } from "../src/index.ts";
@@ -47,11 +47,14 @@ describe("facet bundles", () => {
 			sourceMap: true,
 		});
 		const firstEntry = firstBuild.manifest.entries.worker!;
-		expect(firstEntry.file).toMatch(/^facet-[a-f0-9]{12}-[A-Z0-9]+\.js$/u);
+		expect(firstEntry.file).toMatch(/^facet-[a-f0-9]{12}-[A-Z0-9]+\.cjs$/u);
 		expect(firstEntry.sourceMap).toBe(`${firstEntry.file}.map`);
 		expect(firstEntry.externalImports).toEqual(["@draht/chord"]);
 		expect(firstBuild.manifest.entries.presentation!.file).not.toBe(firstEntry.file);
-		expect((await readdir(outputDirectory)).filter((path) => path.endsWith(".js"))).toHaveLength(2);
+		expect((await readdir(outputDirectory)).filter((path) => path.endsWith(".cjs"))).toHaveLength(2);
+		const firstSource = await readFile(join(outputDirectory, firstEntry.file), "utf8");
+		expect(firstSource).toContain('require("@draht/chord")');
+		expect(firstSource).toContain("module.exports");
 		expect((await readFile(firstBuild.manifestPath, "utf8")).endsWith("\n")).toBe(true);
 
 		const presentation = await createFacetBundleLoader({
@@ -116,6 +119,40 @@ describe("facet bundles", () => {
 		await loadedB.dispose();
 	});
 
+	test("loads host externals through the controlled CommonJS require", async () => {
+		const directory = await mkdtemp(join(packageDirectory, ".bundle-external-test-"));
+		temporaryDirectories.push(directory);
+		const externalPath = join(directory, "host.mjs");
+		const entryPath = join(directory, "entry.ts");
+		const outputDirectory = join(directory, "bundle");
+		await writeFile(externalPath, 'export const named = "host-named";\n');
+		await writeFile(
+			entryPath,
+			'import { named } from "@example/host";\n' +
+				'export const loadDynamic = () => import("@example/dynamic");\n' +
+				'if (named !== "host-named") throw new Error("external mismatch");\n' +
+				'export default { id: "external-facet", setup() {} };\n',
+		);
+		const result = await bundleFacets({
+			plugin: { id: "external-bundle" },
+			entries: { worker: entryPath },
+			external: ["@example/host", "@example/dynamic"],
+			outdir: outputDirectory,
+		});
+		const entry = result.manifest.entries.worker!;
+		const source = await readFile(join(outputDirectory, entry.file), "utf8");
+		expect(source).not.toContain("import(");
+		expect(source).toContain('require("@example/dynamic")');
+		const loaded = await createFacetBundleLoader({
+			manifestPath: result.manifestPath,
+			entry: "worker",
+			resolveExternal: (specifier) =>
+				specifier === "@example/host" || specifier === "@example/dynamic" ? pathToFileURL(externalPath) : undefined,
+		}).load();
+		expect(loaded.facets.map(({ id }) => id)).toEqual(["external-facet"]);
+		await loaded.dispose();
+	});
+
 	test("builds plugin packages from conventional and configured facet entries", async () => {
 		const directory = await mkdtemp(join(packageDirectory, ".bundle-package-test-"));
 		temporaryDirectories.push(directory);
@@ -148,7 +185,7 @@ describe("facet bundles", () => {
 		expect(conventional.manifest.plugin).toEqual({ id: "@example/conventional-plugin", version: "1.2.3" });
 		expect(Object.keys(conventional.manifest.entries)).toEqual(["session", "tui"]);
 		expect(conventional.manifest.entries.session?.externalImports).toEqual(["@example/host/plugin"]);
-		expect(conventional.manifest.entries.tui?.sourceMap).toMatch(/\.js\.map$/u);
+		expect(conventional.manifest.entries.tui?.sourceMap).toMatch(/\.cjs\.map$/u);
 
 		await writeFile(
 			join(directory, "package.json"),

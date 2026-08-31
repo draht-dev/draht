@@ -90,7 +90,7 @@ Applications may define their own context keys. A Pi adapter can carry telemetry
 
 A context object never crosses RPC as a business value. The calling peer sends cancellation control and, if configured, an opaque strict-JSON metadata carrier. The receiving adapter constructs a fresh local context. The adapter, not remote business arguments, installs authenticated local identity.
 
-Chord owns the static `JsonValue` contract and provides `JsonRepresentation<T>`, `isJsonValue()`, and `cloneJsonValue()` for adapter boundaries. The service runtime deliberately performs no automatic recursive validation; concrete serializers remain responsible for rejecting or normalizing unsupported values. Remote arguments, results, errors, snapshots, updates, catalogues, and RPC envelopes are expected to be finite strict JSON:
+Chord owns the static `JsonValue` contract and provides `JsonRepresentation<T>` plus `isJsonValue()` for adapter boundaries. The service runtime deliberately performs no automatic recursive validation; concrete serializers remain responsible for rejecting unsupported values. Remote arguments, results, errors, snapshots, updates, catalogues, and RPC envelopes are expected to be finite strict JSON:
 
 - finite numbers only;
 - no `undefined`, sparse arrays, symbols, prototypes, cycles, classes, functions, `Map`, or `Set`; and
@@ -379,12 +379,12 @@ Required semantics:
 4. Subscribing to cold state registers without immediate delivery.
 5. Subscription establishment installs update capture before taking the snapshot.
 6. Updates racing the snapshot are buffered and delivered after the snapshot with no gap.
-7. Updates carry a provider-binding-local sequence and are applied only in order.
+7. The source API exposes a tracked mutable state and explicit publication. Each publication flushes one decoded operation batch; connection adapters encode it independently per client/state stream, and replicas apply batches only in sequence order.
 8. A sequence gap clears readiness and triggers complete resubscription or reports a terminal binding error; stale state must not continue as current silently.
 9. Disconnect, provider withdrawal, route change, and replacement clear replica readiness.
 10. Reconnect or replacement installs a complete fresh snapshot in the existing state facade before later updates.
 11. Listener exceptions are isolated and reported through host policy.
-12. Values are borrowed immutable data. Chord does not defensively clone local reads, local writes, or local listener delivery. Wire encoding naturally detaches remote data, but callers must not depend on identity.
+12. Values are immutable data. Chord does not defensively clone local reads, local writes, or local listener delivery. Delta application preserves prior values and may structurally share unchanged data, but callers must not depend on identity.
 
 State identity is structural:
 
@@ -398,13 +398,12 @@ Explicit non-goals:
 
 - durability or reconstruction after process restart;
 - event history;
-- patch or delta replication in the initial API;
 - CRDT merging or multiple writers;
 - offline mutation replay;
 - automatic unchanged-value suppression; and
 - high-frequency stream transport.
 
-Chord now exposes a standalone intent-preserving JSON delta primitive for durable output and other explicit consumers. Replicated service state still uses complete snapshots and ordered latest-value updates; adopting deltas there requires a separate snapshot/delta/gap-recovery design.
+Chord exposes an intent-preserving JSON delta primitive and uses its operation batches internally for remote replicated state. Initial hydration and reconnection carry a complete root replacement; producers mutate tracked state and flush compact operations on publication. Replicated-state sources do not select reducers or interact with path encoders. Every client/state pairing owns an independent encoder, and sequence handling rejects gaps before a later operation can be applied.
 
 ## 9. Symmetric RPC plumbing
 
@@ -830,7 +829,7 @@ Race tests should control exact points rather than use timing: subscription capt
 - network listeners, socket framing, reconnect loops, routing, or authentication;
 - server/client roles or fixed process topologies;
 - durable state, database integration, migrations, or transactional application writes;
-- CRDTs, offline writes, mutation replay, or generic delta replication;
+- CRDTs, offline writes, or mutation replay;
 - arbitrary object remoting, callbacks, remote references, or garbage collection of references;
 - serialized UI trees, remote tools, or remote hooks;
 - generic contribution registries; applications can expose these as process-local services;

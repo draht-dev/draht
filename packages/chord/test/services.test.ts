@@ -39,6 +39,12 @@ interface Echo {
 
 const Echo = defineService<Echo>("test.echo");
 
+interface Timeline {
+	readonly state: ReplicatedState<{ entries: { id: string }[]; retained: { value: number } }>;
+}
+
+const Timeline = defineService<Timeline>("test.timeline");
+
 interface JsonPassthrough {
 	call(value: JsonValue, context: Context): Promise<JsonValue>;
 }
@@ -80,21 +86,42 @@ describe("remote services", () => {
 		expect(() => new RemoteServiceProvider([local])).toThrow("cannot be published remotely");
 	});
 
-	test("does not defensively clone borrowed state values", () => {
+	test("tracks mutable source state while publishing immutable revisions", () => {
 		const initial: ModelsState = { selected: null, revision: 0 };
 		const state = replicatedState(initial);
 		let delivered: ModelsState | undefined;
-		const unsubscribe = state.subscribe((value) => {
+		const deliveries: string[] = [];
+		const unsubscribe = state.subscribe((value, _context, delivery) => {
 			delivered = value;
+			deliveries.push(delivery.kind);
 		});
-		expect(state.value).toBe(initial);
-		expect(delivered).toBe(initial);
+		expect(state.value).toEqual(initial);
+		expect(state.value).not.toBe(initial);
+		expect(delivered).toBe(state.value);
+		const hydrated = delivered;
 
-		const next: ModelsState = { selected: { provider: "test", modelId: "one" }, revision: 1 };
-		state.set(next, BACKGROUND_CONTEXT);
-		expect(state.value).toBe(next);
-		expect(delivered).toBe(next);
+		state.state.selected = { provider: "test", modelId: "one" };
+		state.state.revision = 1;
+		state.publish(BACKGROUND_CONTEXT);
+		expect(state.value).toEqual({ selected: { provider: "test", modelId: "one" }, revision: 1 });
+		expect(state.value).not.toBe(initial);
+		expect(delivered).toBe(state.value);
+		expect(hydrated).toEqual({ selected: null, revision: 0 });
+		expect(deliveries).toEqual(["hydrate", "update"]);
 		unsubscribe();
+	});
+
+	test("flushes pending mutations before hydrating a new state subscriber", () => {
+		const state = replicatedState({ entries: [{ id: "one" }] });
+		const first: { entries: { id: string }[] }[] = [];
+		state.subscribe((value) => first.push(value));
+		state.state.entries.push({ id: "two" });
+
+		const second: { entries: { id: string }[] }[] = [];
+		state.subscribe((value) => second.push(value));
+
+		expect(first).toEqual([{ entries: [{ id: "one" }] }, { entries: [{ id: "one" }, { id: "two" }] }]);
+		expect(second).toEqual([{ entries: [{ id: "one" }, { id: "two" }] }]);
 	});
 
 	test("does not defensively clone method arguments or results", async () => {
@@ -131,8 +158,10 @@ describe("remote services", () => {
 		provider.provide(Models, {
 			state,
 			async select(model, context) {
-				publishedState = { selected: model, revision: state.value.revision + 1 };
-				state.set(publishedState, context);
+				state.state.selected = model;
+				state.state.revision += 1;
+				state.publish(context);
+				publishedState = state.value;
 			},
 		});
 		const errors: Error[] = [];
@@ -147,12 +176,12 @@ describe("remote services", () => {
 		expect(first).toBe(second);
 		expect(first.state.value).toBeUndefined();
 		await namespace.ready(BACKGROUND_CONTEXT);
-		expect(first.state.value).toBe(initialState);
+		expect(first.state.value).toEqual(initialState);
 
 		const updates: ModelsState[] = [];
 		const unsubscribe = second.state.subscribe((value) => updates.push(value));
 		await first.select({ provider: "test", modelId: "one" }, BACKGROUND_CONTEXT);
-		expect(first.state.value).toBe(publishedState);
+		expect(first.state.value).toEqual(publishedState);
 		expect(first.state.value).toEqual({
 			selected: { provider: "test", modelId: "one" },
 			revision: 1,
@@ -173,6 +202,60 @@ describe("remote services", () => {
 
 		unsubscribe();
 		await Promise.all([namespace.dispose(BACKGROUND_CONTEXT), lateNamespace.dispose(BACKGROUND_CONTEXT)]);
+		provider.dispose();
+	});
+
+	test("publishes compact tracked operations through the remote provider", async () => {
+		const provider = new RemoteServiceProvider([Timeline]);
+		const initial = { entries: [{ id: "one" }], retained: { value: 1 } };
+		const source = replicatedState(initial);
+		provider.provide(Timeline, { state: source });
+		const updates: Array<Parameters<Parameters<typeof provider.subscribe>[2]>[0]> = [];
+		const raw = provider.subscribe(Timeline.id, "singleton", (update) => updates.push(update));
+		expect(raw.snapshot.instances[0]?.members).toEqual([
+			{ name: "state", kind: "state", sequence: 0, ops: [["r", initial]] },
+		]);
+		raw.activate();
+
+		const namespace = createRemoteServiceBinding({
+			services: [Timeline],
+			transport: createLoopbackServiceTransport(provider),
+		});
+		const timeline = namespace.use(Timeline);
+		await namespace.ready(BACKGROUND_CONTEXT);
+		const previous = timeline.state.value;
+		const next = { entries: [{ id: "one" }, { id: "two" }], retained: initial.retained };
+		source.state.entries.push({ id: "two" });
+		source.publish(BACKGROUND_CONTEXT);
+
+		expect(updates).toContainEqual({
+			type: "state",
+			member: "state",
+			sequence: 1,
+			ops: [["p", ["entries"], 1, 0, [{ id: "two" }]]],
+		});
+		expect(previous).toEqual({ entries: [{ id: "one" }], retained: { value: 1 } });
+		expect(timeline.state.value).toEqual(next);
+
+		source.state.entries.push({ id: "three" });
+		const late = provider.subscribe(Timeline.id, "singleton", () => {});
+		expect(updates.at(-1)).toEqual({
+			type: "state",
+			member: "state",
+			sequence: 2,
+			ops: [["p", ["entries"], 2, 0, [{ id: "three" }]]],
+		});
+		expect(late.snapshot.instances[0]?.members).toEqual([
+			{
+				name: "state",
+				kind: "state",
+				sequence: 2,
+				ops: [["r", { entries: [{ id: "one" }, { id: "two" }, { id: "three" }], retained: { value: 1 } }]],
+			},
+		]);
+		late.close();
+		raw.close();
+		await namespace.dispose(BACKGROUND_CONTEXT);
 		provider.dispose();
 	});
 
@@ -343,7 +426,8 @@ describe("remote services", () => {
 			invoke: (call, context) => provider.invoke(call, context),
 			subscribe: async (serviceId, mode, listener) => {
 				const subscription = provider.subscribe(serviceId, mode, listener);
-				state.set({ selected: null, revision: 1 }, BACKGROUND_CONTEXT);
+				state.state.revision = 1;
+				state.publish(BACKGROUND_CONTEXT);
 				return {
 					snapshot: subscription.snapshot,
 					activate: () => subscription.activate(),
@@ -360,6 +444,59 @@ describe("remote services", () => {
 		expect(models.state.value?.revision).toBe(1);
 		await namespace.dispose(BACKGROUND_CONTEXT);
 		provider.dispose();
+	});
+
+	test.each([
+		["duplicate", 0],
+		["gap", 2],
+	] as const)("clears replicated state after a %s operation sequence", async (_kind, sequence) => {
+		let sendUpdate: ((update: Parameters<Parameters<RemoteServiceTransport["subscribe"]>[2]>[0]) => void) | undefined;
+		const errors: Error[] = [];
+		const namespace = createRemoteServiceBinding({
+			services: [Models],
+			transport: {
+				invoke: () => Promise.reject(new Error("unexpected invocation")),
+				async subscribe(_serviceId, _mode, listener) {
+					sendUpdate = (update) => listener(update, BACKGROUND_CONTEXT);
+					return {
+						snapshot: {
+							serviceId: Models.id,
+							mode: "singleton",
+							instances: [
+								{
+									members: [
+										{ name: "select", kind: "method" },
+										{
+											name: "state",
+											kind: "state",
+											sequence: 0,
+											ops: [["r", { selected: null, revision: 0 }]],
+										},
+									],
+								},
+							],
+						},
+						activate() {},
+						close() {},
+					};
+				},
+			},
+			onError: (error) => errors.push(error),
+		});
+		const models = namespace.use(Models);
+		await namespace.ready(BACKGROUND_CONTEXT);
+		expect(models.state.value?.revision).toBe(0);
+
+		sendUpdate?.({
+			type: "state",
+			member: "state",
+			sequence,
+			ops: [["r", { selected: null, revision: sequence }]],
+		});
+		expect(models.state.value).toBeUndefined();
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.message).toContain("sequence has a gap");
+		await namespace.dispose(BACKGROUND_CONTEXT);
 	});
 
 	test("hydrates cold ReplicatedState replicas and replaces them across rebinds", async () => {
@@ -380,16 +517,19 @@ describe("remote services", () => {
 		expect(models.state.value).toBeUndefined();
 		expect(revisions).toEqual([]);
 
-		state.set({ selected: null, revision: 1 }, BACKGROUND_CONTEXT);
+		state.state.revision = 1;
+		state.publish(BACKGROUND_CONTEXT);
 		await namespace.rebind(true, BACKGROUND_CONTEXT);
 		expect(models.state.value?.revision).toBe(1);
 		expect(revisions).toEqual([1]);
-		state.set({ selected: null, revision: 2 }, BACKGROUND_CONTEXT);
+		state.state.revision = 2;
+		state.publish(BACKGROUND_CONTEXT);
 		expect(revisions).toEqual([1, 2]);
 
 		await namespace.rebind(false, BACKGROUND_CONTEXT);
 		expect(models.state.value).toBeUndefined();
-		state.set({ selected: null, revision: 3 }, BACKGROUND_CONTEXT);
+		state.state.revision = 3;
+		state.publish(BACKGROUND_CONTEXT);
 		expect(revisions).toEqual([1, 2]);
 		await namespace.rebind(true, BACKGROUND_CONTEXT);
 		expect(models.state.value?.revision).toBe(3);
@@ -433,7 +573,8 @@ describe("remote services", () => {
 		expect(observed[0]).toMatchObject({ question: { question: "First?" } });
 
 		const firstService = observed[0]!.service;
-		firstRequest.set({ question: "Updated?" }, BACKGROUND_CONTEXT);
+		firstRequest.state.question = "Updated?";
+		firstRequest.publish(BACKGROUND_CONTEXT);
 		expect(firstService.request.value).toEqual({ question: "Updated?" });
 		await expect(firstService.submit("yes", BACKGROUND_CONTEXT)).resolves.toEqual({ accepted: true });
 		expect(firstSubmit).toHaveBeenCalledWith("yes", expect.objectContaining({ abortSignal: undefined }));

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	apply,
-	assertJsonValue,
+	applyImmutable,
 	assertValidOp,
 	assertValidWireOp,
 	decoder,
@@ -306,26 +306,6 @@ describe("tracker: root ops", () => {
 		expect(apply(structuredClone(initial), t.flush())).toEqual(t.state);
 	});
 
-	it("detaches objects supplied to fill", () => {
-		const supplied = { value: 1 };
-		const t = track({ xs: [{ value: 0 }, { value: 0 }] });
-		t.flush();
-		t.state.xs.fill(supplied);
-		supplied.value = 2;
-		expect(t.state.xs).toEqual([{ value: 1 }, { value: 1 }]);
-		expect(t.state.xs[0]).not.toBe(t.state.xs[1]);
-		expect(apply({ xs: [{ value: 0 }, { value: 0 }] }, t.flush())).toEqual(t.state);
-	});
-
-	it("keeps copyWithin results as a JSON tree", () => {
-		const t = track({ xs: [{ value: 1 }, { value: 2 }] });
-		t.flush();
-		t.state.xs.copyWithin(1, 0, 1);
-		expect(t.state.xs).toEqual([{ value: 1 }, { value: 1 }]);
-		expect(t.state.xs[0]).not.toBe(t.state.xs[1]);
-		expect(apply({ xs: [{ value: 1 }, { value: 2 }] }, t.flush())).toEqual(t.state);
-	});
-
 	it("combines retained element edits with one append", () => {
 		const initial = { messages: [{ text: "a" }, { text: "b" }], flag: 0 };
 		const t = track(structuredClone(initial));
@@ -423,42 +403,12 @@ describe("replacing the whole value", () => {
 		expect(t.flush()).toEqual([["s", ["value"], 2]]);
 	});
 
-	it("rejects replacing state with a nested tracked proxy", () => {
-		const t = track<{ nested: Record<string, number> }>({ nested: { value: 1 } });
-		const nested = t.state.nested;
-		expect(() => {
-			t.state = nested as unknown as { nested: Record<string, number> };
-		}).toThrow();
-	});
-
 	it("allows a tracked child self-assignment as a no-op", () => {
 		const t = track({ child: { value: 1 } });
 		t.flush();
 		const child = t.state.child;
 		t.state.child = child;
 		expect(t.flush()).toEqual([]);
-	});
-
-	it("rejects assigning a nested tracked proxy into state", () => {
-		const t = track<{
-			left: Record<string, number>;
-			right?: Record<string, number>;
-			wrapped?: { inner: Record<string, number> };
-			items?: Record<string, number>[];
-		}>({ left: { value: 1 } });
-		t.flush();
-		expect(() => {
-			t.state.right = t.state.left;
-		}).toThrow(/state prox/);
-		expect(() => {
-			t.state.wrapped = { inner: t.state.left };
-		}).toThrow(/state prox/);
-		t.state.items = [];
-		expect(() => t.state.items?.push(t.state.left)).toThrow(/state prox/);
-		const other = track({ value: 2 });
-		expect(() => {
-			t.state.wrapped = { inner: other.state as unknown as Record<string, number> };
-		}).toThrow(/state prox/);
 	});
 
 	it("assigning to state discards ops recorded before it", () => {
@@ -540,6 +490,18 @@ describe("the first flush", () => {
 		expect(t.flush()).toEqual([]);
 		t.state.y = 1;
 		expect(t.flush()).toEqual([["s", ["y"], 1]]);
+	});
+});
+
+describe("immutable operation application", () => {
+	it("does not mutate a replacement payload targeted by a later operation", () => {
+		const replacement = { nested: { value: 1 } };
+		const next = applyImmutable<{ nested: { value: number } }>(undefined, [
+			["r", replacement],
+			["s", ["nested", "value"], 2],
+		]);
+		expect(replacement.nested.value).toBe(1);
+		expect(next.nested.value).toBe(2);
 	});
 });
 
@@ -880,83 +842,7 @@ describe("safety: op structure", () => {
 	});
 });
 
-describe("safety: what a facet can put on the wire", () => {
-	// A facet cannot forge an op — it mutates plain objects and the tracker builds
-	// the tuples. Values and keys are the leak, and structuredClone is NOT a JSON
-	// check: it clones a Map happily, and the op then carries {} while the producer
-	// keeps a real Map.
-	const rejects = (name: string, mutate: (s: Record<string, unknown>) => void) =>
-		it(`rejects ${name}`, () => {
-			const t = track<Record<string, unknown>>({ pad: PAD });
-			t.flush(); // drain the base batch
-			expect(() => mutate(t.state)).toThrow();
-		});
-
-	rejects("a function", (s) => {
-		s.f = () => {};
-	});
-	rejects("a Map", (s) => {
-		s.m = new Map([[1, 2]]);
-	});
-	rejects("a Date", (s) => {
-		s.d = new Date(0);
-	});
-	rejects("a BigInt", (s) => {
-		s.b = 1n;
-	});
-	rejects("a cycle", (s) => {
-		const a: Record<string, unknown> = {};
-		a.self = a;
-		s.c = a;
-	});
-	rejects("a symbol key", (s) => {
-		s[Symbol("k") as unknown as string] = 1;
-	});
-
-	it("rejects invalid array items before mutation", () => {
-		const t = track<{ xs: JsonValue[] }>({ xs: [] });
-		t.flush();
-		expect(() => t.state.xs.push(new Map() as unknown as JsonValue)).toThrow();
-		expect(t.state.xs).toEqual([]);
-	});
-
-	it("rejects duplicate objects inserted in one array call", () => {
-		const t = track<{ xs: JsonValue[] }>({ xs: [] });
-		t.flush();
-		const shared = { value: 1 };
-		expect(() => t.state.xs.push(shared, shared)).toThrow(/shared/);
-		expect(t.state.xs).toEqual([]);
-	});
-
-	it("rejects accessors without invoking them", () => {
-		const t = track<Record<string, unknown>>({});
-		t.flush();
-		let reads = 0;
-		const supplied = Object.defineProperty({}, "value", {
-			get() {
-				reads++;
-				return 1;
-			},
-			enumerable: true,
-			configurable: true,
-		});
-		expect(() => {
-			t.state.value = supplied;
-		}).toThrow(/accessor/);
-		expect(reads).toBe(0);
-		expect(t.state).toEqual({});
-	});
-
-	it("rejects frozen and otherwise non-extensible values", () => {
-		const t = track<Record<string, unknown>>({});
-		t.flush();
-		expect(() => {
-			t.state.frozen = Object.freeze({ nested: { value: 1 } });
-		}).toThrow(/non-extensible/);
-		expect(() => track(Object.freeze({ value: 1 }))).toThrow(/non-extensible/);
-		expect(t.state).toEqual({});
-	});
-
+describe("tracker proxy boundaries", () => {
 	it("rejects descriptor and object-shape bypasses", () => {
 		const t = track<Record<string, unknown>>({ pad: PAD });
 		t.flush();
@@ -968,34 +854,14 @@ describe("safety: what a facet can put on the wire", () => {
 	});
 
 	it("accepts a value that merely looks like an op", () => {
-		// Nested inside ["s", path, value]; nothing flattens, so it cannot be read
-		// as a top-level op.
 		const t = track<Record<string, unknown>>({ pad: PAD });
-		t.flush(); // drain the base batch
+		t.flush();
 		t.state.x = ["r", { evil: true }];
 		expect(t.flush()).toEqual([["s", ["x"], ["r", { evil: true }]]]);
 	});
 });
 
 describe("assertions", () => {
-	it("assertJsonValue rejects non-JSON", () => {
-		const shared = { value: 1 };
-		for (const bad of [
-			new Map(),
-			new Set(),
-			new Date(),
-			/re/,
-			() => {},
-			Number.NaN,
-			Infinity,
-			{ left: shared, right: shared },
-		]) {
-			expect(() => assertJsonValue(bad)).toThrow();
-		}
-		for (const good of [null, true, 1, "s", [1, "a"], { a: { b: [null] } }]) {
-			expect(() => assertJsonValue(good)).not.toThrow();
-		}
-	});
 	it("assertValidOp accepts decoded ops and rejects wire forms", () => {
 		// Validating Op against the wire grammar would be laxer than the type: a
 		// two-element ["s", value] would pass, and apply would read the value as a
@@ -1022,6 +888,11 @@ describe("assertions", () => {
 			expect(() => assertValidOp(wireOnly)).toThrow();
 			expect(() => assertValidWireOp(wireOnly)).not.toThrow();
 		}
+	});
+
+	it("does not recursively inspect operation payloads", () => {
+		expect(() => assertValidOp(["s", ["value"], new Map()] as never)).not.toThrow();
+		expect(() => assertValidWireOp(["r", new Date()] as never)).not.toThrow();
 	});
 });
 

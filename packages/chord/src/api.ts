@@ -85,6 +85,6 @@ export function createRemoteServiceBinding(options: RemoteServiceBindingOptions)
 	return new RemoteServiceBindingImpl(options);
 }
 
-export function replicatedState<T>(initial: T): MutableReplicatedState<T> {
+export function replicatedState<T extends object>(initial: T): MutableReplicatedState<T> {
 	return new MutableReplicatedStateImpl(initial);
 }

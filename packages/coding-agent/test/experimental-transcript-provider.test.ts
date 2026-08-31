@@ -2,6 +2,7 @@ import type { AgentLane, EventListener, HarnessEvent, LaneSnapshot, WatchHandle 
 import { replicatedState } from "@draht/chord";
 import { BACKGROUND_CONTEXT } from "@draht/chord/context";
 import { describe, expect, test, vi } from "vitest";
+import type { TranscriptState } from "../src/experimental/services/transcript.ts";
 import { createTranscriptService } from "../src/experimental/services/transcript-provider.ts";
 
 function laneSnapshot(tipId: string | null = null): LaneSnapshot {
@@ -32,7 +33,7 @@ function laneSnapshot(tipId: string | null = null): LaneSnapshot {
 }
 
 describe("Transcript service", () => {
-	test("publishes ordered reducer events and a snapshot after navigation", async () => {
+	test("publishes coherent state and rebases after navigation", async () => {
 		let listener: EventListener | undefined;
 		const replacement = laneSnapshot("replacement-tip");
 		const resnapshot = vi.fn(async () => replacement);
@@ -47,21 +48,39 @@ describe("Transcript service", () => {
 		};
 		const lane = { watch: async () => handle } as unknown as AgentLane;
 		const runtime = createTranscriptService(lane, replicatedState);
-		const updates: Array<{ type: string; revision: number }> = [];
-		runtime.service.updates.subscribe((update) => {
-			if (update !== null) updates.push({ type: update.type, revision: update.revision });
+		const states: TranscriptState[] = [];
+		runtime.service.state.subscribe((value) => {
+			if (value.snapshot !== null) states.push(value);
 		});
 		await runtime.activate();
 
-		expect(await runtime.service.snapshot(BACKGROUND_CONTEXT)).toMatchObject({
-			revision: 0,
-			snapshot: { lane: "main", operation: null },
-		});
+		expect(states).toHaveLength(1);
+		expect(states[0]).toMatchObject({ snapshot: { lane: "main", operation: null }, event: null });
 		await listener?.({ type: "run_start", lane: "main", runId: "run-1", startedAt: 1 }, BACKGROUND_CONTEXT);
-		expect(updates).toEqual([{ type: "event", revision: 1 }]);
-		expect(await runtime.service.snapshot(BACKGROUND_CONTEXT)).toMatchObject({
-			revision: 1,
+		expect(states).toHaveLength(2);
+		expect(states[1]).toMatchObject({
 			snapshot: { operation: { id: "run-1" } },
+			event: { type: "run_start", runId: "run-1" },
+		});
+
+		await listener?.(
+			{
+				type: "entry_added",
+				lane: "main",
+				entry: {
+					id: "entry-1",
+					parentId: null,
+					seq: 1,
+					timestamp: 2,
+					type: "message",
+					message: { role: "user", content: "hello", timestamp: 2 },
+				},
+			},
+			BACKGROUND_CONTEXT,
+		);
+		expect(states.at(-1)).toMatchObject({
+			snapshot: { tipId: "entry-1", transcript: [{ id: "entry-1" }] },
+			event: { type: "entry_added" },
 		});
 
 		const navigation: HarnessEvent = {
@@ -69,22 +88,18 @@ describe("Transcript service", () => {
 			lane: "main",
 			runId: "navigation-1",
 			status: "completed",
-			fromTipId: null,
+			fromTipId: "entry-1",
 			tipId: "replacement-tip",
-			endedAt: 2,
+			endedAt: 3,
 		};
 		await listener?.(navigation, BACKGROUND_CONTEXT);
-		await vi.waitFor(() =>
-			expect(updates).toEqual([
-				{ type: "event", revision: 1 },
-				{ type: "event", revision: 2 },
-				{ type: "snapshot", revision: 3 },
-			]),
-		);
-		expect(await runtime.service.snapshot(BACKGROUND_CONTEXT)).toMatchObject({
-			revision: 3,
-			snapshot: { tipId: "replacement-tip" },
+		await vi.waitFor(() => expect(states.at(-1)?.event).toBeNull());
+		expect(states.at(-2)).toMatchObject({
+			snapshot: { tipId: "entry-1" },
+			event: { type: "navigation_end" },
 		});
+		expect(states.at(-1)).toMatchObject({ snapshot: { tipId: "replacement-tip" }, event: null });
+		expect(runtime.service.state.value).toMatchObject({ snapshot: { tipId: "replacement-tip" }, event: null });
 		expect(resnapshot).toHaveBeenCalledOnce();
 
 		await runtime.dispose();

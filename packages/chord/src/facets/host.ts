@@ -574,7 +574,7 @@ export class FacetKernel {
 					this.#serviceSlots.observe(service, () => lifecycle.assertServiceAccess(), handler),
 				);
 			},
-			replicatedState: <T>(initial: T) => {
+			replicatedState: <T extends object>(initial: T) => {
 				lifecycle.assertRunning("create replicated state");
 				return new MutableReplicatedStateImpl(initial);
 			},

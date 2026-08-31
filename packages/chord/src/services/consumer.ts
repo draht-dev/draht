@@ -1,4 +1,5 @@
 import { awaitWithContext, BACKGROUND_CONTEXT } from "../context/index.ts";
+import type { Op } from "../delta/index.ts";
 import type {
 	Context,
 	JsonValue,
@@ -75,14 +76,14 @@ class MemberSlot {
 		}
 	}
 
-	hydrate(sequence: number, value: JsonValue, context: Context): void {
+	hydrate(sequence: number, ops: readonly Op[], context: Context): void {
 		this.setDescription("state");
-		this.#state.hydrate(sequence, value, context);
+		this.#state.hydrate(sequence, ops, context);
 	}
 
-	update(sequence: number, value: JsonValue, context: Context): void {
+	update(sequence: number, ops: readonly Op[], context: Context): void {
 		this.setDescription("state");
-		this.#state.update(sequence, value, context);
+		this.#state.update(sequence, ops, context);
 	}
 
 	clear(): void {
@@ -186,18 +187,18 @@ class ServiceFacade {
 		for (const member of members.values()) {
 			const slot = this.#slots.get(member.name);
 			if (member.kind === "state") {
-				(slot ?? this.#slot(member.name)).hydrate(member.sequence, member.value, context);
+				(slot ?? this.#slot(member.name)).hydrate(member.sequence, member.ops, context);
 			} else {
 				slot?.setDescription(member.kind);
 			}
 		}
 	}
 
-	update(member: string, sequence: number, value: JsonValue, context: Context): void {
+	update(member: string, sequence: number, ops: readonly Op[], context: Context): void {
 		if (this.#descriptions.get(member) !== "state") {
 			throw new Error(`Remote service update targets non-state member ${this.#serviceId}.${member}`);
 		}
-		this.#slot(member).update(sequence, value, context);
+		this.#slot(member).update(sequence, ops, context);
 	}
 
 	clear(): void {
@@ -386,7 +387,7 @@ class KeyedBinding<T> {
 					if (update.instance === undefined) throw new Error("Keyed state update has no instance address");
 					const instance = this.#instances.get(update.instance.key);
 					if (instance?.generation !== update.instance.generation) return;
-					instance.facade.update(update.member, update.sequence, update.value, context);
+					instance.facade.update(update.member, update.sequence, update.ops, context);
 					break;
 				}
 			}
@@ -586,7 +587,7 @@ export class RemoteServiceBindingImpl implements RemoteServiceBinding {
 						}
 						binding.facade.install(update.snapshot, context);
 					} else if (update.type === "state" && update.instance === undefined) {
-						binding.facade.update(update.member, update.sequence, update.value, context);
+						binding.facade.update(update.member, update.sequence, update.ops, context);
 					}
 				} catch (error) {
 					this.#reportError(toError(error));

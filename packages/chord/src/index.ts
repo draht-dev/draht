@@ -10,7 +10,7 @@ export {
 	defineService,
 	replicatedState,
 } from "./api.ts";
-export { cloneJsonValue, isJsonValue } from "./json.ts";
+export { isJsonValue } from "./json.ts";
 export { RemoteServiceError } from "./services/errors.ts";
 export { RemoteServiceProvider } from "./services/provider.ts";
 export type {
@@ -32,6 +32,7 @@ export type {
 	RemoteServices,
 	RemoteServiceTransport,
 	ReplicatedState,
+	ReplicatedStateDelivery,
 	Service,
 	ServiceCall,
 	ServiceCatalogueEntry,

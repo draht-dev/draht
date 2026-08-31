@@ -239,6 +239,7 @@ export class RemoteServiceProvider {
 			terminated: false,
 			closed: false,
 		};
+		this.#publishPending(registration);
 		registration.subscribers.add(subscriber);
 		const snapshot = this.#snapshot(registration);
 		return {
@@ -332,7 +333,7 @@ export class RemoteServiceProvider {
 		for (const [name, member] of classified.members) {
 			if (member.kind !== "state") continue;
 			removeMemberListeners.push(
-				member.state.subscribe((value, sequence, context) => {
+				member.state.subscribe((ops, sequence, context) => {
 					if (!instance.active) return;
 					this.#emit(
 						registration,
@@ -341,7 +342,7 @@ export class RemoteServiceProvider {
 							...(address === undefined ? {} : { instance: address }),
 							member: name,
 							sequence,
-							value: value as JsonValue,
+							ops,
 						},
 						context,
 					);
@@ -395,6 +396,21 @@ export class RemoteServiceProvider {
 		return instance;
 	}
 
+	#publishPending(registration: ServiceRegistration): void {
+		const context = serviceDeliveryContext();
+		const instances =
+			registration.mode === "singleton"
+				? registration.singleton === undefined
+					? []
+					: [registration.singleton]
+				: registration.instances.values();
+		for (const instance of instances) {
+			for (const member of instance.members.values()) {
+				if (member.kind === "state") member.state.publish(context);
+			}
+		}
+	}
+
 	#snapshot(registration: ServiceRegistration): ServiceSubscriptionSnapshot {
 		const instances =
 			registration.mode === "singleton"
@@ -417,7 +433,7 @@ export class RemoteServiceProvider {
 					name,
 					kind: "state",
 					sequence: member.state.sequence,
-					value: member.state.value as JsonValue,
+					ops: [["r", member.state.value as JsonValue]],
 				});
 			}
 		}

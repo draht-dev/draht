@@ -1,3 +1,4 @@
+import type { Op } from "./delta/index.ts";
 import type { RemoteServiceProvider } from "./services/provider.ts";
 
 export type { RemoteServiceError } from "./services/errors.ts";
@@ -34,17 +35,24 @@ export type JsonRepresentation<T> = IsAny<T> extends true
 					? { [TKey in keyof T]: JsonRepresentation<T[TKey]> }
 					: never;
 
-export interface ReplicatedState<T> {
-	/** Borrowed immutable value, or undefined until hydration. Do not mutate or retain it. */
-	readonly value: T | undefined;
-	/** Listener values are borrowed and must not be mutated or retained. */
-	subscribe(listener: (value: T, context: Context) => void): () => void;
+export interface ReplicatedStateDelivery {
+	readonly kind: "hydrate" | "update";
+	readonly sequence: number;
 }
 
-export interface MutableReplicatedState<T> extends ReplicatedState<T> {
+export interface ReplicatedState<T> {
+	/** Immutable value, or undefined until hydration. Later updates do not mutate previously returned values. */
+	readonly value: T | undefined;
+	/** Listener values are immutable and may structurally share unchanged data with other revisions. */
+	subscribe(listener: (value: T, context: Context, delivery: ReplicatedStateDelivery) => void): () => void;
+}
+
+export interface MutableReplicatedState<T extends object> extends ReplicatedState<T> {
 	readonly value: T;
-	/** Transfers the JSON value to the state; the caller must not subsequently mutate it. */
-	set(value: T, context: Context): void;
+	/** Mutable tracked state. All writes must go through this proxy. */
+	readonly state: T;
+	/** Publish the changes made through {@link state} since the previous publication. */
+	publish(context: Context): void;
 }
 
 declare const SERVICE_TYPE: unique symbol;
@@ -125,7 +133,7 @@ export type ServiceInstanceAddress = {
 
 export type ServiceMemberSnapshot =
 	| { readonly name: string; readonly kind: "method" }
-	| { readonly name: string; readonly kind: "state"; readonly sequence: number; readonly value: JsonValue };
+	| { readonly name: string; readonly kind: "state"; readonly sequence: number; readonly ops: readonly Op[] };
 
 export type ServiceInstanceSnapshot = {
 	readonly instance?: ServiceInstanceAddress;
@@ -144,7 +152,7 @@ export type ServiceProviderUpdate =
 			readonly instance?: ServiceInstanceAddress;
 			readonly member: string;
 			readonly sequence: number;
-			readonly value: JsonValue;
+			readonly ops: readonly Op[];
 	  }
 	| { readonly type: "unavailable" }
 	| { readonly type: "replaced"; readonly snapshot: ServiceInstanceSnapshot }
@@ -215,7 +223,7 @@ export interface FacetEnvironment {
 	/** Declare ownership of a multi-instance service and return its deferred spawning capability. */
 	provideMany<T>(service: Service<T>): ServiceSpawner<T>;
 	/** Create initialized mutable state suitable for exposing through a service implementation. */
-	replicatedState<T>(initial: T): MutableReplicatedState<T>;
+	replicatedState<T extends object>(initial: T): MutableReplicatedState<T>;
 	/** Give the facet ownership of a resource cleanup function. */
 	own(disposal: () => void | Promise<void>): void;
 	/** Register asynchronous initialization after dependencies are bound and ready. */

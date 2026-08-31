@@ -1,7 +1,7 @@
 import type { HarnessEvent, LaneSnapshot, LaneWatchEvent } from "../agent-harness.ts";
 import type { OperationResultRecord } from "../session/types.ts";
 
-export type LaneSnapshotReduction = LaneSnapshot | { rebase: true };
+export type LaneSnapshotReduction = "rebase" | undefined;
 
 function matchingOperation(
 	snapshot: LaneSnapshot,
@@ -10,145 +10,153 @@ function matchingOperation(
 	return snapshot.operation?.id === operationId ? snapshot.operation : undefined;
 }
 
-/** Apply one harness event to a replicated lane snapshot. Navigation completion requires a fresh snapshot. */
+/** Apply one harness event to a mutable lane snapshot. Navigation completion requires a fresh snapshot. */
 export function reduceLaneSnapshot(
 	snapshot: LaneSnapshot,
 	event: HarnessEvent | LaneWatchEvent,
 ): LaneSnapshotReduction {
-	if ("lane" in event && event.lane !== undefined && event.lane !== snapshot.lane && event.type !== "usage") {
-		return snapshot;
-	}
-	const next = structuredClone(snapshot);
+	if ("lane" in event && event.lane !== undefined && event.lane !== snapshot.lane && event.type !== "usage") return;
 	switch (event.type) {
 		case "run_start":
-			next.operation = {
+			snapshot.operation = {
 				id: event.runId,
 				kind: "run",
 				startedAt: event.startedAt,
-				fromTipId: next.tipId,
+				fromTipId: snapshot.tipId,
 				status: "open",
 				runningTools: [],
 			};
-			return next;
+			return;
 		case "compaction_start":
-			if (next.operation !== null) return next;
-			next.operation = {
+			if (snapshot.operation !== null) return;
+			snapshot.operation = {
 				id: event.runId,
 				kind: "compaction",
 				startedAt: event.startedAt,
-				fromTipId: next.tipId,
+				fromTipId: snapshot.tipId,
 				status: "open",
 				runningTools: [],
 			};
-			return next;
+			return;
 		case "navigation_start":
-			next.operation = {
+			snapshot.operation = {
 				id: event.runId,
 				kind: "navigation",
 				startedAt: event.startedAt,
-				fromTipId: next.tipId,
+				fromTipId: snapshot.tipId,
 				status: "open",
 				runningTools: [],
 			};
-			return next;
-		case "operation_abort":
-			if (next.operation?.id === event.operationId) next.operation.status = "aborting";
-			return next;
-		case "run_resume":
-			if (next.operation?.id === event.runId) delete next.operation.deferred;
-			return next;
-		case "run_suspend":
-			if (next.operation?.id === event.runId) {
-				next.operation.deferred = { handle: event.deferred, poll: event.poll };
-				delete next.operation.streamingMessage;
-			}
-			return next;
-		case "retry_scheduled":
-			if (next.operation?.id === event.runId) {
-				next.operation.retry = {
+			return;
+		case "operation_abort": {
+			const operation = matchingOperation(snapshot, event.operationId);
+			if (operation !== undefined) operation.status = "aborting";
+			return;
+		}
+		case "run_resume": {
+			const operation = matchingOperation(snapshot, event.runId);
+			if (operation !== undefined) delete operation.deferred;
+			return;
+		}
+		case "run_suspend": {
+			const operation = matchingOperation(snapshot, event.runId);
+			if (operation === undefined) return;
+			delete operation.streamingMessage;
+			operation.deferred = { handle: event.deferred, poll: event.poll };
+			return;
+		}
+		case "retry_scheduled": {
+			const operation = matchingOperation(snapshot, event.runId);
+			if (operation !== undefined) {
+				operation.retry = {
 					attempt: event.attempt,
 					maxAttempts: event.maxAttempts,
 					nextAttemptAt: event.notBefore,
 				};
 			}
-			return next;
+			return;
+		}
 		case "retry_start":
-		case "retry_end":
-			if (next.operation?.id === event.runId) delete next.operation.retry;
-			return next;
-		case "message_start":
+		case "retry_end": {
+			const operation = matchingOperation(snapshot, event.runId);
+			if (operation !== undefined) delete operation.retry;
+			return;
+		}
+		case "message_start": {
 			if (
-				event.runId !== undefined &&
-				next.operation?.id === event.runId &&
-				event.message.role === "assistant" &&
-				event.message.stopReason === "pending"
+				event.runId === undefined ||
+				event.message.role !== "assistant" ||
+				event.message.stopReason !== "pending"
 			) {
-				next.operation.streamingMessage = event.message;
+				return;
 			}
-			return next;
-		case "message_update":
-			if (next.operation?.id === event.runId && event.message.role === "assistant") {
-				next.operation.streamingMessage = event.message;
-			}
-			return next;
-		case "message_end":
-			if (event.runId !== undefined && next.operation?.id === event.runId) {
-				delete next.operation.streamingMessage;
-			}
-			return next;
-		case "tool_start":
-			if (next.operation?.id === event.runId) {
-				next.operation.runningTools.push({
-					toolCallId: event.toolCallId,
-					toolName: event.toolName,
-					args: event.args,
-				});
-			}
-			return next;
+			const operation = matchingOperation(snapshot, event.runId);
+			if (operation !== undefined) operation.streamingMessage = event.message;
+			return;
+		}
+		case "message_update": {
+			if (event.message.role !== "assistant") return;
+			const operation = matchingOperation(snapshot, event.runId);
+			if (operation !== undefined) operation.streamingMessage = event.message;
+			return;
+		}
+		case "message_end": {
+			if (event.runId === undefined) return;
+			const operation = matchingOperation(snapshot, event.runId);
+			if (operation !== undefined) delete operation.streamingMessage;
+			return;
+		}
+		case "tool_start": {
+			const operation = matchingOperation(snapshot, event.runId);
+			operation?.runningTools.push({
+				toolCallId: event.toolCallId,
+				toolName: event.toolName,
+				args: event.args,
+			});
+			return;
+		}
 		case "tool_update": {
-			const tool = next.operation?.runningTools.find((candidate) => candidate.toolCallId === event.toolCallId);
+			const tool = snapshot.operation?.runningTools.find((candidate) => candidate.toolCallId === event.toolCallId);
 			if (tool !== undefined) tool.partialResult = event.partialResult;
-			return next;
+			return;
 		}
-		case "tool_end":
-			if (next.operation?.id === event.runId) {
-				next.operation.runningTools = next.operation.runningTools.filter(
-					(candidate) => candidate.toolCallId !== event.toolCallId,
-				);
-			}
-			return next;
-		case "entry_added": {
-			const alreadyPresent = next.transcript.some((entry) => entry.id === event.entry.id);
-			if (!alreadyPresent) {
-				next.transcript = event.entry.type === "compaction" ? [event.entry] : [...next.transcript, event.entry];
-				next.tipId = event.entry.id;
-				if (event.entry.type === "message") next.stats.messageCount++;
-			}
-			return next;
+		case "tool_end": {
+			const operation = matchingOperation(snapshot, event.runId);
+			const index =
+				operation?.runningTools.findIndex((candidate) => candidate.toolCallId === event.toolCallId) ?? -1;
+			if (operation !== undefined && index !== -1) operation.runningTools.splice(index, 1);
+			return;
 		}
+		case "entry_added":
+			if (snapshot.transcript.some((entry) => entry.id === event.entry.id)) return;
+			if (event.entry.type === "compaction") snapshot.transcript.splice(0, snapshot.transcript.length, event.entry);
+			else snapshot.transcript.push(event.entry);
+			snapshot.tipId = event.entry.id;
+			if (event.entry.type === "message") snapshot.stats.messageCount += 1;
+			return;
 		case "queue_update":
-			next.queues = event.queues;
-			return next;
+			snapshot.queues = event.queues;
+			return;
 		case "usage":
-			next.stats.usage = event.totals;
-			return next;
+			snapshot.stats.usage = event.totals;
+			return;
 		case "config_update":
-			if (!("lane" in event) || event.lane !== next.lane) return next;
+			if (!("lane" in event) || event.lane !== snapshot.lane) return;
 			switch (event.property) {
 				case "model":
-					next.configuration.model = event.value;
-					break;
+					snapshot.configuration.model = event.value;
+					return;
 				case "thinkingLevel":
-					next.configuration.thinkingLevel = event.value;
-					break;
+					snapshot.configuration.thinkingLevel = event.value;
+					return;
 				case "activeTools":
-					next.configuration.activeToolNames = event.value;
-					break;
+					snapshot.configuration.activeToolNames = event.value;
+					return;
 			}
-			return next;
+			return;
 		case "run_end": {
-			const operation = matchingOperation(next, event.runId);
-			if (operation?.kind !== "run") return next;
+			const operation = matchingOperation(snapshot, event.runId);
+			if (operation?.kind !== "run") return;
 			const record: OperationResultRecord = {
 				operationId: event.runId,
 				kind: "run",
@@ -159,38 +167,38 @@ export function reduceLaneSnapshot(
 				startedAt: operation.startedAt,
 				endedAt: event.endedAt,
 			};
-			next.lastResult = record;
-			next.operation = null;
-			next.tipId = event.tipId;
-			return next;
+			snapshot.lastResult = record;
+			snapshot.operation = null;
+			snapshot.tipId = event.tipId;
+			return;
 		}
 		case "compaction_end": {
-			const operation = matchingOperation(next, event.runId);
-			if (operation?.kind !== "compaction") return next;
+			const operation = matchingOperation(snapshot, event.runId);
+			if (operation?.kind !== "compaction") return;
 			const record: OperationResultRecord = {
 				operationId: event.runId,
 				kind: "compaction",
 				status: event.status,
 				...(event.status === "failed" ? { error: event.error } : {}),
 				fromTipId: operation.fromTipId,
-				tipId: next.tipId,
+				tipId: snapshot.tipId,
 				startedAt: operation.startedAt,
 				endedAt: event.endedAt,
 			};
-			next.lastResult = record;
-			next.operation = null;
-			return next;
+			snapshot.lastResult = record;
+			snapshot.operation = null;
+			return;
 		}
 		case "navigation_end":
-			return { rebase: true };
+			return "rebase";
 		case "fault":
-			next.faulted = true;
-			return next;
+			snapshot.faulted = true;
+			return;
 		case "handler_error":
 		case "turn_start":
 		case "turn_end":
 		case "value_update":
 		case "lane_created":
-			return next;
+			return;
 	}
 }

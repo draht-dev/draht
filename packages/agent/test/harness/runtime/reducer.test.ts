@@ -36,13 +36,10 @@ async function settleEvents(): Promise<void> {
 }
 
 function fold(snapshot: LaneSnapshot, events: HarnessEvent[]): LaneSnapshot {
-	let current = snapshot;
 	for (const event of events) {
-		const reduced = reduceLaneSnapshot(current, event);
-		if ("rebase" in reduced) throw new Error(`Unexpected rebase for ${event.type}`);
-		current = reduced;
+		if (reduceLaneSnapshot(snapshot, event) === "rebase") throw new Error(`Unexpected rebase for ${event.type}`);
 	}
-	return current;
+	return snapshot;
 }
 
 afterEach(async () => {
@@ -156,23 +153,26 @@ describe("lane snapshot reducer", () => {
 				runningTools: [],
 			},
 		};
-		const started = reduceLaneSnapshot(running, {
-			type: "compaction_start",
-			lane: "main",
-			runId: "run",
-			reason: "threshold",
-			startedAt: 2,
-		});
-		if ("rebase" in started) throw new Error("Unexpected segment rebase");
-		const ended = reduceLaneSnapshot(started, {
-			type: "compaction_end",
-			lane: "main",
-			runId: "run",
-			reason: "threshold",
-			status: "declined",
-			endedAt: 3,
-		});
-		expect(ended).toMatchObject({ operation: { id: "run", kind: "run" } });
+		expect(
+			reduceLaneSnapshot(running, {
+				type: "compaction_start",
+				lane: "main",
+				runId: "run",
+				reason: "threshold",
+				startedAt: 2,
+			}),
+		).toBeUndefined();
+		expect(
+			reduceLaneSnapshot(running, {
+				type: "compaction_end",
+				lane: "main",
+				runId: "run",
+				reason: "threshold",
+				status: "declined",
+				endedAt: 3,
+			}),
+		).toBeUndefined();
+		expect(running).toMatchObject({ operation: { id: "run", kind: "run" } });
 	});
 
 	it("marks navigation completion for rebase", async () => {
@@ -200,6 +200,6 @@ describe("lane snapshot reducer", () => {
 				endedAt: 2,
 			},
 		);
-		expect(reduced).toEqual({ rebase: true });
+		expect(reduced).toBe("rebase");
 	});
 });

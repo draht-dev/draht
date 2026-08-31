@@ -116,6 +116,8 @@ export interface Tracker<T extends object> {
 	 * must not mutate them outside this proxy.
 	 */
 	state: T;
+	/** The untracked current value. Mutating it bypasses change tracking. */
+	readonly target: T;
 	flush(): Op[];
 	/** Make the next flush a complete base batch without changing the value. */
 	rebase(): void;
@@ -147,7 +149,6 @@ const INDEX = /^(?:0|[1-9]\d*)$/;
 const norm = (target: object, key: string | symbol): Seg | symbol =>
 	typeof key === "symbol" ? key : Array.isArray(target) && INDEX.test(key) ? Number(key) : key;
 const MUTATORS = new Set(["push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill", "copyWithin"]);
-const TRACKED_PROXIES = new WeakSet<object>();
 const MISSING = Symbol("missing");
 type MaybeJson = JsonValue | typeof MISSING;
 type ArrayDirty = { kind: "append"; start: number } | { kind: "diff" } | { kind: "replace" };
@@ -257,7 +258,7 @@ function diffObject(
 	scan: number,
 	out: Op[],
 ): void {
-	if (path.length > 0 && [...Object.keys(before), ...Object.keys(after)].some((key) => RESERVED_SEGMENTS.has(key))) {
+	if ([...Object.keys(before), ...Object.keys(after)].some((key) => RESERVED_SEGMENTS.has(key))) {
 		emitSet(path, after, out);
 		return;
 	}
@@ -432,7 +433,6 @@ const cloneOp = (op: Op): Op => {
 };
 
 export function track<T extends object>(root: T, options: TrackerOptions = {}): Tracker<T> {
-	validateJsonValue(root);
 	const scan = options.maxOverlapScan ?? 65_536;
 	let pending = dirtyNode();
 	let hasPending = false;
@@ -509,25 +509,7 @@ export function track<T extends object>(root: T, options: TrackerOptions = {}): 
 		return segment;
 	};
 
-	const assertNoTrackedProxy = (value: unknown, seen = new Set<object>()): void => {
-		if (!isObj(value) || seen.has(value)) return;
-		if (TRACKED_PROXIES.has(value)) {
-			throw new TypeError(
-				"value contains tracked state; build replacements from plain data, not from state proxies",
-			);
-		}
-		seen.add(value);
-		for (const key of Reflect.ownKeys(value)) {
-			const descriptor = Object.getOwnPropertyDescriptor(value, key);
-			if (descriptor !== undefined && "value" in descriptor) assertNoTrackedProxy(descriptor.value, seen);
-		}
-	};
-
-	const adoptItems = (values: readonly unknown[]): JsonValue[] => {
-		assertNoTrackedProxy(values);
-		assertJsonValue(values);
-		return values as JsonValue[];
-	};
+	const adoptItems = (values: readonly unknown[]): JsonValue[] => values as JsonValue[];
 
 	const integer = (value: unknown): number => {
 		const number = Number(value);
@@ -596,28 +578,9 @@ export function track<T extends object>(root: T, options: TrackerOptions = {}): 
 								result = spliceItems(target, index, remove, items);
 								break;
 							}
-							default: {
-								let methodArgs = args;
-								let fillValue: JsonValue | undefined;
-								if (key === "fill") {
-									assertNoTrackedProxy(args[0]);
-									assertJsonValue(args[0]);
-									fillValue = cloneJson(args[0]);
-									methodArgs = [fillValue, ...args.slice(1)];
-								}
+							default:
 								markArrayDiff(path);
-								result = Reflect.apply(Array.prototype[key as "sort"], target, methodArgs);
-								if (isObj(fillValue)) {
-									for (let index = 0; index < target.length; index++) {
-										if (target[index] === fillValue) target[index] = cloneJson(fillValue as JsonValue);
-									}
-								} else if (key === "copyWithin") {
-									for (let index = 0; index < target.length; index++) {
-										if (isObj(target[index])) target[index] = cloneJson(target[index] as JsonValue);
-									}
-								}
-								assertJsonValue(target);
-							}
+								result = Reflect.apply(Array.prototype[key as "sort"], target, args);
 						}
 						if (key === "pop") childProxies.delete(String(before - 1));
 						else if (key !== "push") childProxies.clear();
@@ -689,8 +652,6 @@ export function track<T extends object>(root: T, options: TrackerOptions = {}): 
 				if (previous === value) return true;
 				const cached = childProxies.get(key);
 				if (cached !== undefined && cached.target === previous && cached.proxy === value) return true;
-				assertNoTrackedProxy(value);
-				assertJsonValue(value);
 				if (Array.isArray(target)) {
 					const index = segment as number;
 					if (index === target.length) markArrayAppend(path, target.length);
@@ -726,7 +687,6 @@ export function track<T extends object>(root: T, options: TrackerOptions = {}): 
 			},
 		});
 
-		TRACKED_PROXIES.add(proxy);
 		return proxy as V;
 	};
 
@@ -736,15 +696,15 @@ export function track<T extends object>(root: T, options: TrackerOptions = {}): 
 		get state() {
 			return state;
 		},
+		get target() {
+			return root;
+		},
 		set state(next: T) {
 			if (next === state) {
 				clearPending();
 				forceBase = true;
 				return;
 			}
-			if (TRACKED_PROXIES.has(next)) throw new TypeError("tracker state cannot be replaced with tracked state");
-			assertNoTrackedProxy(next);
-			validateJsonValue(next);
 			clearPending();
 			root = next;
 			state = wrap(root, []);
@@ -815,63 +775,6 @@ export class UnsafePathError extends Error {
 }
 
 /**
- * Rejects anything JSON.stringify would not round-trip and object aliases that
- * would lose identity when serialized. Tracked state is a JSON tree, not an
- * arbitrary object graph.
- */
-export function assertJsonValue(value: unknown): asserts value is JsonValue {
-	const visit = (candidate: unknown, seen: Set<unknown>): void => {
-		if (candidate === null) return;
-		const type = typeof candidate;
-		if (type === "string" || type === "boolean") return;
-		if (type === "number") {
-			if (!Number.isFinite(candidate as number)) throw new TypeError("non-finite number is not JSON");
-			return;
-		}
-		if (type !== "object") throw new TypeError(`${type} is not a JsonValue`);
-		if (seen.has(candidate)) throw new TypeError("shared or cyclic object is not JSON state");
-		seen.add(candidate);
-		if (!Object.isExtensible(candidate)) throw new TypeError("non-extensible object is not mutable JSON state");
-		if (Object.getOwnPropertySymbols(candidate).length > 0) throw new TypeError("symbol keys are not JSON");
-
-		const visitProperty = (key: string): void => {
-			const descriptor = Object.getOwnPropertyDescriptor(candidate, key);
-			if (descriptor === undefined) throw new TypeError("sparse arrays are not JSON state");
-			if (!("value" in descriptor)) throw new TypeError("accessor properties are not JSON state");
-			if (!descriptor.enumerable || !descriptor.writable || !descriptor.configurable) {
-				throw new TypeError("JSON state properties must be enumerable, writable, and configurable");
-			}
-			visit(descriptor.value, seen);
-		};
-
-		if (Array.isArray(candidate)) {
-			if (Object.getOwnPropertyDescriptor(candidate, "length")?.writable !== true) {
-				throw new TypeError("array length must be writable");
-			}
-			for (const key of Object.getOwnPropertyNames(candidate)) {
-				if (key === "length") continue;
-				if (!INDEX.test(key) || Number(key) >= candidate.length) {
-					throw new TypeError("arrays cannot have non-index properties");
-				}
-			}
-			for (let index = 0; index < candidate.length; index++) visitProperty(String(index));
-			return;
-		}
-
-		const prototype = Object.getPrototypeOf(candidate);
-		if (prototype !== Object.prototype && prototype !== null) {
-			throw new TypeError("non-plain object is not a JsonValue");
-		}
-		for (const key of Object.getOwnPropertyNames(candidate)) visitProperty(key);
-	};
-	visit(value, new Set());
-}
-
-function validateJsonValue(value: unknown): void {
-	assertJsonValue(value);
-}
-
-/**
  * Verb, arity and payload shape for a **decoded** op: paths inline, no `#`, no
  * short forms. `apply` uses this.
  *
@@ -884,12 +787,10 @@ export function assertValidOp(op: unknown): asserts op is Op {
 	switch (op[0]) {
 		case "r":
 			if (op.length !== 2) throw new TypeError("r arity");
-			assertJsonValue(op[1]);
 			return;
 		case "s":
 			if (op.length !== 3) throw new TypeError("s arity");
 			assertPathArg(op[1], true);
-			assertJsonValue(op[2]);
 			return;
 		case "d":
 			if (op.length !== 2) throw new TypeError("d arity");
@@ -909,7 +810,6 @@ export function assertValidOp(op: unknown): asserts op is Op {
 			if (!Number.isInteger(op[2]) || op[2] < 0) throw new TypeError("p index");
 			if (!Number.isInteger(op[3]) || op[3] < 0) throw new TypeError("p remove");
 			if (!Array.isArray(op[4])) throw new TypeError("p items");
-			for (const v of op[4]) assertJsonValue(v);
 			return;
 		}
 		// Silently skipping an unknown verb is how a newer producer's op vanishes.
@@ -941,14 +841,10 @@ export function assertValidWireOp(op: unknown): asserts op is WireOp {
 	switch (verb) {
 		case "r":
 			if (op.length !== 2) throw new TypeError("r arity");
-			assertJsonValue(op[1]);
 			return;
 		case "s":
-			if (op.length === 3) {
-				okRef(op[1]);
-				assertJsonValue(op[2]);
-			} else if (op.length === 2) assertJsonValue(op[1]);
-			else throw new TypeError("s arity");
+			if (op.length === 3) okRef(op[1]);
+			else if (op.length !== 2) throw new TypeError("s arity");
 			return;
 		case "d":
 			if (op.length === 2) okRef(op[1]);
@@ -977,7 +873,6 @@ export function assertValidWireOp(op: unknown): asserts op is WireOp {
 			if (!Number.isInteger(i) || (i as number) < 0) throw new TypeError("p index");
 			if (!Number.isInteger(r) || (r as number) < 0) throw new TypeError("p remove");
 			if (!Array.isArray(items)) throw new TypeError("p items");
-			for (const v of items) assertJsonValue(v);
 			return;
 		}
 		case "#": {
@@ -1041,11 +936,14 @@ export class PathError extends Error {
  * `decode` first if the ops came from a boundary.
  */
 export function apply<T>(target: T | undefined, ops: readonly Op[]): T {
+	return applyOps(target, ops);
+}
+
+function applyOps<T>(target: T | undefined, ops: readonly Op[]): T {
 	let root = target as unknown as JsonValue;
 
 	for (const op of ops) {
 		assertValidOp(op);
-
 		if (op[0] === "r") {
 			// Adopted, not copied. The consumer owns the batch it was handed.
 			//
@@ -1112,6 +1010,59 @@ export function apply<T>(target: T | undefined, ops: readonly Op[]): T {
 	return root as unknown as T;
 }
 
+/** Apply decoded operations without mutating the previous immutable value. */
+export function applyImmutable<T>(target: T | undefined, ops: readonly Op[]): T {
+	let root = target as unknown as JsonValue;
+	for (const op of ops) {
+		if (op[0] === "r") {
+			assertValidOp(op);
+			root = op[1];
+			continue;
+		}
+		root = copyContainers(root, op[0] === "p" ? op[1] : op[1].slice(0, -1));
+		root = applyOps(root, [op]);
+	}
+	return root as unknown as T;
+}
+
+function copyContainers(root: JsonValue, path: Path): JsonValue {
+	const copy = (value: JsonValue): JsonValue[] | Record<string, JsonValue> => {
+		if (Array.isArray(value)) return value.slice();
+		if (!isObj(value)) throw new PathError(path);
+		const result = Object.create(Object.getPrototypeOf(value) === null ? null : Object.prototype) as Record<
+			string,
+			JsonValue
+		>;
+		for (const key of Object.keys(value)) {
+			Object.defineProperty(result, key, {
+				value: (value as Record<string, JsonValue>)[key],
+				writable: true,
+				enumerable: true,
+				configurable: true,
+			});
+		}
+		return result;
+	};
+	const copiedRoot = copy(root);
+	let source = root;
+	let destination = copiedRoot;
+	for (const segment of path) {
+		if (!isObj(source) || !Object.hasOwn(source, segment)) throw new PathError(path);
+		if (Array.isArray(source) && typeof segment !== "number") throw new UnsafePathError(segment);
+		const child = (source as Record<Seg, JsonValue>)[segment]!;
+		const copiedChild = copy(child);
+		Object.defineProperty(destination, segment, {
+			value: copiedChild,
+			writable: true,
+			enumerable: true,
+			configurable: true,
+		});
+		source = child;
+		destination = copiedChild;
+	}
+	return copiedRoot;
+}
+
 function resolveValue(root: JsonValue, path: Path): JsonValue {
 	let node: JsonValue = root;
 	for (const seg of path) {
@@ -1136,12 +1087,10 @@ function resolve(root: JsonValue, path: Path): JsonValue {
 // Path interning and arity omission live between the tracker and a boundary;
 // `Op` and `apply` know nothing about them.
 //
-// ONE PAIR PER STREAM. The table spans an entire subscription or file: a path
-// interned in batch 3 is referenced in batch 40. A second consumer that
-// subscribes at batch 40 has never seen the definition, so it needs its own
-// encoder — sharing one across consumers hands the late subscriber ids it cannot
-// resolve. A base batch does not rescue it, because `["r", value]` carries no
-// path refs and leaves the table empty.
+// ONE PAIR PER INDEPENDENT STATE STREAM. Every decoder must observe exactly the
+// batches encoded by its matching encoder, beginning with that state's base.
+// Sharing a transport connection does not make separately hydrated states one
+// stream.
 
 const pathKey = (path: Path): string => JSON.stringify(path);
 

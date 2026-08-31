@@ -1,54 +1,64 @@
 import { BACKGROUND_CONTEXT } from "../context/index.ts";
-import type { Context, JsonValue, MutableReplicatedState, ReplicatedState } from "../types.ts";
+import { applyImmutable, isBase, type Op, type Tracker, track } from "../delta/index.ts";
+import type { Context, JsonValue, MutableReplicatedState, ReplicatedState, ReplicatedStateDelivery } from "../types.ts";
 import { registerReplicatedStateInternals } from "./state-internals.ts";
 
-export class MutableReplicatedStateImpl<T> implements MutableReplicatedState<T> {
-	readonly #listeners = new Set<(value: T, context: Context) => void>();
-	readonly #sourceListeners = new Set<(value: T, sequence: number, context: Context) => void>();
-	#value: T;
+export class MutableReplicatedStateImpl<T extends object> implements MutableReplicatedState<T> {
+	readonly #listeners = new Set<(value: T, context: Context, delivery: ReplicatedStateDelivery) => void>();
+	readonly #sourceListeners = new Set<(ops: readonly Op[], sequence: number, context: Context) => void>();
+	readonly #tracker: Tracker<T>;
+	#publishedValue: T;
 	#sequence = 0;
 
 	constructor(initial: T) {
-		this.#value = initial;
+		this.#tracker = track(initial);
+		this.#publishedValue = applyImmutable(undefined, this.#tracker.flush()) as unknown as T;
 		const thisSource = this;
 		registerReplicatedStateInternals(this, {
 			get sequence() {
 				return thisSource.#sequence;
 			},
 			get value() {
-				return thisSource.#value;
+				return thisSource.#publishedValue;
 			},
+			publish: (context) => thisSource.publish(context),
 			subscribe: (listener) => {
-				const sourceListener = (value: T, sequence: number, context: Context): void => {
-					listener(value, sequence, context);
-				};
-				thisSource.#sourceListeners.add(sourceListener);
-				return () => thisSource.#sourceListeners.delete(sourceListener);
+				thisSource.#sourceListeners.add(listener);
+				return () => thisSource.#sourceListeners.delete(listener);
 			},
 		});
 	}
 
 	get value(): T {
-		return this.#value;
+		return this.#publishedValue;
 	}
 
-	set(value: T, context: Context): void {
-		this.#value = value;
+	get state(): T {
+		return this.#tracker.state;
+	}
+
+	publish(context: Context): void {
+		const ops = this.#tracker.flush();
+		if (ops.length === 0) return;
 		this.#sequence += 1;
-		for (const listener of this.#sourceListeners) listener(value, this.#sequence, context);
-		for (const listener of this.#listeners) listener(value, context);
+		this.#publishedValue = applyImmutable(this.#publishedValue as unknown as JsonValue, ops) as unknown as T;
+		for (const listener of [...this.#sourceListeners]) listener(ops, this.#sequence, context);
+		const delivery = { kind: "update", sequence: this.#sequence } as const;
+		for (const listener of [...this.#listeners]) listener(this.#publishedValue, context, delivery);
 	}
 
-	subscribe(listener: (value: T, context: Context) => void): () => void {
+	subscribe(listener: (value: T, context: Context, delivery: ReplicatedStateDelivery) => void): () => void {
+		const context = serviceDeliveryContext();
+		this.publish(context);
 		this.#listeners.add(listener);
-		listener(this.value, serviceDeliveryContext());
+		listener(this.#publishedValue, context, { kind: "hydrate", sequence: this.#sequence });
 		return () => this.#listeners.delete(listener);
 	}
 }
 
 /** A cold read-only state used by service consumers until a complete snapshot arrives. */
 export class ReplicatedStateReplica<T extends JsonValue = JsonValue> implements ReplicatedState<T> {
-	readonly #listeners = new Set<(value: T, context: Context) => void>();
+	readonly #listeners = new Set<(value: T, context: Context, delivery: ReplicatedStateDelivery) => void>();
 	readonly #reportError: (error: Error) => void;
 	#value: T | undefined;
 	#sequence: number | undefined;
@@ -61,25 +71,37 @@ export class ReplicatedStateReplica<T extends JsonValue = JsonValue> implements 
 		return this.#value;
 	}
 
-	subscribe(listener: (value: T, context: Context) => void): () => void {
+	subscribe(listener: (value: T, context: Context, delivery: ReplicatedStateDelivery) => void): () => void {
 		this.#listeners.add(listener);
-		if (this.#value !== undefined) this.#deliver(listener, this.#value, serviceDeliveryContext());
+		if (this.#value !== undefined) {
+			this.#deliver(listener, this.#value, serviceDeliveryContext(), {
+				kind: "hydrate",
+				sequence: this.#sequence!,
+			});
+		}
 		return () => this.#listeners.delete(listener);
 	}
 
-	hydrate(sequence: number, value: T, context: Context): void {
+	hydrate(sequence: number, ops: readonly Op[], context: Context): void {
+		if (!isBase(ops)) throw new Error("Replicated state snapshot is not a base operation batch");
+		const value = applyImmutable<T>(undefined, ops);
 		this.#sequence = sequence;
 		this.#value = value;
-		this.#deliverAll(context);
+		this.#deliverAll(context, { kind: "hydrate", sequence });
 	}
 
-	update(sequence: number, value: T, context: Context): void {
-		if (this.#sequence === undefined) throw new Error("Replicated state received an update before hydration");
-		if (sequence <= this.#sequence) return;
-		if (sequence !== this.#sequence + 1) throw new Error("Replicated state update sequence has a gap");
+	update(sequence: number, ops: readonly Op[], context: Context): void {
+		if (this.#sequence === undefined || this.#value === undefined) {
+			throw new Error("Replicated state received an update before hydration");
+		}
+		if (sequence !== this.#sequence + 1) {
+			this.clear();
+			throw new Error("Replicated state update sequence has a gap");
+		}
+		const value = applyImmutable(this.#value, ops);
 		this.#sequence = sequence;
 		this.#value = value;
-		this.#deliverAll(context);
+		this.#deliverAll(context, { kind: "update", sequence });
 	}
 
 	clear(): void {
@@ -87,14 +109,19 @@ export class ReplicatedStateReplica<T extends JsonValue = JsonValue> implements 
 		this.#sequence = undefined;
 	}
 
-	#deliverAll(context: Context): void {
+	#deliverAll(context: Context, delivery: ReplicatedStateDelivery): void {
 		if (this.#value === undefined) return;
-		for (const listener of this.#listeners) this.#deliver(listener, this.#value, context);
+		for (const listener of this.#listeners) this.#deliver(listener, this.#value, context, delivery);
 	}
 
-	#deliver(listener: (value: T, context: Context) => void, value: T, context: Context): void {
+	#deliver(
+		listener: (value: T, context: Context, delivery: ReplicatedStateDelivery) => void,
+		value: T,
+		context: Context,
+		delivery: ReplicatedStateDelivery,
+	): void {
 		try {
-			listener(value, context);
+			listener(value, context, delivery);
 		} catch (error) {
 			this.#reportError(toError(error));
 		}

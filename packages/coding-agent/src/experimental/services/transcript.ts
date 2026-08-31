@@ -1,19 +1,15 @@
 import type { LaneTranscriptSnapshot, LaneWatchEvent } from "@draht/agent-core";
-import { type Context, defineService, type ReplicatedState } from "@draht/chord";
+import { defineService, type ReplicatedState } from "@draht/chord";
 
-export type TranscriptUpdate =
-	| { readonly type: "event"; readonly revision: number; readonly event: LaneWatchEvent }
-	| { readonly type: "snapshot"; readonly revision: number; readonly snapshot: LaneTranscriptSnapshot };
-
-export interface TranscriptSnapshot {
-	readonly revision: number;
-	readonly snapshot: LaneTranscriptSnapshot;
+export interface TranscriptState {
+	snapshot: LaneTranscriptSnapshot | null;
+	/** The source event is retained for presentation side effects; hydration does not replay it. */
+	event: LaneWatchEvent | null;
 }
 
-/** Coherent main-lane observation published as an ordinary Chord service. */
+/** Coherent main-lane state replicated through Chord's operation stream. */
 export interface Transcript {
-	readonly updates: ReplicatedState<TranscriptUpdate | null>;
-	snapshot(context: Context): Promise<TranscriptSnapshot>;
+	readonly state: ReplicatedState<TranscriptState>;
 }
 
 export const Transcript = defineService<Transcript>("pi.transcript");

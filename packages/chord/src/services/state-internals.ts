@@ -1,9 +1,11 @@
+import type { Op } from "../delta/index.ts";
 import type { Context } from "../types.ts";
 
 export interface ReplicatedStateInternals {
 	readonly sequence: number;
 	readonly value: unknown;
-	subscribe(listener: (value: unknown, sequence: number, context: Context) => void): () => void;
+	publish(context: Context): void;
+	subscribe(listener: (ops: readonly Op[], sequence: number, context: Context) => void): () => void;
 }
 
 const sources = new WeakMap<object, ReplicatedStateInternals>();

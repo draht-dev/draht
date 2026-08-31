@@ -483,14 +483,9 @@ proxy and reconstructed at the endpoint.
 
 ### 9.2 Replicated state
 
-One authoritative writer, many readers. The stream carries opcodes:
+One authoritative writer, many readers. The stream carries one base op batch followed by delta batches; the vocabulary is in [delta.md](../../01-harness/01-delta/delta.md).
 
-The stream carries a snapshot then ops; the vocabulary is in `delta.md` and the
-frame type is given below.
-
-Full-value replication is the degenerate configuration where every update is a
-`replace`. It is not a separate primitive, and it is what the adaptive rule
-selects automatically when a value changes wholesale.
+Full-value replication is the degenerate configuration where the producer explicitly replaces or rebases on every update. It is not a separate primitive: Chord emits the root replacement op `r`.
 
 #### State is plain TypeScript
 
@@ -528,35 +523,28 @@ Consumers apply ops. They never see mutation names and never run provider code.
 This matters for a specific reason: a consumer running provider code would have
 to resolve a definition from a registry, making the fold depend on ambient
 registration — a reload changes the answer for the same input. Ops remove that,
-and make non-JS consumers trivial, since the applier is five verbs.
+and make non-JS consumers trivial, since the applier is six verbs.
 
 Consequences:
 
 - mutation names are not part of the wire contract and appear in no member table,
   so there is no mutation-name version skew;
-- a consumer needs no schema for arguments, only for the value in the `replace`
-  frame;
+- a consumer needs no schema for arguments, only for the value in the root `r` op;
 - `x = undefined` normalises to `delete`, since JSON has no `undefined`.
 
 #### Wire protocol
 
-A subscription carries batches of ops — `Op[]`. There is no frame type and no
-`seq` in the payload: the SSE binding stamps `id:`, which is where transport
+The producer and applier use `Op[]`; a subscription carries encoded `WireOp[]`. There is no frame type and no `seq` in the payload: the SSE binding stamps `id:`, which is where transport
 metadata belongs (`delta.md` §6).
 
-`Op` and its encoding — five verbs, array paths, tuple form, second-use path
-interning — are specified in `delta.md` §2 and §4. They are not restated here.
+`Op` and its encoding — six verbs, array paths, tuple form, second-use path interning — are specified in [delta.md](../../01-harness/01-delta/delta.md) §2 and §4. They are not restated here.
 
-**A replacement is an op**, `["s", [], value]` — a set at the root path
-(`delta.md` §6). There is no frame discriminator. A frame whose ops begin with a
-root set is a **base frame**, and frame zero is always one. This collapses several
-things `plugins.md` treats separately:
+**A replacement is an op**, `["r", value]`. There is no frame discriminator. A batch whose first op is `r` is a **base batch**, and batch zero is always one. This collapses several things `plugins.md` treats separately:
 
-- there is no distinct hydration path — the snapshot is simply the first frame;
-- no buffering-during-snapshot dance, and therefore no two-phase
-  `watch()`/`start()` handshake as in mini today;
+- there is no distinct wire hydration shape — the snapshot is simply the first batch;
+- snapshot buffering remains a local adapter detail rather than a second wire protocol;
 - cold start, reconnect, provider reload, session switch, a sequence gap, and a
-  fold that could not apply are **one code path**: send a fresh base frame.
+  fold that could not apply are **one code path**: send a fresh base batch.
 
 That last item is why there is no `Rebase` type anywhere in this design.
 
@@ -564,27 +552,19 @@ The SSE `id:` is stamped by the host binding, starts at zero on every
 subscription, and is contiguous. A consumer seeing a gap discards its replica and
 resubscribes.
 
-#### Resubscription is a base frame plus buffered frames
+#### Resubscription is a base batch plus buffered batches
 
 There is no cross-subscription resume and no `Last-Event-ID`. Resubscribing works
 the way the harness already hands out lane state: snapshot the current value as
-frame zero, buffer whatever arrives while the client is catching up, then deliver
-the buffer as ordinary frames once it is ready.
+base batch zero, buffer whatever arrives while the client is catching up, then deliver the buffer as ordinary batches once it is ready.
 
 That is the same two-phase shape as `AgentHarness.watch` — `snapshot` then
 `start` — and it is a purely local detail of the provider binding, invisible on
-the wire. A consumer sees a base frame followed by contiguous frames, exactly as
-on cold start.
+the wire. A consumer sees a base batch followed by contiguous batches, exactly as on cold start.
 
-Real resume would need a retained op log so a client could ask for "everything
-after seq N". We deliberately do not keep one: the durable form is a list of
-frames per *value* (`delta.md` §9), retired with its scope, not a per-subscription
-history. Buffering costs a bounded amount of memory for the duration of a
-handshake; an op log would cost unbounded disk forever.
+Real resume would need a retained op log so a client could ask for "everything after seq N". We deliberately do not keep one: the durable form is a list of batches per *value* ([delta.md §9](../../01-harness/01-delta/delta.md#9-durable-form)), retired with its scope, not a per-subscription history. Buffering costs a bounded amount of memory for the duration of a handshake; an op log would cost unbounded disk forever.
 
-**Emission is adaptive** (`delta.md` §5): ops when they are smaller than a root
-set, otherwise the root set. The crossover is at the size of the bounded value,
-which bounds traffic in both directions without any sliding-window diffing.
+The landed tracker emits structural ops without a serialized-size heuristic. Provider replacement, reconnect, and policy-driven recovery bounds call `replace()`/`rebase()` explicitly; those are the only sources of a root `r` batch.
 
 #### The harness does not emit ops
 
@@ -629,7 +609,7 @@ subscriber table, revision stamping, and disposal.
 
 ```ts
 interface State<T> {
-  readonly value: T | undefined;                    // undefined until frame zero
+  readonly value: T | undefined;                    // undefined until base batch zero
   subscribe(listener: (value: T) => void): void;   // returns nothing (§13)
 }
 
@@ -667,10 +647,7 @@ export const transcriptSession = defineFacet({
 });
 ```
 
-A `mutate()` call advances the authoritative value **and** publishes the resulting
-ops — one statement, so the value and the wire cannot disagree. `replace()`
-publishes a whole new snapshot and is what reconnect, provider reload, and the
-adaptive rule (`delta.md` §5) use.
+A `mutate()` call advances the authoritative value **and** publishes the resulting ops — one statement, so the value and the wire cannot disagree. `replace()` publishes an explicit root `r` batch and is what reconnect, provider reload, resnapshot, and policy-driven recovery bounds use.
 
 Consumer side:
 
@@ -685,7 +662,7 @@ export const transcriptTui = defineFacet({
     const transcript = ctx.use(Transcript);
     const tui = ctx.use(Tui);
 
-    transcript.tail.subscribe((tail) => render(tail.entries));   // frame zero arrives here too
+    transcript.tail.subscribe((tail) => render(tail.entries));   // base batch zero arrives here too
     tui.commands.register("transcript.older", async (context) =>
       render(await transcript.page({ before: oldestId(), limit: 100 }, context)),
     );
@@ -695,8 +672,7 @@ export const transcriptTui = defineFacet({
 });
 ```
 
-The consumer never sees opcodes. It receives values, and frame zero is delivered as
-an ordinary update — so there is no separate "ready" callback and no hydration
+The consumer never sees opcodes. It receives values, and base batch zero is delivered as an ordinary update — so there is no separate "ready" callback and no hydration
 branch in facet code.
 
 #### Worked: adapting `AgentHarness.watch`
@@ -723,7 +699,7 @@ interface WatchHandle<T> {
 `readLane` critical section, so both are taken under the same lock. Events arriving
 before `start()` are buffered, then flushed. `resnapshot()` does the same with a
 `markBoundary()` callback re-establishing where the stream resumes. That is exactly
-the guarantee frame zero needs, so the adapter is thin.
+the guarantee base batch zero needs, so the adapter is thin.
 
 `LaneSnapshot` is per lane, so `Lane` is keyed — one instance per lane, each taking
 its own `watch()`. The harness already filters by lane
@@ -778,7 +754,7 @@ replica.
 Four things to notice.
 
 - **The `watch`/`start` handshake does not cross the wire.** It is a local detail of
-  one adapter. Remote consumers see frame zero, then ops. Mini's buffering dance
+  one adapter. Remote consumers see base batch zero, then ops. Mini's buffering dance
   disappears, because the harness already buffers between the two phases and the flush
   lands as ordinary mutations after the initial value.
 - **The facet owns the replicated shape.** `LaneView` is the facet's, not the
@@ -786,7 +762,7 @@ Four things to notice.
   regardless, so the harness gains nothing by emitting ops itself.
 - **Rebase never reaches consumers, and is not a type.** `navigation_end` is an
   ordinary event the adapter answers with `resnapshot()` plus `replace()` — the
-  *same* frame a reconnecting client receives. `markBoundary()` supplies the
+  same base batch a reconnecting client receives. `markBoundary()` supplies the
   ordering. No reducer signals anything by returning a value.
 - **`HarnessEvent` is not a wire format.** `message_update` today carries the full
   message *and* an `AssistantMessageEvent` holding a second copy *and* the delta,
@@ -814,12 +790,10 @@ an open question in §16.
 
 Everything below is host machinery, not facet API:
 
-- stamping `seq` per frame within the provider binding, so business snapshots and
-  ops carry no transport metadata;
-- delivering `replace` before any ops on a fresh subscription;
-- choosing ops versus `replace` per flush by the adaptive rule (`delta.md` §5);
-- applying only consecutive frames, and requesting a fresh `replace` after a gap,
-  reconnect, or provider replacement;
+- stamping `seq` per batch within the provider binding, so business snapshots and ops carry no transport metadata;
+- delivering a root `r` base batch before deltas on a fresh subscription;
+- resetting each subscriber's encoder dictionary on that base batch;
+- applying only consecutive batches, and requesting a fresh base batch after a gap, reconnect, or provider replacement;
 - hardening values as they cross the boundary (§14.3);
 - announcing the state value definition ID in the member table. Mutation names are
   **not** announced, because they never travel — ops are structural, so a consumer
@@ -837,7 +811,7 @@ Two rules follow from the provider and every replica running the same fold:
 
 Mutation-name version skew does not exist: mutations never cross a boundary, so
 adding, renaming or removing one is not a breaking change. The version-skew surface
-is the *value shape* alone, which the `replace` frame's schema describes.
+is the *value shape* alone, which the root `r` batch's schema describes.
 
 Prefer several coarse state values to one large value. A cold replica has
 `value === undefined`; that is local readiness and never crosses the wire.
@@ -1720,7 +1694,7 @@ export const Transcript = defineService<Transcript>("pi.transcript", {
 `page` and `tail` are published. `subscribeRaw` is absent from `protocol`, so it is
 local — nothing marks it, and publishing it later means adding one entry.
 
-Only the state **value** needs a schema, for the `replace` frame. Mutations do not,
+Only the state **value** needs a schema, for the root `r` batch. Mutations do not,
 because recipes never leave the provider (§9.2) and ops are structural.
 
 Method parameters are a single object, not positional. Names then survive into the
@@ -1792,27 +1766,26 @@ POST /v1/call/pi.transcript/page
 GET /v1/state/pi.lane/main/snapshot
 Accept: text/event-stream
 id: 0
-event: replace
-data: {"lane":"main","transcript":[],"operation":null}
+event: ops
+data: [["r",{"lane":"main","transcript":[],"operation":null}]]
 
 id: 1
 event: ops
-data: [{"op":"splice","path":["transcript"],"index":12,"remove":0,"items":[{"id":"e12"}]}]
+data: [["p",["transcript"],12,0,[{"id":"e12"}]]]
 
 id: 2
 event: ops
-data: [{"op":"append","path":["operation","streamingMessage","content",0,"text"],"value":"Sure, I"}]
+data: [["a",["operation","streamingMessage","content",0,"text"],"Sure, I"]]
 ```
 
 `id` is stamped by the binding, not carried in the payload. The first batch is
 always a base batch, so hydration is not
 a separate route. `Last-Event-ID` is **not** honoured: `seq` restarts per
-subscription, and resubscription is a base frame plus buffered frames (§9.2); a gap, an unknown id, and a provider reload all take that same path. A
+subscription, and resubscription is a base batch plus buffered batches (§9.2); a gap, an unknown id, and a provider reload all take that same path. A
 closed keyed instance ends the stream with `event: closed` and the client does not
 retry.
 
-A foreign client needs only the five ops of `delta.md` §2 — `set`, `delete`,
-`append`, `truncate`, `splice`. No mutation names, no recipes, no provider code. The applier is
+A foreign client needs only the six ops of [delta.md §2](../../01-harness/01-delta/delta.md#2-ops) — `replace`, `set`, `delete`, `append`, `truncate`, `splice`. No mutation names, no recipes, no provider code. The applier is
 a page of code in any language.
 
 **This is where non-conformance becomes visible**, and it is the one place worth
@@ -1824,7 +1797,7 @@ work.
 Two mitigations, neither of which is "conform":
 
 - The catalogue advertises the op vocabulary explicitly, so a client discovers the
-  five verbs rather than assuming six different ones.
+  six verbs rather than assuming a different vocabulary.
 - If a client genuinely needs RFC 6902, the server can offer a lossy downgrade behind
   a content negotiation header — join paths with slashes and `~0`/`~1` escaping,
   materialise `append` and `truncate` into whole-value `replace`, expand `splice`
@@ -1851,14 +1824,14 @@ silently mean freezing, and §16 lists version negotiation as unresolved.
 | validation | requires running facet code | pure manifest analysis |
 | mode | declared per call site, validated | property of the token |
 | cycles | tolerated via laziness | rejected; explicit `deferred()` escape |
-| replication | `ReplicatedState` full-value; `DeltaState` deferred | one primitive; `replace` + five-verb ops |
-| hydration | separate atomic snapshot + buffering | frame zero of the stream |
+| replication | `ReplicatedState` full-value; `DeltaState` deferred | one primitive; explicit root `r` + six-verb ops |
+| hydration | separate atomic snapshot + buffering | base batch zero of the stream |
 | presentation facets | loaded locally | delivered by server and worker |
 | server↔worker | unspecified inversion | reporting registries; deps point upstream |
 | authority | `requireClientIdentity` in method bodies | principal on context; filtered views + handle checks |
 | per-client state | not addressed | `peer` mode: one instance per peer, consumed as a singleton |
 | resource ownership | explicit `own()` | implicit; every handle is a self-disposing binding |
-| state updates | hand-written patch unions | plain mutation on the provider; five-verb ops on the wire |
+| state updates | hand-written patch unions | plain mutation on the provider; six-verb ops on the wire |
 | UI mounting | facet-owned panels, unspecified host API | slots with `claim`/`add`; host unmounts on disposal |
 | isolation | trusted code, unspecified | SES compartment per presentation facet |
 | foreign clients | not addressed | opt-in `protocol` block; JSON Schema catalogue + HTTP/SSE |
@@ -1879,5 +1852,4 @@ silently mean freezing, and §16 lists version negotiation as unresolved.
   lane state is replace-only.
 - Whether `deferred()` survives contact with real plugins, or should be removed.
 - Property tests for the tracker (`delta.md` §3.3) before any facet depends on it.
-- Where the adaptive ops-vs-replace threshold is measured — per flush against the
-  current snapshot size, or amortised.
+- Which durable values need an explicit periodic `rebase()` cadence to bound recovery work.

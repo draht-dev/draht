@@ -1,6 +1,6 @@
 # WP05 — Direct durable drive
 
-**Status: WP05 complete through M10: lane-owned inbox, immutable result records, 13 family-neutral leaves, atomic boundary planning, total cancellation/dispatch, public and replicated lane surfaces, documentation reconciliation, and lane-safe provider cache identity. M11 is a tracked storage-amplification follow-up outside the public-drive gate.**
+**Status: WP05 complete through M10: lane-owned inbox, immutable result records, 13 family-neutral leaves, atomic boundary planning, total cancellation/dispatch, public and replicated lane surfaces, documentation reconciliation, and lane-safe provider cache identity. Remaining assistant-output work is owned by the [mobile assistant-output handoff](../mobile-handoff/01-harness/05-assistant-output/message-update.md), outside the public-drive gate.**
 
 WP06's Session/Branch/Lane separation is part of the foundation. Public drive is enabled; `watchSession` is the sole deferred Harness method.
 
@@ -521,11 +521,11 @@ rg -i 'promotion|drainedSteer|drainedFollowUp|laneLastResult|lastResult|skipInbo
 
 Ordinary assistant requests use the derived lane identity, structural requests keep fresh identities with `cacheRetention: "none"`, and deferred handle polling sends no cache identity. The policy is documented in `docs/harness.md` and independently reviewed before WP05 completion.
 
-## 13. M11 — Bound durable streaming-frame volume
+## 13. Mobile assistant-output handoff
 
 **Tracked follow-up; not part of the M8/M10 public-drive gate.** A trivial mini coding-agent Session produced an approximately 300 KB JSONL file because live assistant streaming persists many `pi.pending.assistant_frame` list appends. Logical frame cleanup does not reclaim bytes already appended to the JSONL history, so short conversations can have disproportionate durable storage and replay cost.
 
-M11 must measure frame count and encoded-byte growth across Memory, JSONL, and SQLite, then bound amplification without weakening the existing crash contract: an admitted assistant effect remains reconstructible, progress observation remains useful, and settlement still removes operation-owned pending-frame state. Investigate coalesced durable checkpoints, bounded frame snapshots plus a short delta tail, and JSONL snapshot-compaction interaction. Do not solve this by dropping unknown-outcome recovery, persisting only the final response, or adding a generic retention framework.
+The authoritative follow-up is the [mobile assistant-output handoff](../mobile-handoff/01-harness/05-assistant-output/message-update.md) and its numbered prerequisites in the [mobile handoff README](../mobile-handoff/README.md). It addresses the complete path rather than only batching frames: Chord op tracking, scoped pending-output durability, tool/assistant output reduction, and `message_update` replication amplification. Preserve the existing crash contract: an admitted assistant effect remains reconstructible, progress observation remains useful, and settlement retires operation-owned pending state.
 
 Exit checks:
 

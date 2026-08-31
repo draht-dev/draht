@@ -347,7 +347,7 @@ Do not include:
 - catalog redesign, async database replacement, or VACUUM policy;
 - search/FTS;
 - R11 migration machinery or a storage-version bump;
-- M11 assistant-frame changes or JSONL compaction;
+- [mobile assistant-output handoff](../mobile-handoff/01-harness/05-assistant-output/message-update.md) changes or JSONL compaction;
 - repository-wide `SessionRepo.close()` contract changes;
 - removal of shared-container support;
 - transaction DSLs, schedulers, generic lock managers, or compatibility layers.

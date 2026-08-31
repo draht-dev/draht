@@ -3,8 +3,7 @@
 > **Scope:** `packages/agent/src/harness/session/`, plus the call sites in
 > `runtime/` listed in §10.
 >
-> **Depends on `01-delta`** for the op vocabulary that pending state is stored in
-> (§2, §11) and for the `WireOp` form the record encoding carries (§12). The two
+> **Depends on [01-delta](../01-delta/delta.md)** for the landed Chord op vocabulary that pending state is stored in (§2, §11) and for the `WireOp` form the record encoding carries (§12). The two
 > are otherwise independent and compound: encoding shrinks every write, scopes
 > move one class of write out of the main log entirely.
 >
@@ -35,10 +34,7 @@ Three orders of magnitude of the file is scaffolding for finished operations.
 
 **Two independent fixes, and they are not alternatives:**
 
-- **Encoding** (`delta.md`): value writes carry ops rather than whole values, and
-  addresses are interned. Takes the same workload to **5.32 MB in a single file**,
-  with no change to atomicity. This is the larger and safer win, and it applies to
-  every value and list, not just pending state.
+- **Encoding** ([delta.md](../01-delta/delta.md)): value writes carry Chord ops rather than whole values, and addresses are interned. Takes the same workload to **5.32 MB in a single file**, with no change to atomicity. The op vocabulary and flush-time tracker have landed; storage integration has not.
 - **Scopes** (this document): pending state leaves the main log entirely, so it is
   never history to begin with.
 
@@ -85,12 +81,12 @@ distinguish *session from ephemeral* statically but cannot distinguish *two
 different ephemeral scopes*: the tag is in the type, the id is not.
 
 ```ts
-// Lists of op batches, not values — see `delta.md` §9 and §11 below.
+// Durable lists carry encoded batches; one encoder/decoder pair belongs to each value stream.
 export const pendingToolOutput = (operationId: string, invocationId: string) =>
-  list<Op[]>("pi.pending.tool_output", `${operationId}:${invocationId}`, operationId);
+  list<WireOp[]>("pi.pending.tool_output", `${operationId}:${invocationId}`, operationId);
 
 export const pendingAssistantOutput = (operationId: string, entryId: string) =>
-  list<Op[]>("pi.pending.assistant_output", `${operationId}:${entryId}`, operationId);
+  list<WireOp[]>("pi.pending.assistant_output", `${operationId}:${entryId}`, operationId);
 
 export const operationToolMemo = (operationId: string, invocationId: string, name: string) =>
   value<JsonValue>("pi.op.tool_memo", `${operationId}:${invocationId}:${name}`, operationId);

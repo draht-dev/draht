@@ -1,7 +1,6 @@
 # `message_update` Write Amplification
 
-> **Scope:** harness-local. Depends on `delta.md` for the op vocabulary and
-> `session-scopes.md` for durability.
+> **Scope:** harness-local. Depends on [delta tracking](../01-delta/delta.md) for the landed Chord `Op`/`WireOp` vocabulary and [scoped storage](../02-scopes/scopes.md) for durability. Chord delta tracking has landed; scoped storage and this Harness integration have not.
 
 ## 1. The problem
 
@@ -72,7 +71,7 @@ continuing through the harness.
 ## 4. The change
 
 ```ts
-| { type: "message_update"; runId: string; entryId: string; ops: Op[] }
+| { type: "message_update"; runId: string; entryId: string; frame: AssistantMessageFrame }
 ```
 
 `message` and `event` are removed; `frame` stops being optional.
@@ -82,14 +81,16 @@ read. `AgentEvent` (`agent-loop.ts`) and `AgentSessionEvent` (`agent-session.ts`
 separate unions that happen to share the tag name and build their own
 `message_update` from the pi-ai event directly. They are out of scope here.
 
-Real consumers of `HarnessEvent.message_update`:
+Real consumers and producers of `HarnessEvent.message_update`:
 
-| consumer | change |
+| site | change |
 | --- | --- |
+| `runtime/drive/response.ts` | emit the required semantic frame; stop attaching full snapshots |
 | `runtime/reducer.ts` | fold the frame instead of assigning `event.message` |
-| `experimental/harness-wire-adapter.ts` | forward the frame; stop sending `message` |
+| lane/facet state adapter | run that fold under the Chord tracker and emit `Op[]`/encoded `WireOp[]` |
+| `experimental/harness-wire-adapter.ts` | stop treating raw `HarnessEvent` as the final replication format |
 | `harness/telemetry.ts` | name list only |
-| `protocol/harness.ts` | schema |
+| `protocol/harness.ts` | replication carries encoded `WireOp[]`, not the raw event |
 
 `message_end` continues to carry the settled message, because frames deliberately
 exclude terminal settlement. That is once per message, not once per token.
@@ -108,26 +109,21 @@ export function applyAssistantMessageFrame(
 
 Plain mutation on a plain object. **No `Draft`, no Immer.** An earlier draft
 argued for a draft-mutating signature so it would compose inside a `produce`
-recipe; that motivation is gone (`delta.md` §8). The step function is still
+recipe; that motivation is gone ([delta.md §8](../01-delta/delta.md#8-what-this-removes-from-the-codebase)). The step function is still
 needed — the whole-stream version becomes a loop over it — just for the simpler
 reason that the reducer folds one frame at a time.
 
-### 5.1 pi-ai frames stay at the pi-ai boundary; our frames go on the wire
+### 5.1 pi-ai frames stay at the pi-ai boundary; Chord ops cross replication boundaries
 
-Two things are called "frame" and they are not the same. `AssistantMessageFrame`
-is pi-ai's semantic delta vocabulary (`text_delta`, `text_end`, …). What crosses a
-boundary in this design is
-`delta.md` §6 has no frame type at all — what travels is `Op[]`. The pi-ai frames
-stop at the fold; ops are what cross a boundary.
+`AssistantMessageFrame` is pi-ai's semantic delta vocabulary (`text_delta`, `text_end`, …). [Delta tracking §6](../01-delta/delta.md#6-there-is-no-frame-type) defines no second frame wrapper: in-process replication carries `Op[]`, and a wire adapter carries encoded `WireOp[]`. Pi-ai frames stop at the fold; Chord ops cross the replication boundary.
 
 `AssistantMessageFrame` is pi-ai's own delta vocabulary and stays. What changes is
 that it is no longer the durable unit or the replication unit.
 
-The harness folds frames into `LaneView` by plain mutation. Under the tracker
-(`delta.md`) that yields:
+The harness folds frames into `LaneView` by plain mutation. Under the Chord tracker that yields:
 
 ```json
-{"op":"append","path":["operation","streaming","content",0,"text"],"value":"Let me "}
+["a",["operation","streamingMessage","content",0,"text"],"Let me "]
 ```
 
 Measured, interned ops are **smaller than frames** on this workload — 13.6 KB
@@ -170,31 +166,20 @@ represent, and no block needs an error slot.
 ### 5.3 Parse cost
 
 `parseStreamingJson` on a growing string once per delta is quadratic per message.
-Since `arguments` is now derived rather than replicated, this cost falls on
-whoever reads it rather than on every consumer. Honouring `toolcall_checkpoint`
-and `toolcall_end` only, so `arguments` refreshes at checkpoint granularity, is
-almost certainly why checkpoints exist.
+Since `arguments` is now derived rather than replicated, this cost falls on whoever reads it rather than on every consumer. Presentation can refresh derived arguments at semantic checkpoints and `toolcall_end` instead of parsing on every delta; that policy is separate from why the encoder currently emits a checkpoint (§6).
 
 ## 6. What `toolcall_checkpoint` is for
 
-`EncoderBlockState` carries `caughtUp` and `catchupJson`, so a subscriber joining
-mid-tool-call receives a checkpoint to resync against rather than the deltas it
-missed. It is a replication mechanism inside an encoder.
+`EncoderBlockState` carries `caughtUp` and `catchupJson` because a queued provider event's shared `partial` may already be ahead of that event's delta. The checkpoint catches the semantic frame stream up to the authoritative tool-call arguments visible at block start; it is not currently a general late-subscriber protocol.
 
-With a delta-folding reducer it stops being a correctness requirement and becomes what
-it should be: a resync point, and the bound on how much must be replayed.
+After frames fold into tracked state, a Chord root replacement (`r`) is the replication and durable-recovery resync point. `toolcall_checkpoint` remains semantic input to that fold rather than carrying transport responsibility.
 
 ## 7. Write volume for pending output
 
 `openFrameProgress` calls `appendList(pendingAssistantFrames(...))`, so every
 frame is a line. A long response is thousands of writes.
 
-**The address is renamed `pendingAssistantOutput`** and becomes a `list<Op[]>`,
-matching `pendingToolOutput`
-(`harness-tools.md` §7.2), and it stops being a list of frames. It holds tracked
-state written as ops or snapshots under the adaptive rule (`delta.md` §5), in an
-**ephemeral scope** so it is unlinked on settle rather than persisting in the main
-log (`session-scopes.md`).
+**The address is renamed `pendingAssistantOutput`** and becomes a `list<WireOp[]>`, matching `pendingToolOutput` ([tool-output handoff §7.2](../04-tool-output/harness-tools.md#72-renaming)), and it stops being a list of frames. The progress sink encodes tracked `Op[]` with one stateful encoder per response before appending each durable `WireOp[]` batch; explicit `rebase()` calls produce bounded root-replacement batches for recovery. The list lives in an **ephemeral scope** so it is unlinked on settle rather than persisting in the main log ([scoped storage](../02-scopes/scopes.md)).
 
 The important property is that this list is **not history**: `deleteList` runs on
 settle in `response.ts`, `deferred.ts`, and `terminal.ts`. It exists so a crash

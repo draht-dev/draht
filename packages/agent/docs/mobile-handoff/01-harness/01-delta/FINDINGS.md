@@ -1,8 +1,6 @@
 # 01-delta: known defects and measured findings
 
-Everything here was found **after** `delta.md` and the shipped implementation were
-written. None of it is applied to the code in this directory. Each item is
-problem, evidence, then a candidate fix.
+Everything here was found **after** `delta.md` and the prototype implementation beside it were written. None of it is applied to the code in this directory. Production now lives in `packages/chord/src/delta/index.ts`: its flush-time dirty-tree design resolves D1, while D2 remains relevant to rolling-window producers that assign sliced strings, but its profile predates flush-time tracking and must be re-measured against production Chord. Each item below remains the original problem, evidence, and candidate-fix record.
 
 Every number was measured with **`node --experimental-strip-types`**, not `tsx`.
 That matters: tsx transpiles through esbuild and inflated the same benchmark by

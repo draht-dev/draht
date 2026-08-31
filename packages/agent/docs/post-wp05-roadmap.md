@@ -18,7 +18,7 @@ The inventory was checked against current source, tests, package READMEs, the co
 
 ## Executive result
 
-WP05 is complete through M10. M11 is its only recorded follow-up. The current Harness execution graph has no unfinished runtime path: `watchSession()` is the sole `SliceNotImplemented` Harness method.
+WP05 is complete through M10. Its remaining assistant-output work is owned by the [mobile assistant-output handoff](mobile-handoff/01-harness/05-assistant-output/message-update.md) and its numbered prerequisites. The current Harness execution graph has no unfinished runtime path: `watchSession()` is the sole `SliceNotImplemented` Harness method.
 
 That does **not** mean the surrounding durable system is complete. The remaining audit findings are:
 
@@ -48,7 +48,7 @@ Define one coherent capture and fold for dynamic lane inventory and fault state.
 
 **Dependency**
 
-Independent of M11 and SQLite internals. It should precede any revisioned Transcript service or remote session-wide observation built on it.
+Independent of the mobile assistant-output handoff and SQLite internals. It should precede any revisioned Transcript service or remote session-wide observation built on it.
 
 ### JSONL snapshot compaction
 
@@ -58,11 +58,11 @@ Independent of M11 and SQLite internals. It should precede any revisioned Transc
 
 **Consequence**
 
-Superseded `pi.op.state`, deleted pending payloads, deleted tool checkpoints, and deleted assistant-frame lists remain physical bytes indefinitely. Generic compaction and M11 are distinct mechanisms but their recorded scopes overlap: WP05 M11 also cites dead post-settlement JSONL frame history, while `harness.md` tracks generic reclamation separately. Compaction reclaims all dead write history after the fact; frame-specific bounding limits peak logical/physical progress while an effect is pending.
+Superseded `pi.op.state`, deleted pending payloads, deleted tool checkpoints, and deleted assistant-frame lists remain physical bytes indefinitely. Generic compaction and the [mobile assistant-output handoff](mobile-handoff/01-harness/05-assistant-output/message-update.md) are complementary. Compaction reclaims dead session-scoped write history after the fact; the handoff moves pending assistant/tool output into ephemeral scopes so it never becomes main-log history, and replaces full/per-frame replication with Chord op batches.
 
 **Dependency**
 
-Memory/SQLite M11 measurement and mechanism design may proceed in parallel. Implement and measure JSONL snapshot compaction before setting M11's final JSONL post-settlement budget, so M11 distinguishes pending-effect volume from already-dead physical history and does not invent a second reclamation mechanism.
+The assistant-output handoff does not depend on J1: scoped storage is the intended lifetime mechanism for pending output, while J1 remains the reclamation mechanism for superseded session-scoped state. Measure both independently so their effects are not conflated.
 
 ### Remote Session contract contradiction — decision required
 
@@ -111,7 +111,7 @@ Before implementation, replace or reconcile the draft public interface and decid
 
 ### R11 — Schema migrations, activation-gated
 
-No current format-4 migration is required. Memory is current-only; JSONL and SQLite reject unsupported storage versions; SQLite runs only idempotent `001_initial.sql`. R11 becomes required immediately before the first incompatible durable storage version/address/state change after format 4 is stabilized. It is not prerequisite work for M11 or current WIP format replacement.
+No current format-4 migration is required. Memory is current-only; JSONL and SQLite reject unsupported storage versions; SQLite runs only idempotent `001_initial.sql`. R11 becomes required immediately before the first incompatible durable storage version/address/state change after format 4 is stabilized. It is not prerequisite work for the mobile assistant-output handoff or current WIP format replacement.
 
 When activated, it must provide ordered transactional migrate-on-open under exclusive ownership, version-specific JSONL decoding plus post-migration compaction, and total mappings for every reachable open operation leaf and surviving value/list.
 
@@ -149,7 +149,7 @@ Define cross-backend query-limit semantics in agent conformance, then chunk SQLi
 - The production gate-close contract permits only `HarnessClosed | HarnessFault`, but the private source primitive accepts any `Error` and isolated tests use that wider type. Narrow the source declaration and fixtures or explicitly retain the private widening.
 - Part 9 of `harness.md` is the required conformance matrix. Existing focused tests cover the graph extensively, including cancellation reconciliation over all 13 leaves, but there is no audited one-to-one proof that every close/reopen leaf case and every race row has both deterministic orders. Audit the matrix and add only the missing cases rather than claiming blanket completion.
 
-Keep this package separate from telemetry, RemoteSession, and M11; it is local contract/test closure.
+Keep this package separate from telemetry, RemoteSession, and the mobile assistant-output handoff; it is local contract/test closure.
 
 ### Disabled real worker persistence regression
 
@@ -157,7 +157,7 @@ Keep this package separate from telemetry, RemoteSession, and M11; it is local c
 
 ## Performance debt
 
-### M11 — durable assistant-frame volume
+### Mobile assistant-output handoff — durable and replication amplification
 
 The user-supplied motivating mini Session outside the repository is 303,920 bytes across 569 physical lines. These external measurements are evidence, not a reproducible checked-in fixture:
 
@@ -165,11 +165,9 @@ The user-supplied motivating mini Session outside the repository is 303,920 byte
 - 12 frame-list deletes; physical lines mentioning the frame namespace total 148,214 bytes;
 - about 51,568 bytes of superseded `pi.op.state` writes and 26,192 bytes of one structural preparation, showing why generic JSONL compaction and frame-specific bounding are distinct.
 
-M11 must first add a deterministic repository fixture and measurement script that reproduces or replaces these figures.
+The authoritative design is the [mobile assistant-output handoff](mobile-handoff/01-harness/05-assistant-output/message-update.md), following the numbered `01-harness` prerequisites in [`mobile-handoff/README.md`](mobile-handoff/README.md). Chord delta tracking has landed; scoped storage, tool-output integration, and assistant-output integration have not.
 
-M11 must measure Memory logical elements, SQLite rows/pages/WAL, JSONL peak bytes during an effect, JSONL post-settlement bytes, and JSONL reopen/replay time. It must then bound persisted progress without weakening unknown-outcome recovery, invocation fencing, non-blocking provider streaming, or settlement cleanup. Live event fidelity need not imply one durable write per provider event.
-
-Candidate mechanisms remain design inputs, not approved architecture: coalesced durable checkpoints, a bounded full snapshot plus short delta tail, or logarithmic snapshot points. The exit condition needs numerical budgets derived from fixtures, not only “smaller than before.”
+Implementation must add a deterministic repository fixture and measurement script that reproduces or replaces these figures, then measure Memory logical elements, SQLite rows/pages/WAL, JSONL peak sidecar/main-log bytes, and reopen/replay time. The handoff must preserve unknown-outcome recovery, invocation fencing, non-blocking provider streaming, and settlement retirement while eliminating per-frame durable writes and quadratic `message_update` replication. Numerical budgets belong in its implementation handoff/tests, not in a competing standalone design.
 
 ### SQLite branch divergence
 
@@ -232,8 +230,8 @@ The order is by data safety first, then dependencies. Independent tracks may pro
 1. **Harness contract/conformance closure.** Resolve `OperationStatus.running`, abort signal/event binding order, gate-close typing, and the Part 9 coverage matrix.
 2. **Remote Session decision (decision only).** Resolve the false normative boundary early. If process-local wins, repair the docs. If raw RemoteSession wins, later create a dedicated protocol/client/server/worker package; do not fold it into telemetry or R12.
 3. **Client watch/subscription staleness** and **repository lifecycle contract.** Small independent correctness packages; complete them before expanding server/worker lifecycle semantics. The lifecycle package must also address Memory's fail-fast repository close.
-4. **JSONL snapshot compaction.** Implement the already-normative physical reclamation path and metrics.
-5. **M11 durable frame volume.** Memory/SQLite measurement can start earlier; set final JSONL budgets only with compaction measured, and preserve all recovery boundaries.
+4. **[Mobile Harness handoff](mobile-handoff/README.md).** Follow its numbered prerequisites through scoped storage, tool output, and assistant output; preserve all recovery boundaries and land deterministic amplification measurements.
+5. **JSONL snapshot compaction.** Implement the already-normative physical reclamation path and metrics for remaining session-scoped history.
 6. **R12 session-wide watch.** Complete the only Harness method stub before building revisioned Transcript/session-wide remote observation.
 7. **Telemetry, if retained:** reconcile schemas, then local instrumentation, then RPC propagation, then an optional exporter. RPC propagation follows the Remote Session/product-boundary decision.
 8. **WP08 — named-branch and streaming forks.** Implement the actionable handoff without reopening WP07 ownership or lifecycle decisions.

@@ -96,21 +96,18 @@ after is deltas. The repeated content path is interned on its second use, and
 consecutive ops on it omit the id entirely:
 
 ```jsonc
-["s",[],{"content":[{"type":"text","text":""}],"details":{},"terminate":false,"truncation":{…}}]
+[["r",{"content":[{"type":"text","text":""}],"details":{},"terminate":false,"truncation":{…}}]]
 
-["#",0,["content",0,"text"]]
-["a",0,"make: Entering directory …\n"]
-["a","cc -c src/a.c …\n"]
+[["a",["content",0,"text"],"make: Entering directory …\n"]]
+[["#",0,["content",0,"text"]],["a",0,"cc -c src/a.c …\n"]]
+[["a",0,"cc -c src/b.c …\n"]]
 …
-["s",["details","spillPath"],"/tmp/pi-session-x/bash-8f2.log"]
+[["s",["details","spillPath"],"/tmp/pi-session-x/bash-8f2.log"]]
 …
-["t",0,4096]
-["a","cc -c src/z.c\n"]
-["s",["truncation","totalBytes"],262144]
+[["t",0,4096],["a","cc -c src/z.c\n"],["s",["truncation","totalBytes"],262144]]
 ```
 
-Details are one `s`, in one flush out of twenty. The `t` + `a` pair is the window
-slide, stated by the sink rather than inferred — the case a differ degrades on.
+Details are one `s`, in one flush out of twenty. The `t` + `a` pair is the window slide. The current tracker recovers it by verified overlap; delta FINDINGS D2 requires re-measurement against production Chord before this becomes a hot tool-output loop; add an explicit append/truncate producer path if overlap remains dominant.
 
 ## 5. Harness events
 
@@ -136,14 +133,9 @@ re-sending would duplicate any images.
 so it lives in `<session>.op_….jsonl` and is retired on settle rather than
 persisting in the main log forever. Retirement is a main-log `retireScope` record,
 so it commits atomically with the settle writes; the unlink is a consequence of
-replaying that record, not part of the transaction (`session-scopes.md` §5).
+replaying that record, not part of the transaction ([scopes.md §5](../02-scopes/scopes.md)).
 
-A `list<Op[]>`, one batch appended per flush, base batches tagged `"base"` so
-recovery reads backwards with `stopAtTag` and stops there
-(`session-scopes.md` §11). Written under the adaptive rule (`delta.md` §5) — ops
-while they are smaller than a root set, otherwise the root set. For `make -j8` trickling a few KB per
-checkpoint that is ops; for `cat 1gb.txt` it is capped snapshots. The write
-interval is the crash-loss knob and lives in the capture policy.
+A `list<WireOp[]>`, one encoded batch appended per flush, base batches tagged `"base"` so recovery reads backwards with `stopAtTag` and stops there ([scopes.md §11](../02-scopes/scopes.md#11-list-tags-and-stop-conditions)). The tracker emits structural ops; the producer calls `rebase()` periodically to write a capped root replacement and bound recovery replay. The write interval is the crash-loss knob and lives in the capture policy.
 
 Recovery seeds a fresh `ToolOutput` from that state — it does **not** delete it,
 which is what `clearReplayCheckpoint` does today and is a bug
@@ -189,7 +181,7 @@ not. The facet never writes an op.
 ## 8. Wire and consumer
 
 ```jsonc
-{ "seq": 0, "ops": [["s",[],{"transcript":[],"operation":null}]] }
+{ "seq": 0, "ops": [["r",{"transcript":[],"operation":null}]] }
 { "seq": 1, "ops": [ … ] }
 ```
 
@@ -197,7 +189,7 @@ One shape: a batch of ops. The first is a base batch — it begins with `r` —
 and everything after is deltas. A gap, a reconnect, a provider
 reload, or a fold that could not apply all take one path: send a fresh `replace`.
 
-The consumer is `apply` — five verbs, no domain knowledge, no library, no tool
+The consumer is `apply` — six verbs, no domain knowledge, no library, no tool
 code, against a plain mutable object it owns.
 
 ## 9. What this run costs
@@ -206,7 +198,7 @@ code, against a plain mutable object it owns.
 
 | | today | this design |
 |---|---|---|
-| durable writes | full `AgentToolResult` per checkpoint | ops, or a capped snapshot when smaller |
+| durable writes | full `AgentToolResult` per checkpoint | structural ops plus explicit periodic capped base batches |
 | durable location | main log, forever | sidecar, unlinked on settle |
 | wire per flush | whole snapshot | one `truncate` + one `append` |
 | details written | rebuilt whole, every flush | one `set`, once |

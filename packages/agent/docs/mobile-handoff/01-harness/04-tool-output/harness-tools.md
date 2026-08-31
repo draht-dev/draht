@@ -1,9 +1,7 @@
 # Tool Output and Progress
 
 > **Scope:** harness-local. Nothing here depends on the facet system, RPC, or any
-> presentation. Depends on `delta.md` (op vocabulary and tracker),
-> `executionenv.md` (where truncation happens), and `session-scopes.md`
-> (durability).
+> presentation. Depends on [delta tracking](../01-delta/delta.md) (the landed Chord op vocabulary and tracker), [execution environments](../03-execenv/execenv.md) (where truncation happens), and [scoped storage](../02-scopes/scopes.md) (durability).
 
 ## 1. The problem
 
@@ -309,8 +307,7 @@ plus `details` and `usage`.
 
 Note the implication that misled an earlier draft: because the checkpoint must
 *be* the current state, it was read as needing `value` semantics. It does not. It
-needs to be *derivable*, and folding a list of frames back to the last base batch
-derives it — which is the point of tagging base batchs (§7.3). `checkpoint: true`
+needs to be *derivable*, and folding encoded batches from the last base batch derives it — which is the point of tagging base batches (§7.3). `checkpoint: true`
 requests a durable write, not a replacement.
 
 `pendingAssistantFrames` is a `list<AssistantMessageFrame>` appended per frame,
@@ -329,7 +326,7 @@ tracked state written as ops or snapshots.
 
 ### 7.3 What to write, and when
 
-Both addresses are **ephemeral-scoped** (`session-scopes.md`), so they live in a
+Both addresses are **ephemeral-scoped** ([scopes.md](../02-scopes/scopes.md)), so they live in a
 sidecar retired on settle rather than in the main log forever.
 
 Two independent wins, in order of importance:
@@ -339,33 +336,22 @@ Two independent wins, in order of importance:
 - **Scopes.** Pending state leaves the main log entirely: 5.32 MB to 0.06 MB
   surviving.
 
-**Both are `list<Op[]>`**, not values. One batch is appended per flush, and a batch
-whose first op is `r` is tagged `"base"` on the storage record.
+**Both are `list<WireOp[]>`**, not values. The sink owns one stateful Chord encoder/decoder pair per durable value stream. One encoded batch is appended per flush, and a logical batch whose first op is `r` is tagged `"base"` on the storage record.
 Recovery reads backwards with `stopAtTag: "base"` and applies forward
-(`delta.md` §9, `session-scopes.md` §11).
+([delta.md §9](../01-delta/delta.md#9-durable-form), [scopes.md §11](../02-scopes/scopes.md#11-list-tags-and-stop-conditions)).
 
 Writing one flush:
 
 ```ts
 const ops = out.flush();
 if (ops.length === 0) return;
-writes: [appendList(address, ops, isBase(ops) ? "base" : undefined)];
+const wire = enc.encode(ops);
+writes: [appendList(address, wire, isBase(ops) ? "base" : undefined)];
 ```
 
-`isBase` comes from the delta package. It is not `ops[0][0] === "s"`: a set on any
-path is `"s"`, and what makes a base is that it targets the root. Classification
-lives beside the vocabulary so the comparison is written once.
+`isBase` comes from Chord. It checks for the root replacement op `r`; ordinary nested sets use `s`. Classification lives beside the vocabulary so the comparison is written once.
 
-Emission follows the adaptive rule from `delta.md` §5:
-
-> Write ops when they are smaller than a replacement; otherwise write the
-> replacement — which is itself an op, `["s", [], value]`.
-
-The crossover is exactly at the cap. Below it ops win by up to 30x; above it
-snapshots win unboundedly. A trickling build stays on cheap ops; `cat 1gb.txt`
-degrades to capped snapshots. Sweep in `delta.md` §5 — **do not quote a single
-ratio without it**, since an earlier draft claimed 18x from a rate that happened
-to favour ops.
+The landed tracker emits structural ops unconditionally. There is no serialized-size comparison or adaptive replacement heuristic. A producer requests a base batch explicitly with `rebase()`; the output sink's cap bounds that replacement, while periodic rebasing bounds recovery work. Before the rolling tool-output hot path lands, re-measure delta FINDINGS D2 against production Chord; if overlap discovery remains hot, add an explicit append/truncate producer API.
 
 **Checkpointing is not deleted.** An earlier draft called for removing
 `BASH_CHECKPOINT_INTERVAL_MS`; that was wrong. Checkpoint frequency is the knob
@@ -420,7 +406,7 @@ setMemo(name, value) {
 ```
 
 Both addresses are **ephemeral-scoped**, so this is a single-file transaction and
-statically enforced as one (`session-scopes.md` §3, §6). `operationToolMemo` is
+statically enforced as one ([scopes.md §3 and §6](../02-scopes/scopes.md)). `operationToolMemo` is
 placed in that scope precisely for this. Ordering on the Session line would not be
 enough — two file writes are not atomic. The periodic checkpoint stays as it
 is — best-effort, for the interruption path; this forces one where correctness
@@ -463,7 +449,7 @@ memos.
 
 ### 7.7 Nothing on the durable path runs tool code
 
-Ops are interpreted by a five-verb applier with no domain knowledge, so a tool
+Ops are interpreted by a six-verb applier with no domain knowledge, so a tool
 rewritten between crash and resume cannot make a persisted stream unreadable.
 
 > **The durable path uses only harness-owned reducers.**

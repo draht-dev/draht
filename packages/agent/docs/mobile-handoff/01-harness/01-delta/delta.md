@@ -1,58 +1,15 @@
 # Delta Tracking and the Op Vocabulary
 
-> **Scope:** `packages/agent/src/harness/delta/`. It depends on nothing else in the
-> harness — not on session storage, the runtime, or facets — and those three
-> consume it. Keep that direction: a delta module that imports from `session/` or
-> `runtime/` cannot later be extracted, and extracting it is the point of the
-> boundary.
+> **Production status:** landed in `packages/chord/src/delta/index.ts`, with tests in `packages/chord/test/delta.test.ts`. Chord owns the dependency-free `Op`/`WireOp`, tracker, applier, codec, and validation boundary; Session storage, the Harness, and facets consume it. The implementation and tests beside this document are historical prototype and benchmark evidence, not production source.
 >
-> It lives inside `packages/agent` rather than as its own package because it has
-> exactly one consumer today. Split it out when a second one appears — the facet
-> host is the likely trigger, since a replica in another process needs the applier
-> without the harness.
->
-> Nothing existing in `origin/dev` is modified by this unit alone.
+> The landed tracker computes deltas at `flush()` from a dirty tree and baseline rather than retaining one op per mutation. That resolves FINDINGS D1. FINDINGS D2 remains relevant to producers that repeatedly assign sliced rolling strings, but its profile predates flush-time tracking; re-measure it against production Chord and add an explicit append/truncate producer API before the tool-output hot path only if it remains hot.
 
-One mechanism covers assistant partials, tool output, tool details, lane state,
-and arbitrary facet state — on the wire and in durable storage.
-
-**Shipped alongside this doc**, all four verified:
-
-| file | lands as |
-| --- | --- |
-| `delta.ts` | `harness/delta/types.ts` — the API surface as it should be exported |
-| `delta-impl.ts` | `harness/delta/index.ts` — tracker, applier, codec, safety guards |
-| `delta.test.ts` | `test/harness/delta.test.ts` — 42 tests. Port these first. |
-| `delta.bench.ts` | `test/harness/delta.bench.ts` — guards two performance cliffs |
-| `delta.examples.ts` | not shipped — runnable illustrations of §3.2.1 and §3.2.2 |
-
-Re-export from `harness/session/index.ts` is **not** wanted: session storage is a
-consumer of this vocabulary, not its owner.
-
-`packages/agent` already has an `exports` map with subpaths (`.`, `./node`, …).
-Give delta one too, so the boundary is visible from outside the package and a
-later extraction is a one-line change rather than a search for importers:
-
-```jsonc
-"./delta": {
-  "types":  "./dist/harness/delta/index.d.ts",
-  "import": "./dist/harness/delta/index.js"
-}
-```
-
-Consumers inside the harness import relatively; anything outside it imports
-`@draht/agent/delta`. If the second form starts appearing inside
-`packages/agent`, the module has outgrown its home — see the scope note above.
+One mechanism covers assistant partials, tool output, tool details, lane state, and arbitrary facet state — on the wire and in durable storage.
 
 ```bash
-npx vitest run delta.test.ts                        # 54 passing
-npx vitest bench delta.bench.ts
-node --experimental-strip-types delta.examples.ts   # the two sharp edges, printed
+node "$(git rev-parse --show-toplevel)/node_modules/vitest/dist/cli.js" --run test/delta.test.ts
+# run from packages/chord
 ```
-
-Both import `./delta-impl.ts` directly and need no harness. `delta.ts` and
-`delta-impl.ts` are verified mutually assignable, so the declared API is
-satisfiable by the implementation rather than merely adjacent to it.
 
 ## 1. Why not an existing library
 
@@ -80,7 +37,7 @@ old value; measured on 5000 elements the fallback was
 `{index: 0, remove: 5000, items: 5000}` — a full replace, in exactly the case the
 optimisation existed for.
 
-So the win is not a better differ. It is **not diffing at all**.
+So the win is not a blind whole-value differ. The tracker records which paths and array operations became dirty, then compares only those subtrees against its accepted baseline at `flush()`.
 
 ## 2. Ops
 
@@ -116,7 +73,7 @@ rather than a path, and misclassifies `["s", []]`.
 
 **Only `p` may target the root**, and only because a tracked value can itself be
 an array — `entries.push(x)` on a root array is `["p", [], 3, 0, [x]]`. A `p`
-covering its entire target is normalised at record time to `r` (root) or `s`
+covering its entire target is normalised at flush time to `r` (root) or `s`
 (nested), so a root `p` is always a partial modification. The other four verbs
 take a `NonEmptyPath`: `["s", [], v]` and `["d", []]` do not typecheck.
 
@@ -125,7 +82,7 @@ Two representations of one thing means two appliers, two size estimates, and a
 conversion nobody needs. Ops are tuples in memory, on the wire, and on disk;
 readability is what a debug formatter is for.
 
-Five verbs. No `move`, `copy` or `test`: the first two are size optimisations for
+Six verbs. No `move`, `copy` or `test`: the first two are size optimisations for
 a case we do not have, and `test` belongs to a conflict model we do not have,
 since there is exactly one authoritative writer.
 
@@ -143,7 +100,7 @@ decorators. You mutate normally.
 
 ```ts
 const t = track(laneView);
-t.state.operation.streaming.content[0].text += delta;   // -> append
+t.state.operation.streamingMessage.content[0].text += delta;   // -> append
 t.state.transcript.push(entry);                         // -> splice
 t.state.tools[0].details.failures.push({ name, msg });  // -> splice
 delete t.state.config.model;                            // -> delete
@@ -160,9 +117,7 @@ records `splice(len, 0, [x])` and then delegates. Intent is captured *before* th
 engine performs its index writes, which is why `unshift` is one op rather than
 O(n). This is the thing no other library does.
 
-**Strings — overlap detection on the `set` trap.** Strings are primitives, so
-there is nothing to intercept. Given `prev` and `next`, find the longest suffix of
-`prev` that is a prefix of `next`:
+**Strings — dirty marking on the `set` trap, overlap detection at `flush()`.** Strings are primitives, so there is nothing to intercept. Given the accepted `prev` and final `next`, find the longest suffix of `prev` that is a prefix of `next`:
 
 ```
 overlap === prev.length  ->  append(next.slice(overlap))
@@ -194,10 +149,7 @@ the probe entirely.
 
 ### 3.2 Rules the implementation must hold
 
-**Op payloads are structured-cloned at record time.** Without this a later
-mutation retroactively changes an already-emitted op, and a local replay aliases
-the source object. This was an observed bug in the prototype, not a hypothetical:
-producer and replica ended up sharing an object and double-appending.
+**Inserted values are adopted; emitted payloads are cloned at flush.** Callers may retain read-only references but must not mutate adopted objects outside the tracker. `flush()` clones payloads and advances a cloned accepted baseline, so emitted ops never alias producer state.
 
 **`x = undefined` normalises to `delete`.** JSON has no `undefined`, and a `set`
 with a missing value is indistinguishable from a lost value after a
@@ -281,8 +233,7 @@ tracker.rebase();        // next flush is ["r", value]; value unchanged
 ```
 
 Discarding the pending ops is correct: the proxy mutates the target directly, so
-the value already carries them. `tracker.state = tracker.target` has the same
-effect, but re-wraps the proxy needlessly and reads like a mistake.
+the value already carries them. `tracker.state = tracker.state` has the same effect in the landed implementation, but `rebase()` states the intent directly.
 
 **Nothing produces a base batch on its own.** `flush()` emits ops; a replacement
 happens only when the producer asks for one. So a stream of appends stays a
@@ -309,13 +260,9 @@ Two callers need this:
 
 ### 3.3 Known gaps
 
-- `sort` / `reverse` / `fill` / `copyWithin` fall back to a whole-array `set`.
-  Rare on replicated state; revisit if a real workload needs them.
-- A manual index-shift loop (`for (…) a[i] = a[i+1]`) costs O(n) sets. Correct,
-  not minimal, and unavoidable — you genuinely did write every element.
-- Cross-realm identity. The interning table in §7 keys by id within one process;
-  a replica in another process or language needs the same table built from the
-  wire, which is not specified here.
+- `sort` / `reverse` / `fill` / `copyWithin` mark the array dirty and emit the resulting structural/index changes rather than preserving the producer's method intent. Add a dedicated op only if a measured workload needs one.
+- A manual index-shift loop (`for (…) a[i] = a[i+1]`) can still cost O(n) sets. Correct, not minimal, and unavoidable — the producer genuinely wrote every element.
+- Rolling-window string assignment still runs overlap discovery at flush. Re-measure FINDINGS D2 against the landed tracker, then add an explicit append/truncate producer API if it remains hot.
 
 ### 3.4 Constraints the string algorithm must hold
 
@@ -351,11 +298,9 @@ a numeric PathRef   references a previously defined id
 a shortened tuple   reuses the previous op's path; arity disambiguates
 ```
 
-`encode(ops): WireOp[]` and `decode(wire): Op[]` are the only places either
-exists. Keeping them out of `Op` means `apply` has no id resolution, no `#`
+`encoder().encode(ops): WireOp[]` and `decoder().decode(wire): Op[]` are the only places either exists. Keeping them out of `Op` means `apply` has no id resolution, no `#`
 case, and no previous-path state — three branches removed from the hot path —
-and the dead-op pass gets a total `opPath`, where before it silently skipped
-interned refs.
+and dirty-tree generation always works with inline paths before encoding.
 
 `["r", value]` carries no path, so it encodes to itself. That is why `isBase`
 works unchanged on either vocabulary.
@@ -407,9 +352,7 @@ interning exists to bound.
 
 ## 5. Flush emits ops, and drops the dead ones
 
-`flush()` returns the recorded ops. There is no size comparison and no
-replacement heuristic: a replacement is something the producer asks for, by
-assigning `state` or calling `rebase()`.
+`flush()` computes ops for the dirty paths against the last accepted baseline. It does not retain one op per mutation, so repeated and interleaved writes stay bounded by changed state rather than write count. There is no size comparison or replacement heuristic: a replacement is something the producer asks for by assigning `state` or calling `rebase()`.
 
 An earlier design compared op bytes against the value's serialised size and
 replaced when ops were larger. It was removed. Measured against emitting ops
@@ -420,49 +363,17 @@ the widest case (`run_end`) touches four fields. The rule cost a per-flush
 comparison, a running size estimate, and an invalidation rule for the ops that
 could not maintain it.
 
-### 5.1 Dead-op elimination
+### 5.1 Dirty-tree collapse
 
-Ops apply in order, so an op is dead if a later one overwrites the whole subtree
-it lives in. Only `s`, `d` and `r` do that — `a`, `t` and `p` modify what is
-already there, so they never dominate.
+The landed tracker records only which subtrees are dirty. At flush it compares each dirty subtree's accepted baseline with its final value and emits the surviving structural change. Repeated writes to one field collapse naturally; alternating writes to two fields retain two dirty paths rather than one op per mutation; a parent replacement subsumes dirty descendants where the final comparison permits it. `packages/chord/test/delta.test.ts` pins the interleaved rolling-window case at at most three ops after 1,000 alternating writes.
 
-| written | emitted |
-| --- | --- |
-| same field three times | one `s` |
-| `x`, then `y`, then `x` again | two ops, first `x` dropped |
-| child, then parent replaced | one `s` on the parent |
-| set, then delete | one `d` |
-| parent replaced, then child | **both** — the child write survives |
+This replaces the prototype's backwards dead-op pass and adjacent-only coalescer. Do not port those algorithms into Chord: flush-time generation is the D1 fix.
 
-Walk backwards keeping a map of overwritten paths and test each op's own
-prefixes against it: **O(n · d)** for n ops at path depth d. Comparing each op
-against every dominator instead is O(n² · d), which degrades on precisely the
-wide flush this pass exists to clean up.
-
-Measured: 12–14 µs per op, flat from 100 to 5000 ops, depth 8 barely costlier
-than depth 3. A pathological producer writing the same two fields 5000 times
-emits **2 ops from 10 001 recorded**.
-
-> **Object key order is not preserved.** A producer that does
-> `set c; set a; delete c; set c` leaves `c` last, because deleting and
-> reinserting moves it. The replica receives only the surviving `set c`, applies
-> it to a base where `c` never existed, and `c` lands first.
->
-> Values are identical — 1823 randomised sequences, zero value mismatches — but
-> the serialised forms can differ. This is acceptable because nothing compares a
-> replica against its producer: the consumer holds the state and nobody diffs it
-> back. The one visible case is a consumer that iterates keys for display, where
-> two views could order rows differently, and it needs a delete-and-recreate of
-> the same key within one flush. **Do not hash or content-address a replicated
-> value.**
-
-Adjacent ops on the same path are then merged: `a` + `a` becomes one append,
-`s` + `s` keeps the later, `s` + `a` folds into the set. Non-adjacent append
-merging is a future optimisation, not done.
+> **Object key order is not a replicated invariant.** Values round-trip, but delete-and-reinsert activity within one flush can produce a different insertion order on a replica. Do not hash or content-address a replicated value, and sort explicitly where display order matters.
 
 ## 6. There is no frame type
 
-What travels is `Op[]`. Do not wrap it.
+The logical batch is `Op[]`; transport and durable storage carry the statefully encoded `WireOp[]`. Do not wrap either batch.
 
 **`seq` does not belong in the payload.** It would defend against a lossy
 transport we do not have: a durable list element already carries `seq` from
@@ -475,7 +386,7 @@ which is where transport metadata belongs.
 replacement is an op (§2), and the address already says which value a batch
 belongs to. What would remain is a struct around an array.
 
-So a batch of ops is just `Op[]`. A **base batch** is one whose first op is `r`;
+A producer batch is just `Op[]`, and its encoded boundary form is `WireOp[]`. A **base batch** is one whose first op is `r`;
 `isBase(ops)` is `ops[0]?.[0] === "r"`, exact rather than heuristic because flush
 guarantees `r` appears at index 0 or not at all (§5).
 
@@ -635,7 +546,7 @@ be read as a top-level op, because nothing flattens.
 ### 7.5 Applier
 
 ```ts
-export function apply<T>(target: T, ops: readonly Op[]): T;
+export function apply<T>(target: T | undefined, ops: readonly Op[]): T;
 ```
 
 Six verbs, no domain knowledge, no library, no tool code, no registry lookup, and
@@ -669,14 +580,13 @@ Concrete deletions, not simplifications in principle:
 
 And three things not to build, each of which looks reasonable until §1:
 
-- **A differ.** Nothing here diffs two values; every path records intent.
+- **A blind whole-value differ.** The landed tracker compares only dirty subtrees against its accepted baseline; it does not scan unrelated state.
 - **A keyed op shape plus a codec.** Tuples are the form everywhere (§2).
 - **A frame wrapper.** What travels is `Op[]` (§6).
 
 ## 9. Durable form
 
-A tracked value is stored as a **list of frames**, one appended per flush. Base
-frames carry the storage tag `"base"`.
+A tracked value is stored as a **list of encoded `WireOp[]` batches**, one appended per flush. Base batches carry the storage tag `"base"`; one stateful decoder per value decodes them before `apply`.
 
 Recovery reads backwards to the last base batch and applies forward:
 
@@ -687,7 +597,7 @@ readList(address, { order: "desc", stopAtTag: "base", limit: 100 })
 `stopAtTag` is a stop condition *within a page*: if no base batch is in the page,
 the consumer pages again with the cursor. The tag lives on the storage record
 beside `seq`, never inside the value, so storage never parses ops. See
-`session-scopes.md` §11.
+[scopes.md](../02-scopes/scopes.md) §11.
 
 This is what makes "a replacement truncates recovery" (§5) real rather than
 aspirational — a reader stops at the last base batch instead of replaying from
@@ -698,12 +608,11 @@ the beginning.
 - Prefix interning (a trie over path heads) if a workload emerges with many
   distinct paths sharing long prefixes. Second-use interning (§4) removes the
   pathological case; this would go further.
-- Non-adjacent append merging in `coalesce`. Dead-op elimination (§5.1) handles
-  redundancy; this would handle interleaving.
-- Whether `sort` / `reverse` deserve real ops.
+- Re-measure rolling-window overlap under flush-time tracking (FINDINGS D2); if it remains hot, add an explicit append/truncate producer API so the producer can state what changed.
+- Whether array reordering needs a dedicated op; the landed tracker currently marks the array dirty and emits the resulting structural/index changes.
 - Cross-language replicas: the applier is a page of code in any language, but the
   interning tables and the wire framing are not specified for a non-JS consumer.
 
 Address interning in the JSONL log is the same trick as path interning, applied
 one layer up over `namespace` + `key`. It is **not** an open question — it is
-specified in `session-scopes.md` §12 and is a separate dictionary from this one.
+specified in [scopes.md](../02-scopes/scopes.md) §12 and is a separate dictionary from this one.

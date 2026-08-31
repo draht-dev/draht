@@ -351,7 +351,7 @@ writes: [appendList(address, wire, isBase(ops) ? "base" : undefined)];
 
 `isBase` comes from Chord. It checks for the root replacement op `r`; ordinary nested sets use `s`. Classification lives beside the vocabulary so the comparison is written once.
 
-The landed tracker emits structural ops unconditionally. There is no serialized-size comparison or adaptive replacement heuristic. A producer requests a base batch explicitly with `rebase()`; the output sink's cap bounds that replacement, while periodic rebasing bounds recovery work. Before the rolling tool-output hot path lands, re-measure delta FINDINGS D2 against production Chord; if overlap discovery remains hot, add an explicit append/truncate producer API.
+The landed tracker emits structural ops unconditionally. There is no serialized-size comparison or adaptive replacement heuristic. A producer requests a base batch explicitly with `rebase()`; the output sink's cap bounds that replacement, while periodic rebasing bounds recovery work. Production remeasurement rejects a text-specific append/truncate API: the generic path measured 2.43–2.46 µs per 50 KB rolling-window flush locally, below surrounding costs. Keep ordinary tracked string mutation; see the [decision record](../01-delta/append-decision.md).
 
 **Checkpointing is not deleted.** An earlier draft called for removing
 `BASH_CHECKPOINT_INTERVAL_MS`; that was wrong. Checkpoint frequency is the knob

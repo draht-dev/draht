@@ -2,7 +2,7 @@
 
 > **Production status:** landed in `packages/chord/src/delta/index.ts`, with tests in `packages/chord/test/delta.test.ts`. Chord owns the dependency-free `Op`/`WireOp`, tracker, applier, codec, and validation boundary; Session storage, the Harness, and facets consume it. The implementation and tests beside this document are historical prototype and benchmark evidence, not production source.
 >
-> The landed tracker computes deltas at `flush()` from a dirty tree and baseline rather than retaining one op per mutation. That resolves FINDINGS D1. FINDINGS D2 remains relevant to producers that repeatedly assign sliced rolling strings, but its profile predates flush-time tracking; re-measure it against production Chord and add an explicit append/truncate producer API before the tool-output hot path only if it remains hot.
+> The landed tracker computes deltas at `flush()` from a dirty tree and baseline rather than retaining one op per mutation. That resolves FINDINGS D1. Production remeasurement also closes FINDINGS D2: the generic string path is below surrounding replication/rendering costs, so an explicit append/truncate API is rejected ([decision](append-decision.md)).
 
 One mechanism covers assistant partials, tool output, tool details, lane state, and arbitrary facet state — on the wire and in durable storage.
 
@@ -262,7 +262,7 @@ Two callers need this:
 
 - `sort` / `reverse` / `fill` / `copyWithin` mark the array dirty and emit the resulting structural/index changes rather than preserving the producer's method intent. Add a dedicated op only if a measured workload needs one.
 - A manual index-shift loop (`for (…) a[i] = a[i+1]`) can still cost O(n) sets. Correct, not minimal, and unavoidable — the producer genuinely wrote every element.
-- Rolling-window string assignment still runs overlap discovery at flush. Re-measure FINDINGS D2 against the landed tracker, then add an explicit append/truncate producer API if it remains hot.
+- Rolling-window string assignment still runs overlap discovery at flush, deliberately: production measurements do not justify text-specific tracker state or API surface ([decision](append-decision.md)).
 
 ### 3.4 Constraints the string algorithm must hold
 
@@ -608,7 +608,6 @@ the beginning.
 - Prefix interning (a trie over path heads) if a workload emerges with many
   distinct paths sharing long prefixes. Second-use interning (§4) removes the
   pathological case; this would go further.
-- Re-measure rolling-window overlap under flush-time tracking (FINDINGS D2); if it remains hot, add an explicit append/truncate producer API so the producer can state what changed.
 - Whether array reordering needs a dedicated op; the landed tracker currently marks the array dirty and emits the resulting structural/index changes.
 - Cross-language replicas: the applier is a page of code in any language, but the
   interning tables and the wire framing are not specified for a non-JS consumer.

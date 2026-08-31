@@ -1,6 +1,6 @@
 # 01-delta: known defects and measured findings
 
-Everything here was found **after** `delta.md` and the prototype implementation beside it were written. None of it is applied to the code in this directory. Production now lives in `packages/chord/src/delta/index.ts`: its flush-time dirty-tree design resolves D1, while D2 remains relevant to rolling-window producers that assign sliced strings, but its profile predates flush-time tracking and must be re-measured against production Chord. Each item below remains the original problem, evidence, and candidate-fix record.
+Everything here was found **after** `delta.md` and the prototype implementation beside it were written. None of it is applied to the code in this directory. Production now lives in `packages/chord/src/delta/index.ts`: flush-time dirty tracking resolves D1, and production remeasurement closes D2 without a new API. See [`append-decision.md`](append-decision.md). Each item below remains the original problem, evidence, and candidate-fix record.
 
 Every number was measured with **`node --experimental-strip-types`**, not `tsx`.
 That matters: tsx transpiles through esbuild and inflated the same benchmark by
@@ -88,9 +88,9 @@ writes.
 
 ---
 
-## D2. `overlap()` is 94.5% of tracker time
+## D2. `overlap()` was 94.5% of prototype tracker time — closed
 
-**Severity: high.** Everything else in this file is noise beside it.
+**Historical severity: high. Production decision:** do not add an explicit append/truncate API. The prototype profile was dominated by a slow `startsWith` path; production uses a flattened-slice comparison and measured 17.8–18.7 µs per 200 KB assistant append flush and 2.43–2.46 µs per 50 KB rolling-window flush locally. See [`append-decision.md`](append-decision.md). The original evidence follows.
 
 ### Problem
 
@@ -166,7 +166,7 @@ benchmarks disagree in a way that points at path depth:
 cache key by joining the path, so a read of `content[0].text` allocates on every
 access.
 
-**Re-profile after D2 lands.** This may be the next bottleneck or it may be
+**Re-profile only if production delta cost becomes material.** This may be the next bottleneck or it may be
 nothing; the current numbers cannot distinguish them because `overlap` swamps both.
 
 ---
@@ -179,8 +179,7 @@ profile above.
 **A path trie replacing `JSON.stringify(path)` keys.** Genuinely faster in
 isolation — 6x on the `LaneSnapshot` shape, 93x at 500 distinct paths — because
 stringify cost scales with path depth while a trie walk is one `Map.get` per
-segment. But the whole slot layer is 0.5% of runtime. Build it only if a profile
-after D2 says so.
+segment. But the whole slot layer is 0.5% of runtime. Build it only if a current production profile says so.
 
 **Trie as storage vs trie as index.** If a trie is ever built, it should map path
 to a **position in the ops array**, not hold the ops. Holding them loses first-touch

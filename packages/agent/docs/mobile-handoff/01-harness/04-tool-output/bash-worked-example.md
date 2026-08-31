@@ -107,7 +107,7 @@ consecutive ops on it omit the id entirely:
 [["t",0,4096],["a","cc -c src/z.c\n"],["s",["truncation","totalBytes"],262144]]
 ```
 
-Details are one `s`, in one flush out of twenty. The `t` + `a` pair is the window slide. The current tracker recovers it by verified overlap; delta FINDINGS D2 requires re-measurement against production Chord before this becomes a hot tool-output loop; add an explicit append/truncate producer path if overlap remains dominant.
+Details are one `s`, in one flush out of twenty. The `t` + `a` pair is the window slide. The current tracker recovers it by verified overlap; production remeasurement shows the generic path is already negligible, so no explicit append/truncate producer API is added ([decision](../01-delta/append-decision.md)).
 
 ## 5. Harness events
 

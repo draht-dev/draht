@@ -11,8 +11,36 @@ export {
 	replicatedState,
 } from "./api.ts";
 export { isJsonValue } from "./json.ts";
-export { RemoteServiceError } from "./services/errors.ts";
+export {
+	isRemoteServiceErrorCode,
+	REMOTE_SERVICE_ERROR_CODES,
+	RemoteServiceError,
+	type RemoteServiceErrorCode,
+} from "./services/errors.ts";
 export { RemoteServiceProvider } from "./services/provider.ts";
+export {
+	createServiceStateDecoder,
+	createServiceStateEncoder,
+	type ServiceStateDecoder,
+	type ServiceStateEncoder,
+} from "./services/state-codec.ts";
+export {
+	createServiceCatalogueCall,
+	createServiceSubscribeCall,
+	createServiceUnsubscribeCall,
+	decodeServiceControlCall,
+	parseServiceCall,
+	parseServiceCatalogue,
+	parseServiceProviderUpdate,
+	parseServiceSubscriptionSnapshot,
+	parseWireServiceProviderUpdate,
+	parseWireServiceSubscriptionSnapshot,
+	type ServiceControlCall,
+	type WireServiceInstanceSnapshot,
+	type WireServiceMemberSnapshot,
+	type WireServiceProviderUpdate,
+	type WireServiceSubscriptionSnapshot,
+} from "./services/wire.ts";
 export type {
 	Context,
 	ContextKey,
@@ -27,7 +55,6 @@ export type {
 	MutableReplicatedState,
 	RemoteServiceBinding,
 	RemoteServiceBindingOptions,
-	RemoteServiceErrorCode,
 	RemoteServiceSource,
 	RemoteServices,
 	RemoteServiceTransport,

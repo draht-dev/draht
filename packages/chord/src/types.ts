@@ -203,16 +203,6 @@ export interface RemoteServiceBinding extends RemoteServices {
 	rebind(bound: boolean, context: Context): Promise<void>;
 }
 
-export type RemoteServiceErrorCode =
-	| "service_not_allowed"
-	| "service_not_found"
-	| "service_mode_mismatch"
-	| "service_member_not_found"
-	| "service_member_mismatch"
-	| "service_instance_not_found"
-	| "service_stale_instance"
-	| "service_invalid_value";
-
 export interface FacetEnvironment {
 	/** Declare a hard dependency on one singleton service and return its stable handle. */
 	use<T>(service: Service<T>): T;

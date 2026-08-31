@@ -19,6 +19,21 @@ export interface Context {
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
+type IsAny<T> = 0 extends 1 & T ? true : false;
+
+/** Strict-JSON representation of an application data type. Unknown payloads become JsonValue. */
+export type JsonRepresentation<T> = IsAny<T> extends true
+	? JsonValue
+	: unknown extends T
+		? JsonValue
+		: T extends null | boolean | number | string
+			? T
+			: T extends readonly (infer TItem)[]
+				? JsonRepresentation<TItem>[]
+				: T extends object
+					? { [TKey in keyof T]: JsonRepresentation<T[TKey]> }
+					: never;
+
 export interface ReplicatedState<T> {
 	/** Borrowed immutable value, or undefined until hydration. Do not mutate or retain it. */
 	readonly value: T | undefined;
@@ -44,11 +59,17 @@ export interface Service<T> {
 	readonly [SERVICE_TYPE]?: (value: T) => T;
 }
 
-type InvalidJsonPart<T> = [T] extends [JsonValue]
-	? [JsonValue] extends [T]
+type InvalidJsonPart<T> = IsAny<T> extends true
+	? T
+	: unknown extends T
 		? never
-		: InvalidJsonStructure<T>
-	: InvalidJsonStructure<T>;
+		: [T] extends [JsonValue]
+			? [JsonValue] extends [T]
+				? never
+				: InvalidJsonStructure<T>
+			: InvalidJsonStructure<T>;
+
+type InvalidJsonProperty<T> = [Exclude<T, undefined>] extends [never] ? T : InvalidJsonPart<Exclude<T, undefined>>;
 
 type InvalidJsonStructure<T> = T extends null | boolean | number | string
 	? never
@@ -57,7 +78,7 @@ type InvalidJsonStructure<T> = T extends null | boolean | number | string
 		: T extends (...args: never[]) => unknown
 			? T
 			: T extends object
-				? { [TKey in keyof T]-?: InvalidJsonPart<T[TKey]> }[keyof T]
+				? { [TKey in keyof T]-?: InvalidJsonProperty<T[TKey]> }[keyof T]
 				: T;
 
 type InvalidRemoteMember<T> = T extends ReplicatedState<infer TValue>

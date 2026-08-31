@@ -10,6 +10,7 @@ export {
 	defineService,
 	replicatedState,
 } from "./api.ts";
+export { cloneJsonValue, isJsonValue } from "./json.ts";
 export { RemoteServiceError } from "./services/errors.ts";
 export { RemoteServiceProvider } from "./services/provider.ts";
 export type {
@@ -20,6 +21,7 @@ export type {
 	FacetHost,
 	FacetLoader,
 	FacetOptions,
+	JsonRepresentation,
 	JsonValue,
 	LoadedFacets,
 	MutableReplicatedState,

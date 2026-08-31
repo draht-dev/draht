@@ -90,7 +90,7 @@ Applications may define their own context keys. A Pi adapter can carry telemetry
 
 A context object never crosses RPC as a business value. The calling peer sends cancellation control and, if configured, an opaque strict-JSON metadata carrier. The receiving adapter constructs a fresh local context. The adapter, not remote business arguments, installs authenticated local identity.
 
-Chord owns the static `JsonValue` contract. The current implementation deliberately performs no recursive runtime validation; concrete serializers are responsible for rejecting unsupported values. Remote arguments, results, errors, snapshots, updates, catalogues, and RPC envelopes are expected to be finite strict JSON:
+Chord owns the static `JsonValue` contract and provides `JsonRepresentation<T>`, `isJsonValue()`, and `cloneJsonValue()` for adapter boundaries. The service runtime deliberately performs no automatic recursive validation; concrete serializers remain responsible for rejecting or normalizing unsupported values. Remote arguments, results, errors, snapshots, updates, catalogues, and RPC envelopes are expected to be finite strict JSON:
 
 - finite numbers only;
 - no `undefined`, sparse arrays, symbols, prototypes, cycles, classes, functions, `Map`, or `Set`; and

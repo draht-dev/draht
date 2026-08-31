@@ -1,4 +1,4 @@
-import type { HarnessEvent, LaneSnapshot } from "../agent-harness.ts";
+import type { HarnessEvent, LaneSnapshot, LaneWatchEvent } from "../agent-harness.ts";
 import type { OperationResultRecord } from "../session/types.ts";
 
 export type LaneSnapshotReduction = LaneSnapshot | { rebase: true };
@@ -11,7 +11,10 @@ function matchingOperation(
 }
 
 /** Apply one harness event to a replicated lane snapshot. Navigation completion requires a fresh snapshot. */
-export function reduceLaneSnapshot(snapshot: LaneSnapshot, event: HarnessEvent): LaneSnapshotReduction {
+export function reduceLaneSnapshot(
+	snapshot: LaneSnapshot,
+	event: HarnessEvent | LaneWatchEvent,
+): LaneSnapshotReduction {
 	if ("lane" in event && event.lane !== undefined && event.lane !== snapshot.lane && event.type !== "usage") {
 		return snapshot;
 	}

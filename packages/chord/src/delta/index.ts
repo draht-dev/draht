@@ -3,7 +3,7 @@ import type { JsonValue } from "../types.ts";
 export type { JsonValue } from "../types.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// chord/delta — intent-recording change tracking over plain JSON.
+// chord/delta — flush-time change tracking over plain JSON.
 //
 // Depends on nothing else in the harness. Session storage, the runtime and the
 // facet host consume it; keep the arrows pointing that way.
@@ -22,7 +22,7 @@ export type PathRef<P extends Path = Path> = P | number;
  * `r` is the ONLY op that replaces a whole value. `s`/`d`/`a`/`t` cannot target
  * the root: the type forbids it. `p` may, and only because a tracked value can
  * itself be an array — but a `p` that replaces its entire target is normalised to
- * `r`/`s` at record time, so a root `p` is always a partial modification.
+ * `r`/`s` at flush time, so a root `p` is always a partial modification.
  *
  * `Op` knows nothing about the path dictionary. Interning, id references and
  * omitted paths live in `WireOp` and exist only between `encode` and `decode`.
@@ -107,41 +107,24 @@ export function overlap(a: string, b: string, scan: number, probe = 64, maxCandi
 
 export interface TrackerOptions {
 	maxOverlapScan?: number;
-	coalesce?: boolean;
 }
 
 export interface Tracker<T extends object> {
 	/**
-	 * Mutate this. Plain TS: assignment, push, splice, delete, all of it.
-	 *
-	 * Assigning to it replaces the whole value: emits `["r", next]` and discards
-	 * ops recorded before it, which describe a value that no longer exists.
-	 *
-	 * `tracker.state = tracker.target` is therefore a checkpoint — it forces a base
-	 * batch without changing anything. Discarding the pending ops is correct
-	 * because the proxy mutates the target directly, so the value already carries
-	 * them.
+	 * The tracked value. Mutate and read state only through this proxy. Values
+	 * inserted into it are adopted: callers may retain read-only references, but
+	 * must not mutate them outside this proxy.
 	 */
 	state: T;
-	/** The untracked backing object. Reads only — writing here emits nothing. */
-	readonly target: T;
 	flush(): Op[];
-	/**
-	 * Clear pending ops and make the next flush a base batch, without changing
-	 * the value.
-	 *
-	 * Recovery replays from the last base batch, so a producer that wants "at most
-	 * N batches to replay" calls this every N. The pending ops are already
-	 * reflected in the value — the proxy mutates the target directly — so
-	 * discarding them loses nothing.
-	 */
+	/** Make the next flush a complete base batch without changing the value. */
 	rebase(): void;
-	/** Discard without emitting. */
+	/** Accept pending mutations locally without emitting them. */
 	discard(): void;
 	readonly dirty: boolean;
 }
 
-const isObj = (v: unknown): v is object => v !== null && typeof v === "object";
+const isObj = (value: unknown): value is object => value !== null && typeof value === "object";
 const cloneJson = <T extends JsonValue>(value: T): T => {
 	if (!isObj(value)) return value;
 	if (Array.isArray(value)) return value.map((item) => cloneJson(item)) as T;
@@ -159,220 +142,526 @@ const cloneJson = <T extends JsonValue>(value: T): T => {
 	}
 	return result as T;
 };
+
 const INDEX = /^(?:0|[1-9]\d*)$/;
-const norm = (t: object, k: string | symbol): Seg | symbol =>
-	typeof k === "symbol" ? k : Array.isArray(t) && INDEX.test(k) ? Number(k) : k;
-const toIntegerOrInfinity = (value: unknown): number => {
-	const number = Number(value);
-	if (Number.isNaN(number) || number === 0) return 0;
-	return Number.isFinite(number) ? Math.trunc(number) : number;
-};
+const norm = (target: object, key: string | symbol): Seg | symbol =>
+	typeof key === "symbol" ? key : Array.isArray(target) && INDEX.test(key) ? Number(key) : key;
 const MUTATORS = new Set(["push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill", "copyWithin"]);
 const TRACKED_PROXIES = new WeakSet<object>();
+const MISSING = Symbol("missing");
+type MaybeJson = JsonValue | typeof MISSING;
+type ArrayDirty = { kind: "append"; start: number } | { kind: "diff" } | { kind: "replace" };
+type DirtyNode = { valueDirty?: true; array?: ArrayDirty; children: Map<Seg, DirtyNode> };
+
+const dirtyNode = (): DirtyNode => ({ children: new Map() });
+
+const spliceItems = (target: unknown[], index: number, remove: number, items: JsonValue[]): JsonValue[] => {
+	const removed = Reflect.apply(Array.prototype.splice, target, [index, remove]) as JsonValue[];
+	const chunkSize = 10_000;
+	for (let offset = 0; offset < items.length; offset += chunkSize) {
+		Reflect.apply(Array.prototype.splice, target, [index + offset, 0, ...items.slice(offset, offset + chunkSize)]);
+	}
+	return removed;
+};
+
+const jsonEqual = (left: JsonValue, right: JsonValue): boolean => {
+	if (left === right) return true;
+	if (!isObj(left) || !isObj(right) || Array.isArray(left) !== Array.isArray(right)) return false;
+	if (Array.isArray(left) && Array.isArray(right)) {
+		if (left.length !== right.length) return false;
+		for (let index = 0; index < left.length; index++) {
+			if (!jsonEqual(left[index]!, right[index]!)) return false;
+		}
+		return true;
+	}
+	const leftObject = left as Record<string, JsonValue>;
+	const rightObject = right as Record<string, JsonValue>;
+	const leftKeys = Object.keys(leftObject);
+	const rightKeys = Object.keys(rightObject);
+	if (leftKeys.length !== rightKeys.length) return false;
+	for (const key of leftKeys) {
+		if (!Object.hasOwn(rightObject, key) || !jsonEqual(leftObject[key]!, rightObject[key]!)) return false;
+	}
+	return true;
+};
+
+const ownValue = (value: JsonValue, segment: Seg): MaybeJson => {
+	if (!isObj(value) || !Object.hasOwn(value, segment)) return MISSING;
+	return (value as Record<Seg, JsonValue>)[segment]!;
+};
+
+const emitSet = (path: Path, value: JsonValue, out: Op[]): void => {
+	const snapshot = cloneJson(value);
+	if (path.length === 0) out.push(["r", snapshot]);
+	else out.push(["s", [...path] as unknown as NonEmptyPath, snapshot]);
+};
+
+const emitDelete = (path: Path, out: Op[]): void => {
+	if (path.length === 0) throw new TypeError("the tracked root cannot be deleted");
+	out.push(["d", [...path] as unknown as NonEmptyPath]);
+};
+
+const diffString = (before: string, after: string, path: Path, scan: number, out: Op[]): void => {
+	if (before === after) return;
+	if (path.length === 0) {
+		emitSet(path, after, out);
+		return;
+	}
+	const at = [...path] as unknown as NonEmptyPath;
+	if (after.length > before.length && after.startsWith(before)) {
+		out.push(["a", at, after.slice(before.length)]);
+		return;
+	}
+	const shared = overlap(before, after, scan);
+	if (shared === 0) {
+		out.push(["s", at, after]);
+		return;
+	}
+	out.push(["t", at, before.length - shared]);
+	if (after.length > shared) out.push(["a", at, after.slice(shared)]);
+};
+
+const diffValue = (before: MaybeJson, after: MaybeJson, path: Path, scan: number, out: Op[]): void => {
+	if (before === MISSING) {
+		if (after !== MISSING) emitSet(path, after, out);
+		return;
+	}
+	if (after === MISSING) {
+		emitDelete(path, out);
+		return;
+	}
+	if (before === after) return;
+	if (typeof before === "string" && typeof after === "string") {
+		diffString(before, after, path, scan, out);
+		return;
+	}
+	if (Array.isArray(before) && Array.isArray(after)) {
+		diffArray(before, after, path, scan, out);
+		return;
+	}
+	if (isObj(before) && isObj(after) && !Array.isArray(before) && !Array.isArray(after)) {
+		diffObject(before as Record<string, JsonValue>, after as Record<string, JsonValue>, path, scan, out);
+		return;
+	}
+	emitSet(path, after, out);
+};
+
+function diffObject(
+	before: Record<string, JsonValue>,
+	after: Record<string, JsonValue>,
+	path: Path,
+	scan: number,
+	out: Op[],
+): void {
+	if (path.length > 0 && [...Object.keys(before), ...Object.keys(after)].some((key) => RESERVED_SEGMENTS.has(key))) {
+		emitSet(path, after, out);
+		return;
+	}
+	for (const key of Object.keys(after)) {
+		diffValue(Object.hasOwn(before, key) ? before[key]! : MISSING, after[key]!, [...path, key], scan, out);
+	}
+	for (const key of Object.keys(before)) {
+		if (!Object.hasOwn(after, key)) emitDelete([...path, key], out);
+	}
+}
+
+function diffArray(before: JsonValue[], after: JsonValue[], path: Path, scan: number, out: Op[]): void {
+	if (before.length === after.length) {
+		for (let index = 0; index < after.length; index++) {
+			diffValue(before[index]!, after[index]!, [...path, index], scan, out);
+		}
+		return;
+	}
+
+	let prefix = 0;
+	while (prefix < before.length && prefix < after.length && jsonEqual(before[prefix]!, after[prefix]!)) prefix++;
+	let suffix = 0;
+	while (
+		suffix < before.length - prefix &&
+		suffix < after.length - prefix &&
+		jsonEqual(before[before.length - 1 - suffix]!, after[after.length - 1 - suffix]!)
+	) {
+		suffix++;
+	}
+	const shorter = Math.min(before.length, after.length);
+	if (prefix + suffix === shorter) {
+		const remove = before.length - prefix - suffix;
+		const items = after.slice(prefix, after.length - suffix);
+		if (prefix === 0 && remove === before.length) emitSet(path, after, out);
+		else out.push(["p", [...path], prefix, remove, cloneJson(items)]);
+		return;
+	}
+
+	// Structural movement combined with retained-index edits has no unique
+	// alignment. Preserve the retained index deltas and express only the tail
+	// length change structurally. It may be broader than the producer's intent,
+	// but never degrades those edits to a whole-array replacement.
+	for (let index = 0; index < shorter; index++) {
+		diffValue(before[index]!, after[index]!, [...path, index], scan, out);
+	}
+	if (after.length > before.length) {
+		out.push(["p", [...path], before.length, 0, cloneJson(after.slice(before.length))]);
+	} else if (before.length > after.length) {
+		if (after.length === 0) emitSet(path, after, out);
+		else out.push(["p", [...path], after.length, before.length - after.length, []]);
+	}
+}
+
+const walkDirty = (before: JsonValue, after: JsonValue, node: DirtyNode, path: Path, scan: number, out: Op[]): void => {
+	if (node.valueDirty) {
+		diffValue(before, after, path, scan, out);
+		return;
+	}
+	if (node.array !== undefined) {
+		if (node.array.kind === "replace") {
+			if (!jsonEqual(before, after)) emitSet(path, after, out);
+			return;
+		}
+		if (!Array.isArray(before) || !Array.isArray(after) || node.array.kind === "diff") {
+			diffValue(before, after, path, scan, out);
+			return;
+		}
+		const start = node.array.start;
+		if (before.length !== start || after.length < start) {
+			diffValue(before, after, path, scan, out);
+			return;
+		}
+		for (const [segment, child] of node.children) {
+			if (typeof segment !== "number" || segment >= start) continue;
+			const previous = ownValue(before, segment);
+			const current = ownValue(after, segment);
+			if (previous === MISSING || current === MISSING || child.valueDirty) {
+				diffValue(previous, current, [...path, segment], scan, out);
+			} else if (isObj(previous) && isObj(current)) {
+				walkDirty(previous as JsonValue, current as JsonValue, child, [...path, segment], scan, out);
+			} else {
+				diffValue(previous, current, [...path, segment], scan, out);
+			}
+		}
+		const items = after.slice(start);
+		if (items.length > 0) out.push(["p", [...path], start, 0, cloneJson(items)]);
+		return;
+	}
+	for (const [segment, child] of node.children) {
+		const previous = ownValue(before, segment);
+		const current = ownValue(after, segment);
+		if (previous === MISSING || current === MISSING || child.valueDirty) {
+			diffValue(previous, current, [...path, segment], scan, out);
+			continue;
+		}
+		if (!isObj(previous) || !isObj(current)) {
+			diffValue(previous, current, [...path, segment], scan, out);
+			continue;
+		}
+		walkDirty(previous as JsonValue, current as JsonValue, child, [...path, segment], scan, out);
+	}
+};
+
+const cloneOp = (op: Op): Op => {
+	switch (op[0]) {
+		case "r":
+			return ["r", cloneJson(op[1])];
+		case "s":
+			return ["s", op[1], cloneJson(op[2])];
+		case "p":
+			return ["p", op[1], op[2], op[3], cloneJson(op[4])];
+		default:
+			return op;
+	}
+};
 
 export function track<T extends object>(root: T, options: TrackerOptions = {}): Tracker<T> {
 	validateJsonValue(root);
 	const scan = options.maxOverlapScan ?? 65_536;
-	const doCoalesce = options.coalesce ?? true;
+	let pending = dirtyNode();
+	let hasPending = false;
+	let baseline: JsonValue | undefined;
+	let forceBase = true;
 
-	let ops: Op[] = [];
-
-	const emit = (op: Op) => {
-		ops.push(op);
+	const clearPending = (): void => {
+		pending = dirtyNode();
+		hasPending = false;
 	};
 
-	/**
-	 * Reject reserved keys at record time, not just on apply.
-	 *
-	 * `JSON.parse('{"__proto__":{}}')` yields an OWN property, so a producer can
-	 * hold state containing one without doing anything unusual. The tracker would
-	 * then emit a path the applier refuses — state that cannot be replicated. Fail
-	 * where the mistake is, at the write.
-	 */
-	const guard = (seg: Seg | symbol): Seg => {
-		if (typeof seg === "symbol") throw new UnsafePathError(String(seg));
-		if (typeof seg === "string" && RESERVED_SEGMENTS.has(seg)) throw new UnsafePathError(seg);
-		return seg;
+	const ensureNode = (path: Path): DirtyNode | undefined => {
+		hasPending = true;
+		let node = pending;
+		for (const segment of path) {
+			if (node.valueDirty || node.array?.kind === "diff" || node.array?.kind === "replace") return undefined;
+			let child = node.children.get(segment);
+			if (child === undefined) child = dirtyNode();
+			else node.children.delete(segment);
+			node.children.set(segment, child);
+			node = child;
+		}
+		return node;
 	};
 
-	/**
-	 * A splice covering the whole target is a replacement written the long way.
-	 * Only the interception knows the pre-splice length, so this is a record-time
-	 * rewrite, not something flush can recover.
-	 */
-	const spliceOrReplace = (path: Path, before: number, index: number, remove: number, items: JsonValue[]) => {
-		if (index === 0 && remove === before) {
-			if (path.length === 0) emit(["r", items]);
-			else emit(["s", path as NonEmptyPath, items]);
+	const findNode = (path: Path): DirtyNode | undefined => {
+		let node = pending;
+		for (const segment of path) {
+			const child = node.children.get(segment);
+			if (child === undefined) return undefined;
+			node = child;
+		}
+		return node;
+	};
+
+	const markValue = (path: Path): void => {
+		const node = ensureNode(path);
+		if (node === undefined) return;
+		node.valueDirty = true;
+		node.array = undefined;
+		node.children.clear();
+	};
+
+	const markArrayAppend = (path: Path, start: number): void => {
+		const node = ensureNode(path);
+		if (node === undefined || node.valueDirty || node.array?.kind === "diff" || node.array?.kind === "replace") {
 			return;
 		}
-		emit(["p", [...path], index, remove, items]);
+		if (node.array === undefined) node.array = { kind: "append", start };
+	};
+
+	const markArrayDiff = (path: Path): void => {
+		const node = ensureNode(path);
+		if (node === undefined || node.valueDirty || node.array?.kind === "replace") return;
+		node.array = { kind: "diff" };
+		node.children.clear();
+	};
+
+	const markArrayReplace = (path: Path): void => {
+		const node = ensureNode(path);
+		if (node === undefined || node.valueDirty) return;
+		node.array = { kind: "replace" };
+		node.children.clear();
+	};
+
+	const appendStart = (path: Path): number | undefined => {
+		const array = findNode(path)?.array;
+		return array?.kind === "append" ? array.start : undefined;
+	};
+
+	const guard = (segment: Seg | symbol): Seg => {
+		if (typeof segment === "symbol") throw new UnsafePathError(String(segment));
+		if (typeof segment === "string" && RESERVED_SEGMENTS.has(segment)) throw new UnsafePathError(segment);
+		return segment;
 	};
 
 	const assertNoTrackedProxy = (value: unknown, seen = new Set<object>()): void => {
 		if (!isObj(value) || seen.has(value)) return;
-		if (TRACKED_PROXIES.has(value)) throw new TypeError("tracked proxies cannot be assigned as values");
+		if (TRACKED_PROXIES.has(value)) {
+			throw new TypeError(
+				"value contains tracked state; build replacements from plain data, not from state proxies",
+			);
+		}
 		seen.add(value);
-		for (const child of Array.isArray(value) ? value : Object.values(value)) assertNoTrackedProxy(child, seen);
+		for (const key of Reflect.ownKeys(value)) {
+			const descriptor = Object.getOwnPropertyDescriptor(value, key);
+			if (descriptor !== undefined && "value" in descriptor) assertNoTrackedProxy(descriptor.value, seen);
+		}
 	};
 
-	const wrap = <V extends object>(obj: V, path: Path): V => {
+	const adoptItems = (values: readonly unknown[]): JsonValue[] => {
+		assertNoTrackedProxy(values);
+		assertJsonValue(values);
+		return values as JsonValue[];
+	};
+
+	const integer = (value: unknown): number => {
+		const number = Number(value);
+		if (Number.isNaN(number) || number === 0) return 0;
+		return Number.isFinite(number) ? Math.trunc(number) : number;
+	};
+
+	const spliceRange = (length: number, args: readonly unknown[]): { index: number; remove: number } => {
+		const rawStart = args.length === 0 ? 0 : integer(args[0]);
+		const index = rawStart < 0 ? Math.max(0, length + rawStart) : Math.min(rawStart, length);
+		const remove =
+			args.length === 0
+				? 0
+				: args.length === 1
+					? length - index
+					: Math.max(0, Math.min(integer(args[1]), length - index));
+		return { index, remove };
+	};
+
+	const wrap = <V extends object>(object: V, path: Path, blockedSegment?: Seg): V => {
 		const childProxies = new Map<string | symbol, { target: object; proxy: object }>();
-		const proxy = new Proxy(obj, {
-			get(t, k, r) {
-				if (Array.isArray(t) && typeof k === "string" && MUTATORS.has(k)) {
+		const proxy = new Proxy(object, {
+			get(target, key, receiver) {
+				if (Array.isArray(target) && typeof key === "string" && MUTATORS.has(key)) {
 					return (...args: unknown[]) => {
-						const before = t.length;
-						const cloneItems = (values: readonly unknown[]): JsonValue[] => {
-							for (const value of values) {
-								assertNoTrackedProxy(value);
-								assertJsonValue(value);
-							}
-							return values.map((value) => cloneJson(value as JsonValue));
-						};
+						if (blockedSegment !== undefined) throw new UnsafePathError(blockedSegment);
+						const before = target.length;
 						let result: unknown;
-						switch (k) {
+						switch (key) {
 							case "push": {
-								const items = cloneItems(args);
-								result = Reflect.apply(Array.prototype.push, t, items);
-								spliceOrReplace(path, before, before, 0, cloneJson(items));
+								const items = adoptItems(args);
+								if (items.length > 0) markArrayAppend(path, before);
+								spliceItems(target, before, 0, items);
+								result = target.length;
 								break;
 							}
 							case "unshift": {
-								const items = cloneItems(args);
-								result = Reflect.apply(Array.prototype.unshift, t, items);
-								spliceOrReplace(path, before, 0, 0, cloneJson(items));
+								const items = adoptItems(args);
+								if (items.length > 0) markArrayDiff(path);
+								spliceItems(target, 0, 0, items);
+								result = target.length;
 								break;
 							}
 							case "pop":
-								result = Reflect.apply(Array.prototype.pop, t, args);
-								if (before > 0) spliceOrReplace(path, before, before - 1, 1, []);
+								if (before > 0) {
+									const start = appendStart(path);
+									if (start === undefined || before - 1 < start) markArrayDiff(path);
+								}
+								result = Reflect.apply(Array.prototype.pop, target, args);
 								break;
 							case "shift":
-								result = Reflect.apply(Array.prototype.shift, t, args);
-								if (before > 0) spliceOrReplace(path, before, 0, 1, []);
+								if (before > 0) markArrayDiff(path);
+								result = Reflect.apply(Array.prototype.shift, target, args);
 								break;
 							case "splice": {
-								const items = cloneItems(args.slice(2));
-								const rawStart = args.length === 0 ? 0 : toIntegerOrInfinity(args[0]);
-								const index = rawStart < 0 ? Math.max(0, before + rawStart) : Math.min(rawStart, before);
-								const remove =
-									args.length === 0
-										? 0
-										: args.length === 1
-											? before - index
-											: Math.max(0, Math.min(toIntegerOrInfinity(args[1]), before - index));
-								result = Reflect.apply(Array.prototype.splice, t, [index, remove, ...items]);
-								spliceOrReplace(path, before, index, remove, cloneJson(items));
+								const items = adoptItems(args.slice(2));
+								const { index, remove } = spliceRange(before, args);
+								if (remove > 0 || items.length > 0) {
+									const start = appendStart(path);
+									if (index === 0 && remove === before) markArrayReplace(path);
+									else if (start !== undefined && index >= start) {
+										// The final append payload includes all tail edits.
+									} else if (index === before && remove === 0) markArrayAppend(path, before);
+									else markArrayDiff(path);
+								}
+								result = spliceItems(target, index, remove, items);
 								break;
 							}
-							// sort/reverse/fill/copyWithin permute wholesale; intent is not a splice.
 							default: {
 								let methodArgs = args;
 								let fillValue: JsonValue | undefined;
-								if (k === "fill") {
+								if (key === "fill") {
 									assertNoTrackedProxy(args[0]);
 									assertJsonValue(args[0]);
 									fillValue = cloneJson(args[0]);
 									methodArgs = [fillValue, ...args.slice(1)];
 								}
-								result = Reflect.apply(Array.prototype[k as "sort"], t, methodArgs);
+								markArrayDiff(path);
+								result = Reflect.apply(Array.prototype[key as "sort"], target, methodArgs);
 								if (isObj(fillValue)) {
-									for (let index = 0; index < t.length; index++) {
-										if (t[index] === fillValue) t[index] = cloneJson(fillValue as JsonValue);
+									for (let index = 0; index < target.length; index++) {
+										if (target[index] === fillValue) target[index] = cloneJson(fillValue as JsonValue);
 									}
-								} else if (k === "copyWithin") {
-									for (let index = 0; index < t.length; index++) {
-										if (isObj(t[index])) t[index] = cloneJson(t[index] as JsonValue);
+								} else if (key === "copyWithin") {
+									for (let index = 0; index < target.length; index++) {
+										if (isObj(target[index])) target[index] = cloneJson(target[index] as JsonValue);
 									}
 								}
-								assertJsonValue(t);
-								if (path.length === 0) emit(["r", cloneJson(t as JsonValue)]);
-								else emit(["s", path as NonEmptyPath, cloneJson(t as JsonValue)]);
+								assertJsonValue(target);
 							}
 						}
-						if (k === "pop") childProxies.delete(String(before - 1));
-						else if (k !== "push") childProxies.clear();
-						return k === "sort" || k === "reverse" || k === "fill" || k === "copyWithin" ? proxy : result;
+						if (key === "pop") childProxies.delete(String(before - 1));
+						else if (key !== "push") childProxies.clear();
+						return key === "sort" || key === "reverse" || key === "fill" || key === "copyWithin" ? proxy : result;
 					};
 				}
-				const value = Reflect.get(t, k, r);
+				const value = Reflect.get(target, key, receiver);
 				if (!isObj(value)) return value;
-				const cached = childProxies.get(k);
+				const cached = childProxies.get(key);
 				if (cached?.target === value) return cached.proxy;
-				const child = wrap(value, [...path, guard(norm(t, k))]);
-				childProxies.set(k, { target: value, proxy: child });
+				const rawSegment = norm(target, key);
+				let segment: Seg;
+				let childBlocked = blockedSegment;
+				if (blockedSegment !== undefined) {
+					if (typeof rawSegment === "symbol") throw new UnsafePathError(String(rawSegment));
+					segment = rawSegment;
+				} else if (
+					typeof rawSegment === "string" &&
+					RESERVED_SEGMENTS.has(rawSegment) &&
+					Object.hasOwn(target, key)
+				) {
+					segment = rawSegment;
+					childBlocked = rawSegment;
+				} else segment = guard(rawSegment);
+				const child = wrap(value, [...path, segment], childBlocked);
+				childProxies.set(key, { target: value, proxy: child });
 				return child;
 			},
 
-			set(t, k, v, r) {
-				// `length` is a real mutation but not a document location.
-				if (Array.isArray(t) && k === "length") {
-					const before = t.length;
-					const next = Number(v);
-					if (!Number.isSafeInteger(next) || next < 0 || next > 4_294_967_295) return Reflect.set(t, k, v, r);
+			set(target, key, value) {
+				if (blockedSegment !== undefined) throw new UnsafePathError(blockedSegment);
+				if (Array.isArray(target) && key === "length") {
+					const before = target.length;
+					const next = Number(value);
+					if (!Number.isSafeInteger(next) || next < 0 || next > 4_294_967_295) {
+						return Reflect.set(target, key, value);
+					}
 					if (next < before) {
-						Reflect.set(t, k, next, r);
+						const start = appendStart(path);
+						if (next === 0) markArrayReplace(path);
+						else if (start === undefined || next < start) markArrayDiff(path);
+						Reflect.set(target, key, next);
 						childProxies.clear();
-						spliceOrReplace(path, before, next, before - next, []);
 					} else if (next > before) {
-						const items = Array<JsonValue>(next - before).fill(null);
-						t.length = next;
-						t.fill(null, before);
-						emit(["p", [...path], before, 0, items]);
+						markArrayAppend(path, before);
+						target.length = next;
+						target.fill(null, before);
 					}
 					return true;
 				}
 
-				const segment = guard(norm(t, k));
-				if (Array.isArray(t)) {
+				const segment = guard(norm(target, key));
+				if (Array.isArray(target)) {
 					if (typeof segment !== "number") throw new UnsafePathError(segment);
-					if (segment > t.length) throw new UnsafePathError(segment);
+					if (segment > target.length) throw new UnsafePathError(segment);
 				}
 				const at = [...path, segment] as unknown as NonEmptyPath;
 
-				if (v === undefined) {
-					// JSON has no undefined, and deleting an array element would create a hole.
-					if (Array.isArray(t)) throw new TypeError("undefined would create a sparse array; use splice instead");
-					emit(["d", at]);
-					childProxies.delete(k);
-					return Reflect.deleteProperty(t, k);
+				if (value === undefined) {
+					if (Array.isArray(target)) {
+						throw new TypeError("undefined would create a sparse array; use splice instead");
+					}
+					markValue(at);
+					childProxies.delete(key);
+					return Reflect.deleteProperty(target, key);
 				}
 
-				const prev = (t as Record<string | symbol, unknown>)[k];
-				if (typeof prev === "string" && typeof v === "string") {
-					if (prev === v) return true;
-					if (v.length > prev.length && v.startsWith(prev)) {
-						emit(["a", at, v.slice(prev.length)]); // fast path, no probe
-					} else {
-						const ov = overlap(prev, v, scan);
-						if (ov === 0) emit(["s", at, v]);
-						else {
-							emit(["t", at, prev.length - ov]);
-							if (v.length > ov) emit(["a", at, v.slice(ov)]);
-						}
+				const previous = (target as Record<string | symbol, unknown>)[key];
+				if (previous === value) return true;
+				const cached = childProxies.get(key);
+				if (cached !== undefined && cached.target === previous && cached.proxy === value) return true;
+				assertNoTrackedProxy(value);
+				assertJsonValue(value);
+				if (Array.isArray(target)) {
+					const index = segment as number;
+					if (index === target.length) markArrayAppend(path, target.length);
+					else {
+						const start = appendStart(path);
+						if (start === undefined || index < start) markValue(at);
 					}
-				} else {
-					assertNoTrackedProxy(v);
-					assertJsonValue(v);
-					const stored = cloneJson(v);
-					emit(["s", at, cloneJson(stored)]);
-					childProxies.delete(k);
-					return Reflect.set(t, k, stored, r);
-				}
-				childProxies.delete(k);
-				return Reflect.set(t, k, v, r);
+				} else markValue(at);
+				childProxies.delete(key);
+				return Reflect.set(target, key, value);
 			},
 
-			deleteProperty(t, k) {
-				const segment = guard(norm(t, k));
-				if (Array.isArray(t)) {
+			deleteProperty(target, key) {
+				if (blockedSegment !== undefined) throw new UnsafePathError(blockedSegment);
+				const segment = guard(norm(target, key));
+				if (Array.isArray(target)) {
 					if (typeof segment !== "number") throw new UnsafePathError(segment);
 					throw new TypeError("delete would create a sparse array; use splice instead");
 				}
-				emit(["d", [...path, segment] as unknown as NonEmptyPath]);
-				childProxies.delete(k);
-				return Reflect.deleteProperty(t, k);
+				markValue([...path, segment]);
+				childProxies.delete(key);
+				return Reflect.deleteProperty(target, key);
+			},
+
+			defineProperty() {
+				throw new TypeError("defineProperty is not supported on tracked state; use assignment");
+			},
+			setPrototypeOf() {
+				throw new TypeError("setPrototypeOf is not supported on tracked state");
+			},
+			preventExtensions() {
+				throw new TypeError("preventExtensions is not supported on tracked state");
 			},
 		});
 
@@ -381,193 +670,53 @@ export function track<T extends object>(root: T, options: TrackerOptions = {}): 
 	};
 
 	let state = wrap(root, []);
-	// The first flush is always a base batch. A consumer starts with nothing, so
-	// a stream that opens with deltas has nothing to apply them to — and that
-	// fails at runtime, in the consumer, rather than where the mistake is.
-	let forceBase = true;
 
 	return {
 		get state() {
 			return state;
 		},
-		// A setter, so the obvious thing works. Without it `tracker.state = next`
-		// silently swaps the proxy for a plain object and stops tracking.
 		set state(next: T) {
 			if (next === state) {
-				ops = [];
+				clearPending();
 				forceBase = true;
 				return;
 			}
-			if (TRACKED_PROXIES.has(next)) throw new TypeError("tracker state cannot be replaced with a tracked proxy");
+			if (TRACKED_PROXIES.has(next)) throw new TypeError("tracker state cannot be replaced with tracked state");
+			assertNoTrackedProxy(next);
 			validateJsonValue(next);
-			ops = [];
+			clearPending();
 			root = next;
 			state = wrap(root, []);
+			baseline = undefined;
 			forceBase = true;
 		},
-		get target() {
-			return root;
-		},
-
-		// Same effect as assigning the current value back, minus the re-wrap: the
-		// value has not changed, so the proxy cache is still valid.
 		rebase() {
-			ops = [];
+			clearPending();
 			forceBase = true;
 		},
-
 		get dirty() {
-			return forceBase || ops.length > 0;
+			return forceBase || hasPending;
 		},
 		discard() {
-			ops = [];
+			baseline = cloneJson(root as unknown as JsonValue);
+			clearPending();
 		},
 		flush() {
 			if (forceBase) {
+				const value = cloneJson(root as unknown as JsonValue);
+				baseline = cloneJson(root as unknown as JsonValue);
 				forceBase = false;
-				ops = [];
-				return [["r", cloneJson(root as unknown as JsonValue)]];
+				clearPending();
+				return [["r", value]];
 			}
-			if (ops.length === 0) return [];
-			let out = ops;
-			ops = [];
-
-			// Everything before a replacement is dead.
-			let lastReplace = -1;
-			for (let index = out.length - 1; index >= 0; index--) {
-				if (!isReplace(out[index]!)) continue;
-				lastReplace = index;
-				break;
-			}
-			if (lastReplace > 0) out = out.slice(lastReplace);
-
-			out = dropDead(out);
-			return doCoalesce ? coalesce(out) : out;
+			if (!hasPending || baseline === undefined) return [];
+			const out: Op[] = [];
+			walkDirty(baseline, root as unknown as JsonValue, pending, [], scan, out);
+			clearPending();
+			if (out.length > 0) baseline = apply(baseline, out.map(cloneOp));
+			return out;
 		},
 	};
-}
-
-const samePath = (a: Op, b: Op): boolean => {
-	const left = pathOf(a);
-	const right = pathOf(b);
-	if (left === undefined || right === undefined || left.length !== right.length) return false;
-	for (let index = 0; index < left.length; index++) {
-		if (left[index] !== right[index]) return false;
-	}
-	return true;
-};
-
-function pathOf(op: Op): Path | undefined {
-	return op[0] === "r" ? undefined : op[1];
-}
-
-/**
- * Drop ops that a later op makes unreachable.
- *
- * Ops apply in order, so an op is dead if a later one overwrites the whole
- * subtree it lives in. Only `s`, `d` and `r` do that — `a`, `t` and `p` modify
- * what is already there, so they never dominate.
- *
- * O(n * d): walk backwards keeping a map of overwritten paths, and for each op
- * test its own prefixes against that map. `d` is the path depth, which is small
- * and bounded. The obvious formulation — compare each op against every
- * dominator — is O(n^2 * d) and degrades on exactly the wide-flush input this
- * pass exists to clean up. Measured: 12-14 microseconds per op, flat from 100 to
- * 5000 ops, and 10001 redundant writes collapse to 2 emitted ops.
- *
- * OBJECT KEY ORDER IS NOT PRESERVED. A producer that does
- * `set c; set a; delete c; set c` leaves `c` last, because deleting and
- * reinserting moves it. The replica receives only the surviving `set c`, applies
- * it to a base where `c` never existed, and `c` lands first. Values are
- * identical — verified over 1823 randomised sequences with zero value
- * mismatches — but the serialised forms can differ.
- *
- * This is fine because nothing compares a replica against its producer: the
- * consumer holds the state and nobody diffs it back. The one visible case is a
- * consumer that iterates keys for display, where two views could order rows
- * differently. It requires a delete-and-recreate of the same key within one
- * flush. Do not hash or content-address a replicated value.
- */
-function dropDead(ops: Op[]): Op[] {
-	type Overwrite = { kind: "s" | "d"; path: Path };
-	const overwritten = new Map<string, Overwrite>();
-	const kept: Op[] = [];
-	const rootKey = JSON.stringify([]);
-
-	for (let i = ops.length - 1; i >= 0; i--) {
-		const op = ops[i]!;
-		if (op[0] === "r") {
-			kept.push(op);
-			overwritten.clear();
-			overwritten.set(rootKey, { kind: "s", path: [] });
-			continue;
-		}
-
-		const path = opPath(op);
-		if (path === undefined) {
-			kept.push(op);
-			continue;
-		}
-
-		let dead = overwritten.has(rootKey);
-		for (let length = 1; length <= path.length && !dead; length++) {
-			const overwrite = overwritten.get(JSON.stringify(path.slice(0, length)));
-			if (overwrite === undefined) continue;
-			// A `d` at exactly a later `s`'s path is NOT dead. Dropping it leaves the
-			// key in its original slot, while the producer's delete-then-set moved it
-			// to the end: same value, different serialisation.
-			if (length === path.length && op[0] === "d" && overwrite.kind === "s") break;
-			dead = true;
-		}
-		if (dead) continue;
-
-		kept.push(op);
-		if (op[0] === "p") {
-			// A splice can reindex every descendant, so path equality below it cannot
-			// prove that a later overwrite dominates an earlier operation.
-			for (const [key, overwrite] of overwritten) {
-				if (
-					overwrite.path.length > path.length &&
-					path.every((segment, index) => overwrite.path[index] === segment)
-				) {
-					overwritten.delete(key);
-				}
-			}
-		} else if (op[0] === "s" || op[0] === "d") {
-			overwritten.set(JSON.stringify(path), { kind: op[0], path });
-		}
-	}
-	return kept.reverse();
-}
-
-/** Total, because `Op` paths are always inline. */
-function opPath(op: Op): Path | undefined {
-	return op[0] === "r" ? undefined : op[1];
-}
-
-/** Merge adjacent ops describing the same path. Lossless. */
-function coalesce(ops: Op[]): Op[] {
-	const out: Op[] = [];
-	for (const op of ops) {
-		const last = out[out.length - 1];
-		if (last !== undefined && samePath(last, op)) {
-			if (last[0] === "a" && op[0] === "a") {
-				out[out.length - 1] = ["a", last[1], `${last[2]}${op[2]}`];
-				continue;
-			}
-			if (last[0] === "s" && op[0] === "s") {
-				// later write wins
-				out[out.length - 1] = op;
-				continue;
-			}
-			if (last[0] === "s" && op[0] === "a" && typeof last[2] === "string") {
-				out[out.length - 1] = ["s", last[1], `${last[2]}${op[2]}`];
-				continue;
-			}
-		}
-		out.push(op);
-	}
-	return out;
 }
 
 // ─── Path safety ─────────────────────────────────────────────────────────────
@@ -613,18 +762,38 @@ export function assertJsonValue(value: unknown): asserts value is JsonValue {
 		if (type !== "object") throw new TypeError(`${type} is not a JsonValue`);
 		if (seen.has(candidate)) throw new TypeError("shared or cyclic object is not JSON state");
 		seen.add(candidate);
+		if (!Object.isExtensible(candidate)) throw new TypeError("non-extensible object is not mutable JSON state");
+		if (Object.getOwnPropertySymbols(candidate).length > 0) throw new TypeError("symbol keys are not JSON");
+
+		const visitProperty = (key: string): void => {
+			const descriptor = Object.getOwnPropertyDescriptor(candidate, key);
+			if (descriptor === undefined) throw new TypeError("sparse arrays are not JSON state");
+			if (!("value" in descriptor)) throw new TypeError("accessor properties are not JSON state");
+			if (!descriptor.enumerable || !descriptor.writable || !descriptor.configurable) {
+				throw new TypeError("JSON state properties must be enumerable, writable, and configurable");
+			}
+			visit(descriptor.value, seen);
+		};
+
 		if (Array.isArray(candidate)) {
-			for (const item of candidate) visit(item, seen);
-		} else {
-			const prototype = Object.getPrototypeOf(candidate);
-			if (prototype !== Object.prototype && prototype !== null) {
-				throw new TypeError("non-plain object is not a JsonValue");
+			if (Object.getOwnPropertyDescriptor(candidate, "length")?.writable !== true) {
+				throw new TypeError("array length must be writable");
 			}
-			if (Object.getOwnPropertySymbols(candidate).length > 0) {
-				throw new TypeError("symbol keys are not JSON");
+			for (const key of Object.getOwnPropertyNames(candidate)) {
+				if (key === "length") continue;
+				if (!INDEX.test(key) || Number(key) >= candidate.length) {
+					throw new TypeError("arrays cannot have non-index properties");
+				}
 			}
-			for (const item of Object.values(candidate as object)) visit(item, seen);
+			for (let index = 0; index < candidate.length; index++) visitProperty(String(index));
+			return;
 		}
+
+		const prototype = Object.getPrototypeOf(candidate);
+		if (prototype !== Object.prototype && prototype !== null) {
+			throw new TypeError("non-plain object is not a JsonValue");
+		}
+		for (const key of Object.getOwnPropertyNames(candidate)) visitProperty(key);
 	};
 	visit(value, new Set());
 }

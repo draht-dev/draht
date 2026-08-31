@@ -36,7 +36,8 @@
 	"sideEffects": false,
 	"files": [
 		"dist",
-		"README.md"
+		"README.md",
+		"src/delta/README.md"
 	],
 	"scripts": {
 		"clean": "shx rm -rf dist",

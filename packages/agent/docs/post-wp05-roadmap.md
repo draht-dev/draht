@@ -14,23 +14,22 @@ This audit covers the durable AgentHarness and its directly coupled Session back
 - `packages/coding-agent/src/experimental` and its focused tests where they host that path;
 - telemetry plumbing in `packages/telemetry`, `packages/ai`, and `packages/agent`.
 
-The inventory was checked against current source, tests, package READMEs, the complete `harness.md`, WP00–WP06 status, explicit stubs/TODOs/skips, and the shipped package boundaries. Historical handoffs are not treated as backlog when current source and the completed WP05 contract supersede them.
+The inventory was checked against current source, tests, package READMEs, the complete `harness.md`, completed WP00–WP07 status, the actionable WP08 handoff, explicit stubs/TODOs/skips, and the shipped package boundaries. Historical handoffs are not treated as backlog when current source and the completed WP05 contract supersede them.
 
 ## Executive result
 
 WP05 is complete through M10. M11 is its only recorded follow-up. The current Harness execution graph has no unfinished runtime path: `watchSession()` is the sole `SliceNotImplemented` Harness method.
 
-That does **not** mean the surrounding durable system is complete. The audit found:
+That does **not** mean the surrounding durable system is complete. The remaining audit findings are:
 
-1. SQLite storage-layer writer ownership that contradicts the server/Session-worker authority model, plus no explicit read-only path proving a server-side fork can snapshot a live worker-owned source;
-2. normative JSONL snapshot-compaction behavior with no implementation;
-3. one required Harness method stub (`watchSession`);
-4. a deliberate removal of raw `RemoteSession` that conflicts with later normative WP06/`harness.md` text;
-5. a public search type skeleton that conflicts with the newer search design and has no implementation;
-6. a full telemetry vocabulary whose only production span is the tool-hook span;
-7. smaller repository, client-watch, query-bound, documentation, and end-to-end-test gaps.
+1. normative JSONL snapshot-compaction behavior with no implementation;
+2. one required Harness method stub (`watchSession`);
+3. a deliberate removal of raw `RemoteSession` that conflicts with later normative WP06/`harness.md` text;
+4. a public search type skeleton that conflicts with the newer search design and has no implementation;
+5. a full telemetry vocabulary whose only production span is the tool-hook span;
+6. smaller repository, client-watch, query-bound, documentation, and end-to-end-test gaps.
 
-The immediate package is therefore SQLite host-ownership alignment and live-source fork support, not generic storage cleanup. Its handoff is [`work-packages/07-sqlite-host-ownership-live-forks.md`](work-packages/07-sqlite-host-ownership-live-forks.md).
+WP07 completed SQLite host-ownership alignment and live-source fork support after the audit baseline; its historical handoff is [`work-packages/07-sqlite-host-ownership-live-forks.md`](work-packages/07-sqlite-host-ownership-live-forks.md). WP08 now owns the separate named-branch, tree-state, and bounded-memory fork redesign; its actionable handoff is [`work-packages/08-named-branch-streaming-forks.md`](work-packages/08-named-branch-streaming-forks.md).
 
 ## Required missing functionality and contract contradictions
 
@@ -118,27 +117,19 @@ When activated, it must provide ordered transactional migrate-on-open under excl
 
 ## Correctness and data-safety debt
 
-### SQLite host ownership and live-source forks — immediate
+### SQLite host ownership and live-source forks — completed by WP07
 
 The authoritative product rule is in `plugins.md`: exactly one host-assigned process owns writable Session authority; normally it is the Session worker, while the server may temporarily own a newly created or forked destination before closing it and handing it off. Storage backends do not implement writer ownership. The server closes a worker before destructive repository administration.
 
-Current SQLite source contradicts that rule with a `writer_lease` table, claim/release calls, renewal timer, lease-loss admission path, and a pre-commit renewal callback. This duplicates host ownership without correctly fencing commits. Remove it rather than repair it; a second process directly opening the same Session for writes is an unsupported host defect, as with Memory and JSONL.
+SQLite now follows that rule: the writer-lease schema/module, claims, renewal timer, lease-loss path, and pre-commit callback are gone, with no replacement lock or ownership primitive. Create/open/fork/delete retain repository-local ID reservation. Metadata open and deletion use a true no-create read-write mode; listing and external fork sources use no-create read-only connections.
 
-Forking is the supported cross-process overlap: the server repository may snapshot a source while its worker continues writing. Keep the same-repository source queue for its admitted-commit ordering seam, but use an independent no-create, read-only connection and one deferred transaction for a source owned elsewhere. WAL must allow later worker commits while the fork sees one complete before-or-after transaction boundary. WP07 owns the lease removal, live-source fork path, repository-local deletion reservation, physical identity/path safety, and SQLite close draining. It does not add a replacement storage lock, lease, tombstone, or takeover protocol.
+Same-repository forks retain the source `commitQueue` ordering seam. A source owned elsewhere, including a live worker, is read from its exact canonical container through one independent read-only deferred WAL transaction. Focused per-file and shared-container tests commit a complete later source transaction after the reader establishes its snapshot and before it closes: the first fork excludes the transaction wholly and a later fork includes it wholly.
 
-### SQLite repository identity and path safety
-
-- `databasePath` creation makes `options.directory`, not the actual custom path’s parent.
-- Per-session filenames interpolate arbitrary explicit IDs without encoding; separators can escape `directory`.
-- Active fork lookup is keyed only by Session ID, so caller-supplied metadata for the same ID at another path can select the wrong open source.
-- `repo.close()` uses fail-fast `Promise.all`, so it can reject before other Session closes finish draining and release their connections.
-- Equal-`createdAt` list ordering has no deterministic tie-break.
-
-Path/identity/close items needed by the host-owned repository and live-fork path belong in WP07. Deterministic listing is a later behavior-preserving cleanup.
+WP07 also completed canonical `(containerPath, sessionId)` active identity, safe explicit-ID filenames, custom `databasePath` parent creation, Session-scoped shared deletion, WAL/SHM cleanup, and all-settled SQLite repository close. Writable open/delete reject foreign metadata; foreign fork sources are read only from their exact path. Equal-`createdAt` list ordering still has no deterministic tie-break and remains a later behavior-preserving cleanup.
 
 ### Repository close ownership is unspecified
 
-`JsonlSessionRepo.close()` contains the only active Agent source TODO and closes no open Session handles. Memory and SQLite repositories do close owned resources, but both currently use fail-fast `Promise.all`; `SessionRepo` itself declares no `close()` method and shared conformance does not define repository-to-handle ownership. Resolve ownership and all-settled cleanup in one repository-lifecycle package; WP07 may harden SQLite's backend-local resource cleanup, but do not patch JSONL alone without deciding the common contract.
+`JsonlSessionRepo.close()` contains the only active Agent source TODO and closes no open Session handles. Memory still uses fail-fast `Promise.all`; SQLite now performs backend-local all-settled cleanup of currently open handles, but an already-admitted create/open/fork can still register a handle after repository close captured that set. `SessionRepo` itself declares no `close()` method and shared conformance does not define repository-to-handle ownership or draining of admitted repository operations. Resolve ownership and common cleanup in one repository-lifecycle package; do not patch one backend further without deciding the common contract.
 
 ### Client watch staleness after disconnect
 
@@ -184,9 +175,9 @@ Candidate mechanisms remain design inputs, not approved architecture: coalesced 
 
 `createDivergentBranchForEntry()` copies every row after the newest compaction; with no compaction it copies root-through-parent. A first divergence from a long uncompacted transcript is therefore O(history) writes. This exposes an internal contradiction in `harness.md` §2.6: its opening bounded-prefix promise conflicts with its own compaction-based copy algorithm, which the implementation follows. Change both the specification and segment representation so a divergence can reference a covering segment at the parent boundary. Preserve shared-container support and add large uncompacted divergence plus chain-soundness tests/benchmarks.
 
-### SQLite fork cost
+### Fork contract and materialization — WP08 actionable
 
-Active and closed forks load every scalar value, including application values that are later excluded, and `createForkSnapshot()` repeatedly searches those arrays for branch/config/label state. Select only fork-relevant built-in namespaces, index once, and fetch labels only for copied entries. Measure large application-state forks before/after.
+All current backends materialize source-sized fork snapshots. Branch scope defaults to `main` without named-Branch ancestry validation; tree scope omits application values/lists; JSONL closed-source fork replay may repair its source. WP08 replaces that contract with required named-branch or tree scope, one closed built-in-state policy, complete current application state for tree forks, and backend-specific bounded-memory copy procedures. It preserves WP07's host ownership, physical identity, same-repository ordering, and independent live-source WAL boundary.
 
 ### SQLite catalog, statements, stats, and reclamation
 
@@ -217,7 +208,7 @@ Remaining cleanup:
 - Consolidate duplicated SQLite branch payload/structure scan plumbing only after correctness tests pin both paths.
 - Decide whether unused `sessions.metadata` and unmeasured indexes have a future owner before schema removal; do not change schema casually.
 - Consolidate `startAiSpan()`/`startHarnessSpan()` implementation only if the telemetry surface is retained.
-- Mark historical durability documents as delivered where they still read as implementation queues. WP00–WP06, `runtime-simplification.md`, `values.md`’s old consumer deferrals, and external-finalization designs are not active runtime backlog.
+- Mark historical durability documents as delivered where they still read as implementation queues. WP00–WP07, `runtime-simplification.md`, `values.md`’s old consumer deferrals, and external-finalization designs are not active runtime backlog.
 
 ## Optional or deferred product capabilities
 
@@ -238,15 +229,15 @@ These are not blockers for the durable Harness:
 
 The order is by data safety first, then dependencies. Independent tracks may proceed in parallel only when they do not edit the same contracts.
 
-1. **WP07 — SQLite host ownership and live forks.** Remove storage-layer writer leases; add no-create read-only snapshots of live worker-owned sources; preserve same-repository fork ordering; add repository-local deletion reservation, path/source identity, and close draining.
-2. **Harness contract/conformance closure.** Resolve `OperationStatus.running`, abort signal/event binding order, gate-close typing, and the Part 9 coverage matrix.
-3. **Remote Session decision (decision only).** Resolve the false normative boundary early. If process-local wins, repair the docs. If raw RemoteSession wins, later create a dedicated protocol/client/server/worker package; do not fold it into telemetry or R12.
-4. **Client watch/subscription staleness** and **repository lifecycle contract.** Small independent correctness packages; complete them before expanding server/worker lifecycle semantics. The lifecycle package must also address Memory's fail-fast repository close.
-5. **JSONL snapshot compaction.** Implement the already-normative physical reclamation path and metrics.
-6. **M11 durable frame volume.** Memory/SQLite measurement can start earlier; set final JSONL budgets only with compaction measured, and preserve all recovery boundaries.
-7. **R12 session-wide watch.** Complete the only Harness method stub before building revisioned Transcript/session-wide remote observation.
-8. **Telemetry, if retained:** reconcile schemas, then local instrumentation, then RPC propagation, then an optional exporter. RPC propagation follows the Remote Session/product-boundary decision.
-9. **SQLite branch/fork/query performance hardening.** Keep separate from WP07 ownership alignment and require benchmarks.
+1. **Harness contract/conformance closure.** Resolve `OperationStatus.running`, abort signal/event binding order, gate-close typing, and the Part 9 coverage matrix.
+2. **Remote Session decision (decision only).** Resolve the false normative boundary early. If process-local wins, repair the docs. If raw RemoteSession wins, later create a dedicated protocol/client/server/worker package; do not fold it into telemetry or R12.
+3. **Client watch/subscription staleness** and **repository lifecycle contract.** Small independent correctness packages; complete them before expanding server/worker lifecycle semantics. The lifecycle package must also address Memory's fail-fast repository close.
+4. **JSONL snapshot compaction.** Implement the already-normative physical reclamation path and metrics.
+5. **M11 durable frame volume.** Memory/SQLite measurement can start earlier; set final JSONL budgets only with compaction measured, and preserve all recovery boundaries.
+6. **R12 session-wide watch.** Complete the only Harness method stub before building revisioned Transcript/session-wide remote observation.
+7. **Telemetry, if retained:** reconcile schemas, then local instrumentation, then RPC propagation, then an optional exporter. RPC propagation follows the Remote Session/product-boundary decision.
+8. **WP08 — named-branch and streaming forks.** Implement the actionable handoff without reopening WP07 ownership or lifecycle decisions.
+9. **SQLite branch/query performance hardening.** Keep separate from completed WP07 ownership alignment and WP08 fork semantics; require benchmarks.
 10. **S3 search.** Resolve its API/filter/cursor decisions, then implement catch-up and the standalone FTS projection.
 11. **R11 migrations.** Activate immediately before the first incompatible stabilized durable schema change, not earlier.
 
@@ -260,4 +251,5 @@ This inventory must be updated when any of these facts changes:
 - telemetry schemas are implemented or removed;
 - S3’s public API is reconciled;
 - a durable format change activates R11;
-- SQLite storage-layer ownership is removed or the host-authority contract changes.
+- WP08 lands or its fork contract changes;
+- the host-authority contract changes.

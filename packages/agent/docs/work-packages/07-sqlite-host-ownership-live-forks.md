@@ -1,6 +1,8 @@
 # WP07 — SQLite host ownership and live-source forks
 
-**Status: actionable handoff; not implemented.**
+**Status: implemented.**
+
+The delivered backend has no writer lease or replacement ownership primitive. It provides no-create read-write/read-only opens, queued same-repository snapshots, independent read-only WAL snapshots for live external sources, canonical physical identity, path-safe IDs, repository-local deletion reservation, and all-settled close. The tests cover both per-file and shared-container layouts, including a writer commit completed after a read snapshot boundary but before that reader closes.
 
 This package aligns `packages/session-backends/sqlite-node` with the product ownership model: the server owns Session records and worker lifecycle, and exactly one host-assigned process owns writable Session authority at a time. Normally that process is the Session worker. The server may temporarily own a newly created or forked destination, but it closes that Session before handing its metadata to a worker.
 

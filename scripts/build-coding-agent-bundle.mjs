@@ -19,6 +19,7 @@ const allowedExternalPackages = new Set([
 	"@draht/chord",
 	"@draht/chord/bundler",
 	"@draht/chord/context",
+	"@draht/chord/delta",
 	"@draht/chord/node",
 	"@silvia-odwyer/photon-node",
 	// Loaded through the @mariozechner/jiti external rewrite below.

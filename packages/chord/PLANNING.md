@@ -404,7 +404,7 @@ Explicit non-goals:
 - automatic unchanged-value suppression; and
 - high-frequency stream transport.
 
-A later delta primitive requires a concrete feature and a separate snapshot/delta/gap-recovery design.
+Chord now exposes a standalone intent-preserving JSON delta primitive for durable output and other explicit consumers. Replicated service state still uses complete snapshots and ordered latest-value updates; adopting deltas there requires a separate snapshot/delta/gap-recovery design.
 
 ## 9. Symmetric RPC plumbing
 

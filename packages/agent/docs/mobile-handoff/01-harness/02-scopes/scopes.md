@@ -1,5 +1,7 @@
 # Session Storage: Scopes
 
+> **Status:** Design evidence. The actionable Step 1 contract is [`implementation-handoff.md`](implementation-handoff.md), which supersedes this document on sequence allocation, reusable scope IDs, retirement authority/records, sidecar layout, implementation order, and the separation of JSONL encoding into Step 2.
+>
 > **Scope:** `packages/agent/src/harness/session/`, plus the call sites in
 > `runtime/` listed in §10.
 >

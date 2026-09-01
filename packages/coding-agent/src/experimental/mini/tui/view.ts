@@ -531,9 +531,8 @@ export async function runView(client: AttachedSession): Promise<void> {
 			void (busy ? client.lane.steer(trimmed) : client.lane.prompt(trimmed)).then(report);
 		},
 		queueFollowUp: (text) => void client.lane.followUp(text).then(report),
-		interrupt: () => {
-			if (client.state().lane.operation !== null) void client.lane.abort().then(report);
-		},
+		// The worker is authoritative. Never suppress abort from a potentially stale presentation snapshot.
+		interrupt: () => void client.lane.abort().then(report),
 		exit,
 		selectModel: () => selectModel(),
 	});

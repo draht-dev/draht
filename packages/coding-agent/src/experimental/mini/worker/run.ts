@@ -63,7 +63,7 @@ export async function runSessionWorker(options: {
 	const executionEnv = new NodeExecutionEnv({ cwd });
 	const repo = new JsonlSessionRepo({ fileSystem: executionEnv, sessionsRoot: options.sessionsRoot });
 	const session = await openSession(repo, options.sessionId, cwd, context);
-	const { harness } = await AgentHarness.create(
+	const { harness, open } = await AgentHarness.create(
 		{
 			session,
 			models: modelRuntime,
@@ -92,9 +92,22 @@ export async function runSessionWorker(options: {
 	peer.provide(Models, models);
 	peer.provide(Worker, { describe: async () => ({ sessionId: session.metadata.id }) });
 
+	// Creation restores durable operation state without starting effects. Once services are reachable,
+	// install a new process-local drive for every operation left open by the previous worker.
+	const recoveries = open.map(async (operation) => {
+		try {
+			const restoredLane = operation.lane === lane.name ? lane : await harness.lane(operation.lane, context);
+			const result = await restoredLane.resume(context);
+			if (!result.ok) throw result.error;
+		} catch (error) {
+			console.error(`Failed to resume ${operation.lane}/${operation.operationId}:`, error);
+		}
+	});
+
 	await new Promise<void>((resolve) => connection.onClose(resolve));
 	laneService.close();
 	await harness.close(context).catch(() => {});
+	await Promise.all(recoveries);
 	await repo.close(context).catch(() => {});
 	await executionEnv.cleanup(context).catch(() => {});
 }

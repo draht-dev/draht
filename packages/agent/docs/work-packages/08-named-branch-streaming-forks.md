@@ -1,6 +1,6 @@
 # WP08 — Named-branch and tree forks with streaming copies
 
-**Status: actionable handoff, not implemented.**
+**Status: in progress — implementing Slice A.**
 
 This package replaces the fork contract: `ForkOptions` gains a mandatory scope and a mandatory named source branch, branch forks validate a complete configured source AgentLane and ancestry membership, tree forks copy the complete immutable tree plus current application values/lists, and all three backends replace materialized source snapshot arrays with bounded-memory streaming copies. A JSONL fork never repairs or mutates its source. One closed core classifier owns every namespace's fork disposition.
 

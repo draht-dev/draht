@@ -32,24 +32,10 @@ interface ToolOutput<TDetails extends JsonValue> {
   write(text: string): void;
   /** Append an image block. Images are never windowed. */
   image(image: ImageContent): void;
-  /**
-   * Replace the retained text wholesale.
-   *
-   * For output originating in the exec env, which emits `chunk` below the cap and
-   * `snapshot` once the window starts evicting (`executionenv.md` §4). An append
-   * cannot express eviction, so a snapshot has to assign. The tracker still
-   * recovers `t` + `a` from the assignment by verified overlap, so this is not a
-   * whole-value replacement on the wire.
-   */
+  /** Replace the retained text wholesale. Chord still recovers a verified `t` + `a` slide when possible. */
   replace(text: string): void;
-  /**
-   * Record totals when the text itself did not change — `head` mode past the cap,
-   * where output keeps arriving but the retained view is frozen
-   * (`executionenv.md` §4). Without this a renderer cannot report how much was
-   * suppressed, and resending the capped text to move a counter is what
-   * `counters` exists to avoid.
-   */
-  counters(truncation: TruncationResult): void;
+  /** Apply source-owned truncation totals and spill metadata without resending text. */
+  capture(metadata: ShellOutputMetadata): void;
 
   /** The tool's own details object. Mutate it directly. */
   readonly details: TDetails;
@@ -175,8 +161,8 @@ Head+tail is **not** offered. `truncate.ts` exports `truncateHead` and
 ### 3.2 The tool does not truncate — the exec env does
 
 For output originating in the execution environment, capping, coalescing and
-spilling happen **at the source**. See `executionenv.md`. The tool passes its
-`OutputLimits` into `env.exec` and pipes the resulting updates into the sink.
+spilling happen **at the source**. See [`execenv.md`](../03-execenv/execenv.md). The tool passes its
+`ShellOutputLimits` into `env.exec` and pipes the resulting updates into the sink.
 
 This is not a convenience. Reading a 1 GB file on a sandbox host must not ship
 1 GB to the agent machine to be capped there, and the spill file must land where
@@ -201,7 +187,7 @@ interface ToolOutputState {
   usage?: Usage;
   addedTools?: string[];
   terminate: boolean;
-  truncation: TruncationResult;   // totals over everything ever written
+  truncation: ShellOutputTruncation;   // totals over everything ever written, without duplicate text
 }
 ```
 
@@ -353,10 +339,7 @@ writes: [appendList(address, wire, isBase(ops) ? "base" : undefined)];
 
 The landed tracker emits structural ops unconditionally. There is no serialized-size comparison or adaptive replacement heuristic. A producer requests a base batch explicitly with `rebase()`; the output sink's cap bounds that replacement, while periodic rebasing bounds recovery work. Production remeasurement rejects a text-specific append/truncate API: the generic path measured 2.43–2.46 µs per 50 KB rolling-window flush locally, below surrounding costs. Keep ordinary tracked string mutation; see the [decision record](../01-delta/append-decision.md).
 
-**Checkpointing is not deleted.** An earlier draft called for removing
-`BASH_CHECKPOINT_INTERVAL_MS`; that was wrong. Checkpoint frequency is the knob
-trading durable write volume against how much a crash loses, and it belongs in
-the exec env's capture policy now rather than in bash.
+**Checkpointing is not deleted.** `BASH_CHECKPOINT_INTERVAL_MS` remains only as an interim compatibility mechanism. The generic sink owns durable frequency because Shell cannot price a storage write or enforce memo/output atomicity. Forced memo, terminal, and recovery-base writes bypass ordinary pacing while remaining cap-bounded.
 
 ### 7.4 Replay must seed, not discard
 
@@ -467,7 +450,7 @@ no facet present.
   them in a loop grows `content` without limit. Currently treated as a tool bug.
 - Whether details need a bound for the same reason (§2.1).
 - Whether `retain: "head"` should keep emitting counter-only updates once capped
-  so a renderer can report how much was suppressed. `executionenv.md` answers this
+  so a renderer can report how much was suppressed. [`execenv.md`](../03-execenv/execenv.md) answers this
   for exec-originated output; agent-side output needs the same answer.
 - Whether a failing tool *should* be able to terminate, or whether the current
   inability is deliberate — there is a reasonable argument the model should

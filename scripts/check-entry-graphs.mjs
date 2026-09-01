@@ -37,7 +37,7 @@ const BUDGETS = {
 	"packages/agent": {
 		"./harness/runtime/reducer": { maxFiles: 1 },
 		"./harness/context": { maxFiles: 6, forbid: ["harness/runtime/", "harness/execution/", "packages/ai/"] },
-		"./harness/env/nodejs": { maxFiles: 3, forbid: ["packages/ai/", "harness/runtime/"] },
+		"./harness/env/nodejs": { maxFiles: 5, forbid: ["packages/ai/", "harness/runtime/"] },
 		"./harness/session": { maxFiles: 25, forbid: ["harness/runtime/", "harness/execution/", "packages/ai/src/index.ts"] },
 	},
 };

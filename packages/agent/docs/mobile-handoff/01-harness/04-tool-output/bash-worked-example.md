@@ -13,7 +13,7 @@ state → facet → wire → consumer.
 
 ```ts
 // packages/agent/src/harness/tools/bash.ts
-export interface BashToolDetails { spillPath?: string }
+export interface BashToolDetails { spillPath?: string; truncation?: ShellOutputTruncation }
 
 export function createBashTool(): AgentHarnessTool<ExecutionToolContext, typeof bashSchema, BashToolDetails> {
   return {
@@ -23,21 +23,24 @@ export function createBashTool(): AgentHarnessTool<ExecutionToolContext, typeof 
 
     async execute(_id, { command, timeout }, signal, out, context) {
       const env = context.env;
+      let view: ShellOutputView | undefined;
 
       const result = getOrThrow(await env.exec(command, {
         cwd: env.cwd,
         inheritEnv: true,
         timeout,
-        capture: { limits: this.output, intervalMs: 500, spill: true },
+        capture: { limits: this.output, spill: true },
         onUpdate: (u) => {
-          if (u.kind === "chunk")    out.write(u.text);
-          if (u.kind === "snapshot") out.replace(u.output.text);
-          // counters: nothing to do, truncation totals ride the snapshot
+          view = applyShellOutputUpdate(view, u);
+          if (u.kind === "append") out.write(u.text);
+          else out.replace(view.text);
+          out.details.truncation = view.truncation;
+          if (view.spillPath) out.details.spillPath = view.spillPath;
         },
       }, context));
 
-      if (result.output.spillPath) out.details.spillPath = result.output.spillPath;
-      if (result.output.truncation.truncated) out.write(`\n\n[${describe(result.output.truncation)}]`);
+      if (result.spillPath) out.details.spillPath = result.spillPath;
+      if (result.truncation.truncated) out.write(`\n\n[${describe(result.truncation)}]`);
       if (result.exitCode) throw new Error(`Command exited with code ${result.exitCode}`);
     },
   };
@@ -57,14 +60,11 @@ longer knows what was dropped.
 
 ## 2. The exec env caps at the source
 
-`env.exec` applies `OutputLimits` where the bytes originate. For a sandbox host
+`env.exec` applies `ShellOutputLimits` where the bytes originate. For a sandbox host
 that means `cat 1gb.txt` never ships 1 GB to the agent machine, and the spill
-lands where the model's own `read` and `grep` run. See `executionenv.md`.
+lands where the model's own `read` and `grep` run. See [`execenv.md`](../03-execenv/execenv.md).
 
-Under the cap it emits `chunk`. Once the window starts evicting it emits
-`snapshot`, because an append cannot express "and 20 bytes fell off the front".
-For `retain: "tail"` there is no cheap-trickle regime past the cap — every byte
-in evicts a byte out — so it is chunks until full, snapshots thereafter.
+The initial state is a bounded `replace`. Growth emits `append`; a moving tail emits `slide { drop, text }`; complete turnover falls back to a bounded `replace`; metadata moves totals and spill paths without resending text. The adaptive publisher keeps small slides responsive and spaces cap-sized turnovers according to their encoded size.
 
 ## 3. The sink
 
@@ -135,7 +135,7 @@ persisting in the main log forever. Retirement is a main-log `retireScope` recor
 so it commits atomically with the settle writes; the unlink is a consequence of
 replaying that record, not part of the transaction ([scopes.md §5](../02-scopes/scopes.md)).
 
-A `list<WireOp[]>`, one encoded batch appended per flush, base batches tagged `"base"` so recovery reads backwards with `stopAtTag` and stops there ([scopes.md §11](../02-scopes/scopes.md#11-list-tags-and-stop-conditions)). The tracker emits structural ops; the producer calls `rebase()` periodically to write a capped root replacement and bound recovery replay. The write interval is the crash-loss knob and lives in the capture policy.
+A `list<WireOp[]>`, one encoded batch appended per flush, base batches tagged `"base"` so recovery reads backwards with `stopAtTag` and stops there ([scopes.md §11](../02-scopes/scopes.md#11-list-tags-and-stop-conditions)). The tracker emits structural ops; the producer calls `rebase()` periodically to write a capped root replacement and bound recovery replay. The durable interval is a sink policy. Shell capture controls only source-state and transport publication; memo, terminal, and recovery-base flushes are forced by `ToolOutput`.
 
 Recovery seeds a fresh `ToolOutput` from that state — it does **not** delete it,
 which is what `clearReplayCheckpoint` does today and is a bug

@@ -1,250 +1,125 @@
-# 04-tool-output: update cadence and rate limiting
+# Bounded output publication
 
-**Status: design, not implementation.** This unit is not built. What follows is
-the problem, what three other agents do about it, and a candidate solution with
-its measured behaviour and its known holes.
+**Status:** the shared adaptive publisher and its `ExecutionEnv` use are implemented. Generic `ToolOutput` integration remains design work.
 
-Depends on `01-delta` (the op vocabulary), `02-scopes` (the durable list), and
-`03-execenv` (where bytes originate).
+Depends on landed Chord delta tracking, source-bounded execution output, and scoped storage for durable batches.
 
----
+## 1. Invariant
 
-## 1. The invariant this unit exists to hold
+> The durable record, what the model sees, and what the UI shows are the same bounded view.
 
-> **The durable record, what the model sees, and what the UI shows are always the
-> same view.**
+A spill file is not a second view. It is a file inside the execution environment that the model reaches through ordinary file tools.
 
-Not a simplification — a commitment. If the UI shows output the model never
-received, a user reads it, forms a belief about what the model knows, and is
-wrong. Showing less is better than showing something different.
+Every uncontrolled producer boundary needs two independent bounds:
 
-Two consequences that look like limitations and are not:
+- **state size:** the latest retained text is capped;
+- **publication:** both encoded bytes and event count are paced.
 
-- **One byte budget, not two.** A separate "UI scrollback" budget would break the
-  invariant by construction. Codex has two (see §3) and their UI can scroll
-  through output the model never saw.
-- **Two knobs on the tool, and only two:** how much to keep, and which end. Head
-  vs tail is genuinely per-command — `grep` and `find` want the first matches,
-  `npm test` wants the failure at the end — and nothing in the harness can infer
-  it.
+Delta encoding is complementary. It compresses a published change; it does not cap state or decide when publication occurs.
 
-The spill file does not violate this. It is not a view; it is a file on disk the
-model reaches through `read`/`grep` like any other file.
+## 2. Boundaries
 
----
-
-## 2. The problem
-
-A tool produces output continuously. Every update must reach three consumers. How
-often?
-
-**`intervalMs` is the wrong knob**, and it is what `03-execenv` currently ships.
-It was chosen for an in-process TUI where 100 ms feels live. The cost of an emit
-varies by ~1000x depending on throughput, so a fixed interval is wrong at both
-ends:
-
-| | bytes per emit | at 100 emits/s |
-| --- | --- | --- |
-| slow build, 2 KB/s | 40 | 4 KB/s — fine |
-| `cat 1gb.txt` | 51 000 | **5.1 MB/s** — untenable |
-
-**And no purely data-intrinsic policy exists.** "Emit every N bytes changed" gives
-constant bytes per emit, so the emit *rate* scales with throughput. "Emit once per
-window turnover" is 20 000 emits for 1 GB at a 50 KB window. A clock is
-unavoidable; the question is whose, and what it measures.
-
-### 2.1 Where the delta encoding stops helping
-
-Measured, 50 KB tail window, one flush per arrival:
-
-| bytes arriving between flushes | ops | wire | vs a full replacement |
-| --- | --- | --- | --- |
-| 200 B | `t,a` | 232 B | 0% |
-| 2 KB | `t,a` | 2 067 B | 4% |
-| 25 KB | `t,a` | 25 504 B | 51% |
-| 49 KB | `t,a` | 49 959 B | 100% |
-| **50 KB and above** | **`s`** | **50 967 B** | **102%** |
-
-The delta helps in exact proportion to how little the window moved, and stops
-entirely once arrival >= cap. At `cat` rates every update is a full `s`. That is
-correct behaviour, not a failure — but it means **the pathological case is bounded
-by the cap and the cadence, never by the encoding.**
-
-Related: at full turnover, `s`-on-the-field and `r`-on-the-root are within 0.3%
-(51 833 vs 51 970 bytes). At low rates the field-level `s` is 224x smaller. So the
-tracker naturally emits the narrowest op it can, exactly where narrowness pays.
-
----
-
-## 3. What other agents do
-
-Read before designing. All three differ from us and from each other.
-
-### tmux — backpressure at the source
-
-```c
-#define READ_SIZE     1024   // max data held from a pty
-#define READ_BACKOFF   512   // bytes waiting for the tty before backing off
-#define READ_TIME      100   // µs to wait before the next read
+```text
+remote process
+  -> optional ExecutionEnv publisher
+  -> worker ToolOutput publisher
+  -> events + durability + replication
 ```
 
-tmux stops **reading the pty** when the client is behind, and discards output plus
-a full redraw when the backlog gets large — which is our full-turnover `s`,
-arrived at independently.
+A publisher instance is required only before a real costly boundary:
 
-The symptom that justifies it: *"when the user tries to ^C the command they have
-to wait for this backlog to clear"*. **The real cost of a queue is interactivity,
-not bandwidth.** Their failure mode is permanent data loss — users reported
-scrollback silently truncated — which our spill avoids.
+- a physically remote execution environment limits output before transport;
+- `ToolOutput` limits custom tools and downstream event/storage traffic;
+- a colocated environment can feed its bounded updates in process without another serialized transport;
+- custom tools bypass `ExecutionEnv` but cannot bypass `ToolOutput`.
 
-### Codex — no backpressure, deliberately, and two budgets
+The control algorithm is shared. Payload vocabularies differ: Shell uses replace/append/slide/metadata; `ToolOutput` uses Chord operations.
 
-```rust
-// Continue reading to EOF to avoid back-pressure
-pub const DEFAULT_OUTPUT_BYTES_CAP: usize = 1024 * 1024;   // head, silent drop
-pub(crate) const MAX_EXEC_OUTPUT_DELTAS_PER_CALL: usize = 10_000;
-const READ_CHUNK_SIZE: usize = 8192;
-```
+## 3. Why size or cadence alone is insufficient
 
-Model gets the first 1 MB, head-retained, silently discarded past that. The UI
-gets raw 8 KB chunks it appends itself, capped at 10 000 **events** — so up to
-80 MB, bounded by count rather than rate. Crude, needs no timer and no consumer
-signal, and breaks our invariant: their UI can scroll through output the model
-never saw.
+A fixed 50 KB snapshot is safe per event but not over time. At 100 ms it permits ten complete snapshots per second, approximately 500 KB/s plus envelopes.
 
-### OpenCode — no live output at all
+A byte budget alone also permits excessive tiny events and durable transactions. A minimum interval bounds count; encoded-size debt bounds bandwidth.
+
+The original handoff incorrectly treated `intervalMs = 100` as 100 emits/s. It is ten emits/s. The fixed interval was still non-adaptive: it delayed small trickles while allowing complete windows at the same frequency.
+
+## 4. Landed adaptive algorithm
+
+`packages/agent/src/harness/utils/adaptive-publisher.ts` implements:
 
 ```ts
-// TODO: Add durable/live progress metadata streaming for long-running commands
-//       once V2 tool invocation progress context is wired.
+nextDelayMs = max(globalMinEmitInterval, encodedUpdateBytes * 1000 / globalTargetBytesPerSecond);
 ```
 
-`collectStream` folds the whole stream into a 1 MB head-retained buffer and
-returns once. Their **v2 spec** states the separation we should copy:
-
-> *"Model-output bounding is not producer memory management. Processes and
-> streaming sources may need separate capture or spooling limits before a tool
-> result exists. Those limits must be modeled at the producer boundary and must
-> not masquerade as model-output truncation. A producer cannot claim a complete
-> retained output after it has already discarded bytes."*
-
-Also worth taking: *"if complete retention fails, settlement fails operationally
-rather than publishing lossy success"* — better to fail the tool than hand the
-model a silently truncated result. Both Codex and OpenCode-v1 do the lossy thing.
-
-**We are the only one of the three that keeps the tail.** For `npm test`, where
-the failure is at the end, head retention shows the successful setup and drops the
-error.
-
----
-
-## 4. Candidate: a byte-rate limiter owned by the sink
-
-The constraint is bandwidth, so measure bandwidth. **Unit: bytes per second.** One
-value in the sink, not per tool.
+Current harness-global policy:
 
 ```ts
-#maybeEmit(): void {
-  this.#credit = min(RATE, this.#credit + RATE * secondsSince(this.#lastRefill));
-  this.#lastRefill = now();
-  if (this.#credit <= 0) return;               // accumulate instead
-
-  const ops = this.#tracker.flush();
-  if (ops.length === 0) return;
-  const wire = this.#encoder.encode(ops);
-  this.#credit -= sizeOf(wire);
-  this.#publish(wire);                          // ONE emit, all three consumers
-}
+minEmitInterval = 100 ms;
+targetBytesPerSecond = 100 KB/s;
 ```
 
-`flush()` drains, so it can only be called once per batch — which is *why* durable
-and UI share it, and why they cannot diverge.
+Behavior:
 
-### Measured, 50 KB budget, RATE = 100 KB/s, 10 s
+1. The first dirty state after idle publishes immediately.
+2. Writes before the next deadline collapse into the latest state.
+3. One trailing timer publishes held state after the deadline.
+4. Completion and correctness boundaries force one bounded publication.
+5. The publisher commits its baseline before consumer delivery, preventing duplicate deltas if a consumer applies and then throws.
 
-| producer | emits/s | wire |
-| --- | --- | --- |
-| slow build, 2 KB/s | 100/s | 40 KB |
-| busy build, 50 KB/s | 100/s | 529 KB |
-| **`cat`, 100 MB/s** | **2.2/s** | **1.1 MB** |
-| `cat`, no limit (`intervalMs=100` today) | 100/s | **50.6 MB** |
+This is an amortized token bucket with a cap-sized burst. A leading or forced terminal update may exceed the target over a short interval, but sustained encoded bytes converge to the target and sustained event count cannot exceed the minimum-interval floor except for explicit forced correctness writes.
 
-**45x less wire for `cat`, and the slow case is more responsive than a 100 ms
-interval, not less.** Same rule, opposite behaviour, because it measures the thing
-that is actually scarce. Nobody configures a cadence.
+## 5. Scenario traces
 
-### 4.1 This depends on D1 being fixed first
+Assume a 50 KB cap, 100 KB/s target, and 100 ms floor.
 
-Holding back is only free if held-back writes collapse. **They currently do not**
-— see `../01-delta/FINDINGS.md` D1: 1000 held-back interleaved writes produce 2001
-ops and 264 KB. Until that is fixed the rate limiter converts a bandwidth problem
-into a memory problem.
+### Below cap, completes
 
-### 4.2 Known hole: the trailing emit
+The initial state publishes immediately. Small appends publish no faster than the floor, and final dirty state is forced. Total encoded text is approximately the produced text.
 
-`#maybeEmit` runs only when the tool writes. A command that bursts and then goes
-quiet on a held write never sends it:
+### Below cap, trickling
 
-```
-t=0ms   sent 319B (credit -19)
-t=10ms  sent 329B (credit -248)
-t=20ms  HELD
-        ...quiet for 30s...
-        tracker still dirty — the UI shows state from t=10ms, forever
-```
+Writes arriving more than 100 ms apart publish immediately because the preceding deadline has already passed. Faster writes collapse into one append per floor interval.
 
-Needs a **one-shot** timer armed only while something is held, with the delay
-computed as `deficit / RATE`. That is not the knob we deleted: it is derived from
-`RATE`, not configured, and it does not poll.
+### Above cap, full force
 
-### 4.3 Undecided
+The retained state never exceeds 50 KB. Complete window turnovers encode as bounded replacements. A roughly 50 KB update buys about 500 ms of silence, yielding approximately two updates and 100 KB per second regardless of raw producer throughput.
 
-- **Durability cadence.** Does the durable write ride the same emit, or run
-  slower? Riding it is simpler and preserves the invariant trivially. A separate
-  slower clock reduces writes but needs its own trailing timer and its own
-  argument for why divergence is acceptable.
-- **Backpressure.** tmux stops reading the pipe; Codex explicitly does not. We
-  currently do not. tmux is the only one with a human pressing Ctrl-C in the
-  pane — which suggests backpressure buys *interactivity*, and we may be closer to
-  Codex here. Unmeasured: whether our abort path has the Ctrl-C latency problem.
-- **Pull-based instead of a rate limit.** The consumer says "ready" and gets the
-  current state; no estimation at all. Measured: **1000 producer writes cost the
-  same one op as 1**, so a slow consumer sees a bigger jump rather than a queue.
-  Cleaner in principle, needs consumer plumbing and still needs a durability floor.
+For shell execution, the complete stream goes to a source-local spill under backpressure rather than over the output-update channel.
 
----
+### Above cap, trickling
 
-## 5. Consequences for `03-execenv`
+A small tail movement encodes as truncate plus append (Chord) or `slide` (Shell). Its encoded size is small, so the 100 ms floor dominates and output remains responsive. Resending a complete 50 KB snapshot for each tiny slide would be both slower and larger.
 
-**`BASH_CHECKPOINT_INTERVAL_MS` goes and nothing in `03-execenv` replaces it.**
-The durable cadence is not a `Shell` concern.
+### Burst then silence
 
-`bash.after.ts` as shipped checkpoints when the update kind is `snapshot`, on the
-reasoning that a snapshot is the only kind that can express eviction. **That is
-wrong and should not be copied.** `nowCrossed` is sticky: once total output
-exceeds the cap it never resets, so every subsequent update is a snapshot — a
-durable write every `intervalMs`, the same cadence, not a lower one.
+The leading state is immediate. Held writes collapse, and one trailing timer publishes the latest residue. There is no polling timer.
 
-**Two knobs can also go:**
+### Huge single write
 
-- **`maxLines`** is redundant with `maxBytes`. 2000 lines x 25 bytes is the same
-  bound; 100 000 tiny lines still yields ~50 KB. Keep truncation *line-aware* —
-  cut at a line boundary at or below the budget — which is what `truncateTail`
-  already does, so removing the parameter does not change behaviour.
-- **A byte limit does not break UTF-8.** Only slicing by *code units* does.
-  Binary-searching on encoded length lands on a codepoint boundary every time, and
-  `trimToLastBytes` already does this. Verified across mixed ASCII / accented /
-  CJK / emoji at 10, 20 and 30-byte budgets.
+The producer may already have allocated its input, but the boundary retains and publishes only the configured cap. Shell spill keeps the complete source stream. Arbitrary custom-tool images and structured details still require separate limits.
 
-**`counters` as an update kind can go too.** It exists so head mode can move a
-number without resending the frozen text — but nothing needs that number *live*.
-The final `ShellExecResult` carries the totals and the visible content was
-complete when the cap filled. Head mode emits chunks until full, then silence.
-That reduces three update kinds to two.
+## 6. Forced writes
 
-**`retain: "head" | "tail"` stays.** Head is correct for search-shaped output —
-`grep`, `find`, `ls -R`, where results are unordered so the first N are as
-informative as any N and arrive immediately. `truncateHead` is already used by
-`read.ts`.
+These bypass pacing once, while remaining state-size bounded:
 
-Resulting `CaptureOptions`: `{ maxBytes, retain?, spill? }` — three, from five.
+- command/tool completion;
+- error or abort;
+- a memo and output checkpoint committed atomically;
+- an explicit recovery base/rebase.
+
+A terminal flush cancels the trailing timer before `tool_end`, preventing a late update for a settled invocation.
+
+## 7. `ToolOutput` application
+
+The sink will own one Chord tracker and encoder per invocation. Mutations remain local while publication is blocked; flush-time dirty tracking means held writes collapse without retaining one op per write.
+
+One sink flush feeds the live event and current model-visible state. Durable batches use the same logical flush, encoded as per-stream `WireOp[]`. Periodic `rebase()` bounds recovery replay; a memo correctness flush writes a tagged base batch in the same transaction as the memo.
+
+Durable cadence belongs to the sink, not to Shell or bash. Bash's existing two-second checkpoint request remains only as an interim compatibility mechanism until the sink migration.
+
+## 8. Remaining decisions
+
+- Explicit byte/count rejection policy for images.
+- Bounds for structured details; arbitrary JSON cannot be meaningfully tail-windowed.
+- Whether ordinary durable writes ride every live sink publication initially or use a slower measured cadence. Memo and terminal correctness flushes are not optional.
+- Exact global production values after profiling real remote transport and storage.

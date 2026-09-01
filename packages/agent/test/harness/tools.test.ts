@@ -15,8 +15,9 @@ import {
 	ok,
 	type Result,
 	type ShellExecOptions,
+	type ShellExecResult,
 } from "../../src/harness/types.ts";
-import { DEFAULT_MAX_LINES } from "../../src/harness/utils/truncate.ts";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncateTail } from "../../src/harness/utils/truncate.ts";
 import { createTempDir } from "./session-test-utils.ts";
 
 const noUpdate = () => {};
@@ -94,15 +95,36 @@ class BlockingEditExecutionEnv extends NodeExecutionEnv {
 	}
 }
 
+function fakeShellOutput(text: string, options: ShellExecOptions | undefined, spillPath?: string): ShellExecResult {
+	const limits = options?.capture?.limits ?? {
+		maxBytes: DEFAULT_MAX_BYTES,
+		maxLines: DEFAULT_MAX_LINES,
+		retain: "tail" as const,
+	};
+	const truncated = truncateTail(text, limits);
+	const { content, ...truncation } = truncated;
+	options?.onUpdate?.(
+		{
+			kind: "replace",
+			output: { text: content, truncation, ...(spillPath === undefined ? {} : { spillPath }) },
+		},
+		BACKGROUND_CONTEXT,
+	);
+	return { exitCode: 0, truncation, ...(spillPath === undefined ? {} : { spillPath }) };
+}
+
 class LateOutputExecutionEnv extends NodeExecutionEnv {
 	override async exec(
 		_command: string,
 		options: ShellExecOptions | undefined,
 		context: Context,
-	): Promise<Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>> {
-		options?.onStdout?.("before\n", context);
-		setTimeout(() => options?.onStdout?.("late\n", context), 0);
-		return ok({ stdout: "before\n", stderr: "", exitCode: 0 });
+	): Promise<Result<ShellExecResult, ExecutionError>> {
+		const result = fakeShellOutput("before\n", options);
+		setTimeout(() => {
+			const truncation = truncateTail("before\nlate\n", options?.capture?.limits);
+			options?.onUpdate?.({ kind: "replace", output: { text: truncation.content, truncation } }, context);
+		}, 0);
+		return ok(result);
 	}
 }
 
@@ -119,16 +141,15 @@ class CheckpointOutputExecutionEnv extends NodeExecutionEnv {
 	override async exec(
 		_command: string,
 		options: ShellExecOptions | undefined,
-		context: Context,
-	): Promise<Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>> {
-		options?.onStdout?.("one\n", context);
+		_context: Context,
+	): Promise<Result<ShellExecResult, ExecutionError>> {
+		fakeShellOutput("one\n", options);
 		await delay(2_100);
-		options?.onStdout?.("two\n", context);
+		fakeShellOutput("one\ntwo\n", options);
 		await delay(100);
-		options?.onStdout?.("three\n", context);
+		fakeShellOutput("one\ntwo\nthree\n", options);
 		await delay(2_000);
-		options?.onStdout?.("four\n", context);
-		return ok({ stdout: "one\ntwo\nthree\nfour\n", stderr: "", exitCode: 0 });
+		return ok(fakeShellOutput("one\ntwo\nthree\nfour\n", options));
 	}
 }
 
@@ -137,9 +158,11 @@ class TimeoutOutputExecutionEnv extends NodeExecutionEnv {
 		_command: string,
 		options: ShellExecOptions | undefined,
 		context: Context,
-	): Promise<Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>> {
+	): Promise<Result<ShellExecResult, ExecutionError>> {
 		const output = `${Array.from({ length: TRUNCATED_OUTPUT_LINES }, (_, index) => `line-${index + 1}`).join("\n")}\n`;
-		options?.onStdout?.(output, context);
+		const spillPath = getOrThrow(await this.createTempFile({ prefix: "timeout-", suffix: ".log" }, context));
+		getOrThrow(await this.writeFile(spillPath, output, context));
+		fakeShellOutput(output, options, spillPath);
 		return err(new ExecutionError("timeout", `timeout:${options?.timeout}`));
 	}
 }

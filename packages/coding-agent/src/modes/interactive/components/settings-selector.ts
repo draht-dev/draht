@@ -635,15 +635,16 @@ export class SettingsSelectorComponent extends Container {
 								const levels = (
 									model.reasoning ? getSupportedThinkingLevels(model) : ["off"]
 								) as ThinkingLevel[];
+								const activeLevel = currentModelThinkingLevels[ctx.model];
 								const items: SelectItem[] = levels.map((level) => ({
 									value: level,
-									label: level,
+									label: `${level === activeLevel ? "✓ " : "  "}${level}`,
 									description: THINKING_DESCRIPTIONS[level],
 								}));
 								if (currentModelThinkingLevels[ctx.model] !== undefined) {
 									items.push({
 										value: CLEAR_OVERRIDE_VALUE,
-										label: "(clear override)",
+										label: "  (clear override)",
 										description: `Revert to global default (${config.thinkingLevel})`,
 									});
 								}

@@ -276,11 +276,7 @@ describe("JSONL v3 migration", () => {
 		it("forks a closed source into a complete v4 destination without rewriting it", async () => {
 			const { path, content, metadata } = await writeForkFixture();
 
-			const fork = await repo.fork(
-				metadata,
-				{ id: "closed-fork", scope: "branch", branch: "main" },
-				BACKGROUND_CONTEXT,
-			);
+			const fork = await repo.fork(metadata, { id: "closed-fork", scope: "tree" }, BACKGROUND_CONTEXT);
 
 			expect(getOrThrow(await fileSystem.readTextFile(path, BACKGROUND_CONTEXT))).toBe(content);
 			expect(fork.metadata.id).toBe("closed-fork");
@@ -313,11 +309,7 @@ describe("JSONL v3 migration", () => {
 			const sourceEntries = await source.findEntries({ order: "asc" }, BACKGROUND_CONTEXT);
 			const sourceStats = await source.getStats(BACKGROUND_CONTEXT);
 
-			const fork = await repo.fork(
-				metadata,
-				{ id: "open-fork", scope: "branch", branch: "main" },
-				BACKGROUND_CONTEXT,
-			);
+			const fork = await repo.fork(metadata, { id: "open-fork", scope: "tree" }, BACKGROUND_CONTEXT);
 			const forkEntries = await expectForkedState(fork);
 
 			expect(fork.metadata.id).toBe("open-fork");

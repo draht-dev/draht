@@ -151,6 +151,9 @@ function validateForkSourceSnapshot(
 		if ((configuration === undefined) !== (state === undefined)) {
 			throw new Error(`Source session branch ${JSON.stringify(tip.address.key)} has incomplete lane state`);
 		}
+		if (options.scope === "branch" && tip.address.key === options.branch && configuration === undefined) {
+			throw new Error(`Source branch ${JSON.stringify(options.branch)} is not a configured AgentLane`);
+		}
 		if (
 			(source.entriesComplete !== false || options.scope === "tree") &&
 			tip.value !== null &&

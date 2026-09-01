@@ -334,6 +334,21 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 			});
 			await Promise.all([source.close(BACKGROUND_CONTEXT), fork.close(BACKGROUND_CONTEXT)]);
 		}),
+		createCase(factory, "forks", "rejects a data-only branch and releases its destination id", async ({ repo }) => {
+			const source = await repo.create({ id: "source" }, BACKGROUND_CONTEXT);
+			await source.createBranch("data", null, BACKGROUND_CONTEXT);
+
+			await rejects(
+				repo.fork(source.metadata, { id: "destination", scope: "branch", branch: "data" }, BACKGROUND_CONTEXT),
+			);
+			deepStrictEqual(
+				(await repo.list(undefined, BACKGROUND_CONTEXT)).map(({ id }) => id),
+				["source"],
+			);
+
+			const destination = await repo.create({ id: "destination" }, BACKGROUND_CONTEXT);
+			await Promise.all([source.close(BACKGROUND_CONTEXT), destination.close(BACKGROUND_CONTEXT)]);
+		}),
 		createCase(
 			factory,
 			"forks",
@@ -571,6 +586,8 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 								customType: "root",
 							}),
 							setValue(branchTip("main"), ROOT_ID),
+							setValue(laneConfig("main"), configuration),
+							setValue(laneState("main"), idleLaneState),
 							setValue(applicationValue, "excluded"),
 							appendList(applicationList, "excluded"),
 						],
@@ -586,8 +603,8 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 				BACKGROUND_CONTEXT,
 			);
 			strictEqual(await getBranchTip(fork), ROOT_ID);
-			strictEqual(await fork.getValue(laneConfig("main"), BACKGROUND_CONTEXT), undefined);
-			strictEqual(await fork.getValue(laneState("main"), BACKGROUND_CONTEXT), undefined);
+			deepStrictEqual((await fork.getValue(laneConfig("main"), BACKGROUND_CONTEXT))?.value, configuration);
+			deepStrictEqual((await fork.getValue(laneState("main"), BACKGROUND_CONTEXT))?.value, idleLaneState);
 			strictEqual(await fork.getValue(applicationValue, BACKGROUND_CONTEXT), undefined);
 			deepStrictEqual(await fork.readList(applicationList, undefined, BACKGROUND_CONTEXT), []);
 			await fork.close(BACKGROUND_CONTEXT);
@@ -713,6 +730,8 @@ export function createSessionRepoForkSourceSnapshotConformance<TMetadata extends
 							customType: "first",
 						}),
 						setValue(branchTip("main"), ROOT_ID),
+						setValue(laneConfig("main"), configuration),
+						setValue(laneState("main"), idleLaneState),
 						setValue(sessionName, "first name"),
 						setValue(entryLabel(ROOT_ID), "first label"),
 					],

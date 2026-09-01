@@ -207,25 +207,25 @@ The sequence is:
 load replacement module generation
 → run replacement setup
 → validate replacement shape and remote implementations
-→ withdraw replaced providers
+→ activate replacements in dependency order while the old providers remain routed
+→ atomically replace local targets and publish complete remote singleton replacement snapshots
+→ drain calls admitted by the retired singleton and keyed instances
 → deactivate replaced plugins in reverse dependency order
-→ activate replacements in dependency order
-→ reconnect local provider slots
-→ publish complete remote singleton replacement snapshots
 → dispose the retired loaded generation
 ```
 
 Properties:
 
 - existing local and remote singleton facades keep object identity;
-- captured local methods dispatch to the replacement;
-- captured remote methods and replicated-state facades address the replacement;
-- while withdrawn, calls fail rather than queue and replicated state is unhydrated;
-- keyed instances from the old plugin close; instances reconstructed by the replacement use fresh generations;
-- setup or shape-validation failure leaves the active generation unchanged; and
-- a failure after provider withdrawal begins disposes the complete host instead of exposing a partially active graph.
+- captured local and remote methods dispatch to the old provider before cutover and the replacement after cutover;
+- replicated-state facades install the replacement snapshot without becoming unhydrated;
+- calls admitted before cutover finish against the retired provider while later calls use the replacement;
+- keyed instances from the old plugin close; instances staged by the replacement use fresh generations;
+- setup, shape-validation, or replacement-activation failure leaves the active generation unchanged;
+- named host resources acquired during activation support overlapping staged replacements, so candidate cleanup restores the old registration and retired cleanup cannot remove the replacement; and
+- cutover performs no asynchronous work or facet callbacks.
 
-There is no rollback guarantee after old-plugin deactivation begins. Committed application effects are outside the reload transaction.
+There is no rollback after cutover. Retired-generation cleanup failures are reported without disconnecting the replacement. Committed application effects are outside the reload transaction.
 
 #### Structural replacement
 
@@ -253,14 +253,9 @@ This full-generation path supplies actual plugin load and unload semantics witho
 
 ### 6.2 Calls during unload
 
-Provider withdrawal rejects new calls. The runtime must generation-fence admitted calls and state publication so old completions cannot update a replacement provider.
+Replacement atomically stops new admission to the retired service target. Calls already admitted to that target retain it until they settle, while new calls through the same stable facade use the replacement. Old state publication is detached at cutover and cannot update the replacement replica.
 
-The initial implementation must explicitly choose and test one admitted-call drain policy before module-loader disposal:
-
-1. wait for admitted calls to settle while signalling plugin deactivation separately; or
-2. cancel them through a provider-generation signal, then wait for settlement.
-
-Silently abandoning admitted promises is not acceptable. Transport disconnect still cancels only connection-owned invocations; it does not imply application-level cancellation or rollback.
+Facet deactivation and loaded-module disposal wait for admitted calls to drain. A future killable-isolate host may force termination during abnormal shutdown, but ordinary reload does not reject admitted calls. Transport disconnect still cancels only connection-owned invocations; it does not imply application-level cancellation or rollback.
 
 ### 6.3 Update failure reporting
 

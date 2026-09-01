@@ -3,7 +3,7 @@ import { RemoteServiceBindingImpl } from "../services/consumer.ts";
 import { ServiceSlot } from "../services/handle.ts";
 import { InstanceDirectory, type InstanceDirectoryEntry } from "../services/instances.ts";
 import { createLoopbackServiceTransport } from "../services/loopback.ts";
-import { RemoteServiceProvider } from "../services/provider.ts";
+import { RemoteServiceProvider, validateRemoteServiceImplementation } from "../services/provider.ts";
 import { MutableReplicatedStateImpl } from "../services/state.ts";
 import type {
 	Context,
@@ -174,18 +174,23 @@ class LocalKeyedServiceRegistry implements KeyedServiceSource {
 		}
 		const generation = (registration.generations.get(key) ?? 0) + 1;
 		registration.generations.set(key, generation);
+		const slot = new ServiceSlot(service.id, false);
+		void slot.bind(implementation as object);
 		const instance: InstanceDirectoryEntry = {
 			key,
 			generation,
-			service: implementation as object,
+			service: slot.view<T>(() => {}) as object,
 			deactivate() {},
 		};
 		registration.directory.insert(instance);
 		let closed = false;
+		let retired: Promise<void> | undefined;
 		return () => {
-			if (closed) return;
+			if (closed) return retired;
 			closed = true;
 			registration.directory.remove(instance);
+			retired = slot.unbind();
+			return retired;
 		};
 	}
 
@@ -239,7 +244,7 @@ class HostServiceSlots {
 		let stopped = false;
 		const stop = source.observe(service, (target, context) => {
 			const slot = new ServiceSlot(service.id, !service.local);
-			slot.bind(target as object);
+			void slot.bind(target as object);
 			return handler(
 				slot.view<T>(() => {
 					assertAccess();
@@ -257,12 +262,8 @@ class HostServiceSlots {
 		};
 	}
 
-	bindSingleton(serviceId: string, target: object): void {
-		this.#singletons.get(serviceId)?.bind(target);
-	}
-
-	unbindSingleton(serviceId: string): void {
-		this.#singletons.get(serviceId)?.unbind();
+	bindSingleton(serviceId: string, target: object): Promise<void> {
+		return this.#singletons.get(serviceId)?.bind(target) ?? Promise.resolve();
 	}
 
 	bindKeyed(serviceId: string, services: KeyedServiceSource): void {
@@ -270,37 +271,53 @@ class HostServiceSlots {
 	}
 
 	dispose(): void {
-		for (const slot of this.#singletons.values()) slot.unbind();
+		for (const slot of this.#singletons.values()) void slot.unbind();
 		this.#singletons.clear();
 		this.#keyedSources.clear();
 	}
 }
 
-type ServiceInstanceInstaller<T> = (key: string, implementation: T) => () => void;
+type ServiceInstanceInstaller<T> = (key: string, implementation: T) => Disposal;
+
+interface StagedServiceInstance<T> {
+	readonly key: string;
+	readonly implementation: T;
+	release?: Disposal;
+	retirement?: Promise<void>;
+}
 
 class StagedServiceSpawner<T> implements ServiceSpawner<T> {
 	readonly #lifecycle: FacetLifecycle;
+	readonly #validate: (key: string, implementation: T) => void;
+	readonly #instances = new Map<string, StagedServiceInstance<T>>();
 	#installer: ServiceInstanceInstaller<T> | undefined;
 
-	constructor(lifecycle: FacetLifecycle) {
+	constructor(lifecycle: FacetLifecycle, validate: (key: string, implementation: T) => void) {
 		this.#lifecycle = lifecycle;
+		this.#validate = validate;
 	}
 
 	connect(installer: ServiceInstanceInstaller<T>): void {
 		if (this.#installer !== undefined) throw new Error("Facet service provider is already connected");
 		this.#installer = installer;
+		for (const instance of this.#instances.values()) {
+			instance.release = installer(instance.key, instance.implementation);
+		}
 	}
 
 	spawn(key: string, implementation: T): () => void {
 		this.#lifecycle.assertActive("spawn service instances");
-		const installer = this.#installer;
-		if (installer === undefined) throw new Error("Facet service provider is not connected");
-		const release = installer(key, implementation);
-		let closed = false;
-		const close = (): void => {
-			if (closed) return;
-			closed = true;
-			release();
+		this.#validate(key, implementation);
+		if (this.#instances.has(key)) throw new Error(`Facet service already has a live instance with key ${key}`);
+		const instance: StagedServiceInstance<T> = { key, implementation };
+		this.#instances.set(key, instance);
+		if (this.#installer !== undefined) instance.release = this.#installer(key, implementation);
+		const close = (): void | Promise<void> => {
+			if (this.#instances.get(key) !== instance) return instance.retirement;
+			this.#instances.delete(key);
+			const result = instance.release?.();
+			if (isPromiseLike(result)) instance.retirement = Promise.resolve(result);
+			return instance.retirement;
 		};
 		this.#lifecycle.own(close);
 		return close;
@@ -314,8 +331,7 @@ type FacetProvision =
 			readonly implementation: object;
 			install(provider: RemoteServiceProvider): void;
 			validateReplacement(provider: RemoteServiceProvider): void;
-			withdraw(provider: RemoteServiceProvider): void;
-			replace(provider: RemoteServiceProvider): void;
+			replace(provider: RemoteServiceProvider): Promise<void>;
 	  }
 	| {
 			readonly kind: "keyed";
@@ -433,14 +449,7 @@ export class FacetKernel {
 				candidates.push(record);
 			}
 		} catch (error) {
-			const cleanupErrors: unknown[] = [];
-			for (const record of staged.reverse()) {
-				try {
-					await record.lifecycle.dispose();
-				} catch (cleanupError) {
-					cleanupErrors.push(cleanupError);
-				}
-			}
+			const cleanupErrors = await disposeFacetRecords(staged.reverse());
 			this.#phase = "active";
 			if (cleanupErrors.length > 0) {
 				throw new AggregateError([error, ...cleanupErrors], "Facet reload setup and cleanup failed");
@@ -449,60 +458,49 @@ export class FacetKernel {
 		}
 
 		const replacements = new Map(candidates.map((record) => [record.facetId, record]));
-		let candidatesInstalled = false;
 		try {
-			for (const candidate of candidates) {
-				for (const provision of candidate.provisions) {
-					if (provision.kind !== "singleton") continue;
-					if (provision.service.local) this.#serviceSlots.unbindSingleton(provision.service.id);
-					else provision.withdraw(this.provider);
-				}
-			}
-
-			const disposalErrors: unknown[] = [];
-			for (const id of [...this.#activationOrder].reverse()) {
-				if (!replacements.has(id)) continue;
-				const record = this.#facets.get(id)!;
-				this.#facets.delete(id);
-				try {
-					await record.lifecycle.dispose();
-				} catch (error) {
-					disposalErrors.push(error);
-				}
-			}
-			if (disposalErrors.length > 0) {
-				throw new AggregateError(disposalErrors, "Failed to deactivate reloaded facets");
-			}
-
-			for (const candidate of candidates) this.#facets.set(candidate.facetId, candidate);
-			candidatesInstalled = true;
-			for (const candidate of candidates) {
-				for (const provision of candidate.provisions) {
-					if (provision.kind !== "keyed") continue;
-					if (provision.service.local) provision.connectLocal(this.#localKeyedRegistry);
-					else provision.connectRemote(this.provider);
-				}
-			}
 			for (const id of this.#activationOrder) {
-				const candidate = replacements.get(id);
-				if (candidate === undefined) continue;
-				await candidate.lifecycle.activate();
-				for (const provision of candidate.provisions) {
-					if (provision.kind !== "singleton") continue;
-					if (provision.service.local) {
-						this.#serviceSlots.bindSingleton(provision.service.id, provision.implementation);
-					} else {
-						provision.replace(this.provider);
-					}
-				}
+				await replacements.get(id)?.lifecycle.activate();
 			}
-			this.#phase = "active";
 		} catch (error) {
-			const cleanupErrors = await this.#terminate(candidatesInstalled ? [] : candidates);
+			const cleanupErrors = await disposeFacetRecords([...candidates].reverse());
+			this.#phase = "active";
 			if (cleanupErrors.length > 0) {
-				throw new AggregateError([error, ...cleanupErrors], "Facet reload failed and host cleanup failed");
+				throw new AggregateError([error, ...cleanupErrors], "Facet reload activation and cleanup failed");
 			}
 			throw error;
+		}
+
+		const previous = new Map(candidates.map(({ facetId }) => [facetId, this.#facets.get(facetId)!] as const));
+		const retirements = candidates.flatMap(({ provisions }) =>
+			provisions.flatMap((provision) => {
+				if (provision.kind !== "singleton") return [];
+				return [
+					provision.service.local
+						? this.#serviceSlots.bindSingleton(provision.service.id, provision.implementation)
+						: provision.replace(this.provider),
+				];
+			}),
+		);
+		for (const candidate of candidates) this.#facets.set(candidate.facetId, candidate);
+		await Promise.all(retirements);
+		const retirementErrors = await disposeFacetRecords(
+			[...this.#activationOrder].reverse().flatMap((id) => {
+				const record = previous.get(id);
+				return record === undefined ? [] : [record];
+			}),
+		);
+		for (const candidate of candidates) {
+			for (const provision of candidate.provisions) {
+				if (provision.kind !== "keyed") continue;
+				if (provision.service.local) provision.connectLocal(this.#localKeyedRegistry);
+				else provision.connectRemote(this.provider);
+			}
+		}
+		this.#phase = "active";
+		if (retirementErrors.length === 1) throw retirementErrors[0];
+		if (retirementErrors.length > 1) {
+			throw new AggregateError(retirementErrors, "Failed to retire replaced facets");
 		}
 	}
 
@@ -537,14 +535,19 @@ export class FacetKernel {
 					install: (provider) => provider.provide(service, implementation as NoInfer<RemoteServiceContract<T>>),
 					validateReplacement: (provider) =>
 						provider.validateReplacement(service, implementation as NoInfer<RemoteServiceContract<T>>),
-					withdraw: (provider) => provider.withdraw(service),
 					replace: (provider) => provider.replace(service, implementation as NoInfer<RemoteServiceContract<T>>),
 				});
 			},
 			provideMany: <T>(service: Service<T>): ServiceSpawner<T> => {
 				lifecycle.assertSettingUp("provide service instances");
 				recordServiceReference(runtime.provides, service, "keyed");
-				const instances = new StagedServiceSpawner<T>(lifecycle);
+				const instances = new StagedServiceSpawner<T>(lifecycle, (key, implementation) => {
+					if (key.length === 0) throw new TypeError("Facet service instance key must not be empty");
+					if (typeof implementation !== "object" || implementation === null || Array.isArray(implementation)) {
+						throw new TypeError(`Facet service ${service.id} implementation must be an object`);
+					}
+					if (!service.local) validateRemoteServiceImplementation(service.id, implementation);
+				});
 				provisions.push({
 					kind: "keyed",
 					service,
@@ -735,16 +738,9 @@ export class FacetKernel {
 		}
 	}
 
-	async #terminate(extraRecords: readonly FacetRuntime[] = []): Promise<unknown[]> {
+	async #terminate(): Promise<unknown[]> {
 		this.#phase = "disposing";
 		const errors = await this.#disposeLifecycles();
-		for (const record of [...extraRecords].reverse()) {
-			try {
-				await record.lifecycle.dispose();
-			} catch (error) {
-				errors.push(error);
-			}
-		}
 		try {
 			this.#localKeyedServices?.dispose();
 		} catch (error) {
@@ -782,6 +778,18 @@ export class FacetKernel {
 		}
 		return errors;
 	}
+}
+
+async function disposeFacetRecords(records: readonly FacetRuntime[]): Promise<unknown[]> {
+	const errors: unknown[] = [];
+	for (const record of records) {
+		try {
+			await record.lifecycle.dispose();
+		} catch (error) {
+			errors.push(error);
+		}
+	}
+	return errors;
 }
 
 function validateFacets(

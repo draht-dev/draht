@@ -171,8 +171,8 @@ describe("facet loader", () => {
 		const loadedB = await loader.load();
 		const reload = host.reload(loadedB.facets);
 		await replacementStarted;
-		expect(() => localRead(BACKGROUND_CONTEXT)).toThrow(`Service ${LocalGenerationValue.id} is disconnected`);
-		await expect(remoteRead(BACKGROUND_CONTEXT)).rejects.toMatchObject({ code: "service_not_found" });
+		await expect(localRead(BACKGROUND_CONTEXT)).resolves.toBe("A");
+		await expect(remoteRead(BACKGROUND_CONTEXT)).resolves.toBe("A");
 		continueReplacement();
 		await reload;
 		await loadedA.dispose();
@@ -193,13 +193,83 @@ describe("facet loader", () => {
 			"activate consumer:A",
 			"load B",
 			"setup provider B",
-			"deactivate provider A",
 			"activate provider B",
+			"deactivate provider A",
 			"unload A",
 			"deactivate consumer",
 			"deactivate provider B",
 			"unload B",
 		]);
+	});
+
+	test("drains calls admitted by the old provider without blocking calls to the replacement", async () => {
+		let localValue: GenerationValue | undefined;
+		let oldCalls = 0;
+		let reportOldCallsStarted!: () => void;
+		const oldCallsStarted = new Promise<void>((resolve) => {
+			reportOldCallsStarted = resolve;
+		});
+		let finishOldCalls!: () => void;
+		const oldCallsCanFinish = new Promise<void>((resolve) => {
+			finishOldCalls = resolve;
+		});
+		let reportReplacementActivated!: () => void;
+		const replacementActivated = new Promise<void>((resolve) => {
+			reportReplacementActivated = resolve;
+		});
+		const provider = (name: string, block: boolean) =>
+			defineFacet({
+				id: "draining-provider",
+				setup(env) {
+					const implementation: GenerationValue = {
+						async read() {
+							if (block) {
+								oldCalls += 1;
+								if (oldCalls === 2) reportOldCallsStarted();
+								await oldCallsCanFinish;
+							}
+							return name;
+						},
+					};
+					env.provide(LocalGenerationValue, implementation);
+					env.provide(RemoteGenerationValue, implementation);
+					if (!block) env.onActivate(reportReplacementActivated);
+				},
+			});
+		const consumer = defineFacet({
+			id: "draining-consumer",
+			setup(env) {
+				localValue = env.use(LocalGenerationValue);
+			},
+		});
+		const host = await createFacetHost({ facets: [consumer, provider("A", true)] });
+		const remoteServices = createRemoteServiceBinding({
+			services: [RemoteGenerationValue],
+			transport: createLoopbackServiceTransport(host.services),
+		});
+		const remoteValue = remoteServices.use(RemoteGenerationValue);
+		await remoteServices.ready(BACKGROUND_CONTEXT);
+
+		const oldLocal = localValue!.read(BACKGROUND_CONTEXT);
+		const oldRemote = remoteValue.read(BACKGROUND_CONTEXT);
+		await oldCallsStarted;
+		let reloadSettled = false;
+		const reload = host.reload([provider("B", false)]).finally(() => {
+			reloadSettled = true;
+		});
+		await replacementActivated;
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		await expect(localValue!.read(BACKGROUND_CONTEXT)).resolves.toBe("B");
+		await expect(remoteValue.read(BACKGROUND_CONTEXT)).resolves.toBe("B");
+		expect(reloadSettled).toBe(false);
+
+		finishOldCalls();
+		await expect(oldLocal).resolves.toBe("A");
+		await expect(oldRemote).resolves.toBe("A");
+		await reload;
+
+		await remoteServices.dispose(BACKGROUND_CONTEXT);
+		await host.dispose();
 	});
 
 	test("rejects remote singleton member shape changes before reload cutover", async () => {
@@ -247,7 +317,7 @@ describe("facet loader", () => {
 		expect(providerDisposed).toBe(true);
 	});
 
-	test("terminates the host when replacement activation fails after cutover", async () => {
+	test("keeps the old generation active when replacement activation fails before cutover", async () => {
 		const failure = new Error("replacement activation failed");
 		const trace: string[] = [];
 		let retained: GenerationValue | undefined;
@@ -282,13 +352,11 @@ describe("facet loader", () => {
 		await expect(retained!.read(BACKGROUND_CONTEXT)).resolves.toBe("A");
 
 		await expect(host.reload([provider("B", true)])).rejects.toBe(failure);
-		expect(trace).toEqual(["activate A", "deactivate A", "activate B", "deactivate consumer", "deactivate B"]);
-		expect(() => retained!.read(BACKGROUND_CONTEXT)).toThrow(
-			"Facet terminal-consumer service handles cannot be used while dead",
-		);
-		await expect(host.reload([])).rejects.toThrow("Facet host cannot reload while dead");
-		expect(() => host.services.use(RemoteGenerationValue)).toThrow("Remote service provider is disposed");
+		expect(trace).toEqual(["activate A", "activate B", "deactivate B"]);
+		await expect(retained!.read(BACKGROUND_CONTEXT)).resolves.toBe("A");
+		await host.reload([]);
 		await host.dispose();
+		expect(trace).toEqual(["activate A", "activate B", "deactivate B", "deactivate consumer", "deactivate A"]);
 	});
 
 	test("creates a reusable static loader", async () => {

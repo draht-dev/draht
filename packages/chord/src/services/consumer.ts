@@ -279,7 +279,7 @@ class KeyedBinding<T> {
 		let stopped = false;
 		const stop = this.#instances.observe<T>((service, context) => {
 			const slot = new ServiceSlot(this.#service.id, true);
-			slot.bind(service as object);
+			void slot.bind(service as object);
 			return handler(
 				slot.view<T>(() => {
 					this.#assertAccess();

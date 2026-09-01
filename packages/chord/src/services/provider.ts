@@ -13,6 +13,7 @@ import type {
 	ServiceSubscription,
 	ServiceSubscriptionSnapshot,
 } from "../types.ts";
+import { CallTracker } from "./calls.ts";
 import { RemoteServiceError } from "./errors.ts";
 import { serviceDeliveryContext } from "./state.ts";
 import { getReplicatedStateInternals, type ReplicatedStateInternals } from "./state-internals.ts";
@@ -36,6 +37,7 @@ interface ProviderInstance {
 	readonly implementation: object;
 	readonly members: ReadonlyMap<string, InstanceMember>;
 	readonly removeMemberListeners: readonly (() => void)[];
+	readonly calls: CallTracker;
 	active: boolean;
 }
 
@@ -123,18 +125,20 @@ export class RemoteServiceProvider {
 		registration.singletonShape = shape;
 	}
 
-	/** Disconnect one singleton while preserving its active subscriptions and remote facades. */
-	withdraw<T>(service: Service<T>): void {
+	/** Disconnect one singleton and resolve after calls admitted by the retired target settle. */
+	withdraw<T>(service: Service<T>): Promise<void> {
 		this.#assertActive();
 		this.#assertRemotable(service);
 		this.#assertAllowed(service.id);
 		const registration = this.#registration(service.id, "singleton");
 		const previous = registration.singleton;
-		if (previous === undefined) return;
+		if (previous === undefined) return Promise.resolve();
 		previous.active = false;
 		for (const remove of previous.removeMemberListeners) remove();
 		delete registration.singleton;
+		const retired = previous.calls.retire();
 		this.#emit(registration, { type: "unavailable" });
+		return retired;
 	}
 
 	/** Check a singleton replacement without changing the active provider. */
@@ -147,8 +151,8 @@ export class RemoteServiceProvider {
 		this.#assertSingletonShape(registration, serviceMemberShape(classified.members));
 	}
 
-	/** Replace one singleton while preserving its active subscriptions and remote facades. */
-	replace<T>(service: Service<T>, implementation: NoInfer<RemoteServiceContract<T>>): void {
+	/** Replace one singleton immediately and resolve after calls admitted by the retired target settle. */
+	replace<T>(service: Service<T>, implementation: NoInfer<RemoteServiceContract<T>>): Promise<void> {
 		this.#assertActive();
 		this.#assertRemotable(service);
 		this.#assertAllowed(service.id);
@@ -164,7 +168,9 @@ export class RemoteServiceProvider {
 		}
 		registration.singleton = replacement;
 		registration.singletonShape = shape;
+		const retired = previous?.calls.retire() ?? Promise.resolve();
 		this.#emit(registration, { type: "replaced", snapshot: this.#snapshotInstance(replacement) });
+		return retired;
 	}
 
 	use<T>(service: Service<T>): T {
@@ -198,14 +204,17 @@ export class RemoteServiceProvider {
 		registration.instances.set(key, instance);
 		this.#emit(registration, { type: "spawned", instance: this.#snapshotInstance(instance) });
 		let closed = false;
+		let retired: Promise<void> | undefined;
 		return () => {
-			if (closed) return;
+			if (closed) return retired;
 			closed = true;
-			if (registration.instances.get(key) !== instance) return;
+			if (registration.instances.get(key) !== instance) return undefined;
 			instance.active = false;
 			for (const remove of instance.removeMemberListeners) remove();
 			registration.instances.delete(key);
+			retired = instance.calls.retire();
 			this.#emit(registration, { type: "closed", instance: address });
+			return retired;
 		};
 	}
 
@@ -230,7 +239,9 @@ export class RemoteServiceProvider {
 				`Remote service member ${call.serviceId}.${call.member} is not a method`,
 			);
 		}
-		const result: unknown = await Reflect.apply(member.method, instance.implementation, [...call.args, context]);
+		const result: unknown = await instance.calls.run(() =>
+			Reflect.apply(member.method, instance.implementation, [...call.args, context]),
+		);
 		return result as JsonValue | undefined;
 	}
 
@@ -341,6 +352,7 @@ export class RemoteServiceProvider {
 			implementation: classified.implementation,
 			members: classified.members,
 			removeMemberListeners,
+			calls: new CallTracker(),
 			active: true,
 		};
 		for (const [name, member] of classified.members) {

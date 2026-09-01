@@ -246,7 +246,7 @@ export interface FacetOptions {
 
 export interface FacetHost {
 	readonly services: RemoteServiceProvider;
-	/** Replace active facets with matching IDs while preserving consumer service handles. */
+	/** Activate and atomically replace facets with matching IDs without disconnecting consumer service handles. */
 	reload(facets: readonly Facet[]): Promise<void>;
 	dispose(): Promise<void>;
 }

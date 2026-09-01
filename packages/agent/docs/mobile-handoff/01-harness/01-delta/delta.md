@@ -476,7 +476,7 @@ Two further measures on the same hazard:
 What prototype pollution actually buys an attacker here is narrower than it first
 appears: **it flips defaults, it does not overwrite explicit values.** An own
 property shadows. So `{name:"bob", isAdmin:false}` is unaffected; an option bag read
-as `opts.skipSandbox` is not. Our own `ShellExecOptions`, `CaptureOptions`,
+as `opts.skipSandbox` is not. Our own `ShellExecOptions`, `ShellOutputCaptureOptions`,
 `ListReadOptions` and `TrackerOptions` are exactly that shape. Note also that
 `"x" in {}` and `const {x = false} = {}` both lie under pollution — which is why
 the applier uses `Object.hasOwn`.

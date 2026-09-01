@@ -336,7 +336,7 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 		createCase(
 			factory,
 			"forks",
-			"forks one configured branch with scoped values and a zero ledger",
+			"forks one named configured branch with scoped values and a zero ledger",
 			async ({ repo }) => {
 				const source = await repo.create({ id: "source" }, BACKGROUND_CONTEXT);
 				await source.mutate(
@@ -361,9 +361,10 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 									type: "custom",
 									customType: "sibling",
 								}),
-								setValue(branchTip("main"), CHILD_ID),
-								setValue(laneConfig("main"), configuration),
-								setValue(laneState("main"), {
+								setValue(branchTip("main"), SIBLING_ID),
+								setValue(branchTip("review"), CHILD_ID),
+								setValue(laneConfig("review"), configuration),
+								setValue(laneState("review"), {
 									currentOperationId: OPERATION_ID,
 									lastOperationId: "previous",
 									inbox: [{ entryId: PENDING_ID, kind: "write" }],
@@ -388,7 +389,7 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 								}),
 								setValue(operationMeta(OPERATION_ID), {
 									operationId: OPERATION_ID,
-									lane: "main",
+									lane: "review",
 									sourceTipId: CHILD_ID,
 									startedAt: 1,
 									intent: { kind: "compaction" },
@@ -431,7 +432,7 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 
 				const fork = await repo.fork(
 					source.metadata,
-					{ id: "fork", entryId: CHILD_ID, position: "at" },
+					{ id: "fork", scope: "branch", branch: "review", entryId: CHILD_ID, position: "at" },
 					BACKGROUND_CONTEXT,
 				);
 
@@ -439,9 +440,12 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 					(await fork.findEntries({ order: "asc" }, BACKGROUND_CONTEXT)).map(({ id }) => id),
 					[ROOT_ID, CHILD_ID],
 				);
-				strictEqual(await getBranchTip(fork), CHILD_ID);
-				deepStrictEqual((await fork.getValue(laneConfig("main"), BACKGROUND_CONTEXT))?.value, configuration);
-				deepStrictEqual((await fork.getValue(laneState("main"), BACKGROUND_CONTEXT))?.value, idleLaneState);
+				strictEqual(await fork.branch("main", BACKGROUND_CONTEXT), undefined);
+				strictEqual(await getBranchTip(fork, "review"), CHILD_ID);
+				deepStrictEqual((await fork.getValue(laneConfig("review"), BACKGROUND_CONTEXT))?.value, configuration);
+				deepStrictEqual((await fork.getValue(laneState("review"), BACKGROUND_CONTEXT))?.value, idleLaneState);
+				strictEqual(await fork.getValue(laneConfig("main"), BACKGROUND_CONTEXT), undefined);
+				strictEqual(await fork.getValue(laneState("main"), BACKGROUND_CONTEXT), undefined);
 				strictEqual(await fork.getName(BACKGROUND_CONTEXT), "source name");
 				strictEqual(await fork.getValue(applicationValue, BACKGROUND_CONTEXT), undefined);
 				deepStrictEqual(await fork.readList(applicationList, undefined, BACKGROUND_CONTEXT), []);
@@ -503,7 +507,7 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 
 				const before = await repo.fork(
 					source.metadata,
-					{ id: "before", entryId: CHILD_ID, position: "before" },
+					{ id: "before", scope: "branch", branch: "main", entryId: CHILD_ID, position: "before" },
 					BACKGROUND_CONTEXT,
 				);
 				strictEqual(await getBranchTip(before), ROOT_ID);
@@ -511,7 +515,13 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 					(await before.findEntries({ order: "asc" }, BACKGROUND_CONTEXT)).map(({ id }) => id),
 					[ROOT_ID],
 				);
-				await rejects(repo.fork(source.metadata, { id: "failed", entryId: SIBLING_ID }, BACKGROUND_CONTEXT));
+				await rejects(
+					repo.fork(
+						source.metadata,
+						{ id: "failed", scope: "branch", branch: "main", entryId: SIBLING_ID },
+						BACKGROUND_CONTEXT,
+					),
+				);
 				deepStrictEqual((await repo.list(undefined, BACKGROUND_CONTEXT)).map(({ id }) => id).sort(), [
 					"before",
 					"source",
@@ -541,7 +551,11 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 			);
 			await source.close(BACKGROUND_CONTEXT);
 
-			const fork = await repo.fork(source.metadata, { id: "fork" }, BACKGROUND_CONTEXT);
+			const fork = await repo.fork(
+				source.metadata,
+				{ id: "fork", scope: "branch", branch: "main" },
+				BACKGROUND_CONTEXT,
+			);
 			strictEqual(await getBranchTip(fork), ROOT_ID);
 			strictEqual(await fork.getValue(laneConfig("main"), BACKGROUND_CONTEXT), undefined);
 			strictEqual(await fork.getValue(laneState("main"), BACKGROUND_CONTEXT), undefined);
@@ -675,7 +689,11 @@ export function createSessionRepoForkSourceSnapshotConformance<TMetadata extends
 					],
 					BACKGROUND_CONTEXT,
 				);
-				const fork = repo.fork(source.metadata, { id: "fork" }, BACKGROUND_CONTEXT);
+				const fork = repo.fork(
+					source.metadata,
+					{ id: "fork", scope: "branch", branch: "main" },
+					BACKGROUND_CONTEXT,
+				);
 				const secondCommit = source.mutate(
 					(mutator) =>
 						mutator.commit(

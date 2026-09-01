@@ -103,6 +103,8 @@ describe("MemorySessionRepo metadata", () => {
 		);
 		const options = {
 			id: "fork",
+			scope: "branch" as const,
+			branch: "main",
 			entryId: childId,
 			position: "before" as "before" | "at",
 		};

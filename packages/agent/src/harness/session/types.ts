@@ -560,13 +560,10 @@ export interface SessionCreateOptions {
 
 export type ForkOptions =
 	| {
-			/**
-			 * Copy one path into destination Branch main. A configured source AgentLane
-			 * copies its configuration plus fresh idle state; a data-only Branch remains
-			 * data-only. Operation/pending/result/usage state is excluded.
-			 */
-			scope?: "branch";
-			/** Entry to fork from. Defaults to the source main Branch's current tip. */
+			scope: "branch";
+			/** Source Branch to copy under the same name in the destination. */
+			branch: string;
+			/** Entry to fork from. Defaults to the source Branch's current tip. */
 			entryId?: string;
 			/**
 			 * Whether the fork includes the selected entry or stops at its parent.

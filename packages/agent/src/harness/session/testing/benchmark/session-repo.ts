@@ -156,7 +156,11 @@ export const SESSION_REPO_FORK_WRITE_BENCHMARK_SCENARIOS: readonly SessionRepoFo
 			return dataset.entryCount;
 		},
 		async run(repo, source, dataset) {
-			const fork = await repo.fork(source, { id: FORK_DESTINATION_SESSION_ID }, BACKGROUND_CONTEXT);
+			const fork = await repo.fork(
+				source,
+				{ id: FORK_DESTINATION_SESSION_ID, scope: "branch", branch: "main" },
+				BACKGROUND_CONTEXT,
+			);
 			return fork.metadata.id === FORK_DESTINATION_SESSION_ID && fork.metadata.parentSessionId === source.id
 				? dataset.entryCount
 				: 0;

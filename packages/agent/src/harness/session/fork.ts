@@ -40,7 +40,7 @@ export function createForkSnapshot(source: ForkSourceSnapshot, options: ForkOpti
 	const sourceTips = storedValuesInNamespace(source.scalarValues, branchTip(""));
 	validateForkSourceSnapshot(source, sourceEntries, sourceTips, options);
 
-	const { entryIds, sourceToDestinationTip } = selectForkContents(sourceEntries, sourceTips, options);
+	const { entryIds, destinationTips } = selectForkContents(sourceEntries, sourceTips, options);
 	const entries = new Map<string, Entry>();
 	for (const id of entryIds) entries.set(id, sourceEntries.get(id)!);
 
@@ -53,12 +53,12 @@ export function createForkSnapshot(source: ForkSourceSnapshot, options: ForkOpti
 			seq: nextSeq++,
 		});
 	};
-	for (const [sourceName, destination] of sourceToDestinationTip) {
-		const configuration = findStoredValue(source.scalarValues, laneConfig(sourceName));
-		store(branchTip(destination.name), destination.tipId);
+	for (const [branch, tipId] of destinationTips) {
+		const configuration = findStoredValue(source.scalarValues, laneConfig(branch));
+		store(branchTip(branch), tipId);
 		if (configuration !== undefined) {
-			store(laneConfig(destination.name), configuration.value);
-			store(laneState(destination.name), { currentOperationId: null, lastOperationId: null, inbox: [] });
+			store(laneConfig(branch), configuration.value);
+			store(laneState(branch), { currentOperationId: null, lastOperationId: null, inbox: [] });
 		}
 	}
 	const name = findStoredValue(source.scalarValues, sessionName);
@@ -93,22 +93,17 @@ function selectForkContents(
 	options: ForkOptions,
 ): {
 	entryIds: Set<string>;
-	sourceToDestinationTip: Map<string, { name: string; tipId: string | null }>;
+	destinationTips: Map<string, string | null>;
 } {
 	const entryIds = new Set<string>();
-	const sourceToDestinationTip = new Map<string, { name: string; tipId: string | null }>();
+	const destinationTips = new Map<string, string | null>();
 	if (options.scope === "tree") {
 		for (const id of sourceEntries.keys()) entryIds.add(id);
-		for (const stored of sourceTips) {
-			sourceToDestinationTip.set(stored.address.key, {
-				name: stored.address.key,
-				tipId: stored.value,
-			});
-		}
+		for (const stored of sourceTips) destinationTips.set(stored.address.key, stored.value);
 	} else {
-		const mainTip = sourceTips.find((stored) => stored.address.key === "main");
-		if (mainTip === undefined) throw new Error("Source session is missing main branch");
-		const requested = options.entryId ?? mainTip.value;
+		const sourceTip = sourceTips.find((stored) => stored.address.key === options.branch);
+		if (sourceTip === undefined) throw new Error(`Unknown source branch: ${options.branch}`);
+		const requested = options.entryId ?? sourceTip.value;
 		let tipId = requested;
 		if (requested !== null) {
 			const target = sourceEntries.get(requested);
@@ -123,9 +118,9 @@ function selectForkContents(
 			entryIds.add(entryId);
 			entryId = entry.parentId;
 		}
-		sourceToDestinationTip.set("main", { name: "main", tipId });
+		destinationTips.set(options.branch, tipId);
 	}
-	return { entryIds, sourceToDestinationTip };
+	return { entryIds, destinationTips };
 }
 
 function validateForkSourceSnapshot(
@@ -136,9 +131,6 @@ function validateForkSourceSnapshot(
 ): void {
 	const sourceTipKeys = new Set(sourceTips.map((stored) => stored.address.key));
 
-	if (options.scope !== "tree" && !sourceTipKeys.has("main")) {
-		throw new Error("Source session is missing main branch");
-	}
 	for (const stored of source.scalarValues) {
 		if (
 			(stored.address.namespace === laneConfig("").namespace ||

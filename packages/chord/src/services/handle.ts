@@ -1,14 +1,6 @@
-import { CallTracker } from "./calls.ts";
-
 interface ResolvedValue {
 	readonly value: unknown;
 	readonly receiver: object;
-	readonly calls: CallTracker;
-}
-
-interface ServiceTarget {
-	readonly implementation: object;
-	readonly calls: CallTracker;
 }
 
 type ValueResolver = () => ResolvedValue;
@@ -17,7 +9,7 @@ type ValueResolver = () => ResolvedValue;
 export class ServiceSlot {
 	readonly #serviceId: string;
 	readonly #wrapObjects: boolean;
-	#target: ServiceTarget | undefined;
+	#implementation: object | undefined;
 
 	constructor(serviceId: string, wrapObjects: boolean) {
 		this.#serviceId = serviceId;
@@ -28,26 +20,21 @@ export class ServiceSlot {
 		return new ServiceView(this, assertAccess, this.#wrapObjects).proxy as T;
 	}
 
-	bind(implementation: object): Promise<void> {
-		const previous = this.#target;
-		this.#target = { implementation, calls: new CallTracker() };
-		return previous?.calls.retire() ?? Promise.resolve();
+	bind(implementation: object): void {
+		this.#implementation = implementation;
 	}
 
-	unbind(): Promise<void> {
-		const previous = this.#target;
-		this.#target = undefined;
-		return previous?.calls.retire() ?? Promise.resolve();
+	unbind(): void {
+		this.#implementation = undefined;
 	}
 
 	resolve(property: PropertyKey, assertAccess: () => void): ResolvedValue {
 		assertAccess();
-		const target = this.#target;
-		if (target === undefined) throw new Error(`Service ${this.#serviceId} is disconnected`);
+		const implementation = this.#implementation;
+		if (implementation === undefined) throw new Error(`Service ${this.#serviceId} is disconnected`);
 		return {
-			value: Reflect.get(target.implementation, property, target.implementation),
-			receiver: target.implementation,
-			calls: target.calls,
+			value: Reflect.get(implementation, property, implementation),
+			receiver: implementation,
 		};
 	}
 }
@@ -96,9 +83,9 @@ class ValueView {
 	}
 
 	#invoke(args: unknown[]): unknown {
-		const { value, receiver, calls } = this.#resolve();
+		const { value, receiver } = this.#resolve();
 		if (typeof value !== "function") throw new TypeError("Service member is not callable");
-		return calls.run(() => Reflect.apply(value, receiver, args));
+		return Reflect.apply(value, receiver, args);
 	}
 
 	#get(property: PropertyKey): unknown {
@@ -108,7 +95,6 @@ class ValueView {
 			return {
 				value: Reflect.get(parent.value, property, parent.value),
 				receiver: parent.value,
-				calls: parent.calls,
 			};
 		};
 		const current = resolve().value;

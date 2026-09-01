@@ -196,6 +196,61 @@ describe("facet host", () => {
 		expect(observed[1]!.context.abortSignal?.aborted).toBe(true);
 	});
 
+	test("terminates the host when keyed replacement publication fails", async () => {
+		const failure = new Error("spawn publication failed");
+		const provider = (value: string) =>
+			defineFacet({
+				id: "failing-keyed-provider",
+				setup(env) {
+					const values = env.provideMany(KeyedValue);
+					env.onActivate(() => {
+						values.spawn("current", {
+							async read() {
+								return value;
+							},
+						});
+					});
+				},
+			});
+		const host = await createFacetHost({ facets: [provider("A")] });
+		const subscription = host.services.subscribe(KeyedValue.id, "keyed", (update) => {
+			if (update.type === "spawned") throw failure;
+		});
+		subscription.activate();
+
+		await expect(host.reload([provider("B")])).rejects.toThrow("Facet reload failed after cutover");
+		await expect(host.reload([])).rejects.toThrow("Facet host cannot reload while dead");
+		expect(() => host.services.use(KeyedValue)).toThrow("Remote service provider is disposed");
+		await host.dispose();
+	});
+
+	test("terminates the host when keyed retirement publication fails", async () => {
+		const failure = new Error("close publication failed");
+		const provider = (value: string) =>
+			defineFacet({
+				id: "failing-keyed-retirement-provider",
+				setup(env) {
+					const values = env.provideMany(KeyedValue);
+					env.onActivate(() => {
+						values.spawn("current", {
+							async read() {
+								return value;
+							},
+						});
+					});
+				},
+			});
+		const host = await createFacetHost({ facets: [provider("A")] });
+		const subscription = host.services.subscribe(KeyedValue.id, "keyed", (update) => {
+			if (update.type === "closed") throw failure;
+		});
+		subscription.activate();
+
+		await expect(host.reload([provider("B")])).rejects.toThrow("Facet reload failed after cutover");
+		await expect(host.reload([])).rejects.toThrow("Facet host cannot reload while dead");
+		await host.dispose();
+	});
+
 	test("keeps unrestricted local keyed services process-local across provider reloads", async () => {
 		const observed: Array<{ service: LocalKeyedValue; context: Context }> = [];
 		const consumer = defineFacet({

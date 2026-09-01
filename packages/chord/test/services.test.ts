@@ -309,6 +309,57 @@ describe("remote services", () => {
 		provider.dispose();
 	});
 
+	test("delivers active subscriber updates before reporting listener failures", () => {
+		const failure = new Error("listener failed");
+		const provider = new RemoteServiceProvider([Models]);
+		provider.provide(Models, {
+			state: replicatedState<ModelsState>({ selected: null, revision: 1 }),
+			async select() {},
+		});
+		let delivered = 0;
+		const failing = provider.subscribe(Models.id, "singleton", () => {
+			throw failure;
+		});
+		const succeeding = provider.subscribe(Models.id, "singleton", () => {
+			delivered += 1;
+		});
+		failing.activate();
+		succeeding.activate();
+
+		expect(() =>
+			provider.replace(Models, {
+				state: replicatedState<ModelsState>({ selected: null, revision: 2 }),
+				async select() {},
+			}),
+		).toThrow(failure);
+		expect(delivered).toBe(1);
+
+		failing.close();
+		succeeding.close();
+		provider.dispose();
+	});
+
+	test("replays every buffered update before reporting listener failures", () => {
+		const failure = new Error("listener failed");
+		const provider = new RemoteServiceProvider([Models]);
+		const state = replicatedState<ModelsState>({ selected: null, revision: 0 });
+		provider.provide(Models, { state, async select() {} });
+		let delivered = 0;
+		const subscription = provider.subscribe(Models.id, "singleton", () => {
+			delivered += 1;
+			throw failure;
+		});
+		state.state.revision = 1;
+		state.publish(BACKGROUND_CONTEXT);
+		state.state.revision = 2;
+		state.publish(BACKGROUND_CONTEXT);
+
+		expect(() => subscription.activate()).toThrow("Failed to activate remote service subscription");
+		expect(delivered).toBe(2);
+		subscription.close();
+		provider.dispose();
+	});
+
 	test("clears retained facades when providers and bindings are disposed", async () => {
 		const provider = new RemoteServiceProvider([Models]);
 		provider.provide(Models, {

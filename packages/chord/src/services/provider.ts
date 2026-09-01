@@ -13,7 +13,6 @@ import type {
 	ServiceSubscription,
 	ServiceSubscriptionSnapshot,
 } from "../types.ts";
-import { CallTracker } from "./calls.ts";
 import { RemoteServiceError } from "./errors.ts";
 import { serviceDeliveryContext } from "./state.ts";
 import { getReplicatedStateInternals, type ReplicatedStateInternals } from "./state-internals.ts";
@@ -37,7 +36,6 @@ interface ProviderInstance {
 	readonly implementation: object;
 	readonly members: ReadonlyMap<string, InstanceMember>;
 	readonly removeMemberListeners: readonly (() => void)[];
-	readonly calls: CallTracker;
 	active: boolean;
 }
 
@@ -125,20 +123,18 @@ export class RemoteServiceProvider {
 		registration.singletonShape = shape;
 	}
 
-	/** Disconnect one singleton and resolve after calls admitted by the retired target settle. */
-	withdraw<T>(service: Service<T>): Promise<void> {
+	/** Disconnect one singleton while preserving active subscriptions and remote facades. */
+	withdraw<T>(service: Service<T>): void {
 		this.#assertActive();
 		this.#assertRemotable(service);
 		this.#assertAllowed(service.id);
 		const registration = this.#registration(service.id, "singleton");
 		const previous = registration.singleton;
-		if (previous === undefined) return Promise.resolve();
+		if (previous === undefined) return;
 		previous.active = false;
 		for (const remove of previous.removeMemberListeners) remove();
 		delete registration.singleton;
-		const retired = previous.calls.retire();
 		this.#emit(registration, { type: "unavailable" });
-		return retired;
 	}
 
 	/** Check a singleton replacement without changing the active provider. */
@@ -151,8 +147,8 @@ export class RemoteServiceProvider {
 		this.#assertSingletonShape(registration, serviceMemberShape(classified.members));
 	}
 
-	/** Replace one singleton immediately and resolve after calls admitted by the retired target settle. */
-	replace<T>(service: Service<T>, implementation: NoInfer<RemoteServiceContract<T>>): Promise<void> {
+	/** Replace one singleton without making its stable remote facade unavailable. */
+	replace<T>(service: Service<T>, implementation: NoInfer<RemoteServiceContract<T>>): void {
 		this.#assertActive();
 		this.#assertRemotable(service);
 		this.#assertAllowed(service.id);
@@ -168,9 +164,7 @@ export class RemoteServiceProvider {
 		}
 		registration.singleton = replacement;
 		registration.singletonShape = shape;
-		const retired = previous?.calls.retire() ?? Promise.resolve();
 		this.#emit(registration, { type: "replaced", snapshot: this.#snapshotInstance(replacement) });
-		return retired;
 	}
 
 	use<T>(service: Service<T>): T {
@@ -204,17 +198,14 @@ export class RemoteServiceProvider {
 		registration.instances.set(key, instance);
 		this.#emit(registration, { type: "spawned", instance: this.#snapshotInstance(instance) });
 		let closed = false;
-		let retired: Promise<void> | undefined;
 		return () => {
-			if (closed) return retired;
+			if (closed) return;
 			closed = true;
-			if (registration.instances.get(key) !== instance) return undefined;
+			if (registration.instances.get(key) !== instance) return;
 			instance.active = false;
 			for (const remove of instance.removeMemberListeners) remove();
 			registration.instances.delete(key);
-			retired = instance.calls.retire();
 			this.#emit(registration, { type: "closed", instance: address });
-			return retired;
 		};
 	}
 
@@ -239,9 +230,7 @@ export class RemoteServiceProvider {
 				`Remote service member ${call.serviceId}.${call.member} is not a method`,
 			);
 		}
-		const result: unknown = await instance.calls.run(() =>
-			Reflect.apply(member.method, instance.implementation, [...call.args, context]),
-		);
+		const result: unknown = await Reflect.apply(member.method, instance.implementation, [...call.args, context]);
 		return result as JsonValue | undefined;
 	}
 
@@ -271,11 +260,19 @@ export class RemoteServiceProvider {
 			activate: () => {
 				if (subscriber.closed || subscriber.active) return;
 				subscriber.active = true;
+				const errors: unknown[] = [];
 				try {
-					for (const entry of subscriber.buffer.splice(0)) listener(entry.update, entry.context);
+					for (const entry of subscriber.buffer.splice(0)) {
+						try {
+							listener(entry.update, entry.context);
+						} catch (error) {
+							errors.push(error);
+						}
+					}
 				} finally {
 					if (subscriber.terminated) subscriber.closed = true;
 				}
+				throwCollectedErrors(errors, "Failed to activate remote service subscription");
 			},
 			close: () => {
 				if (subscriber.closed) return;
@@ -352,7 +349,6 @@ export class RemoteServiceProvider {
 			implementation: classified.implementation,
 			members: classified.members,
 			removeMemberListeners,
-			calls: new CallTracker(),
 			active: true,
 		};
 		for (const [name, member] of classified.members) {
@@ -471,12 +467,21 @@ export class RemoteServiceProvider {
 	#emit(registration: ServiceRegistration, update: ServiceProviderUpdate, context?: Context): void {
 		if (registration.subscribers.size === 0) return;
 		const deliveryContext = context ?? serviceDeliveryContext();
+		const errors: unknown[] = [];
 		for (const subscriber of registration.subscribers) {
 			if (subscriber.closed) continue;
 			const entry = { update, context: deliveryContext };
-			if (subscriber.active) subscriber.listener(entry.update, entry.context);
-			else subscriber.buffer.push(entry);
+			if (!subscriber.active) {
+				subscriber.buffer.push(entry);
+				continue;
+			}
+			try {
+				subscriber.listener(entry.update, entry.context);
+			} catch (error) {
+				errors.push(error);
+			}
 		}
+		throwCollectedErrors(errors, `Failed to publish remote service ${registration.serviceId} update`);
 	}
 
 	#assertRemotable(service: { readonly id: string; readonly local: boolean }): void {
@@ -562,6 +567,11 @@ function classifyRemoteServiceImplementation(
 	}
 	if (members.size === 0) throw new TypeError(`Remote service ${serviceId} has no members`);
 	return { implementation, members };
+}
+
+function throwCollectedErrors(errors: readonly unknown[], message: string): void {
+	if (errors.length === 1) throw errors[0];
+	if (errors.length > 1) throw new AggregateError(errors, message);
 }
 
 function serviceMemberShape(members: ReadonlyMap<string, InstanceMember>): ReadonlyMap<string, ServiceMemberKind> {

@@ -208,8 +208,7 @@ load replacement module generation
 → run replacement setup
 → validate replacement shape and remote implementations
 → activate replacements in dependency order while the old providers remain routed
-→ atomically replace local targets and publish complete remote singleton replacement snapshots
-→ drain calls admitted by the retired singleton and keyed instances
+→ replace each local or remote singleton directly without withdrawing it
 → deactivate replaced plugins in reverse dependency order
 → dispose the retired loaded generation
 ```
@@ -219,13 +218,13 @@ Properties:
 - existing local and remote singleton facades keep object identity;
 - captured local and remote methods dispatch to the old provider before cutover and the replacement after cutover;
 - replicated-state facades install the replacement snapshot without becoming unhydrated;
-- calls admitted before cutover finish against the retired provider while later calls use the replacement;
+- every singleton switches directly from its old target to its replacement, but a multi-service reload is not graph-transactional;
 - keyed instances from the old plugin close; instances staged by the replacement use fresh generations;
 - setup, shape-validation, or replacement-activation failure leaves the active generation unchanged;
 - named host resources acquired during activation support overlapping staged replacements, so candidate cleanup restores the old registration and retired cleanup cannot remove the replacement; and
-- cutover performs no asynchronous work or facet callbacks.
+- any failure after replacement begins terminates the host rather than attempting to preserve a partially transitioned graph.
 
-There is no rollback after cutover. Retired-generation cleanup failures are reported without disconnecting the replacement. Committed application effects are outside the reload transaction.
+There is no rollback after cutover. Terminal cleanup revokes every facet handle before best-effort disposal; only pre-cutover candidate cleanup and ordinary host disposal guarantee dependency-ordered cleanup. Committed application effects are outside the reload transaction.
 
 #### Structural replacement
 
@@ -253,9 +252,7 @@ This full-generation path supplies actual plugin load and unload semantics witho
 
 ### 6.2 Calls during unload
 
-Replacement atomically stops new admission to the retired service target. Calls already admitted to that target retain it until they settle, while new calls through the same stable facade use the replacement. Old state publication is detached at cutover and cannot update the replacement replica.
-
-Facet deactivation and loaded-module disposal wait for admitted calls to drain. A future killable-isolate host may force termination during abnormal shutdown, but ordinary reload does not reject admitted calls. Transport disconnect still cancels only connection-owned invocations; it does not imply application-level cancellation or rollback.
+Replacement never leaves a singleton facade without a target: an invocation resolves either the old implementation or its replacement. Work already running in a retired facet is not drained; later use of that facet's revoked handles may fail as stale work. A future killable-isolate host terminates such work directly. Transport disconnect still cancels only connection-owned invocations; it does not imply application-level cancellation or rollback.
 
 ### 6.3 Update failure reporting
 

@@ -17,7 +17,12 @@ export {
 	RemoteServiceError,
 	type RemoteServiceErrorCode,
 } from "./services/errors.ts";
-export { RemoteServiceProvider } from "./services/provider.ts";
+export {
+	createRemoteServiceEndpoint,
+	type RemoteServiceEndpoint,
+	RemoteServiceProvider,
+	type ServiceUpdatePublisher,
+} from "./services/provider.ts";
 export {
 	createServiceStateDecoder,
 	createServiceStateEncoder,

@@ -16,6 +16,7 @@ import type {
 import { RemoteServiceError } from "./errors.ts";
 import { serviceDeliveryContext } from "./state.ts";
 import { getReplicatedStateInternals, type ReplicatedStateInternals } from "./state-internals.ts";
+import { decodeServiceControlCall } from "./wire.ts";
 
 type RemoteMethod = (...args: unknown[]) => unknown;
 
@@ -59,6 +60,18 @@ interface ServiceRegistration {
 	readonly instances: Map<string, ProviderInstance>;
 	readonly generations: Map<string, number>;
 	readonly subscribers: Set<ProviderSubscriber>;
+}
+
+export type ServiceUpdatePublisher = (
+	subscriptionId: string,
+	update: ServiceProviderUpdate,
+	context: Context,
+) => void | Promise<void>;
+
+/** Hosts one provider for one remote consumer and owns that consumer's subscriptions. */
+export interface RemoteServiceEndpoint {
+	invoke(call: ServiceCall, publish: ServiceUpdatePublisher, context: Context): Promise<JsonValue | undefined>;
+	dispose(): void;
 }
 
 export class RemoteServiceProvider {
@@ -467,6 +480,44 @@ export class RemoteServiceProvider {
 	#assertActive(): void {
 		if (this.#disposed) throw new Error("Remote service provider is disposed");
 	}
+}
+
+export function createRemoteServiceEndpoint(provider: RemoteServiceProvider): RemoteServiceEndpoint {
+	const subscriptions = new Map<string, ServiceSubscription>();
+	let disposed = false;
+
+	return {
+		async invoke(call, publish, context) {
+			if (disposed) throw new Error("Remote service endpoint is disposed");
+			const control = decodeServiceControlCall(call);
+			if (control?.type === "catalogue") return provider.catalogue as unknown as JsonValue;
+			if (control?.type === "subscribe") {
+				if (subscriptions.has(control.subscriptionId)) {
+					throw new Error("Service subscription ID is already active");
+				}
+				const subscription = provider.subscribe(control.serviceId, control.mode, (update, updateContext) => {
+					void Promise.resolve(publish(control.subscriptionId, update, updateContext)).catch(() => {});
+				});
+				subscriptions.set(control.subscriptionId, subscription);
+				subscription.activate();
+				return subscription.snapshot as unknown as JsonValue;
+			}
+			if (control?.type === "unsubscribe") {
+				const subscription = subscriptions.get(control.subscriptionId);
+				if (subscription === undefined) throw new Error("Service subscription was not found");
+				subscription.close();
+				subscriptions.delete(control.subscriptionId);
+				return undefined;
+			}
+			return provider.invoke(call, context);
+		},
+		dispose() {
+			if (disposed) return;
+			disposed = true;
+			for (const subscription of subscriptions.values()) subscription.close();
+			subscriptions.clear();
+		},
+	};
 }
 
 export function validateRemoteServiceImplementation(serviceId: string, implementation: unknown): void {

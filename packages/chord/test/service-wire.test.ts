@@ -1,17 +1,23 @@
 import { describe, expect, test } from "vitest";
+import { BACKGROUND_CONTEXT } from "../src/context/index.ts";
 import {
+	createRemoteServiceEndpoint,
 	createServiceCatalogueCall,
 	createServiceStateDecoder,
 	createServiceStateEncoder,
 	createServiceSubscribeCall,
 	createServiceUnsubscribeCall,
 	decodeServiceControlCall,
+	defineService,
 	parseServiceCall,
 	parseServiceCatalogue,
 	parseServiceProviderUpdate,
 	parseServiceSubscriptionSnapshot,
 	parseWireServiceProviderUpdate,
 	parseWireServiceSubscriptionSnapshot,
+	RemoteServiceProvider,
+	type ReplicatedState,
+	replicatedState,
 	type ServiceProviderUpdate,
 	type ServiceSubscriptionSnapshot,
 } from "../src/index.ts";
@@ -223,4 +229,41 @@ describe("service wire protocol", () => {
 		expect(dec.decodeUpdate(enc.encodeUpdate(closed))).toEqual(closed);
 		expect(() => enc.encodeUpdate({ ...update, sequence: 2 })).toThrow("Unknown service state");
 	});
+});
+
+interface Counter {
+	readonly state: ReplicatedState<{ value: number }>;
+}
+
+const Counter = defineService<Counter>("test.counter");
+
+test("remote service endpoints publish and clean up provider subscriptions", async () => {
+	const provider = new RemoteServiceProvider([Counter]);
+	const state = replicatedState({ value: 0 });
+	provider.provide(Counter, { state });
+	const endpoint = createRemoteServiceEndpoint(provider);
+	const updates: ServiceProviderUpdate[] = [];
+	const publish = (_subscriptionId: string, update: ServiceProviderUpdate): void => {
+		updates.push(update);
+	};
+
+	await expect(endpoint.invoke(createServiceCatalogueCall(), publish, BACKGROUND_CONTEXT)).resolves.toEqual([
+		{ serviceId: Counter.id, mode: "singleton" },
+	]);
+	await expect(
+		endpoint.invoke(
+			createServiceSubscribeCall("subscription-1", Counter.id, "singleton"),
+			publish,
+			BACKGROUND_CONTEXT,
+		),
+	).resolves.toMatchObject({ serviceId: Counter.id, mode: "singleton" });
+
+	state.state.value = 1;
+	state.publish(BACKGROUND_CONTEXT);
+	expect(updates).toEqual([{ type: "state", member: "state", sequence: 1, ops: [["s", ["value"], 1]] }]);
+	endpoint.dispose();
+	state.state.value = 2;
+	state.publish(BACKGROUND_CONTEXT);
+	expect(updates).toHaveLength(1);
+	provider.dispose();
 });

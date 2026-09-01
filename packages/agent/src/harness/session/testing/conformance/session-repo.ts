@@ -36,6 +36,7 @@ const SIBLING_ID = "00000000-0000-7000-8000-000000000003";
 const USAGE_ID = "00000000-0000-7000-8000-000000000004";
 const OPERATION_ID = "00000000-0000-7000-8000-000000000005";
 const PENDING_ID = "00000000-0000-7000-8000-000000000006";
+const UNKNOWN_ID = "00000000-0000-7000-8000-000000000007";
 const idleLaneState = {
 	currentOperationId: null,
 	lastOperationId: null,
@@ -476,59 +477,87 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 				await Promise.all([source.close(BACKGROUND_CONTEXT), fork.close(BACKGROUND_CONTEXT)]);
 			},
 		),
-		createCase(
-			factory,
-			"forks",
-			"supports before placement and rejects unknown fork points atomically",
-			async ({ repo }) => {
-				const source = await repo.create({ id: "source" }, BACKGROUND_CONTEXT);
-				await source.mutate(
-					(mutator) =>
-						mutator.commit(
-							[
-								insertEntry({
-									id: ROOT_ID,
-									parentId: null,
-									type: "custom",
-									customType: "root",
-								}),
-								insertEntry({
-									id: CHILD_ID,
-									parentId: ROOT_ID,
-									type: "custom",
-									customType: "child",
-								}),
-								setValue(branchTip("main"), CHILD_ID),
-							],
-							BACKGROUND_CONTEXT,
-						),
-					BACKGROUND_CONTEXT,
-				);
-
-				const before = await repo.fork(
-					source.metadata,
-					{ id: "before", scope: "branch", branch: "main", entryId: CHILD_ID, position: "before" },
-					BACKGROUND_CONTEXT,
-				);
-				strictEqual(await getBranchTip(before), ROOT_ID);
-				deepStrictEqual(
-					(await before.findEntries({ order: "asc" }, BACKGROUND_CONTEXT)).map(({ id }) => id),
-					[ROOT_ID],
-				);
-				await rejects(
-					repo.fork(
-						source.metadata,
-						{ id: "failed", scope: "branch", branch: "main", entryId: SIBLING_ID },
+		createCase(factory, "forks", "enforces branch ancestry for at and before placement", async ({ repo }) => {
+			const source = await repo.create({ id: "source" }, BACKGROUND_CONTEXT);
+			await source.mutate(
+				(mutator) =>
+					mutator.commit(
+						[
+							insertEntry({ id: ROOT_ID, parentId: null, type: "custom", customType: "root" }),
+							insertEntry({ id: CHILD_ID, parentId: ROOT_ID, type: "custom", customType: "child" }),
+							insertEntry({ id: SIBLING_ID, parentId: ROOT_ID, type: "custom", customType: "sibling" }),
+							setValue(branchTip("main"), CHILD_ID),
+							setValue(laneConfig("main"), configuration),
+							setValue(laneState("main"), idleLaneState),
+							setValue(branchTip("empty"), null),
+							setValue(laneConfig("empty"), configuration),
+							setValue(laneState("empty"), idleLaneState),
+						],
 						BACKGROUND_CONTEXT,
 					),
-				);
-				deepStrictEqual((await repo.list(undefined, BACKGROUND_CONTEXT)).map(({ id }) => id).sort(), [
-					"before",
-					"source",
-				]);
-				await Promise.all([source.close(BACKGROUND_CONTEXT), before.close(BACKGROUND_CONTEXT)]);
-			},
-		),
+				BACKGROUND_CONTEXT,
+			);
+
+			const before = await repo.fork(
+				source.metadata,
+				{ id: "before", scope: "branch", branch: "main", entryId: CHILD_ID, position: "before" },
+				BACKGROUND_CONTEXT,
+			);
+			strictEqual(await getBranchTip(before), ROOT_ID);
+			deepStrictEqual(
+				(await before.findEntries({ order: "asc" }, BACKGROUND_CONTEXT)).map(({ id }) => id),
+				[ROOT_ID],
+			);
+
+			const mid = await repo.fork(
+				source.metadata,
+				{ id: "mid", scope: "branch", branch: "main", entryId: ROOT_ID, position: "at" },
+				BACKGROUND_CONTEXT,
+			);
+			strictEqual(await getBranchTip(mid), ROOT_ID);
+			deepStrictEqual(
+				(await mid.findEntries({ order: "asc" }, BACKGROUND_CONTEXT)).map(({ id }) => id),
+				[ROOT_ID],
+			);
+
+			const beforeRoot = await repo.fork(
+				source.metadata,
+				{ id: "before-root", scope: "branch", branch: "main", entryId: ROOT_ID, position: "before" },
+				BACKGROUND_CONTEXT,
+			);
+			strictEqual(await getBranchTip(beforeRoot), null);
+			deepStrictEqual(await beforeRoot.findEntries({ order: "asc" }, BACKGROUND_CONTEXT), []);
+
+			const empty = await repo.fork(
+				source.metadata,
+				{ id: "empty", scope: "branch", branch: "empty" },
+				BACKGROUND_CONTEXT,
+			);
+			strictEqual(await getBranchTip(empty, "empty"), null);
+			deepStrictEqual(await empty.findEntries({ order: "asc" }, BACKGROUND_CONTEXT), []);
+
+			for (const [id, branch, entryId] of [
+				["off-branch", "main", SIBLING_ID],
+				["unknown", "main", UNKNOWN_ID],
+				["null-tip", "empty", ROOT_ID],
+			] as const) {
+				await rejects(repo.fork(source.metadata, { id, scope: "branch", branch, entryId }, BACKGROUND_CONTEXT));
+			}
+			deepStrictEqual((await repo.list(undefined, BACKGROUND_CONTEXT)).map(({ id }) => id).sort(), [
+				"before",
+				"before-root",
+				"empty",
+				"mid",
+				"source",
+			]);
+			await Promise.all([
+				source.close(BACKGROUND_CONTEXT),
+				before.close(BACKGROUND_CONTEXT),
+				beforeRoot.close(BACKGROUND_CONTEXT),
+				empty.close(BACKGROUND_CONTEXT),
+				mid.close(BACKGROUND_CONTEXT),
+			]);
+		}),
 		createCase(factory, "forks", "forks a closed source session", async ({ repo }) => {
 			const source = await repo.create({ id: "source" }, BACKGROUND_CONTEXT);
 			await source.mutate(

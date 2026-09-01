@@ -103,20 +103,25 @@ function selectForkContents(
 	} else {
 		const sourceTip = sourceTips.find((stored) => stored.address.key === options.branch);
 		if (sourceTip === undefined) throw new Error(`Unknown source branch: ${options.branch}`);
-		const requested = options.entryId ?? sourceTip.value;
-		let tipId = requested;
-		if (requested !== null) {
-			const target = sourceEntries.get(requested);
-			if (target === undefined) throw new Error(`Unknown fork entry: ${requested}`);
-			if (options.position === "before") tipId = target.parentId;
-		}
 
-		let entryId = tipId;
+		const requested = options.entryId ?? sourceTip.value;
+		let found = requested === null;
+		let tipId: string | null = null;
+		let entryId = sourceTip.value;
 		while (entryId !== null) {
 			const entry = sourceEntries.get(entryId);
 			if (entry === undefined) throw new Error(`Corrupt source branch: missing parent ${entryId}`);
-			entryIds.add(entryId);
+			if (entry.id === requested) {
+				found = true;
+				tipId = options.position === "before" ? entry.parentId : entry.id;
+				if (options.position !== "before") entryIds.add(entry.id);
+			} else if (found) {
+				entryIds.add(entry.id);
+			}
 			entryId = entry.parentId;
+		}
+		if (!found) {
+			throw new Error(`Fork entry ${requested} is not on source branch ${JSON.stringify(options.branch)}`);
 		}
 		destinationTips.set(options.branch, tipId);
 	}

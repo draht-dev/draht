@@ -563,7 +563,7 @@ export type ForkOptions =
 			scope: "branch";
 			/** Source Branch to copy under the same name in the destination. */
 			branch: string;
-			/** Entry to fork from. Defaults to the source Branch's current tip. */
+			/** Entry on the source Branch's current tip ancestry. Defaults to the current tip. */
 			entryId?: string;
 			/**
 			 * Whether the fork includes the selected entry or stops at its parent.

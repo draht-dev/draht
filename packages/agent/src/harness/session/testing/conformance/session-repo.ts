@@ -641,6 +641,7 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 							setValue(laneConfig("review"), configuration),
 							setValue(laneState("review"), idleLaneState),
 							setValue(branchTip("notes"), ROOT_ID),
+							setValue(applicationValue, { copied: true }),
 						],
 						BACKGROUND_CONTEXT,
 					),
@@ -660,7 +661,39 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 			strictEqual(await fork.getValue(laneState("notes"), BACKGROUND_CONTEXT), undefined);
 			deepStrictEqual((await fork.getValue(laneConfig("review"), BACKGROUND_CONTEXT))?.value, configuration);
 			deepStrictEqual((await fork.getValue(laneState("review"), BACKGROUND_CONTEXT))?.value, idleLaneState);
+			deepStrictEqual((await fork.getValue(applicationValue, BACKGROUND_CONTEXT))?.value, { copied: true });
 			await Promise.all([source.close(BACKGROUND_CONTEXT), fork.close(BACKGROUND_CONTEXT)]);
+		}),
+		createCase(factory, "forks", "rejects only surviving unknown reserved scalar state", async ({ repo }) => {
+			const source = await repo.create({ id: "source" }, BACKGROUND_CONTEXT);
+			await source.createBranch("main", null, BACKGROUND_CONTEXT);
+			await source.mutate(
+				(mutator) =>
+					mutator.commit(
+						[setValue(laneConfig("main"), configuration), setValue(laneState("main"), idleLaneState)],
+						BACKGROUND_CONTEXT,
+					),
+				BACKGROUND_CONTEXT,
+			);
+
+			for (const namespace of ["pi", "pi.unknown"] as const) {
+				const address = value<JsonValue>(namespace);
+				await source.setValue(address, true, BACKGROUND_CONTEXT);
+				await rejects(repo.fork(source.metadata, { id: "tree", scope: "tree" }, BACKGROUND_CONTEXT));
+				await rejects(
+					repo.fork(source.metadata, { id: "branch", scope: "branch", branch: "main" }, BACKGROUND_CONTEXT),
+				);
+				await source.deleteValue(address, BACKGROUND_CONTEXT);
+			}
+			await source.close(BACKGROUND_CONTEXT);
+
+			const tree = await repo.fork(source.metadata, { id: "tree", scope: "tree" }, BACKGROUND_CONTEXT);
+			const branch = await repo.fork(
+				source.metadata,
+				{ id: "branch", scope: "branch", branch: "main" },
+				BACKGROUND_CONTEXT,
+			);
+			await Promise.all([tree.close(BACKGROUND_CONTEXT), branch.close(BACKGROUND_CONTEXT)]);
 		}),
 	];
 }

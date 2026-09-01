@@ -1,15 +1,7 @@
 import type { CommittedWrite } from "./commit.ts";
+import { classifyForkAddress } from "./fork-policy.ts";
 import type { Entry, ForkOptions } from "./types.ts";
-import {
-	branchTip,
-	entryLabel,
-	laneConfig,
-	laneState,
-	type StoredValue,
-	sessionName,
-	type Value,
-	value,
-} from "./values.ts";
+import { branchTip, laneConfig, laneState, type StoredValue, type Value, value } from "./values.ts";
 
 export interface ForkSourceSnapshot {
 	entries: Entry[];
@@ -61,11 +53,15 @@ export function createForkSnapshot(source: ForkSourceSnapshot, options: ForkOpti
 			store(laneState(branch), { currentOperationId: null, lastOperationId: null, inbox: [] });
 		}
 	}
-	const name = findStoredValue(source.scalarValues, sessionName);
-	if (name !== undefined) store(sessionName, name.value);
-	for (const entryId of entryIds) {
-		const label = findStoredValue(source.scalarValues, entryLabel(entryId));
-		if (label !== undefined) store(entryLabel(entryId), label.value);
+	for (const stored of source.scalarValues) {
+		switch (classifyForkAddress(stored.address, options.scope, (entryId) => entryIds.has(entryId))) {
+			case "copy":
+				store(stored.address, stored.value);
+				break;
+			case "exclude":
+			case "reconstruct":
+				break;
+		}
 	}
 
 	return { entries, scalarValues, nextSeq };

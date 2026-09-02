@@ -84,7 +84,7 @@ export function createWriteToolDefinition(
 				throwIfAborted();
 
 				return {
-					content: [{ type: "text", text: `Successfully wrote ${content.length} bytes to ${path}` }],
+					content: [{ type: "text", text: `Successfully wrote to ${path}` }],
 					details: undefined,
 				};
 			});

@@ -38,6 +38,17 @@ const PLUGIN_NAME = "draht";
 // Default location for the local marketplace we generate
 const DEFAULT_MARKETPLACE_DIR = path.join(os.homedir(), ".draht", "claude-marketplace");
 
+// Host config dir, settings file, and the two opt-in side installs: the draht
+// status line (a settings.json key) and the judge TUI (a PATH symlink). Both
+// touch state OUTSIDE the marketplace transaction, so both are opt-in and both
+// record enough to undo themselves on uninstall.
+const CLAUDE_CONFIG_DIR = process.env.CLAUDE_CONFIG_DIR
+	? path.resolve(process.env.CLAUDE_CONFIG_DIR)
+	: path.join(os.homedir(), ".claude");
+const SETTINGS_PATH = path.join(CLAUDE_CONFIG_DIR, "settings.json");
+const STATUSLINE_BACKUP = path.join(os.homedir(), ".draht", "statusline-backup.json");
+const JUDGE_LINK_DIR = path.join(os.homedir(), ".local", "bin");
+
 // Files in the npm package that must NOT be copied into the plugin tree
 const IGNORE = new Set([
 	"node_modules",
@@ -46,6 +57,7 @@ const IGNORE = new Set([
 	".npmignore",
 	".DS_Store",
 	"CHANGELOG.md",
+	"__pycache__",
 ]);
 
 // ─── args ───────────────────────────────────────────────────────────────────
@@ -56,6 +68,7 @@ function parseArgs(argv) {
 	const flags = {
 		path: null, force: false, help: false, agent: null, model: null, list: false, reset: false,
 		noGraphEngine: false, graphEngine: false, graphEngineVersion: null, from: null, purgeGraphEngine: false,
+		statusline: false, judge: false,
 	};
 	for (let i = 1; i < args.length; i++) {
 		const a = args[i];
@@ -86,6 +99,13 @@ function parseArgs(argv) {
 			flags.from = args[++i];
 		} else if (a === "--purge-graph-engine") {
 			flags.purgeGraphEngine = true;
+		} else if (a === "--statusline") {
+			flags.statusline = true;
+		} else if (a === "--judge") {
+			flags.judge = true;
+		} else if (a === "--no-statusline" || a === "--no-judge") {
+			// Both side installs are opt-in, so the negations are no-ops. They
+			// exist so a scripted install can state the intent explicitly.
 		}
 	}
 	if (!command || command === "--help" || command === "-h") flags.help = true;
@@ -99,6 +119,8 @@ Usage:
   npx draht-claude install            Install as a Claude Code plugin
   npx draht-claude install --force    Reinstall even if already present
   npx draht-claude install --path DIR Custom marketplace directory
+    --statusline                      Also wire the draht status line into settings.json
+    --judge                           Also link the judge TUI onto PATH (~/.local/bin)
   npx draht-claude uninstall          Remove the plugin and marketplace
     --purge-graph-engine              Also remove ~/.draht/bin/draht-graph — WARNING: shared with
                                        draht-codex/coding-agent and baked into every repo's
@@ -110,6 +132,10 @@ Usage:
     --agent <name> --reset            Reset agent to inherit default model
     --reset                           Reset all agents to inherit
     --list                            List current agent model assignments
+  npx draht-claude install-statusline     Wire the draht status line (alias: statusline)
+  npx draht-claude uninstall-statusline   Unwire it and restore whatever was there before
+  npx draht-claude install-judge          Link the judge TUI onto PATH (alias: judge)
+  npx draht-claude uninstall-judge        Remove that link
   npx draht-claude install-graph-engine   Fetch the prebuilt draht-graph binary (alias: graph-engine)
     --graph-engine-version <v>        Pin a version instead of this package's own version
     --from <path>                     Install a locally built binary instead of fetching
@@ -121,18 +147,28 @@ Options:
   -h, --help         Show this help
   --graph-engine     Also fetch the prebuilt draht-graph binary during install/update
                      (opt-in; downloads an unsigned native binary from GitHub Releases)
+  --statusline       Also wire the draht status line during install/update
+  --judge            Also link the judge TUI onto PATH during install/update
 
 What this installs:
   • Local Claude Code marketplace named "${MARKETPLACE_NAME}" at ~/.draht/claude-marketplace/
   • Plugin "${PLUGIN_NAME}" inside that marketplace, registered and enabled
   • 23 slash commands (/new-project, /plan-phase, /execute-phase, /orchestrate, ...)
   • 11 specialist subagents (architect, implementer, reviewer, debugger, ...)
-  • 16 bundled skills (gsd-workflow, tdd-workflow, ddd-workflow, ...)
+  • 17 bundled skills (gsd-workflow, tdd-workflow, ddd-workflow, judge, ...)
   • Workflow hook scripts (pre-execute, post-task, post-phase, quality-gate)
-  • 4 Claude Code lifecycle hooks (SessionStart, UserPromptSubmit, PostToolUse, Stop)
+  • 5 Claude Code lifecycle hooks (SessionStart, UserPromptSubmit, PostToolUse, Stop,
+    PermissionRequest)
   • Self-contained draht-tools CLI (JS graph engine built in — works out of the box)
 
 Optional, not installed by default:
+  • The draht status line (dir · model · context% · 5h/7d limits · token burn ·
+    judge queue, in the draht palette). It is a settings.json change, so it is
+    opt-in: pass --statusline, or run 'npx draht-claude install-statusline'.
+    Any status line already configured is saved and restored on uninstall.
+  • The judge TUI on PATH. The plugin's hooks already queue permission prompts
+    and finished turns for it; the symlink into ~/.local/bin is what lets you
+    run 'judge' in a spare pane. Pass --judge, or run 'install-judge' later.
   • The prebuilt draht-graph binary (~6x faster map-graph). It is an unsigned
     native binary downloaded from GitHub Releases, so it is opt-in: pass
     --graph-engine, or run 'npx draht-claude install-graph-engine' later.
@@ -604,6 +640,176 @@ function writeMarketplaceManifest(marketplaceDir, pluginManifest) {
 	fs.writeFileSync(path.join(manifestDir, "marketplace.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
+// ─── status line + judge (opt-in side installs) ─────────────────────────────
+
+// Both payloads are Python. Nothing else in the plugin needs an interpreter,
+// so this is checked at wire-up time rather than assumed.
+function hasPython3() {
+	try {
+		return spawnSync("python3", ["--version"], { stdio: "ignore" }).status === 0;
+	} catch {
+		return false;
+	}
+}
+
+function statuslineScript(pluginDir) {
+	return path.join(pluginDir, "statusline", "statusline.py");
+}
+
+function judgeBinary(pluginDir) {
+	return path.join(pluginDir, "bin", "judge");
+}
+
+function readSettings() {
+	if (!fs.existsSync(SETTINGS_PATH)) return {};
+	const raw = fs.readFileSync(SETTINGS_PATH, "utf-8").trim();
+	if (raw === "") return {};
+	return JSON.parse(raw);
+}
+
+function writeSettings(settings) {
+	fs.mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });
+	const tmp = `${SETTINGS_PATH}.draht-${process.pid}.tmp`;
+	fs.writeFileSync(tmp, `${JSON.stringify(settings, null, 2)}\n`);
+	fs.renameSync(tmp, SETTINGS_PATH);
+}
+
+// True when a statusLine entry is the one this installer wrote — i.e. it runs
+// the statusline.py inside a draht plugin tree. Ownership is what makes the
+// uninstall safe: a status line the user wired up themselves is never touched.
+// The marker is the plugin-tree shape rather than the default marketplace path,
+// so an install under --path is recognised as ours too.
+const STATUSLINE_MARKER = ["plugins", PLUGIN_NAME, "statusline", "statusline.py"].join(path.sep);
+
+function isDrahtStatusline(statusLine) {
+	const command = statusLine && typeof statusLine === "object" ? statusLine.command : null;
+	return typeof command === "string" && command.includes(STATUSLINE_MARKER);
+}
+
+function installStatusline(pluginDir) {
+	const script = statuslineScript(pluginDir);
+	if (!fs.existsSync(script)) {
+		err(`status line script missing at ${script} — skipping`);
+		return;
+	}
+	if (!hasPython3()) {
+		err("python3 not found in PATH — skipping the status line (it is a Python script)");
+		return;
+	}
+
+	let settings;
+	try {
+		settings = readSettings();
+	} catch (error) {
+		err(`could not read ${SETTINGS_PATH} (${error.message}) — skipping the status line`);
+		err("fix the JSON, then run: npx draht-claude install-statusline");
+		return;
+	}
+
+	const previous = settings.statusLine;
+	if (previous !== undefined && !isDrahtStatusline(previous)) {
+		fs.mkdirSync(path.dirname(STATUSLINE_BACKUP), { recursive: true });
+		fs.writeFileSync(STATUSLINE_BACKUP, `${JSON.stringify({ savedAt: new Date().toISOString(), statusLine: previous }, null, 2)}\n`);
+		log(`  saved your existing statusLine to ${STATUSLINE_BACKUP}`);
+	}
+
+	settings.statusLine = { type: "command", command: `python3 "${script}"`, padding: 0 };
+	try {
+		writeSettings(settings);
+	} catch (error) {
+		err(`could not write ${SETTINGS_PATH} (${error.message}) — status line not wired`);
+		return;
+	}
+	log(`✓ status line wired in ${SETTINGS_PATH}`);
+	log("  dir · model · context% · 5h · 7d · token burn · judge queue, in the draht palette");
+}
+
+function removeStatusline() {
+	let settings;
+	try {
+		settings = readSettings();
+	} catch {
+		log(`Leaving ${SETTINGS_PATH} alone (unreadable JSON) — remove the statusLine key by hand if it points at draht.`);
+		return;
+	}
+	if (!isDrahtStatusline(settings.statusLine)) return;
+
+	let restored = null;
+	if (fs.existsSync(STATUSLINE_BACKUP)) {
+		try {
+			restored = JSON.parse(fs.readFileSync(STATUSLINE_BACKUP, "utf-8")).statusLine ?? null;
+		} catch {
+			restored = null;
+		}
+	}
+	if (restored) settings.statusLine = restored;
+	else delete settings.statusLine;
+
+	try {
+		writeSettings(settings);
+	} catch (error) {
+		err(`could not update ${SETTINGS_PATH}: ${error.message}`);
+		return;
+	}
+	removeRecursive(STATUSLINE_BACKUP);
+	log(restored ? "Restored your previous statusLine setting." : "Removed the draht statusLine setting.");
+}
+
+// The judge TUI has to run in its own terminal pane, so it is only useful from
+// PATH. ~/.local/bin is the conventional per-user bin dir; a symlink keeps the
+// binary a single copy that updates with the plugin.
+function linkJudge(pluginDir) {
+	const source = judgeBinary(pluginDir);
+	if (!fs.existsSync(source)) {
+		err(`judge binary missing at ${source} — skipping`);
+		return;
+	}
+	if (!hasPython3()) {
+		err("python3 not found in PATH — skipping judge (it is a Python program)");
+		return;
+	}
+
+	const link = path.join(JUDGE_LINK_DIR, "judge");
+	const existing = lstatIfExists(link);
+	if (existing && !existing.isSymbolicLink()) {
+		err(`${link} exists and is not a symlink — leaving it alone`);
+		err(`run judge from ${source} instead, or remove that file and re-run`);
+		return;
+	}
+	try {
+		fs.mkdirSync(JUDGE_LINK_DIR, { recursive: true });
+		if (existing) fs.unlinkSync(link);
+		fs.symlinkSync(source, link);
+	} catch (error) {
+		err(`could not link judge into ${JUDGE_LINK_DIR}: ${error.message}`);
+		return;
+	}
+	log(`✓ judge linked at ${link}`);
+	const onPath = (process.env.PATH || "").split(path.delimiter).includes(JUDGE_LINK_DIR);
+	if (!onPath) log(`  ${JUDGE_LINK_DIR} is not on your PATH — add it, or run judge by its full path`);
+	log("  run 'judge' in a spare terminal pane; sessions queue their permission prompts and finished turns there");
+}
+
+function unlinkJudge() {
+	const link = path.join(JUDGE_LINK_DIR, "judge");
+	const stat = lstatIfExists(link);
+	if (!stat?.isSymbolicLink()) return;
+	let target = "";
+	try {
+		target = fs.readlinkSync(link);
+	} catch {
+		return;
+	}
+	// Only ours: a link into a draht marketplace plugin tree.
+	if (!target.includes(`${path.sep}plugins${path.sep}${PLUGIN_NAME}${path.sep}bin${path.sep}judge`)) return;
+	try {
+		fs.unlinkSync(link);
+		log(`Removed ${link}`);
+	} catch (error) {
+		err(`could not remove ${link}: ${error.message}`);
+	}
+}
+
 // ─── graph engine (Go binary fetch) ────────────────────────────────────────
 // Installs the prebuilt `draht-graph` binary (go/, Phase 4) into ~/.draht/bin
 // so draht-tools.cjs's dispatch shim can find it. This is the ONLY place in
@@ -1011,6 +1217,12 @@ async function cmdInstall(flags) {
 		await ensureGraphEngine(flags);
 	}
 
+	// Opt-in side installs. They write outside the marketplace (settings.json,
+	// ~/.local/bin), so they run last, never throw, and never fail the install.
+	if (flags.statusline || flags.judge) log("");
+	if (flags.statusline) installStatusline(pluginDir);
+	if (flags.judge) linkJudge(pluginDir);
+
 	log("");
 	log(`✓ installed ${PLUGIN_NAME}@${MARKETPLACE_NAME} v${manifest.version}`);
 	log("");
@@ -1018,6 +1230,12 @@ async function cmdInstall(flags) {
 	log("  1. Restart Claude Code so it picks up the plugin");
 	log("  2. Check that commands appear: run `claude plugin list`");
 	log("  3. Try /new-project or /orchestrate inside Claude Code");
+	if (!flags.statusline || !flags.judge) {
+		log("");
+		log("Not installed (opt in whenever you want them):");
+		if (!flags.statusline) log("  npx draht-claude install-statusline   draht status line: context, limits, token burn, judge queue");
+		if (!flags.judge) log("  npx draht-claude install-judge        judge TUI on PATH: swipe through permission prompts and finished turns");
+	}
 	log("");
 	log("Docs: https://draht.dev");
 }
@@ -1058,6 +1276,12 @@ function cmdUninstall(flags) {
 		log("(claude CLI not found — skipping registry cleanup)");
 	}
 
+	// Undo the opt-in side installs before the files they point at disappear.
+	// Both are ownership-checked, so a status line or a judge binary the user
+	// wired up themselves survives.
+	removeStatusline();
+	unlinkJudge();
+
 	// Remove local marketplace files
 	if (fs.existsSync(marketplaceDir)) {
 		log(`Removing ${marketplaceDir}...`);
@@ -1078,6 +1302,16 @@ function cmdStatus(flags) {
 	const pluginManifestPath = path.join(pluginDir, ".claude-plugin", "plugin.json");
 
 	log(`marketplace dir: ${marketplaceDir}`);
+
+	let statusLine;
+	try {
+		statusLine = readSettings().statusLine;
+	} catch {
+		statusLine = undefined;
+	}
+	log(`status line:     ${isDrahtStatusline(statusLine) ? "wired" : statusLine ? "wired to something else" : "not wired"}`);
+	const judgeLink = path.join(JUDGE_LINK_DIR, "judge");
+	log(`judge:           ${lstatIfExists(judgeLink)?.isSymbolicLink() ? `linked at ${judgeLink}` : "not linked"}`);
 
 	if (!fs.existsSync(pluginManifestPath)) {
 		log("status:          not installed");
@@ -1220,6 +1454,20 @@ if (flags.help) {
 		case "install-graph-engine":
 		case "graph-engine":
 			await ensureGraphEngine(flags);
+			break;
+		case "install-statusline":
+		case "statusline":
+			installStatusline(path.join(flags.path || DEFAULT_MARKETPLACE_DIR, "plugins", PLUGIN_NAME));
+			break;
+		case "install-judge":
+		case "judge":
+			linkJudge(path.join(flags.path || DEFAULT_MARKETPLACE_DIR, "plugins", PLUGIN_NAME));
+			break;
+		case "uninstall-statusline":
+			removeStatusline();
+			break;
+		case "uninstall-judge":
+			unlinkJudge();
 			break;
 		default:
 			err(`unknown command: ${command}`);

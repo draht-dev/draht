@@ -4,6 +4,7 @@
 
 ### Added
 
+- `judge` — the human-judgment queue, shared with draht-claude: `judge-hook.cjs` (UserPromptSubmit, Stop, PermissionRequest) plus the TUI at `bin/judge` and the `judge` skill. Inert unless the TUI is running, and where no Python interpreter is present
 - `install-graph-engine` (alias `graph-engine`) command that fetches the prebuilt Go `draht-graph` knowledge-graph engine binary; `map-graph`/`graph-*`/`map-codebase` now dispatch to it automatically when present (`DRAHT_GRAPH_ENGINE=auto`, the default), falling back to the built-in JS engine otherwise — see `go/README.md` and `.planning/kg-integration/SPEC.md`
 - `--no-graph-engine` install flag and `DRAHT_SKIP_GRAPH_ENGINE` env var to skip the automatic fetch
 - portable `cinematic-continuation` skill with bundled style/continuity references, a neutral sequence template, Seedance adapter boundary, and offline timeline compiler

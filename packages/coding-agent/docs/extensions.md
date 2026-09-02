@@ -1661,7 +1661,7 @@ Typical `sourceInfo.source` values:
 
 ### pi.setModel(model, options?)
 
-Set the current model. Returns `false` if no API key is available for the model. See [models.md](models.md) for configuring custom models. Defaults to session-scoped; pass `{ persist: true }` to also update the user's global default model.
+Set the model for the current session. The change is recorded in session history and restored when that session is resumed, but by default it does not change the configured `defaultProvider` or `defaultModel` used by new sessions; pass `{ persist: true }` to also update the user's global default model. Returns `false` if authentication is not configured for the model's provider. See [models.md](models.md) for configuring custom models.
 
 ```typescript
 const model = ctx.modelRegistry.find("anthropic", "claude-sonnet-4-5");
@@ -1675,7 +1675,9 @@ if (model) {
 
 ### pi.getThinkingLevel() / pi.setThinkingLevel(level, options?)
 
-Get or set the thinking level. Level is clamped to model capabilities (non-reasoning models always use "off"). Changes emit `thinking_level_select`. Defaults to session-scoped; pass `{ persist: true }` to also update the user's global default thinking level.
+Get the current thinking level. Level is clamped to model capabilities (non-reasoning models always use "off"). Changes emit `thinking_level_select`.
+
+`pi.setThinkingLevel()` changes the thinking level for the current session. The change is recorded in session history and restored when that session is resumed, but by default it does not change the configured default used by new sessions; pass `{ persist: true }` to also update the user's global default thinking level.
 
 ```typescript
 const current = pi.getThinkingLevel();  // "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"

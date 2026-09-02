@@ -59,7 +59,7 @@
 		"generate-image-models": "npx tsx scripts/generate-image-models.ts --strict"
 	},
 	"dependencies": {
-		"@anthropic-ai/sdk": "^0.91.1",
+		"@anthropic-ai/sdk": "^0.123.0",
 		"@draht/chord": "workspace:*",
 		"@aws-sdk/client-bedrock-runtime": "^3.1030.0",
 		"@draht/telemetry": "workspace:*",

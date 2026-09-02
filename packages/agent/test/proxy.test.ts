@@ -78,9 +78,9 @@ describe("streamProxy", () => {
 	});
 
 	// Regression tests for https://github.com/earendil-works/pi/issues/8996
-	it("processes a terminal event that is not newline-terminated", async () => {
+	it("processes terminal metadata when the event is not newline-terminated", async () => {
 		const start = `data: ${JSON.stringify({ type: "start" })}\n\n`;
-		const done = `data: ${JSON.stringify({ type: "done", reason: "stop", usage })}`;
+		const done = `data: ${JSON.stringify({ type: "done", reason: "stop", usage, providerThinkingLevel: "high" })}`;
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async () => new Response(start + done, { status: 200 })),
@@ -100,6 +100,7 @@ describe("streamProxy", () => {
 
 		expect(events.map((event) => event.type)).toEqual(["start", "done"]);
 		expect(result.stopReason).toBe("stop");
+		expect(result.providerThinkingLevel).toBe("high");
 	});
 
 	it("emits an error instead of hanging when the stream ends without a terminal event", async () => {

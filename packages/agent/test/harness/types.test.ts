@@ -33,6 +33,7 @@ import type {
 	LaneConfiguration,
 	LaneExecutionInfo,
 	LaneSnapshot,
+	LaneSnapshotTool,
 	NewEntry,
 	OperationAdmissionResult,
 	OperationAt,
@@ -443,6 +444,7 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 		systemPrompt: string;
 	}>();
 	expectTypeOf<LaneSnapshot["operation"]>().not.toEqualTypeOf<SessionSnapshot>();
+	expectTypeOf<LaneSnapshotTool["status"]>().toEqualTypeOf<"running" | "settled">();
 	expectTypeOf<AgentLane["getResult"]>().returns.toEqualTypeOf<Promise<OperationResultRecord | undefined>>();
 	expectTypeOf<SuspendedRun>().toEqualTypeOf<{
 		operationId: string;

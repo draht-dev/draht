@@ -257,7 +257,7 @@ describe("runtime lane watch", () => {
 		watch.unsubscribe();
 	});
 
-	it("reduces assistant frames and renders only effect-pending tools with full-content indexes", async () => {
+	it("reduces assistant frames and projects running and settled tools with full-content indexes", async () => {
 		const frameSession = await createSession();
 		const partial = fauxAssistantMessage([], { stopReason: "pending" });
 		const frames: AssistantMessageFrame[] = [
@@ -306,10 +306,27 @@ describe("runtime lane watch", () => {
 		frameWatch.unsubscribe();
 
 		const toolSession = await createSession();
+		const toolUsage = {
+			input: 1,
+			output: 2,
+			cacheRead: 3,
+			cacheWrite: 4,
+			totalTokens: 10,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
 		const assistant = fauxAssistantMessage([
 			{ type: "text", text: "before" },
-			{ type: "toolCall", id: "call", name: "read", arguments: { live: false } },
-			{ type: "toolCall", id: "call-without-checkpoint", name: "write", arguments: { live: false } },
+			{ type: "toolCall", id: "call-completed", name: "completed", arguments: { source: "completed" } },
+			{ type: "toolCall", id: "call-running", name: "read", arguments: { source: "running" } },
+			{
+				type: "toolCall",
+				id: "call-without-checkpoint",
+				name: "write",
+				arguments: { source: "without-checkpoint" },
+			},
+			{ type: "toolCall", id: "call-ready", name: "real", arguments: { source: "real" } },
+			{ type: "toolCall", id: "call-synthetic", name: "missing", arguments: { source: "synthetic" } },
+			{ type: "toolCall", id: "call-planned", name: "planned", arguments: { source: "planned" } },
 		]);
 		const toolOperationId = toolSession.idGenerator.next();
 		await commit(toolSession, [
@@ -329,25 +346,66 @@ describe("runtime lane watch", () => {
 					configuration,
 					turnId: "turn",
 					calls: [
-						{ status: "planned", sourceIndex: 1, resultEntryId: "planned" },
-						{ status: "effect_pending", sourceIndex: 1, resultEntryId: "result", replay: "safe" },
+						{ status: "completed", sourceIndex: 1, resultEntryId: "completed", terminate: false },
+						{ status: "effect_pending", sourceIndex: 2, resultEntryId: "result", replay: "safe" },
 						{
 							status: "effect_pending",
-							sourceIndex: 2,
+							sourceIndex: 3,
 							resultEntryId: "without-checkpoint",
 							replay: "never",
 						},
-						{ status: "outcome_ready", sourceIndex: 1, resultEntryId: "ready", terminate: false },
+						{ status: "outcome_ready", sourceIndex: 4, resultEntryId: "ready", terminate: true },
+						{ status: "outcome_ready", sourceIndex: 5, resultEntryId: "synthetic", terminate: false },
+						{ status: "planned", sourceIndex: 6, resultEntryId: "planned" },
 					],
 				},
 			}),
-			storedValues.setValue(storedValues.operationToolArgs(toolOperationId, "turn", 1), { path: "file" }),
-			storedValues.setValue(storedValues.operationToolArgs(toolOperationId, "turn", 2), { path: "output" }),
+			sessionWrites.insertEntry({
+				id: "completed",
+				parentId: "assistant",
+				type: "message",
+				message: {
+					role: "toolResult",
+					toolCallId: "call-completed",
+					toolName: "completed",
+					content: [{ type: "text", text: "completed" }],
+					isError: false,
+					timestamp: 2,
+				},
+			}),
+			storedValues.setValue(storedValues.operationToolArgs(toolOperationId, "turn", 2), { path: "file" }),
+			storedValues.setValue(storedValues.operationToolArgs(toolOperationId, "turn", 3), { path: "output" }),
+			storedValues.setValue(storedValues.operationToolArgs(toolOperationId, "turn", 4), { path: "settled" }),
 			storedValues.setValue(storedValues.pendingToolOutput(toolOperationId, "result"), {
 				content: [{ type: "text", text: "partial" }],
 				details: { bytes: 1 },
 			}),
-			storedValues.setValue(storedValues.branchTip("main"), "assistant"),
+			storedValues.setValue(storedValues.pendingEntry("ready"), {
+				type: "message",
+				payload: {
+					role: "toolResult",
+					toolCallId: "call-ready",
+					toolName: "real",
+					content: [{ type: "text", text: "settled" }],
+					details: { kind: "real" },
+					usage: toolUsage,
+					addedToolNames: ["later"],
+					isError: false,
+					timestamp: 3,
+				},
+			}),
+			storedValues.setValue(storedValues.pendingEntry("synthetic"), {
+				type: "message",
+				payload: {
+					role: "toolResult",
+					toolCallId: "call-synthetic",
+					toolName: "missing",
+					content: [{ type: "text", text: "unavailable" }],
+					isError: true,
+					timestamp: 4,
+				},
+			}),
+			storedValues.setValue(storedValues.branchTip("main"), "completed"),
 			storedValues.setValue(storedValues.laneState("main"), {
 				currentOperationId: toolOperationId,
 				lastOperationId: null,
@@ -356,21 +414,108 @@ describe("runtime lane watch", () => {
 		]);
 		const toolHarness = await attach(toolSession);
 		const toolWatch = await toolHarness.watch(BACKGROUND_CONTEXT);
+		expect(toolWatch.snapshot.transcript.map(({ id }) => id)).toEqual(["assistant", "completed"]);
 		expect(toolWatch.snapshot.operation?.runningTools).toEqual([
 			{
-				toolCallId: "call",
+				status: "running",
+				toolCallId: "call-running",
 				toolName: "read",
 				args: { path: "file" },
-				partialResult: { content: [{ type: "text", text: "partial" }], details: { bytes: 1 } },
+				result: { content: [{ type: "text", text: "partial" }], details: { bytes: 1 } },
 			},
 			{
+				status: "running",
 				toolCallId: "call-without-checkpoint",
 				toolName: "write",
 				args: { path: "output" },
 			},
+			{
+				status: "settled",
+				toolCallId: "call-ready",
+				toolName: "real",
+				args: { path: "settled" },
+				result: {
+					content: [{ type: "text", text: "settled" }],
+					details: { kind: "real" },
+					usage: toolUsage,
+					addedToolNames: ["later"],
+					terminate: true,
+				},
+				isError: false,
+			},
+			{
+				status: "settled",
+				toolCallId: "call-synthetic",
+				toolName: "missing",
+				args: { source: "synthetic" },
+				result: {
+					content: [{ type: "text", text: "unavailable" }],
+					details: undefined,
+				},
+				isError: true,
+			},
 		]);
-		expect(toolWatch.snapshot.operation?.runningTools[1]).not.toHaveProperty("partialResult");
+		expect(toolWatch.snapshot.operation?.runningTools[1]).not.toHaveProperty("result");
 		toolWatch.unsubscribe();
+	});
+
+	it("faults missing or mismatched staged outcome-ready results", async () => {
+		for (const corruption of ["missing", "mismatched"] as const) {
+			const session = await createSession();
+			const operationId = session.idGenerator.next();
+			const writes: Write[] = [
+				sessionWrites.insertEntry({
+					id: "assistant",
+					parentId: null,
+					type: "message",
+					message: fauxAssistantMessage([
+						{ type: "toolCall", id: "call", name: "read", arguments: { path: "file" } },
+					]),
+				}),
+				storedValues.setValue(storedValues.operationMeta(operationId), {
+					operationId,
+					lane: "main",
+					sourceTipId: null,
+					startedAt: 1,
+					intent: { kind: "run", promptEntryIds: [] },
+				}),
+				storedValues.setValue(storedValues.operationState(operationId), {
+					...runScope(),
+					at: "tools",
+					batch: {
+						assistantEntryId: "assistant",
+						configuration,
+						turnId: "turn",
+						calls: [{ status: "outcome_ready", sourceIndex: 0, resultEntryId: "result", terminate: false }],
+					},
+				}),
+				storedValues.setValue(storedValues.branchTip("main"), "assistant"),
+				storedValues.setValue(storedValues.laneState("main"), {
+					currentOperationId: operationId,
+					lastOperationId: null,
+					inbox: [],
+				}),
+			];
+			if (corruption === "mismatched") {
+				writes.push(
+					storedValues.setValue(storedValues.pendingEntry("result"), {
+						type: "message",
+						payload: {
+							role: "toolResult",
+							toolCallId: "other-call",
+							toolName: "read",
+							content: [],
+							isError: false,
+							timestamp: 2,
+						},
+					}),
+				);
+			}
+			await commit(session, writes);
+			const harness = await attach(session);
+
+			await expect(harness.watch(BACKGROUND_CONTEXT)).rejects.toBeInstanceOf(HarnessFault);
+		}
 	});
 
 	it("faults required payload corruption and unsubscribes the incomplete watcher", async () => {

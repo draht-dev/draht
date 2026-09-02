@@ -251,12 +251,11 @@ class MiniTui {
 		this.#syncStreaming(snapshot.operation?.streamingMessage);
 		for (const tool of snapshot.operation?.runningTools ?? []) {
 			const component = this.#tool(tool.toolName, tool.toolCallId, tool.args);
-			component.markExecutionStarted();
-			if (tool.partialResult) {
-				component.updateResult(
-					{ content: tool.partialResult.content, details: tool.partialResult.details, isError: false },
-					true,
-				);
+			if (tool.status === "running") {
+				component.markExecutionStarted();
+				if (tool.result !== undefined) component.updateResult({ ...tool.result, isError: false }, true);
+			} else {
+				component.updateResult({ ...tool.result, isError: tool.isError }, false);
 			}
 		}
 		this.#syncQueues(snapshot.queues);

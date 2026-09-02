@@ -6,7 +6,7 @@
 - Branch at handoff creation: `dev`
 - Baseline commit: `d14d6b22327d545d6a253f932165b63e48d7f9c8`
 - The user reported the worktree clean immediately before this handoff.
-- This document is a handoff for implementation after conversation compaction. It is not itself the normative harness specification. `packages/agent/docs/harness.md` remains normative and must be updated as part of the work.
+- This document began as an implementation handoff after conversation compaction and now records the implemented design. It is not itself the normative harness specification; `packages/agent/docs/harness.md` remains normative.
 
 ## Goal
 
@@ -23,14 +23,14 @@ completed       → transcript toolResult entry
 
 For each call after it becomes presentation-active, `runningTools` and placed transcript entries must not have a gap or overlap. Placement is a source-prefix flush, not an all-tools barrier. Remove a call from `runningTools` on its own `entry_added`, never on `turn_end`.
 
-## Current bug
+## Original bug
 
-A call disappears between real-effect completion and source-ordered tree placement:
+A call disappeared between real-effect completion and source-ordered tree placement:
 
-1. `packages/agent/src/harness/runtime/reducer.ts`: `tool_end` splices the call out of `runningTools`.
-2. `packages/agent/src/harness/runtime/lane.ts`: `captureLaneSnapshot()`, `case "tools"`, projects only `effect_pending` calls and skips `outcome_ready` calls.
-3. The finalized result is already durable at `pendingEntry(resultEntryId)`, but a fresh/reconnected snapshot cannot display it.
-4. It reappears only after `entry_added` places the immutable `toolResult` entry.
+1. `packages/agent/src/harness/runtime/reducer.ts`: `tool_end` spliced the call out of `runningTools`.
+2. `packages/agent/src/harness/runtime/lane.ts`: `captureLaneSnapshot()`, `case "tools"`, projected only `effect_pending` calls and skipped `outcome_ready` calls.
+3. The finalized result was already durable at `pendingEntry(resultEntryId)`, but a fresh/reconnected snapshot could not display it.
+4. It reappeared only after `entry_added` placed the immutable `toolResult` entry.
 
 For a parallel batch `[A, B, C]`, if B settles while A remains pending, B may stay `outcome_ready` until A is ready. If A is already placed, B can place without waiting for C. Therefore clearing everything at `turn_end` is wrong: early-placed results would temporarily exist in both `transcript` and `runningTools`.
 
@@ -43,24 +43,23 @@ Mini does **not** replicate structural object deltas.
 - Reconnect/rebase fetches another complete snapshot.
 - `tool_update` currently carries a complete replacement progress result, not a nested diff.
 
-Current durable tool flow in `packages/agent/src/harness/runtime/drive/tools.ts`:
+Implemented durable tool flow in `packages/agent/src/harness/runtime/drive/tools.ts`:
 
 ```text
 prepare
 → before_tool
-→ intent commit (effect_pending + effective args)
+→ intent commit (effect_pending + effective args), then tool_start
 → execute/update/checkpoint
 → after_tool
 → finalize
-→ emit tool_end                       CURRENT: before staging, real effects only
-→ publishToolOutcome staging commit  (pendingEntry + outcome_ready)
+→ publishToolOutcome staging commit (pendingEntry + outcome_ready), then tool_end
 → materializeReady prefix placement
 → entry_added
 ```
 
-All real, immediate synthetic, cancellation, and recovery outcomes eventually converge through `publishToolOutcome()`.
+All real, immediate synthetic, cancellation, and recovery outcomes converge through `publishToolOutcome()`.
 
-`Lane.settleOperation()` supports commit-bound events. It commits, publishes process-local state, constructs the event batch, and the public operation awaits delivery. In parallel execution, `materializeReady()` is scheduled only after the outcome-completion promise resolves. This permits `tool_end` to be moved into the outcome staging transition: it will be delivered after staging and before placement.
+`Lane.settleOperation()` supports commit-bound events. It commits, publishes process-local state, constructs the event batch, and the public operation awaits delivery. In parallel execution, `materializeReady()` is scheduled only after the outcome-completion promise resolves. Consequently, `tool_end` is delivered after staging and before placement.
 
 ## Agreed event contract change
 
@@ -84,12 +83,14 @@ intent commit
 ### Fresh synthetic call
 
 ```text
-tool_start
-→ TX[pendingEntry + outcome_ready]
+TX[pendingEntry + outcome_ready]
+→ tool_start
 → tool_end
 → source-ordered placement
 → entry_added
 ```
+
+The staging transaction's post-commit event batch contains `tool_start` followed by `tool_end`, so a watcher cannot observe either lifecycle event without the authoritative staged state.
 
 Fresh synthetic calls include:
 
@@ -104,7 +105,7 @@ Fresh synthetic calls include:
 Historical lifecycle events are not replayed.
 
 - A restored `effect_pending` call is already represented by the initial snapshot.
-- Safe replay may emit a recovery-tagged `tool_start`/`tool_end` around the replayed effect.
+- Safe replay emits recovery-tagged `tool_start` from the checkpoint-clear commit and `tool_end` from the later outcome-staging commit.
 - Unsafe interruption synthesis may emit a recovery-tagged `tool_end` without a newly emitted `tool_start`; the initial snapshot supplied the running row.
 - A call already restored as `outcome_ready` appears as settled in the initial snapshot and needs no replayed end event before placement.
 
@@ -173,32 +174,16 @@ Upsert is required because a watch may capture durable `effect_pending` state be
 ### `tool_end`
 
 - Resolve with `matchingOperation(snapshot, event.runId)`.
-- Upsert/replace the matching row as:
-
-```ts
-{
-  status: "settled",
-  toolCallId,
-  toolName,
-  args,
-  result: event.result,
-  isError: event.isError,
-}
-```
-
+- Find the existing row by batch-local `toolCallId`; only one tool batch is presentation-active at a time.
+- Replace it with `status: "settled"`, preserving its arguments and using `event.result` and `event.isError`.
 - This naturally removes the provisional interpretation of the old `result`; there is no separate `partialResult` to delete.
 - The finalized result remains displayed until placement.
 
-A robust end upsert requires `args` on `tool_end`. Add `args: unknown` to the public event shape and populate it. This handles the race where a watcher registers after synthetic `tool_start` but before staging: its durable capture sees `planned`, misses the historical start, then receives post-commit `tool_end`.
+`tool_end` does not carry arguments and cannot create a row. Fresh synthetic `tool_start` and `tool_end` are emitted together after the staging commit, eliminating the old capture/event gap. Unsafe recovery relies on the initial snapshot's running row.
 
 ### `entry_added`
 
-Before the existing transcript dedupe guard:
-
-- If `event.entry` is a message whose role is `toolResult`, remove the matching `toolCallId` from `snapshot.operation?.runningTools`.
-- Then run the existing duplicate-entry guard and transcript logic.
-
-Removal before dedupe lets a duplicate/replayed placement event heal a stale row without duplicating transcript content.
+If `event.entry` is a message whose role is `toolResult`, remove the matching batch-local `toolCallId` from `snapshot.operation?.runningTools`, then apply the transcript update. Harness events are serialized, trusted, emitted exactly once, and not historically replayed, so neither duplicate-entry handling nor cross-batch identity is needed.
 
 Do not clear tool rows on `turn_end`.
 
@@ -271,36 +256,27 @@ Extend/refactor it so post-commit event production has the complete canonical fi
 
 Synthetic helpers currently return `ToolResultMessage` directly. Refactor carefully so synthetic outcomes also carry the canonical result data. Do not invent `details` in the transcript: existing unknown/invalid synthetic results deliberately omit message details.
 
-### Universal `tool_start`
+### Commit-bound `tool_start`
 
-Fresh synthetic paths must emit `tool_start` before staging.
+For fresh execution, `publishToolIntent()` attaches `tool_start` to the commit that persists effective arguments and changes the call to `effect_pending`. The public operation awaits delivery before admitting `executeToolCall()`, preserving `tool_start → tool_update*` without requiring each update callback to await delivery.
 
-A useful implementation shape is a shared `emitToolStart(...)` helper used from:
+For a fresh synthetic call that never writes effect intent, `publishToolOutcome()` attaches `tool_start` before `tool_end` in the outcome-staging commit's event batch. It reports the source block arguments.
 
-- real execution after effective argument intent is durable and before effect updates/end;
-- immediate synthetic outcome paths, using source `block.arguments` when no effective arguments exist;
-- planned cancellation synthesis.
-
-For actual execution, start must be queued before `executeToolCall()` can synchronously fail or publish an update. Event-bus serialization must preserve `tool_start → tool_update*` without requiring each update callback to await delivery.
-
-For executable calls, report persisted/effective validated arguments. For synthetic calls that never wrote effective arguments, report the source block arguments.
-
-Do not emit a fresh start merely to replay historical lifecycle for an already-restored unsafe `effect_pending` call; its initial snapshot is the baseline.
+For safe recovery, the checkpoint-clear commit emits recovery-tagged `tool_start` using persisted effective arguments. Do not emit a fresh start for an already-restored unsafe `effect_pending` call; its initial snapshot is the baseline.
 
 ### Post-commit `tool_end`
 
 Remove the current pre-staging `tool_end` emission from `performToolInvocation()`.
 
-Make `publishToolOutcome()` attach `tool_end` to the same staging command's `events` callback. The event must carry:
+`publishToolOutcome()` attaches `tool_end` to the same staging command's `events` callback. The event carries:
 
 - `runId`, `turnId`, `toolCallId`, `toolName`;
-- `args` (persisted effective args when present, otherwise source arguments);
 - canonical final `result`;
 - `isError`;
 - cancellation-normalized durable `terminate`;
 - `recovery: true` where applicable.
 
-The staging planner has a `SessionReader`. It can read persisted `operationToolArgs`; pass source arguments as the legal fallback for planned synthetic outcomes. Event data must describe the state actually committed, especially cancellation forcing `terminate: false`.
+Arguments belong to `tool_start` and are not repeated on `tool_end`. Event data describes the state actually committed, especially cancellation forcing `terminate: false`.
 
 Because `Lane.command()` awaits retained event delivery and `runParallel()` schedules materialization from the outcome-completion promise, the required order is:
 
@@ -314,7 +290,7 @@ staging commit
 
 ### Call sites to audit
 
-Every `publishToolOutcome()` call must supply the source-argument fallback and recovery context correctly:
+Every `publishToolOutcome()` call must supply the source tool call and recovery context correctly:
 
 - immediate outcome in `startToolInvocation()`;
 - cancellation after intent but before execution;
@@ -377,8 +353,7 @@ Add focused coverage for:
 
 - `tool_update` from a stale/wrong `runId` does not mutate the current operation;
 - `tool_start` upserts rather than duplicates a row captured from durable intent;
-- `tool_end` can upsert a missing row using its `args` payload;
-- duplicate `entry_added` removes a stale matching row before transcript dedupe.
+- `tool_end` settles the existing batch-local row.
 
 ### Capture/watch tests
 
@@ -401,15 +376,15 @@ File: `packages/agent/test/harness/runtime/drive-tools.test.ts`
 
 Update/add ordering assertions proving:
 
-- real: `tool_start < tool_update* < staging commit < tool_end < entry_added`;
-- immediate synthetic: `tool_start < staging commit < tool_end < entry_added`, no tool effect and no `after_tool`;
+- real: `intent commit < tool_start < tool_update* < staging commit < tool_end < entry_added`;
+- immediate synthetic: `staging commit < tool_start < tool_end < entry_added`, no tool effect and no `after_tool`;
 - planned cancellation gets coherent start/end;
 - unsafe recovery uses initial snapshot plus recovery-tagged end without replaying effects;
 - B can emit post-commit end and remain settled while A blocks placement;
 - source-order placement remains unchanged;
 - a crash after staging cannot replay the call.
 
-The current normative tests/documentation explicitly require `tool_end` before staging. Reverse those expectations deliberately.
+The baseline normative tests/documentation required `tool_end` before staging; the implementation reverses those expectations deliberately.
 
 ### Type/event catalog tests
 
@@ -418,7 +393,7 @@ Audit:
 - `packages/agent/test/harness/types.test.ts`
 - `packages/agent/src/harness/telemetry.ts`
 
-No new event name is planned, but `tool_end` gains `args` and semantics change.
+No new event name is added. `tool_end` omits arguments and its semantics change.
 
 ### Mini regression
 
@@ -439,7 +414,7 @@ Read both documents completely before editing:
 - `packages/agent/docs/harness.md` (normative)
 - `packages/agent/docs/tool-durability.md`
 
-Update all statements that currently require:
+The implementation updates baseline statements that required:
 
 - `tool_end` before staging;
 - `tool_start`/`tool_end` only for real effects;

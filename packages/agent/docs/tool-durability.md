@@ -57,7 +57,7 @@ Each call already reserves its result entry ID before execution. Use that as the
 invocationId = resultEntryId
 ```
 
-It is session-unique, survives safe replay, and is distinct from the provider's `toolCallId`.
+It is session-unique, survives safe replay, and is distinct from the provider's batch-local `toolCallId`, which a later assistant message may reuse.
 
 The surrounding operation state continues to provide:
 
@@ -233,6 +233,7 @@ planned
      set pi.op.tool_args,
      set call = effect_pending(replay)
    ]
+→ post-commit tool_start
 → admit tool execution
 ```
 
@@ -260,8 +261,8 @@ When the tool promise settles:
 2. await the latest tracked `tool_update` delivery and latest checkpoint-write promise; each implies completion of its preceding queue;
 3. run `after_tool` when this is a real fresh or safely replayed result and cancellation did not prevent the hook;
 4. construct the complete final `ToolResultMessage`;
-5. emit and await `tool_end` for a real execution;
-6. commit the result as `outcome_ready`.
+5. commit the result as `outcome_ready`;
+6. emit and await `tool_end` from the committed staging transition.
 
 `setMemo()` returns a promise and tools must await it; `step.do` always does. An unawaited pre-return mutation is still enqueued before staging and is deleted by staging. Calls begun after capability expiry reject. No separate invocation-write drain exists.
 
@@ -280,7 +281,7 @@ TX[
 ]
 ```
 
-The transaction is the linearization point after which the invocation can never replay.
+The transaction is the linearization point after which the invocation can never replay. Its post-commit `tool_end` is therefore durable evidence that the finalized outcome is ready; it is no longer a pre-commit effect observation.
 
 The staged message contains the final:
 
@@ -566,22 +567,23 @@ A reconnecting client may see:
 
 - live process-local progress newer than the latest durable checkpoint before disconnect;
 - after process replacement, only the latest committed bounded checkpoint;
-- `outcome_ready` calls as no longer running but not yet visible in the transcript until source-ordered materialization;
+- `outcome_ready` calls as settled rows in `runningTools` until source-ordered materialization;
 - completed calls in the transcript.
 
-In `LaneSnapshot`, an effect-pending tool's `partialResult` prefers its latest process-local update and falls back to the durable checkpoint after reopen. An `outcome_ready` call is settled and does not appear in `runningTools`.
+`LaneSnapshot.operation.runningTools` is a discriminated union. An effect-pending tool has `status: "running"` and an optional `result` containing the latest complete progress snapshot, falling back to the durable checkpoint after reopen. An outcome-ready call has `status: "settled"`, its required complete final `result`, and `isError`; it remains there until its immutable result entry's `entry_added` removes the row and places the same presentation in the transcript. Planned and completed calls are omitted.
 
 ## Events and hooks
 
-- `tool_start` remains a live effect event.
+- `tool_start` begins public processing presentation for a fresh call; it is emitted from the commit that establishes effect intent or a synthetic staged outcome and does not by itself prove an external effect started. It carries effective arguments for an intended effect and source arguments for an immediate synthetic result.
 - live progress events and durable progress checkpoints do not prove completion.
 - The harness awaits the latest `tool_update` delivery before `after_tool`, preserving the existing listener ordering without making `onUpdate` async.
-- `tool_end` reports a finalized real result before its `outcome_ready` staging commit, in completion order. It is observation, not proof of durability.
-- synthetic blocked and unsafe-recovery outcomes emit no tool-effect lifecycle and run no post-effect tool hook.
-- message lifecycle and `entry_added` occur when the staged result materializes, not when it first becomes `outcome_ready`.
+- `tool_end` carries the complete finalized result after its `outcome_ready` staging commit, in completion order. It is durable settlement evidence and does not repeat the arguments from `tool_start`.
+- for a fresh blocked, invalid, truncated, or planned-cancellation synthetic outcome, the staging commit emits `tool_start` followed by `tool_end`; these paths still run no tool effect or post-effect hook. Cancellation after effect intent uses the earlier intent-bound start and a staging-bound end.
+- an unsafe restored effect is already represented as running by the initial snapshot and may emit only a recovery-tagged `tool_end` when interruption synthesis stages.
+- message lifecycle and `entry_added` occur when the staged result materializes, not when it first becomes `outcome_ready`; `entry_added` removes only that settled row.
 - passive listeners cannot mutate invocation state reentrantly.
 
-Instrumented-storage tests assert this ordering. A crash after `tool_end` but before outcome staging may recover or safely replay the still-uncertain call; only staging prevents replay. Historical events are not replayed, though a safely replayed execution emits its own recovery-tagged lifecycle.
+Instrumented-storage tests assert `intent commit → tool_start → tool_update* → outcome staging → tool_end → source-ordered placement` for execution and `outcome staging → tool_start → tool_end → source-ordered placement` for fresh synthetic results. Historical events are not replayed; a safely replayed execution emits recovery `tool_start` from its checkpoint-clear commit and `tool_end` from outcome staging.
 
 ## Races
 
@@ -670,7 +672,7 @@ Instrumented-storage tests assert this ordering. A crash after `tool_end` but be
 
 ### Atomicity and instrumentation
 
-- exact intent, synchronous update acceptance, asynchronous update-delivery, `after_tool`, `tool_end`, outcome-ready, source-ordered message lifecycle, and materialization order;
+- exact intent, synchronous update acceptance, asynchronous update-delivery, `after_tool`, outcome-ready staging, post-commit `tool_end`, source-ordered message lifecycle, and materialization order;
 - outcome staging is atomic with memo/output cleanup;
 - materialization is atomic with pending deletion, usage, tip, and state;
 - crash at every boundary;

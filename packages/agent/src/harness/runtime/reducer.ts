@@ -3,6 +3,14 @@ import type { OperationResultRecord } from "../session/types.ts";
 
 export type LaneSnapshotReduction = "rebase" | undefined;
 
+type LaneOperationSnapshot = NonNullable<LaneSnapshot["operation"]>;
+
+function upsertTool(operation: LaneOperationSnapshot, tool: LaneOperationSnapshot["runningTools"][number]): void {
+	const index = operation.runningTools.findIndex((candidate) => candidate.toolCallId === tool.toolCallId);
+	if (index === -1) operation.runningTools.push(tool);
+	else operation.runningTools[index] = tool;
+}
+
 function matchingOperation(
 	snapshot: LaneSnapshot,
 	operationId: string,
@@ -108,7 +116,9 @@ export function reduceLaneSnapshot(
 		}
 		case "tool_start": {
 			const operation = matchingOperation(snapshot, event.runId);
-			operation?.runningTools.push({
+			if (operation === undefined) return;
+			upsertTool(operation, {
+				status: "running",
 				toolCallId: event.toolCallId,
 				toolName: event.toolName,
 				args: event.args,
@@ -116,24 +126,42 @@ export function reduceLaneSnapshot(
 			return;
 		}
 		case "tool_update": {
-			const tool = snapshot.operation?.runningTools.find((candidate) => candidate.toolCallId === event.toolCallId);
-			if (tool !== undefined) tool.partialResult = event.partialResult;
+			const operation = matchingOperation(snapshot, event.runId);
+			const tool = operation?.runningTools.find((candidate) => candidate.toolCallId === event.toolCallId);
+			if (tool?.status === "running") tool.result = event.partialResult;
 			return;
 		}
 		case "tool_end": {
 			const operation = matchingOperation(snapshot, event.runId);
-			const index =
-				operation?.runningTools.findIndex((candidate) => candidate.toolCallId === event.toolCallId) ?? -1;
-			if (operation !== undefined && index !== -1) operation.runningTools.splice(index, 1);
+			if (operation === undefined) return;
+			const index = operation.runningTools.findIndex((candidate) => candidate.toolCallId === event.toolCallId);
+			const current = operation.runningTools[index];
+			if (current === undefined) return;
+			operation.runningTools[index] = {
+				status: "settled",
+				toolCallId: event.toolCallId,
+				toolName: event.toolName,
+				args: current.args,
+				result: event.result,
+				isError: event.isError,
+			};
 			return;
 		}
-		case "entry_added":
-			if (snapshot.transcript.some((entry) => entry.id === event.entry.id)) return;
+		case "entry_added": {
+			if (event.entry.type === "message" && event.entry.message.role === "toolResult") {
+				const operation = snapshot.operation;
+				if (operation !== null) {
+					const toolCallId = event.entry.message.toolCallId;
+					const index = operation.runningTools.findIndex((candidate) => candidate.toolCallId === toolCallId);
+					if (index !== -1) operation.runningTools.splice(index, 1);
+				}
+			}
 			if (event.entry.type === "compaction") snapshot.transcript.splice(0, snapshot.transcript.length, event.entry);
 			else snapshot.transcript.push(event.entry);
 			snapshot.tipId = event.entry.id;
 			if (event.entry.type === "message") snapshot.stats.messageCount += 1;
 			return;
+		}
 		case "queue_update":
 			snapshot.queues = event.queues;
 			return;

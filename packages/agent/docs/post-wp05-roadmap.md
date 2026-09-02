@@ -201,6 +201,7 @@ Completed by this audit:
 
 Remaining cleanup:
 
+- **Harness-owned DTO boundary:** the durable Harness still imports legacy agent-loop DTOs from `src/types.ts`: `AgentMessage`, `AgentToolResult`, `AgentToolCall`, `AgentTool`, `QueueMode`, and `ThinkingLevel`. Make a later one-shot cut to independent `HarnessMessage`, `CustomHarnessMessages`, `HarnessToolResult`, `HarnessToolCall`, `HarnessQueueMode`, and `HarnessThinkingLevel` definitions; keep `AgentHarnessTool` as the executable Harness configuration type. Update Harness internals, root exports, declaration-merging tests, documentation, and experimental coding-agent consumers together. Do not alias the new message/tool DTOs back to legacy types, because that preserves the coupling this work is intended to remove.
 - Preserve shared-container support; do not remove it incidentally.
 - Remove or use unused `insertEntryRow()` and `insertUsageLedgerRow()`.
 - Consolidate duplicated SQLite branch payload/structure scan plumbing only after correctness tests pin both paths.

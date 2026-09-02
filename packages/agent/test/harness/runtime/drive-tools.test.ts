@@ -3,7 +3,7 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HarnessEvent, WatchHandle } from "../../../src/harness/agent-harness.ts";
 import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/compaction.ts";
-import { BACKGROUND_CONTEXT } from "../../../src/harness/context.ts";
+import { BACKGROUND_CONTEXT, type Context } from "../../../src/harness/context.ts";
 import { HookRegistry } from "../../../src/harness/hooks.ts";
 import { runTools } from "../../../src/harness/runtime/drive/tools.ts";
 import { Lane } from "../../../src/harness/runtime/lane.ts";
@@ -39,7 +39,7 @@ interface Fixture {
 	assistantEntryId: string;
 	resultEntryIds: string[];
 	operationId: string;
-	config: Config<undefined>;
+	observations: string[];
 }
 
 interface FixtureOptions {
@@ -61,6 +61,32 @@ interface FixtureOptions {
 
 function unusedWatch<T>(): WatchHandle<T> {
 	throw new Error("watch is not used by tool procedure tests");
+}
+
+class ObservedMemoryStorage extends MemoryStorage {
+	readonly observations: string[] = [];
+
+	override async commit(writes: Write[], context: Context) {
+		const result = await super.commit(writes, context);
+		if (
+			writes.some((write) => write.kind === "value" && write.op === "set" && write.namespace === "pi.op.tool_args")
+		) {
+			this.observations.push("intent_commit");
+		}
+		const stagesOutcome = writes.some(
+			(write) => write.kind === "value" && write.op === "set" && write.namespace === "pi.pending.entry",
+		);
+		if (stagesOutcome) this.observations.push("outcome_commit");
+		if (
+			!stagesOutcome &&
+			writes.some(
+				(write) => write.kind === "value" && write.op === "delete" && write.namespace === "pi.pending.tool_output",
+			)
+		) {
+			this.observations.push("replay_commit");
+		}
+		return result;
+	}
 }
 
 function deferred<T = void>(): { promise: Promise<T>; resolve(value: T): void } {
@@ -107,7 +133,7 @@ function tool(
 }
 
 async function createFixture(options: FixtureOptions): Promise<Fixture> {
-	const storage = new MemoryStorage({ now: () => 100 });
+	const storage = new ObservedMemoryStorage({ now: () => 100 });
 	const session = new StorageBackedSession(
 		{ id: `drive-tools-${sessions.length}`, createdAt: 1, storageVersion: 1 },
 		storage,
@@ -124,7 +150,7 @@ async function createFixture(options: FixtureOptions): Promise<Fixture> {
 		activeToolNames: options.calls.map(({ name }) => name),
 	};
 	const assistant = fauxAssistantMessage(
-		options.calls.map(({ name, value = name }) => fauxToolCall(name, { value })),
+		options.calls.map(({ name, value = name }, index) => fauxToolCall(name, { value }, { id: `call-${index}` })),
 		{ stopReason: options.stopReason ?? "toolUse", timestamp: 20 },
 	);
 	const calls =
@@ -197,6 +223,7 @@ async function createFixture(options: FixtureOptions): Promise<Fixture> {
 		(cause) => (cause instanceof Error ? cause : new Error(String(cause))),
 		async (batch) => {
 			events.push(...structuredClone(batch));
+			storage.observations.push(...batch.map((event) => event.type));
 			await options.onEmit?.(batch);
 		},
 		unusedWatch,
@@ -204,7 +231,17 @@ async function createFixture(options: FixtureOptions): Promise<Fixture> {
 	);
 	const drive = new Drive({ operationId }, BACKGROUND_CONTEXT);
 	lane.activeDrive = drive;
-	return { session, lane, drive, hooks, events, assistantEntryId, resultEntryIds, operationId, config };
+	return {
+		session,
+		lane,
+		drive,
+		hooks,
+		events,
+		assistantEntryId,
+		resultEntryIds,
+		operationId,
+		observations: storage.observations,
+	};
 }
 
 function currentRun(fixture: Fixture): OperationState {
@@ -319,6 +356,17 @@ describe("durable tool batch", () => {
 		await expect(lateInvocation?.setMemo("late", true)).rejects.toThrow("no longer owns");
 		const eventTypes = fixture.events.map(({ type }) => type);
 		expect(eventTypes.indexOf("tool_update")).toBeLessThan(eventTypes.indexOf("tool_end"));
+		const firstIntent = fixture.observations.indexOf("intent_commit");
+		const firstStart = fixture.observations.indexOf("tool_start");
+		const firstUpdate = fixture.observations.indexOf("tool_update");
+		const firstCommit = fixture.observations.indexOf("outcome_commit");
+		const firstEnd = fixture.observations.indexOf("tool_end");
+		const firstPlacement = fixture.observations.indexOf("entry_added");
+		expect(firstIntent).toBeLessThan(firstStart);
+		expect(firstStart).toBeLessThan(firstUpdate);
+		expect(firstUpdate).toBeLessThan(firstCommit);
+		expect(firstCommit).toBeLessThan(firstEnd);
+		expect(firstEnd).toBeLessThan(firstPlacement);
 		expect(fixture.events.filter(({ type }) => type === "entry_added")).toHaveLength(2);
 		expect(fixture.events.filter(({ type }) => type === "usage")).toHaveLength(1);
 		expect(fixture.events.at(-1)?.type).toBe("turn_end");
@@ -346,6 +394,12 @@ describe("durable tool batch", () => {
 		await waitFor(() => currentCalls(fixture)[1]?.status === "outcome_ready");
 		expect(currentCalls(fixture).map(({ status }) => status)).toEqual(["effect_pending", "outcome_ready"]);
 		expect(await fixture.session.getEntry(fixture.resultEntryIds[1]!, BACKGROUND_CONTEXT)).toBeUndefined();
+		expect(fixture.events.find((event) => event.type === "tool_start" && event.toolName === "b")).toMatchObject({
+			args: { value: "b" },
+		});
+		expect(fixture.events.find((event) => event.type === "tool_end" && event.toolName === "b")).toMatchObject({
+			result: { content: [{ type: "text", text: "b" }] },
+		});
 		finishA.resolve();
 		await running;
 
@@ -396,6 +450,14 @@ describe("durable tool batch", () => {
 		expect(safeExecute).toHaveBeenCalledOnce();
 		expect(safeExecute.mock.calls[0]?.[0]).toBe("persisted");
 		expect(unsafeExecute).not.toHaveBeenCalled();
+		expect(
+			fixture.events.find((event) => event.type === "tool_start" && event.toolCallId === "call-0"),
+		).toMatchObject({ recovery: true, args: { value: "persisted" } });
+		expect(fixture.observations.indexOf("replay_commit")).toBeLessThan(fixture.observations.indexOf("tool_start"));
+		expect(fixture.events.find((event) => event.type === "tool_end" && event.toolCallId === "call-0")).toMatchObject({
+			recovery: true,
+			isError: false,
+		});
 		const unsafeEntry = await fixture.session.getEntry(fixture.resultEntryIds[1]!, BACKGROUND_CONTEXT);
 		expect(unsafeEntry?.type === "message" ? unsafeEntry.message : undefined).toMatchObject({
 			role: "toolResult",
@@ -407,6 +469,11 @@ describe("durable tool batch", () => {
 				? unsafeEntry.message.content.at(-1)
 				: undefined,
 		).toMatchObject({ type: "text", text: expect.stringContaining("external outcome is unknown") });
+		expect(fixture.events.some((event) => event.type === "tool_start" && event.toolCallId === "call-1")).toBe(false);
+		expect(fixture.events.find((event) => event.type === "tool_end" && event.toolCallId === "call-1")).toMatchObject({
+			recovery: true,
+			isError: true,
+		});
 	});
 
 	it("reconciles a restored cancelled batch without hooks, context, or effects", async () => {
@@ -450,6 +517,12 @@ describe("durable tool batch", () => {
 				? pending.message.content.at(-1)
 				: undefined,
 		).toMatchObject({ type: "text", text: expect.stringContaining("external outcome is unknown") });
+		const starts = fixture.events.filter((event) => event.type === "tool_start");
+		const ends = fixture.events.filter((event) => event.type === "tool_end");
+		expect(starts).toHaveLength(1);
+		expect(starts[0]).toMatchObject({ toolName: "planned", args: { value: "planned" } });
+		expect(ends).toHaveLength(2);
+		expect(ends.find((event) => event.toolCallId === starts[0]?.toolCallId)).toMatchObject({ isError: true });
 	});
 
 	it("materializes outcome-ready state without resolving tools or tool context", async () => {
@@ -457,7 +530,7 @@ describe("durable tool batch", () => {
 		const context = vi.fn(() => undefined);
 		const staged: ToolResultMessage = {
 			role: "toolResult",
-			toolCallId: "call-1",
+			toolCallId: "call-0",
 			toolName: "ready",
 			content: [{ type: "text", text: "already done" }],
 			addedToolNames: ["later"],
@@ -472,19 +545,10 @@ describe("durable tool batch", () => {
 			extraWrites: ({ resultEntryIds }) => [
 				storedValues.setValue(storedValues.pendingEntry(resultEntryIds[0]!), {
 					type: "message",
-					payload: { ...staged, toolCallId: "call-1" },
+					payload: staged,
 				}),
 			],
 		});
-		const assistant = await fixture.session.getEntry(fixture.assistantEntryId, BACKGROUND_CONTEXT);
-		if (assistant?.type !== "message" || assistant.message.role !== "assistant") throw new Error("missing assistant");
-		const block = assistant.message.content[0];
-		if (block?.type !== "toolCall") throw new Error("missing call");
-		await fixture.session.setValue(
-			storedValues.pendingEntry(fixture.resultEntryIds[0]!),
-			{ type: "message", payload: { ...staged, toolCallId: block.id } },
-			BACKGROUND_CONTEXT,
-		);
 
 		await driveTools(fixture);
 		expect(execute).not.toHaveBeenCalled();
@@ -505,6 +569,8 @@ describe("durable tool batch", () => {
 			tools: [tool("present", execute)],
 			stopReason: "length",
 		});
+		const truncatedAfterTool = vi.fn(() => undefined);
+		truncated.hooks.on("after_tool", truncatedAfterTool);
 		await driveTools(truncated);
 		expect(execute).not.toHaveBeenCalled();
 		const truncatedEntry = await truncated.session.getEntry(truncated.resultEntryIds[0]!, BACKGROUND_CONTEXT);
@@ -513,8 +579,18 @@ describe("durable tool batch", () => {
 				? truncatedEntry.message.content[0]
 				: undefined,
 		).toMatchObject({ type: "text", text: expect.stringContaining("arguments may be truncated") });
+		expect(truncatedAfterTool).not.toHaveBeenCalled();
+		expect(truncated.events.filter((event) => event.type === "tool_start")).toHaveLength(1);
+		expect(truncated.events.filter((event) => event.type === "tool_end")).toHaveLength(1);
+		expect(truncated.observations.indexOf("outcome_commit")).toBeLessThan(
+			truncated.observations.indexOf("tool_start"),
+		);
+		expect(truncated.observations.indexOf("tool_start")).toBeLessThan(truncated.observations.indexOf("tool_end"));
+		expect(truncated.observations.indexOf("tool_end")).toBeLessThan(truncated.observations.indexOf("entry_added"));
 
 		const missing = await createFixture({ calls: [{ name: "missing" }], tools: [] });
+		const missingAfterTool = vi.fn(() => undefined);
+		missing.hooks.on("after_tool", missingAfterTool);
 		await driveTools(missing);
 		const missingEntry = await missing.session.getEntry(missing.resultEntryIds[0]!, BACKGROUND_CONTEXT);
 		expect(missingEntry?.type === "message" ? missingEntry.message : undefined).toMatchObject({
@@ -527,6 +603,17 @@ describe("durable tool batch", () => {
 				? Object.hasOwn(missingEntry.message, "details")
 				: true,
 		).toBe(false);
+		expect(missingAfterTool).not.toHaveBeenCalled();
+		expect(missing.events.filter((event) => event.type === "tool_start")).toHaveLength(1);
+		const missingEnds = missing.events.filter((event) => event.type === "tool_end");
+		expect(missingEnds).toHaveLength(1);
+		expect(missing.events.find((event) => event.type === "tool_start")).toMatchObject({
+			args: { value: "missing" },
+		});
+		expect(missingEnds[0]).toMatchObject({
+			result: { content: [{ type: "text", text: 'Tool "missing" is unavailable' }], details: undefined },
+			isError: true,
+		});
 	});
 
 	it("awaits update delivery and checkpoint persistence before after_tool", async () => {

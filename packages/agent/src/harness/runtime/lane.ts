@@ -34,6 +34,7 @@ import type {
 import { type BranchPreparation, prepareBranchEntries } from "../compaction/branch-summarization.ts";
 import { prepareCompaction } from "../compaction/compaction.ts";
 import { awaitWithContext, type Context } from "../context.ts";
+import { toolResultFromMessage } from "../execution/tools.ts";
 import type { HookRegistry } from "../hooks.ts";
 import { formatPromptTemplateInvocation } from "../prompt-templates.ts";
 import {
@@ -1796,7 +1797,7 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 						throw new SessionInvariantError("Tool batch assistant entry is invalid");
 					}
 					for (const call of batch.calls) {
-						if (call.status !== "effect_pending") continue;
+						if (call.status === "planned" || call.status === "completed") continue;
 						const block = assistant.message.content[call.sourceIndex];
 						if (block?.type !== "toolCall") {
 							throw new SessionInvariantError(
@@ -1807,18 +1808,37 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 							operationToolArgs(operation.meta.operationId, batch.turnId, call.sourceIndex),
 							context,
 						);
-						if (args === undefined) {
-							throw new SessionInvariantError(`Tool call ${block.id} is missing persisted arguments`);
+						if (call.status === "effect_pending") {
+							if (args === undefined) {
+								throw new SessionInvariantError(`Tool call ${block.id} is missing persisted arguments`);
+							}
+							const checkpoint = await reader.getValue(
+								pendingToolOutput(operation.meta.operationId, call.resultEntryId),
+								context,
+							);
+							runningTools.push({
+								status: "running",
+								toolCallId: block.id,
+								toolName: block.name,
+								args: args.value,
+								...(checkpoint === undefined ? {} : { result: checkpoint.value }),
+							});
+							continue;
 						}
-						const checkpoint = await reader.getValue(
-							pendingToolOutput(operation.meta.operationId, call.resultEntryId),
-							context,
-						);
+						const staged = await reader.getValue(pendingEntry(call.resultEntryId), context);
+						if (staged?.value.type !== "message" || staged.value.payload.role !== "toolResult") {
+							throw new SessionInvariantError(`Tool call ${call.resultEntryId} is missing its staged result`);
+						}
+						if (staged.value.payload.toolCallId !== block.id || staged.value.payload.toolName !== block.name) {
+							throw new SessionInvariantError(`Tool call ${call.resultEntryId} has a mismatched staged result`);
+						}
 						runningTools.push({
+							status: "settled",
 							toolCallId: block.id,
 							toolName: block.name,
-							args: args.value,
-							...(checkpoint === undefined ? {} : { partialResult: checkpoint.value }),
+							args: args?.value ?? block.arguments,
+							result: toolResultFromMessage(staged.value.payload, call.terminate),
+							isError: staged.value.payload.isError,
 						});
 					}
 					break;

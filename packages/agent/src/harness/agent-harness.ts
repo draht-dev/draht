@@ -191,6 +191,23 @@ export interface LaneInfo {
 	operation: CurrentOperationInfo | null;
 }
 
+export type LaneSnapshotTool =
+	| {
+			status: "running";
+			toolCallId: string;
+			toolName: string;
+			args: unknown;
+			result?: AgentToolResult<unknown>;
+	  }
+	| {
+			status: "settled";
+			toolCallId: string;
+			toolName: string;
+			args: unknown;
+			result: AgentToolResult<unknown>;
+			isError: boolean;
+	  };
+
 export interface OpenOperation {
 	lane: string;
 	operationId: string;
@@ -224,12 +241,7 @@ export interface LaneSnapshot {
 		retry?: { attempt: number; maxAttempts: number; nextAttemptAt: number };
 		deferred?: { handle: DeferredHandle; poll: number };
 		streamingMessage?: AssistantMessage;
-		runningTools: {
-			toolCallId: string;
-			toolName: string;
-			args: unknown;
-			partialResult?: AgentToolResult<unknown>;
-		}[];
+		runningTools: LaneSnapshotTool[];
 	};
 	queues: LaneQueuedItem[];
 	faulted: boolean;

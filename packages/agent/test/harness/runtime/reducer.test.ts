@@ -175,6 +175,96 @@ describe("lane snapshot reducer", () => {
 		expect(running).toMatchObject({ operation: { id: "run", kind: "run" } });
 	});
 
+	it("retains settled parallel tools until each source-ordered result is placed", async () => {
+		const { lane } = await createFixture();
+		const snapshot = (await lane.watch(BACKGROUND_CONTEXT)).snapshot;
+		snapshot.operation = {
+			id: "run",
+			kind: "run",
+			startedAt: 1,
+			fromTipId: null,
+			status: "open",
+			runningTools: [],
+		};
+		const result = (text: string) => ({ content: [{ type: "text" as const, text }], details: { text } });
+		const start = (index: number): HarnessEvent => ({
+			type: "tool_start",
+			lane: "main",
+			runId: "run",
+			turnId: "turn",
+			toolCallId: `call-${index}`,
+			toolName: `tool-${index}`,
+			args: { index },
+		});
+		const end = (index: number): HarnessEvent => ({
+			type: "tool_end",
+			lane: "main",
+			runId: "run",
+			turnId: "turn",
+			toolCallId: `call-${index}`,
+			toolName: `tool-${index}`,
+			result: result(`done-${index}`),
+			isError: false,
+			terminate: false,
+		});
+		const entry = (index: number): HarnessEvent => ({
+			type: "entry_added",
+			lane: "main",
+			entry: {
+				id: `result-${index}`,
+				parentId: index === 0 ? null : `result-${index - 1}`,
+				seq: index + 1,
+				timestamp: index + 1,
+				type: "message",
+				message: {
+					role: "toolResult",
+					toolCallId: `call-${index}`,
+					toolName: `tool-${index}`,
+					content: [{ type: "text", text: `done-${index}` }],
+					isError: false,
+					timestamp: index + 1,
+				},
+			},
+		});
+
+		for (let index = 0; index < 3; index += 1) reduceLaneSnapshot(snapshot, start(index));
+		expect(snapshot.operation.runningTools).toHaveLength(3);
+		reduceLaneSnapshot(snapshot, start(0));
+		expect(snapshot.operation.runningTools).toHaveLength(3);
+
+		reduceLaneSnapshot(snapshot, {
+			type: "tool_update",
+			lane: "main",
+			runId: "stale",
+			turnId: "turn",
+			toolCallId: "call-1",
+			toolName: "tool-1",
+			partialResult: result("stale"),
+		});
+		expect(snapshot.operation.runningTools[1]).not.toHaveProperty("result");
+
+		reduceLaneSnapshot(snapshot, end(2));
+		expect(snapshot.operation.runningTools.find(({ toolCallId }) => toolCallId === "call-2")).toMatchObject({
+			status: "settled",
+			args: { index: 2 },
+			result: result("done-2"),
+		});
+
+		reduceLaneSnapshot(snapshot, end(0));
+		expect(snapshot.operation.runningTools.map(({ status }) => status)).toEqual(["settled", "running", "settled"]);
+		reduceLaneSnapshot(snapshot, entry(0));
+		expect(snapshot.operation.runningTools.map(({ toolCallId }) => toolCallId)).toEqual(["call-1", "call-2"]);
+		expect(snapshot.transcript.map(({ id }) => id)).toEqual(["result-0"]);
+
+		reduceLaneSnapshot(snapshot, end(1));
+		expect(snapshot.operation.runningTools.every(({ status }) => status === "settled")).toBe(true);
+		reduceLaneSnapshot(snapshot, entry(1));
+		expect(snapshot.operation.runningTools.map(({ toolCallId }) => toolCallId)).toEqual(["call-2"]);
+		reduceLaneSnapshot(snapshot, entry(2));
+		expect(snapshot.operation.runningTools).toEqual([]);
+		expect(snapshot.transcript.map(({ id }) => id)).toEqual(["result-0", "result-1", "result-2"]);
+	});
+
 	it("marks navigation completion for rebase", async () => {
 		const { lane } = await createFixture();
 		const snapshot = (await lane.watch(BACKGROUND_CONTEXT)).snapshot;

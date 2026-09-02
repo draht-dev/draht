@@ -46,6 +46,11 @@ function hooksTemplate() {
 							type: "command",
 							command: `node "${PLUGIN_ROOT_TOKEN}/scripts/prompt-context.cjs"`,
 						},
+						{
+							type: "command",
+							command: `node "${PLUGIN_ROOT_TOKEN}/scripts/judge-hook.cjs" UserPromptSubmit`,
+							timeout: 10,
+						},
 					],
 				},
 			],
@@ -69,6 +74,28 @@ function hooksTemplate() {
 							type: "command",
 							command: `node "${PLUGIN_ROOT_TOKEN}/scripts/stop-quality-gate.cjs"`,
 							timeout: 180,
+						},
+						{
+							type: "command",
+							command: `node "${PLUGIN_ROOT_TOKEN}/scripts/judge-hook.cjs" Stop`,
+							timeout: 20,
+						},
+					],
+				},
+			],
+			// The judge queue parks a permission request as a card and waits for
+			// the human swipe, so its timeout is an hour rather than seconds: the
+			// hook is blocked for exactly as long as the person takes. With the
+			// judge TUI not running the hook returns immediately and the host's
+			// own permission dialog appears, so the long timeout never bites.
+			PermissionRequest: [
+				{
+					matcher: "",
+					hooks: [
+						{
+							type: "command",
+							command: `node "${PLUGIN_ROOT_TOKEN}/scripts/judge-hook.cjs" PermissionRequest`,
+							timeout: 3600,
 						},
 					],
 				},

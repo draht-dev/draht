@@ -9,7 +9,7 @@ Draht is a methodology for running agentic coding work through a milestone → p
 
 ## Two Kinds of Sibling Skills
 
-- **14 discipline skills** — transversal habits that apply regardless of which command is running: `atomic-reasoning`, `blast-radius`, `brainstorming`, `ddd-workflow`, `debugging-workflow`, `epistemics`, `gsd-workflow`, `loop-workflow`, `model-tiering`, `saga-spawner`, `tdd-workflow`, `typescript-discipline`, `unslop`, `verification-gate`.
+- **15 discipline skills** — transversal habits that apply regardless of which command is running: `atomic-reasoning`, `blast-radius`, `brainstorming`, `ddd-workflow`, `debugging-workflow`, `epistemics`, `gsd-workflow`, `judge`, `loop-workflow`, `model-tiering`, `saga-spawner`, `tdd-workflow`, `typescript-discipline`, `unslop`, `verification-gate`.
 - **23 command skills** — one per stage of the GSD lifecycle, from greenfield questioning through milestone completion: `new-project`, `init-project`, `map-codebase`, `discuss-phase`, `plan-phase`, `execute-phase`, `verify-work`, `next-milestone`, `pause-work`, `resume-work`, `progress`, `quick`, `fix`, `review`, `atomic-commit`, `orchestrate`, `orchestrate-loop`, `resolve-conflicts`, `grill`, `why`, `create-verification-skill`, `triage`, `speak`.
 
 Every skill's frontmatter `name` matches its directory name, so `skills/<name>/` and the name you invoke are always the same string.
@@ -18,7 +18,7 @@ Every skill's frontmatter `name` matches its directory name, so `skills/<name>/`
 
 - `skills/<name>/SKILL.md` — every skill has one; frontmatter (`name`, `description`) plus instructions.
 - `skills/<name>/command.md` — the 23 command skills only. This is the full prompt template; the command skill's `SKILL.md` is a thin wrapper that reads it.
-- The 14 discipline skills have no `command.md` — their `SKILL.md` is self-contained.
+- The 15 discipline skills have no `command.md` — their `SKILL.md` is self-contained.
 - This file, `skills/draht/SKILL.md`, is itself a plain skill (no `command.md`) — it is discovered and loaded the same way any discipline skill is.
 
 ## How the Catalog Composes
@@ -72,6 +72,7 @@ Command skills and discipline skills are not independent choices — most comman
 | Calibrating confidence, citations, and gaps when reporting investigation findings | `epistemics` |
 | Designing or reasoning about iterate-until-a-check-passes loops | `loop-workflow` |
 | Choosing which model tier should run a session vs its subagents | `model-tiering` |
+| Putting a human in the loop — permission prompts and finished turns queued as cards to swipe through | `judge` |
 | Advancing a repo unattended — saga graph, beats, scheduled or cloud routines | `saga-spawner` |
 | Writing testable code — the red → green → refactor cycle | `tdd-workflow` |
 | Writing or editing TypeScript — modelling state, narrowing, casts, exhaustiveness | `typescript-discipline` |
@@ -96,7 +97,7 @@ A few sibling pairs are easy to reach for incorrectly:
 
 | Host | How to invoke a draht skill |
 |---|---|
-| Claude Code | `/draht:<command>` slash commands for the 23 command skills (for example `/draht:plan-phase`); the 14 discipline skills load automatically by description match or on request |
+| Claude Code | `/draht:<command>` slash commands for the 23 command skills (for example `/draht:plan-phase`); the 15 discipline skills load automatically by description match or on request |
 | Codex | `$draht:<command>` prompts, or `/skills` and pick the wrapper, for the 23 command skills; discipline skills load automatically or by name |
 | Any Agent-Skills-compatible host | invoke the sibling skill directly by name — every `SKILL.md` in this tree is self-contained and portable |
 | draht CLI (`@draht/coding-agent`) | runs the GSD workflow natively; no skill indirection needed |

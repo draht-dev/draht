@@ -18,6 +18,11 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/prompt-context.cjs\""
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/judge-hook.cjs\" UserPromptSubmit",
+            "timeout": 10
           }
         ]
       }
@@ -42,6 +47,23 @@
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/stop-quality-gate.cjs\"",
             "timeout": 180
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/judge-hook.cjs\" Stop",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/judge-hook.cjs\" PermissionRequest",
+            "timeout": 3600
           }
         ]
       }

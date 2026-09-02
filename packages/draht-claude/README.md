@@ -64,7 +64,7 @@ All usable via Claude Code's `Task` tool (`subagent_type: <name>`):
 | `security-auditor` | Scans for injection, auth, secrets, unsafe patterns |
 | `advisor` | Strongest-tier strategic steer, consulted rarely when stuck or before committing to an approach |
 
-### 16 bundled skills
+### 17 bundled skills
 
 - **`draht`** — router and catalog for the skill family: what draht is, which skill fits which situation
 - **`gsd-workflow`** — complete GSD methodology reference (directory structure, cycle, hooks, config)
@@ -82,6 +82,7 @@ All usable via Claude Code's `Task` tool (`subagent_type: <name>`):
 - **`epistemics`** — confidence calibration for investigation findings: five tiers, cite-or-label-as-inference, null results as evidence
 - **`typescript-discipline`** — make illegal states unrepresentable: discriminated unions, branded primitives, boundary parsing, exhaustiveness
 - **`blast-radius`** — impact analysis beyond the diff: reduce the safety argument to one falsifiable fact and prove it on the evidence ladder
+- **`judge`** — the human-judgment queue: how permission prompts and finished turns become cards, and how a reviewer's comment comes back into the session
 
 ### 4 workflow hook scripts
 
@@ -92,12 +93,35 @@ Invoked from inside commands (not Claude Code lifecycle hooks):
 - `gsd-post-phase.cjs <phase>` — generate phase report, update ROADMAP status
 - `gsd-quality-gate.cjs [--strict]` — lint + typecheck + test + coverage enforcement
 
-### 4 Claude Code lifecycle hooks
+### 5 Claude Code lifecycle hooks
 
 - **SessionStart** — surfaces current phase, status, and CONTINUE-HERE marker when a session opens in a draht project (`session-start.cjs`)
-- **UserPromptSubmit** — prepends a tiny `[draht]` reminder of phase/status before each prompt (`prompt-context.cjs`)
+- **UserPromptSubmit** — prepends a tiny `[draht]` reminder of phase/status before each prompt (`prompt-context.cjs`), then delivers any pending judge feedback (`judge-hook.cjs`)
 - **PostToolUse** — after `Edit`/`Write`/`MultiEdit`, runs a fast check over the touched files (`post-edit-check.cjs`)
-- **Stop** — runs the quality gate when a session ends (`stop-quality-gate.cjs`)
+- **Stop** — runs the quality gate when a session ends (`stop-quality-gate.cjs`), then files the finished turn as a judge review card (`judge-hook.cjs`)
+- **PermissionRequest** — while the judge TUI is running, parks the prompt as a card and waits for the human swipe (`judge-hook.cjs`)
+
+The judge hooks are inert unless you run the TUI, and inert again where no Python interpreter is available — the normal permission dialog appears exactly as before.
+
+### The judge queue
+
+`judge` is a tinder-style TUI over the decisions every session on this machine is waiting on: permission prompts (→ allow, ← deny, with the comment delivered as the denial message) and finished turns (a ← reject reaches the session as a `[judge]` block it must address first). It runs in its own terminal pane, never inside a session:
+
+```bash
+npx draht-claude install-judge   # symlink into ~/.local/bin
+judge                            # or: judge open, to pop a cmux split
+```
+
+State lives in `~/.claude/judge/`. `judge list` prints the queue, `judge clear` expires it.
+
+### The draht status line
+
+`statusline/statusline.py` renders `dir · model · context% · 5h · 7d · token burn · judge queue` in the draht foundry palette, sheds detail rather than letting the terminal chop it, and aggregates token burn incrementally from the transcripts under `~/.claude/projects/`:
+
+```bash
+npx draht-claude install-statusline    # writes settings.json (previous line saved)
+npx draht-claude uninstall-statusline  # and restores it
+```
 
 ### Bundled `draht-tools` CLI
 
@@ -124,6 +148,11 @@ npx draht-claude install --path /path/to/plugins/draht
 
 # Check install status
 npx draht-claude status
+
+# Opt into the status line and the judge TUI (also available as install flags:
+# npx draht-claude install --statusline --judge)
+npx draht-claude install-statusline
+npx draht-claude install-judge
 
 # Configure subagent models
 npx draht-claude configure --agent architect --model opus

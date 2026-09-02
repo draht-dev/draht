@@ -4,6 +4,8 @@
 
 ### Added
 
+- `judge` — the human-judgment queue: a `PermissionRequest` hook parks permission prompts as cards and waits for a human swipe while the TUI runs, a `Stop` hook files each substantive finished turn as a review card, and a `UserPromptSubmit` hook delivers the reviewer's comment back into the session as a `[judge]` block. Ships the TUI at `bin/judge` and the `judge` skill; `install-judge` (or `install --judge`) symlinks it into `~/.local/bin`. Hooks route through `judge-hook.cjs`, which no-ops where no Python interpreter is present
+- draht status line (`statusline/statusline.py`): dir, model, context %, 5h/7d rate limits, token burn for today/7d/30d, and the open judge queue, rendered in the draht foundry palette (truecolor with an xterm-256 fallback) and shedding detail in a fixed order rather than being chopped by the terminal. `install-statusline` (or `install --statusline`) wires it into `settings.json`; any status line already configured is saved and restored on uninstall
 - `install-graph-engine` (alias `graph-engine`) command that fetches the prebuilt Go `draht-graph` knowledge-graph engine binary; `map-graph`/`graph-*`/`map-codebase` now dispatch to it automatically when present (`DRAHT_GRAPH_ENGINE=auto`, the default), falling back to the built-in JS engine otherwise — see `go/README.md` and `.planning/kg-integration/SPEC.md`
 - `--no-graph-engine` install flag and `DRAHT_SKIP_GRAPH_ENGINE` env var to skip the automatic fetch
 - portable `cinematic-continuation` skill with bundled style/continuity references, a neutral sequence template, Seedance adapter boundary, and offline timeline compiler

@@ -10,6 +10,7 @@
 		".claude-plugin",
 		"bin",
 		"scripts",
+		"statusline",
 		"hooks",
 		"commands",
 		"agents",

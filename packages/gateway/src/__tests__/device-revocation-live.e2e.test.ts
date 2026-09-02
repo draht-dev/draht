@@ -94,7 +94,11 @@ class SessionPeer {
 			}
 		});
 		socket.on("error", () => {});
-		socket.on("close", () => this.stop());
+		// Deliberately not stopped on close. A real session prints on when one
+		// device's bridge goes away, and the revocation teardown closes this very
+		// socket — so stopping here froze `written` at the cutoff precisely when the
+		// property held, on whichever platform surfaced the close first. `stop()` is
+		// the only thing that ends the stream.
 	}
 
 	/**
@@ -119,7 +123,7 @@ class SessionPeer {
 		try {
 			this.#socket.write(`${JSON.stringify(frame)}\n`);
 		} catch {
-			// The bridge dropped us; the timer is cleared on close.
+			// The bridge dropped us; the session prints on regardless.
 		}
 	}
 
@@ -462,6 +466,8 @@ test("revoking a device mid-stream stops every further server frame within 1s, w
 
 	victim.close();
 	bystander.close();
+	victimPeer.stop();
+	bystanderPeer.stop();
 }, 20_000);
 
 test("a silent revoked device receives zero further server frames within 1s, having sent nothing since attach", async () => {

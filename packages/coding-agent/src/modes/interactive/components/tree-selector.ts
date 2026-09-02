@@ -94,6 +94,35 @@ function renderHorizontalViewport(rows: HorizontalViewportRow[], width: number):
 /** Filter mode for tree display */
 export type FilterMode = "default" | "no-tools" | "user-only" | "labeled-only" | "all";
 
+/** Checkpoint annotation shown next to an entry (R42-RWD.1). */
+export interface TreeCheckpointAnnotation {
+	/** ISO-8601 capture time of the checkpoint. */
+	timestamp: string;
+	/** Files differing from HEAD when the checkpoint was captured. */
+	dirtyFileCount: number;
+}
+
+export interface TreeSelectorOptions {
+	/** Heading above the tree. Defaults to "Session Tree". */
+	title?: string;
+	/**
+	 * Restricts the tree to these entries and annotates each one with its
+	 * checkpoint time and dirty-file count. Used by `/rewind`, which only offers
+	 * entries that have a snapshot to restore.
+	 */
+	checkpoints?: ReadonlyMap<string, TreeCheckpointAnnotation>;
+}
+
+/** `[14:05:31 · 3 files] ` — kept short so it never crowds out the entry text. */
+function formatCheckpointAnnotation(annotation: TreeCheckpointAnnotation): string {
+	const at = new Date(annotation.timestamp);
+	const time = Number.isNaN(at.getTime())
+		? annotation.timestamp
+		: at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+	const files = annotation.dirtyFileCount === 1 ? "1 file" : `${annotation.dirtyFileCount} files`;
+	return `[${time} · ${files}] `;
+}
+
 /**
  * Tree list component with selection and ASCII art visualization
  */
@@ -119,6 +148,7 @@ class TreeList implements Component {
 	private visibleChildrenMap: Map<string | null, string[]> = new Map();
 	private lastSelectedId: string | null = null;
 	private foldedNodes: Set<string> = new Set();
+	private checkpoints: ReadonlyMap<string, TreeCheckpointAnnotation> | undefined;
 
 	public onSelect?: (entryId: string) => void;
 	public onCancel?: () => void;
@@ -131,10 +161,12 @@ class TreeList implements Component {
 		maxVisibleLines: number,
 		initialSelectedId?: string,
 		initialFilterMode?: FilterMode,
+		checkpoints?: ReadonlyMap<string, TreeCheckpointAnnotation>,
 	) {
 		this.currentLeafId = currentLeafId;
 		this.maxVisibleLines = maxVisibleLines;
 		this.filterMode = initialFilterMode ?? "default";
+		this.checkpoints = checkpoints;
 		this.multipleRoots = tree.length > 1;
 		this.flatNodes = this.flattenTree(tree);
 		this.buildActivePath();
@@ -339,6 +371,10 @@ class TreeList implements Component {
 		this.filteredNodes = this.flatNodes.filter((flatNode) => {
 			const entry = flatNode.node.entry;
 			const isCurrentLeaf = entry.id === this.currentLeafId;
+
+			// Checkpoint mode (/rewind): only entries with a snapshot are offered,
+			// whatever the filter mode is set to.
+			if (this.checkpoints && !this.checkpoints.has(entry.id)) return false;
 
 			// Skip assistant messages with only tool calls (no text) unless error/aborted
 			// Always show current leaf so active position is visible
@@ -743,10 +779,12 @@ class TreeList implements Component {
 					? theme.fg("muted", `${this.formatLabelTimestamp(flatNode.node.labelTimestamp)} `)
 					: "";
 			const content = this.getEntryDisplayText(flatNode.node, isSelected);
+			const annotation = this.checkpoints?.get(entry.id);
+			const checkpointInfo = annotation ? theme.fg("muted", formatCheckpointAnnotation(annotation)) : "";
 			const prefixPart = theme.fg("dim", prefix) + foldMarker + pathMarker;
 			const anchorCol = visibleWidth(prefixPart);
 			let gutter = cursor;
-			let body = prefixPart + label + labelTimestamp + content;
+			let body = prefixPart + label + labelTimestamp + checkpointInfo + content;
 			if (isSelected) {
 				gutter = theme.bg("selectedBg", gutter);
 				body = theme.bg("selectedBg", body);
@@ -1355,13 +1393,21 @@ export class TreeSelectorComponent extends Container implements Focusable {
 		onLabelChange?: (entryId: string, label: string | undefined) => void,
 		initialSelectedId?: string,
 		initialFilterMode?: FilterMode,
+		options?: TreeSelectorOptions,
 	) {
 		super();
 
 		this.onLabelChangeCallback = onLabelChange;
 		const maxVisibleLines = Math.max(5, Math.floor(terminalHeight / 2));
 
-		this.treeList = new TreeList(tree, currentLeafId, maxVisibleLines, initialSelectedId, initialFilterMode);
+		this.treeList = new TreeList(
+			tree,
+			currentLeafId,
+			maxVisibleLines,
+			initialSelectedId,
+			initialFilterMode,
+			options?.checkpoints,
+		);
 		this.treeList.onSelect = onSelect;
 		this.treeList.onCancel = onCancel;
 		this.treeList.onCopy = (text) => this.onCopy?.(text);
@@ -1374,7 +1420,7 @@ export class TreeSelectorComponent extends Container implements Focusable {
 
 		this.addChild(new Spacer(1));
 		this.addChild(new DynamicBorder());
-		this.addChild(new Text(theme.bold("  Session Tree"), 1, 0));
+		this.addChild(new Text(theme.bold(`  ${options?.title ?? "Session Tree"}`), 1, 0));
 		this.addChild(new TreeHelp());
 		this.addChild(new SearchLine(this.treeList));
 		this.addChild(new DynamicBorder());

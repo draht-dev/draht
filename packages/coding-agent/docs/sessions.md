@@ -19,6 +19,9 @@ Use `/session` in interactive mode to see the current session file, session ID, 
 
 For the JSONL file format and SessionManager API, see [Session Format](session-format.md).
 
+To expose a running session on a Unix socket and watch or drive it from another terminal, see
+[Attachable Sessions](attachable-sessions.md) (`--attachable`, `--attach`, `--list-sessions`).
+
 ## Session Commands
 
 | Command | Description |

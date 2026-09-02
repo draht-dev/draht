@@ -13,6 +13,7 @@ import type { Provider } from "@draht/ai";
 import * as _bundledPiAiCompat from "@draht/ai/compat";
 import * as _bundledPiAiOauth from "@draht/ai/oauth";
 import * as _bundledPiAiProviders from "@draht/ai/providers/all";
+import * as _bundledPiAiProvidersFaux from "@draht/ai/providers/faux";
 import type { KeyId } from "@draht/tui";
 import * as _bundledPiTui from "@draht/tui";
 import { createJiti } from "@mariozechner/jiti";
@@ -27,6 +28,7 @@ import { CONFIG_DIR_NAME, getAgentDir, isBunBinary } from "../../config.ts";
 // avoiding a circular dependency. Extensions can import from @draht/coding-agent.
 import * as _bundledPiCodingAgent from "../../index.ts";
 import { resolvePath } from "../../utils/paths.ts";
+import type { CheckpointRestoreOptions } from "../checkpoints/checkpoint-manager.ts";
 import { createEventBus, type EventBus } from "../event-bus.ts";
 import type { ExecOptions } from "../exec.ts";
 import { execCommand } from "../exec.ts";
@@ -45,6 +47,9 @@ import type {
 	ToolDefinition,
 } from "./types.ts";
 
+/** Reason reported by `pi.checkpoints` when the session has no checkpoint storage. */
+const CHECKPOINTS_UNAVAILABLE = "checkpoints are unavailable for this session";
+
 /** Modules available to extensions via virtualModules (for compiled Bun binary) */
 const VIRTUAL_MODULES: Record<string, unknown> = {
 	typebox: _bundledTypebox,
@@ -62,6 +67,11 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@draht/ai/compat": _bundledPiAiCompat,
 	"@draht/ai/oauth": _bundledPiAiOauth,
 	"@draht/ai/providers/all": _bundledPiAiProviders,
+	// Every @draht/ai subpath an extension may import needs its own entry here and
+	// in getAliases(): the bare "@draht/ai" key below is a PREFIX match, so an
+	// unlisted subpath is rewritten onto the compat entrypoint
+	// ("<compat.js>/providers/faux") and fails to resolve.
+	"@draht/ai/providers/faux": _bundledPiAiProvidersFaux,
 	"@draht/coding-agent": _bundledPiCodingAgent,
 };
 
@@ -102,12 +112,14 @@ function getAliases(): Record<string, string> {
 	const piAiCompatEntry = resolveWorkspaceOrImport("ai/dist/compat.js", "@draht/ai/compat");
 	const piAiOauthEntry = resolveWorkspaceOrImport("ai/dist/oauth.js", "@draht/ai/oauth");
 	const piAiProvidersEntry = resolveWorkspaceOrImport("ai/dist/providers/all.js", "@draht/ai/providers/all");
+	const piAiProvidersFauxEntry = resolveWorkspaceOrImport("ai/dist/providers/faux.js", "@draht/ai/providers/faux");
 
 	_aliases = {
 		"@draht/coding-agent": piCodingAgentEntry,
 		"@draht/agent-core": piAgentCoreEntry,
 		"@draht/tui": piTuiEntry,
 		"@draht/ai/providers/all": piAiProvidersEntry,
+		"@draht/ai/providers/faux": piAiProvidersFauxEntry,
 		"@draht/ai/compat": piAiCompatEntry,
 		"@draht/ai/oauth": piAiOauthEntry,
 		"@draht/ai": piAiCompatEntry,
@@ -171,6 +183,9 @@ export function createExtensionRuntime(): ExtensionRuntime {
 		setModel: () => Promise.reject(new Error("Extension runtime not initialized")),
 		getThinkingLevel: notInitialized,
 		setThinkingLevel: notInitialized,
+		// Checkpoints need the runner's session binding; until bindCore() runs
+		// there is none, and pi.checkpoints degrades instead of throwing.
+		getCheckpointManager: () => undefined,
 		assertActive: notInitialized,
 		invalidate: notInitialized,
 		flagValues: new Map(),
@@ -350,6 +365,34 @@ function createExtensionAPI(
 		},
 
 		events: eventBus,
+
+		checkpoints: {
+			list() {
+				runtime.assertActive();
+				return runtime.getCheckpointManager()?.list() ?? [];
+			},
+
+			get(entryId: string) {
+				runtime.assertActive();
+				return runtime.getCheckpointManager()?.get(entryId);
+			},
+
+			async restore(options: CheckpointRestoreOptions) {
+				runtime.assertActive();
+				const manager = runtime.getCheckpointManager();
+				if (!manager) {
+					return { status: "disabled" as const, restored: [], deleted: [], reason: CHECKPOINTS_UNAVAILABLE };
+				}
+				return manager.restore(options);
+			},
+
+			async capture(entryId: string) {
+				runtime.assertActive();
+				const manager = runtime.getCheckpointManager();
+				if (!manager) return { status: "disabled" as const, reason: CHECKPOINTS_UNAVAILABLE };
+				return manager.captureIfChanged(entryId);
+			},
+		},
 	} as ExtensionAPI;
 
 	return api;

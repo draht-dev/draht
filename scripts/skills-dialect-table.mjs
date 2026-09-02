@@ -27,9 +27,10 @@ export const PLUGIN_ROOT_RENDER = {
 	codex: "${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$HOME/.draht/codex-marketplace/plugins/draht}}",
 };
 
-// ── 10 discipline skills — line-scoped dialect spans ────────────────────────
-// Only 5 of the 10 discipline skills have any host-specific span; the other 5
-// (brainstorming, ddd-workflow, loop-workflow, model-tiering, tdd-workflow)
+// ── 14 discipline skills — line-scoped dialect spans ────────────────────────
+// Only 5 of the 14 discipline skills have any host-specific span; the other 9
+// (blast-radius, brainstorming, ddd-workflow, epistemics, loop-workflow,
+// model-tiering, tdd-workflow, typescript-discipline, unslop)
 // render identically for every host and have no entry here. saga-spawner
 // carries the table's one asymmetric pair: the canonical "strongest tier"
 // line renders with a Claude model example on the claude side but a generic
@@ -106,7 +107,7 @@ export const DISCIPLINE_DIALECT = {
 	],
 };
 
-// ── 17 command templates — line-scoped dialect spans ────────────────────────
+// ── 22 command templates — line-scoped dialect spans ────────────────────────
 // Lines that differ only by the plugin-root token (e.g. every tool-note line
 // in discuss-phase, init-project, next-milestone, pause-work, progress,
 // resume-work) are not listed — PLUGIN_ROOT_TOKEN handles those generically.
@@ -167,6 +168,15 @@ export const COMMAND_DIALECT = {
 			claude:
 				'Once the affected/buggy file is identified, run `draht-tools graph-context <buggy-file>` and `draht-tools graph-callers <buggy-file>` to orient (package, layer, who calls it) — paste the summary into the `debugger` prompt to support its "trace UPWARD" step.',
 			codex: 'Once the affected/buggy file is identified, run `draht-tools graph-context <buggy-file>` and `draht-tools graph-callers <buggy-file>` to orient (package, layer, who calls it) — paste the summary into the Codex subagent prompt to support its "trace UPWARD" step.',
+		},
+	],
+	grill: [
+		{
+			canonical:
+				"> **Tool note**: For environment facts, dispatch the `architect` subagent the way your host runs subagents — read-only fact-finding; never block the current round on it.",
+			claude:
+				'> **Tool note**: For environment facts, use the **Task tool** with `subagent_type: "architect"` — read-only fact-finding; never block the current round on it.',
+			codex: "> **Tool note**: For environment facts, spawn a Codex subagent using the `architect` agent prompt — read-only fact-finding; never block the current round on it.",
 		},
 	],
 	"map-codebase": [
@@ -345,6 +355,15 @@ export const COMMAND_DIALECT = {
 			codex: "   - **(If spec context exists)** Codex subagent using the `spec-reviewer` agent prompt and prompt:",
 		},
 	],
+	triage: [
+		{
+			canonical:
+				"> **Tool note**: For the bounded cause trace, dispatch the `debugger` agent the way your host runs subagents — findings-only diagnosis (no fixes, no writes); classification and every tracker write stay with the orchestrator.",
+			claude:
+				'> **Tool note**: For the bounded cause trace, use the **Task tool** with `subagent_type: "debugger"` — findings-only diagnosis (no fixes, no writes); classification and every tracker write stay with the orchestrator.',
+			codex: "> **Tool note**: For the bounded cause trace, spawn a Codex subagent using the `debugger` agent prompt — findings-only diagnosis (no fixes, no writes); classification and every tracker write stay with the orchestrator.",
+		},
+	],
 	"verify-work": [
 		{
 			canonical:
@@ -381,9 +400,18 @@ export const COMMAND_DIALECT = {
 			codex: "   - **Codex subagent** with ``spec-reviewer` agent prompt` and prompt:",
 		},
 	],
+	why: [
+		{
+			canonical:
+				'> **Tool note**: Invoke `draht-tools <subcommand>` as `node "<PLUGIN_ROOT>/bin/draht-tools.cjs" <subcommand>`. For subagents, dispatch one `investigator` agent per available evidence category in parallel when your host allows it (single assistant turn = multiple subagent calls). To escalate a contested synthesis, consult the `advisor` agent.',
+			claude:
+				'> **Tool note**: Invoke `draht-tools <subcommand>` as `node "${CLAUDE_PLUGIN_ROOT}/bin/draht-tools.cjs" <subcommand>`. For subagents, use the **Task tool** with `subagent_type: "investigator"` — one Task per available evidence category, dispatched in parallel (single assistant turn = multiple Task tool calls). To escalate a contested synthesis, consult the `advisor` agent.',
+			codex: '> **Tool note**: Invoke `draht-tools <subcommand>` as `node "${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$HOME/.draht/codex-marketplace/plugins/draht}}/bin/draht-tools.cjs" <subcommand>`. For subagents, spawn Codex subagents using the `investigator` agent prompt — one per available evidence category, dispatched in parallel (single assistant turn = multiple Codex subagent calls). To escalate a contested synthesis, consult the `advisor` agent.',
+		},
+	],
 };
 
-// ── 17 command-wrapper skills (codex-only) — one shared span ────────────────
+// ── 22 command-wrapper skills (codex-only) — one shared span ────────────────
 // Claude never renders these files at all (no wrapper skills on the claude
 // side), so there is no "claude" field: only "codex" is ever read.
 export const WRAPPER_DIALECT = [

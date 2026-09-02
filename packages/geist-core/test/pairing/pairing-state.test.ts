@@ -30,15 +30,18 @@ describe("PairingState", () => {
 		expect(state.disconnectedAt).toBeNull();
 	});
 
-	test("token mismatch rejected — pairing attempt fails and reverts to unpaired", () => {
+	test("token mismatch rejected — pairing attempt fails and mutates nothing", () => {
 		const state = new PairingState({ token: "correct-token" });
 		state.beginPairingAttempt();
 		expect(state.status).toBe("pairing");
 
 		const result = state.completePairing("wrong-token");
 
-		expect(result).toEqual({ ok: false, status: "unpaired", reason: "invalid_token" });
-		expect(state.status).toBe("unpaired");
+		// A failed pair is a no-op on shared state (GSEC-08): it neither pairs
+		// nor tears the machine down behind whoever else is holding it.
+		expect(result).toEqual({ ok: false, status: "pairing", reason: "invalid_token" });
+		expect(state.status).toBe("pairing");
+		expect(state.disconnectedAt).toBeNull();
 	});
 
 	test("successful pairing — matching token moves pairing -> paired", () => {
@@ -152,5 +155,70 @@ describe("PairingState", () => {
 
 	test("default reconnect grace window is 60s", () => {
 		expect(DEFAULT_RECONNECT_GRACE_MS).toBe(60_000);
+	});
+
+	test("a wrong-token completePairing leaves currentStatus untouched — a second socket's failed pair cannot move the shared state machine", () => {
+		// GSEC-08 / R33-REACH.7: pairing is socket-scoped. A failed `pair`
+		// arriving on a SECOND socket must not revoke, mutate or disturb the
+		// already-bound device — not its status, and not the grace clock the
+		// legitimate device is relying on to resume.
+		const clock = fakeClock(0);
+		const state = new PairingState({ token: "correct-token", now: clock.now, graceWindowMs: 60_000 });
+
+		// The real headset pairs on socket A, then its app restarts: still
+		// paired, grace clock anchored at t=0.
+		state.beginPairingAttempt();
+		state.completePairing("correct-token");
+		state.disconnect();
+		expect(state.status).toBe("paired");
+		expect(state.disconnectedAt).toBe(0);
+
+		// 10s into the window a second socket presents a wrong token.
+		clock.advance(10_000);
+		state.beginPairingAttempt(); // no-op while paired
+		const result = state.completePairing("wrong-token");
+
+		// Rejected — and nothing about the bound session moved.
+		expect(result).toEqual({ ok: false, status: "paired", reason: "invalid_token" });
+		expect(state.status).toBe("paired");
+		expect(state.disconnectedAt).toBe(0); // grace clock untouched, not restarted
+
+		// The real headset can still resume inside the original window.
+		expect(state.reconnect("correct-token")).toEqual({ ok: true, status: "paired" });
+		expect(state.status).toBe("paired");
+	});
+
+	test("a wrong-token completePairing mid-attempt leaves the attempt in `pairing` rather than tearing it down", () => {
+		const state = new PairingState({ token: "correct-token" });
+		state.beginPairingAttempt();
+
+		const result = state.completePairing("wrong-token");
+
+		expect(result).toEqual({ ok: false, status: "pairing", reason: "invalid_token" });
+		expect(state.status).toBe("pairing");
+
+		// The correct token still completes the same attempt.
+		expect(state.completePairing("correct-token")).toEqual({ ok: true, status: "paired" });
+	});
+
+	test("token comparison rejects a same-length near-miss and a length-mismatched token alike", () => {
+		const state = new PairingState({ token: "abcdef0123456789" });
+		state.beginPairingAttempt();
+
+		// Same length, one byte off — the case a timing oracle would leak.
+		expect(state.completePairing("abcdef012345678a")).toEqual({
+			ok: false,
+			status: "pairing",
+			reason: "invalid_token",
+		});
+		// A prefix of the real token must never be accepted.
+		expect(state.completePairing("abcdef")).toEqual({ ok: false, status: "pairing", reason: "invalid_token" });
+		// And an over-long superstring.
+		expect(state.completePairing("abcdef0123456789extra")).toEqual({
+			ok: false,
+			status: "pairing",
+			reason: "invalid_token",
+		});
+		expect(state.status).toBe("pairing");
 	});
 });

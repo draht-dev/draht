@@ -13,7 +13,7 @@ Task: $ARGUMENTS
 
 ## Atomic Reasoning
 
-Before delegating, decompose the task into atomic work units:
+Decompose the work into independently verifiable units before acting; the `atomic-reasoning` skill holds the full discipline — load it when the decomposition is not obvious.
 
 1. **State the logical components** — What sub-tasks make up this work? Which are independent? A sub-task is well-cut only if its success can be checked without reference to the others.
 2. **Match agents to work** — Which specialist is right for each sub-task?

@@ -1,0 +1,626 @@
+/*
+ * The one daemon-served surface — layout and skin (R32-FLEET.10).
+ * Decision record: .planning/specs/2026-08-19-geist-served-surface-decision.md
+ *
+ * Ships on geist-glass from the first pixel: every colour below resolves through
+ * a `--token` defined by tokens.css, which the daemon serves at /ui/tokens.css
+ * from packages/geist-console/src/tokens.css. There is not one literal colour in
+ * this file, and the browser acceptance fails on any hex it can find here.
+ *
+ * Mobile-first, deliberately. The 390px layout is the base stylesheet and the
+ * desktop layout is the media query, because the phone is Phase 33's surface and
+ * a rule that only exists inside `@media (max-width: …)` is a rule nobody
+ * maintains.
+ */
+
+/* --- semantic tokens, all derived from geist-glass ----------------------- */
+:root {
+	--surface: var(--smoke-900);
+	--surface-raised: var(--smoke-700);
+	--hairline: color-mix(in srgb, var(--ink) 12%, transparent);
+	--hover: color-mix(in srgb, var(--ink) 7%, transparent);
+	--selected: color-mix(in srgb, var(--spectra-a) 18%, transparent);
+	--field: color-mix(in srgb, var(--ink) 5%, transparent);
+
+	--gap: 12px;
+	--radius: 10px;
+	/*
+	 * The smallest thing a thumb hits reliably. Every control below is at
+	 * least this in *both* dimensions — a 44px-tall field 20px wide is as
+	 * unhittable as a 20px-tall one, and the fields are the ones that get
+	 * missed because a button's padding usually saves it by accident.
+	 */
+	--touch: 44px;
+	/* Width of the fleet rail once there is room for one. */
+	--rail-width: 300px;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	margin: 0;
+	height: 100%;
+}
+
+body {
+	display: grid;
+	/*
+	 * `minmax(0, 1fr)`, never a bare `1fr` or an implicit column: an implicit grid
+	 * column is `auto`, whose minimum is min-content, so one unbreakable child can
+	 * make the column wider than the viewport and give a phone a horizontal
+	 * scrollbar. Measured at 390px before this line existed: the document was
+	 * 401px wide. Same reason `#shell` and `#transcript` are written this way.
+	 */
+	grid-template-columns: minmax(0, 1fr);
+	/* topbar · shell · diagnostics · footer. The diagnostics row is `hidden`
+	   unless the fragment asked for it, and a `display: none` child is not a
+	   grid item, so the row it would occupy collapses to nothing. */
+	grid-template-rows: auto minmax(0, 1fr) auto auto;
+	/*
+	 * The *visual* viewport, with `100dvh` as the fallback (R33-REACH.10).
+	 *
+	 * `dvh` is the layout viewport, and a virtual keyboard does not always
+	 * shrink that. Chrome on Android resizes the layout viewport, so `dvh`
+	 * follows and this line would be enough. iOS Safari does not: it leaves the
+	 * page laid out at its full height and shrinks `visualViewport` instead, so
+	 * a composer at `100dvh`'s bottom edge sits several hundred pixels behind
+	 * the keyboard — on screen as far as CSS is concerned, and unreachable.
+	 * `--viewport-height` is what `syncViewport()` in console.js measures;
+	 * `100dvh` is what a browser with no `visualViewport` at all gets.
+	 */
+	height: var(--viewport-height, 100dvh);
+	/*
+	 * And the other half of the same geometry: with the keyboard up iOS lets
+	 * the page scroll under the layout viewport's origin, and the visible area
+	 * moves *down* as well as shrinking. Applied as a transform rather than as
+	 * layout precisely because a transform cannot make the document scrollable.
+	 */
+	transform: translateY(var(--viewport-offset, 0px));
+	overflow: hidden;
+	background: var(--surface);
+	color: var(--ink);
+	font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+	/* Below the notch and above the home indicator on a phone. */
+	padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+		env(safe-area-inset-left);
+}
+
+/* --- top bar ------------------------------------------------------------- */
+#topbar {
+	display: flex;
+	align-items: center;
+	gap: var(--gap);
+	padding: 10px 14px;
+	border-bottom: 1px solid var(--hairline);
+	background: var(--surface-raised);
+}
+
+#brand {
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	background: var(--spectra-gradient);
+	background-clip: text;
+	-webkit-background-clip: text;
+	color: transparent;
+}
+
+#status {
+	flex: 1;
+	min-width: 0;
+	font-size: 13px;
+	color: var(--ink-dim);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+#status[data-state="connected"] {
+	color: var(--status-ok);
+}
+
+#status[data-state="disconnected"],
+#status[data-state="error"] {
+	color: var(--status-danger);
+}
+
+/*
+ * A resync is not a disconnection and must not read as one: the socket is up,
+ * the session is still attached, and the only thing being replaced is the fleet
+ * listing. It gets the warning colour rather than the danger one, because what
+ * it says is "this list is a moment out of date", not "you have lost the page".
+ */
+#status[data-state="resyncing"] {
+	color: var(--status-warn);
+}
+
+/* --- shell --------------------------------------------------------------- */
+#shell {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	min-height: 0;
+	min-width: 0;
+}
+
+#rail,
+#session {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	min-width: 0;
+	grid-area: 1 / 1;
+}
+
+/* One document, two layouts: below 720px exactly one pane is on screen. */
+body[data-view="fleet"] #session,
+body[data-view="session"] #rail {
+	display: none;
+}
+
+/*
+ * With the keyboard up there are ~400 vertical pixels left for a transcript
+ * and a composer, and the decision-record footer is 46 of them spent on a
+ * sentence nobody is reading mid-prompt. It comes back the moment the
+ * keyboard does down.
+ */
+body[data-keyboard="up"] #decision-record {
+	display: none;
+}
+
+/* --- fleet rail ---------------------------------------------------------- */
+#rail {
+	overflow-y: auto;
+	border-right: 1px solid var(--hairline);
+	padding: var(--gap);
+	gap: var(--gap);
+}
+
+.pane-title {
+	margin: 0;
+	font-size: 12px;
+	font-weight: 600;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--ink-dim);
+}
+
+.pane-note {
+	margin: 0;
+	font-size: 13px;
+	color: var(--ink-dim);
+	overflow-wrap: anywhere;
+}
+
+#fleet {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.session-row {
+	display: block;
+	width: 100%;
+	text-align: left;
+	padding: 10px 12px;
+	border: 1px solid var(--hairline);
+	border-radius: var(--radius);
+	background: var(--field);
+	color: inherit;
+	font: inherit;
+	cursor: pointer;
+	overflow-wrap: anywhere;
+	min-height: var(--touch);
+}
+
+.session-row:hover {
+	background: var(--hover);
+}
+
+/*
+ * A history row (R35-ALWAYS.7).
+ *
+ * It is a `<div>`, not a `<button>` — console.js never builds one as a button
+ * and binds no handler to it — so these rules are the *appearance* of a
+ * decision that was already made in the DOM, never the decision itself. Nothing
+ * here may be the only thing saying a row cannot be steered: the row also
+ * carries the word "history" in its own text, because a stylesheet that failed
+ * to load must not turn an inert row into an inviting one.
+ */
+.session-row-history {
+	cursor: default;
+	border-style: dashed;
+	background: transparent;
+	color: var(--ink-dim);
+}
+
+.session-row-history:hover {
+	background: transparent;
+}
+
+/*
+ * What kind of row this is, in words. Not a colour, not an icon, not a shade:
+ * "live · attachable" or "history · not attachable · resumable", set as text by
+ * console.js so it survives a stylesheet that never arrived.
+ */
+.session-kind {
+	display: block;
+	margin-top: 2px;
+	font-size: 11px;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--ink-dim);
+}
+
+.session-row:not(.session-row-history) .session-kind {
+	color: var(--status-ok);
+}
+
+.session-row[aria-current="true"] {
+	background: var(--selected);
+	border-color: color-mix(in srgb, var(--spectra-a) 45%, transparent);
+}
+
+.session-cwd {
+	display: block;
+	font-weight: 600;
+}
+
+.session-sub {
+	display: block;
+	margin-top: 2px;
+	font-size: 12px;
+	color: var(--ink-dim);
+}
+
+#token-form {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+#token-input {
+	/* A field is a touch target too: at 15px/1.5 with 8px of padding this box
+	   was 40.5px tall, which is the sort of miss that reads as a dead page. */
+	min-height: var(--touch);
+	padding: 8px 10px;
+	border: 1px solid var(--hairline);
+	border-radius: var(--radius);
+	background: var(--field);
+	color: inherit;
+	font: inherit;
+	min-width: 0;
+}
+
+/* --- session pane -------------------------------------------------------- */
+#session-head {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px var(--gap);
+	border-bottom: 1px solid var(--hairline);
+	min-width: 0;
+}
+
+#session-title {
+	min-width: 0;
+}
+
+#session-cwd {
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+#session-meta {
+	font-size: 12px;
+	color: var(--ink-dim);
+	overflow-wrap: anywhere;
+}
+
+#transcript {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	padding: var(--gap);
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.entry {
+	max-width: 100%;
+	padding: 8px 11px;
+	border-radius: var(--radius);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font-size: 14px;
+}
+
+.entry[data-kind="you"] {
+	align-self: flex-end;
+	background: var(--selected);
+}
+
+.entry[data-kind="peer"] {
+	align-self: flex-end;
+	background: var(--hover);
+	color: var(--ink-dim);
+}
+
+.entry[data-kind="agent"] {
+	background: var(--field);
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.entry[data-kind="notice"] {
+	align-self: center;
+	background: color-mix(in srgb, var(--status-warn) 14%, transparent);
+	color: var(--status-warn);
+	font-size: 12px;
+}
+
+.entry[data-kind="fatal"] {
+	align-self: center;
+	background: color-mix(in srgb, var(--status-danger) 16%, transparent);
+	color: var(--status-danger);
+	font-size: 12px;
+}
+
+/* --- permission ask ------------------------------------------------------ */
+
+/*
+ * A decision the agent is parked on (R34-PERM.1/.2), and the one entry in the
+ * transcript whose text an attacker chose: the tool name, the command, the path
+ * are all the model's words. They arrive ALREADY neutralized — every C0, DEL,
+ * C1, bidi control and invisible replaced one for one before the wire — so
+ * nothing here has to sanitize. What is left to CSS is the residual direction
+ * problem those replacements do not touch: a right-to-left SCRIPT still flips
+ * the run it sits in, and a flipped run inside this box would reorder the words
+ * of the command above the buttons that approve it.
+ *
+ * So `dir="ltr"` (set on the element in console.js) plus `unicode-bidi:
+ * isolate-override` here. `isolate` alone would only stop the run leaking OUT
+ * into the surrounding UI; `override` is what forces every character inside to
+ * be laid out in the base direction, so the order on screen is the order in the
+ * string. Both halves are on the container AND on each value, because the value
+ * is the part that gets read as an instruction.
+ */
+.entry[data-kind="permission"] {
+	align-self: stretch;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	background: color-mix(in srgb, var(--status-warn) 12%, transparent);
+	border: 1px solid color-mix(in srgb, var(--status-warn) 40%, transparent);
+	/* The `.entry` default is `pre-wrap`, which is right for a bubble of streamed
+	   text and wrong for a box built out of elements: it would print the newline
+	   between rows as blank space. Each value re-declares it for itself. */
+	white-space: normal;
+	direction: ltr;
+	unicode-bidi: isolate-override;
+}
+
+.entry[data-kind="permission"][data-decision] {
+	/* Settled: it is a record of what happened, not a question. */
+	background: var(--field);
+	border-color: var(--hairline);
+}
+
+.permission-heading {
+	font-weight: 600;
+}
+
+.permission-facts {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+}
+
+.permission-row {
+	display: flex;
+	gap: 8px;
+	align-items: baseline;
+	min-width: 0;
+}
+
+.permission-label {
+	flex: none;
+	width: 68px;
+	font-size: 11px;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--ink-dim);
+}
+
+.permission-value {
+	flex: 1;
+	min-width: 0;
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 13px;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	direction: ltr;
+	unicode-bidi: isolate-override;
+}
+
+.permission-notice {
+	margin: 0;
+	font-size: 12px;
+	color: var(--status-warn);
+}
+
+.permission-options {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.permission-option {
+	/* A thumb target in both dimensions, like every other control here: this is
+	   the one button on the page where a miss has consequences. */
+	min-height: var(--touch);
+	min-width: var(--touch);
+	padding: 8px 18px;
+	border: 1px solid var(--hairline);
+	border-radius: var(--radius);
+	background: var(--field);
+	color: inherit;
+	font: inherit;
+	cursor: pointer;
+}
+
+.permission-option:hover:not(:disabled) {
+	background: var(--hover);
+}
+
+.permission-option[data-chosen="true"] {
+	background: var(--selected);
+	border-color: color-mix(in srgb, var(--spectra-a) 45%, transparent);
+}
+
+.permission-option:disabled {
+	cursor: default;
+	opacity: 0.55;
+}
+
+.permission-outcome {
+	margin: 0;
+	font-size: 12px;
+	color: var(--ink-dim);
+	overflow-wrap: anywhere;
+}
+
+/* --- composer ------------------------------------------------------------ */
+#composer {
+	display: flex;
+	gap: 8px;
+	padding: var(--gap);
+	border-top: 1px solid var(--hairline);
+	background: var(--surface-raised);
+}
+
+#prompt {
+	flex: 1;
+	min-width: 0;
+	/* `resizePrompt()` sets an inline height from `scrollHeight`, which for one
+	   empty line is 43px. This is the floor that keeps it a thumb target. */
+	min-height: var(--touch);
+	/* A third of what is actually visible, not a third of `vh` — `vh` is the
+	   large viewport, so with the keyboard up `30vh` is most of the screen. */
+	max-height: calc(var(--viewport-height, 100dvh) * 0.3);
+	padding: 10px 12px;
+	border: 1px solid var(--hairline);
+	border-radius: var(--radius);
+	background: var(--field);
+	color: inherit;
+	font: inherit;
+	resize: none;
+	/* 16px stops iOS Safari zooming the viewport when the field takes focus. */
+	font-size: 16px;
+}
+
+button {
+	padding: 9px 14px;
+	border: 1px solid var(--hairline);
+	border-radius: var(--radius);
+	background: var(--field);
+	color: inherit;
+	font: inherit;
+	cursor: pointer;
+	/* A phone target, not a mouse target — in both dimensions. */
+	min-height: var(--touch);
+	min-width: var(--touch);
+}
+
+button:hover {
+	background: var(--hover);
+}
+
+#send {
+	background: var(--spectra-gradient);
+	border-color: transparent;
+	color: var(--smoke-900);
+	font-weight: 600;
+}
+
+#back {
+	padding: 9px 12px;
+}
+
+/* --- diagnostics (R33-REACH.2) ------------------------------------------- */
+#diagnostics {
+	/* Bounded, and bounded by what is *visible* rather than by `dvh`, for the
+	   same reason `body` is: a UA string is long, and this readout must never be
+	   what pushes the composer off the phone it exists to document. */
+	max-height: calc(var(--viewport-height, 100dvh) * 0.3);
+	overflow-y: auto;
+	padding: 8px 14px;
+	border-top: 1px solid var(--hairline);
+	background: var(--surface-raised);
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 11px;
+	line-height: 1.45;
+	color: var(--ink-dim);
+}
+
+#diagnostics dl {
+	display: grid;
+	/* `minmax(0, 1fr)` again: the UA string is one unbreakable-looking token and
+	   an `auto` column would size to it and give the phone a sideways scroll. */
+	grid-template-columns: max-content minmax(0, 1fr);
+	gap: 2px 10px;
+	margin: 0;
+}
+
+#diagnostics dt {
+	color: var(--ink);
+}
+
+#diagnostics dd {
+	margin: 0;
+	min-width: 0;
+	overflow-wrap: anywhere;
+	word-break: break-all;
+}
+
+/* --- footer -------------------------------------------------------------- */
+#decision-record {
+	padding: 6px 14px;
+	border-top: 1px solid var(--hairline);
+	font-size: 11px;
+	color: var(--ink-dim);
+	overflow-wrap: anywhere;
+}
+
+/* --- desktop ------------------------------------------------------------- */
+@media (min-width: 720px) {
+	#shell {
+		grid-template-columns: var(--rail-width) minmax(0, 1fr);
+	}
+
+	#rail {
+		grid-area: 1 / 1;
+	}
+
+	#session {
+		grid-area: 1 / 2;
+	}
+
+	/* Both panes at once: the fleet stays addressable while a session streams. */
+	body[data-view="fleet"] #session,
+	body[data-view="session"] #rail {
+		display: flex;
+	}
+
+	/* Nothing to go back to when the list never left. */
+	#back {
+		display: none;
+	}
+}

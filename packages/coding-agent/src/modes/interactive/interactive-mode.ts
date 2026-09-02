@@ -61,6 +61,16 @@ import {
 	computeCacheWaste,
 	detectCacheMiss,
 } from "../../core/cache-stats.ts";
+import { CheckpointManager } from "../../core/checkpoints/checkpoint-manager.ts";
+import {
+	DEFAULT_REWIND_SCOPE,
+	listRewindTargets,
+	type PerformRewindResult,
+	performRewind,
+	REWIND_SCOPE_CHOICES,
+	type RewindScope,
+	rewindScopeForLabel,
+} from "../../core/checkpoints/rewind.ts";
 import { formatContextWindow } from "../../core/context-windows.ts";
 import type {
 	AutocompleteProviderFactory,
@@ -74,6 +84,7 @@ import type {
 	ProjectTrustContext,
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
+import type { PermissionAskDetail } from "../../core/extensions/types.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
@@ -89,6 +100,7 @@ import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
+import { boundedSafeText } from "../../core/socket-server/safe-text.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
@@ -118,7 +130,7 @@ import { DynamicBorder } from "./components/dynamic-border.ts";
 import { EarendilAnnouncementComponent } from "./components/earendil-announcement.ts";
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
-import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
+import { boundDialogText, ExtensionSelectorComponent, MAX_DETAIL_ROWS } from "./components/extension-selector.ts";
 import { FooterComponent, formatTokens } from "./components/footer.ts";
 import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
@@ -388,6 +400,11 @@ export class InteractiveMode {
 	// Track if editor is in bash mode (text starts with !)
 	private isBashMode = false;
 
+	// True while `/rewind` is rewriting the working tree. The selector hands
+	// focus back to the editor before the restore finishes, so submissions have
+	// to be gated here or a new prompt runs against a half-restored tree.
+	private isRewindRunning = false;
+
 	// Track current bash execution component
 	private bashComponent: BashExecutionComponent | undefined = undefined;
 
@@ -408,8 +425,22 @@ export class InteractiveMode {
 
 	// Extension UI state
 	private extensionSelector: ExtensionSelectorComponent | undefined = undefined;
+	/**
+	 * Settles the promise of the dialog currently occupying {@link extensionSelector}.
+	 *
+	 * The slot holds at most one dialog, so opening a second one used to overwrite the first without
+	 * settling it — stranding a promise that `beforeToolCall` is awaiting, which wedges the agent
+	 * loop forever. Keeping the settle function beside the component makes the slot non-clobbering.
+	 */
+	private extensionSelectorSettle: ((value: string | undefined) => void) | undefined = undefined;
+	/** Label of the surface that decided the open ask elsewhere, pending a one-line notice. */
+	private extensionDialogDecidedBy: string | undefined = undefined;
 	private extensionInput: ExtensionInputComponent | undefined = undefined;
+	/** Settles the promise `showExtensionInput` returned. See {@link hideExtensionInput}. */
+	private extensionInputSettle: ((value: string | undefined) => void) | undefined = undefined;
 	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
+	/** Settles the promise `showExtensionEditor` returned. See {@link hideExtensionEditor}. */
+	private extensionEditorSettle: ((value: string | undefined) => void) | undefined = undefined;
 	private extensionTerminalInputUnsubscribers = new Set<() => void>();
 
 	// Extension widgets (components rendered above/below the editor)
@@ -2233,6 +2264,7 @@ export class InteractiveMode {
 		title: string,
 		options: string[],
 		opts?: ExtensionUIDialogOptions,
+		detailRows?: readonly string[],
 	): Promise<string | undefined> {
 		return new Promise((resolve) => {
 			if (opts?.signal?.aborted) {
@@ -2240,57 +2272,198 @@ export class InteractiveMode {
 				return;
 			}
 
+			let settled = false;
+			const settle = (value: string | undefined): void => {
+				if (settled) return;
+				settled = true;
+				opts?.signal?.removeEventListener("abort", onAbort);
+				if (this.extensionSelectorSettle === settle) this.extensionSelectorSettle = undefined;
+				// A deciding-surface label that nothing flushed belongs to THIS ask and dies with it.
+				// Left standing it is sticky: the next, unrelated dialog's teardown would emit
+				// "Permission resolved by <whoever>" about an ask that surface never saw.
+				this.extensionDialogDecidedBy = undefined;
+				resolve(value);
+			};
+
 			const onAbort = () => {
-				this.hideExtensionSelector();
-				resolve(undefined);
+				// A dialog that was already displaced by a newer one must not tear the newer one down.
+				if (!settled) {
+					// Flush BEFORE settling: `settle` drops the pending label, and `hideExtensionSelector`
+					// now settles this dialog fail-closed on its way out.
+					this.flushExtensionDialogDecidedNotice();
+					this.hideExtensionSelector();
+				}
+				settle(undefined);
 			};
 			opts?.signal?.addEventListener("abort", onAbort, { once: true });
+
+			// Non-clobbering slot. Whatever is already in it is disposed and its promise settled as
+			// cancelled BEFORE the replacement takes over; the previous code overwrote the field and
+			// left the earlier caller awaiting a promise nothing could ever resolve.
+			const displaced = this.extensionSelectorSettle;
+			this.extensionSelector?.dispose();
+			this.extensionSelector = undefined;
+			this.extensionSelectorSettle = undefined;
 
 			this.extensionSelector = new ExtensionSelectorComponent(
 				title,
 				options,
+				// Settle BEFORE hiding: `hideExtensionSelector` settles whatever is still in the slot
+				// fail-closed, so hiding first would resolve the ask as `undefined` (a denial) and the
+				// human's actual choice would be swallowed by the `settled` guard.
 				(option) => {
-					opts?.signal?.removeEventListener("abort", onAbort);
+					settle(option);
 					this.hideExtensionSelector();
-					resolve(option);
 				},
 				() => {
-					opts?.signal?.removeEventListener("abort", onAbort);
+					settle(undefined);
 					this.hideExtensionSelector();
-					resolve(undefined);
 				},
-				{ tui: this.ui, timeout: opts?.timeout, onToggleToolsExpanded: () => this.toggleToolOutputExpansion() },
+				{
+					tui: this.ui,
+					timeout: opts?.timeout,
+					detailRows,
+					onToggleToolsExpanded: () => this.toggleToolOutputExpansion(),
+				},
 			);
+			this.extensionSelectorSettle = settle;
 
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.extensionSelector);
 			this.ui.setFocus(this.extensionSelector);
 			this.ui.requestRender();
+
+			// Settle the displaced caller only once the replacement is installed, so its continuation
+			// cannot observe an empty dialog slot.
+			displaced?.(undefined);
 		});
 	}
 
 	/**
-	 * Hide the extension selector.
+	 * Record that the open ask was decided by another surface (an attached client, the RPC caller).
+	 *
+	 * This does NOT dismiss the dialog: `opts.signal` already does that, and the relay aborts it
+	 * right after calling this. All that is added here is the RENDERING — the operator otherwise
+	 * watches a permission dialog vanish with no account of who answered it.
+	 */
+	noteExtensionDialogResolvedElsewhere(label: string): void {
+		this.extensionDialogDecidedBy = label;
+		// Nothing is open to abort, so no teardown will flush the notice — emit it now.
+		if (!this.extensionSelector) this.flushExtensionDialogDecidedNotice();
+	}
+
+	/** Emit the pending deciding-surface notice at most once, then forget it. */
+	private flushExtensionDialogDecidedNotice(): void {
+		const label = this.extensionDialogDecidedBy;
+		if (label === undefined) return;
+		this.extensionDialogDecidedBy = undefined;
+		this.showExtensionNotify(`Permission resolved by ${label}`, "info");
+	}
+
+	/**
+	 * Hide the extension selector, settling its promise FAIL-CLOSED if nothing else has.
+	 *
+	 * Every teardown path FOR THE SELECTOR funnels through here — {@link hideExtensionInput} and
+	 * {@link hideExtensionEditor} are the matching, separate ones for the other two dialog types, and
+	 * they need the same treatment for the same reason. This one used to drop the component on the
+	 * floor without touching {@link extensionSelectorSettle} when `resetExtensionUI` (reached from
+	 * `setBeforeSessionInvalidate` and from `/reload`) called it. A session invalidate while a permission ask
+	 * was open therefore stranded the promise `beforeToolCall` awaits and wedged the agent loop
+	 * forever: no dialog on screen, no tool call, no way out.
+	 *
+	 * `undefined` is the fail-closed answer — `showExtensionConfirm` maps it to `false`, i.e. denial.
+	 * Callers that carry a real answer must `settle(...)` it BEFORE calling this.
 	 */
 	private hideExtensionSelector(): void {
+		const settle = this.extensionSelectorSettle;
+		this.extensionSelectorSettle = undefined;
 		this.extensionSelector?.dispose();
 		this.editorContainer.clear();
 		this.editorContainer.addChild(this.editor);
 		this.extensionSelector = undefined;
 		this.ui.setFocus(this.editor);
 		this.ui.requestRender();
+		// Last, so the caller's continuation cannot observe a half-torn-down dialog slot.
+		settle?.(undefined);
 	}
 
 	/**
 	 * Show a confirmation dialog for extensions.
+	 *
+	 * `ui.confirm(title, message, opts)` is a PUBLIC extension surface and the attach relay forwards
+	 * the caller's title through unchanged, so `title` is attacker-influenced even when the built-in
+	 * permission gate passes a constant. Untreated it carried every defect the detail rows were
+	 * hardened against: `ESC[2J` in a title cleared the operator's screen, U+202E survived verbatim,
+	 * and `"Approve\nYes\nNo"` rendered four option-looking rows above two real ones.
+	 *
+	 * TITLE and MESSAGE are bounded DIFFERENTLY, because they are different things:
+	 *
+	 *  - a TITLE is a header, so it stays exactly ONE row on every path and its newlines are
+	 *    neutralized. That is what stops `"Approve\nYes\nNo"` from drawing option-looking rows above
+	 *    the real ones, and it costs nothing HERE: no caller of `showExtensionConfirm` writes a
+	 *    multi-line title. (Two callers elsewhere do — `showStartupSelector` gets the five-line
+	 *    `formatMissingSessionCwdPrompt` from `main.ts`, and `project-trust.ts` passes
+	 *    `${title}\n${message}` — but they reach `ExtensionSelectorComponent` directly, where
+	 *    `TitleRowsComponent` draws one row per line. The reasoning below depends only on the
+	 *    `showExtensionConfirm` path.)
+	 *  - a MESSAGE is prose, so it gets a ROW BUDGET and its own newlines are row breaks. Bounding it
+	 *    to a single row's width instead gutted the `/rewind --fork` consent dialog (215 of its 273
+	 *    characters elided at 80 columns) and collapsed the deliberately 5-line
+	 *    `formatMissingSessionCwdPrompt` into one. See {@link boundDialogText}.
 	 */
 	private async showExtensionConfirm(
 		title: string,
 		message: string,
 		opts?: ExtensionUIDialogOptions,
 	): Promise<boolean> {
-		const result = await this.showExtensionSelector(`${title}\n${message}`, ["Yes", "No"], opts);
+		// Grapheme budget for one row of dialog text: the terminal width less the row's `paddingX: 1`
+		// on each side. The floor keeps a very narrow terminal from producing a useless budget.
+		const columns = this.ui?.terminal?.columns ?? 80;
+		const safeTitle = boundedSafeText(title, Math.max(16, columns - 2)).value;
+		const detail = opts?.detail;
+		if (detail !== undefined) {
+			// A permission ask arrives with typed fields, so it is rendered as typed rows. Flattening
+			// it back into `${title}\n${message}` would hand the attacker-influenced command a way to
+			// forge rows, and the human would be deciding about a string rather than about a call.
+			const rows = this.buildPermissionDetailRows(detail);
+			const result = await this.showExtensionSelector(safeTitle, ["Yes", "No"], opts, rows);
+			return result === "Yes";
+		}
+		// Two rows of the header budget are already spoken for: the single-row title above, and the
+		// spacer `ExtensionSelectorComponent` draws between the header and the option list when there
+		// are no detail rows. Both sit above `Yes`, so both have to come out of the same budget.
+		const safeMessage = boundDialogText(message, columns, MAX_DETAIL_ROWS - 2);
+		const result = await this.showExtensionSelector(`${safeTitle}\n${safeMessage}`, ["Yes", "No"], opts);
 		return result === "Yes";
+	}
+
+	/**
+	 * Turn a {@link PermissionAskDetail} into one bounded, neutralized row per fact.
+	 *
+	 * The protocol layer neutralizes what arrives from a remote surface, but a LOCALLY raised ask
+	 * never crosses the wire — so the rule is applied here too. Note the ORDER: neutralize, then
+	 * measure. `visibleWidth` strips ANSI for measurement only and reports zero width for bidi
+	 * controls and DEL, so any width budget computed over raw text is a fiction.
+	 */
+	private buildPermissionDetailRows(detail: PermissionAskDetail): string[] {
+		const labels: [string, string | undefined][] = [
+			["Tool", detail.toolName],
+			["Directory", detail.cwd],
+			["Command", detail.command],
+			["Path", detail.path],
+			["Operation", detail.operation],
+			["Reason", detail.reason],
+		];
+		const present = labels.filter((entry): entry is [string, string] => {
+			const value = entry[1];
+			return value !== undefined && value.length > 0;
+		});
+		const labelWidth = present.reduce((max, [label]) => Math.max(max, label.length), 0);
+		// Terminal width minus the row margins, the label column and its ": " separator. The floor
+		// keeps a narrow terminal from producing a zero or negative budget.
+		const columns = this.ui?.terminal?.columns ?? 80;
+		const budget = Math.max(16, columns - 2 - labelWidth - 2);
+		return present.map(([label, value]) => `${label.padEnd(labelWidth)}: ${boundedSafeText(value, budget).value}`);
 	}
 
 	private async promptForMissingSessionCwd(error: MissingSessionCwdError): Promise<string | undefined> {
@@ -2315,45 +2488,76 @@ export class InteractiveMode {
 				return;
 			}
 
+			let settled = false;
+			const settle = (value: string | undefined): void => {
+				if (settled) return;
+				settled = true;
+				opts?.signal?.removeEventListener("abort", onAbort);
+				if (this.extensionInputSettle === settle) this.extensionInputSettle = undefined;
+				resolve(value);
+			};
+
 			const onAbort = () => {
-				this.hideExtensionInput();
-				resolve(undefined);
+				// A dialog already displaced by a newer one must not tear the newer one down.
+				if (!settled) this.hideExtensionInput();
+				settle(undefined);
 			};
 			opts?.signal?.addEventListener("abort", onAbort, { once: true });
+
+			const displaced = this.extensionInputSettle;
+			this.extensionInput?.dispose();
+			this.extensionInput = undefined;
+			this.extensionInputSettle = undefined;
 
 			this.extensionInput = new ExtensionInputComponent(
 				title,
 				placeholder,
+				// Settle BEFORE hiding, for the same reason the selector does: `hideExtensionInput`
+				// settles whatever is still in the slot fail-closed, so hiding first would resolve the
+				// ask as `undefined` and the human's actual answer would hit the `settled` guard.
 				(value) => {
-					opts?.signal?.removeEventListener("abort", onAbort);
+					settle(value);
 					this.hideExtensionInput();
-					resolve(value);
 				},
 				() => {
-					opts?.signal?.removeEventListener("abort", onAbort);
+					settle(undefined);
 					this.hideExtensionInput();
-					resolve(undefined);
 				},
 				{ tui: this.ui, timeout: opts?.timeout },
 			);
+			this.extensionInputSettle = settle;
 
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.extensionInput);
 			this.ui.setFocus(this.extensionInput);
 			this.ui.requestRender();
+
+			// Only once the replacement is installed, so the displaced caller's continuation cannot
+			// observe an empty dialog slot.
+			displaced?.(undefined);
 		});
 	}
 
 	/**
-	 * Hide the extension input.
+	 * Hide the extension input, settling its promise FAIL-CLOSED if nothing else has.
+	 *
+	 * Same defect the selector had: this used to dispose and re-focus without touching the `resolve`
+	 * captured in {@link showExtensionInput}'s closure, so `resetExtensionUI` — a session invalidate
+	 * or `/reload` — left the extension awaiting `ui.input(...)` hanging forever.
+	 *
+	 * Callers that carry a real answer must `settle(...)` it BEFORE calling this.
 	 */
 	private hideExtensionInput(): void {
+		const settle = this.extensionInputSettle;
+		this.extensionInputSettle = undefined;
 		this.extensionInput?.dispose();
 		this.editorContainer.clear();
 		this.editorContainer.addChild(this.editor);
 		this.extensionInput = undefined;
 		this.ui.setFocus(this.editor);
 		this.ui.requestRender();
+		// Last, so the caller's continuation cannot observe a half-torn-down dialog slot.
+		settle?.(undefined);
 	}
 
 	/**
@@ -2361,39 +2565,68 @@ export class InteractiveMode {
 	 */
 	private showExtensionEditor(title: string, prefill?: string): Promise<string | undefined> {
 		return new Promise((resolve) => {
+			let settled = false;
+			const settle = (value: string | undefined): void => {
+				if (settled) return;
+				settled = true;
+				if (this.extensionEditorSettle === settle) this.extensionEditorSettle = undefined;
+				resolve(value);
+			};
+
+			const displaced = this.extensionEditorSettle;
+			this.extensionEditor = undefined;
+			this.extensionEditorSettle = undefined;
+
 			this.extensionEditor = new ExtensionEditorComponent(
 				this.ui,
 				this.keybindings,
 				title,
 				prefill,
+				// Settle BEFORE hiding: `hideExtensionEditor` settles the slot fail-closed.
 				(value) => {
+					settle(value);
 					this.hideExtensionEditor();
-					resolve(value);
 				},
 				() => {
+					settle(undefined);
 					this.hideExtensionEditor();
-					resolve(undefined);
 				},
 				undefined,
 				this.settingsManager.getExternalEditorCommand(),
 			);
+			this.extensionEditorSettle = settle;
 
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.extensionEditor);
 			this.ui.setFocus(this.extensionEditor);
 			this.ui.requestRender();
+
+			// Only once the replacement is installed, so the displaced caller's continuation cannot
+			// observe an empty dialog slot.
+			displaced?.(undefined);
 		});
 	}
 
 	/**
-	 * Hide the extension editor.
+	 * Hide the extension editor, settling its promise FAIL-CLOSED if nothing else has.
+	 *
+	 * Same defect the selector had: this used to clear the container and re-focus without touching
+	 * the `resolve` captured in {@link showExtensionEditor}'s closure, so `resetExtensionUI` — a
+	 * session invalidate or `/reload` — stranded whoever was awaiting the editor forever. `/compact`
+	 * with custom instructions is one such caller.
+	 *
+	 * Callers that carry a real answer must `settle(...)` it BEFORE calling this.
 	 */
 	private hideExtensionEditor(): void {
+		const settle = this.extensionEditorSettle;
+		this.extensionEditorSettle = undefined;
 		this.editorContainer.clear();
 		this.editorContainer.addChild(this.editor);
 		this.extensionEditor = undefined;
 		this.ui.setFocus(this.editor);
 		this.ui.requestRender();
+		// Last, so the caller's continuation cannot observe a half-torn-down dialog slot.
+		settle?.(undefined);
 	}
 
 	/**
@@ -2634,6 +2867,7 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.message.dequeue", () => this.handleDequeue());
 		this.defaultEditor.onAction("app.session.new", () => this.handleClearCommand());
 		this.defaultEditor.onAction("app.session.tree", () => this.showTreeSelector());
+		this.defaultEditor.onAction("app.session.rewind", () => this.showRewindSelector());
 		this.defaultEditor.onAction("app.session.fork", () => this.showUserMessageSelector());
 		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
 
@@ -2681,6 +2915,15 @@ export class InteractiveMode {
 		this.defaultEditor.onSubmit = async (text: string) => {
 			text = text.trim();
 			if (!text) return;
+
+			// A `/rewind` is rewriting the working tree right now. Anything
+			// submitted here would run against a tree that is mid-restore, so
+			// hold the text in the editor the way the bash guard below does.
+			if (this.isRewindRunning) {
+				this.showWarning("A rewind is restoring your files. Wait for it to finish.");
+				this.editor.setText(text);
+				return;
+			}
 
 			// Handle commands
 			if (text === "/settings") {
@@ -2751,6 +2994,11 @@ export class InteractiveMode {
 			}
 			if (text === "/tree") {
 				this.showTreeSelector();
+				this.editor.setText("");
+				return;
+			}
+			if (text === "/rewind") {
+				this.showRewindSelector();
 				this.editor.setText("");
 				return;
 			}
@@ -4256,6 +4504,7 @@ export class InteractiveMode {
 					outputPad: this.settingsManager.getOutputPad(),
 					autocompleteMaxVisible: this.settingsManager.getAutocompleteMaxVisible(),
 					quietStartup: this.settingsManager.getQuietStartup(),
+					attachableSessions: this.settingsManager.getAttachableSessions(),
 					clearOnShrink: this.settingsManager.getClearOnShrink(),
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
 					warnings: this.settingsManager.getWarnings(),
@@ -4339,6 +4588,10 @@ export class InteractiveMode {
 					},
 					onQuietStartupChange: (enabled) => {
 						this.settingsManager.setQuietStartup(enabled);
+					},
+					onAttachableSessionsChange: (enabled) => {
+						// Takes effect on the next session start: this one already bound (or did not).
+						this.settingsManager.setAttachableSessions(enabled);
 					},
 					onDefaultProjectTrustChange: (defaultProjectTrust) => {
 						this.settingsManager.setDefaultProjectTrust(defaultProjectTrust);
@@ -4681,6 +4934,14 @@ export class InteractiveMode {
 				userMessages.map((m) => ({ id: m.entryId, text: m.text })),
 				async (entryId) => {
 					done();
+					// The user committed to forking: stop the active response first,
+					// the same way /tree and /rewind do. The fork fires the
+					// checkpoint restore offer, and that must never rewrite the
+					// working tree while the agent is still writing to it.
+					if (this.session.isStreaming) {
+						this.restoreQueuedMessagesToEditor();
+						await this.session.abort();
+					}
 					try {
 						const result = await this.runtimeHost.fork(entryId);
 						if (result.cancelled) {
@@ -4864,6 +5125,150 @@ export class InteractiveMode {
 			};
 			return { component: selector, focus: selector };
 		});
+	}
+
+	/** Checkpoint manager for the live session; undefined before a session file exists. */
+	private createCheckpointManager(): CheckpointManager | undefined {
+		const sessionFile = this.sessionManager.getSessionFile();
+		if (!sessionFile) return undefined;
+		return new CheckpointManager({
+			cwd: this.sessionManager.getCwd(),
+			sessionId: this.sessionManager.getSessionId(),
+			sessionFile,
+		});
+	}
+
+	/**
+	 * `/rewind` (R42-RWD.1): the tree selector, restricted to entries that have a
+	 * checkpoint and annotated with its time and dirty-file count, followed by the
+	 * restore-scope menu (R42-RWD.2). Entries on abandoned branches keep their
+	 * checkpoints, so rewinding forward to one is just another selection (R42-RWD.6).
+	 */
+	private showRewindSelector(initialSelectedId?: string): void {
+		const tree = this.sessionManager.getTree();
+		if (tree.length === 0) {
+			this.showStatus("No entries in session");
+			return;
+		}
+
+		const manager = this.createCheckpointManager();
+		const targets = manager ? listRewindTargets(manager.list()) : [];
+		const checkpoints =
+			targets.length > 0
+				? new Map(
+						targets.map((target) => [
+							target.entryId,
+							{ timestamp: target.timestamp, dirtyFileCount: target.dirtyFileCount },
+						]),
+					)
+				: undefined;
+
+		if (!checkpoints) {
+			// No snapshots (e.g. a non-git cwd): still rewind the conversation.
+			this.showStatus("No checkpoints recorded - /rewind will restore the conversation only");
+		}
+
+		this.showSelector((done) => {
+			const selector = new TreeSelectorComponent(
+				tree,
+				this.sessionManager.getLeafId(),
+				this.ui.terminal.rows,
+				async (entryId) => {
+					done();
+
+					if (!checkpoints) {
+						await this.runRewind(entryId, "conversation-only", undefined);
+						return;
+					}
+
+					const label = await this.showExtensionSelector(
+						"Restore scope?",
+						REWIND_SCOPE_CHOICES.map((choice) => choice.label),
+					);
+					if (label === undefined) {
+						// Escape returns to the selector with the same entry focused.
+						this.showRewindSelector(entryId);
+						return;
+					}
+					await this.runRewind(entryId, rewindScopeForLabel(label) ?? DEFAULT_REWIND_SCOPE, manager);
+				},
+				() => {
+					done();
+					this.ui.requestRender();
+				},
+				undefined,
+				initialSelectedId,
+				undefined,
+				{ title: "Rewind", checkpoints },
+			);
+			return { component: selector, focus: selector };
+		});
+	}
+
+	/**
+	 * Run the rewind under the chosen scope. The conversation leaf is moved by
+	 * `performRewind` through this navigate callback, which it only invokes once
+	 * the file restore has succeeded (R42-RWD.5).
+	 */
+	private async runRewind(
+		targetEntryId: string,
+		scope: RewindScope,
+		manager: CheckpointManager | undefined,
+	): Promise<void> {
+		const currentEntryId = this.sessionManager.getLeafId();
+		if (!currentEntryId) {
+			this.showStatus("Nothing to rewind yet");
+			return;
+		}
+		if (targetEntryId === currentEntryId && scope === "conversation-only") {
+			this.showStatus("Already at this point");
+			return;
+		}
+
+		// The user committed to rewinding: stop the active response first.
+		if (this.session.isStreaming) {
+			this.restoreQueuedMessagesToEditor();
+			await this.session.abort();
+		}
+
+		// The selector already called `done()`, so the editor has focus again
+		// while this runs. Block submissions until the restore is finished
+		// rather than let a new prompt race the file writes.
+		this.isRewindRunning = true;
+		let result: PerformRewindResult;
+		try {
+			result = await performRewind({
+				manager,
+				scope,
+				// Scopes the in-progress gate to this session (R35-ALWAYS.5).
+				// Read at call time so it follows a session replacement.
+				sessionId: this.sessionManager.getSessionId(),
+				targetEntryId,
+				currentEntryId,
+				// Gives extensions the `session_before_rewind` veto (R42-RWD.8).
+				runner: this.session.extensionRunner,
+				navigate: async () => {
+					if (targetEntryId === currentEntryId) return;
+					const navigation = await this.session.navigateTree(targetEntryId, { summarize: false });
+					if (navigation.cancelled) throw new Error("navigation cancelled");
+					this.chatContainer.clear();
+					this.renderInitialMessages();
+					if (navigation.editorText && !this.editor.getText().trim()) {
+						this.editor.setText(navigation.editorText);
+					}
+					void this.flushCompactionQueue({ willRetry: false });
+				},
+			});
+		} finally {
+			this.isRewindRunning = false;
+		}
+
+		if (result.ok) {
+			this.showStatus(result.message);
+		} else {
+			this.showError(result.message);
+		}
+		this.ui.requestRender();
 	}
 
 	private showSessionSelector(): void {

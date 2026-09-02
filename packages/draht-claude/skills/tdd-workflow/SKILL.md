@@ -52,6 +52,8 @@ Draht enforces strict test-driven development through commit conventions, post-t
 
 6. **Fix bugs with a reproducing test first.** No exceptions. The test must fail before the fix, pass after.
 
+7. **Comments are a design signal.** Comments exist only for constraints the code cannot express. If the green or refactor step leaves code that needs comments to be understood, keep refactoring until it doesn't — never narrate steps or leave "this handles Y" breadcrumbs. Comment density above the surrounding file's norm is a defect to fix before committing; a heavily-commented solution means the design is wrong — redesign, don't annotate.
+
 ## TDD Cycle Violations
 
 The post-task hook (`gsd-post-task.cjs`) checks commit history for cycle violations:

@@ -23,8 +23,14 @@
  *   7. Repo-level subagents exist in .draht/agents/
  *   8. GSD sources exist in packages/coding-agent/src/gsd/
  *   9. GSD hooks exist in packages/coding-agent/hooks/gsd/
- *  10. GSD prompt templates exist in packages/coding-agent/prompts/
- *  11. Built-in agents exist in packages/coding-agent/agents/
+ *  10. GSD command prompt templates exist in packages/coding-agent/prompts/commands/
+ *      (and the legacy prompts/agents/ templates stay retired)
+ *  10b. Dual-channel skills (root skills/<name>/ + shipped
+ *      packages/coding-agent/skills/<name>/) stay byte-identical copies
+ *  11. Built-in agents exist in packages/coding-agent/agents/, and the set of
+ *      agent names dispatched by prompts/commands/*.md matches the shipped
+ *      roster in both directions (no command routes to an unshipped agent,
+ *      no shipped agent is unrouted dead weight)
  *  12. draht-tools binary exists in packages/coding-agent/bin/
  *  13. GSD test suite is intact in packages/coding-agent/test/
  *  14. All package.json names use @draht/* or draht-* (not @mariozechner/pi*)
@@ -507,12 +513,14 @@ check(
 console.log("\n.planning/ integrity");
 
 try {
-	const diffOutput = execSync("git diff main -- .planning/", {
-		cwd: root,
-		encoding: "utf-8",
-		stdio: ["pipe", "pipe", "pipe"],
-	});
-	check(diffOutput.trim() === "", `.planning/ unchanged vs main`);
+	const run = (cmd) => execSync(cmd, { cwd: root, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+	// `git diff main` reads the WORKING TREE, so on the branch that authors planning
+	// docs this fires on every edit and the pre-commit hook can never commit one.
+	if (run("git rev-parse --abbrev-ref HEAD") === "main" || run("git rev-parse HEAD") === run("git rev-parse main")) {
+		pass(`.planning/ check skipped (authoring branch)`);
+	} else {
+		check(run("git diff main -- .planning/") === "", `.planning/ unchanged vs main`);
+	}
 } catch {
 	// If not on a branch or main doesn't exist, skip
 	pass(`.planning/ check skipped (no main ref)`);
@@ -593,9 +601,11 @@ console.log("\nGSD prompt templates (packages/coding-agent/prompts/)");
 
 const requiredCommandPrompts = [
 	"atomic-commit",
+	"create-verification-skill",
 	"discuss-phase",
 	"execute-phase",
 	"fix",
+	"grill",
 	"init-project",
 	"map-codebase",
 	"new-project",
@@ -605,9 +615,12 @@ const requiredCommandPrompts = [
 	"plan-phase",
 	"progress",
 	"quick",
+	"resolve-conflicts",
 	"resume-work",
 	"review",
+	"triage",
 	"verify-work",
+	"why",
 ];
 for (const name of requiredCommandPrompts) {
 	check(
@@ -618,14 +631,82 @@ for (const name of requiredCommandPrompts) {
 	);
 }
 
-const requiredAgentPrompts = ["build", "plan", "verify"];
-for (const name of requiredAgentPrompts) {
-	check(
-		existsSync(
-			resolve(root, `packages/coding-agent/prompts/agents/${name}.md`),
-		),
-		`prompts/agents/${name}.md exists`,
+// Legacy build/plan/verify agent prompt templates are retired: they carried
+// the dead `draht commit-task N P T` commit convention (superseded by plain
+// red:/green:/refactor: git commits) and were referenced nowhere. An
+// upstream rebase must not resurrect them.
+const retiredAgentPromptsDir = "packages/coding-agent/prompts/agents";
+check(
+	!existsSync(resolve(root, retiredAgentPromptsDir)),
+	`${retiredAgentPromptsDir}/ stays retired (legacy build/plan/verify templates)`,
+);
+
+// ── 10b. Dual-channel skill byte-copies stay in sync ───────────────
+//
+// A discipline that exists in both channels — root skills/<name>/ as the
+// canonical source, packages/coding-agent/skills/<name>/ as the shipped
+// fallback so shipped prompts resolve the name with nothing installed —
+// must be a byte-copy, not an adaptation (ADR 0003) — the whole dir, so a
+// skill's references/ files can't drift while its SKILL.md stays pinned.
+// Without this gate the pair drifts silently: no generator emits the
+// shipped copy and no mirror check covers it. Extend DUAL_CHANNEL_SKILLS in
+// the same change as any new dual-channel occupant. hexagon-animation is
+// deliberately excluded: it is an asset-bearing product default with no
+// root twin.
+
+console.log("\nDual-channel skill byte-copies (root skills/ ↔ shipped builtin)");
+
+const DUAL_CHANNEL_SKILLS = [
+	"atomic-reasoning",
+	"blast-radius",
+	"epistemics",
+	"typescript-discipline",
+	"unslop",
+];
+
+function walkSkillFiles(dirAbs, prefix = "") {
+	const files = [];
+	const entries = readdirSync(dirAbs, { withFileTypes: true }).sort((a, b) =>
+		a.name.localeCompare(b.name),
 	);
+	for (const entry of entries) {
+		const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+		if (entry.isDirectory()) {
+			files.push(...walkSkillFiles(resolve(dirAbs, entry.name), rel));
+		} else {
+			files.push(rel);
+		}
+	}
+	return files;
+}
+
+for (const name of DUAL_CHANNEL_SKILLS) {
+	const rootDirPath = `skills/${name}`;
+	const shippedDirPath = `packages/coding-agent/skills/${name}`;
+	const rootDirAbs = resolve(root, rootDirPath);
+	const shippedDirAbs = resolve(root, shippedDirPath);
+	if (!existsSync(rootDirAbs) || !existsSync(shippedDirAbs)) {
+		fail(
+			`${shippedDirPath}/ and ${rootDirPath}/ both exist (dual-channel occupant "${name}")`,
+		);
+		continue;
+	}
+	const rootFiles = walkSkillFiles(rootDirAbs);
+	const shippedFiles = walkSkillFiles(shippedDirAbs);
+	check(
+		rootFiles.join("\n") === shippedFiles.join("\n"),
+		`${shippedDirPath}/ has the same file set as ${rootDirPath}/` +
+			` (root: ${rootFiles.join(", ")}; shipped: ${shippedFiles.join(", ")})`,
+	);
+	for (const rel of rootFiles) {
+		if (!shippedFiles.includes(rel)) continue;
+		check(
+			readFileSync(resolve(shippedDirAbs, rel), "utf-8") ===
+				readFileSync(resolve(rootDirAbs, rel), "utf-8"),
+			`${shippedDirPath}/${rel} is byte-equal to ${rootDirPath}/${rel}` +
+				` (fix: cp ${rootDirPath}/${rel} ${shippedDirPath}/${rel})`,
+		);
+	}
 }
 
 // ── 11. Built-in agents ─────────────────────────────────────────────
@@ -633,12 +714,15 @@ for (const name of requiredAgentPrompts) {
 console.log("\nBuilt-in agents (packages/coding-agent/agents/)");
 
 const requiredBuiltinAgents = [
+	"advisor",
 	"architect",
 	"debugger",
 	"git-committer",
 	"implementer",
+	"investigator",
 	"reviewer",
 	"security-auditor",
+	"spec-reviewer",
 	"verifier",
 ];
 for (const name of requiredBuiltinAgents) {
@@ -647,6 +731,119 @@ for (const name of requiredBuiltinAgents) {
 		`agents/${name}.md exists`,
 	);
 }
+
+// ── 11b. Agent roster ↔ command dispatch (bidirectional) ───────────
+//
+// A command prompt that dispatches an agent not shipped in
+// packages/coding-agent/agents/ hard-fails at runtime: subagent.ts
+// discoverAgents() rejects unknown names with `Unknown agent "<name>"`.
+// The reverse is quieter rot: a shipped agent no command routes to is dead
+// roster weight. Either direction is a router that lies. This section exists
+// because six commands (execute-phase, orchestrate, orchestrate-loop, quick,
+// review, verify-work) dispatched `spec-reviewer` while it shipped only in
+// the plugin packages — Stage 2 of /execute-phase was broken out of the box.
+//
+// The dispatch grammar below is what derives "which agents do the commands
+// route to" from prose. If a command prompt rephrases its dispatch language,
+// extend the grammar in the same change — never make a red check green by
+// deleting patterns.
+
+console.log("\nAgent roster ↔ command dispatch (bidirectional)");
+
+const builtinAgentsDir = resolve(root, "packages/coding-agent/agents");
+const shippedAgentNames = new Set();
+for (const file of readdirSync(builtinAgentsDir).sort()) {
+	if (!file.endsWith(".md")) continue;
+	const text = readFileSync(resolve(builtinAgentsDir, file), "utf-8");
+	// subagent.ts silently skips roster files whose frontmatter lacks a name or
+	// description — an unloadable roster file must be red here, not silent.
+	let name = null;
+	let hasDescription = false;
+	if (text.startsWith("---\n")) {
+		const end = text.indexOf("\n---", 4);
+		if (end !== -1) {
+			const frontmatter = text.slice(4, end);
+			name = frontmatter.match(/^name:\s*(\S+)\s*$/m)?.[1] ?? null;
+			hasDescription = /^description:\s*\S/m.test(frontmatter);
+		}
+	}
+	check(
+		name !== null && hasDescription,
+		`agents/${file}: frontmatter has name + description (subagent.ts skips it silently otherwise)`,
+	);
+	if (name) shippedAgentNames.add(name);
+}
+
+const commandsDir = resolve(root, "packages/coding-agent/prompts/commands");
+const dispatched = new Map(); // agent name → Set of command files
+const mentioned = new Map(); // agent name → Set of command files
+const recordDispatch = (name, file) => {
+	if (name === "subagent") return;
+	if (!dispatched.has(name)) dispatched.set(name, new Set());
+	dispatched.get(name).add(file);
+};
+for (const file of readdirSync(commandsDir).sort()) {
+	if (!file.endsWith(".md")) continue;
+	const text = readFileSync(resolve(commandsDir, file), "utf-8");
+	// "`<name>` agent" / "`<name>` agents"
+	for (const m of text.matchAll(/`([a-z][a-z0-9-]*)` agents?\b/g)) {
+		recordDispatch(m[1], file);
+	}
+	// orchestrate.md's tool-note roster: every backtick token after
+	// "`agent` to one of:" on that line
+	for (const m of text.matchAll(/`agent` to one of: ([^\n]+)/g)) {
+		for (const token of m[1].matchAll(/`([a-z][a-z0-9-]*)`/g)) {
+			recordDispatch(token[1], file);
+		}
+	}
+	// orchestrate-loop / plan-phase phrasings: "dispatch `x`", "call to `x`",
+	// "workers are `x`", "the final gate is `x`", "consult `x`"
+	for (const m of text.matchAll(
+		/\b(?:dispatch|call to|workers are|final gate is|consult)[^`\n]{0,40}`([a-z][a-z0-9-]*)`/gi,
+	)) {
+		recordDispatch(m[1], file);
+	}
+	// Backtick delimiters make the mention scan substring-safe:
+	// `reviewer` never matches inside `spec-reviewer`.
+	for (const name of shippedAgentNames) {
+		if (text.includes(`\`${name}\``)) {
+			if (!mentioned.has(name)) mentioned.set(name, new Set());
+			mentioned.get(name).add(file);
+		}
+	}
+}
+
+// Direction 1: every dispatched agent is shipped.
+for (const name of [...dispatched.keys()].sort()) {
+	const files = [...dispatched.get(name)].sort().join(", ");
+	check(
+		shippedAgentNames.has(name),
+		`dispatched agent \`${name}\` (${files}) is shipped in packages/coding-agent/agents/` +
+			(shippedAgentNames.has(name)
+				? ""
+				: ` — ship the agent there or correct the prompt;` +
+					` project-level .draht/agents/ does not count for shipped commands`),
+	);
+}
+
+// Direction 2: every shipped agent is routed to by at least one command.
+for (const name of [...shippedAgentNames].sort()) {
+	check(
+		(mentioned.get(name)?.size ?? 0) > 0,
+		`shipped agent \`${name}\` is mentioned by at least one command prompt` +
+			(mentioned.has(name)
+				? ""
+				: ` — dead roster entry: route to it from a command or delete it`),
+	);
+}
+
+// Non-vacuity floor: the dispatch grammar lives above and must be extended
+// together with any command-prompt rephrasing — a grammar that matches
+// nothing would pass direction 1 vacuously.
+check(
+	dispatched.size >= 5,
+	`dispatch grammar derives ≥5 agent names from prompts/commands/ (got ${dispatched.size})`,
+);
 
 // ── 12. draht-tools binary ─────────────────────────────────────────
 
@@ -1146,7 +1343,13 @@ function walkDir(dir, visit) {
 				entry.name === "node_modules" ||
 				entry.name === ".git" ||
 				entry.name === "dist" ||
-				entry.name === ".next"
+				entry.name === ".next" ||
+				// `.claude/worktrees/<name>` holds FULL checkouts of other branches
+				// (`git worktree list` shows them), and `.gitignore` excludes `.claude/*`.
+				// Walking in audits some other branch's tree as if it were this one:
+				// six `pi-extension-*` packages renamed on main still fail from a
+				// worktree pinned before the rename, and no edit here can green it.
+				entry.name === ".claude"
 			)
 				continue;
 			walkDir(fullPath, visit);

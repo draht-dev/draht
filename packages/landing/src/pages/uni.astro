@@ -1,0 +1,187 @@
+---
+import AtelierPage from "../layouts/AtelierPage.astro";
+
+const title = "draht uni — building in public";
+const description =
+	"Follow the build of uni.draht.dev, one episode per week. Episode 1 is live; join the waitlist for the next release.";
+
+// Google Apps Script waitlist endpoint (see waitlist/README.md — signups land
+// in Google Contacts under "draht uni waitlist", newsletter goes out via Gmail).
+// TODO-CONFIGURE: deploy the script and paste its /exec URL here.
+const WAITLIST_ENDPOINT = "PASTE_APPS_SCRIPT_EXEC_URL";
+---
+
+<AtelierPage title={title} description={description}>
+	<main class="uni-main">
+		<header class="page-head">
+			<div class="page-kicker">uni.draht.dev · building in public</div>
+			<h1 class="page-title">The first course is the university itself<span class="ampersand">.</span></h1>
+			<p class="page-lede">
+				We are building uni.draht.dev in public, one episode per week. Watch Episode 1 now, or get the next release in your inbox.
+			</p>
+		</header>
+
+		<section class="waitlist">
+			<!--
+				Waitlist backend: Google Apps Script → Google Contacts label "draht uni waitlist"
+				(waitlist/Code.gs + waitlist/README.md). Double opt-in via confirmation mail
+				(DACH/DSGVO — Gate 3 + 4.3); the newsletter goes out from Gmail to that label.
+				No ESP, no Lambda. With JS disabled the plain POST gets the script's own
+				styled response page, so the flow still works.
+			-->
+			<form class="waitlist-form" action={WAITLIST_ENDPOINT} method="post">
+				<input
+					type="email"
+					name="email"
+					placeholder="you@company.com"
+					aria-label="Email address"
+					required
+				/>
+				<input type="text" name="hp_ref" class="waitlist-hp" tabindex="-1" autocomplete="off" aria-hidden="true" />
+				<button type="submit" class="btn">Get the next episode</button>
+			</form>
+			<p class="waitlist-note" hidden></p>
+			<p class="waitlist-foot">This list will move to uni.draht.dev when the site opens.</p>
+		</section>
+
+		<section class="episode">
+			<div class="episode-kicker">Episode 01 · Live now</div>
+			<h2 class="episode-title">the first brick</h2>
+			<p class="episode-desc">
+				Episode 1 starts with an empty repository and the first implementation decision. Watch it, then get the next episode by email.
+			</p>
+			<!-- Points at the @freyedev X profile until we have the exact Episode 1 post/video permalink;
+			     swap for a direct embed once the writeup lands in src/content/blog with category: "episode". -->
+			<a href="https://x.com/freyedev" class="episode-link">Watch Episode 1 →</a>
+		</section>
+	</main>
+</AtelierPage>
+
+<script is:inline>
+	(() => {
+		const form = document.querySelector(".waitlist-form");
+		const note = document.querySelector(".waitlist-note");
+		if (!form || !note) return;
+		const say = (msg) => {
+			note.textContent = msg;
+			note.hidden = false;
+		};
+		if (new URLSearchParams(location.search).get("confirmed") === "1") {
+			form.hidden = true;
+			say("Confirmed. The next episode will land in your inbox.");
+			return;
+		}
+		form.addEventListener("submit", (ev) => {
+			ev.preventDefault();
+			if (form.action.includes("PASTE_")) {
+				say("The waitlist isn't connected yet. Email oskar@draht.dev to join.");
+				return;
+			}
+			fetch(form.action, { method: "POST", mode: "no-cors", body: new URLSearchParams(new FormData(form)) })
+				.then(() => {
+					form.hidden = true;
+					say("Check your inbox for the confirmation link.");
+				})
+				.catch(() => say("That didn't go through. Try again, or email oskar@draht.dev."));
+		});
+	})();
+</script>
+
+<style>
+	.uni-main {
+		max-width: 720px;
+		margin: 0 auto;
+	}
+
+	.waitlist {
+		padding: clamp(32px, 5vw, 48px) 0;
+		border-bottom: 1px solid var(--rule);
+	}
+
+	.waitlist-form {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 12px;
+	}
+
+	.waitlist-form input[type="email"] {
+		flex: 1 1 260px;
+		background: transparent;
+		border: 1px solid var(--rule-strong);
+		color: var(--paper);
+		font-family: var(--f-ui);
+		font-size: 15px;
+		padding: 12px 16px;
+	}
+	.waitlist-form input[type="email"]::placeholder {
+		color: var(--paper-soft);
+	}
+	.waitlist-form input[type="email"]:focus-visible {
+		border-color: var(--copper);
+	}
+
+	.waitlist-hp {
+		display: none;
+	}
+
+	.waitlist-note {
+		margin: 18px 0 0;
+		font-size: 15px;
+		line-height: 1.6;
+		color: var(--copper);
+	}
+
+	.waitlist-foot {
+		margin: 18px 0 0;
+		font-family: var(--f-mono);
+		font-size: 11px;
+		letter-spacing: 0.05em;
+		color: var(--paper-soft);
+	}
+
+	.episode {
+		padding: clamp(32px, 5vw, 48px) 0;
+	}
+
+	.episode-kicker {
+		display: inline-flex;
+		align-items: center;
+		gap: 10px;
+		font-family: var(--f-mono);
+		font-size: 11px;
+		letter-spacing: 0.18em;
+		text-transform: uppercase;
+		color: var(--copper);
+		margin-bottom: 16px;
+	}
+
+	.episode-title {
+		font-family: var(--f-display);
+		font-style: italic;
+		font-weight: 300;
+		font-size: clamp(28px, 4vw, 40px);
+		line-height: 1.05;
+		letter-spacing: -0.02em;
+		color: var(--paper);
+		margin: 0 0 14px;
+	}
+
+	.episode-desc {
+		color: var(--paper-dim);
+		font-size: 15px;
+		line-height: 1.6;
+		max-width: 56ch;
+		margin: 0 0 20px;
+		text-wrap: pretty;
+	}
+
+	.episode-link {
+		font-family: var(--f-mono);
+		font-size: 12px;
+		letter-spacing: 0.05em;
+		color: var(--copper);
+	}
+	.episode-link:hover {
+		color: var(--paper);
+	}
+</style>

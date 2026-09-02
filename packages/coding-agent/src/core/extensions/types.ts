@@ -47,6 +47,13 @@ import type {
 import type { Static, TSchema } from "typebox";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { BashResult } from "../bash-executor.ts";
+import type {
+	CheckpointCaptureResult,
+	CheckpointManager,
+	CheckpointRecord,
+	CheckpointRestoreOptions,
+	CheckpointRestoreResult,
+} from "../checkpoints/checkpoint-manager.ts";
 import type { CompactionPreparation, CompactionResult } from "../compaction/index.ts";
 import type { EventBus } from "../event-bus.ts";
 import type { ExecOptions, ExecResult } from "../exec.ts";
@@ -55,6 +62,7 @@ import type { KeybindingsManager } from "../keybindings.ts";
 import type { CustomMessage } from "../messages.ts";
 import type { ModelRegistry } from "../model-registry.ts";
 import type { ScopedModel } from "../model-resolver.ts";
+import type { RelayOutcome } from "../permission-relay/types.ts";
 import type {
 	BranchSummaryEntry,
 	CompactionEntry,
@@ -83,6 +91,7 @@ import type {
 	WriteToolInput,
 } from "../tools/index.ts";
 
+export type { AutocompleteItem } from "@draht/tui";
 export type { ExecOptions, ExecResult } from "../exec.ts";
 export type { BuildSystemPromptOptions } from "../system-prompt.ts";
 export type { AgentToolResult, AgentToolUpdateCallback, ToolExecutionMode };
@@ -92,12 +101,105 @@ export type { AppKeybinding, KeybindingsManager } from "../keybindings.ts";
 // UI Context
 // ============================================================================
 
+/**
+ * Structured detail for a tool permission ask.
+ *
+ * Carried as optional trailing data on {@link ExtensionUIDialogOptions} so that every surface
+ * (TUI, attached client, RPC) renders the same canonical facts instead of a prose summary.
+ * All fields are already-resolved values: `cwd` is a canonical (realpath) directory, and
+ * `options` is the immutable set of choices that were offered for this request.
+ */
+export interface PermissionAskDetail {
+	kind: "tool_permission";
+	/** Id of the tool call this ask gates. */
+	toolCallId: string;
+	/** Name of the tool being gated (e.g. "bash", "write"). */
+	toolName: string;
+	/** Canonical (realpath) working directory the tool call would run in. */
+	cwd: string;
+	/** The command line, for command-shaped tools. */
+	command?: string;
+	/** The target path, for file-shaped tools. */
+	path?: string;
+	/** The operation being performed, when the tool distinguishes several. */
+	operation?: string;
+	/** Why the permission gate stopped this call. */
+	reason: string;
+	/**
+	 * True when ANY free-text field above was elided to fit its budget.
+	 *
+	 * A human is entitled to know they are approving an abbreviated string. This field is the only
+	 * carrier of that fact: the producer bounds by graphemes AND bytes, and the elision is not
+	 * recoverable from the value afterwards — a 5000-character command arrives here already cut to
+	 * ~530 characters, comfortably inside every downstream budget, so nothing later can rediscover
+	 * that anything was dropped.
+	 *
+	 * It lives on the SHARED type rather than as a structural widening at each end on purpose. It was
+	 * first added as two independent optional widenings — one in the producer, one in the relay — and
+	 * an adversarial reviewer pointed out that renaming or dropping either side would typecheck clean
+	 * and silently degrade to `false`, which is exactly the defect it was added to fix, restored in
+	 * silence. Declared here, both ends refer to one name and the compiler notices.
+	 *
+	 * Still optional, so a producer that does not bound anything is unaffected and can never
+	 * fabricate a `true`. Hand-mirrored in `RpcPermissionDetail` (`modes/rpc/rpc-types.ts`).
+	 */
+	truncated?: boolean;
+	/**
+	 * The immutable set of options offered for this request, each stating its OWN semantics.
+	 *
+	 * `decision` is what makes this a permission vocabulary rather than a list of words: it says,
+	 * per option, whether choosing it lets the tool call proceed. Consumers read it; nothing may
+	 * infer an option's meaning from its position in this array, from the array's length, or from
+	 * its id — a vocabulary like `[allow, deny-once, deny-always]` has its denial in the middle and
+	 * two of them, and a positional rule silently turns a human's denial into an approval.
+	 *
+	 * A vocabulary must be non-empty, must carry only the two decision words, and must not repeat
+	 * an id. A consumer that cannot honour those rules must offer NOTHING rather than substitute a
+	 * vocabulary of its own: an empty list is a caller that authorised no option, and a repeated id
+	 * makes array position decide which of two options an answer names.
+	 */
+	options: readonly { id: string; label: string; decision: "approve" | "deny" }[];
+}
+
 /** Options for extension UI dialogs. */
 export interface ExtensionUIDialogOptions {
 	/** AbortSignal to programmatically dismiss the dialog. */
 	signal?: AbortSignal;
 	/** Timeout in milliseconds. Dialog auto-dismisses with live countdown display. */
 	timeout?: number;
+	/**
+	 * Structured detail for a tool permission ask.
+	 *
+	 * Optional and purely additive: third-party extensions implement `ExtensionUIContext`,
+	 * so widening the options object is the only backwards-compatible way to carry it.
+	 */
+	detail?: PermissionAskDetail;
+	/**
+	 * The surface STATES ITS OWN OUTCOME, just before it resolves.
+	 *
+	 * {@link ExtensionUIContext.confirm} returns a bare `Promise<boolean>`, and that is the whole
+	 * problem: a human pressing "No" and a surface GIVING UP — a shutdown, a stdin EOF, an abort,
+	 * the surface's own timeout — resolve to the same `false`. Anything derived from that boolean
+	 * therefore fabricates something, and what it fabricated was a human's refusal recorded against
+	 * asks nobody ever answered. There is no cleverer reading of a boolean that fixes this; the
+	 * only fix is for the party that knows to say so.
+	 *
+	 * Call it with what ACTUALLY happened:
+	 *
+	 *  - `{kind: "approved" | "denied", chosenOptionId}` — somebody answered. `chosenOptionId` names
+	 *    the offered option when the surface validated one (this is how a `deny-once` an operator
+	 *    actually named reaches the audit row instead of a `null`), and is `null` for a surface that
+	 *    drew its own Yes/No and never named one.
+	 *  - `{kind: "answered"}` — a `select` or `input` was answered. Neither grants nor refuses.
+	 *  - `{kind: "cancelled"}` — NOBODY ANSWERED. Shutdown, abort, EOF, dismissal, timeout. An
+	 *    ending reported this way is attributed to the system, never to the surface.
+	 *
+	 * OPTIONAL, AND ADDITIVE ON PURPOSE. Third parties implement `ExtensionUIContext`, so a base
+	 * that never calls this keeps today's behaviour exactly — the caller falls back to reading the
+	 * resolved value. Only the FIRST call is used; a surface that reports again while being torn
+	 * down cannot overwrite the answer that already won.
+	 */
+	reportOutcome?: (outcome: RelayOutcome) => void;
 }
 
 /** Placement for extension widgets. */
@@ -279,6 +381,16 @@ export interface ExtensionUIContext {
 
 	/** Set tool output expansion state. */
 	setToolsExpanded(expanded: boolean): void;
+
+	/**
+	 * True only while some surface can actually answer right now.
+	 *
+	 * Optional: an implementation that omits it is assumed to be able to answer, which keeps
+	 * every existing implementer working unchanged. Implementations that can lose their answering
+	 * surface at runtime (for example a relay whose clients have all disconnected) must evaluate
+	 * this LIVE on every call rather than caching it.
+	 */
+	hasAnswerSurface?(): boolean;
 }
 
 // ============================================================================
@@ -642,6 +754,21 @@ export interface SessionBeforeTreeEvent {
 	signal: AbortSignal;
 }
 
+/**
+ * Fired before a `/rewind` restores conversation and/or working-tree state
+ * (can be cancelled). Emitted before the pre-rewind safety snapshot is taken,
+ * so a cancelling handler leaves both halves of the session untouched.
+ */
+export interface SessionBeforeRewindEvent {
+	type: "session_before_rewind";
+	/** Entry the rewind targets. */
+	targetEntryId: string;
+	/** Current conversation leaf the rewind starts from. */
+	currentEntryId: string;
+	/** Which halves of the state the rewind would restore. */
+	scope: "conversation-and-files" | "conversation-only" | "files-only";
+}
+
 /** Fired after navigating in the session tree */
 export interface SessionTreeEvent {
 	type: "session_tree";
@@ -660,7 +787,18 @@ export type SessionEvent =
 	| SessionCompactEvent
 	| SessionShutdownEvent
 	| SessionBeforeTreeEvent
+	| SessionBeforeRewindEvent
 	| SessionTreeEvent;
+
+// ============================================================================
+// Checkpoint Events
+// ============================================================================
+
+/** Fired after a working-tree checkpoint has been captured and recorded. */
+export interface CheckpointCreatedEvent {
+	type: "checkpoint_created";
+	record: CheckpointRecord;
+}
 
 // ============================================================================
 // Agent Events
@@ -1035,6 +1173,7 @@ export type ExtensionEvent =
 	| ProjectTrustEvent
 	| ResourcesDiscoverEvent
 	| SessionEvent
+	| CheckpointCreatedEvent
 	| ContextEvent
 	| BeforeProviderRequestEvent
 	| BeforeProviderHeadersEvent
@@ -1129,6 +1268,10 @@ export interface SessionBeforeTreeResult {
 	label?: string;
 }
 
+export interface SessionBeforeRewindResult {
+	cancel?: boolean;
+}
+
 // ============================================================================
 // Message and Entry Rendering
 // ============================================================================
@@ -1203,7 +1346,12 @@ export interface ExtensionAPI {
 	on(event: "session_compact", handler: ExtensionHandler<SessionCompactEvent>): void;
 	on(event: "session_shutdown", handler: ExtensionHandler<SessionShutdownEvent>): void;
 	on(event: "session_before_tree", handler: ExtensionHandler<SessionBeforeTreeEvent, SessionBeforeTreeResult>): void;
+	on(
+		event: "session_before_rewind",
+		handler: ExtensionHandler<SessionBeforeRewindEvent, SessionBeforeRewindResult>,
+	): void;
 	on(event: "session_tree", handler: ExtensionHandler<SessionTreeEvent>): void;
+	on(event: "checkpoint_created", handler: ExtensionHandler<CheckpointCreatedEvent>): void;
 	on(event: "context", handler: ExtensionHandler<ContextEvent, ContextEventResult>): void;
 	on(
 		event: "before_provider_request",
@@ -1417,6 +1565,45 @@ export interface ExtensionAPI {
 
 	/** Shared event bus for extension communication. */
 	events: EventBus;
+
+	// =========================================================================
+	// Checkpoints
+	// =========================================================================
+
+	/** Working-tree checkpoints for the current session (R42-RWD.8). */
+	checkpoints: ExtensionCheckpointsAPI;
+}
+
+/**
+ * `pi.checkpoints` — read and restore the working-tree snapshots taken for the
+ * current session. All calls operate on the session's own checkpoint namespace
+ * and degrade quietly when checkpoints are unavailable (no session file yet, or
+ * a cwd outside any git repository).
+ */
+export interface ExtensionCheckpointsAPI {
+	/** Every checkpoint recorded for this session, in capture order. */
+	list(): CheckpointRecord[];
+
+	/** The newest checkpoint recorded for an entry id, if any. */
+	get(entryId: string): CheckpointRecord | undefined;
+
+	/**
+	 * Restore the working tree to an entry's checkpoint, taking a pre-rewind
+	 * safety snapshot first and rolling back to it on failure. Never throws:
+	 * the outcome is on the returned status.
+	 */
+	restore(options: CheckpointRestoreOptions): Promise<CheckpointRestoreResult>;
+
+	/**
+	 * Capture a checkpoint for an entry id, skipping when the working tree is
+	 * unchanged since the previous one. A successful capture dispatches
+	 * `checkpoint_created`.
+	 *
+	 * This is the seam the always-loaded checkpoints builtin captures through,
+	 * which is what makes `checkpoint_created` fire for every capture in the
+	 * session rather than only for extension-initiated ones. Never throws.
+	 */
+	capture(entryId: string): Promise<CheckpointCaptureResult>;
 }
 
 // ============================================================================
@@ -1589,6 +1776,12 @@ export interface ExtensionRuntimeState {
 	pendingProviderRegistrations: Array<{ name: string; config: ProviderConfig; extensionPath: string }>;
 	/** Native @draht/ai provider registrations queued during extension loading, processed when runner binds. */
 	pendingNativeProviderRegistrations: Array<{ provider: Provider; extensionPath: string }>;
+	/**
+	 * Checkpoint manager for the active session, backing `pi.checkpoints`.
+	 * Bound by the runner; returns undefined until then, and whenever the
+	 * session has no file to hang a checkpoint sidecar off.
+	 */
+	getCheckpointManager: () => CheckpointManager | undefined;
 	/** Throws when this extension instance is stale after runtime replacement. */
 	assertActive: () => void;
 	/** Marks this extension instance as stale after runtime replacement or reload. */

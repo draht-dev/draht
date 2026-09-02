@@ -1,5 +1,6 @@
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { realPathStrict } from "../utils/canonical-path.ts";
 import { resolvePath } from "../utils/paths.ts";
 import type { AgentSession } from "./agent-session.ts";
 import type { AgentSessionRuntimeDiagnostic, AgentSessionServices } from "./agent-session-services.ts";
@@ -64,6 +65,23 @@ function extractUserMessageText(content: string | Array<{ type: string; text?: s
 		.join("");
 }
 
+// `services.cwd` collapses `..` lexically; the resource walk resolves the same spelling through
+// the filesystem, because it must answer to the physical chain the trust gate answers to. A
+// spelling crossing a symlink before a `..` therefore names two real directories at once: tools
+// run in one, context and skills come from the other. That trade is intended; silence is not.
+// Every path is quoted - all three are named by the caller and this is printed to a terminal.
+function cwdSpellingDivergence(spelling: string, cwd: string): AgentSessionRuntimeDiagnostic | undefined {
+	const physical = realPathStrict(spelling);
+	const operating = realPathStrict(cwd);
+	if (physical === undefined || operating === undefined || physical === operating) {
+		return undefined;
+	}
+	return {
+		type: "warning",
+		message: `cwd ${JSON.stringify(spelling)} resolves to ${JSON.stringify(operating)} once \`..\` is collapsed but to ${JSON.stringify(physical)} on disk. Tools run in the first; project context and skills are read from the second, and the first's own AGENTS.md is not loaded.`,
+	};
+}
+
 /**
  * Owns the current AgentSession plus its cwd-bound services.
  *
@@ -73,9 +91,11 @@ function extractUserMessageText(content: string | Array<{ type: string; text?: s
  */
 export class AgentSessionRuntime {
 	private rebindSession?: (session: AgentSession) => Promise<void>;
+	private sessionReplacedListeners = new Set<(session: AgentSession) => Promise<void> | void>();
 	private beforeSessionInvalidate?: () => void;
 	private _session: AgentSession;
 	private _services: AgentSessionServices;
+	private _cwdSpelling: string;
 	private readonly createRuntime: CreateAgentSessionRuntimeFactory;
 	private _diagnostics: AgentSessionRuntimeDiagnostic[];
 	private _modelFallbackMessage?: string;
@@ -86,12 +106,22 @@ export class AgentSessionRuntime {
 		createRuntime: CreateAgentSessionRuntimeFactory,
 		_diagnostics: AgentSessionRuntimeDiagnostic[] = [],
 		_modelFallbackMessage?: string,
+		_cwdSpelling: string = _services.cwd,
 	) {
 		this._session = _session;
 		this._services = _services;
+		this._cwdSpelling = _cwdSpelling;
 		this.createRuntime = createRuntime;
 		this._diagnostics = _diagnostics;
 		this._modelFallbackMessage = _modelFallbackMessage;
+		this.reportCwdSpellingDivergence();
+	}
+
+	private reportCwdSpellingDivergence(): void {
+		const diagnostic = cwdSpellingDivergence(this._cwdSpelling, this._services.cwd);
+		if (diagnostic) {
+			this._diagnostics = [...this._diagnostics, diagnostic];
+		}
 	}
 
 	get services(): AgentSessionServices {
@@ -106,6 +136,12 @@ export class AgentSessionRuntime {
 		return this._services.cwd;
 	}
 
+	// Uncollapsed. `services.cwd` has been through `path.resolve`, so handing that back to
+	// `createRuntime` rebuilds /new and /fork on a different chain than the first construction.
+	get cwdSpelling(): string {
+		return this._cwdSpelling;
+	}
+
 	get diagnostics(): readonly AgentSessionRuntimeDiagnostic[] {
 		return this._diagnostics;
 	}
@@ -116,6 +152,23 @@ export class AgentSessionRuntime {
 
 	setRebindSession(rebindSession?: (session: AgentSession) => Promise<void>): void {
 		this.rebindSession = rebindSession;
+	}
+
+	/**
+	 * Subscribe to session replacement (/new, /resume, /fork, /import).
+	 *
+	 * `setRebindSession` is a single slot that the active mode (interactive, print, rpc)
+	 * already owns, so host features that must also follow the current session - the
+	 * attachable-session socket, for example - register here instead of stealing it.
+	 * Listeners run after the mode's own rebind, with the new session.
+	 *
+	 * @returns unsubscribe function
+	 */
+	addSessionReplacedListener(listener: (session: AgentSession) => Promise<void> | void): () => void {
+		this.sessionReplacedListeners.add(listener);
+		return () => {
+			this.sessionReplacedListeners.delete(listener);
+		};
 	}
 
 	/**
@@ -181,9 +234,23 @@ export class AgentSessionRuntime {
 		this._modelFallbackMessage = result.modelFallbackMessage;
 	}
 
+	private async applyNewRuntime(options: {
+		cwd: string;
+		sessionManager: SessionManager;
+		sessionStartEvent?: SessionStartEvent;
+		projectTrustContext?: ProjectTrustContext;
+	}): Promise<void> {
+		this.apply(await this.createRuntime({ ...options, agentDir: this.services.agentDir }));
+		this._cwdSpelling = options.cwd;
+		this.reportCwdSpellingDivergence();
+	}
+
 	private async finishSessionReplacement(withSession?: (ctx: ReplacedSessionContext) => Promise<void>): Promise<void> {
 		if (this.rebindSession) {
 			await this.rebindSession(this.session);
+		}
+		for (const listener of this.sessionReplacedListeners) {
+			await listener(this.session);
 		}
 		if (withSession) {
 			await withSession(this.session.createReplacedSessionContext());
@@ -207,15 +274,12 @@ export class AgentSessionRuntime {
 		const sessionManager = SessionManager.open(sessionPath, undefined, options?.cwdOverride);
 		assertSessionCwdExists(sessionManager, this.cwd);
 		await this.teardownCurrent("resume", sessionManager.getSessionFile());
-		this.apply(
-			await this.createRuntime({
-				cwd: sessionManager.getCwd(),
-				agentDir: this.services.agentDir,
-				sessionManager,
-				sessionStartEvent: { type: "session_start", reason: "resume", previousSessionFile },
-				projectTrustContext: options?.projectTrustContextFactory?.(sessionManager.getCwd()),
-			}),
-		);
+		await this.applyNewRuntime({
+			cwd: sessionManager.getCwd(),
+			sessionManager,
+			sessionStartEvent: { type: "session_start", reason: "resume", previousSessionFile },
+			projectTrustContext: options?.projectTrustContextFactory?.(sessionManager.getCwd()),
+		});
 		await this.finishSessionReplacement(options?.withSession);
 		return { cancelled: false };
 	}
@@ -240,14 +304,11 @@ export class AgentSessionRuntime {
 		}
 
 		await this.teardownCurrent("new", sessionManager.getSessionFile());
-		this.apply(
-			await this.createRuntime({
-				cwd: this.cwd,
-				agentDir: this.services.agentDir,
-				sessionManager,
-				sessionStartEvent: { type: "session_start", reason: "new", previousSessionFile },
-			}),
-		);
+		await this.applyNewRuntime({
+			cwd: this.cwdSpelling,
+			sessionManager,
+			sessionStartEvent: { type: "session_start", reason: "new", previousSessionFile },
+		});
 		if (options?.setup) {
 			await options.setup(this.session.sessionManager);
 			this.session.agent.state.messages = this.session.sessionManager.buildSessionContext().messages;
@@ -294,14 +355,11 @@ export class AgentSessionRuntime {
 				const sessionManager = SessionManager.create(this.cwd, sessionDir);
 				sessionManager.newSession({ parentSession: currentSessionFile });
 				await this.teardownCurrent("fork", sessionManager.getSessionFile());
-				this.apply(
-					await this.createRuntime({
-						cwd: this.cwd,
-						agentDir: this.services.agentDir,
-						sessionManager,
-						sessionStartEvent: { type: "session_start", reason: "fork", previousSessionFile },
-					}),
-				);
+				await this.applyNewRuntime({
+					cwd: this.cwdSpelling,
+					sessionManager,
+					sessionStartEvent: { type: "session_start", reason: "fork", previousSessionFile },
+				});
 				await this.finishSessionReplacement(options?.withSession);
 				return { cancelled: false, selectedText };
 			}
@@ -317,14 +375,11 @@ export class AgentSessionRuntime {
 				throw new Error("Failed to create forked session");
 			}
 			await this.teardownCurrent("fork", sessionManager.getSessionFile());
-			this.apply(
-				await this.createRuntime({
-					cwd: sessionManager.getCwd(),
-					agentDir: this.services.agentDir,
-					sessionManager,
-					sessionStartEvent: { type: "session_start", reason: "fork", previousSessionFile },
-				}),
-			);
+			await this.applyNewRuntime({
+				cwd: sessionManager.getCwd(),
+				sessionManager,
+				sessionStartEvent: { type: "session_start", reason: "fork", previousSessionFile },
+			});
 			await this.finishSessionReplacement(options?.withSession);
 			return { cancelled: false, selectedText };
 		}
@@ -336,14 +391,11 @@ export class AgentSessionRuntime {
 			sessionManager.createBranchedSession(targetLeafId);
 		}
 		await this.teardownCurrent("fork", sessionManager.getSessionFile());
-		this.apply(
-			await this.createRuntime({
-				cwd: this.cwd,
-				agentDir: this.services.agentDir,
-				sessionManager,
-				sessionStartEvent: { type: "session_start", reason: "fork", previousSessionFile },
-			}),
-		);
+		await this.applyNewRuntime({
+			cwd: this.cwdSpelling,
+			sessionManager,
+			sessionStartEvent: { type: "session_start", reason: "fork", previousSessionFile },
+		});
 		await this.finishSessionReplacement(options?.withSession);
 		return { cancelled: false, selectedText };
 	}
@@ -380,14 +432,11 @@ export class AgentSessionRuntime {
 		const sessionManager = SessionManager.open(destinationPath, sessionDir, cwdOverride);
 		assertSessionCwdExists(sessionManager, this.cwd);
 		await this.teardownCurrent("resume", sessionManager.getSessionFile());
-		this.apply(
-			await this.createRuntime({
-				cwd: sessionManager.getCwd(),
-				agentDir: this.services.agentDir,
-				sessionManager,
-				sessionStartEvent: { type: "session_start", reason: "resume", previousSessionFile },
-			}),
-		);
+		await this.applyNewRuntime({
+			cwd: sessionManager.getCwd(),
+			sessionManager,
+			sessionStartEvent: { type: "session_start", reason: "resume", previousSessionFile },
+		});
 		await this.finishSessionReplacement();
 		return { cancelled: false };
 	}
@@ -425,6 +474,7 @@ export async function createAgentSessionRuntime(
 		createRuntime,
 		result.diagnostics,
 		result.modelFallbackMessage,
+		options.cwd,
 	);
 }
 

@@ -1,0 +1,22 @@
+{
+	"protocol": "geist/0.x",
+	"version": "0.3",
+	"direction": "server-to-client",
+	"type": "server_hello",
+	"recordedFrom": "scripts/geist-conformance/reference-daemon.mjs over ws://127.0.0.1/attach, relaying a real draht SocketServer behind a real device-credential exchange",
+	"normalizedFields": [],
+	"frame": {
+		"type": "server_hello",
+		"protocol": "geist/0.x",
+		"version": "0.3",
+		"server": {
+			"name": "geist-reference-daemon",
+			"version": "0.1.0"
+		},
+		"limits": {
+			"maxFrameBytes": 65536,
+			"maxOutboundFrames": 1024,
+			"maxBufferedOutputBytes": 4194304
+		}
+	}
+}

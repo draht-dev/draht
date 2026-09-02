@@ -1,11 +1,18 @@
+import { arch, platform, release } from "node:os";
 import { describe, expect, it, vi } from "vitest";
 
 const googleGenAiMock = vi.hoisted(() => ({
+	constructorCalls: [] as Array<Record<string, unknown>>,
 	finishReason: "MALFORMED_FUNCTION_CALL",
+	includeFunctionCall: false,
 }));
 
 vi.mock("@google/genai", () => {
 	class GoogleGenAI {
+		constructor(config: Record<string, unknown>) {
+			googleGenAiMock.constructorCalls.push(config);
+		}
+
 		models = {
 			generateContentStream: async function* () {
 				yield {
@@ -70,9 +77,25 @@ import { stream as streamGoogleVertex } from "../src/api/google-vertex.ts";
 import { getModel } from "../src/compat.ts";
 import type { Context } from "../src/types.ts";
 
+const PI_USER_AGENT = `pi (${platform()} ${release()}; ${arch()})`;
+
 const context: Context = {
 	messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
 };
+
+async function captureGoogleHeaders(headers?: Record<string, string>): Promise<Record<string, string>> {
+	googleGenAiMock.constructorCalls.length = 0;
+	googleGenAiMock.finishReason = "STOP";
+	googleGenAiMock.includeFunctionCall = false;
+	await streamGoogleGenerativeAi(getModel("google", "gemini-2.5-flash"), context, {
+		apiKey: "test-api-key",
+		headers,
+	}).result();
+
+	expect(googleGenAiMock.constructorCalls).toHaveLength(1);
+	const httpOptions = googleGenAiMock.constructorCalls[0].httpOptions as { headers?: Record<string, string> };
+	return httpOptions.headers ?? {};
+}
 
 describe("Google raw stop reasons", () => {
 	it("preserves raw Gemini finish reasons for Google Generative AI errors", async () => {
@@ -102,5 +125,15 @@ describe("Google raw stop reasons", () => {
 		expect(message.stopReason).toBe("error");
 		expect(message.rawStopReason).toBe("SAFETY");
 		expect(message.errorMessage).toBe("Provider stopped with: SAFETY");
+	});
+});
+
+describe("Google Generative AI user agent", () => {
+	it("uses pi's User-Agent by default", async () => {
+		expect((await captureGoogleHeaders())["User-Agent"]).toBe(PI_USER_AGENT);
+	});
+
+	it("lets explicit headers override the default User-Agent", async () => {
+		expect((await captureGoogleHeaders({ "User-Agent": "custom-agent" }))["User-Agent"]).toBe("custom-agent");
 	});
 });

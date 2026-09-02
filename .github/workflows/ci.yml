@@ -11,30 +11,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-check-test:
+  build-check:
+    name: Build & check
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
-          sudo ln -s $(which fdfind) /usr/local/bin/fd
-
-      - name: Install dependencies
-        run: bun install
+      - name: Setup
+        uses: ./.github/actions/setup
 
       - name: Build
         run: bun run build
@@ -42,8 +28,121 @@ jobs:
       - name: Check
         run: bun run check
 
+  # The workspace fan-out used to be one step, and one step costs the SUM of 25
+  # packages. Measured on run 33118600321: gateway 384s and coding-agent 212s
+  # against ~90s for the other 23 combined, so the sum was ~688s of a 13m job
+  # while no single package took more than 6.5 minutes.
+  #
+  # The shard names are read from scripts/ci-test-matrix.mjs rather than written
+  # here, so a package added to the repo cannot end up in no shard: the generator
+  # enumerates the workspaces and drops anything unclaimed into `rest`, and
+  # scripts/ci-test-matrix.test.mjs fails if the shards stop partitioning the set.
+  # This job is deliberately dependency-free so it costs seconds, not a install.
+  shard-map:
+    name: Shard map
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      shards: ${{ steps.map.outputs.shards }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup
+        uses: ./.github/actions/setup
+        with:
+          system-deps: "false"
+          install: "false"
+
+      - name: Resolve shards
+        id: map
+        run: echo "shards=$(node scripts/ci-test-matrix.mjs --matrix)" >> "$GITHUB_OUTPUT"
+
+  test-workspaces:
+    name: Test (${{ matrix.shard }})
+    needs: shard-map
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      # Every shard reports. Without this, the KNOWN RED below would cancel the
+      # other shards and hide whatever else broke in the same push.
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.shard-map.outputs.shards) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Build
+        run: bun run build
+
+      # KNOWN RED, DELIBERATELY — lands in the `gateway` shard: packages/gateway's
+      # "the pinned identity-header contract > is a real capture, not the
+      # placeholder this repo ships" fails until a human captures the real tailnet
+      # identity header from a live tailnet. Nothing in CI can clear it and nothing
+      # in CI should hide it. It is cleared by running, on a machine joined to the
+      # tailnet:
+      #   node scripts/geist-tailscale-serve.mjs --capture-identity --peer NODE \
+      #     --out packages/gateway/src/__tests__/fixtures/tailnet-identity.captured.json
+      # Do not skip, exclude or continue-on-error this step to go green.
       - name: Test
-        run: bun run test
+        run: node scripts/ci-test-matrix.mjs --run "${{ matrix.shard }}"
+
+  # The two script suites run as their own jobs for the same reason the packages
+  # do, and both call the ROOT npm scripts rather than a hand-picked file list —
+  # so there is exactly one definition of what the suite is and CI cannot drift
+  # from what a developer gets locally. scripts/root-test-script-parity.test.mjs
+  # fails if any suite under scripts/ is left out of the root `test` chain.
+  test-scripts:
+    name: Test (scripts)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Build
+        run: bun run build
+
+      - name: Test (scripts)
+        run: bun run test:scripts
+
+      - name: Test (geist protocol)
+        run: bun test scripts/check-geist-protocol.test.mjs
+
+  # Split out from the fast group because these run one file at a time
+  # (--test-concurrency=1) so only one Chromium is alive at a time, which makes
+  # them the slowest suites per test in the repo. They are also the only ones
+  # that need a browser installed.
+  test-scripts-serial:
+    name: Test (scripts, serial)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Build
+        run: bun run build
+
+      # The headless-browser harness (scripts/browser-harness.mjs, R32-FLEET.12)
+      # runs in this group. playwright-core ships no browser of its own, so
+      # Chromium is installed explicitly here — without this step the browser
+      # tests fail loudly rather than silently skipping.
+      - name: Install Chromium for the browser harness
+        run: bunx playwright-core install --with-deps chromium
+
+      - name: Test (scripts, serial)
+        run: bun run test:scripts:serial
 
   go:
     name: Go (draht-graph)
@@ -55,17 +154,17 @@ jobs:
       CGO_ENABLED: "0"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         # Needed for internal/graph's parity test, which shells out to
         # `node .../draht-tools.cjs map-graph --quiet` in the untagged pass.
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go/.go-version
           cache-dependency-path: go/go.sum

@@ -104,6 +104,7 @@ export interface Settings {
 	shellPath?: string; // Custom shell path (e.g., for Cygwin users on Windows); supports leading ~ expansion
 	quietStartup?: boolean;
 	defaultProjectTrust?: DefaultProjectTrust; // default: "ask"; global setting only
+	attachableSessions?: boolean; // default: true - register interactive sessions on a control socket; global setting only
 	shellCommandPrefix?: string; // Prefix prepended to every bash command (e.g., "shopt -s expand_aliases" for alias support)
 	npmCommand?: string[]; // Command used for npm package lookup/install operations, argv-style (e.g., ["mise", "exec", "node@20", "--", "npm"])
 	collapseChangelog?: boolean; // Show condensed changelog after update (use /changelog for full)
@@ -912,6 +913,25 @@ export class SettingsManager {
 	getDefaultProjectTrust(): DefaultProjectTrust {
 		const value = this.globalSettings.defaultProjectTrust;
 		return value === "always" || value === "never" ? value : "ask";
+	}
+
+	/**
+	 * Whether interactive sessions register a control socket by default.
+	 *
+	 * Read from `globalSettings`, NOT the merged view, and deliberately so — the
+	 * `defaultProjectTrust` pattern. `deepMergeSettings` lets a project's
+	 * `.draht/settings.json` win for primitives, so a mergeable key would let any cloned
+	 * repository decide whether sessions opened inside it are reachable from Oskar's
+	 * phone. Reachability is the operator's decision, not the checkout's.
+	 */
+	getAttachableSessions(): boolean {
+		return this.globalSettings.attachableSessions ?? true;
+	}
+
+	setAttachableSessions(enabled: boolean): void {
+		this.globalSettings.attachableSessions = enabled;
+		this.markModified("attachableSessions");
+		this.save();
 	}
 
 	setDefaultProjectTrust(defaultProjectTrust: DefaultProjectTrust): void {

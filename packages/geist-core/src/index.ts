@@ -1,4 +1,56 @@
 export type {
+	AttachBridgeOptions,
+	AttachIdentity,
+	AuthorizationRequest,
+	AuthorizationVerdict,
+	DeviceAuthenticator,
+	DeviceAuthResult,
+	PresentedCredential,
+	RendererConnection,
+	ResumeSessionPort,
+	SessionResumeOutcome,
+} from "./attach/attach-bridge.js";
+export { AttachBridge, DEFAULT_AUTH_DEADLINE_MS } from "./attach/attach-bridge.js";
+export type {
+	FleetObserverOptions,
+	FleetSource,
+	FleetUpdate,
+	FleetUpdateListener,
+} from "./attach/fleet-observer.js";
+export {
+	DEFAULT_FLEET_COALESCE_MS,
+	DEFAULT_FLEET_HISTORY_REFRESH_MS,
+	DEFAULT_FLEET_POLL_MS,
+	FleetObserver,
+	MAX_FLEET_DELTA_CHANGES,
+} from "./attach/fleet-observer.js";
+export type { HistoryPage, HistoryPageQuery, HistoryScanCounters, HistorySession } from "./attach/history-sessions.js";
+export {
+	DEFAULT_HISTORY_LIMIT,
+	HISTORY_HEADER_READ_BYTES,
+	HistoryCursorError,
+	HistoryIndex,
+	MAX_HISTORY_LIMIT,
+	resolveSessionsDir,
+	SESSIONS_DIR_NAME,
+} from "./attach/history-sessions.js";
+export type { FleetProjectionOptions } from "./attach/socket-sessions.js";
+export {
+	AGENT_DIR_ENV,
+	buildFleetFrame,
+	buildFleetFrameWithStatus,
+	listAttachableSessions,
+	resolveSocketDir,
+	SOCKETS_DIR_NAME,
+} from "./attach/socket-sessions.js";
+export type {
+	FleetStatusReading,
+	FleetStatusSource,
+	GitStatusProbeResult,
+	ProbeFailure,
+} from "./attach/status-probe.js";
+export { DEFAULT_STATUS_PROBE_DEADLINE_MS, GitStatusProbe, probeGitStatus } from "./attach/status-probe.js";
+export type {
 	ComposeElementContextInput,
 	ElementBoundingRect,
 	ElementContext,
@@ -50,8 +102,27 @@ export type {
 	ShaLedgerEntry,
 	ShaLedgerRecordResult,
 	ShaLedgerUndoResult,
+	WorktreeReviewState,
 } from "./ledger/sha-ledger.js";
-export { isDirtyOrAhead, ShaLedger, ShaLedgerError } from "./ledger/sha-ledger.js";
+export { ShaLedger, ShaLedgerError, worktreeReviewState } from "./ledger/sha-ledger.js";
+export type {
+	BootstrapToken,
+	DeviceMeta,
+	DeviceRegistryEvent,
+	DeviceRegistryOptions,
+	DeviceSummary,
+	ExchangeResult,
+	RevokeResult,
+	RotateResult,
+	VerifyResult,
+} from "./pairing/device-registry.js";
+export {
+	DEFAULT_BOOTSTRAP_TTL_MS,
+	DEVICE_REGISTRY_PATH_ENV,
+	DeviceRegistry,
+	DeviceRegistryError,
+	resolveDeviceRegistryPath,
+} from "./pairing/device-registry.js";
 export type {
 	PairingAttemptResult,
 	PairingStateOptions,

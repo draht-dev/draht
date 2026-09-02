@@ -51,6 +51,7 @@ Use the package directory name or feature area (e.g., `auth`, `billing`, `api`).
 - Read the diff you are about to commit, not just `git status` — a filename tells you a file changed, not what changed inside it
 - Keep the first line under 72 characters
 - No emojis in commit messages
+- Commit body prose follows the `unslop` skill — plain words, active voice, no filler; the subject line format is fixed and is never reworded.
 - If there is a related issue, include `fixes #<number>` or `closes #<number>`
 
 ## Final Status

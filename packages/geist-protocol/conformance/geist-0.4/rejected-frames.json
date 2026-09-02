@@ -1,0 +1,97 @@
+{
+	"protocol": "geist/0.x",
+	"version": "0.4",
+	"rejections": [
+		{
+			"name": "not-json",
+			"sent": "{not json",
+			"code": "invalid_frame",
+			"expectedCode": "invalid_frame",
+			"closed": true
+		},
+		{
+			"name": "json-array",
+			"sent": "[]",
+			"code": "invalid_frame",
+			"expectedCode": "invalid_frame",
+			"closed": true
+		},
+		{
+			"name": "no-discriminator",
+			"sent": "{\"hello\":true}",
+			"code": "unknown_type",
+			"expectedCode": "unknown_type",
+			"closed": true
+		},
+		{
+			"name": "arbitrary-command-spawn",
+			"sent": "{\"type\":\"spawn\",\"command\":[\"/bin/sh\",\"-c\",\"touch $CANARY\"]}",
+			"code": "unknown_type",
+			"expectedCode": "unknown_type",
+			"closed": true
+		},
+		{
+			"name": "server-frame-in-client-direction",
+			"sent": "{\"type\":\"output\",\"data\":\"x\",\"stream\":\"stdout\"}",
+			"code": "unknown_type",
+			"expectedCode": "unknown_type",
+			"closed": true
+		},
+		{
+			"name": "attach-missing-fields",
+			"sent": "{\"type\":\"attach\",\"sessionId\":\"conformance\"}",
+			"code": "invalid_frame",
+			"expectedCode": "invalid_frame",
+			"closed": true
+		},
+		{
+			"name": "attach-undeclared-mode",
+			"sent": "{\"type\":\"attach\",\"sessionId\":\"conformance\",\"clientId\":\"client-x\",\"mode\":\"root\"}",
+			"code": "invalid_frame",
+			"expectedCode": "invalid_frame",
+			"closed": true
+		},
+		{
+			"name": "hello-foreign-protocol",
+			"sent": "{\"type\":\"hello\",\"protocol\":\"acp/1.0\",\"version\":\"0.4\",\"client\":{\"name\":\"impostor\",\"version\":\"0.0.0\"}}",
+			"code": "version_mismatch",
+			"expectedCode": "version_mismatch",
+			"closed": true
+		},
+		{
+			"name": "attach-before-hello",
+			"sent": "{\"type\":\"attach\",\"sessionId\":\"conformance\",\"clientId\":\"client-x\",\"mode\":\"read-write\"}",
+			"code": "handshake_required",
+			"expectedCode": "handshake_required",
+			"closed": true
+		},
+		{
+			"name": "fleet-resync-before-auth",
+			"sent": "{\"type\":\"fleet_resync\"}",
+			"code": "not_authenticated",
+			"expectedCode": "not_authenticated",
+			"closed": true
+		},
+		{
+			"name": "session-resume-before-auth",
+			"sent": "{\"type\":\"session_resume\",\"sessionId\":\"conformance\",\"command\":[\"/bin/sh\",\"-c\",\"touch $CANARY\"]}",
+			"code": "not_authenticated",
+			"expectedCode": "not_authenticated",
+			"closed": true
+		},
+		{
+			"name": "attach-before-auth",
+			"sent": "{\"type\":\"attach\",\"sessionId\":\"conformance\",\"clientId\":\"client-x\",\"mode\":\"read-write\"}",
+			"code": "not_authenticated",
+			"expectedCode": "not_authenticated",
+			"closed": true
+		},
+		{
+			"name": "replayed-bootstrap",
+			"sent": "{\"type\":\"pair_device\",\"bootstrapToken\":\"conformance-bootstrap-a\",\"device\":{\"name\":\"replay\",\"platform\":\"linux\"}}",
+			"code": "not_authenticated",
+			"expectedCode": "not_authenticated",
+			"closed": true
+		}
+	]
+}

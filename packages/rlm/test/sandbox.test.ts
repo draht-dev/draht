@@ -44,6 +44,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test } from "vitest";
 import { resolveSandboxedCommand, SandboxUnavailableError, spawnSandboxed } from "../src/sandbox.js";
+import { HAS_PYTHON3, HAS_USERNS } from "./sandbox-prereqs.js";
+
+// Tests 1-6 spawn the REAL sandboxed python3 subprocess and need both
+// prerequisites -- see sandbox-prereqs.ts. Test 7 only asserts the
+// synchronous fail-closed throw against nonexistent wrapper binaries (no
+// process is ever spawned), so it runs everywhere.
+const SKIP_REAL_SPAWN = !HAS_PYTHON3 || !HAS_USERNS;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DRIVER_PATH = join(__dirname, "..", "python", "repl_driver.py");
@@ -179,40 +186,46 @@ describe("OS-level sandbox (sandbox.ts + sandbox/macos.sb) -- the real security 
 		}
 	});
 
-	test("1. startup self-test (`self_test` wire message): a network connect attempt and an out-of-workdir file read both fail, on a route that bypasses repl_driver.py's own guardrails", async () => {
-		harness = new SandboxedDriverHarness();
-		harness.send({ type: "self_test" });
-		const result = await harness.next();
+	test.skipIf(SKIP_REAL_SPAWN)(
+		"1. startup self-test (`self_test` wire message): a network connect attempt and an out-of-workdir file read both fail, on a route that bypasses repl_driver.py's own guardrails",
+		async () => {
+			harness = new SandboxedDriverHarness();
+			harness.send({ type: "self_test" });
+			const result = await harness.next();
 
-		// A crash (sandbox setup failure, dyld abort, etc.) would show up as
-		// the harness never receiving a well-formed self_test_result at all
-		// (the `next()` promise would hang until the test timeout, or the
-		// process would exit) -- reaching this assertion at all is part of
-		// the proof.
-		expect(result.type).toBe("self_test_result");
-		expect(result.networkBlocked).toBe(true);
-		expect(result.fileReadBlocked).toBe(true);
-	});
+			// A crash (sandbox setup failure, dyld abort, etc.) would show up as
+			// the harness never receiving a well-formed self_test_result at all
+			// (the `next()` promise would hang until the test timeout, or the
+			// process would exit) -- reaching this assertion at all is part of
+			// the proof.
+			expect(result.type).toBe("self_test_result");
+			expect(result.networkBlocked).toBe(true);
+			expect(result.fileReadBlocked).toBe(true);
+		},
+	);
 
-	test("2. `import os; os.system(...)` cannot actually run anything (process-exec denied)", async () => {
-		workdir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-workdir-"));
-		scriptDir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-script-"));
-		const marker = join(workdir, "pwned-os-system.txt");
+	test.skipIf(SKIP_REAL_SPAWN)(
+		"2. `import os; os.system(...)` cannot actually run anything (process-exec denied)",
+		async () => {
+			workdir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-workdir-"));
+			scriptDir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-script-"));
+			const marker = join(workdir, "pwned-os-system.txt");
 
-		const { exitCode } = await runSandboxedScript(
-			["import os", `rc = os.system(${JSON.stringify(`echo pwned > ${marker}`)})`, "print('rc=', rc)"].join("\n"),
-			workdir,
-			scriptDir,
-		);
+			const { exitCode } = await runSandboxedScript(
+				["import os", `rc = os.system(${JSON.stringify(`echo pwned > ${marker}`)})`, "print('rc=', rc)"].join("\n"),
+				workdir,
+				scriptDir,
+			);
 
-		expect(exitCode).toBe(0);
-		// The real proof isn't the numeric exit code (its exact encoding is
-		// platform-dependent) -- it's that the command's side effect never
-		// happened, because /bin/sh itself could never be exec'd.
-		expect(existsSync(marker)).toBe(false);
-	});
+			expect(exitCode).toBe(0);
+			// The real proof isn't the numeric exit code (its exact encoding is
+			// platform-dependent) -- it's that the command's side effect never
+			// happened, because /bin/sh itself could never be exec'd.
+			expect(existsSync(marker)).toBe(false);
+		},
+	);
 
-	test('3. `open("/etc/passwd")` fails (read denied outside the workdir)', async () => {
+	test.skipIf(SKIP_REAL_SPAWN)('3. `open("/etc/passwd")` fails (read denied outside the workdir)', async () => {
 		workdir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-workdir-"));
 		scriptDir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-script-"));
 
@@ -233,7 +246,7 @@ describe("OS-level sandbox (sandbox.ts + sandbox/macos.sb) -- the real security 
 		expect(stdout).toContain("PermissionError");
 	});
 
-	test("4. `urllib.request.urlopen(...)` does not succeed", async () => {
+	test.skipIf(SKIP_REAL_SPAWN)("4. `urllib.request.urlopen(...)` does not succeed", async () => {
 		workdir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-workdir-"));
 		scriptDir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-script-"));
 
@@ -255,74 +268,80 @@ describe("OS-level sandbox (sandbox.ts + sandbox/macos.sb) -- the real security 
 		expect(stdout).toContain("failed:");
 	});
 
-	test("5. escape-technique litmus tests both fail to actually run anything, even though neither touches `import os`/`open`, and neither is screened by any guardrail here", async () => {
-		workdir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-workdir-"));
-		scriptDir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-script-"));
+	test.skipIf(SKIP_REAL_SPAWN)(
+		"5. escape-technique litmus tests both fail to actually run anything, even though neither touches `import os`/`open`, and neither is screened by any guardrail here",
+		async () => {
+			workdir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-workdir-"));
+			scriptDir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-script-"));
 
-		// Litmus A (subclass-based): reaches the real, unrestricted
-		// __builtins__/__import__ via the type graph
-		// (().__class__.__base__.__subclasses__()), with zero use of `import
-		// os`/`open`. `import warnings` here is NOT part of the escape itself
-		// (it never touches os/subprocess/network/filesystem) -- it's only
-		// there because `warnings.catch_warnings` must actually be loaded into
-		// the process for it to appear in `object.__subclasses__()` at all
-		// (confirmed empirically: a bare `python3 -c` script on current
-		// CPython doesn't auto-import `warnings`, unlike some older
-		// interpreter startup paths this public PoC was written against).
-		// This script has full, unrestricted builtins (no
-		// _build_restricted_builtins, no _screen_code) -- if the OS sandbox is
-		// the only thing standing between this and a real shell command, this
-		// proves it holds.
-		const markerA = join(workdir, "pwned-litmus-subclass.txt");
-		const resultA = await runSandboxedScript(
-			[
-				"import warnings",
-				"cw = [c for c in ().__class__.__base__.__subclasses__() if c.__name__ == 'catch_warnings'][0]",
-				`rc = cw.__init__.__globals__['__builtins__']['__import__']('os').system(${JSON.stringify(`echo pwned > ${markerA}`)})`,
-				"print('rc=', rc)",
-			].join("\n"),
-			workdir,
-			scriptDir,
-		);
-		expect(resultA.exitCode).toBe(0);
-		expect(existsSync(markerA)).toBe(false);
+			// Litmus A (subclass-based): reaches the real, unrestricted
+			// __builtins__/__import__ via the type graph
+			// (().__class__.__base__.__subclasses__()), with zero use of `import
+			// os`/`open`. `import warnings` here is NOT part of the escape itself
+			// (it never touches os/subprocess/network/filesystem) -- it's only
+			// there because `warnings.catch_warnings` must actually be loaded into
+			// the process for it to appear in `object.__subclasses__()` at all
+			// (confirmed empirically: a bare `python3 -c` script on current
+			// CPython doesn't auto-import `warnings`, unlike some older
+			// interpreter startup paths this public PoC was written against).
+			// This script has full, unrestricted builtins (no
+			// _build_restricted_builtins, no _screen_code) -- if the OS sandbox is
+			// the only thing standing between this and a real shell command, this
+			// proves it holds.
+			const markerA = join(workdir, "pwned-litmus-subclass.txt");
+			const resultA = await runSandboxedScript(
+				[
+					"import warnings",
+					"cw = [c for c in ().__class__.__base__.__subclasses__() if c.__name__ == 'catch_warnings'][0]",
+					`rc = cw.__init__.__globals__['__builtins__']['__import__']('os').system(${JSON.stringify(`echo pwned > ${markerA}`)})`,
+					"print('rc=', rc)",
+				].join("\n"),
+				workdir,
+				scriptDir,
+			);
+			expect(resultA.exitCode).toBe(0);
+			expect(existsSync(markerA)).toBe(false);
 
-		// Litmus B (gi_frame-based): reaches the real builtins via a
-		// generator's frame -- zero dunders on this route at all.
-		const markerB = join(workdir, "pwned-litmus-giframe.txt");
-		const resultB = await runSandboxedScript(
-			[
-				"osmod = (_ for _ in ()).gi_frame.f_builtins['__import__']('os')",
-				`rc = osmod.system(${JSON.stringify(`echo pwned > ${markerB}`)})`,
-				"print('rc=', rc)",
-			].join("\n"),
-			workdir,
-			scriptDir,
-		);
-		expect(resultB.exitCode).toBe(0);
-		expect(existsSync(markerB)).toBe(false);
-	});
+			// Litmus B (gi_frame-based): reaches the real builtins via a
+			// generator's frame -- zero dunders on this route at all.
+			const markerB = join(workdir, "pwned-litmus-giframe.txt");
+			const resultB = await runSandboxedScript(
+				[
+					"osmod = (_ for _ in ()).gi_frame.f_builtins['__import__']('os')",
+					`rc = osmod.system(${JSON.stringify(`echo pwned > ${markerB}`)})`,
+					"print('rc=', rc)",
+				].join("\n"),
+				workdir,
+				scriptDir,
+			);
+			expect(resultB.exitCode).toBe(0);
+			expect(existsSync(markerB)).toBe(false);
+		},
+	);
 
-	test("6. writing inside the session workdir succeeds (the sandbox isn't blocking legitimate work too)", async () => {
-		workdir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-workdir-"));
-		scriptDir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-script-"));
-		const target = join(workdir, "legit.txt");
+	test.skipIf(SKIP_REAL_SPAWN)(
+		"6. writing inside the session workdir succeeds (the sandbox isn't blocking legitimate work too)",
+		async () => {
+			workdir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-workdir-"));
+			scriptDir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-script-"));
+			const target = join(workdir, "legit.txt");
 
-		const { stdout, exitCode } = await runSandboxedScript(
-			[
-				`with open(${JSON.stringify(target)}, "w") as f:`,
-				'    f.write("hello from inside the sandbox")',
-				"print('wrote ok')",
-			].join("\n"),
-			workdir,
-			scriptDir,
-		);
+			const { stdout, exitCode } = await runSandboxedScript(
+				[
+					`with open(${JSON.stringify(target)}, "w") as f:`,
+					'    f.write("hello from inside the sandbox")',
+					"print('wrote ok')",
+				].join("\n"),
+				workdir,
+				scriptDir,
+			);
 
-		expect(exitCode).toBe(0);
-		expect(stdout).toBe("wrote ok\n");
-		expect(existsSync(target)).toBe(true);
-		expect(readFileSync(target, "utf8")).toBe("hello from inside the sandbox");
-	});
+			expect(exitCode).toBe(0);
+			expect(stdout).toBe("wrote ok\n");
+			expect(existsSync(target)).toBe(true);
+			expect(readFileSync(target, "utf8")).toBe("hello from inside the sandbox");
+		},
+	);
 
 	test("7. a broken sandbox wrapper (nonexistent binary) refuses to run rather than falling back to an unwrapped spawn", () => {
 		const brokenWorkdir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-failclosed-"));

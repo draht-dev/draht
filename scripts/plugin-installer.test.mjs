@@ -140,6 +140,59 @@ function writeOldMarketplace(marketplace, config) {
 	writeFileSync(join(marketplace, "unrelated.txt"), "keep me");
 }
 
+/**
+ * A `claude` stub for the "already enabled" regression: unlike the shared
+ * fixture's stub (whose `plugin enable`/`disable` always exit 0 regardless of
+ * prior state), this one tracks a live enabled bit and models two real
+ * `claude` CLI behaviors the shared stub does not:
+ *   - `plugin install <spec> --scope user` leaves the plugin enabled as a
+ *     side effect (this repo's own history — commit 63282da9c's pre-image —
+ *     documented this as known: "install usually enables automatically").
+ *   - `claude plugin enable <spec>` on an ALREADY-enabled plugin is an error
+ *     (non-zero exit, "Plugin X is already enabled"), not a no-op.
+ * Toggle `DRAHT_TEST_FORCE_VALIDATE_FAIL=1` to make the *first* `plugin
+ * validate` call fail (subsequent calls succeed), for driving the rollback
+ * path without ever reaching the install/enable calls.
+ */
+function writeIdempotencyAwareClaudeStub(f) {
+	writeFileSync(
+		join(f.fakeBin, f.config.binary),
+		`#!/bin/sh
+set -eu
+command="$*"
+printf '%s\n' "$command" >> "$DRAHT_TEST_COMMAND_LOG"
+case "$command" in
+  "plugin validate "*)
+    if [ "\${DRAHT_TEST_FORCE_VALIDATE_FAIL:-0}" = 1 ] && [ ! -f "$DRAHT_TEST_VALIDATE_FAIL_STATE" ]; then
+      : > "$DRAHT_TEST_VALIDATE_FAIL_STATE"
+      exit 1
+    fi
+    exit 0
+    ;;
+esac
+if [ "$command" = "$DRAHT_TEST_MARKETPLACE_LIST_COMMAND" ]; then printf '[{"name":"draht"}]\n'; exit 0; fi
+if [ "$command" = "$DRAHT_TEST_LIST_COMMAND" ]; then
+  if [ "$(cat "$DRAHT_TEST_ENABLED_STATE")" = 1 ]; then printf '[{"id":"draht@draht","enabled":true}]\n'; else printf '[{"id":"draht@draht","enabled":false}]\n'; fi
+  exit 0
+fi
+if [ "$command" = "$DRAHT_TEST_REMOVE_COMMAND" ]; then exit 0; fi
+if [ "$command" = "$DRAHT_TEST_MARKETPLACE_UPDATE_COMMAND" ]; then exit 0; fi
+if [ "$command" = "$DRAHT_TEST_INSTALL_COMMAND" ]; then printf '1' > "$DRAHT_TEST_ENABLED_STATE"; exit 0; fi
+if [ "$command" = "plugin enable draht@draht" ]; then
+  if [ "$(cat "$DRAHT_TEST_ENABLED_STATE")" = 1 ]; then
+    echo "Failed to enable plugin draht@draht: Plugin draht@draht is already enabled" >&2
+    exit 1
+  fi
+  printf '1' > "$DRAHT_TEST_ENABLED_STATE"
+  exit 0
+fi
+if [ "$command" = "plugin disable draht@draht" ]; then printf '0' > "$DRAHT_TEST_ENABLED_STATE"; exit 0; fi
+exit 0
+`,
+	);
+	chmodSync(join(f.fakeBin, f.config.binary), 0o755);
+}
+
 function run(f, extraEnv = {}, command = "update") {
 	return spawnSync(process.execPath, [join(f.source, "cli.mjs"), command, "--path", f.marketplace], {
 		encoding: "utf8",
@@ -378,24 +431,30 @@ test("draht-claude failed replacement preserves a previously disabled plugin sta
 	assert.notEqual(result.status, 0);
 	const log = commands(f);
 	assert.equal(log.filter((command) => command === f.config.install).length, 2);
+	// The plugin was already disabled and the stub reports the same static
+	// "disabled" state before and after reinstall, so neither call is needed
+	// to restore it — calling either would be a redundant, idempotency-unsafe
+	// no-op on the real `claude` CLI.
 	assert.equal(log.includes(f.config.enable), false);
-	assert.equal(log.includes(f.config.disable), true);
+	assert.equal(log.includes(f.config.disable), false);
 });
 
 for (const implementation of Object.keys(IMPLEMENTATIONS)) {
 	test(`${implementation} required CLI failures abort and restore the marketplace`, async (t) => {
 		const probe = fixture(implementation, { pluginInstalled: true });
+		// "enable"/"disable" are intentionally excluded here: they are only
+		// called when the plugin's actual post-install state differs from the
+		// target state (see the idempotency-aware regression tests below), so a
+		// forced failure of either is only meaningful with a stub that tracks
+		// live enabled/disabled state — which this static-list fixture does not.
 		const required = implementation === "draht-claude"
-			? ["remove", "install", "validate", "marketplaceUpdate", "enable", "disable"]
+			? ["remove", "install", "validate", "marketplaceUpdate"]
 			: ["marketplaceAdd", "remove", "install"];
 		for (const commandKey of required) {
 			await t.test(commandKey, () => {
 				const f = fixture(implementation, { pluginInstalled: true });
 				const failedCommand = f.config[commandKey];
-				const installedList = commandKey === "disable"
-					? '[{"id":"draht@draht","enabled":false}]'
-					: f.config.installedList;
-				const result = run(f, { DRAHT_TEST_FAIL_COMMAND: failedCommand, DRAHT_TEST_INSTALLED_LIST: installedList });
+				const result = run(f, { DRAHT_TEST_FAIL_COMMAND: failedCommand, DRAHT_TEST_INSTALLED_LIST: f.config.installedList });
 				assert.notEqual(result.status, 0, `reported success when ${failedCommand} failed`);
 				assert.doesNotMatch(result.stdout, /(?:✓ installed|^installed draht@draht)/m);
 				assert.equal(readFileSync(join(f.marketplace, "plugins", "draht", "version-marker.txt"), "utf8"), "old");
@@ -433,8 +492,11 @@ test("draht-claude successful update preserves a previously disabled plugin", ()
 	const f = fixture("draht-claude", { pluginInstalled: true });
 	const result = run(f, { DRAHT_TEST_INSTALLED_LIST: '[{"id":"draht@draht","enabled":false}]' });
 	assert.equal(result.status, 0, result.stderr || result.stdout);
+	// Already disabled before and after reinstall (static stub state), so
+	// restoring it needs neither call — see the dedicated idempotency tests
+	// below for the case where the state genuinely needs to change.
 	assert.equal(commands(f).includes(f.config.enable), false);
-	assert.equal(commands(f).includes(f.config.disable), true);
+	assert.equal(commands(f).includes(f.config.disable), false);
 });
 
 for (const implementation of Object.keys(IMPLEMENTATIONS)) {
@@ -506,6 +568,46 @@ test("draht-claude marketplace registration inspection failure restores files wi
 	assert.equal(readFileSync(f.registrationState, "utf8"), "0");
 	assert.equal(readFileSync(join(f.marketplace, "plugins", "draht", "version-marker.txt"), "utf8"), "old");
 	assert.equal(existsSync(`${f.marketplace}.draht-update-lock`), false);
+});
+
+// Regression: `draht-claude install --force` on a plugin that is already
+// installed and enabled threw "plugin enable failed", because `claude plugin
+// install` leaves the plugin enabled as a side effect and the wrapper then
+// unconditionally called `claude plugin enable` on top of that — which the
+// real `claude` CLI rejects as an error ("Plugin X is already enabled"), not
+// a no-op. The wrapper's own rollback repeated the identical mistake while
+// restoring the previously-enabled state, producing "rollback failed: could
+// not restore the previously enabled plugin state".
+test("draht-claude force-reinstalling an enabled plugin does not fail when install itself already re-enables it", () => {
+	const f = fixture("draht-claude", { pluginInstalled: true });
+	const enabledState = join(f.root, "enabled-state");
+	writeFileSync(enabledState, "1");
+	writeIdempotencyAwareClaudeStub(f);
+
+	const result = run(f, {
+		DRAHT_TEST_ENABLED_STATE: enabledState,
+		DRAHT_TEST_VALIDATE_FAIL_STATE: join(f.root, "validate-fail-state"),
+	});
+	assert.equal(result.status, 0, result.stderr || result.stdout);
+	assert.doesNotMatch(result.stderr, /already enabled/i);
+	assert.equal(readFileSync(join(f.marketplace, "plugins", "draht", "version-marker.txt"), "utf8"), "new");
+});
+
+test("draht-claude rollback restores an already-enabled plugin without re-calling enable", () => {
+	const f = fixture("draht-claude", { pluginInstalled: true });
+	const enabledState = join(f.root, "enabled-state");
+	writeFileSync(enabledState, "1");
+	writeIdempotencyAwareClaudeStub(f);
+
+	const result = run(f, {
+		DRAHT_TEST_ENABLED_STATE: enabledState,
+		DRAHT_TEST_FORCE_VALIDATE_FAIL: "1",
+		DRAHT_TEST_VALIDATE_FAIL_STATE: join(f.root, "validate-fail-state"),
+	});
+	assert.notEqual(result.status, 0);
+	assert.match(result.stderr, /plugin validation failed/i);
+	assert.doesNotMatch(result.stderr, /already enabled/i);
+	assert.doesNotMatch(result.stderr, /rollback failed/i);
 });
 
 test("draht-claude reports replacement and registration rollback failures", () => {

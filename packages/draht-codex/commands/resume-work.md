@@ -9,14 +9,6 @@ Resume from last session state.
 
 > **Tool note**: Invoke `draht-tools <subcommand>` as `node "${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$HOME/.draht/codex-marketplace/plugins/draht}}/bin/draht-tools.cjs" <subcommand>` via the Bash tool.
 
-## Atomic Reasoning
-
-Before resuming, decompose handoff context into atomic reasoning units:
-
-1. **State the logical component** — What phase/task was active? What was the last accomplishment? What decisions were made?
-2. **Validate independence** — Are there blockers? What changed since the pause? Is the codebase in the expected state?
-3. **Verify correctness** — Is the handoff document complete? Does the current state match what was documented? Can work continue safely?
-
 ## Steps
 1. Read `.planning/CONTINUE-HERE.md` (if missing, tell the user there's nothing to resume)
 2. Read `.planning/STATE.md` for current phase/status

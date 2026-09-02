@@ -90,10 +90,12 @@ describe("createPairingServer — WS pairing handshake", () => {
 		const clock = fakeClock(0);
 		const handle = start({ graceWindowMs: 60_000, now: clock.now });
 
-		// 1. Headset connects and pairs with the correct token.
+		// 1. Headset connects and pairs with the correct token. Opening alone
+		// touches nothing on the shared state machine (GSEC-08): the attempt
+		// begins when the `pair` frame arrives.
 		const first = new WebSocket(handle.url);
 		await waitForOpen(first);
-		expect(handle.state.status).toBe("pairing");
+		expect(handle.state.status).toBe("unpaired");
 
 		first.send(JSON.stringify({ type: "pair", token: TOKEN }));
 		const pairResponse = await waitForMessage(first);
@@ -133,7 +135,10 @@ describe("createPairingServer — WS pairing handshake", () => {
 		const response = await waitForMessage(ws);
 
 		expect(response).toEqual({ type: "pair_rejected", reason: "invalid_token" });
-		expect(handle.state.status).toBe("unpaired");
+		// The rejection is a no-op on shared state: the attempt this socket began
+		// is still open, and crucially nothing ever became `paired`.
+		expect(handle.state.status).toBe("pairing");
+		expect(handle.state.disconnectedAt).toBeNull();
 
 		ws.close();
 	});
@@ -168,6 +173,51 @@ describe("createPairingServer — WS pairing handshake", () => {
 		const rePairResponse = await waitForMessage(second);
 		expect(rePairResponse).toEqual({ type: "paired" });
 
+		second.close();
+	});
+
+	test("a wrong-token pair on a second socket cannot revoke a bound device's grace window (GSEC-08, R33-REACH.7)", async () => {
+		const clock = fakeClock(0);
+		const handle = start({ graceWindowMs: 60_000, now: clock.now });
+
+		// The real headset pairs, then its app restarts: still paired, grace
+		// clock anchored at t=0.
+		const first = new WebSocket(handle.url);
+		await waitForOpen(first);
+		first.send(JSON.stringify({ type: "pair", token: TOKEN }));
+		expect(await waitForMessage(first)).toEqual({ type: "paired" });
+
+		const closed = waitForClose(first);
+		first.close();
+		await closed;
+		await waitUntil(() => handle.state.disconnectedAt !== null);
+		expect(handle.state.disconnectedAt).toBe(0);
+
+		// 10s into the window, a second socket opens and presents a wrong token.
+		clock.advance(10_000);
+		const attacker = new WebSocket(handle.url);
+		await waitForOpen(attacker);
+		// Merely opening must not have disturbed the bound session either.
+		expect(handle.state.status).toBe("paired");
+		expect(handle.state.disconnectedAt).toBe(0);
+
+		attacker.send(JSON.stringify({ type: "pair", token: "not-the-right-token" }));
+		expect(await waitForMessage(attacker)).toEqual({ type: "pair_rejected", reason: "invalid_token" });
+
+		// The failed pair mutated nothing: still paired, grace clock still
+		// anchored to the FIRST disconnect (not reset, not cleared).
+		expect(handle.state.status).toBe("paired");
+		expect(handle.state.disconnectedAt).toBe(0);
+
+		// And the real headset still resumes inside its original window.
+		const second = new WebSocket(handle.url);
+		await waitForOpen(second);
+		second.send(JSON.stringify({ type: "reconnect", token: TOKEN }));
+		expect(await waitForMessage(second)).toEqual({ type: "reconnected" });
+		expect(handle.state.status).toBe("paired");
+		expect(handle.state.disconnectedAt).toBeNull();
+
+		attacker.close();
 		second.close();
 	});
 });
@@ -434,6 +484,98 @@ describe("createPairingServer — permission_request/permission_answer relay (sp
 		);
 		await fake.answeredOnce;
 		expect(fake.answered).toEqual([{ requestId: "perm-1", optionId: "allow" }]);
+
+		socketA.close();
+	});
+
+	test("a wrong-token pair on a second socket leaves the first, bound socket authorized and still receiving permission_request frames (GSEC-08, R33-REACH.7)", async () => {
+		const handle = start();
+		const fake = fakePermissionSession("session-1");
+		handle.sessionBridge.registerSession(fake.session);
+
+		// Socket A is the bound device.
+		const socketA = await connectAndPair(handle);
+		expect(handle.state.status).toBe("paired");
+
+		// Socket B is a second socket presenting an invalid/replayed/downgraded
+		// `pair`. It is rejected — and that rejection must not touch A.
+		const socketB = new WebSocket(handle.url);
+		await waitForOpen(socketB);
+		const bRejected = waitForMessage(socketB);
+		socketB.send(JSON.stringify({ type: "pair", token: "not-the-right-token" }));
+		expect(await bRejected).toEqual({ type: "pair_rejected", reason: "invalid_token" });
+
+		expect(handle.state.status).toBe("paired");
+		expect(handle.state.disconnectedAt).toBeNull();
+
+		// A keeps receiving permission_request frames after B's failed pair —
+		// this is the property the old `currentStatus = "unpaired"` on mismatch
+		// silently broke: the relay gates delivery on the shared status.
+		const aReceives = waitForMessage(socketA);
+		const bStaysSilent = expectNoMessage(socketB);
+		fake.raise({
+			requestId: "perm-1",
+			title: "Allow write to secrets.env?",
+			options: [{ id: "allow", label: "Allow", kind: "allow_once" }],
+		});
+		expect(await aReceives).toEqual({
+			type: "permission_request",
+			payload: {
+				sessionId: "session-1",
+				requestId: "perm-1",
+				title: "Allow write to secrets.env?",
+				options: [{ id: "allow", label: "Allow", kind: "allow_once" }],
+			},
+		});
+		await bStaysSilent;
+
+		// B still cannot answer.
+		const bRejectedAnswer = waitForMessage(socketB);
+		socketB.send(
+			JSON.stringify({
+				type: "permission_answer",
+				payload: { sessionId: "session-1", requestId: "perm-1", optionId: "allow" },
+			}),
+		);
+		expect(await bRejectedAnswer).toEqual({ type: "error", reason: "not_paired" });
+		expect(fake.answered).toEqual([]);
+
+		// B gives up and closes: A must be untouched by that too.
+		const bClosed = new Promise<void>((resolve) => {
+			socketB.addEventListener("close", () => resolve(), { once: true });
+		});
+		socketB.close();
+		await bClosed;
+		await new Promise((r) => setTimeout(r, 100));
+		expect(handle.state.status).toBe("paired");
+		expect(handle.state.disconnectedAt).toBeNull();
+
+		// A is still the authorized socket end to end: a second request reaches
+		// it and its answer lands on the session.
+		const aReceivesSecond = waitForMessage(socketA);
+		fake.raise({
+			requestId: "perm-2",
+			title: "Allow read of .env?",
+			options: [{ id: "allow", label: "Allow", kind: "allow_once" }],
+		});
+		expect(await aReceivesSecond).toEqual({
+			type: "permission_request",
+			payload: {
+				sessionId: "session-1",
+				requestId: "perm-2",
+				title: "Allow read of .env?",
+				options: [{ id: "allow", label: "Allow", kind: "allow_once" }],
+			},
+		});
+
+		socketA.send(
+			JSON.stringify({
+				type: "permission_answer",
+				payload: { sessionId: "session-1", requestId: "perm-2", optionId: "allow" },
+			}),
+		);
+		await fake.answeredOnce;
+		expect(fake.answered).toEqual([{ requestId: "perm-2", optionId: "allow" }]);
 
 		socketA.close();
 	});

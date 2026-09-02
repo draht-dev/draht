@@ -22,6 +22,8 @@ export const WORKTREE_DIR_NAME = ".draht-worktrees";
 /** Result of attempting to merge a task's worktree branch back into its base branch. */
 export interface MergeResult {
 	success: boolean;
+	/** The `agent/<taskId>` branch the task's work is committed on. Absent for an unknown `taskId`. */
+	branch?: string;
 	/** Paths with unresolved conflicts. Present (possibly empty) only when `success` is false. */
 	conflicts?: string[];
 }
@@ -103,7 +105,7 @@ export class WorktreeIsolator {
 
 		try {
 			git(record.cwd, ["merge", "--no-ff", "-m", `Merge agent task ${taskId}`, record.branch]);
-			return { success: true };
+			return { success: true, branch: record.branch };
 		} catch {
 			const conflicts = git(record.cwd, ["diff", "--name-only", "--diff-filter=U"])
 				.trim()
@@ -114,7 +116,7 @@ export class WorktreeIsolator {
 			} catch {
 				// nothing to abort, or already clean — leave repo state as-is
 			}
-			return { success: false, conflicts };
+			return { success: false, branch: record.branch, conflicts };
 		}
 	}
 

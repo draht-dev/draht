@@ -56,7 +56,15 @@ describe("Session input endpoint", () => {
 		expect(body).toHaveProperty("error", "Session not found");
 	});
 
-	test("POST /sessions/:id/input with no-process session → 200 (lazy spawn)", async () => {
+	// Was "→ 200 (lazy spawn)" until Phase 35. The route used to start a draht
+	// process on an HTTP request with no id resolution, no trust check, no
+	// deadline and no teardown — an unguarded spawn reachable by anyone holding
+	// the operator token. It was deleted rather than hardened, because a session
+	// RECORD is not a session: POST /sessions creates a record and never a
+	// process (R32-FLEET.8), so a record with nothing to type into should say so.
+	// The only spawn left on this daemon is the resume primitive, which resolves
+	// an id against the daemon's own history index and builds its own argv.
+	test("POST /sessions/:id/input with no-process session → 409, and starts nothing", async () => {
 		const bus = new EventBus();
 		const manager = new SessionManager(bus);
 		const { app } = createServer({ port: 7878, authToken: AUTH_TOKEN, manager });
@@ -71,16 +79,16 @@ describe("Session input endpoint", () => {
 			body: JSON.stringify({ text: "hello\n" }),
 		});
 
-		// Should succeed and spawn process automatically
-		expect(res.status).toBe(200);
-		const body = await res.json();
-		expect(body).toHaveProperty("success", true);
+		// Refused, and the refusal says where a live session actually comes from.
+		expect(res.status).toBe(409);
+		const body = (await res.json()) as { error: string };
+		expect(body.error).toContain("never a process");
+		expect(body.error).toContain("attach wire");
 
-		// Process should now exist
-		expect(session.process).toBeDefined();
-		expect(session.status).toBe("running");
+		// The load-bearing half: refusing is only honest if nothing was started.
+		expect(session.process).toBeUndefined();
+		expect(session.status).not.toBe("running");
 
-		// Clean up
 		manager.destroy(session.id);
 	});
 

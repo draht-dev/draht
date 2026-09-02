@@ -17,9 +17,7 @@
 		"test": "bun test"
 	},
 	"dependencies": {
+		"yaml": "^2.9.0",
 		"zod": "^3.25.0"
-	},
-	"devDependencies": {
-		"yaml": "^2.9.0"
 	}
 }

@@ -1,0 +1,254 @@
+---
+import AtelierPage from "../layouts/AtelierPage.astro";
+
+const title = "Agentic Engineering Week — Draht";
+const description =
+	"In fünf Tagen bringt Ihr Team einen Use Case in Produktion und lernt, den Ablauf mit Draht zu wiederholen.";
+---
+
+<AtelierPage title={title} description={description} lang="de">
+	<main class="week-main" lang="de">
+		<header class="page-head">
+			<div class="page-kicker">Agentic Engineering Week · Montag bis Freitag</div>
+			<h1 class="page-title">Fünf Tage. Zwei Tracks. Ein Use Case geht live<span class="ampersand">.</span></h1>
+			<p class="page-lede">
+				Wir arbeiten von Montag bis Freitag mit Ihrem Team an einem Use Case. Am Freitag läuft er in Produktion. Ihr Team kann denselben Ablauf beim nächsten Use Case wiederholen.
+			</p>
+		</header>
+
+		<!-- ===================== ZWEI TRACKS ===================== -->
+		<section class="week-section">
+			<div class="week-section-head">
+				<div class="week-num">§ 01</div>
+				<div class="week-title">Zwei Tracks</div>
+			</div>
+			<div class="tracks">
+				<div class="track">
+					<div class="track-tag">Track Engineering</div>
+					<h3>Der Use Case wird gebaut.</h3>
+				</div>
+				<div class="track">
+					<div class="track-tag">Track Enablement</div>
+					<h3>Ihr Team übernimmt den Ablauf.</h3>
+				</div>
+			</div>
+		</section>
+
+		<!-- ===================== DAS ERGEBNIS ===================== -->
+		<section class="week-section">
+			<div class="week-section-head">
+				<div class="week-num">§ 02</div>
+				<div class="week-title">Das Ergebnis</div>
+			</div>
+			<p class="result-text">
+				Am Freitagnachmittag läuft der Use Case in Produktion. Ihr Team kann den Ablauf danach ohne uns wiederholen.
+			</p>
+		</section>
+
+		<!-- ===================== VERGLEICH ===================== -->
+		<section class="week-section">
+			<div class="week-section-head">
+				<div class="week-num">§ 03</div>
+				<div class="week-title">Week <em>vs.</em> Rollout</div>
+			</div>
+			<table class="compare">
+				<thead>
+					<tr>
+						<th scope="col"></th>
+						<th scope="col">Week</th>
+						<th scope="col">Rollout</th>
+					</tr>
+				</thead>
+				<tbody>
+					<tr>
+						<th scope="row">Ansatz</th>
+						<td>Wir shippen Ihren Use Case und befähigen Ihr Team.</td>
+						<td>Wir führen draht bei Ihnen ein.</td>
+					</tr>
+					<tr>
+						<th scope="row">Ergebnis</th>
+						<td>Produktiver Use Case und ein dokumentierter Ablauf fürs Team.</td>
+						<td>Laufende Tool-Infrastruktur.</td>
+					</tr>
+				</tbody>
+			</table>
+			<p class="sequence">Viele Teams starten mit einer Week und entscheiden danach über den <a href="/#pricing">Rollout</a>.</p>
+		</section>
+
+		<!-- ===================== CTA ===================== -->
+		<section class="week-cta">
+			<a class="btn" href="mailto:oskar@draht.dev?subject=Draht%20Agentic%20Engineering%20Week">Erstgespräch vereinbaren →</a>
+		</section>
+
+		<!-- ===================== EN SUMMARY (for international forwards) ===================== -->
+		<p class="en-summary" lang="en">
+			English summary: the Agentic Engineering Week runs Monday to Friday with one team. The engineering track puts one use case into production while the enablement track documents the process with your team. By Friday, the team can repeat that process without us. <a href="mailto:oskar@draht.dev?subject=Draht%20Agentic%20Engineering%20Week">Book a first call</a>.
+		</p>
+	</main>
+</AtelierPage>
+
+<style>
+	.week-main {
+		max-width: 880px;
+		margin: 0 auto;
+	}
+
+	.week-section {
+		padding: clamp(40px, 6vw, 72px) 0;
+		border-top: 1px solid var(--rule);
+	}
+	.week-section:first-of-type {
+		padding-top: clamp(24px, 4vw, 40px);
+	}
+
+	.week-section-head {
+		display: flex;
+		align-items: baseline;
+		gap: 20px;
+		margin-bottom: 32px;
+	}
+	.week-num {
+		font-family: var(--f-mono);
+		font-size: 12px;
+		letter-spacing: 0.1em;
+		color: var(--copper);
+	}
+	.week-title {
+		font-family: var(--f-display);
+		font-style: italic;
+		font-weight: 300;
+		font-size: clamp(26px, 3.2vw, 38px);
+		line-height: 1;
+		letter-spacing: -0.02em;
+		color: var(--paper);
+	}
+	.week-title em {
+		font-style: italic;
+		color: var(--paper-soft);
+	}
+
+	/* ---------- Tracks ---------- */
+	.tracks {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: clamp(20px, 3vw, 32px);
+	}
+	.track {
+		border: 1px solid var(--rule-strong);
+		padding: clamp(22px, 3vw, 32px);
+	}
+	.track-tag {
+		font-family: var(--f-mono);
+		font-size: 10px;
+		letter-spacing: 0.18em;
+		text-transform: uppercase;
+		color: var(--copper);
+		margin-bottom: 14px;
+	}
+	.track h3 {
+		font-family: var(--f-display);
+		font-style: italic;
+		font-weight: 400;
+		font-size: clamp(20px, 2.4vw, 26px);
+		line-height: 1.15;
+		color: var(--paper);
+		margin: 0 0 12px;
+	}
+	.track p {
+		color: var(--paper-dim);
+		font-size: 15px;
+		line-height: 1.6;
+		margin: 0;
+	}
+
+	/* ---------- Ergebnis ---------- */
+	.result-text {
+		font-family: var(--f-display);
+		font-style: italic;
+		font-size: clamp(19px, 2.1vw, 24px);
+		line-height: 1.5;
+		color: var(--paper-dim);
+		max-width: 54ch;
+		margin: 0;
+		text-wrap: pretty;
+	}
+
+	/* ---------- Vergleich ---------- */
+	.compare {
+		width: 100%;
+		border-collapse: collapse;
+		margin: 0 0 24px;
+	}
+	.compare th,
+	.compare td {
+		text-align: left;
+		padding: 14px 16px 14px 0;
+		border-bottom: 1px solid var(--rule);
+		font-size: 14px;
+		line-height: 1.5;
+	}
+	.compare thead th {
+		font-family: var(--f-mono);
+		font-size: 11px;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		font-weight: 400;
+		color: var(--paper-soft);
+	}
+	.compare tbody th {
+		font-family: var(--f-mono);
+		font-size: 11px;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		font-weight: 400;
+		color: var(--paper-soft);
+		white-space: nowrap;
+		padding-right: 16px;
+	}
+	.compare td {
+		color: var(--paper-dim);
+	}
+
+	.sequence {
+		font-size: 14px;
+		color: var(--paper-soft);
+		margin: 0;
+	}
+	.sequence a {
+		color: var(--copper);
+	}
+	.sequence a:hover {
+		color: var(--paper);
+	}
+
+	/* ---------- CTA ---------- */
+	.week-cta {
+		padding: clamp(40px, 6vw, 72px) 0;
+		border-top: 1px solid var(--rule);
+		text-align: center;
+	}
+
+	/* ---------- EN summary ---------- */
+	.en-summary {
+		font-family: var(--f-ui);
+		font-size: 13px;
+		line-height: 1.65;
+		color: var(--paper-soft);
+		max-width: 68ch;
+		margin: 40px auto 0;
+		padding-top: 24px;
+		border-top: 1px dashed var(--rule-strong);
+	}
+	.en-summary a {
+		color: var(--copper);
+	}
+	.en-summary a:hover {
+		color: var(--paper);
+	}
+
+	@media (max-width: 640px) {
+		.tracks {
+			grid-template-columns: 1fr;
+		}
+	}
+</style>

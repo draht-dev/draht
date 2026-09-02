@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+		<title>geist — fleet</title>
+
+		<!--
+			The one daemon-served surface (R32-FLEET.10).
+			Decision record: .planning/specs/2026-08-19-geist-served-surface-decision.md
+
+			No build step, no framework, no npm dependency, no external request: the
+			daemon serves these bytes and the browser runs them. `tokens.css` is
+			geist-glass itself (packages/geist-console/src/tokens.css) — the same file
+			the geist-picker overlay uses, not a copy — and it is linked before the
+			script tag, so there is no moment where this page renders unstyled.
+
+			The empty data: icon exists only so the browser does not request a favicon
+			the daemon does not serve; a 404 there would show up as a console error and
+			the browser acceptance treats console errors as failures.
+		-->
+		<link rel="icon" href="data:," />
+		<link rel="stylesheet" href="/ui/tokens.css" />
+		<link rel="stylesheet" href="/ui/console.css" />
+	</head>
+
+	<body data-view="fleet">
+		<header id="topbar">
+			<span id="brand">geist</span>
+			<span id="status" data-state="connecting">connecting…</span>
+			<button id="refresh" type="button" title="Re-read the fleet over HTTP">Refresh</button>
+		</header>
+
+		<main id="shell">
+			<!--
+				Both panes are always in the DOM. Which one you see is CSS: side by side
+				above 720px, one at a time below it, switched by body[data-view]. There is
+				no phone-only branch in console.js, so the two viewports cannot drift.
+			-->
+			<section id="rail" aria-label="Live sessions">
+				<h2 class="pane-title">Sessions</h2>
+				<ul id="fleet"></ul>
+				<p id="fleet-empty" class="pane-note">
+					No live attachable sessions. Start one with <code>draht --attachable</code>.
+				</p>
+				<form id="token-form" hidden>
+					<label class="pane-note" for="token-input">
+						This daemon needs a bearer token. Paste it, or open <code>/ui#token=…</code>.
+					</label>
+					<input id="token-input" type="password" autocomplete="off" spellcheck="false" />
+					<button id="token-save" type="submit">Connect</button>
+				</form>
+			</section>
+
+			<section id="session" aria-label="Session">
+				<div id="session-head">
+					<button id="back" type="button" aria-label="Back to sessions">←</button>
+					<div id="session-title">
+						<div id="session-cwd"></div>
+						<div id="session-meta"></div>
+					</div>
+				</div>
+
+				<div id="transcript" role="log" aria-live="polite">
+					<p class="pane-note" id="transcript-empty">Pick a session to attach.</p>
+				</div>
+
+				<form id="composer">
+					<textarea
+						id="prompt"
+						rows="1"
+						placeholder="Send a prompt…"
+						autocomplete="off"
+						spellcheck="false"
+					></textarea>
+					<button id="send" type="submit">Send</button>
+				</form>
+			</section>
+		</main>
+
+		<!--
+			The evidence readout (R33-REACH.2), rendered only when the URL fragment
+			carries `diag`.
+
+			Phase 39 archives a device run: which browser build loaded this bundle,
+			which protocol member it spoke, how long its socket survived and how that
+			socket died. A phone has no devtools to read any of that out of, so the
+			page says it — and one screenshot then carries the whole pinned-version
+			set rather than a photo of a transcript plus a claim about the versions.
+
+			Opt-in, because an operator's console is not an evidence sheet. The switch
+			is `diag` in the same fragment the bootstrap token arrives in —
+			`/ui#diag`, or `/ui#token=…&diag=1` — and nothing else turns it on. No
+			command emits that fragment today: whoever runs the archived device
+			capture appends it, and a `geist pair --diag` that puts it in the QR is
+			still owed.
+		-->
+		<section id="diagnostics" aria-label="Device diagnostics" hidden>
+			<dl>
+				<dt>ua</dt>
+				<dd id="diag-ua">—</dd>
+				<dt>protocol</dt>
+				<dd id="diag-protocol">—</dd>
+				<dt>viewport</dt>
+				<dd id="diag-viewport">—</dd>
+				<dt>socket</dt>
+				<dd id="diag-uptime">—</dd>
+				<dt>last close</dt>
+				<dd id="diag-close">—</dd>
+			</dl>
+		</section>
+
+		<footer id="decision-record">
+			one served bundle · desktop + phone · .planning/specs/2026-08-19-geist-served-surface-decision.md
+		</footer>
+
+		<script type="module" src="/ui/console.js"></script>
+	</body>
+</html>

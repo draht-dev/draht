@@ -18,9 +18,16 @@ import * as path from "node:path";
 import type { Message, Usage } from "@draht/ai";
 import { Text } from "@draht/tui";
 import { Type } from "@sinclair/typebox";
-import { getAgentDir, getPackageDir, isBunBinary } from "../../config.js";
+import { CONFIG_DIR_NAME, getAgentDir, getPackageDir, isBunBinary } from "../../config.js";
+import { comparablePath, realPathStrict } from "../../utils/canonical-path.js";
 import { parseFrontmatter } from "../../utils/frontmatter.js";
-import type { ExtensionAPI, ExtensionContext, ToolCallEvent, ToolCallEventResult } from "../extensions/types.js";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	PermissionAskDetail,
+	ToolCallEvent,
+	ToolCallEventResult,
+} from "../extensions/types.js";
 import {
 	AgentFSM,
 	type AgentFSMTransitionEvent,
@@ -28,12 +35,16 @@ import {
 	loadRules,
 	type Message as MailboxMessage,
 	MailboxSystem,
+	type MergeResult,
 	PERMISSION_MODES,
 	PermissionGate,
 	type PermissionMode,
+	type PermissionRule,
+	parseRules,
 	TaskBoard,
 	WorktreeIsolator,
 } from "../multi-agent/index.ts";
+import { boundedSafeText } from "../socket-server/safe-text.js";
 
 const MAX_PARALLEL = 8;
 const MAX_CONCURRENCY = 4;
@@ -120,9 +131,13 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 }
 
 function findProjectAgentsDir(cwd: string): string | null {
-	let dir = cwd;
+	// The gate's own chain, from the raw spelling: `resolvePath` first would collapse `..`
+	// lexically, and a cwd that will not resolve has unknown ancestors to load from.
+	const realCwd = realPathStrict(cwd);
+	if (realCwd === undefined) return null;
+	let dir = realCwd;
 	while (true) {
-		const candidate = path.join(dir, ".draht", "agents");
+		const candidate = path.join(dir, CONFIG_DIR_NAME, "agents");
 		try {
 			if (fs.statSync(candidate).isDirectory()) return candidate;
 		} catch {}
@@ -134,13 +149,13 @@ function findProjectAgentsDir(cwd: string): string | null {
 
 type AgentScope = "user" | "project" | "both";
 
-function discoverAgents(cwd: string, scope: AgentScope): AgentConfig[] {
+export function discoverAgents(cwd: string, scope: AgentScope, projectTrusted: boolean): AgentConfig[] {
 	// Shipped agents (bundled with the package) — lowest priority
 	const shippedDir = path.join(getPackageDir(), "agents");
 	const shippedAgents = loadAgentsFromDir(shippedDir, "user");
 
 	const userDir = path.join(getAgentDir(), "agents");
-	const projectDir = findProjectAgentsDir(cwd);
+	const projectDir = projectTrusted ? findProjectAgentsDir(cwd) : null;
 	const userAgents = scope !== "project" ? loadAgentsFromDir(userDir, "user") : [];
 	const projectAgents = scope !== "user" && projectDir ? loadAgentsFromDir(projectDir, "project") : [];
 
@@ -162,6 +177,12 @@ export interface RunResult {
 	stderr: string;
 	usage?: Usage;
 	step?: number;
+	/**
+	 * Outcome of merging the task's worktree branch back. Present only when
+	 * the run opted into worktree isolation, a real worktree existed (git
+	 * repo), and the agent exited 0 so a merge-back was attempted.
+	 */
+	merge?: MergeResult;
 }
 
 function writeTemp(name: string, content: string): { file: string; dir: string } {
@@ -424,8 +445,10 @@ async function runAgentWithLifecycle(
 
 	const result = await runner(effectiveCwd, agent, task, opts.signal, opts.step, opts.onProgress);
 
-	if (worktree) {
-		if (result.exitCode === 0) worktreeIsolator.merge(taskId);
+	// effectiveCwd === cwd means create() fell back to cwd outside a git repo,
+	// where merge(taskId) would fabricate a failure for the unknown taskId.
+	if (worktree && effectiveCwd !== cwd) {
+		if (result.exitCode === 0) result.merge = worktreeIsolator.merge(taskId);
 		worktreeIsolator.cleanup(taskId);
 	}
 
@@ -580,6 +603,123 @@ export async function runChainTasks(
 	return results;
 }
 
+/** Grapheme budget for every attacker-influenced string that travels in a permission ask. */
+const PERMISSION_DETAIL_MAX_GRAPHEMES = 512;
+
+/**
+ * Byte budget for the same strings, stated HERE and not left to the default, because this is the
+ * producer whose output has to fit a frame: one grapheme cluster admits unboundedly many combining
+ * marks, so 512 clusters of Zalgo weighed 383,246 bytes until this bound existed — accepted by the
+ * schema, then refused by the attach bridge, which closed the renderer's socket with 1008.
+ *
+ * 512 × 4 bytes: four is the widest a single code point is in UTF-8, so every ordinary cluster
+ * survives untouched. A `tool_permission` detail carries FIVE such fields — `toolCallId`,
+ * `toolName`, `cwd`, `reason`, and exactly one of `command` / `path` / `operation` — so at maximum
+ * it is 5 × 2048 = 10,240 bytes of free text plus a fixed option pair and a handful of keys: ~10 KiB
+ * against the 64 KiB `maxFrameBytes` a permission frame must fit into, which is never split.
+ */
+const PERMISSION_DETAIL_MAX_BYTES = 512 * 4;
+
+/**
+ * The vocabulary this phase offers for a tool permission ask.
+ *
+ * Frozen and shared: the same object identity is handed to every surface, so no renderer can
+ * quietly widen or reorder it. Each option states its OWN decision — nothing may infer approval
+ * from an option's position, id, or the array's length.
+ */
+const TOOL_PERMISSION_OPTIONS: readonly { id: string; label: string; decision: "approve" | "deny" }[] = Object.freeze([
+	Object.freeze({ id: "approve", label: "Yes", decision: "approve" as const }),
+	Object.freeze({ id: "deny", label: "No", decision: "deny" as const }),
+]);
+
+/** Accumulates the elision verdicts of every field of one detail. */
+interface ElisionVerdict {
+	truncated: boolean;
+}
+
+/**
+ * Neutralize-and-bound a single wire-bound string — in clusters AND bytes — RECORDING the verdict.
+ *
+ * `verdict` is a required parameter and not an optional convenience: this function used to return
+ * `boundedSafeText(...).value` and nothing else, and every caller silently dropped `.truncated`.
+ * Making the accumulator part of the signature is what stops a new field being added tomorrow that
+ * elides in silence — there is no way to call this and not answer the question.
+ */
+function safeField(raw: string, verdict: ElisionVerdict): string {
+	const bounded = boundedSafeText(raw, PERMISSION_DETAIL_MAX_GRAPHEMES, PERMISSION_DETAIL_MAX_BYTES);
+	if (bounded.truncated) verdict.truncated = true;
+	// `bounded.originalLength` is deliberately NOT carried: `PermissionRequestFrameSchema` in
+	// packages/geist-protocol/src/wire.ts has no field for it, so putting it on the detail would
+	// produce a number that reaches no wire. The elision marker inside `value` already names the
+	// count, which is how a surface recovers the original length today.
+	return bounded.value;
+}
+
+/**
+ * Build the canonical detail for a tool permission ask.
+ *
+ * Neutralization happens HERE, at construction, not at any protocol layer: three renderers
+ * (TUI, `draht --attach`, RPC) inherit this object, and the attach client is a bare `JSON.parse`
+ * cast that never passes through a schema. Constructing it safe is what makes all three safe.
+ */
+function buildPermissionAskDetail(event: ToolCallEvent, ctx: ExtensionContext, reason: string): PermissionAskDetail {
+	const input = (event.input ?? {}) as Record<string, unknown>;
+	const verdict: ElisionVerdict = { truncated: false };
+	const detail: PermissionAskDetail = {
+		kind: "tool_permission",
+		toolCallId: safeField(event.toolCallId, verdict),
+		toolName: safeField(event.toolName, verdict),
+		// `ctx.cwd` is the raw, un-normalised `config.cwd`; a symlinked worktree would otherwise
+		// read as a different project on the answering surface.
+		cwd: safeField(comparablePath(ctx.cwd), verdict),
+		reason: safeField(reason, verdict),
+		options: TOOL_PERMISSION_OPTIONS,
+		truncated: false,
+	};
+
+	const command = typeof input.command === "string" ? input.command : undefined;
+	const filePath = typeof input.file_path === "string" ? input.file_path : undefined;
+	const plainPath = typeof input.path === "string" ? input.path : undefined;
+
+	if (command !== undefined) {
+		detail.command = safeField(command, verdict);
+	} else if (filePath !== undefined || plainPath !== undefined) {
+		detail.path = safeField((filePath ?? plainPath) as string, verdict);
+	} else {
+		// Every extension tool takes `Record<string, unknown>`, so there is always SOMETHING to
+		// show. Serializing the whole argument object beats an empty ask that asks the human to
+		// approve an unknown action.
+		detail.operation = safeField(serializeToolInput(input), verdict);
+	}
+
+	// Set LAST: the command/path/operation branch above is the field most likely to be elided, and
+	// it is assigned after the literal. Reading `verdict` any earlier reports on a partial detail.
+	detail.truncated = verdict.truncated;
+
+	return detail;
+}
+
+/** JSON-serialize a tool's argument object, degrading to a readable form rather than throwing. */
+function serializeToolInput(input: Record<string, unknown>): string {
+	try {
+		return JSON.stringify(input) ?? String(input);
+	} catch {
+		// Cyclic or otherwise unserializable input must not crash the permission gate.
+		return Object.keys(input).join(", ");
+	}
+}
+
+const PERMISSION_RULES_FILE = "permissions.yml";
+
+export function loadPermissionRules(projectDir: string, projectTrusted: boolean, globalDir?: string): PermissionRule[] {
+	if (projectTrusted) {
+		return loadRules(projectDir, globalDir);
+	}
+	// Not loadRules(projectDir=undefined): that default is process.cwd(), i.e. the untrusted project itself.
+	const globalRulesPath = path.join(globalDir ?? getAgentDir(), PERMISSION_RULES_FILE);
+	return fs.existsSync(globalRulesPath) ? parseRules(fs.readFileSync(globalRulesPath, "utf-8")) : [];
+}
+
 /**
  * Permission-gate hook point: builds a `tool_call` handler that consults a
  * `PermissionGate` before a tool executes. `deny` blocks the call outright;
@@ -599,11 +739,37 @@ export function createPermissionGateToolCallHandler(
 		}
 
 		if (decision.action === "approve") {
+			// No answering surface at all: keep today's loud, operator-facing block verbatim rather
+			// than letting a no-op UI resolve `false` and be recorded as a user's denial.
 			if (!ctx.hasUI) {
 				return { block: true, reason: `${decision.reason} (no UI available to request approval)` };
 			}
-			const approved = await ctx.ui.confirm("Approve tool call?", `${event.toolName}: ${decision.reason}`);
+
+			const detail = buildPermissionAskDetail(event, ctx, decision.reason);
+			// Both positional strings are unchanged so every existing renderer keeps working; the
+			// canonical facts ride alongside them for surfaces that can render structure.
+			//
+			// `signal` is the turn's OWN abort signal, read live off the context (it is the active
+			// run's controller, minted fresh per run, so it is never a stale aborted one). A
+			// permission ask that inherits "wait forever" with no way to be dismissed is its own
+			// hazard: this ask parks the agent loop inside `beforeToolCall`, and before this the
+			// only things that could end it were a human answering and the relay's own backstop
+			// clock. Aborting the turn now takes the dialog down on every surface, and — because
+			// nobody answered — it is recorded as `cancelled` by the system rather than as this
+			// human's refusal.
+			const approved = await ctx.ui.confirm("Approve tool call?", `${event.toolName}: ${decision.reason}`, {
+				detail,
+				signal: ctx.signal,
+			});
 			if (!approved) {
+				// The turn being aborted is NOT a refusal, and saying so in the transcript would put the
+				// same fabrication in front of the model that the durable record was just cleared of:
+				// the JSONL reads `cancelled` by `system`, so the reason the model sees must not read
+				// `User denied approval`. This branch became reachable the moment `signal` started being
+				// passed above — before that, an abort could not end an ask at all.
+				if (ctx.signal?.aborted) {
+					return { block: true, reason: "the turn was aborted before this call was approved" };
+				}
 				return { block: true, reason: "User denied approval" };
 			}
 			return undefined;
@@ -640,12 +806,37 @@ const Params = Type.Object({
 
 // ─── Rendering helpers ──────────────────────────────────────────────────────
 
+/**
+ * Human-readable recovery notice for a failed worktree merge-back, or
+ * `undefined` when no merge was attempted or it succeeded. The branch name,
+ * the literal `git merge <branch>` command, and the word "resolve-conflicts"
+ * are the contract callers (and tests) rely on.
+ */
+export function describeMergeFailure(result: RunResult): string | undefined {
+	if (!result.merge || result.merge.success) return undefined;
+	const branch = result.merge.branch ?? "agent/<taskId>";
+	const conflicts = result.merge.conflicts?.length ? ` Conflicting paths: ${result.merge.conflicts.join(", ")}.` : "";
+	return (
+		`Worktree merge-back FAILED: the agent's work is committed on the unmerged branch "${branch}" ` +
+		`and is NOT in the working tree.${conflicts} To integrate it, run \`git merge ${branch}\`, ` +
+		`then invoke the resolve-conflicts skill (/resolve-conflicts) to resolve the conflicts and finish the merge.`
+	);
+}
+
 function truncateTask(task: string, maxLen = 120): string {
 	const oneLine = task.replace(/\n/g, " ").trim();
 	return oneLine.length > maxLen ? `${oneLine.slice(0, maxLen)}...` : oneLine;
 }
 
 export default function (pi: ExtensionAPI) {
+	// Autocomplete gets no ctx, so the last trust answer a ctx gave for this cwd stands in; unseen cwds count as untrusted.
+	let lastProjectTrust: { cwd: string; trusted: boolean } | undefined;
+	const noteProjectTrust = (ctx: ExtensionContext) => {
+		lastProjectTrust = { cwd: ctx.cwd, trusted: ctx.isProjectTrusted() };
+	};
+	const rememberedProjectTrust = (cwd: string): boolean =>
+		lastProjectTrust?.cwd === cwd ? lastProjectTrust.trusted : false;
+
 	pi.registerTool({
 		name: "subagent",
 		label: "Subagent",
@@ -726,7 +917,8 @@ export default function (pi: ExtensionAPI) {
 
 		async execute(_id, params, signal, onUpdate, ctx) {
 			const scope: AgentScope = (params.agentScope as string as AgentScope) ?? "both";
-			const agents = discoverAgents(ctx.cwd, scope);
+			noteProjectTrust(ctx);
+			const agents = discoverAgents(ctx.cwd, scope, ctx.isProjectTrusted());
 			const available = agents.map((a) => a.name).join(", ") || "none";
 
 			const find = (name: string) => agents.find((a) => a.name === name);
@@ -775,6 +967,11 @@ export default function (pi: ExtensionAPI) {
 					},
 				});
 
+				const mergeNotices = results
+					.map(describeMergeFailure)
+					.filter((notice): notice is string => notice !== undefined);
+				const noticeBlock = mergeNotices.length > 0 ? `\n\n${mergeNotices.join("\n\n")}` : "";
+
 				const last = results[results.length - 1];
 				if (last.exitCode !== 0) {
 					const failedIndex = results.length - 1;
@@ -782,7 +979,7 @@ export default function (pi: ExtensionAPI) {
 						content: [
 							{
 								type: "text" as const,
-								text: `Chain failed at step ${failedIndex + 1} (${params.chain[failedIndex].agent}):\n${last.output || last.stderr}`,
+								text: `Chain failed at step ${failedIndex + 1} (${params.chain[failedIndex].agent}):\n${last.output || last.stderr}${noticeBlock}`,
 							},
 						],
 						isError: true,
@@ -790,7 +987,10 @@ export default function (pi: ExtensionAPI) {
 					};
 				}
 				return {
-					content: [{ type: "text" as const, text: last.output || "(no output)" }],
+					content: [{ type: "text" as const, text: `${last.output || "(no output)"}${noticeBlock}` }],
+					// A merge-back failure means a step's work did not land in the
+					// caller's tree, even though every step's agent succeeded.
+					...(mergeNotices.length > 0 ? { isError: true } : {}),
 					details: {},
 				};
 			}
@@ -820,12 +1020,24 @@ export default function (pi: ExtensionAPI) {
 					makeOnProgress: (agentName) => makeProgressFn(agentName),
 				});
 
-				const ok = results.filter((r) => r.exitCode === 0).length;
+				const ok = results.filter((r) => r.exitCode === 0 && describeMergeFailure(r) === undefined).length;
 				const summary = results
-					.map((r) => `[${r.agent}] ${r.exitCode === 0 ? "ok" : "fail"} ${r.output.slice(0, 200)}`)
+					.map(
+						(r) =>
+							`[${r.agent}] ${r.exitCode !== 0 ? "fail" : describeMergeFailure(r) ? "merge-failed" : "ok"} ${r.output.slice(0, 200)}`,
+					)
 					.join("\n\n");
+				const notices = results
+					.map(describeMergeFailure)
+					.filter((notice): notice is string => notice !== undefined);
+				const noticeBlock = notices.length > 0 ? `\n\n${notices.join("\n\n")}` : "";
 				return {
-					content: [{ type: "text" as const, text: `Parallel: ${ok}/${results.length} succeeded\n\n${summary}` }],
+					content: [
+						{
+							type: "text" as const,
+							text: `Parallel: ${ok}/${results.length} succeeded\n\n${summary}${noticeBlock}`,
+						},
+					],
 					details: {},
 				};
 			}
@@ -840,9 +1052,13 @@ export default function (pi: ExtensionAPI) {
 					worktree,
 					onProgress: makeProgressFn(params.agent),
 				});
-				const isError = result.exitCode !== 0;
+				const mergeNotice = describeMergeFailure(result);
+				// A merge-back failure means the delegated change did NOT land in
+				// the caller's tree — a plain success would mislead the orchestrator.
+				const isError = result.exitCode !== 0 || mergeNotice !== undefined;
+				const baseText = result.output || result.stderr || "(no output)";
 				return {
-					content: [{ type: "text" as const, text: result.output || result.stderr || "(no output)" }],
+					content: [{ type: "text" as const, text: mergeNotice ? `${baseText}\n\n${mergeNotice}` : baseText }],
 					...(isError ? { isError: true } : {}),
 					details: {},
 				};
@@ -859,8 +1075,9 @@ export default function (pi: ExtensionAPI) {
 	// ── Permission gate hook point ────────────────────────────────────────────
 	// Prepares the wiring point for the multi-agent permission gate: every tool
 	// call in this process is offered to the gate before it runs. Rules are
-	// (re)loaded per call so project-local `.draht/permissions.yml` edits and
-	// per-session cwd changes take effect without an extension reload.
+	// (re)loaded per call so project-local `.draht/permissions.yml` edits — read
+	// only for a trusted project — and per-session cwd changes take effect
+	// without an extension reload.
 	//
 	// The session permission mode (default/auto/yolo) is session-scoped state,
 	// settable via /permissions and /yolo below and seeded from
@@ -879,11 +1096,15 @@ export default function (pi: ExtensionAPI) {
 		yolo: "no approval prompts this session (deny rules still block)",
 	};
 
-	pi.on("tool_call", (event, ctx) =>
-		createPermissionGateToolCallHandler(
-			new PermissionGate(loadRules(ctx.cwd), { cwd: ctx.cwd, mode: permissionMode }),
-		)(event, ctx),
-	);
+	pi.on("tool_call", (event, ctx) => {
+		noteProjectTrust(ctx);
+		return createPermissionGateToolCallHandler(
+			new PermissionGate(loadPermissionRules(ctx.cwd, ctx.isProjectTrusted()), {
+				cwd: ctx.cwd,
+				mode: permissionMode,
+			}),
+		)(event, ctx);
+	});
 
 	// /permissions command — show or set the session permission mode
 	pi.registerCommand("permissions", {
@@ -931,7 +1152,8 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("agent", {
 		description: "Select an agent to handle your next prompts, or clear selection. Usage: /agent [name]",
 		handler: async (args, ctx) => {
-			const agents = discoverAgents(ctx.cwd, "both");
+			noteProjectTrust(ctx);
+			const agents = discoverAgents(ctx.cwd, "both", ctx.isProjectTrusted());
 
 			if (args.trim()) {
 				// Direct selection: /agent architect
@@ -976,14 +1198,16 @@ export default function (pi: ExtensionAPI) {
 			}
 		},
 		getArgumentCompletions: (partial) => {
-			const agents = discoverAgents(process.cwd(), "both");
+			const cwd = process.cwd();
+			const agents = discoverAgents(cwd, "both", rememberedProjectTrust(cwd));
 			const names = ["none", ...agents.map((a) => a.name)];
 			return names.filter((n) => n.startsWith(partial)).map((n) => ({ value: n, label: n }));
 		},
 	});
 
 	// Intercept user input when an agent is selected
-	pi.on("input", (event) => {
+	pi.on("input", (event, ctx) => {
+		noteProjectTrust(ctx);
 		if (!selectedAgent) return { action: "continue" as const };
 		// Don't intercept slash commands
 		if (event.text.startsWith("/") || event.text.startsWith("!")) return { action: "continue" as const };

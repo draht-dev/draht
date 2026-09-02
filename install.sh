@@ -22,6 +22,73 @@ command -v curl >/dev/null 2>&1 || error "curl is required but not installed."
 command -v jq >/dev/null 2>&1 || error "jq is required but not installed."
 command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || error "sha256sum or shasum is required."
 
+# ~/.draht is Draht's home directory: this installer, the `@draht/install`
+# engine and the plugin marketplaces all write underneath it. The installer
+# may only write there when Draht owns the directory, so a pre-existing
+# ~/.draht that belongs to something else is refused instead of written into.
+#
+# Ownership is decided by two layout-independent signals only — the marker
+# file written by `claim_draht_home`, and the `.git` directory left by the
+# legacy install.sh clone. Nothing here inspects the subdirectories Draht
+# creates inside ~/.draht, because that layout changes between releases.
+DRAHT_HOME_DIR="$HOME/.draht"
+DRAHT_HOME_MARKER="$DRAHT_HOME_DIR/.draht-home"
+
+# True when this run will write inside ~/.draht at all. DRAHT_DIR pointing
+# somewhere else means ~/.draht is none of the installer's business.
+draht_home_is_install_target() {
+  case "$INSTALL_DIR" in
+    "$DRAHT_HOME_DIR"|"$DRAHT_HOME_DIR"/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Every ~/.draht created before the ownership marker existed has neither the
+# marker nor a legacy .git clone, so the two signals above would refuse an
+# ordinary upgrade for existing users. Adopt those by recognising entries only
+# Draht creates. This deliberately inspects the layout, which the signals above
+# avoid on purpose — it is used ONLY to adopt a home Draht already owns, never
+# to reject one, so a future layout change can at worst fall back to requiring
+# the explicit marker rather than wrongly refusing anybody.
+draht_home_has_legacy_layout() {
+  for entry in agent claude-marketplace codex-marketplace plans policies bastion.toml; do
+    if [ -e "$DRAHT_HOME_DIR/$entry" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+draht_home_is_owned() {
+  [ -e "$DRAHT_HOME_MARKER" ] || [ -e "$DRAHT_HOME_DIR/.git" ] || draht_home_has_legacy_layout
+}
+
+# Read-only refusal, run before any download so an unowned ~/.draht costs
+# nothing and leaves nothing behind.
+check_draht_home() {
+  draht_home_is_install_target || return 0
+  { [ -e "$DRAHT_HOME_DIR" ] || [ -L "$DRAHT_HOME_DIR" ]; } || return 0
+  [ -d "$DRAHT_HOME_DIR" ] || error "$DRAHT_HOME_DIR exists and is not a directory.\n  Move it aside, or set DRAHT_DIR to install Draht somewhere else:\n      DRAHT_DIR=\"\$HOME/.local/share/draht\" curl -fsSL https://draht.dev/install.sh | bash"
+  [ -n "$(ls -A "$DRAHT_HOME_DIR" 2>/dev/null || true)" ] || return 0
+  draht_home_is_owned && return 0
+  error "$DRAHT_HOME_DIR already exists, is not empty, and was not created by Draht.\n  Refusing to install into a directory Draht does not own.\n\n  Move that directory aside:\n      mv \"$DRAHT_HOME_DIR\" \"$DRAHT_HOME_DIR.bak\"\n  or install Draht somewhere else with DRAHT_DIR:\n      DRAHT_DIR=\"\$HOME/.local/share/draht\" curl -fsSL https://draht.dev/install.sh | bash"
+}
+
+# Creates ~/.draht and stamps the ownership marker. Called only once the
+# release is fully verified, so a failed install never leaves the marker
+# behind claiming a directory the installer never populated.
+claim_draht_home() {
+  draht_home_is_install_target || return 0
+  mkdir -p "$DRAHT_HOME_DIR" || error "Could not create $DRAHT_HOME_DIR."
+  [ ! -e "$DRAHT_HOME_MARKER" ] || return 0
+  printf '%s\n' \
+    "This directory is managed by Draht (https://draht.dev)." \
+    "Created by install.sh. Delete it only when removing Draht's local state." \
+    > "$DRAHT_HOME_MARKER" || error "Could not write $DRAHT_HOME_MARKER."
+}
+
+check_draht_home
+
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
   else shasum -a 256 "$1" | cut -d' ' -f1
@@ -271,6 +338,7 @@ actual_binary_hash="$(sha256_file "$PAYLOAD_DIR/$BINARY_NAME")"
 [ "$actual_binary_hash" = "$manifest_binary_hash" ] || error "Extracted binary SHA-256 does not match runtime-manifest.json."
 chmod +x "$PAYLOAD_DIR/$BINARY_NAME"
 
+claim_draht_home
 mkdir -p "$INSTALL_DIR/releases" "$BIN_DIR"
 release_tmp="$INSTALL_DIR/releases/.${VERSION}.$$"
 release_dir="$INSTALL_DIR/releases/${VERSION}-$$-$(date +%s)"

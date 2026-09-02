@@ -16,25 +16,13 @@ Use this when you have an existing codebase and want to add structured planning.
 
 ## Atomic Reasoning
 
-Before initializing, decompose project understanding into atomic reasoning units:
-
-**For each aspect of the existing project:**
-1. **State the logical component** — What does this project do? Who are the users? What problems does it solve?
-2. **Validate independence** — What bounded contexts exist in the code? What domain concepts are already present? Can they be separated cleanly?
-3. **Verify correctness** — What works well that we must preserve? What pain points exist? What constraints limit changes?
-
-**Synthesize initialization strategy:**
-- Map existing architecture and conventions
-- Extract domain model from code (bounded contexts, aggregates, ubiquitous language)
-- Identify test strategy and coverage
-- Define requirements that align with existing structure
-- Create roadmap that respects what already works
+Decompose the work into independently verifiable units before acting; the `atomic-reasoning` skill holds the full discipline — load it when the decomposition is not obvious.
 
 ## Steps
 1. Run `draht-tools init` to check preconditions (git repo, etc.)
 2. Run `draht-tools map-codebase` to build a structural map of the existing code, then `draht-tools map-graph` to produce `.planning/codebase/MAP.json` + `GRAPH_REPORT.md` (map-codebase alone does NOT emit MAP.json)
 3. Analyze the codebase map to understand architecture, tech stack, and conventions: read `.planning/codebase/MAP.json` and run `draht-tools graph-hotspots` + `draht-tools graph-clusters` to surface high-traffic and cohesive modules
-4. Deep questioning phase (3-7 rounds, 1-2 questions at a time):
+4. Deep questioning phase (3-7 rounds — each round asks the whole frontier: settled-prerequisite questions only, numbered, each with a recommended answer):
    - What is this project? Who uses it?
    - What are the current pain points or goals?
    - What is MVP vs aspirational scope?
@@ -61,7 +49,9 @@ After project initialization, phases are executed one at a time in fresh session
 ```
 
 ## Rules
-- Ask 1-2 questions at a time, never dump 10 at once
+- Ask the whole frontier per round — numbered, each with a recommended answer; the user replies by number, and accepted-by-number counts as decided
+- Questions that depend on still-open answers wait for a later round
+- Finding facts is your job, never the user's — dispatch a subagent for anything the environment can answer and keep asking the rest of the frontier while it runs
 - When the focus names a solution ("migrate to X"), ask what problem it solves — the existing code may admit a smaller answer
 - Respect what already exists — do not propose rewriting working code
 - Stop when you have: current state, goals, MVP scope, constraints, success criteria

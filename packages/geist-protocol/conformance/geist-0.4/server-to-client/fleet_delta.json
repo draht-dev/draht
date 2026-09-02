@@ -1,0 +1,32 @@
+{
+	"protocol": "geist/0.x",
+	"version": "0.4",
+	"direction": "server-to-client",
+	"type": "fleet_delta",
+	"recordedFrom": "scripts/geist-conformance/reference-daemon.mjs over ws://127.0.0.1/attach, relaying a real draht SocketServer behind a real device-credential exchange",
+	"normalizedFields": [
+		"pid",
+		"startedAt"
+	],
+	"frame": {
+		"type": "fleet_delta",
+		"epoch": "conformance-epoch",
+		"seq": 5,
+		"changes": [
+			{
+				"kind": "appeared",
+				"session": {
+					"id": "conformance-transient",
+					"cwd": "/geist/conformance",
+					"pid": 1,
+					"startedAt": "1970-01-01T00:00:00.000Z",
+					"origin": "socket",
+					"attachable": true,
+					"resumable": false,
+					"status": "unknown",
+					"statusAt": null
+				}
+			}
+		]
+	}
+}

@@ -22,6 +22,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test } from "vitest";
+import { HAS_PYTHON3 } from "./sandbox-prereqs.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DRIVER_PATH = join(__dirname, "..", "python", "repl_driver.py");
@@ -99,7 +100,9 @@ class DriverHarness {
 	}
 }
 
-describe("repl_driver.py Python-level guardrails", () => {
+// The harness deliberately spawns bare `python3` (no unshare/sandbox wrapper
+// -- see the file-level comment), so only python3 itself is a prerequisite.
+describe.skipIf(!HAS_PYTHON3)("repl_driver.py Python-level guardrails", () => {
 	let harness: DriverHarness;
 
 	afterEach(() => {

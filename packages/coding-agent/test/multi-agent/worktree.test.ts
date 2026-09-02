@@ -47,6 +47,7 @@ describe("WorktreeIsolator", () => {
 		const result = isolator.merge("task-3");
 
 		expect(result.success).toBe(true);
+		expect(result.branch).toBe("agent/task-3");
 		expect(existsSync(join(repo.repoPath, "feature.txt"))).toBe(true);
 		expect(readFileSync(join(repo.repoPath, "feature.txt"), "utf-8")).toBe("hello from agent\n");
 	});
@@ -65,12 +66,20 @@ describe("WorktreeIsolator", () => {
 		const result = isolator.merge("task-4");
 
 		expect(result.success).toBe(false);
+		expect(result.branch).toBe("agent/task-4");
 		expect(result.conflicts).toContain("README.md");
 
 		// The merge attempt must be aborted, leaving the base branch clean.
 		const status = git(repo.repoPath, ["status", "--porcelain"]).trim();
 		expect(status).toBe("");
 		expect(readFileSync(join(repo.repoPath, "README.md"), "utf-8")).toBe("main change\n");
+	});
+
+	it("reports failure without a branch for an unknown taskId", () => {
+		const result = isolator.merge("no-such-task");
+
+		expect(result).toEqual({ success: false, conflicts: [] });
+		expect("branch" in result).toBe(false);
 	});
 
 	it("removes the worktree directory and git worktree entry on cleanup", () => {

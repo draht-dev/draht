@@ -16,18 +16,9 @@ If no scope given, reviews all recent uncommitted changes.
 
 ## Atomic Reasoning
 
-Before reviewing, decompose code changes into atomic reasoning units:
+Decompose the work into independently verifiable units before acting; the `atomic-reasoning` skill holds the full discipline — load it when the decomposition is not obvious.
 
-**For each changed file:**
-1. **State the logical component** — What does this change do? What problem does it solve? What behavior does it add/modify?
-2. **Validate independence** — Does this change have side effects? Does it affect other modules? Are there hidden dependencies?
-3. **Verify correctness** — Is this change correct? Type-safe? Secure? Does it follow conventions? What could go wrong?
-
-**Synthesize review strategy:**
-- Group changes by concern (correctness, security, style, spec compliance)
-- Prioritize findings (critical, important, minor)
-- Identify patterns across multiple files
-- Check domain language compliance and bounded context boundaries
+Check domain language compliance and bounded context boundaries.
 
 ## Steps
 1. Identify the scope:
@@ -46,7 +37,7 @@ Before reviewing, decompose code changes into atomic reasoning units:
 
    - **Codex subagent** with ``reviewer` agent prompt` and prompt:
      ```
-     Review the following code changes for correctness, type safety, conventions, and potential issues. Scope: <scope summary and file list>. Read each changed file to understand the changes. For each finding: cite the exact file and line, explain the issue, suggest the fix. Prioritize: Critical (must fix) > Important (should fix) > Minor (style/optional). Check domain language compliance against `.planning/DOMAIN.md` if it exists.
+     Review the following code changes for correctness, type safety, conventions, and potential issues. Scope: <scope summary and file list>. Read each changed file to understand the changes. For each finding: cite the exact file and line, explain the issue, suggest the fix. Prioritize: Critical (must fix) > Important (should fix) > Minor (style/optional). Treat comment-heavy new code as a design defect, not a style nit: comments exist only for constraints the code cannot express — if new code needed narration to be understood (step-by-step comments, diff restatements, "removed X" / "this handles Y" breadcrumbs), report the finding as "code needed narration" at Important or higher; the fix is rewriting the code until the comments are unnecessary, not deleting the comments. Check domain language compliance against `.planning/DOMAIN.md` if it exists.
 
      End with `STATUS: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED`.
      ```
@@ -69,7 +60,7 @@ Before reviewing, decompose code changes into atomic reasoning units:
 
 5. Read each subagent's final `STATUS:` line.
 6. Collect and merge results from all dispatched subagents.
-7. **Refute before reporting.** For each Critical or Important finding, attempt to kill it yourself before it reaches the report: read the code path that would make it a false positive — an upstream guard clause, a type constraint, an existing test that covers the case. A finding that survives an honest refutation attempt is **confirmed** (you traced the failing path); one you couldn't confirm is downgraded and labeled **suspected**. Reporting unattacked findings trains readers to ignore the report.
+7. **Refute before reporting.** For each Critical or Important finding, attempt to kill it yourself before it reaches the report: read the code path that would make it a false positive — an upstream guard clause, a type constraint, an existing test that covers the case. A finding that survives an honest refutation attempt is **confirmed** (you traced the failing path); one you couldn't confirm is downgraded and labeled **suspected**. Reporting unattacked findings trains readers to ignore the report. A Critical finding whose refutation hinges on library or runtime behavior gets a rung-4 script, not an argument: write and run a small script or test against the real code yourself — this proof stays with the orchestrator; the review subagents are scoped to reading the diff — per the `blast-radius` skill.
 8. Produce a unified, prioritized findings report. Verdict first: one line — mergeable or not, and why. Then findings:
    - **Critical** — must fix before merge (security `BLOCKED`, spec gaps for required deliverables, correctness issues that cause data loss / crashes)
    - **Important** — should fix (bugs, type issues, spec over-builds, missing error handling)

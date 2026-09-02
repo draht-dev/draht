@@ -101,8 +101,16 @@ export const claudePluginAdapter: Adapter = {
 
 		runOrThrow(ctx, claude, ["plugin", "install", PLUGIN_SPEC, "--scope", "user"]);
 
+		// `claude plugin install` leaves the plugin enabled as a side effect, and
+		// the real CLI rejects a redundant `plugin enable`/`disable` call on a
+		// plugin already in that state ("already enabled", non-zero exit) instead
+		// of treating it as a no-op — so only call it when the state actually
+		// needs to change.
 		const shouldEnable = previous.installed ? previous.enabled : true;
-		runOrThrow(ctx, claude, ["plugin", shouldEnable ? "enable" : "disable", PLUGIN_SPEC]);
+		const postInstall = pluginState(ctx, claude);
+		if (postInstall.enabled !== shouldEnable) {
+			runOrThrow(ctx, claude, ["plugin", shouldEnable ? "enable" : "disable", PLUGIN_SPEC]);
+		}
 		if (!shouldEnable) notes.push("preserved the previously disabled plugin state");
 
 		const verified = pluginState(ctx, claude);

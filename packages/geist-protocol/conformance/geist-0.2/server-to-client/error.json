@@ -1,0 +1,12 @@
+{
+	"protocol": "geist/0.x",
+	"version": "0.2",
+	"direction": "server-to-client",
+	"type": "error",
+	"recordedFrom": "scripts/geist-conformance/reference-daemon.mjs over ws://127.0.0.1/attach, relaying a real draht SocketServer behind a real device-credential exchange",
+	"normalizedFields": [],
+	"frame": {
+		"type": "error",
+		"message": "Read-only clients cannot send input"
+	}
+}

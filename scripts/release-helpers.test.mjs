@@ -72,6 +72,18 @@ test("release toolchain requires the exact pinned Bun canary revision", () => {
 	assert.match(workflow, /BUN_REVISION: 1\.3\.14-canary\.1\+ed1c48f2b/);
 });
 
+test("scheduled releases are opt-in, credentialed, and routed through the release script", () => {
+	const workflow = readFileSync(join(process.cwd(), ".github/workflows/scheduled-release.yml"), "utf8");
+	assert.match(workflow, /cron: '17 3 \* \* \*'/);
+	assert.match(workflow, /vars\.DRAHT_RELEASES_ENABLED == 'true'/);
+	assert.match(workflow, /secrets\.DRAHT_RELEASE_TOKEN/);
+	assert.match(workflow, /secrets\.NPM_TOKEN/);
+	assert.match(workflow, /token: \$\{\{ secrets\.DRAHT_RELEASE_TOKEN \}\}/);
+	assert.match(workflow, /npm run check/);
+	assert.match(workflow, /run: npm run release/);
+	assert.doesNotMatch(workflow, /run: (?:npm|bun) publish/);
+});
+
 test("release asset gate requires every primary and graph runtime archive", () => {
 	assert.deepEqual(EXPECTED_RELEASE_ASSETS, [
 		"draht-darwin-arm64.tar.gz",

@@ -19,6 +19,26 @@ export type Unsubscribe = () => void;
  * Manages the full `starting → running → stopped` lifecycle and provides a
  * subscriber-based stdout fan-out mechanism. Stdin is forwarded synchronously
  * via write().
+ *
+ * ## THIS IS NOT AN EXEC SURFACE, AND THAT IS NOW A PROPERTY RATHER THAN A HOPE
+ *
+ * It takes a command array and hands it to `Bun.spawn`, which resolves a bare
+ * name through the inherited `PATH`. That was reachable from the wire until
+ * R35-ALWAYS.9: `POST /sessions/:id/input` lazily ran `["draht", "start"]`
+ * through here. That call site is gone (see `gateway/routes/sessions.ts`), and
+ * `POST /sessions` has refused a caller-supplied `command` since R32-FLEET.8,
+ * so no HTTP request now reaches this constructor.
+ *
+ * The one place this daemon deliberately creates a process is
+ * `session/spawn-primitive.ts` — canonical absolute executable, argv array,
+ * allowlisted environment, deadlines and TERM→KILL of the process tree — and it
+ * does not use this class, because none of those properties can be added to a
+ * constructor whose contract is "run this command array".
+ *
+ * `env` exists so a caller that DOES construct one can decline to hand the child
+ * its own environment. It is optional, and omitting it inherits, because the
+ * remaining callers are tests that spawn `echo` and `cat`; a required argument
+ * would be a change with no security value and a lot of churn.
  */
 export class SessionProcess {
 	/** The underlying Bun subprocess. */
@@ -51,13 +71,17 @@ export class SessionProcess {
 	 *
 	 * @param command - Command and arguments array, e.g. ['cat'] or ['echo', 'hello'].
 	 * @param cwd - Optional working directory for the process. Defaults to gateway's cwd.
+	 * @param env - Optional complete environment for the child. Omitted means the
+	 *              child inherits this process's, which is what every remaining
+	 *              caller wants and what none of them is reachable from the wire by.
 	 */
-	constructor(command: string[], cwd?: string) {
+	constructor(command: string[], cwd?: string, env?: Record<string, string>) {
 		this.#proc = Bun.spawn(command, {
 			stdin: "pipe",
 			stdout: "pipe",
 			stderr: "pipe",
 			cwd,
+			...(env === undefined ? {} : { env }),
 		});
 
 		// ready resolves on next microtick — process is considered running immediately

@@ -20,6 +20,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { compareCost, writeCostComparisonReport } from "../src/cost-comparison.js";
 import type { RlmSession } from "../src/index.js";
 import { createRouterBackedSession } from "../src/index.js";
+import { HAS_PYTHON3, HAS_USERNS } from "./sandbox-prereqs.js";
 
 /** Builds a minimally-valid `Model<Api>` -- only `contextWindow` matters to router-session.ts. */
 function fakeModel(contextWindow: number, provider: string, api: Api): Model<Api> {
@@ -115,7 +116,9 @@ function makeRouter(rootContextWindow: number, rootResponses: string[], subRespo
 	return new FakeModelRouter(rootContextWindow, rootResponses, subResponse) as unknown as ModelRouter;
 }
 
-describe("compareCost", () => {
+// The router is fake, but every test's session still spawns a real python3
+// REPL through the fail-closed OS sandbox -- see sandbox-prereqs.ts.
+describe.skipIf(!HAS_PYTHON3 || !HAS_USERNS)("compareCost", () => {
 	let tmpDir: string | undefined;
 	let session: RlmSession | undefined;
 

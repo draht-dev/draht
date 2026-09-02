@@ -9,6 +9,7 @@ import { createInterface } from "node:readline";
 import { type ImageContent, modelsAreEqual, supportsMax, supportsXhigh } from "@draht/ai";
 import chalk from "chalk";
 import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.ts";
+import { runAttachMode } from "./cli/attach-mode.ts";
 import {
 	type CredentialPrintCommand,
 	CredentialPrintError,
@@ -21,10 +22,11 @@ import {
 import { processFileArguments } from "./cli/file-processor.ts";
 import { buildInitialMessage } from "./cli/initial-message.ts";
 import { listModels } from "./cli/list-models.ts";
+import { listSessions } from "./cli/list-sessions.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
 import { selectSession } from "./cli/session-picker.ts";
 import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
-import { DISPLAY_VERSION, ENV_SESSION_DIR, expandTildePath, getAgentDir, getPackageDir } from "./config.ts";
+import { APP_NAME, DISPLAY_VERSION, ENV_SESSION_DIR, expandTildePath, getAgentDir, getPackageDir } from "./config.ts";
 import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
 import {
 	type AgentSessionRuntimeDiagnostic,
@@ -49,6 +51,14 @@ import {
 } from "./core/session-cwd.ts";
 import { assertValidSessionId, SessionManager } from "./core/session-manager.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
+import {
+	type AttachableSession,
+	makeSessionAttachable,
+	registerAttachableSessionCleanup,
+	SocketCapReachedError,
+	SocketDirectoryUnsafeError,
+	SocketSessionBusyError,
+} from "./core/socket-server/index.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { builtInExtensions } from "./extensions/index.ts";
@@ -106,6 +116,60 @@ function reportDiagnostics(diagnostics: readonly AgentSessionRuntimeDiagnostic[]
 function isTruthyEnvFlag(value: string | undefined): boolean {
 	if (!value) return false;
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
+}
+
+/**
+ * Opt out of default-on socket registration without editing settings (e.g. DRAHT_NO_ATTACHABLE=1).
+ *
+ * CI and scripted spawns need a way to say no that survives a fresh container and does not
+ * require a writable settings file. Overridden by an explicit `--attachable`.
+ */
+const ENV_NO_ATTACHABLE = `${APP_NAME.toUpperCase()}_NO_ATTACHABLE`;
+
+/**
+ * The ONE line an implicit (default-on) registration failure is allowed to print.
+ *
+ * Exactly one line, on stderr, never stdout — the caller relies on both. It says what was lost
+ * (this window is not on the fleet), never what errno said: an `EEXIST` in a startup banner
+ * teaches a user nothing they can act on. Three shapes, kept distinct on purpose so a cap
+ * refusal is never mistaken for a broken sockets directory and a busy twin is never mistaken
+ * for either.
+ */
+function describeAttachableDegradation(error: unknown): string {
+	const tail = "This session runs normally but is not reachable from your other devices.";
+
+	if (error instanceof SocketSessionBusyError) {
+		const owner =
+			error.ownerPid === null
+				? "another process is claiming it right now"
+				: `it is already published by PID ${error.ownerPid}`;
+		return `Not registering this session for remote attach: ${owner}. Run \`${APP_NAME} --attach ${error.sessionId}\` to reach that one. ${tail}`;
+	}
+
+	if (error instanceof SocketCapReachedError) {
+		return `Not registering this session for remote attach: this machine already holds ${error.liveCount} attachable sessions and the limit is ${error.cap}. Close one you are done with. ${tail}`;
+	}
+
+	if (error instanceof SocketDirectoryUnsafeError) {
+		return `Not registering this session for remote attach: ${error.socketDir} is not a private directory belonging to you. ${tail}`;
+	}
+
+	// Node's fs errors carry a `code`. Translate the ones that are actually reachable into a
+	// sentence; EINVAL in particular is not exotic — the default socket path is already ~76 of
+	// the ~104 bytes a Unix socket address holds, so a long $HOME or a long agent-dir override
+	// overflows it.
+	const code = typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
+	const reason =
+		code === "EACCES" || code === "EPERM"
+			? "permission was denied"
+			: code === "EEXIST" || code === "ENOTDIR"
+				? "something that is not a directory is in the way"
+				: code === "EINVAL" || code === "ENAMETOOLONG"
+					? "the socket path is too long for this system"
+					: code === "ENOENT"
+						? "its directory could not be created"
+						: "the control socket could not be created";
+	return `Not registering this session for remote attach: ${reason}. ${tail}`;
 }
 
 function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean): AppMode {
@@ -238,8 +302,35 @@ async function resolveSessionPath(sessionArg: string, cwd: string, sessionDir?: 
 	return { type: "not_found", arg: sessionArg };
 }
 
-/** Prompt user for yes/no confirmation */
+/**
+ * Prompt user for yes/no confirmation.
+ *
+ * REFUSES OUTRIGHT WHEN STDIN IS NOT A TTY (R35-ALWAYS.9).
+ *
+ * `createInterface({ input: process.stdin })` has no TTY check, so with stdin at
+ * /dev/null this used to print the question, receive EOF, resolve to `false`,
+ * and let its one caller print "Aborted." and EXIT 0 — having started nothing.
+ * Exit 0 having done nothing is indistinguishable from success to every
+ * programmatic caller there is: a script, a supervisor, and now the geist daemon,
+ * which resumes sessions by spawning this binary. A daemon that saw a clean exit
+ * would report a resume that never happened.
+ *
+ * So a non-interactive answer to an interactive question is an ERROR, said on
+ * stderr with an exit code, not a silent "no". The caller that would have taken
+ * this branch — `--session <bare id>` naming a session in another project — is
+ * exactly the shape the daemon avoids by passing an absolute `.jsonl` path
+ * instead, which never reaches a prompt at all.
+ */
 async function promptConfirm(message: string): Promise<boolean> {
+	if (!process.stdin.isTTY) {
+		console.error(
+			chalk.red(
+				`Error: "${message}" needs an answer and stdin is not a terminal.\n` +
+					"Re-run with a terminal, or name the session by its absolute .jsonl path so no question is asked.",
+			),
+		);
+		process.exit(1);
+	}
 	return new Promise((resolve) => {
 		const rl = createInterface({
 			input: process.stdin,
@@ -587,6 +678,19 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(0);
 	}
 
+	// Attachable-session commands are pure socket/filesystem operations. They run before any
+	// runtime construction so they never pay for provider discovery, extensions, or sessions.
+	if (parsed.listSessions) {
+		await listSessions();
+		process.exit(0);
+	}
+
+	if (parsed.attach !== undefined) {
+		// runAttachMode owns its own lifetime: it exits the process on detach or error.
+		await runAttachMode(parsed.attach);
+		return;
+	}
+
 	if (parsed.export) {
 		let result: string;
 		try {
@@ -734,6 +838,7 @@ export async function main(args: string[], options?: MainOptions) {
 				noPromptTemplates: parsed.noPromptTemplates,
 				noThemes: parsed.noThemes,
 				noContextFiles: parsed.noContextFiles,
+				contextRoot: parsed.contextRoot,
 				systemPrompt: parsed.systemPrompt,
 				appendSystemPrompt: parsed.appendSystemPrompt,
 				extensionFactories,
@@ -887,52 +992,160 @@ export async function main(args: string[], options?: MainOptions) {
 		void modelRuntime.refresh().catch(() => {});
 	}
 
-	if (appMode === "rpc") {
-		printTimings();
-		await runRpcMode(runtime);
-	} else if (appMode === "interactive") {
-		const interactiveMode = new InteractiveMode(runtime, {
-			migratedProviders,
-			modelFallbackMessage,
-			autoTrustOnReloadCwd,
-			initialMessage,
-			initialImages,
-			initialMessages: parsed.messages,
-			verbose: parsed.verbose,
-		});
-		if (startupBenchmark) {
-			await interactiveMode.init();
-			time("interactiveMode.init");
-			// Give the TUI's stdin handler a brief chance to consume terminal query replies
-			// (Kitty keyboard protocol, device attributes, cell size) before restoring the terminal.
-			await new Promise((resolve) => setTimeout(resolve, 150));
-			interactiveMode.stop();
-			stopThemeWatcher();
-			printTimings();
-			if (process.stdout.writableLength > 0) {
-				await new Promise<void>((resolve) => process.stdout.once("drain", resolve));
+	// ── DEFAULT-ON (R35-ALWAYS.1) ────────────────────────────────────────────────────────────
+	// Interactive sessions register a control socket unless something says otherwise. The lock
+	// file records the session's resolved cwd (not process.cwd()), which is what identifies the
+	// project a session belongs to when --session/--resume selected a session from elsewhere.
+	//
+	// `parsed.attachable` is a TRI-STATE and the whole split below hangs off it:
+	//   true      the operator typed --attachable       → bind, banner, failure is FATAL
+	//   false     the operator typed --no-attachable    → never bind
+	//   undefined nobody said                           → bind iff interactive, silently,
+	//                                                     and a failure only degrades
+	//
+	// Two things about WHERE this sits, both load-bearing:
+	//  1. `appMode` is read HERE, not at its first computation ~300 lines up, because piped
+	//     stdin DOWNGRADES "interactive" to "print" just above. Reading the earlier value
+	//     would bind a socket for `echo hi | draht`.
+	//  2. The gate is what keeps SUBAGENTS unbound — subagent.ts spawns children with
+	//     ["--mode","json","-p","--no-session"], which is never "interactive". Defaulting
+	//     inside the argument parser instead would put a socket under every subagent and a
+	//     parallel wave would be the first thing to hit the socket cap.
+	// Precedence flag ?? env ?? setting mirrors `sessionDir` above. The setting is read
+	// global-only; see SettingsManager.getAttachableSessions for why.
+	const attachableRequestedExplicitly = parsed.attachable === true;
+	const attachableEnabled =
+		parsed.attachable ??
+		(appMode === "interactive" &&
+			!isTruthyEnvFlag(process.env[ENV_NO_ATTACHABLE]) &&
+			settingsManager.getAttachableSessions());
+	let attachableSession: AttachableSession | undefined;
+	if (attachableEnabled) {
+		try {
+			attachableSession = await makeSessionAttachable({
+				session,
+				enabled: true,
+				cwd: session.sessionManager.getCwd(),
+				// The banner is stdout, and interactive mode never took stdout over, so an
+				// implicit bind must not print it into the scrollback.
+				announce: attachableRequestedExplicitly,
+			});
+		} catch (error) {
+			// ── THE SPLIT CATCH ───────────────────────────────────────────────────────────
+			// An EXPLICIT --attachable that fails stays fatal: the operator asked for a
+			// reachable session and would otherwise get an unreachable one without being
+			// told. An IMPLICIT default that fails must NEVER prevent a session starting —
+			// that is the entire point of the requirement. One line on stderr (never stdout,
+			// in any mode), then carry on unattached: everything downstream already tolerates
+			// `attachableSession === undefined`.
+			//
+			// TWO CONSEQUENCES, recorded here because they are decisions and not accidents:
+			//
+			// (i) THE `--continue` TWIN DEGRADES AND IS THEREFORE NOT ON THE PHONE. Under
+			//     default-on the commonest failure is not environmental at all. `continueRecent`
+			//     reopens the most recent session FILE, so a second `draht -c` in the same
+			//     project reuses the header id and therefore the socket name, and loses the
+			//     race for the lock. It gets the busy notice below and runs normally, but it is
+			//     invisible to the fleet. Decoupling socket identity from session identity would
+			//     make both windows reachable; it ripples through the wire, the history join key
+			//     and resume, and is NAMED DEBT for a later phase, deliberately not attempted
+			//     here.
+			//
+			// (ii) REMOVING THE FATAL EXIT REMOVES THE ONLY GUARD ATTACHABLE SESSIONS HAD
+			//      AGAINST TWO PROCESSES APPENDING TO ONE SESSION JSONL. The `process.exit(1)`
+			//      this replaces was never designed as that guard, but it was one: the second
+			//      `draht -c` died before it could write. It now lives, and both processes
+			//      append to the same file. That hazard predates and outlives this change for
+			//      every non-attachable session, and the session store is append-only, but it
+			//      is strictly more reachable now than it was.
+			if (attachableRequestedExplicitly) {
+				const message = error instanceof Error ? error.message : "Failed to start attachable session";
+				console.error(chalk.red(`Error: ${message}`));
+				process.exit(1);
 			}
-			if (process.stderr.writableLength > 0) {
-				await new Promise<void>((resolve) => process.stderr.once("drain", resolve));
+			console.error(chalk.yellow(describeAttachableDegradation(error)));
+			attachableSession = undefined;
+		}
+	}
+	if (attachableSession) {
+		// Hand the session the pending-ask registry, so a dialog raised by the agent reaches every
+		// attached client and can be answered from one. This only HANDS THE HANDLE OVER: the wrap
+		// itself is installed inside `_applyExtensionBindings`, the one mode-agnostic seam every
+		// session passes through. Installing it here instead would be silently overwritten —
+		// interactive and rpc bind their own UI context later, and `bindExtensions` re-pushes it.
+		session.setPermissionRelay(attachableSession.relay ?? undefined);
+	}
+	// The mode run loops end in process.exit() and never return here, so the finally below
+	// is not enough on its own: exit and signal paths need their own synchronous cleanup.
+	const releaseAttachableCleanup = attachableSession ? registerAttachableSessionCleanup(attachableSession) : undefined;
+	// /new, /resume, /fork and /import dispose this session object and install a new one.
+	// Without following that, the socket would keep advertising a dead session id and route
+	// client input into a disposed session.
+	const releaseAttachableRebind = attachableSession
+		? runtime.addSessionReplacedListener(async (nextSession) => {
+				await attachableSession.rebind(nextSession, nextSession.sessionManager.getCwd());
+				// The rebind swept the old session's pending asks fail-closed and built a fresh
+				// registry for the new one. Without re-handing it here the relay would silently
+				// die on /new, /resume, /fork and /import: the new session would keep an
+				// undecorated UI context, `hasUI()` would stop counting attached clients, and a
+				// phone would watch a session it can no longer answer.
+				nextSession.setPermissionRelay(attachableSession.relay ?? undefined);
+			})
+		: undefined;
+
+	try {
+		if (appMode === "rpc") {
+			printTimings();
+			await runRpcMode(runtime);
+		} else if (appMode === "interactive") {
+			const interactiveMode = new InteractiveMode(runtime, {
+				migratedProviders,
+				modelFallbackMessage,
+				autoTrustOnReloadCwd,
+				initialMessage,
+				initialImages,
+				initialMessages: parsed.messages,
+				verbose: parsed.verbose,
+			});
+			if (startupBenchmark) {
+				await interactiveMode.init();
+				time("interactiveMode.init");
+				// Give the TUI's stdin handler a brief chance to consume terminal query replies
+				// (Kitty keyboard protocol, device attributes, cell size) before restoring the terminal.
+				await new Promise((resolve) => setTimeout(resolve, 150));
+				interactiveMode.stop();
+				stopThemeWatcher();
+				printTimings();
+				if (process.stdout.writableLength > 0) {
+					await new Promise<void>((resolve) => process.stdout.once("drain", resolve));
+				}
+				if (process.stderr.writableLength > 0) {
+					await new Promise<void>((resolve) => process.stderr.once("drain", resolve));
+				}
+				return;
+			}
+
+			printTimings();
+			await interactiveMode.run();
+		} else {
+			printTimings();
+			const exitCode = await runPrintMode(runtime, {
+				mode: toPrintOutputMode(appMode),
+				messages: parsed.messages,
+				initialMessage,
+				initialImages,
+			});
+			stopThemeWatcher();
+			restoreStdout();
+			if (exitCode !== 0) {
+				process.exitCode = exitCode;
 			}
 			return;
 		}
-
-		printTimings();
-		await interactiveMode.run();
-	} else {
-		printTimings();
-		const exitCode = await runPrintMode(runtime, {
-			mode: toPrintOutputMode(appMode),
-			messages: parsed.messages,
-			initialMessage,
-			initialImages,
-		});
-		stopThemeWatcher();
-		restoreStdout();
-		if (exitCode !== 0) {
-			process.exitCode = exitCode;
-		}
-		return;
+	} finally {
+		// Removes the .sock and .lock files so the session stops showing up in --list-sessions.
+		releaseAttachableRebind?.();
+		releaseAttachableCleanup?.();
+		await attachableSession?.stop();
 	}
 }

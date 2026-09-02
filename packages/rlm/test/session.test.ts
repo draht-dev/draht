@@ -9,8 +9,11 @@ import type { ChildProcess } from "node:child_process";
 import { afterEach, describe, expect, test } from "vitest";
 import type { RlmHistoryEntry } from "../src/index.js";
 import { RlmSession } from "../src/index.js";
+import { HAS_PYTHON3, HAS_USERNS } from "./sandbox-prereqs.js";
 
-describe("RlmSession root loop", () => {
+// Every test constructs an RlmSession, which spawns python3 through the
+// fail-closed OS sandbox (`spawnSandboxed`) -- see sandbox-prereqs.ts.
+describe.skipIf(!HAS_PYTHON3 || !HAS_USERNS)("RlmSession root loop", () => {
 	let session: RlmSession | undefined;
 
 	afterEach(() => {

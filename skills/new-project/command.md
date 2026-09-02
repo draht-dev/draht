@@ -14,24 +14,12 @@ Description: $ARGUMENTS
 
 ## Atomic Reasoning
 
-Before questioning, decompose project vision into atomic reasoning units:
-
-**For each aspect of the new project:**
-1. **State the logical component** — What problem does this solve? Who are the users? What is core vs peripheral?
-2. **Validate independence** — What bounded contexts will exist? What domain concepts are central? Can features be built independently?
-3. **Verify correctness** — What defines MVP success? What constraints exist (time, tech, team)? What is explicitly out of scope?
-
-**Synthesize project strategy:**
-- Define bounded contexts and ubiquitous language upfront
-- Establish test strategy before writing code
-- Create requirements mapped to domain contexts
-- Build roadmap with testable phase goals
-- Ensure each phase delivers verifiable user value
+Decompose the work into independently verifiable units before acting; the `atomic-reasoning` skill holds the full discipline — load it when the decomposition is not obvious.
 
 ## Steps
 1. Run `draht-tools init` to check preconditions
 2. If existing code detected, run `draht-tools map-codebase` first
-3. Deep questioning phase (3-7 rounds, 1-2 questions at a time)
+3. Deep questioning phase (3-7 rounds — each round asks the whole frontier: every question whose prerequisites are settled, numbered, each with a recommended answer)
 4. Run `draht-tools create-project` with gathered info
 5. Run `draht-tools create-domain-model` to define bounded contexts, entities, and ubiquitous language
 6. Create `.planning/DOMAIN.md` with:
@@ -65,7 +53,9 @@ After project initialization, phases are executed one at a time in fresh session
 Start a fresh session (`/clear`) between steps. Do NOT suggest `/next-milestone` until every phase in the milestone is verified.
 
 ## Rules
-- Ask 1-2 questions at a time, never dump 10 at once
+- Ask the whole frontier per round — numbered, each with a recommended answer; the user replies by number, and accepted-by-number counts as decided
+- Questions that depend on still-open answers wait for a later round
+- Finding facts is your job, never the user's — dispatch a subagent for anything the environment can answer and keep asking the rest of the frontier while it runs
 - Follow threads based on answers
 - Use examples ("Like Stripe Checkout, or custom?")
 - Confirm, don't assume

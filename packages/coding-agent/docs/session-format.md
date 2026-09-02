@@ -303,6 +303,26 @@ Session metadata (e.g., user-defined display name). Set via `/name`, `--name` / 
 
 The session name is displayed in the session selector (`/resume`) instead of the first message when set.
 
+### PermissionResolutionEntry
+
+Audit record of a resolved tool-permission request: what was asked, which options were offered, what was decided, and which surface decided it. Does NOT participate in LLM context.
+
+```json
+{"type":"permission_resolution","id":"l2m3n4o5","parentId":"k1l2m3n4","timestamp":"2024-12-03T14:40:02.000Z","requestId":"perm_01HV","toolCallId":"call_456","toolName":"bash","cwd":"/path/to/project","detail":{"command":"rm -rf build"},"offeredOptionIds":["approve","approve-always","deny"],"decision":"approved","chosenOptionId":"approve","decidedBy":{"surface":"attach","clientId":"client-7"},"requestedAt":"2024-12-03T14:40:00.000Z","deadline":"2024-12-03T14:45:00.000Z"}
+```
+
+Fields:
+- `requestId`: relay-scoped id of the permission request this resolves
+- `cwd`: canonical (realpath) working directory the tool call was evaluated against
+- `detail`: `{ command?, path?, operation? }` — the decisive part of the tool input
+- `offeredOptionIds`: the immutable option set that was offered, in the order it was offered
+- `decision`: `approved` | `denied` | `cancelled` | `expired`
+- `chosenOptionId`: `null` when nothing was chosen (cancelled/expired)
+- `decidedBy.surface`: `tui` | `attach` | `rpc` | `acp` | `system`; `clientId` is `null` for local/system decisions
+- `deadline`: advisory expiry communicated with the ask, or `null`
+
+This is a RECORD ONLY and must never be treated as answerable state: `createBranchedSession` copies path entries verbatim into a fork (so `requestId`/`toolCallId` can appear in more than one session), the entry becomes the leaf on reload (the next appended message parents off it), and the RPC `get_entries` command ships it verbatim to connected clients.
+
 ## Tree Structure
 
 Entries form a tree:
@@ -338,6 +358,7 @@ Entries form a tree:
    - `branch_summary` -> `branchSummary`
    - `custom_message` -> `CustomMessage`
    - `custom` -> no context message
+   - `permission_resolution` -> no context message
 
 This makes newer compactions act like self-contained checkpoints. `retainedTail` is optional only so older sessions that only store `firstKeptEntryId` continue to load correctly.
 
@@ -410,6 +431,7 @@ Key methods for working with sessions programmatically.
 - `appendCompaction(summary, firstKeptEntryId, tokensBefore, details?, fromHook?)` - Add compaction
 - `appendCustomEntry(customType, data?)` - Extension state (not in context)
 - `appendSessionInfo(name)` - Set session display name
+- `appendPermissionResolution(resolution)` - Record a resolved permission request (not in context)
 - `appendCustomMessageEntry(customType, content, display, details?)` - Extension message (in context)
 - `appendLabelChange(targetId, label)` - Set/clear label
 

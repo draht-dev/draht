@@ -1,20 +1,20 @@
 ---
-title: "Eight Reasoning Disciplines for a Coding Agent"
-description: "A capable model still fails in characteristic ways. These eight disciplines — read the real request, decompose into checkable pieces, spend effort where the risk is, re-derive claims, label known vs guessed, attack your own conclusion, answer first, know the mistakes that look like competence — are now woven into every Draht agent, command, and skill."
+title: "Eight reasoning disciplines for a coding agent"
+description: "Eight procedures Draht uses to keep coding agents focused on the request, the evidence, and the highest-risk parts of the work."
 date: "2026-07-07"
 author: "Oskar Freye"
 tags: ["agents", "reasoning", "prompting", "workflows", "gsd"]
 ---
 
-Raw capability is not the bottleneck anymore. A strong model can read a stack trace, write the fix, and pass the tests — and still hand you the wrong thing, confidently, because it answered the literal words of your request instead of the need behind them, or because it called a build "green" that it never ran.
+A capable model can read a stack trace, write a fix, and pass tests, then still return the wrong result. It may answer the literal request instead of the need behind it. It may also call a build "green" without running it.
 
-Those failures don't come from a gap in intelligence. They come from a gap in **discipline** — the working habits a senior engineer applies without being told. So we wrote them down. What follows is the operating manual now woven into every Draht agent, command, and skill: eight disciplines, each with the procedure to run, one example of it working, and the specific failure it prevents. The order matters — it's roughly the order in which a task moves from "what am I being asked" to "is this safe to hand over."
+Those are failures of working discipline. Draht encodes eight procedures that a careful engineer would otherwise have to enforce by hand. They follow a task from interpreting the request through verification and handoff.
 
 ## 1. Read what the request is actually asking for
 
 The words name an artifact; the request is a need. They are rarely the same thing. A model that optimizes the literal words will build exactly the wrong thing with great precision.
 
-**Procedure.** Restate the goal as the change in the user's world — "after this, a user can X." If the request names a *mechanism* ("add Redis caching"), find the *outcome* behind it ("p95 under 200ms") and work toward the outcome — the mechanism is a candidate, not a requirement. If you can't state the outcome, you can't start; ask.
+**Procedure.** Restate the goal as an observable outcome: "after this, a user can X." If the request names a *mechanism* such as "add Redis caching," find the outcome behind it, such as "p95 under 200ms." Treat the mechanism as a candidate until the user confirms it as a requirement. If you cannot state the outcome, ask before starting.
 
 **Example.** "Add retry logic to the sync job." The real outcome is *syncs recover from transient failures without a human*. Traced that way, the job turns out to be non-idempotent — retries would double-write. The right change is idempotency, and the literal request would have shipped a bug.
 
@@ -35,7 +35,7 @@ The user's words describe an artifact; the design must serve a need.
 
 Breaking a problem down is not the discipline — everyone does that. The discipline is a hard test for whether the pieces are actually separable.
 
-**Procedure.** A unit is atomic only if its check can fail while every other unit's check passes. If two pieces can only be verified together, they are one piece — stop pretending otherwise. Name the proving check for each unit *before* you build it.
+**Procedure.** A unit is atomic only if its check can fail while every other unit's check passes. If two pieces can only be verified together, treat them as one unit. Name the proving check before building it.
 
 **Example.** "Add a webhook and a settings screen" looks like two tasks. But if the only way to know the webhook works is to drive it from the settings screen, they share one verification and they are one task until you can test the webhook round-trip on its own.
 
@@ -45,7 +45,7 @@ Breaking a problem down is not the discipline — everyone does that. The discip
 
 Not all pieces deserve equal effort or equal position in the sequence. Treating them equally is how you discover in task nine that the foundation under tasks one through eight can't work.
 
-**Procedure.** Score each unit by **uncertainty** (has this codebase done this before?) × **blast radius** (how much becomes invalid if it's wrong?). Do the highest-scoring unit first. Push boilerplate last — boilerplate never invalidates a plan; the risky, unfamiliar unit regularly does, and you want to find that out while the cost of being wrong is still one unit.
+**Procedure.** Score each unit by **uncertainty** (has this codebase done this before?) × **blast radius** (how much becomes invalid if it is wrong?). Do the highest-scoring unit first. Push boilerplate last. A failed high-risk unit can invalidate the plan, so test it before building work on top of it.
 
 **Example.** A feature needs a third-party webhook and a settings screen. Both are atomic. Prove the webhook round-trip first — if the contract isn't what you assumed, every screen you'd have built on top of it was wasted work.
 
@@ -57,7 +57,7 @@ Risk-first ordering is now the default in `/plan-phase`, `/execute-phase`, and `
 
 A claim that sounds correct and a claim that is correct are indistinguishable until you reproduce it. This is the discipline agents skip most, because plausible output is cheap and re-derivation costs a command.
 
-**Procedure.** "Verified" means *you ran it and read the output this session* — not that the code looks right, and not that something upstream reported success. Never relay a subagent's "tests pass"; run the command yourself. For each pass, attempt one break — an input, sequence, or state the author probably didn't try. A pass you haven't tried to break is only "not yet failed."
+**Procedure.** "Verified" means *you ran the check and read its output in this session*. Code inspection and a subagent's report do not meet that standard. Re-run the command yourself. Then try one input, sequence, or state that the author probably missed.
 
 **Example.** A summary says "auth middleware verified." You re-run the suite — green. Then you request a route with an expired token: `500`, not `401`. The reported claim was true *and the work was still broken*. Only the attempted break found it.
 
@@ -76,7 +76,7 @@ This is why the orchestrating commands no longer take `STATUS: DONE` at face val
 
 Confidence is not evidence, and the dangerous case is the guess wearing a fact's clothes. The fix is a vocabulary that makes the difference visible in the output itself.
 
-**Procedure.** Tag every load-bearing claim as one of three:
+**Procedure.** Tag every load-bearing claim:
 
 - **observed** — you ran it and saw the output
 - **derived** — follows *necessarily* from something observed (not "probably" — necessarily)
@@ -92,7 +92,7 @@ The `debugger` and `verifier` agents now label every step this way; a root cause
 
 ## 6. Attack your own conclusion before handing it over
 
-The cheapest reviewer of your work is you, one minute before you ship it — if you're willing to try to kill your own finding.
+Before handing over a finding, spend one minute trying to disprove it.
 
 **Procedure.** Before a conclusion leaves your hands, try to refute it. For a bug you found, read the code path that would make it a *false positive* — an upstream guard, a type constraint, a test that already covers it. A finding that survives an honest refutation attempt is **confirmed**. One you couldn't confirm is **suspected** — say so, and don't rank it as if it were certain.
 
@@ -133,7 +133,7 @@ This table now lives in the `implementer` agent and the `/fix` rationalization t
 
 ## The send gate
 
-Eight disciplines are a lot to hold at once, so they collapse into a five-question self-test that every agent runs before it hands work over. It's the last thing in the `architect`, `implementer`, and `verifier` prompts:
+Before handoff, the `architect`, `implementer`, and `verifier` agents run this five-question check:
 
 ```markdown
 ## Before You Send
@@ -144,4 +144,4 @@ Eight disciplines are a lot to hold at once, so they collapse into a five-questi
 5. Wrongness — if this is wrong, where is it most likely, and did I check there?
 ```
 
-None of this is exotic. It's the working memory of a careful engineer, made explicit so a model doesn't have to rediscover it under time pressure — and so the discipline survives being handed from one model to the next. Capability writes the code. Discipline is what makes the code trustworthy.
+These procedures make a careful engineer's working habits explicit. That matters when work passes between models: the checks travel with the task instead of depending on one model's memory. Capability writes the code. Discipline makes the result trustworthy.

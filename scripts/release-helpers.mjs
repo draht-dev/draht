@@ -261,14 +261,21 @@ function inspectArchive(bytes, archive, { wrapper, binary, expectedFiles, maxExp
 		});
 		const allMembers = listing.split("\n").filter(Boolean);
 		if (new Set(allMembers).size !== allMembers.length) throw new Error("duplicate archive member names");
-		const metadata = execFileSync(zip ? "zipinfo" : "tar", zip ? ["-l", archivePath] : ["-tvzf", archivePath], {
+		const metadata = execFileSync(zip ? "zipinfo" : "tar", zip ? ["-l", archivePath] : ["--numeric-owner", "-tvzf", archivePath], {
 			encoding: "utf8",
 			maxBuffer: MAX_ARCHIVE_LISTING_BYTES,
 		});
-		const expandedBytes = zip
+		const expandedSizes = zip
 			? execFileSync("unzip", ["-l", archivePath], { encoding: "utf8", maxBuffer: MAX_ARCHIVE_LISTING_BYTES })
-				.split("\n").map((line) => /^\s*(\d+)\s+\d{4}-\d{2}-\d{2}\s/.exec(line)?.[1]).filter(Boolean).reduce((sum, value) => sum + Number(value), 0)
-			: metadata.split("\n").map((line) => /^\S+\s+\S+\s+(\d+)\s/.exec(line)?.[1]).filter(Boolean).reduce((sum, value) => sum + Number(value), 0);
+				.split("\n").map((line) => /^\s*(\d+)\s+\d{2,4}-\d{2}-\d{2,4}\s+\d{2}:\d{2}\s/.exec(line)?.[1]).filter(Boolean).map(Number)
+			: metadata.split("\n").filter(Boolean).map((line) => {
+				const fields = line.trim().split(/\s+/);
+				return Number(fields[1]?.includes("/") ? fields[2] : fields[4]);
+			});
+		if (expandedSizes.length !== allMembers.length || expandedSizes.some((size) => !Number.isSafeInteger(size) || size < 0)) {
+			throw new Error("archive member sizes are malformed");
+		}
+		const expandedBytes = expandedSizes.reduce((sum, size) => sum + size, 0);
 		if (!Number.isSafeInteger(expandedBytes) || expandedBytes > maxExpandedBytes) throw new Error(`archive expanded size ${expandedBytes} exceeds decompression limit ${maxExpandedBytes}`);
 		const entryTypes = zip
 			? metadata.split("\n").filter((line) => /^[bcdlps-][rwxStTs-]{9}\s/.test(line)).map((line) => line[0])

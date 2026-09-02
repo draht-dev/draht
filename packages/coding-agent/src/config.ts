@@ -376,15 +376,40 @@ export function getPackageDir(): string {
 		return dirname(process.execPath);
 	}
 	// Node.js: walk up from __dirname until we find package.json
-	let dir = __dirname;
+	return findPackageRoot(__dirname);
+}
+
+/**
+ * Is `dir` the emitted `dist/` bundle rather than the package root?
+ *
+ * `build:binary` copies `package.json` into `dist/` because the compiled binary
+ * lives there and resolves its assets relative to itself. That copy is not a
+ * package root: the Node entrypoint `dist/cli.js` sits beside it, so a naive
+ * upward walk stops one level too low and every asset path gains a phantom
+ * `dist/` segment (`dist/dist/modes/interactive/theme/dark.json`). Recognising
+ * the copy is what lets `node dist/cli.js` and the compiled `dist/draht` both
+ * work from one build tree instead of one invalidating the other.
+ */
+function isEmittedBundleDir(dir: string): boolean {
+	return basename(dir) === "dist" && existsSync(join(dirname(dir), "package.json"));
+}
+
+/**
+ * Nearest ancestor of `startDir` (inclusive) that is a real package root.
+ *
+ * @param startDir - Directory to start the upward walk from.
+ * @returns The package root, or `startDir` when no `package.json` exists above it.
+ */
+export function findPackageRoot(startDir: string): string {
+	let dir = startDir;
 	while (dir !== dirname(dir)) {
-		if (existsSync(join(dir, "package.json"))) {
+		if (existsSync(join(dir, "package.json")) && !isEmittedBundleDir(dir)) {
 			return dir;
 		}
 		dir = dirname(dir);
 	}
 	// Fallback (shouldn't happen)
-	return __dirname;
+	return startDir;
 }
 
 /**

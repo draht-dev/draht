@@ -226,7 +226,9 @@ function readMarketplaceLock(lockPath) {
 		if (after.dev !== opened.dev || after.ino !== opened.ino) throw new Error("changed while reading");
 		return { owner, stat: opened };
 	} catch (error) {
-		throw new Error(`plugin update lock exists but is not safely readable: ${lockPath} (${error.message})`);
+		const wrapped = new Error(`plugin update lock exists but is not safely readable: ${lockPath} (${error.message})`);
+		wrapped.lockChurn = error.code === "ENOENT" || error.message === "changed while opening" || error.message === "changed while reading";
+		throw wrapped;
 	} finally {
 		if (descriptor !== undefined) fs.closeSync(descriptor);
 	}
@@ -260,7 +262,16 @@ function acquireMarketplaceLock(marketplaceDir) {
 			fs.rmSync(ownerPath, { force: true });
 		}
 
-		const { owner: existing, stat: observedStat } = readMarketplaceLock(lockPath);
+		// Lock identity churn between the failed link and this read means another
+		// contender is mid-reclaim or mid-release — re-contend, it is not corruption.
+		let observed;
+		try {
+			observed = readMarketplaceLock(lockPath);
+		} catch (error) {
+			if (error.lockChurn) continue;
+			throw error;
+		}
+		const { owner: existing, stat: observedStat } = observed;
 		if (existing?.owner !== "draht-plugin-installer" || !Number.isSafeInteger(existing.pid) || typeof existing.token !== "string" ||
 			(existing.identity !== null && typeof existing.identity !== "string") || !Number.isSafeInteger(existing.createdAt)) {
 			throw new Error(`plugin update lock is not owned by draht: ${lockPath}`);

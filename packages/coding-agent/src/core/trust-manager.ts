@@ -1,9 +1,15 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME } from "../config.ts";
-import { canonicalizePath, resolvePath } from "../utils/paths.ts";
+import {
+	realHomeDir,
+	realPathStrict,
+	resolveRealPrefix,
+	spellRealPrefix,
+	trustKeyPath,
+} from "../utils/canonical-path.ts";
+import { resolvePath } from "../utils/paths.ts";
 
 export type ProjectTrustDecision = boolean | null;
 
@@ -28,6 +34,7 @@ type TrustFile = Record<string, boolean | null | undefined>;
 
 const TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES = [
 	"settings.json",
+	"permissions.yml",
 	"extensions",
 	"skills",
 	"prompts",
@@ -36,15 +43,29 @@ const TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES = [
 	"APPEND_SYSTEM.md",
 ] as const;
 
-function normalizeCwd(cwd: string): string {
-	return canonicalizePath(resolvePath(cwd));
+// Loaded from cwd *and every ancestor*, so the gate has to walk the whole chain, not just cwd.
+const TRUST_REQUIRING_ANCESTOR_PROJECT_RESOURCES = [
+	join(".agents", "skills"),
+	join(CONFIG_DIR_NAME, "agents"),
+] as const;
+
+// The key is the spelling resolved through the filesystem; the settings/extensions/skills loaders
+// still read `<lexical cwd>/<config dir>`. A `..` that crossed a symlink makes those two different
+// directories, so a decision recorded about the key would authorize project config the user never
+// judged. A plain symlinked cwd is not this: it and its key are one directory on disk.
+function trustKeyEscapesProjectConfigDir(cwd: string): boolean {
+	const lexicalCwd = resolvePath(cwd);
+	return hasProjectConfigResources(lexicalCwd) && realPathStrict(lexicalCwd) !== realPathStrict(cwd);
 }
 
 function findNearestTrustEntry(data: TrustFile, cwd: string): ProjectTrustStoreEntry | null {
-	let currentDir = normalizeCwd(cwd);
+	const prefix = resolveRealPrefix(cwd);
+	// A stored refusal always binds; a stored trust binds only when the key names the directory whose project config loads. An unresolved suffix is spelled lexically, and a `..` across a symlink resolves away from it: either way the key is not that directory.
+	const trustBinds = !prefix.failed && !trustKeyEscapesProjectConfigDir(cwd);
+	let currentDir = spellRealPrefix(prefix);
 	while (true) {
 		const value = data[currentDir];
-		if (value === true || value === false) {
+		if (value === false || (value === true && trustBinds)) {
 			return { path: currentDir, decision: value };
 		}
 
@@ -57,13 +78,13 @@ function findNearestTrustEntry(data: TrustFile, cwd: string): ProjectTrustStoreE
 }
 
 export function getProjectTrustParentPath(cwd: string): string | undefined {
-	const trustPath = normalizeCwd(cwd);
+	const trustPath = trustKeyPath(cwd);
 	const parentDir = dirname(trustPath);
 	return parentDir === trustPath ? undefined : parentDir;
 }
 
 export function getProjectTrustOptions(cwd: string, options?: { includeSessionOnly?: boolean }): ProjectTrustOption[] {
-	const trustPath = normalizeCwd(cwd);
+	const trustPath = trustKeyPath(cwd);
 	const trustOptions: ProjectTrustOption[] = [
 		{ label: "Trust", trusted: true, updates: [{ path: trustPath, decision: true }], savedPath: trustPath },
 	];
@@ -176,25 +197,46 @@ function withTrustFileLock<T>(path: string, fn: () => T): T {
 
 /**
  * Returns true when cwd has project-local resources that must be gated by
- * project trust: trust-requiring entries under cwd/.pi, or .agents/skills in
- * cwd or one of its ancestors. Returns false when no such project resources
- * exist. The user/global ~/.agents/skills directory is always treated as a
- * trusted user resource and is ignored here, even when cwd is $HOME.
+ * project trust: trust-requiring entries under the cwd's config dir, or an
+ * ancestor-loaded resource (.agents/skills, <config dir>/agents) in cwd or one
+ * of its ancestors, or when the real cwd cannot be determined.
+ * Returns false when no such project resources exist. The user/global
+ * ~/.agents/skills directory is always treated as a trusted user resource and
+ * is ignored here, even when cwd is $HOME.
  */
 export function hasTrustRequiringProjectResources(cwd: string): boolean {
-	const homeDir = canonicalizePath(resolvePath(process.env.HOME || homedir()));
-	const userAgentsSkillsDir = join(homeDir, ".agents", "skills");
-	let currentDir = canonicalizePath(resolvePath(cwd));
+	const realCwd = realPathStrict(cwd);
+	if (realCwd === undefined) {
+		return true;
+	}
+	const realHome = realHomeDir();
+	const userAgentsSkillsDir = realHome === undefined ? undefined : join(realHome, ".agents", "skills");
+	if (hasProjectResourcesAtOrAbove(realCwd, userAgentsSkillsDir)) {
+		return true;
+	}
+	// The ancestor loaders walk `realCwd` now, but the loaders that read the cwd's OWN
+	// config dir still spell it `resolvePath(config.cwd)`, which collapses `..` lexically.
+	const lexicalCwd = resolvePath(cwd);
+	return lexicalCwd !== realCwd && hasProjectConfigResources(lexicalCwd);
+}
 
-	const configDir = join(currentDir, CONFIG_DIR_NAME);
-	if (TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES.some((entry) => existsSync(join(configDir, entry)))) {
+function hasProjectConfigResources(dir: string): boolean {
+	const configDir = join(dir, CONFIG_DIR_NAME);
+	return TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES.some((entry) => existsSync(join(configDir, entry)));
+}
+
+function hasProjectResourcesAtOrAbove(startDir: string, userAgentsSkillsDir: string | undefined): boolean {
+	if (hasProjectConfigResources(startDir)) {
 		return true;
 	}
 
+	let currentDir = startDir;
 	while (true) {
-		const agentsSkillsDir = join(currentDir, ".agents", "skills");
-		if (agentsSkillsDir !== userAgentsSkillsDir && existsSync(agentsSkillsDir)) {
-			return true;
+		for (const entry of TRUST_REQUIRING_ANCESTOR_PROJECT_RESOURCES) {
+			const resourceDir = join(currentDir, entry);
+			if (resourceDir !== userAgentsSkillsDir && existsSync(resourceDir)) {
+				return true;
+			}
 		}
 
 		const parentDir = dirname(currentDir);
@@ -231,7 +273,7 @@ export class ProjectTrustStore {
 		withTrustFileLock(this.trustPath, () => {
 			const data = readTrustFile(this.trustPath);
 			for (const { path, decision } of decisions) {
-				const key = normalizeCwd(path);
+				const key = trustKeyPath(path);
 				if (decision === null) {
 					delete data[key];
 				} else {

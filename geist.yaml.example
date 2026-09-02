@@ -1,14 +1,26 @@
+# The USER-OWNED registry. Its real home is ~/.geist/config.yaml, mode 0600,
+# inside a 0700 directory you own — the daemon refuses to read it otherwise
+# (R36-SPAWN.3), and it refuses rather than repairing the permissions for you.
+# This copy is an EXAMPLE only: the daemon never reads a geist.yaml out of a
+# checked-out project. See packages/geist-protocol/src/config-load.ts.
+
 harness:
   default: draht
-  agents:            # ACP launch specs; exact cmds/args pinned at M3 from the registry
-    draht:  { cmd: draht-acp }
-    claude: { cmd: claude-agent-acp }
-    codex:  { cmd: codex-acp }
-    gemini: { cmd: gemini, args: [--experimental-acp] }
+  agents:            # ACP launch specs. `cmd` MUST be absolute: a bare name is a
+                     # PATH lookup, and the spawn path never consults PATH.
+                     # `credentialEnv` scopes which env names this harness gets;
+                     # omitting it means "none beyond the built-in minimum".
+    draht:  { cmd: /usr/local/bin/draht-acp }
+    claude: { cmd: /usr/local/bin/claude-agent-acp, credentialEnv: [ANTHROPIC_API_KEY] }
+    codex:  { cmd: /usr/local/bin/codex-acp, credentialEnv: [OPENAI_API_KEY] }
+    gemini: { cmd: /usr/local/bin/gemini, args: [--experimental-acp], credentialEnv: [GEMINI_API_KEY] }
 
 projects:            # explicitly declared projects (spec §3 "yaml" source of the registry), keyed by slug
   fr3n:    { root: /Users/you/dev/fr3n }
   kintura: { root: /Users/you/dev/kintura, name: Kintura }
 
 workspaceRoots:       # dirs scanned for git-repo subdirectories (spec §3 "workspaceRoots discovery" source)
+  - /Users/you/dev
+
+approvedRoots:        # canonical dirs a spawn may enter; anything outside is refused (R36-SPAWN.3)
   - /Users/you/dev

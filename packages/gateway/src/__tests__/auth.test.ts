@@ -57,23 +57,29 @@ describe("bearerAuthMiddleware", () => {
 		expect(body.status).toBe("ok");
 	});
 
-	test("query parameter ?token=correct → 200 (for WebSocket compat)", async () => {
+	test("query parameter ?token=<correct> is refused with 401 — the fallback is deleted (R33-REACH.3)", async () => {
 		const app = buildApp();
 		const res = await app.request("/probe?token=test-secret");
-		expect(res.status).toBe(200);
-	});
-
-	test("query parameter ?token=wrong → 401", async () => {
-		const app = buildApp();
-		const res = await app.request("/probe?token=wrongtoken");
 		expect(res.status).toBe(401);
+		const body = await res.json();
+		expect(body).toEqual({ error: "Unauthorized" });
 	});
 
-	test("both header and query param, header takes precedence", async () => {
+	test("a query parameter is not a credential source at all", async () => {
 		const app = buildApp();
-		const res = await app.request("/probe?token=wrongtoken", {
-			headers: { Authorization: "Bearer test-secret" },
-		});
-		expect(res.status).toBe(200); // Header is correct, query is wrong, but header wins
+
+		// The header alone decides. A query string riding along — right value or
+		// wrong — is never read, so it can neither grant nor deny.
+		expect(
+			(await app.request("/probe?token=wrongtoken", { headers: { Authorization: "Bearer test-secret" } })).status,
+		).toBe(200);
+		expect(
+			(await app.request("/probe?token=test-secret", { headers: { Authorization: "Bearer wrong" } })).status,
+		).toBe(401);
+		expect((await app.request("/probe?token=wrongtoken")).status).toBe(401);
+
+		// Nor under any other spelling a client might reach for.
+		expect((await app.request("/probe?access_token=test-secret")).status).toBe(401);
+		expect((await app.request("/probe?token=test-secret&token=test-secret")).status).toBe(401);
 	});
 });

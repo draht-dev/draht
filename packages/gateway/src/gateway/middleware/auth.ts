@@ -1,4 +1,5 @@
 import type { MiddlewareHandler } from "hono";
+import { decodeWsBearerSubprotocol } from "../ws-bearer";
 
 /**
  * Timing-safe byte-level string comparison.
@@ -36,9 +37,14 @@ function timingSafeEqual(actual: string, expected: string): boolean {
 /**
  * Bearer token authentication middleware.
  *
- * Validates the `Authorization: Bearer <token>` header on every request.
- * For WebSocket connections, also accepts `?token=XXX` query parameter
- * (since WebSocket upgrades can't always carry custom headers from browsers).
+ * Exactly two credential sources, both headers: `Authorization: Bearer <token>`
+ * on every request, and — for WebSocket upgrades — the `Sec-WebSocket-Protocol`
+ * header (`geist.bearer.<base64url>`, the only credential a browser can put on
+ * an upgrade). A `?token=` query parameter is *not* a credential source: spec
+ * §6.4 forbids credentials in URLs, because a query string is copied into
+ * `Referer`, proxy logs and browser history, so R33-REACH.3 deleted the
+ * fallback that once read one. Its absence is regression-tested in
+ * `__tests__/auth.test.ts`.
  * Returns a 401 JSON response for missing, malformed, or incorrect tokens.
  * Uses a timing-safe comparison to prevent token oracle attacks.
  * Use with `except` from `hono/combine` to exclude public endpoints like /health.
@@ -62,12 +68,16 @@ export function bearerAuthMiddleware(expectedToken: string): MiddlewareHandler {
 			}
 		}
 
-		// Fallback to query parameter (for WebSocket connections)
+		// Then the WebSocket subprotocol, which is a request *header*
+		// (`Sec-WebSocket-Protocol`) and the only credential a browser can put on
+		// an upgrade — `new WebSocket(url)` takes no headers of its own. This is
+		// what the daemon-served console uses (R32-FLEET.10); see ws-bearer.ts for
+		// why the value is base64url and why Bun's protocol echo makes it work.
 		if (!token) {
-			token = c.req.query("token");
+			token = decodeWsBearerSubprotocol(c.req.header("Sec-WebSocket-Protocol"));
 		}
 
-		// No token found in either location
+		// No third source. The query string is deliberately never consulted.
 		if (!token) {
 			console.log(`[AUTH] No token found`);
 			return c.json({ error: "Unauthorized" }, 401);

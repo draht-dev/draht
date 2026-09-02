@@ -1,0 +1,265 @@
+---
+import { getCollection } from "astro:content";
+import AtelierPage from "../../layouts/AtelierPage.astro";
+
+const title = "Episodes — Draht";
+const description = "Follow the university's build one episode per week, starting with an empty repository in Episode 1.";
+
+const episodes = (await getCollection("blog", ({ data }) => !data.draft && data.category === "episode"))
+	.sort((a, b) => new Date(a.data.date).getTime() - new Date(b.data.date).getTime());
+
+const startHref = episodes.length > 0 ? `/blog/${episodes[0].id}` : "#episode-1";
+---
+
+<AtelierPage title={title} description={description}>
+	<main class="episodes-index">
+		<header class="page-head">
+			<div class="page-kicker">uni.draht.dev · building in public</div>
+			<h1 class="page-title">Episodes<span class="ampersand">.</span></h1>
+			<p class="page-lede">
+				Follow the university's repository from its first commit, one episode per week.
+			</p>
+			<div class="ep-actions">
+				<a class="btn" href={startHref}>Start at Episode 1 &nbsp;→</a>
+				<a class="btn ghost" href="/blog">All posts</a>
+			</div>
+		</header>
+
+		{episodes.length === 0 && (
+			<div class="ep-placeholder" id="episode-1">
+				<span class="ep-num">Episode 01</span>
+				<div class="ep-body">
+					<span class="ep-status">Live now</span>
+					<h2 class="ep-title">Episode 1 — the first brick</h2>
+					<p class="ep-desc">
+						Watch Episode 1, then join the waitlist for the next release.
+					</p>
+				</div>
+				<!-- Points at the @freyedev X profile until we have the exact Episode 1 post/video permalink.
+				     Drop this placeholder once the writeup lands in src/content/blog with category: "episode" -->
+				<a href="https://x.com/freyedev" class="btn ep-cta">Watch Episode 1 &nbsp;→</a>
+			</div>
+		)}
+
+		{episodes.length > 0 && (
+			<ol class="post-list">
+				{episodes.map((post, i) => (
+					<li class="post-item">
+						<a href={`/blog/${post.id}`} class="post-link">
+							<span class="post-idx">Episode {i + 1}</span>
+							<div class="post-body">
+								<time class="post-date">{post.data.date}</time>
+								<h2 class="post-title-item">{post.data.title}</h2>
+								<p class="post-desc">{post.data.description}</p>
+								{post.data.tags && post.data.tags.length > 0 && (
+									<div class="post-tags">
+										{post.data.tags.map((tag: string) => (
+											<span class="tag">{tag}</span>
+										))}
+									</div>
+								)}
+							</div>
+							<span class="post-arrow">→</span>
+						</a>
+					</li>
+				))}
+			</ol>
+		)}
+
+		<p class="episodes-outro">
+			Episodes are numbered posts from the <a href="/blog">Draht blog</a>.
+		</p>
+	</main>
+</AtelierPage>
+
+<style>
+	.episodes-index {
+		max-width: 900px;
+		margin: 0 auto;
+	}
+
+	.ep-actions {
+		display: flex;
+		gap: 16px;
+		flex-wrap: wrap;
+		margin-top: 32px;
+	}
+
+	.ep-placeholder {
+		display: grid;
+		grid-template-columns: 80px 1fr auto;
+		gap: 24px;
+		align-items: start;
+		padding: 32px 4px;
+		border-bottom: 1px solid var(--rule);
+	}
+	.ep-num {
+		font-family: var(--f-mono);
+		font-size: 11px;
+		letter-spacing: 0.1em;
+		color: var(--paper-soft);
+		padding-top: 6px;
+	}
+	.ep-body {
+		min-width: 0;
+	}
+	.ep-status {
+		display: inline-block;
+		font-family: var(--f-mono);
+		font-size: 10px;
+		letter-spacing: 0.15em;
+		text-transform: uppercase;
+		color: var(--copper);
+		margin-bottom: 10px;
+	}
+	.ep-title {
+		font-family: var(--f-display);
+		font-style: italic;
+		font-weight: 400;
+		font-size: clamp(24px, 3vw, 32px);
+		line-height: 1.1;
+		letter-spacing: -0.02em;
+		color: var(--paper);
+		margin: 0 0 10px;
+	}
+	.ep-desc {
+		color: var(--paper-dim);
+		font-size: 15px;
+		line-height: 1.55;
+		margin: 0;
+		max-width: 58ch;
+		text-wrap: pretty;
+	}
+	.ep-cta {
+		align-self: center;
+	}
+
+	.post-list {
+		list-style: none;
+		margin: 40px 0 0;
+		padding: 0;
+		border-bottom: 1px solid var(--rule);
+	}
+
+	.post-item {
+		border-top: 1px solid var(--rule);
+	}
+	.post-item:first-child {
+		border-top: none;
+	}
+
+	.post-link {
+		display: grid;
+		grid-template-columns: 100px 1fr 40px;
+		gap: 24px;
+		align-items: start;
+		padding: 32px 4px;
+		transition: background 0.2s;
+		color: var(--paper);
+	}
+	.post-link:hover {
+		background: rgba(239, 231, 216, 0.02);
+	}
+	.post-link:hover .post-title-item {
+		color: var(--copper);
+	}
+	.post-link:hover .post-arrow {
+		color: var(--copper);
+		transform: translateX(4px);
+	}
+
+	.post-idx {
+		font-family: var(--f-mono);
+		font-size: 11px;
+		letter-spacing: 0.1em;
+		color: var(--paper-soft);
+		padding-top: 6px;
+	}
+
+	.post-body {
+		min-width: 0;
+	}
+
+	.post-date {
+		display: block;
+		font-family: var(--f-mono);
+		font-size: 10px;
+		letter-spacing: 0.15em;
+		text-transform: uppercase;
+		color: var(--copper);
+		margin-bottom: 10px;
+	}
+
+	.post-title-item {
+		font-family: var(--f-display);
+		font-style: italic;
+		font-weight: 400;
+		font-size: clamp(24px, 3vw, 32px);
+		line-height: 1.1;
+		letter-spacing: -0.02em;
+		color: var(--paper);
+		margin: 0 0 10px;
+		transition: color 0.2s;
+	}
+
+	.post-desc {
+		color: var(--paper-dim);
+		font-size: 15px;
+		line-height: 1.55;
+		margin: 0 0 14px;
+		max-width: 58ch;
+		text-wrap: pretty;
+	}
+
+	.post-tags {
+		display: flex;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+	.tag {
+		font-family: var(--f-mono);
+		font-size: 10px;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+		color: var(--copper-dim);
+		padding: 3px 8px;
+		border: 1px solid var(--rule-strong);
+	}
+
+	.post-arrow {
+		font-family: var(--f-mono);
+		font-size: 20px;
+		color: var(--paper-soft);
+		transition: color 0.2s, transform 0.2s;
+		text-align: right;
+		padding-top: 6px;
+	}
+
+	.episodes-outro {
+		font-family: var(--f-mono);
+		font-size: 12px;
+		letter-spacing: 0.05em;
+		color: var(--paper-soft);
+		text-align: center;
+		padding: 40px 0 20px;
+	}
+	.episodes-outro a {
+		color: var(--copper);
+	}
+	.episodes-outro a:hover {
+		color: var(--paper);
+	}
+
+	@media (max-width: 640px) {
+		.ep-placeholder {
+			grid-template-columns: 1fr;
+			gap: 12px;
+		}
+		.post-link {
+			grid-template-columns: 1fr;
+			gap: 4px;
+		}
+		.post-idx { padding-top: 0; }
+		.post-arrow { display: none; }
+	}
+</style>

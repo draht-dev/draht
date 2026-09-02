@@ -125,11 +125,11 @@ Options:
 What this installs:
   • Local Claude Code marketplace named "${MARKETPLACE_NAME}" at ~/.draht/claude-marketplace/
   • Plugin "${PLUGIN_NAME}" inside that marketplace, registered and enabled
-  • 16 slash commands (/new-project, /plan-phase, /execute-phase, /orchestrate, ...)
-  • 7 specialist subagents (architect, implementer, reviewer, debugger, ...)
-  • 3 workflow skills (gsd-workflow, tdd-workflow, ddd-workflow)
+  • 23 slash commands (/new-project, /plan-phase, /execute-phase, /orchestrate, ...)
+  • 11 specialist subagents (architect, implementer, reviewer, debugger, ...)
+  • 16 bundled skills (gsd-workflow, tdd-workflow, ddd-workflow, ...)
   • Workflow hook scripts (pre-execute, post-task, post-phase, quality-gate)
-  • Claude Code lifecycle hooks (SessionStart, UserPromptSubmit)
+  • 4 Claude Code lifecycle hooks (SessionStart, UserPromptSubmit, PostToolUse, Stop)
   • Self-contained draht-tools CLI (JS graph engine built in — works out of the box)
 
 Optional, not installed by default:
@@ -233,7 +233,9 @@ function readMarketplaceLock(lockPath) {
 		if (after.dev !== opened.dev || after.ino !== opened.ino) throw new Error("changed while reading");
 		return { owner, stat: opened };
 	} catch (error) {
-		throw new Error(`plugin update lock exists but is not safely readable: ${lockPath} (${error.message})`);
+		const wrapped = new Error(`plugin update lock exists but is not safely readable: ${lockPath} (${error.message})`);
+		wrapped.lockChurn = error.code === "ENOENT" || error.message === "changed while opening" || error.message === "changed while reading";
+		throw wrapped;
 	} finally {
 		if (descriptor !== undefined) fs.closeSync(descriptor);
 	}
@@ -267,7 +269,16 @@ function acquireMarketplaceLock(marketplaceDir) {
 			fs.rmSync(ownerPath, { force: true });
 		}
 
-		const { owner: existing, stat: observedStat } = readMarketplaceLock(lockPath);
+		// Lock identity churn between the failed link and this read means another
+		// contender is mid-reclaim or mid-release — re-contend, it is not corruption.
+		let observed;
+		try {
+			observed = readMarketplaceLock(lockPath);
+		} catch (error) {
+			if (error.lockChurn) continue;
+			throw error;
+		}
+		const { owner: existing, stat: observedStat } = observed;
 		if (existing?.owner !== "draht-plugin-installer" || !Number.isSafeInteger(existing.pid) || typeof existing.token !== "string" ||
 			(existing.identity !== null && typeof existing.identity !== "string") || !Number.isSafeInteger(existing.createdAt)) {
 			throw new Error(`plugin update lock is not owned by draht: ${lockPath}`);
@@ -512,8 +523,20 @@ function rollbackClaudePlugin(transaction, previousState, pluginSpec) {
 				failures.push("could not reinstall the previously working plugin");
 				return failures;
 			}
-			const stateCommand = previousState.plugin.enabled ? "enable" : "disable";
-			if (!runClaude(["plugin", stateCommand, pluginSpec], { allowFail: true })) failures.push(`could not restore the previously ${stateCommand}d plugin state`);
+			// Same idempotency hazard as the primary install path: reinstalling
+			// already left the plugin enabled, so only call enable/disable when the
+			// reinstalled state actually differs from what is being restored.
+			let reinstalledState;
+			try {
+				reinstalledState = claudePluginState(pluginSpec);
+			} catch (error) {
+				failures.push(`could not inspect plugin state after reinstall: ${error.message}`);
+				return failures;
+			}
+			if (reinstalledState.enabled !== previousState.plugin.enabled) {
+				const stateCommand = previousState.plugin.enabled ? "enable" : "disable";
+				if (!runClaude(["plugin", stateCommand, pluginSpec], { allowFail: true })) failures.push(`could not restore the previously ${stateCommand}d plugin state`);
+			}
 		}
 		try {
 			const restored = claudePluginState(pluginSpec);
@@ -953,8 +976,16 @@ async function cmdInstall(flags) {
 		if (!runClaude(["plugin", "install", pluginSpec, "--scope", "user"], { allowFail: true })) throw new Error("replacement install failed");
 
 		const shouldEnable = previousState.plugin.installed ? previousState.plugin.enabled : true;
-		const stateCommand = shouldEnable ? "enable" : "disable";
-		if (!runClaude(["plugin", stateCommand, pluginSpec], { allowFail: true })) throw new Error(`plugin ${stateCommand} failed`);
+		// `claude plugin install` leaves the plugin enabled as a side effect, and
+		// the real CLI rejects a redundant `plugin enable`/`disable` call on a
+		// plugin already in that state ("already enabled", non-zero exit) instead
+		// of treating it as a no-op — so only call it when the state actually
+		// needs to change.
+		const postInstallState = claudePluginState(pluginSpec);
+		if (postInstallState.enabled !== shouldEnable) {
+			const stateCommand = shouldEnable ? "enable" : "disable";
+			if (!runClaude(["plugin", stateCommand, pluginSpec], { allowFail: true })) throw new Error(`plugin ${stateCommand} failed`);
+		}
 		const installedState = claudePluginState(pluginSpec);
 		if (!installedState.installed || installedState.enabled !== shouldEnable) throw new Error("post-install plugin state verification failed");
 	} catch (error) {

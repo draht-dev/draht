@@ -2,6 +2,7 @@
  * CLI argument parsing and help display
  */
 
+import { isAbsolute } from "node:path";
 import type { ThinkingLevel } from "@draht/agent-core";
 import chalk from "chalk";
 import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR } from "../config.ts";
@@ -27,6 +28,9 @@ export interface Args {
 	sessionId?: string;
 	fork?: string;
 	sessionDir?: string;
+	attachable?: boolean;
+	attach?: string;
+	listSessions?: boolean;
 	models?: string[];
 	tools?: string[];
 	excludeTools?: string[];
@@ -43,6 +47,13 @@ export interface Args {
 	themes?: string[];
 	noThemes?: boolean;
 	noContextFiles?: boolean;
+	/**
+	 * Absolute project root that automatically-read AGENTS.md / CLAUDE.md discovery is
+	 * confined to (R36-SPAWN.6). Non-absolute values are refused, not resolved against
+	 * cwd: a relative root is meaningless to a daemon-spawned child whose cwd is chosen
+	 * by the caller being confined.
+	 */
+	contextRoot?: string;
 	listModels?: string | true;
 	offline?: boolean;
 	verbose?: boolean;
@@ -111,6 +122,24 @@ export function parseArgs(args: string[]): Args {
 			result.fork = args[++i];
 		} else if (arg === "--session-dir" && i + 1 < args.length) {
 			result.sessionDir = args[++i];
+		} else if (arg === "--attachable") {
+			result.attachable = true;
+		} else if (arg === "--no-attachable") {
+			// Tri-state on purpose: `attachable` stays UNDEFINED when neither flag is given, and
+			// main.ts uses that to tell "the operator asked for a socket" from "the default asked
+			// for one". Explicit failure is fatal; the default degrades. Before this branch existed
+			// `--no-attachable` fell into the unknown-flag path below, which CONSUMES the next
+			// token as the flag's value — so the documented opt-out swallowed the prompt and then
+			// killed the run with "Unknown option: --no-attachable".
+			result.attachable = false;
+		} else if (arg === "--attach") {
+			if (i + 1 < args.length) {
+				result.attach = args[++i];
+			} else {
+				result.diagnostics.push({ type: "error", message: "--attach requires a value" });
+			}
+		} else if (arg === "--list-sessions") {
+			result.listSessions = true;
 		} else if (arg === "--models" && i + 1 < args.length) {
 			result.models = args[++i].split(",").map((s) => s.trim());
 		} else if (arg === "--no-tools" || arg === "-nt") {
@@ -168,6 +197,20 @@ export function parseArgs(args: string[]): Args {
 			result.noThemes = true;
 		} else if (arg === "--no-context-files" || arg === "-nc") {
 			result.noContextFiles = true;
+		} else if (arg === "--context-root") {
+			if (i + 1 < args.length) {
+				const value = args[++i];
+				if (!isAbsolute(value)) {
+					result.diagnostics.push({
+						type: "error",
+						message: `--context-root requires an absolute path (got "${value}")`,
+					});
+				} else {
+					result.contextRoot = value;
+				}
+			} else {
+				result.diagnostics.push({ type: "error", message: "--context-root requires a value" });
+			}
 		} else if (arg === "--list-models") {
 			// Check if next arg is a search pattern (not a flag or file arg)
 			if (i + 1 < args.length && !args[i + 1].startsWith("-") && !args[i + 1].startsWith("@")) {
@@ -251,6 +294,13 @@ ${chalk.bold("Options:")}
   --session-dir <dir>            Directory for session storage and lookup
   --no-session                   Don't save session (ephemeral)
   --name, -n <name>              Set session display name
+  --attachable                   Expose this session on an owner-only Unix socket (attach from your other terminals)
+                                 Interactive sessions do this by default; the flag also forces it on in
+                                 --print/--mode rpc and makes a registration failure fatal
+  --no-attachable                Do not expose this session on a socket (also: DRAHT_NO_ATTACHABLE=1, or
+                                 "attachableSessions": false in global settings)
+  --attach <session-id>          Attach to a running attachable session (tmux-style)
+  --list-sessions                List running attachable sessions and exit
   --models <patterns>            Comma-separated model patterns for Ctrl+P cycling
                                  Supports globs (anthropic/*, *sonnet*) and fuzzy matching
   --no-tools, -nt                Disable all tools by default (built-in and extension)
@@ -269,6 +319,7 @@ ${chalk.bold("Options:")}
   --theme <path>                 Load a theme file or directory (can be used multiple times)
   --no-themes                    Disable theme discovery and loading
   --no-context-files, -nc        Disable AGENTS.md and CLAUDE.md discovery and loading
+  --context-root <path>          Confine AGENTS.md/CLAUDE.md discovery to an absolute project root
   --export <file>                Export session file to HTML and exit
   --list-models [search]         List available models (with optional fuzzy search)
   --verbose                      Force verbose startup (overrides quietStartup setting)
@@ -307,6 +358,13 @@ ${chalk.bold("Examples:")}
 
   # Start a named session
   ${APP_NAME} --name "Refactor auth module"
+
+  # Start a session you can attach to from your other terminals
+  ${APP_NAME} --attachable "Refactor auth module"
+
+  # List running attachable sessions, then attach to one
+  ${APP_NAME} --list-sessions
+  ${APP_NAME} --attach <session-id>
 
   # Use different model
   ${APP_NAME} --provider openai --model gpt-4o-mini "Help me refactor this code"

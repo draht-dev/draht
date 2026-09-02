@@ -28,8 +28,8 @@ import {
 	type HarnessCapabilities,
 	type HarnessSession,
 	type HarnessSessionStatus,
-	isDirtyOrAhead,
 	type SituationPrompt,
+	worktreeReviewState,
 } from "@draht/geist-core";
 import type { AgentLaunchSpec } from "@draht/geist-protocol";
 
@@ -138,22 +138,53 @@ function toAvailableCommandInfo(command: AvailableCommand): AvailableCommandInfo
 	return command.description ? { name: command.name, description: command.description } : { name: command.name };
 }
 
-/** Runs `git <args>` in `cwd`, returning trimmed stdout or `null` on any failure. */
-function runGit(cwd: string, args: readonly string[]): string | null {
-	const result = spawnSync("git", [...args], { cwd, encoding: "utf8" });
-	if (result.status !== 0 || typeof result.stdout !== "string") return null;
-	return result.stdout.trim();
-}
+/**
+ * How long the one git call in this file gets.
+ *
+ * It had no bound at all, and `spawnSync` with no `timeout` is a turn that can
+ * simply never start. Same 500 ms as `geist-core`'s ledger and the fleet status
+ * probe, and `killSignal: "SIGKILL"` for the same measured reason: the default
+ * is SIGTERM and a child that traps TERM survives it.
+ */
+const GIT_DEADLINE_MS = 500;
+
+/**
+ * What `git rev-parse HEAD` said about a spawn `cwd`.
+ *
+ * THREE OUTCOMES, NOT TWO. The old wrapper returned `string | null` and mapped
+ * every failure to `null`, and `null` downstream means "not a git worktree, so
+ * only the dirty half of the review check applies". A git that timed out, was
+ * missing from PATH, or refused the repository therefore SILENTLY DISABLED the
+ * ahead-half of the turn-end check for the life of the session — the one case
+ * where unapproved commits are most likely to be sitting in the tree. The
+ * `unknown` arm exists so that failure is carried instead of erased.
+ */
+type BaseShaCapture = { kind: "sha"; sha: string } | { kind: "no_repo" } | { kind: "unknown" };
 
 /**
  * Captures the worktree's `HEAD` at spawn time as `baseSha` (spec §12's spawn
- * step). Returns `null` when `cwd` is not a git worktree — geist always spawns
- * in one, but a null base just means the turn-end review check falls back to a
- * pure dirty check.
+ * step).
+ *
+ * `no_repo` when `cwd` is genuinely not a git worktree — geist always spawns in
+ * one, but a null base just means the turn-end review check falls back to a pure
+ * dirty check. `unknown` when git could not be asked; see {@link BaseShaCapture}.
  */
-function captureBaseSha(cwd: string): string | null {
-	const sha = runGit(cwd, ["rev-parse", "HEAD"]);
-	return sha != null && sha.length > 0 ? sha : null;
+function captureBaseSha(cwd: string): BaseShaCapture {
+	const result = spawnSync("git", ["rev-parse", "HEAD"], {
+		cwd,
+		encoding: "utf8",
+		timeout: GIT_DEADLINE_MS,
+		killSignal: "SIGKILL",
+		// The `no_repo` arm below matches git's own wording, and git translates
+		// its messages.
+		env: { ...process.env, LC_ALL: "C" },
+	});
+	if (result.error != null || result.signal !== null) return { kind: "unknown" };
+	if (result.status !== 0 || typeof result.stdout !== "string") {
+		return /not a git repository/i.test(result.stderr ?? "") ? { kind: "no_repo" } : { kind: "unknown" };
+	}
+	const sha = result.stdout.trim();
+	return sha.length > 0 ? { kind: "sha", sha } : { kind: "unknown" };
 }
 
 /**
@@ -217,7 +248,7 @@ interface AcpHarnessSessionInit {
 	readonly id: string;
 	readonly harness: string;
 	readonly cwd: string;
-	readonly baseSha: string | null;
+	readonly baseSha: BaseShaCapture;
 	readonly child: ChildProcess;
 	readonly connection: ClientConnection;
 	readonly ctx: ClientContext;
@@ -234,7 +265,7 @@ class AcpHarnessSessionImpl implements AcpHarnessSession {
 	readonly harness: string;
 
 	private readonly cwd: string;
-	private readonly baseSha: string | null;
+	private readonly baseSha: BaseShaCapture;
 	private readonly child: ChildProcess;
 	private readonly connection: ClientConnection;
 	private readonly ctx: ClientContext;
@@ -309,7 +340,31 @@ class AcpHarnessSessionImpl implements AcpHarnessSession {
 
 		// "git is the truth, not the agent's claim" (spec §12): the turn ending
 		// only means review is due if the worktree is actually dirty/ahead.
-		this._status = isDirtyOrAhead(this.cwd, this.baseSha) ? "awaiting_review" : "running";
+		//
+		// FOUR STATES IN, THREE OUT, AND `unknown` IS SPELLED OUT ON PURPOSE. This
+		// line used to be a boolean that swallowed every git failure into
+		// `running` — "nothing to review" — which is the one answer a human acts
+		// on by moving to the next thing. `HarnessSessionStatus` has no `unknown`
+		// of its own (that vocabulary lives on the fleet wire, where a renderer
+		// can show it), so the mapping here is a decision rather than a
+		// translation: not knowing resolves TOWARDS review, never away from it. A
+		// turn that ends against a worktree nobody can read is exactly when a
+		// human should look.
+		const review = worktreeReviewState(this.cwd, this.baseSha.kind === "sha" ? this.baseSha.sha : null);
+		switch (review) {
+			case "dirty":
+				this._status = "awaiting_review";
+				break;
+			case "unknown":
+				this._status = "awaiting_review";
+				break;
+			default:
+				// `clean` or `no_repo`. A base sha that could not be captured leaves
+				// the ahead-half unanswerable, so a clean tree is still not a proven
+				// "nothing to review".
+				this._status = this.baseSha.kind === "unknown" ? "awaiting_review" : "running";
+				break;
+		}
 	}
 
 	async cancel(): Promise<void> {

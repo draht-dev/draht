@@ -1310,7 +1310,7 @@ Set the text in the input editor. Fire-and-forget.
 
 ### Extension UI Responses (stdin)
 
-Responses are sent for dialog methods only (`select`, `confirm`, `input`, `editor`). The `id` must match the request.
+Responses are sent for dialog methods only (`select`, `confirm`, `input`, `editor`). The `id` must match the request. An answer whose `id` matches no open dialog is silently dropped.
 
 #### Value response (select, input, editor)
 
@@ -1323,6 +1323,77 @@ Responses are sent for dialog methods only (`select`, `confirm`, `input`, `edito
 ```json
 {"type": "extension_ui_response", "id": "uuid-2", "confirmed": true}
 ```
+
+#### Naming the option that was chosen (`optionId`)
+
+A request may carry a `detail` object describing what is being decided. When it does, `detail.options`
+is the immutable set of options that request offered, each stating its own meaning:
+
+```json
+{
+  "type": "extension_ui_request",
+  "id": "uuid-2",
+  "method": "confirm",
+  "title": "Approve tool call?",
+  "message": "bash wants to run a command",
+  "detail": {
+    "kind": "tool_permission",
+    "toolCallId": "call-1",
+    "toolName": "bash",
+    "cwd": "/private/tmp/project",
+    "command": "rm -rf build",
+    "reason": "bash commands require approval by default",
+    "options": [
+      {"id": "approve", "label": "Yes", "decision": "approve"},
+      {"id": "deny", "label": "No", "decision": "deny"}
+    ]
+  }
+}
+```
+
+An answer may name which of those options was chosen by adding `optionId`:
+
+```json
+{"type": "extension_ui_response", "id": "uuid-2", "confirmed": false, "optionId": "deny"}
+```
+
+Rules, all enforced by the agent:
+
+- `optionId` is **optional**. Clients that only know yes/no keep sending `confirmed` alone and are
+  unaffected.
+- When present, it **decides**: the named option's own `decision` (`"approve"` or `"deny"`) wins over
+  `confirmed`, in both directions. `{"confirmed": true, "optionId": "deny"}` denies. Never infer an
+  option's meaning from its position in the array, from the array's length, or from its id — read
+  `decision`.
+- When present, it must be **one of the ids that this request offered**. An id nobody offered, an id
+  that appears twice in the offered set, and a present-but-non-string value such as
+  `{"optionId": 123}` are all refused (see below). A wrongly-typed `optionId` is *not* treated as
+  absent.
+- When the matching request offered **no options** — any dialog raised without `detail`, such as
+  `/rewind`'s "Restore files?" confirm or `/agent`'s picker — there is nothing to validate against,
+  so `optionId` is ignored and the answer decides on `confirmed` / `value` as usual. A client may
+  therefore attach `optionId` unconditionally without risk of stranding those dialogs.
+
+#### Refused response (`command: "extension_ui_response"`)
+
+A rejected `optionId` is reported on stdout as an ordinary failed-command response — note that
+`command` here is `"extension_ui_response"`, a value **no client ever sends as a command**. Clients
+that switch exhaustively on `command` must expect it:
+
+```json
+{
+  "id": "uuid-2",
+  "type": "response",
+  "command": "extension_ui_response",
+  "success": false,
+  "error": "optionId \"not-an-option\" is not one of the options offered for this request; the request is still pending"
+}
+```
+
+The `id` is the **dialog request id**, not a command id. The refusal does **not** consume the
+request: the dialog is still open and still answerable, and a subsequent valid answer — with a good
+`optionId`, or with none at all — decides it. A client that receives this line should correct its
+answer and send it again; ignoring it leaves the agent waiting.
 
 #### Cancellation response (any dialog)
 

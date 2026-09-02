@@ -37,6 +37,16 @@ export interface ShaLedgerUndoResult {
 	readonly resetTo: string;
 }
 
+/**
+ * What git says about a worktree at turn end. Mirrors the fleet wire's
+ * `SessionStatus` (`geist-protocol`'s `wire.ts`) value for value, deliberately:
+ * one vocabulary for "what is the state of this working tree", whether it is
+ * read by a session for its own status or by the daemon for a phone. The type
+ * is declared here rather than imported because `geist-core` owns this
+ * question and the protocol package owns how it travels.
+ */
+export type WorktreeReviewState = "clean" | "dirty" | "no_repo" | "unknown";
+
 /** Raised for git subprocess failures and for operating on a worktree with no `record()`ed entry. */
 export class ShaLedgerError extends Error {
 	constructor(message: string) {
@@ -45,12 +55,48 @@ export class ShaLedgerError extends Error {
 	}
 }
 
-/** Runs `git <args>` in `cwd`, returning trimmed stdout. Throws `ShaLedgerError` on any non-zero exit. */
+/**
+ * How long any one git call here gets.
+ *
+ * Same 500 ms as the fleet's status probe (`attach/status-probe.ts`), for the
+ * same measured reasons. It matters less here — these calls are made by a
+ * session's own turn, not by a daemon serving every connected phone — but a git
+ * call with NO bound is a turn that never ends, and that was the shape this
+ * file had.
+ */
+const GIT_DEADLINE_MS = 500;
+
+/**
+ * Runs `git <args>` in `cwd`, returning trimmed stdout. Throws `ShaLedgerError`
+ * on any non-zero exit, on a spawn failure, and on the deadline.
+ *
+ * `killSignal: "SIGKILL"` is not a preference. `spawnSync`'s default is SIGTERM,
+ * a child that traps TERM survives it — measured, still blocked at 15 s against
+ * a 500 ms bound — and `timeout` without a signal that lands is decoration. What
+ * this CANNOT do is take the child's own children with it: `spawnSync` signals
+ * the direct child only. The fleet probe, which is the one an untrusted peer can
+ * trigger, spawns detached and kills the whole process group; this path is
+ * reached from a session's own turn and is bounded, not hardened.
+ */
 function runGit(cwd: string, args: readonly string[]): string {
-	const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+	const result = spawnSync("git", args, {
+		cwd,
+		encoding: "utf8",
+		timeout: GIT_DEADLINE_MS,
+		killSignal: "SIGKILL",
+		// `isNoRepo` matches git's own wording, and git translates its messages;
+		// under a localized shell the ordinary "not a repository" case would be
+		// classified as a refusal instead.
+		env: { ...process.env, LC_ALL: "C" },
+	});
 
 	if (result.error) {
 		throw new ShaLedgerError(`failed to run "git ${args.join(" ")}" in ${cwd}: ${result.error.message}`);
+	}
+	if (result.signal !== null) {
+		throw new ShaLedgerError(
+			`"git ${args.join(" ")}" in ${cwd} did not answer inside ${GIT_DEADLINE_MS}ms (killed with ${result.signal})`,
+		);
 	}
 	if (result.status !== 0) {
 		const stderr = result.stderr.trim();
@@ -58,6 +104,11 @@ function runGit(cwd: string, args: readonly string[]): string {
 	}
 
 	return result.stdout.trim();
+}
+
+/** Whether a failure is git saying "this is not a repository" rather than refusing. */
+function isNoRepo(error: unknown): boolean {
+	return error instanceof ShaLedgerError && /not a git repository/i.test(error.message);
 }
 
 /** The worktree's current `HEAD` commit sha. */
@@ -77,32 +128,59 @@ function isAheadOf(worktreePath: string, baseSha: string): boolean {
 }
 
 /**
- * The concrete mechanism behind spec §12's `awaiting_review` rule: "git is
- * dirty/ahead (git is the truth, not the agent's claim)". Dirty = uncommitted
- * changes in the working tree; ahead = `HEAD` has moved past `baseSha` via
- * new commits. Either one is enough. Reads real git state — no caching, no
- * reliance on ledger bookkeeping — so it's correct even for a worktree this
- * `ShaLedger` instance never `record()`ed.
+ * The review state of a worktree — the concrete mechanism behind spec §12's
+ * `awaiting_review` rule, "git is dirty/ahead (git is the truth, not the
+ * agent's claim)".
+ *
+ * FOUR VALUES, AND IT USED TO BE A BOOLEAN. `isDirtyOrAhead()` caught every
+ * `ShaLedgerError` and returned `false`, and `false` means "nothing to review".
+ * So a worktree git refused to read — dubious ownership (verified: exit 128 on
+ * a genuinely dirty tree), a corrupt index, a `cwd` that had been deleted, no
+ * git on PATH at all — ended a turn as `running`, silently, forever. That is
+ * the fail-open this replaces, and a deadline alone would not have touched it:
+ * a deadline bounds the hang, not the lie.
+ *
+ *   `clean`   a repository at `baseSha` with nothing uncommitted
+ *   `dirty`   uncommitted changes, OR `HEAD` ahead of `baseSha`. The two are
+ *             one value because they mean the same thing to a reviewer: there
+ *             is work here that has not been approved.
+ *   `no_repo` `cwd` is not inside a repository. An ordinary answer — geist's
+ *             own `null`-base fallback exists for exactly this case — and not
+ *             a failure.
+ *   `unknown` git refused, could not be run, or did not answer. NEVER `clean`.
+ *
+ * MUST NOT BE COERCED BACK TO A BOOLEAN at any call site. The whole point of
+ * the fourth value is that a caller has to decide what to do about not knowing,
+ * and a boolean makes that decision invisibly, in the safest-looking direction.
  *
  * `baseSha` may be `null` for a session whose spawn `cwd` had no resolvable
- * `HEAD` (not a git worktree at capture time); with no base to compare against,
- * only the dirty half applies. This is the single canonical implementation
- * `@draht/geist-acp` consumes for its turn-end review check (spec §12) rather
- * than forking a near-copy.
+ * `HEAD`; with no base to compare against, only the dirty half applies.
  *
- * Resilient by design: unlike `record`/`approve`/`undo` — where a git failure
- * is a genuine error worth throwing — a turn-end review probe that cannot read
- * git (e.g. run against a non-git `cwd` under the `null`-base fallback) must not
- * crash the turn. Any {@link ShaLedgerError} from the underlying git calls is
- * treated as "cannot tell → not dirty/ahead" (`false`), preserving the
- * null-safe behavior `geist-acp` previously implemented in its own fork.
+ * @param worktreePath - The worktree to inspect.
+ * @param baseSha - The commit the worktree was spawned from, or null.
  */
-export function isDirtyOrAhead(worktreePath: string, baseSha: string | null): boolean {
+export function worktreeReviewState(worktreePath: string, baseSha: string | null): WorktreeReviewState {
+	let dirty: boolean;
 	try {
-		if (isWorkingTreeDirty(worktreePath)) return true;
-		return baseSha !== null && isAheadOf(worktreePath, baseSha);
+		dirty = isWorkingTreeDirty(worktreePath);
 	} catch (error) {
-		if (error instanceof ShaLedgerError) return false;
+		if (isNoRepo(error)) return "no_repo";
+		if (error instanceof ShaLedgerError) return "unknown";
+		throw error;
+	}
+	if (dirty) return "dirty";
+	if (baseSha === null) return "clean";
+
+	try {
+		return isAheadOf(worktreePath, baseSha) ? "dirty" : "clean";
+	} catch (error) {
+		if (error instanceof ShaLedgerError) {
+			// The tree is provably not dirty, but whether it is AHEAD is unreadable.
+			// Reporting `clean` here is precisely the old bug: `rev-list` fails on a
+			// base sha that no longer exists (a rebased or pruned branch), which is
+			// exactly when unapproved commits are most likely to be sitting there.
+			return "unknown";
+		}
 		throw error;
 	}
 }
@@ -156,9 +234,9 @@ export class ShaLedger {
 		return { resetTo };
 	}
 
-	/** The concrete mechanism behind `awaiting_review` — see the standalone `isDirtyOrAhead` export. */
-	isDirtyOrAhead(worktreePath: string, baseSha: string): boolean {
-		return isDirtyOrAhead(worktreePath, baseSha);
+	/** The concrete mechanism behind `awaiting_review` — see {@link worktreeReviewState}. */
+	reviewState(worktreePath: string, baseSha: string): WorktreeReviewState {
+		return worktreeReviewState(worktreePath, baseSha);
 	}
 
 	/** Current ledger bookkeeping for a worktree, or `undefined` if it was never `record()`ed. */

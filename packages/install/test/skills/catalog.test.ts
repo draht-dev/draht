@@ -68,13 +68,17 @@ function discoverSkillCatalog(root: string): string[] {
 const EXPECTED_NAMES = [
 	"atomic-commit",
 	"atomic-reasoning",
+	"blast-radius",
 	"brainstorming",
+	"create-verification-skill",
 	"ddd-workflow",
 	"debugging-workflow",
 	"discuss-phase",
 	"draht",
+	"epistemics",
 	"execute-phase",
 	"fix",
+	"grill",
 	"gsd-workflow",
 	"init-project",
 	"loop-workflow",
@@ -88,16 +92,22 @@ const EXPECTED_NAMES = [
 	"plan-phase",
 	"progress",
 	"quick",
+	"resolve-conflicts",
 	"resume-work",
 	"review",
 	"saga-spawner",
+	"speak",
 	"tdd-workflow",
+	"triage",
+	"typescript-discipline",
+	"unslop",
 	"verification-gate",
 	"verify-work",
+	"why",
 ].sort();
 
 describe("catalog: priority walk over this repo", () => {
-	it("returns exactly the 28 canonical skill names", () => {
+	it("returns exactly the 38 canonical skill names", () => {
 		expect(discoverSkillCatalog(REPO_ROOT).sort()).toEqual(EXPECTED_NAMES);
 	});
 
@@ -111,7 +121,7 @@ describe("catalog: priority walk over this repo", () => {
 		// would instead surface duplicates or the wrong file for those names.
 		const names = discoverSkillCatalog(REPO_ROOT);
 		expect(names.length).toBe(new Set(names).size);
-		expect(names.length).toBe(28);
+		expect(names.length).toBe(38);
 	});
 });
 

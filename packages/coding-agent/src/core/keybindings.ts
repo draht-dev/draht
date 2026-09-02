@@ -30,6 +30,7 @@ export interface AppKeybindings {
 	"app.clipboard.pasteImage": true;
 	"app.session.new": true;
 	"app.session.tree": true;
+	"app.session.rewind": true;
 	"app.session.fork": true;
 	"app.session.resume": true;
 	"app.tree.foldOrUp": true;
@@ -119,6 +120,7 @@ export const KEYBINDINGS = {
 	},
 	"app.session.new": { defaultKeys: [], description: "Start a new session" },
 	"app.session.tree": { defaultKeys: [], description: "Open session tree" },
+	"app.session.rewind": { defaultKeys: [], description: "Rewind session (conversation + files)" },
 	"app.session.fork": { defaultKeys: [], description: "Fork current session" },
 	"app.session.resume": { defaultKeys: [], description: "Resume a session" },
 	"app.tree.foldOrUp": {

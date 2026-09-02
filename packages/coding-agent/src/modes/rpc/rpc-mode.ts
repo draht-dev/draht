@@ -19,12 +19,14 @@ import type {
 	ExtensionWidgetOptions,
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
+import type { PermissionAskDetail } from "../../core/extensions/types.ts";
 import {
 	flushRawStdout,
 	takeOverStdout,
 	waitForRawStdoutBackpressure,
 	writeRawStdout,
 } from "../../core/output-guard.ts";
+import type { RelayOutcome } from "../../core/permission-relay/types.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
@@ -75,11 +77,59 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		return { id, type: "response", command, success: false, error: message };
 	};
 
-	// Pending extension UI requests waiting for response
+	/** One option as it was OFFERED, carrying its own decision. Never re-derived from an answer. */
+	type OfferedOption = PermissionAskDetail["options"][number];
+
+	// Pending extension UI requests waiting for response.
+	//
+	// `offeredOptions` is the immutable set this exact request went out with (R34-PERM.5). It is
+	// stored at emit time, never taken from the answer, and is what an incoming `optionId` is
+	// checked against — the answering client does not get to name a vocabulary of its own.
 	const pendingExtensionRequests = new Map<
 		string,
-		{ resolve: (value: any) => void; reject: (error: Error) => void }
+		{
+			resolve: (value: any) => void;
+			reject: (error: Error) => void;
+			offeredOptions?: readonly OfferedOption[];
+			/**
+			 * How this surface tells the caller what it ACTUALLY did (T8-FIX2).
+			 *
+			 * `ExtensionUIContext.confirm` returns a bare `Promise<boolean>`, so the `false` this
+			 * mode resolves on shutdown, on stdin EOF and on `abort` is indistinguishable from a
+			 * human pressing "No" — and it was recorded as one: `{decision: "denied", decidedBy:
+			 * {surface: "rpc"}}` for asks nobody ever saw. This is where that stops being a guess.
+			 */
+			reportOutcome?: (outcome: RelayOutcome) => void;
+		}
 	>();
+
+	/**
+	 * Resolve every outstanding extension UI dialog as cancelled.
+	 *
+	 * Without this, an abort issued while a dialog is open (the permission gate's
+	 * `ctx.ui.confirm`, say) leaves its promise unsettled forever: the agent loop
+	 * stays parked in `beforeToolCall`, `session.abort()` never observes idle, and
+	 * the session is wedged for the life of the process. Interactive mode has no
+	 * equivalent hole because Esc reaches the selector's own onCancel.
+	 *
+	 * Fail closed: each dialog resolves to its *negative* default — `confirm` to
+	 * `false`, `select`/`input`/`editor` to `undefined` — exactly as the existing
+	 * `{ cancelled: true }` wire response resolves them. A cancellation can never
+	 * be mistaken for an approval.
+	 */
+	const cancelPendingExtensionRequests = (): void => {
+		if (pendingExtensionRequests.size === 0) return;
+		const cancelled = [...pendingExtensionRequests.entries()];
+		pendingExtensionRequests.clear();
+		for (const [id, pending] of cancelled) {
+			// SAID BEFORE IT IS RESOLVED. Nobody answered this dialog — the process is shutting
+			// down, stdin reached EOF, or an `abort` came in — and the `false` below cannot carry
+			// that. Without this line the audit row reads as a human at this surface refusing a
+			// tool call they were never shown.
+			pending.reportOutcome?.({ kind: "cancelled" });
+			pending.resolve({ type: "extension_ui_response", id, cancelled: true } satisfies RpcExtensionUIResponse);
+		}
+	};
 
 	// Shutdown request flag
 	let shutdownRequested = false;
@@ -107,6 +157,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 			const onAbort = () => {
 				cleanup();
+				// An abort is not an answer. Same reasoning as `cancelPendingExtensionRequests`.
+				opts?.reportOutcome?.({ kind: "cancelled" });
 				resolve(defaultValue);
 			};
 			opts?.signal?.addEventListener("abort", onAbort, { once: true });
@@ -114,6 +166,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			if (opts?.timeout) {
 				timeoutId = setTimeout(() => {
 					cleanup();
+					// Nor is a timeout: the human simply never got to it.
+					opts.reportOutcome?.({ kind: "cancelled" });
 					resolve(defaultValue);
 				}, opts.timeout);
 			}
@@ -124,6 +178,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 					resolve(parseResponse(response));
 				},
 				reject,
+				offeredOptions: opts?.detail?.options,
+				reportOutcome: opts?.reportOutcome,
 			});
 			output({ type: "extension_ui_request", id, ...request } as RpcExtensionUIRequest);
 		});
@@ -133,14 +189,22 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	 * Create an extension UI context that uses the RPC protocol.
 	 */
 	const createExtensionUIContext = (): ExtensionUIContext => ({
+		// `detail` is threaded through verbatim so an RPC client sees the same canonical facts the
+		// TUI does. It is already neutralized and bounded at construction; nothing is reshaped here.
 		select: (title, options, opts) =>
-			createDialogPromise(opts, undefined, { method: "select", title, options, timeout: opts?.timeout }, (r) =>
-				"cancelled" in r && r.cancelled ? undefined : "value" in r ? r.value : undefined,
+			createDialogPromise(
+				opts,
+				undefined,
+				{ method: "select", title, options, timeout: opts?.timeout, detail: opts?.detail },
+				(r) => ("cancelled" in r && r.cancelled ? undefined : "value" in r ? r.value : undefined),
 			),
 
 		confirm: (title, message, opts) =>
-			createDialogPromise(opts, false, { method: "confirm", title, message, timeout: opts?.timeout }, (r) =>
-				"cancelled" in r && r.cancelled ? false : "confirmed" in r ? r.confirmed : false,
+			createDialogPromise(
+				opts,
+				false,
+				{ method: "confirm", title, message, timeout: opts?.timeout, detail: opts?.detail },
+				(r) => ("cancelled" in r && r.cancelled ? false : "confirmed" in r ? r.confirmed : false),
 			),
 
 		input: (title, placeholder, opts) =>
@@ -425,7 +489,15 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			}
 
 			case "abort": {
-				await session.abort();
+				// Start the abort first so the agent's signal is already set by the time
+				// the parked continuation resumes. The loop then reports the tool call as
+				// "Operation aborted" instead of falling through to the dialog's own block
+				// reason, which is what lets a surface tell an abort from a user pressing
+				// "No". Resolving the dialogs is in turn what lets the idle that
+				// `session.abort()` awaits ever arrive.
+				const aborted = session.abort();
+				cancelPendingExtensionRequests();
+				await aborted;
 				return success(id, "abort");
 			}
 
@@ -720,6 +792,59 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	 */
 	let detachInput = () => {};
 
+	/**
+	 * Upper bound on the unwind in {@link settlePendingDialogsForShutdown}. Nothing
+	 * should come close: resolving the dialogs releases the parked continuation
+	 * immediately. The bound exists so that a wedge somewhere else in the loop can
+	 * never turn "the bridge died" into "the process never exits".
+	 */
+	const SHUTDOWN_DIALOG_UNWIND_TIMEOUT_MS = 5000;
+
+	/**
+	 * Settle every outstanding dialog before the process goes away.
+	 *
+	 * Shutdown has three doorways — an extension's `shutdownHandler`, SIGTERM /
+	 * SIGHUP, and stdin EOF — and all three land here. The last one is the one
+	 * that bites: stdin EOF is how a child learns its parent died, so if the relay
+	 * bridge crashes while Oskar is away with a permission ask outstanding, this
+	 * runs with a live `extension_ui_request` on the wire and the agent loop parked
+	 * in `beforeToolCall` waiting for an answer that can no longer arrive.
+	 *
+	 * Exiting from under that promise is not merely untidy: the dialog is garbage
+	 * collected unsettled, so the ask is lost with no record of it, and the session
+	 * is persisted with a tool call that neither ran nor was refused. Resolving the
+	 * dialogs fail-closed (`cancelPendingExtensionRequests`) and letting the loop
+	 * unwind to idle first means the transcript shows the call as aborted, and no
+	 * tool can execute on the way out.
+	 *
+	 * Deliberately *not* in scope: keeping the agent alive past its bridge. That is
+	 * a product decision (DECISIONS-PENDING #5), not a bug fix — stdin EOF stays a
+	 * termination signal here, exactly as it has always been.
+	 *
+	 * No pending dialogs means no work: the ordinary teardown path is untouched.
+	 */
+	const settlePendingDialogsForShutdown = async (): Promise<void> => {
+		if (pendingExtensionRequests.size === 0) return;
+		// Same ordering as the `abort` command: arm the signal first so the resumed
+		// continuation reports "Operation aborted" rather than the dialog's own
+		// block reason, then release the dialogs so idle can actually arrive.
+		const aborted = session.abort();
+		cancelPendingExtensionRequests();
+		let unwindTimer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await Promise.race([
+				aborted,
+				new Promise<void>((resolve) => {
+					unwindTimer = setTimeout(resolve, SHUTDOWN_DIALOG_UNWIND_TIMEOUT_MS);
+				}),
+			]);
+		} catch {
+			// A failed abort must not strand the shutdown; we are exiting regardless.
+		} finally {
+			if (unwindTimer) clearTimeout(unwindTimer);
+		}
+	};
+
 	async function shutdown(exitCode = 0, signal?: NodeJS.Signals): Promise<never> {
 		if (shuttingDown) {
 			process.exit(exitCode);
@@ -728,6 +853,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		for (const cleanup of signalCleanupHandlers) {
 			cleanup();
 		}
+		await settlePendingDialogsForShutdown();
 		unsubscribe?.();
 		unsubscribeBackpressure?.();
 		await runtimeHost.dispose();
@@ -769,10 +895,72 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		) {
 			const response = parsed as RpcExtensionUIResponse;
 			const pending = pendingExtensionRequests.get(response.id);
-			if (pending) {
+			if (!pending) return;
+
+			// R34-PERM.5 on the RPC surface. An answer that NAMES an option is decided by that
+			// option's own `decision`, checked against the immutable set this request was emitted
+			// with. Without this, `{confirmed: true, optionId: "deny"}` — a client whose operator
+			// pressed DENY — was recorded as an APPROVAL, and the resolution disagreed with what
+			// the operator's client believes it sent.
+			// PRESENCE, not type. `rpc-types.ts` says an `optionId`, WHEN PRESENT, must be one of the
+			// ids the matching request offered — and `123` or `null` is present and is not among
+			// them. Gating on `typeof === "string"` would reclassify a wrongly-typed optionId as
+			// ABSENT and fall back to `confirmed`, which is the one shape a buggy or hostile
+			// middlebox produces. (`undefined` cannot reach here from the wire — this is JSON — and
+			// is excluded so an in-process caller spreading an absent field reads as absent.)
+			const named: unknown = "optionId" in response ? (response as { optionId?: unknown }).optionId : undefined;
+			// A request that recorded NO offered set has nothing for an `optionId` to be validated
+			// against, so R34-PERM.5 — whose rule is about the offered set a request actually
+			// carries — has no subject here, and the answer decides on `confirmed` as it always
+			// did. Do NOT "tighten" this into a refusal: five in-repo dialogs (`/rewind`'s "Restore
+			// files?" confirm, `/agent`'s picker, two llama dialogs, `promptForMissingSessionCwd`)
+			// pass no `detail`, no `timeout` and no `signal`, so nothing but an answer can ever
+			// settle them — refusing there wedges the agent loop permanently. (An offered set that is
+			// EMPTY is still a set: a caller that authorised no option authorised none, and every
+			// `optionId` against it is refused.)
+			if (named !== undefined && pending.offeredOptions !== undefined) {
+				// Never by position, index, label or a magic id string: an option's meaning is only
+				// ever its own `decision` field. A repeated id makes "which option was named"
+				// undecidable, so that is a refusal too rather than a coin flip on the first match.
+				const matches = pending.offeredOptions.filter((option) => (option.id as unknown) === named);
+				if (matches.length !== 1) {
+					// Refuse WITHOUT consuming the request: it stays pending and answerable, so a
+					// later valid answer still decides it. Dropping it here would strand the agent
+					// loop; resolving it here would let an unoffered word decide a permission.
+					output(
+						error(
+							response.id,
+							"extension_ui_response",
+							matches.length === 0
+								? `optionId ${JSON.stringify(named)} is not one of the options offered for this request; the request is still pending`
+								: `optionId ${JSON.stringify(named)} is ambiguous in the offered options for this request; the request is still pending`,
+						),
+					);
+					await waitForRawStdoutBackpressure();
+					return;
+				}
+
+				// The offered set wins over `confirmed`. A client that sends both is already
+				// confused about its own answer, and only one of the two was ever offered to it.
+				const chosen = matches[0] as OfferedOption;
 				pendingExtensionRequests.delete(response.id);
-				pending.resolve(response);
+				// THE ID THE OPERATOR ACTUALLY NAMED, carried through instead of being flattened
+				// into a boolean. `confirmed` below is the same fact for a caller that can only
+				// read a boolean; this is the same fact for a caller that can record which of
+				// `deny-once` and `deny-always` was pressed. Said BEFORE the resolve.
+				pending.reportOutcome?.({
+					kind: chosen.decision === "approve" ? "approved" : "denied",
+					chosenOptionId: chosen.id,
+				});
+				pending.resolve({ ...response, confirmed: chosen.decision === "approve" } as RpcExtensionUIResponse);
+				return;
 			}
+
+			// No `optionId` to validate — absent, or present on a request that offered no set to
+			// validate it against: decide on `confirmed`, exactly as before. Clients that only know
+			// yes/no keep working unchanged.
+			pendingExtensionRequests.delete(response.id);
+			pending.resolve(response);
 			return;
 		}
 

@@ -133,9 +133,12 @@ describe("WebSocket — large stdout delivery", () => {
 	function startServer(): { url: string; server: ReturnType<typeof Bun.serve> } {
 		manager = new SessionManager(new EventBus());
 		const { app } = createServer({ port: 0, authToken: AUTH_TOKEN, manager });
-		const server = Bun.serve({ port: 0, fetch: app.fetch, websocket });
+		// Loopback named explicitly: a hostname-less Bun.serve binds every
+		// interface, and a test fixture must not be the one thing in the repo
+		// that opens the machine to the LAN (R32-FLEET.9).
+		const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: app.fetch, websocket });
 		servers.push(server);
-		return { url: `ws://localhost:${server.port}`, server };
+		return { url: `ws://127.0.0.1:${server.port}`, server };
 	}
 
 	afterEach(async () => {

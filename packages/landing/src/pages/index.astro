@@ -3,7 +3,7 @@ import Atelier from "../layouts/Atelier.astro";
 import Navbar from "../components/Navbar.astro";
 
 const title = "draht - coding agents that ship for less";
-const description = "Draht routes each coding task to the cheapest model that can do it. It writes tests first, checks the domain, and logs every call. Use it in Claude Code or run the CLI.";
+const description = "Draht routes coding tasks by capability and cost, writes the failing test first, reads your domain model, and logs each model call. Use it in Claude Code or from the CLI.";
 ---
 
 <Atelier title={title} description={description}>
@@ -49,7 +49,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 
 			<div class="hero-grid">
 				<div class="hero-lede">
-					<span class="drop">Draht</span> is German for <em class="wire">wire</em>. It routes coding-agent work. It picks the cheapest model for each step. It writes tests before code. It reads your domain model. It logs each call for audit or billing.
+					<span class="drop">Draht</span> is German for <em class="wire">wire</em>. It routes each coding-agent task to a suitable model, writes the failing test first, reads the codebase's domain map, and keeps a local record of model calls and cost.
 				</div>
 
 				<div class="hero-cta">
@@ -120,7 +120,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 					<div class="pin"></div>
 					<div class="label">II. Test</div>
 					<h3>Test first. Use the domain.</h3>
-					<p>The agent writes a failing test before code. It reads bounded contexts, aggregates, and your team names. It edits in that language. Red tests block commits.</p>
+					<p>The agent writes a failing test before code. It reads bounded contexts, aggregates, and the terms your team uses. It edits in that language. Red tests block commits.</p>
 				</div>
 				<div class="card">
 					<div class="pin"></div>
@@ -153,7 +153,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 						<div class="fnum">F/01</div>
 						<div>
 							<h4>Routing you can <em>read.</em></h4>
-							<p>Policies are TypeScript. Match file glob, task type, context size, or budget. Route to Haiku, Sonnet, Opus, GPT, Gemini, or your own model. Override per repo, branch, or session.</p>
+							<p>Policies are TypeScript. Match on a file glob, task type, context size, or budget. Route to Haiku, Sonnet, Opus, GPT, Gemini, or your own model. Override the policy per repository, branch, or session.</p>
 						</div>
 					</div>
 					<div class="feat">
@@ -235,7 +235,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 				<a class="pkg" href="https://github.com/draht-dev/draht">
 					<span class="pkg-idx">№ 08</span>
 					<div class="pkg-name">@draht/compliance <em>the notary</em></div>
-					<div class="pkg-desc">Logs for GDPR, routes by data region, and signs each model-call record. Ready when a client asks.</div>
+					<div class="pkg-desc">Records model calls, routes by data region, and signs each record. The audit log stays on disk for client review.</div>
 					<div class="pkg-tag">BIZ</div>
 				</a>
 				<a class="pkg" href="https://github.com/draht-dev/draht">
@@ -314,7 +314,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 					<div class="cnum">iv.</div>
 					<div class="neg">— Parallel by default —</div>
 					<h5>Split work. Don't queue it.</h5>
-					<p>Run independent work in parallel sub-agents. The orchestrator merges the output. One long task becomes three short tasks.</p>
+					<p>Run independent work in parallel sub-agents. Keep dependent work ordered. The orchestrator merges the results.</p>
 				</div>
 				<div class="clause">
 					<div class="cnum">v.</div>
@@ -386,8 +386,40 @@ const description = "Draht routes each coding task to the cheapest model that ca
 						<li>Team workshop &amp; technical handover</li>
 						<li>On-prem / air-gapped work scoped separately</li>
 					</ul>
+					<p class="tier-note">We bring draht into your organization — the outcome is running tool infrastructure, not a single shipped use case. Many teams start with a <a href="/week">Week</a> and decide on the rollout afterward.</p>
 					<a class="tier-cta" href="mailto:oskar@draht.dev?subject=Draht%20team%20rollout">Scope the rollout →</a>
 				</div>
+			</div>
+		</section>
+
+		<!-- ===================== DOORS ===================== -->
+		<section class="section doors">
+			<div class="doors-kicker">Drei Türen <em>— same build, three ways in</em></div>
+
+			<div class="doors-grid">
+				<a class="door" href="/docs">
+					<div class="door-num">i.</div>
+					<div class="door-name">the tool<em>.</em></div>
+					<div class="door-tag">draht — open source, self-serve</div>
+					<p>Route coding-agent work to the cheapest model that can do it. Live today.</p>
+					<span class="door-cta">Read the docs →</span>
+				</a>
+
+				<a class="door" href="/uni">
+					<div class="door-num">ii.</div>
+					<div class="door-name">the uni<em>.</em></div>
+					<div class="door-tag">draht uni — building in public</div>
+					<p>Follow the university's build one episode at a time. Episode 1 is live.</p>
+					<span class="door-cta">Join the waitlist →</span>
+				</a>
+
+				<a class="door" href="/week">
+					<div class="door-num">iii.</div>
+					<div class="door-name">the week<em>.</em></div>
+					<div class="door-tag">Agentic Engineering Week</div>
+					<p>Ship a use case in five days, with your team and our agents.</p>
+					<span class="door-cta">Explore the Week →</span>
+				</a>
 			</div>
 		</section>
 
@@ -396,6 +428,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 			<div class="foot-col">
 				<h6>Werkstatt</h6>
 				<a href="https://github.com/draht-dev/draht">Source on GitHub</a>
+				<a href="https://x.com/freyedev">Follow on X ↗</a>
 				<a href="https://www.npmjs.com/package/draht-claude">Plugin on npm</a>
 				<a href="/docs">Documentation</a>
 				<a href="https://claude.com/claude-code">Claude Code ↗</a>
@@ -1815,6 +1848,107 @@ const description = "Draht routes each coding task to the cheapest model that ca
 			background: transparent;
 			color: var(--copper);
 		}
+		.tier-note {
+			margin: 0 0 24px;
+			font-family: var(--f-ui);
+			font-size: 13px;
+			line-height: 1.55;
+			color: var(--paper-soft);
+		}
+		.tier-note a {
+			color: var(--copper);
+			border-bottom: 1px dotted var(--copper-dim);
+		}
+		.tier-note a:hover {
+			border-bottom-color: var(--copper);
+		}
+
+		/* ---------- Doors ---------- */
+		.doors {
+			padding-top: clamp(56px, 6vw, 96px);
+			padding-bottom: clamp(56px, 6vw, 96px);
+		}
+		.doors-kicker {
+			font-family: var(--f-mono);
+			font-size: 11px;
+			letter-spacing: 0.15em;
+			text-transform: uppercase;
+			color: var(--paper-soft);
+			margin-bottom: 32px;
+		}
+		.doors-kicker em {
+			font-style: normal;
+			color: var(--paper-soft);
+			opacity: 0.7;
+			text-transform: none;
+			letter-spacing: 0;
+			margin-left: 6px;
+		}
+		.doors-grid {
+			display: grid;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+			gap: 2px;
+			background: var(--rule);
+			border: 1px solid var(--rule);
+		}
+		.door {
+			background: var(--ink);
+			padding: clamp(24px, 2.5vw, 32px);
+			display: flex;
+			flex-direction: column;
+			min-width: 0;
+			transition: background 0.2s ease;
+		}
+		.door:hover {
+			background: color-mix(in oklab, var(--copper), transparent 95%);
+		}
+		.door-num {
+			font-family: var(--f-mono);
+			font-size: 11px;
+			letter-spacing: 0.15em;
+			color: var(--paper-soft);
+			margin-bottom: 10px;
+		}
+		.door-name {
+			font-family: var(--f-display);
+			font-style: italic;
+			font-weight: 400;
+			font-size: 26px;
+			color: var(--paper);
+			letter-spacing: -0.01em;
+			margin-bottom: 6px;
+		}
+		.door-name em {
+			font-style: italic;
+			color: var(--copper);
+			font-weight: 400;
+		}
+		.door-tag {
+			font-family: var(--f-mono);
+			font-size: 10px;
+			letter-spacing: 0.1em;
+			text-transform: uppercase;
+			color: var(--paper-soft);
+			margin-bottom: 16px;
+		}
+		.door p {
+			margin: 0 0 20px;
+			font-size: 14px;
+			line-height: 1.6;
+			color: var(--paper-dim);
+			flex: 1;
+		}
+		.door-cta {
+			font-family: var(--f-mono);
+			font-size: 11px;
+			letter-spacing: 0.1em;
+			text-transform: uppercase;
+			color: var(--paper-soft);
+			transition: color 0.2s ease;
+		}
+		.door:hover .door-cta {
+			color: var(--copper);
+		}
 
 		/* ---------- Packages ---------- */
 		.pkg-list {
@@ -1985,6 +2119,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 			.manifest { grid-template-columns: minmax(0, 1fr); }
 			.install-split { grid-template-columns: minmax(0, 1fr); }
 			.pricing { grid-template-columns: minmax(0, 1fr); }
+			.doors-grid { grid-template-columns: minmax(0, 1fr); }
 			.pkg { grid-template-columns: 30px minmax(0, 1fr); }
 			.pkg-name em { display: block; margin-left: 0; margin-top: 2px; font-size: 0.55em; }
 			.pkg-desc, .pkg-tag { grid-column: 2; text-align: left; }

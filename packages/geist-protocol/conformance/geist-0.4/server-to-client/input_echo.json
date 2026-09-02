@@ -1,0 +1,13 @@
+{
+	"protocol": "geist/0.x",
+	"version": "0.4",
+	"direction": "server-to-client",
+	"type": "input_echo",
+	"recordedFrom": "scripts/geist-conformance/reference-daemon.mjs over ws://127.0.0.1/attach, relaying a real draht SocketServer behind a real device-credential exchange",
+	"normalizedFields": [],
+	"frame": {
+		"type": "input_echo",
+		"data": "ship it\n",
+		"clientId": "client-b"
+	}
+}

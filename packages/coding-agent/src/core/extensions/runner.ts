@@ -6,6 +6,7 @@ import type { AgentMessage } from "@draht/agent-core";
 import type { ImageContent, Model, Provider, ProviderHeaders } from "@draht/ai";
 import type { KeyId } from "@draht/tui";
 import { type Theme, theme } from "../../modes/interactive/theme/theme.ts";
+import { CheckpointManager } from "../checkpoints/checkpoint-manager.ts";
 import type { ResourceDiagnostic } from "../diagnostics.ts";
 import type { KeybindingsConfig } from "../keybindings.ts";
 import type { ModelRegistry } from "../model-registry.ts";
@@ -54,6 +55,7 @@ import type {
 	ResourcesDiscoverResult,
 	SessionBeforeCompactResult,
 	SessionBeforeForkResult,
+	SessionBeforeRewindResult,
 	SessionBeforeSwitchResult,
 	SessionBeforeTreeResult,
 	SessionShutdownEvent,
@@ -138,14 +140,22 @@ type RunnerEmitEvent = Exclude<
 
 type SessionBeforeEvent = Extract<
 	RunnerEmitEvent,
-	{ type: "session_before_switch" | "session_before_fork" | "session_before_compact" | "session_before_tree" }
+	{
+		type:
+			| "session_before_switch"
+			| "session_before_fork"
+			| "session_before_compact"
+			| "session_before_tree"
+			| "session_before_rewind";
+	}
 >;
 
 type SessionBeforeEventResult =
 	| SessionBeforeSwitchResult
 	| SessionBeforeForkResult
 	| SessionBeforeCompactResult
-	| SessionBeforeTreeResult;
+	| SessionBeforeTreeResult
+	| SessionBeforeRewindResult;
 
 type RunnerEmitResult<TEvent extends RunnerEmitEvent> = TEvent extends { type: "session_before_switch" }
 	? SessionBeforeSwitchResult | undefined
@@ -155,7 +165,9 @@ type RunnerEmitResult<TEvent extends RunnerEmitEvent> = TEvent extends { type: "
 			? SessionBeforeCompactResult | undefined
 			: TEvent extends { type: "session_before_tree" }
 				? SessionBeforeTreeResult | undefined
-				: undefined;
+				: TEvent extends { type: "session_before_rewind" }
+					? SessionBeforeRewindResult | undefined
+					: undefined;
 
 export type ExtensionErrorListener = (error: ExtensionError) => void;
 
@@ -294,6 +306,8 @@ export class ExtensionRunner {
 	private shortcutDiagnostics: ResourceDiagnostic[] = [];
 	private commandDiagnostics: ResourceDiagnostic[] = [];
 	private staleMessage: string | undefined;
+	private checkpointManager: CheckpointManager | undefined;
+	private checkpointManagerKey: string | undefined;
 
 	constructor(
 		extensions: Extension[],
@@ -336,6 +350,7 @@ export class ExtensionRunner {
 		this.runtime.setThinkingLevel = actions.setThinkingLevel;
 
 		// Bind runtime state methods to the runner
+		this.runtime.getCheckpointManager = () => this.resolveCheckpointManager();
 		this.runtime.assertActive = () => this.assertActive();
 		this.runtime.invalidate = (message?: string) => {
 			if (!this.staleMessage) {
@@ -447,7 +462,11 @@ export class ExtensionRunner {
 	}
 
 	hasUI(): boolean {
-		return this.uiContext !== noOpUIContext;
+		// Not an identity check alone: a decorator (e.g. the permission relay) is a different object
+		// than noOpUIContext but may still have nothing that can answer. Asking the context itself
+		// keeps an attachable session with zero attached clients honestly UI-less, so callers keep
+		// their loud fail-closed path instead of receiving a fabricated "denied" answer.
+		return this.uiContext !== noOpUIContext && (this.uiContext.hasAnswerSurface?.() ?? true);
 	}
 
 	getExtensionPaths(): string[] {
@@ -792,12 +811,39 @@ export class ExtensionRunner {
 		return context;
 	}
 
+	/**
+	 * Checkpoint manager backing `pi.checkpoints` (R42-RWD.8). One instance per
+	 * (cwd, session) so every extension — including the always-loaded
+	 * checkpoints builtin — shares the same snapshot namespace, and every
+	 * capture made through it dispatches `checkpoint_created`.
+	 */
+	private resolveCheckpointManager(): CheckpointManager | undefined {
+		const sessionFile = this.sessionManager.getSessionFile();
+		if (!sessionFile) return undefined;
+
+		const sessionId = this.sessionManager.getSessionId();
+		const key = `${this.cwd} ${sessionId} ${sessionFile}`;
+		if (!this.checkpointManager || this.checkpointManagerKey !== key) {
+			this.checkpointManager = new CheckpointManager({
+				cwd: this.cwd,
+				sessionId,
+				sessionFile,
+				onCaptured: async (record) => {
+					await this.emit({ type: "checkpoint_created", record });
+				},
+			});
+			this.checkpointManagerKey = key;
+		}
+		return this.checkpointManager;
+	}
+
 	private isSessionBeforeEvent(event: RunnerEmitEvent): event is SessionBeforeEvent {
 		return (
 			event.type === "session_before_switch" ||
 			event.type === "session_before_fork" ||
 			event.type === "session_before_compact" ||
-			event.type === "session_before_tree"
+			event.type === "session_before_tree" ||
+			event.type === "session_before_rewind"
 		);
 	}
 

@@ -481,8 +481,11 @@ describe("AgentHarness tools", () => {
 				await createBashTool().execute(
 					"bash-timeout-output",
 					{
-						command: "i=1; while [ $i -le 3000 ]; do echo line-$i; i=$((i + 1)); done; sleep 2",
-						timeout: 0.05,
+						// The timeout must fire during the sleep, never mid-loop: a loaded
+						// CI runner needs far more than 50ms to echo 3000 lines, and the
+						// point here is that output produced before the timeout survives.
+						command: "i=1; while [ $i -le 3000 ]; do echo line-$i; i=$((i + 1)); done; sleep 10",
+						timeout: 1,
 					},
 					undefined,
 					undefined,
@@ -494,7 +497,7 @@ describe("AgentHarness tools", () => {
 
 			expect(error).toBeInstanceOf(Error);
 			const message = (error as Error).message;
-			expect(message).toContain("Command timed out after 0.05 seconds");
+			expect(message).toContain("Command timed out after 1 seconds");
 			const fullOutputPath = message.match(/Full output: ([^\]\n]+)/)?.[1];
 			expect(fullOutputPath).toBeDefined();
 			const fullOutput = getOrThrow(await context.env.readTextFile(fullOutputPath!));

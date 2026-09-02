@@ -195,6 +195,21 @@ describe("parseRlmArgs", () => {
  */
 const HAS_PYTHON3 = spawnSync("python3", ["--version"], { stdio: "ignore" }).status === 0;
 
+/**
+ * On Linux the driver is wrapped in `unshare --user --map-root-user --net
+ * --mount` (see packages/rlm/src/sandbox.ts) and is fail-closed. GitHub's
+ * Ubuntu 24.04 runners restrict unprivileged user namespaces, so `unshare`
+ * dies with "write failed /proc/self/uid_map: Operation not permitted" and
+ * the session ends in sandbox_violation. Probe the same namespace set the
+ * sandbox uses and skip when it's unavailable. Non-Linux hosts never take
+ * the `unshare` path, so the probe only gates Linux.
+ */
+const HAS_USERNS =
+	process.platform !== "linux" ||
+	spawnSync("unshare", ["--user", "--map-root-user", "--net", "--mount", "--", "true"], {
+		stdio: "ignore",
+	}).status === 0;
+
 describe("handleRlmCommand", () => {
 	let tmpDir: string | undefined;
 	let originalCwd: string;
@@ -243,7 +258,7 @@ describe("handleRlmCommand", () => {
 		expect(printed).toMatch(/--input/);
 	});
 
-	test.skipIf(!HAS_PYTHON3)(
+	test.skipIf(!HAS_PYTHON3 || !HAS_USERNS)(
 		"2. end-to-end on a 500KB+ fixture with a fake router finds the needle and exits 0",
 		async () => {
 			tmpDir = mkdtempSync(join(tmpdir(), "rlm-cli-test-"));

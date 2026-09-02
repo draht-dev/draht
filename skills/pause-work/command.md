@@ -9,14 +9,6 @@ Create a handoff document for session continuity.
 
 > **Tool note**: Invoke `draht-tools <subcommand>` as `node "<PLUGIN_ROOT>/bin/draht-tools.cjs" <subcommand>` via the Bash tool.
 
-## Atomic Reasoning
-
-Before pausing, decompose session state into atomic reasoning units:
-
-1. **State the logical component** — What was accomplished this session? What is in-progress? What is the current phase/task?
-2. **Validate independence** — Are there uncommitted changes? Are there blockers? What decisions were made?
-3. **Verify correctness** — Is the current state stable? Can work resume cleanly? What context needs to be captured?
-
 ## Steps
 1. Run `git status` and `git diff --stat` to see uncommitted changes
 2. Read `.planning/STATE.md` for current phase/status
@@ -37,3 +29,4 @@ Before pausing, decompose session state into atomic reasoning units:
 - Be specific — "fix bug in auth" is useless; "null check in src/auth/session.ts:42, test reproducing in test/auth-null.test.ts" is useful
 - Include exact commands, not vague directions
 - Capture any in-flight decisions or trade-offs being weighed
+- Handoff and lesson prose follows the `unslop` skill — plain words, no filler, specifics over vibes; commands, paths, and quoted output stay verbatim.

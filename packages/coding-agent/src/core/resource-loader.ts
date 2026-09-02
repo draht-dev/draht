@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import chalk from "chalk";
 import { CONFIG_DIR_NAME } from "../config.ts";
@@ -7,7 +7,8 @@ import type { ResourceDiagnostic } from "./diagnostics.ts";
 
 export type { ResourceCollision, ResourceDiagnostic } from "./diagnostics.ts";
 
-import { canonicalizePath, isLocalPath, resolvePath } from "../utils/paths.ts";
+import { comparablePath, realPathStrict } from "../utils/canonical-path.ts";
+import { isLocalPath, resolvePath } from "../utils/paths.ts";
 import { createEventBus, type EventBus } from "./event-bus.ts";
 import {
 	clearExtensionCache,
@@ -67,22 +68,79 @@ function resolvePromptInput(input: string | undefined, description: string): str
 	return input;
 }
 
-function loadContextFileFromDir(dir: string): { path: string; content: string } | null {
+/**
+ * Canonical-path containment with a separator boundary (GSEC-13).
+ *
+ * `child.startsWith(root)` alone counts `/x/projects-evil` as inside `/x/projects`,
+ * which is the defect this helper exists to avoid. Both arguments must already be
+ * canonical (realpath'd) — a containment test over uncanonicalized paths can be
+ * walked out of with `..` or a symlinked component.
+ */
+function isCanonicallyContained(child: string, root: string): boolean {
+	if (child === root) return true;
+	const prefix = root.endsWith(sep) ? root : `${root}${sep}`;
+	return child.startsWith(prefix);
+}
+
+/**
+ * Load the context file (AGENTS.md / CLAUDE.md) sitting directly in `dir`, if any.
+ *
+ * SECURITY (GSEC-13, R36-SPAWN.6): project context is read automatically and its bytes
+ * land verbatim in the system prompt (see `buildSystemPrompt`), so it is attacker-reachable
+ * input on any repository a session is pointed at. Three properties, in this order:
+ *
+ *  1. NO-FOLLOW. `lstatSync` first, and a symbolic link is refused outright rather than
+ *     resolved. `statSync` follows, so the previous version read an `AGENTS.md` that was a
+ *     symlink to `~/.ssh/id_rsa` and handed it to the provider. Do not "simplify" this back
+ *     to `statSync` — the check and the read must both be about the same inode we lstat'd.
+ *  2. REGULAR FILE ONLY. A fifo, device, socket or directory named `AGENTS.md` is skipped
+ *     (a fifo would otherwise block `readFileSync` forever).
+ *  3. CONTAINMENT. When `canonicalRoot` is set, the realpath of the file must be inside it,
+ *     with a separator boundary. Not redundant with the walk break in `loadProjectContextFiles`:
+ *     that one resolves the *directory* and stops the walk; this one resolves the file
+ *     itself and fails CLOSED on any realpath error. Do not "simplify" it away.
+ *
+ * `canonicalRoot` undefined means "no constraint", which is exactly today's behaviour for
+ * every discovered session, and for the agent-dir global context file, which is a USER
+ * resource rather than a project one and stays exempt.
+ */
+function loadContextFileFromDir(dir: string, canonicalRoot?: string): { path: string; content: string } | null {
 	const candidates = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
 	for (const filename of candidates) {
 		const filePath = join(dir, filename);
-		if (existsSync(filePath)) {
-			try {
-				if (!statSync(filePath).isFile()) {
+		// lstat, never stat: a symlink must be refused, not resolved. Its failure is the
+		// old `existsSync` guard and stays silent — the ancestor walk crosses directories
+		// this process cannot read (EACCES) on the way to `/`, and warning about each of
+		// four candidates in each of them would be noise, not a finding.
+		let stats: ReturnType<typeof lstatSync>;
+		try {
+			stats = lstatSync(filePath);
+		} catch {
+			continue;
+		}
+		if (stats.isSymbolicLink()) {
+			console.error(chalk.yellow(`Warning: Ignoring context file ${filePath}: symbolic links are not followed`));
+			continue;
+		}
+		if (!stats.isFile()) {
+			continue;
+		}
+		try {
+			if (canonicalRoot !== undefined) {
+				const canonical = realpathSync(filePath);
+				if (!isCanonicallyContained(canonical, canonicalRoot)) {
+					console.error(
+						chalk.yellow(`Warning: Ignoring context file ${filePath}: outside context root ${canonicalRoot}`),
+					);
 					continue;
 				}
-				return {
-					path: filePath,
-					content: readFileSync(filePath, "utf-8"),
-				};
-			} catch (error) {
-				console.error(chalk.yellow(`Warning: Could not read ${filePath}: ${error}`));
 			}
+			return {
+				path: filePath,
+				content: readFileSync(filePath, "utf-8"),
+			};
+		} catch (error) {
+			console.error(chalk.yellow(`Warning: Could not read ${filePath}: ${error}`));
 		}
 	}
 	return null;
@@ -100,8 +158,8 @@ function loadContextFileFromDir(dir: string): { path: string; content: string } 
 function findShadowedContextFile(cwd: string): string | undefined {
 	const gitPaths = findGitPaths(cwd);
 	if (!gitPaths) return undefined;
-	const commonGitDir = canonicalizePath(gitPaths.commonGitDir);
-	const worktreeRoot = canonicalizePath(gitPaths.repoDir);
+	const commonGitDir = comparablePath(gitPaths.commonGitDir);
+	const worktreeRoot = comparablePath(gitPaths.repoDir);
 	const mainRepoRoot = dirname(commonGitDir);
 	// False for an ordinary repo, where the two are the same dir, and for a sibling
 	// worktree (`git worktree add ../feat`), whose main repo is not an ancestor.
@@ -110,7 +168,7 @@ function findShadowedContextFile(cwd: string): string | undefined {
 	// itself checked out from the same repo. In a bare layout (`proj/.bare` +
 	// `proj/main`) it is just the directory holding `.bare`, which tracks nothing; a
 	// submodule's gitdir has no `commondir`, so it lands under `.git/modules`.
-	if (canonicalizePath(join(mainRepoRoot, ".git")) !== commonGitDir) return undefined;
+	if (comparablePath(join(mainRepoRoot, ".git")) !== commonGitDir) return undefined;
 	const worktreeContextFile = loadContextFileFromDir(worktreeRoot);
 	return worktreeContextFile ? join(mainRepoRoot, basename(worktreeContextFile.path)) : undefined;
 }
@@ -118,9 +176,27 @@ function findShadowedContextFile(cwd: string): string | undefined {
 export function loadProjectContextFiles(options: {
 	cwd: string;
 	agentDir: string;
+	/**
+	 * Absolute path the ancestor walk stops at, and the root every discovered project
+	 * context file must be canonically contained under (R36-SPAWN.6).
+	 *
+	 * This is the PROJECT ROOT, not the session cwd: draht-mono itself keeps an AGENTS.md
+	 * at the repo root that subdirectory sessions are meant to inherit, so rooting at cwd
+	 * would silently drop it.
+	 *
+	 * Left unset the walk runs to `/` and nothing is refused on containment grounds, which
+	 * is byte-identical to the behaviour every discovered session has today.
+	 */
+	contextRoot?: string;
 }): Array<{ path: string; content: string }> {
-	const resolvedCwd = resolvePath(options.cwd);
+	// The gate's own chain, from the spelling itself: `resolvePath` would collapse `..` before
+	// any link is followed and walk ancestors the gate never saw. Unresolvable contributes none.
+	const realCwd = realPathStrict(options.cwd);
 	const resolvedAgentDir = resolvePath(options.agentDir);
+	const canonicalRoot =
+		options.contextRoot === undefined ? undefined : realPathStrict(resolvePath(options.contextRoot));
+	// A root that will not resolve contains nothing; `undefined` would mean "no constraint".
+	const contextRootUnresolvable = options.contextRoot !== undefined && canonicalRoot === undefined;
 
 	const contextFiles: Array<{ path: string; content: string }> = [];
 	const seenPaths = new Set<string>();
@@ -133,13 +209,23 @@ export function loadProjectContextFiles(options: {
 
 	const ancestorContextFiles: Array<{ path: string; content: string }> = [];
 
-	const shadowedContextFile = findShadowedContextFile(resolvedCwd);
-	let currentDir = resolvedCwd;
+	const shadowedContextFile = realCwd === undefined ? undefined : findShadowedContextFile(realCwd);
+	let currentDir = realCwd;
 
-	while (true) {
-		const contextFile = loadContextFileFromDir(currentDir);
+	while (currentDir !== undefined && !contextRootUnresolvable) {
+		// Stops the walk at the context root, and refuses a cwd outside it entirely. A
+		// directory whose real path is unknown is not known to be contained either.
+		if (canonicalRoot !== undefined) {
+			const realCurrentDir = realPathStrict(currentDir);
+			if (realCurrentDir === undefined || !isCanonicallyContained(realCurrentDir, canonicalRoot)) {
+				break;
+			}
+		}
+		const contextFile = loadContextFileFromDir(currentDir, canonicalRoot);
 		const isShadowed =
-			shadowedContextFile !== undefined && canonicalizePath(contextFile?.path ?? "") === shadowedContextFile;
+			shadowedContextFile !== undefined &&
+			contextFile !== null &&
+			comparablePath(contextFile.path) === shadowedContextFile;
 		if (contextFile && !isShadowed && !seenPaths.has(contextFile.path)) {
 			ancestorContextFiles.unshift(contextFile);
 			seenPaths.add(contextFile.path);
@@ -157,6 +243,11 @@ export function loadProjectContextFiles(options: {
 
 export interface DefaultResourceLoaderOptions {
 	cwd: string;
+	/**
+	 * `cwd` before `path.resolve` collapsed any `..`, for callers that resolve first.
+	 * The ancestor skill walk needs the uncollapsed spelling to resolve it physically.
+	 */
+	cwdSpelling?: string;
 	agentDir: string;
 	settingsManager?: SettingsManager;
 	eventBus?: EventBus;
@@ -170,6 +261,8 @@ export interface DefaultResourceLoaderOptions {
 	noPromptTemplates?: boolean;
 	noThemes?: boolean;
 	noContextFiles?: boolean;
+	/** Absolute project root that automatically-read context files must stay inside (R36-SPAWN.6). */
+	contextRoot?: string;
 	systemPrompt?: string;
 	appendSystemPrompt?: string[];
 	extensionsOverride?: (base: LoadExtensionsResult) => LoadExtensionsResult;
@@ -194,6 +287,7 @@ export interface DefaultResourceLoaderOptions {
 
 export class DefaultResourceLoader implements ResourceLoader {
 	private cwd: string;
+	private cwdSpelling: string;
 	private agentDir: string;
 	private settingsManager: SettingsManager;
 	private eventBus: EventBus;
@@ -208,6 +302,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private noPromptTemplates: boolean;
 	private noThemes: boolean;
 	private noContextFiles: boolean;
+	private contextRoot?: string;
 	private systemPromptSource?: string;
 	private appendSystemPromptSource?: string[];
 	private extensionsOverride?: (base: LoadExtensionsResult) => LoadExtensionsResult;
@@ -252,11 +347,13 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 	constructor(options: DefaultResourceLoaderOptions) {
 		this.cwd = resolvePath(options.cwd);
+		this.cwdSpelling = options.cwdSpelling ?? options.cwd;
 		this.agentDir = resolvePath(options.agentDir);
 		this.settingsManager = options.settingsManager ?? SettingsManager.create(this.cwd, this.agentDir);
 		this.eventBus = options.eventBus ?? createEventBus();
 		this.packageManager = new DefaultPackageManager({
 			cwd: this.cwd,
+			cwdSpelling: this.cwdSpelling,
 			agentDir: this.agentDir,
 			settingsManager: this.settingsManager,
 		});
@@ -270,6 +367,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.noPromptTemplates = options.noPromptTemplates ?? false;
 		this.noThemes = options.noThemes ?? false;
 		this.noContextFiles = options.noContextFiles ?? false;
+		this.contextRoot = options.contextRoot;
 		this.systemPromptSource = options.systemPrompt;
 		this.appendSystemPromptSource = options.appendSystemPrompt;
 		this.extensionsOverride = options.extensionsOverride;
@@ -515,8 +613,9 @@ export class DefaultResourceLoader implements ResourceLoader {
 			agentsFiles: this.noContextFiles
 				? []
 				: loadProjectContextFiles({
-						cwd: this.cwd,
+						cwd: this.cwdSpelling,
 						agentDir: this.agentDir,
+						contextRoot: this.contextRoot,
 					}),
 		};
 		const resolvedAgentsFiles = this.agentsFilesOverride ? this.agentsFilesOverride(agentsFiles) : agentsFiles;
@@ -849,7 +948,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 		for (const p of [...primary, ...additional]) {
 			const resolved = this.resolveResourcePath(p);
-			const canonicalPath = canonicalizePath(resolved);
+			const canonicalPath = comparablePath(resolved);
 			if (seen.has(canonicalPath)) continue;
 			seen.add(canonicalPath);
 			merged.push(resolved);

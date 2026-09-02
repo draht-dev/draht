@@ -34,9 +34,9 @@ describe("generate-skills-artifacts: computeArtifacts is a pure function", () =>
 		expect(second).toEqual(first);
 	});
 
-	it("discovers 90 artifacts from the 28 canonical skills", () => {
+	it("discovers 124 artifacts from the 38 canonical skills", () => {
 		const artifacts = computeArtifacts(SKILLS_ROOT);
-		expect(artifacts.length).toBe(90);
+		expect(artifacts.length).toBe(124);
 	});
 
 	it("emits no packages/draht-claude skills/<cmd>/ wrapper artifacts (no wrapper skills on the claude side)", () => {
@@ -65,6 +65,57 @@ describe("generate-skills-artifacts: computeArtifacts is a pure function", () =>
 	});
 });
 
+describe("generate-skills-artifacts: plain-skill extra files, on a synthetic skills root", () => {
+	let tmpSkillsRoot: string;
+
+	beforeEach(() => {
+		tmpSkillsRoot = mkdtempSync(join(tmpdir(), "draht-skills-extra-"));
+	});
+
+	afterEach(() => {
+		rmSync(tmpSkillsRoot, { recursive: true, force: true });
+	});
+
+	function writeFile(relPath: string, content: string): void {
+		const full = join(tmpSkillsRoot, relPath);
+		mkdirSync(join(full, ".."), { recursive: true });
+		writeFileSync(full, content);
+	}
+
+	it("mirrors a plain skill's references/ file into both packages verbatim", () => {
+		writeFile("plain/SKILL.md", "---\nname: plain\ndescription: fixture\n---\nsee `./references/patterns.md`\n");
+		writeFile("plain/references/patterns.md", "worked examples\n");
+
+		const artifacts = computeArtifacts(tmpSkillsRoot);
+		const extras = artifacts.filter((a: { relPath: string }) => a.relPath === "skills/plain/references/patterns.md");
+		expect(extras.map((a: { pkg: string }) => a.pkg).sort()).toEqual(["draht-claude", "draht-codex"]);
+		for (const extra of extras) expect(extra.content).toBe("worked examples\n");
+	});
+
+	it("resolves the generic <PLUGIN_ROOT> token per host inside extra files", () => {
+		writeFile("plain/SKILL.md", "---\nname: plain\ndescription: fixture\n---\nbody\n");
+		writeFile("plain/references/tool-note.md", "run <PLUGIN_ROOT>/scripts/tool.cjs\n");
+
+		const artifacts = computeArtifacts(tmpSkillsRoot);
+		const byPkg = new Map(
+			artifacts
+				.filter((a: { relPath: string }) => a.relPath === "skills/plain/references/tool-note.md")
+				.map((a: { pkg: string; content: string }) => [a.pkg, a.content]),
+		);
+		expect(byPkg.get("draht-claude")).not.toContain("<PLUGIN_ROOT>");
+		expect(byPkg.get("draht-codex")).not.toContain("<PLUGIN_ROOT>");
+		expect(byPkg.get("draht-claude")).not.toBe(byPkg.get("draht-codex"));
+	});
+
+	it("rejects extra files under a command skill (no claude-side skills/<cmd>/ dir exists to receive them)", () => {
+		writeFile("cmd/SKILL.md", "---\nname: cmd\ndescription: fixture\n---\nbody\n");
+		writeFile("cmd/command.md", "command template\n");
+		writeFile("cmd/references/notes.md", "stray\n");
+
+		expect(() => computeArtifacts(tmpSkillsRoot)).toThrow(/only supported for plain skills/);
+	});
+});
+
 describe("generate-skills-artifacts: CLI, isolated in a temp output root", () => {
 	let tmpRoot: string;
 
@@ -87,7 +138,7 @@ describe("generate-skills-artifacts: CLI, isolated in a temp output root", () =>
 	it("regenerated output into a temp root matches the real committed package files", () => {
 		run(["--output-root", tmpRoot]);
 		const generated = collectFiles(join(tmpRoot, "packages"));
-		expect(Object.keys(generated).length).toBe(90);
+		expect(Object.keys(generated).length).toBe(124);
 		for (const [relPath, content] of Object.entries(generated)) {
 			const committedPath = join(REPO_ROOT, "packages", relPath);
 			expect(readFileSync(committedPath, "utf8"), `${relPath} differs from the committed file`).toBe(content);

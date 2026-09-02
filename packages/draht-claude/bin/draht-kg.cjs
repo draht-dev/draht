@@ -330,26 +330,56 @@ function parseDecls(rel, content, lang) {
 				d.types.push({ name: m[1], line: i + 1, kind: "type" });
 			}
 		}
-		const impRe = /^import\s+(?:"([^"]+)"|\(([^)]*)\))/gm;
+		// Named (`import foo "path"`), blank (`_`) and dot (`.`) imports all count;
+		// a named alias becomes the local namespace so call binding can resolve
+		// through it. Applies to both single-line and block forms.
+		const impRe = /^import\s+(?:([\w.]+)\s+)?"([^"]+)"|^import\s+\(([^)]*)\)/gm;
 		let m2;
 		while ((m2 = impRe.exec(content)) !== null) {
-			const specs = m2[1] ? [m2[1]] : (m2[2].match(/"([^"]+)"/g) || []).map((s) => s.replace(/"/g, ""));
-			for (const spec of specs) d.imports.push({ spec, default: null, namespace: spec.split("/").pop(), names: [], reExport: false, dynamic: false, line: lineAt(content, m2.index) });
+			const entries = [];
+			if (m2[2]) entries.push({ alias: m2[1] || null, spec: m2[2] });
+			else if (m2[3]) {
+				for (const lm of m2[3].matchAll(/^\s*(?:([\w.]+)\s+)?"([^"]+)"/gm)) entries.push({ alias: lm[1] || null, spec: lm[2] });
+			}
+			for (const e of entries) {
+				const ns = e.alias && e.alias !== "_" && e.alias !== "." ? e.alias : e.spec.split("/").pop();
+				d.imports.push({ spec: e.spec, default: null, namespace: ns, names: [], reExport: false, dynamic: false, line: lineAt(content, m2.index) });
+			}
 		}
 	} else if (lang === "rust") {
+		// Track impl blocks by brace depth so `fn`s inside them become METHODS of
+		// the owning type (owner-scoped ids + `method` edges), not file-level
+		// functions. Covers both inherent impls and `impl Trait for Type`.
+		let currentImpl = null; // { name, depth at impl line }
+		let depth = 0;
 		for (let i = 0; i < lines.length; i++) {
 			const ln = lines[i];
 			let m;
 			if ((m = ln.match(/^\s*(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum|trait)\s+([A-Za-z_][\w]*)/))) {
 				d.classes.push({ name: m[1], line: i + 1, extends: null, implements: [], methods: [] });
-			} else if ((m = ln.match(/^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_][\w]*)/))) {
-				d.functions.push({ name: m[1], line: i + 1 });
-			} else if ((m = ln.match(/^\s*impl(?:<[^>]*>)?\s+([A-Za-z_][\w]*)\s+for\s+([A-Za-z_][\w]*)/))) {
+			} else if (!currentImpl && (m = ln.match(/^\s*impl(?:<[^>]*>)?\s+([A-Za-z_][\w]*)(?:<[^>]*>)?\s+for\s+([A-Za-z_][\w]*)/))) {
 				const owner = d.classes.find((c) => c.name === m[2]);
 				if (owner) owner.implements.push(m[1]);
+				currentImpl = { name: m[2], depth };
+			} else if (!currentImpl && (m = ln.match(/^\s*impl(?:<[^>]*>)?\s+([A-Za-z_][\w]*)/))) {
+				currentImpl = { name: m[1], depth };
+			} else if ((m = ln.match(/^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_][\w]*)/))) {
+				const owner = currentImpl ? d.classes.find((c) => c.name === currentImpl.name) : null;
+				if (owner) {
+					if (owner.methods.length < 80) owner.methods.push({ name: m[1], line: i + 1 });
+				} else {
+					d.functions.push({ name: m[1], line: i + 1 });
+				}
 			}
 			if ((m = ln.match(/^\s*use\s+([\w:]+)/))) {
 				d.imports.push({ spec: m[1], default: null, namespace: m[1].split("::").pop(), names: [], reExport: false, dynamic: false, line: i + 1 });
+			}
+			for (const ch of ln) {
+				if (ch === "{") depth++;
+				else if (ch === "}") {
+					depth--;
+					if (currentImpl && depth <= currentImpl.depth) currentImpl = null;
+				}
 			}
 		}
 	}

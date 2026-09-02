@@ -138,3 +138,25 @@ test("MAP.html embeds the Insights view", () => {
 	assert.ok(html.includes('id="tab-insights"'), "Insights tab missing from MAP.html");
 	assert.ok(html.includes("renderInsights"), "renderInsights missing from MAP.html");
 });
+
+test("star expansion reaches fixpoint on deep barrel chains (>5 hops)", () => {
+	// b7 —star→ b6 —star→ … —star→ b0 (defines the symbols). A fixed pass
+	// ceiling left the outer barrels empty (greptile P1).
+	const chainRoot = fs.mkdtempSync(path.join(os.tmpdir(), "draht-chain-test-"));
+	try {
+		fs.mkdirSync(path.join(chainRoot, ".git"));
+		fs.writeFileSync(path.join(chainRoot, "package.json"), JSON.stringify({ name: "chain", version: "1.0.0" }));
+		fs.mkdirSync(path.join(chainRoot, "src"), { recursive: true });
+		fs.writeFileSync(path.join(chainRoot, "src/b0.ts"), "export function deepest() { return 1; }\n");
+		for (let i = 1; i <= 7; i++) {
+			fs.writeFileSync(path.join(chainRoot, `src/b${i}.ts`), `export * from "./b${i - 1}.js";\n`);
+		}
+		execFileSync(process.execPath, [CLI, "map-graph", "--quiet"], { cwd: chainRoot, encoding: "utf-8" });
+		const m = JSON.parse(fs.readFileSync(path.join(chainRoot, ".planning/codebase/MAP.json"), "utf-8"));
+		const outer = m.modules.find((x) => x.id === "src/b7.ts");
+		assert.ok(outer.exports.some((e) => e.name === "deepest"), `outer barrel missing deep symbol: ${JSON.stringify(outer.exports)}`);
+		assert.equal(outer.exports.find((e) => e.name === "deepest").via, "src/b0.ts");
+	} finally {
+		fs.rmSync(chainRoot, { recursive: true, force: true });
+	}
+});

@@ -168,3 +168,44 @@ test("graph.json is graphify node-link compatible (directed, nodes+edges)", () =
 		assert.ok(typeof e.confidence_score === "number");
 	}
 });
+
+test("Go aliased/blank/dot imports produce imports_from edges (greptile P1)", () => {
+	write("gosrc/util/util.go", "package util\n\nfunc Helper() int { return 1 }\n");
+	write("gosrc/main.go", [
+		"package main",
+		"",
+		"import (",
+		"\tu \"example.com/proj/util\"",
+		"\t_ \"example.com/proj/logx\"",
+		")",
+		"",
+		"import f \"example.com/proj/fmtx\"",
+		"",
+		"func main() { u.Helper() }",
+	].join("\n"));
+	run(["build", "--quiet"]);
+	const g = loadGraph();
+	const fromMain = g.edges.filter((e) => e.source === "gosrc_main" && e.relation === "imports_from");
+	// One edge per distinct import path — the aliased block entries AND the
+	// single-line named import must all survive (the old regex dropped them).
+	assert.ok(fromMain.length >= 3, `aliased/blank/named Go imports dropped: ${JSON.stringify(fromMain)}`);
+});
+
+test("Rust impl methods belong to their type, not the file (greptile P1)", () => {
+	write("rsrc/widget.rs", [
+		"pub struct Widget { size: u32 }",
+		"",
+		"impl Widget {",
+		"    pub fn grow(&mut self) { self.size += 1; }",
+		"}",
+		"",
+		"pub fn free_standing() -> u32 { 2 }",
+	].join("\n"));
+	run(["build", "--quiet"]);
+	const g = loadGraph();
+	assert.ok(g.nodes.some((n) => n.id === "rsrc_widget_widget_grow"), "impl method should be owner-scoped");
+	assert.ok(!g.nodes.some((n) => n.id === "rsrc_widget_grow"), "impl method must not be a file-level function");
+	const methodEdge = g.edges.find((e) => e.relation === "method" && e.target === "rsrc_widget_widget_grow");
+	assert.ok(methodEdge && methodEdge.source === "rsrc_widget_widget", "method edge from owning type missing");
+	assert.ok(g.nodes.some((n) => n.id === "rsrc_widget_free_standing"), "top-level fn should stay file-level");
+});

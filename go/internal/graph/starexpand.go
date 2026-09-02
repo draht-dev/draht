@@ -63,8 +63,12 @@ func ExpandStarReExports(modules []model.Module, stars map[string][]StarReExport
 	}
 	sort.Strings(barrels)
 
+	// Iterate to the true fixpoint. Termination is guaranteed without a pass
+	// cap: every pass either appends at least one export (total additions are
+	// bounded by expansionCap × #barrels) or sets changed=false and stops —
+	// a fixed ceiling would leave >N-deep barrel chains incomplete.
 	const expansionCap = 60
-	for pass := 0; pass < 5; pass++ {
+	for {
 		changed := false
 		for _, bid := range barrels {
 			b := byID[bid]

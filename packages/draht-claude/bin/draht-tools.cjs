@@ -2389,12 +2389,13 @@ function visBuildMap(root) {
 	// Star re-export expansion: `export * from './x'` declares no names, so without this pass
 	// a star barrel's public API is invisible to graph-context/graph-query/MAP.html search.
 	// Copy the resolved target's exported names in as kind "re-export" (with `via` = the real
-	// defining module). Fixpoint over sorted barrel ids (≤5 passes) settles barrel→barrel
-	// chains deterministically; the 60-per-module cap bounds MAP.json growth.
+	// defining module). Iterated to the true fixpoint over sorted barrel ids — termination is
+	// guaranteed without a pass cap (each pass appends ≥1 export, bounded by 60 × #barrels,
+	// or stops); the 60-per-module cap bounds MAP.json growth.
 	if (starReExports.size > 0) {
 		const EXPANSION_CAP = 60;
 		const sortedBarrels = [...starReExports.keys()].sort();
-		for (let pass = 0; pass < 5; pass++) {
+		for (;;) {
 			let changed = false;
 			for (const barrelId of sortedBarrels) {
 				const barrel = moduleByRel.get(barrelId);

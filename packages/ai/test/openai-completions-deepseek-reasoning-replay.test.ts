@@ -13,9 +13,13 @@ const emptyUsage: Usage = {
 
 // Compat shape that detectCompat() returns for deepseek.com baseUrls today.
 // Used for tests that exercise convertMessages directly.
-const deepseekCompat: Omit<Required<OpenAICompletionsCompat>, "deferredToolsMode" | "thinkingTokenBudgetField"> & {
+const deepseekCompat: Omit<
+	Required<OpenAICompletionsCompat>,
+	"deferredToolsMode" | "thinkingTokenBudgetField" | "vllmPriority"
+> & {
 	deferredToolsMode?: OpenAICompletionsCompat["deferredToolsMode"];
 	thinkingTokenBudgetField?: OpenAICompletionsCompat["thinkingTokenBudgetField"];
+	vllmPriority?: OpenAICompletionsCompat["vllmPriority"];
 } = {
 	supportsStore: false,
 	supportsDeveloperRole: false,

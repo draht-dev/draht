@@ -140,7 +140,7 @@ Creative:
 - `typescript-discipline` — make illegal states unrepresentable
 - `blast-radius` — impact analysis beyond the diff on the evidence ladder
 - `cinematic-continuation` — provider-neutral, time-coded video continuation from bundled distilled style and continuity references
-- `judge` — the human-judgment queue: permission prompts and finished turns become cards a reviewer swipes through, with comments delivered back into the session
+- `judge` — the gate queue: the tests a session writes are replayed and mutated into evidence, then a reviewer judges whether the gate is real, with the verdict delivered back into the session
 
 ### Hooks and scripts
 
@@ -154,7 +154,7 @@ The plugin includes `hooks/hooks.json` plus these scripts:
 - `prompt-context.cjs` (UserPromptSubmit)
 - `post-edit-check.cjs` (PostToolUse on `Edit`/`Write`/`MultiEdit`)
 - `stop-quality-gate.cjs` (Stop)
-- `judge-hook.cjs` (UserPromptSubmit, Stop, PermissionRequest) — the human-judgment queue; inert unless the `judge` TUI in `bin/judge` is running
+- `judge-hook.cjs` (PostToolUse, PreToolUse, UserPromptSubmit, Stop, PermissionRequest) — the gate queue: a new test is replayed against the code as it stands, and mutated once the implementation lands; inert unless the `judge` TUI in `bin/judge` is running
 
 Codex loads plugin-bundled hooks only after the user reviews and trusts them.
 

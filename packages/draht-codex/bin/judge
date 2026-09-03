@@ -4,6 +4,7 @@
     judge            open the TUI in this terminal
     judge open       open the TUI in a new cmux split (right)
     judge list       print the open queue and exit
+    judge gates      print the gate ledger and kill-rate trend
     judge clear      expire every open card
 
 Keys:  →/l approve   ←/h reject   c comment then swipe   s skip
@@ -20,6 +21,7 @@ from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
 sys.path.insert(0, os.path.join(HERE, "..", "scripts"))
+import judgegates as G  # noqa: E402
 import judgelib as J  # noqa: E402
 
 REFRESH = 1.0
@@ -141,7 +143,7 @@ class Judge:
         scr = self.scr
         scr.erase()
         h, w = scr.getmaxyx()
-        perms = sum(1 for c in self.queue if c["kind"] == "permission")
+        perms = sum(1 for c in self.queue if c["kind"] in J.BLOCKING_KINDS)
         sessions = len({c["session_id"] for c in self.queue})
 
         # header
@@ -167,8 +169,14 @@ class Judge:
         top, bottom = 2, h - 3
         inner = cw - 4
 
-        kind_attr = C["warn_bg"] if card["kind"] == "permission" else C["cyan"] | curses.A_REVERSE
-        kind_txt = " PERMISSION " if card["kind"] == "permission" else " REVIEW "
+        conclusion = (m0 := card.get("meta") or {}).get("verify", {}).get("conclusion", "")
+        if card["kind"] == "permission":
+            kind_attr, kind_txt = C["warn_bg"], " PERMISSION "
+        elif card["kind"] == "gate":
+            kind_attr = C["no_bg"] if conclusion in ("not-a-gate", "rubber-stamp") else C["warn_bg"]
+            kind_txt = f" GATE · {m0.get('stage', '?').upper()} "
+        else:
+            kind_attr, kind_txt = C["cyan"] | curses.A_REVERSE, " REVIEW "
         self.put(top, cx, "╭" + "─" * (cw - 2) + "╮", C["dim"])
         self.put(top, cx + 2, kind_txt, kind_attr)
         pos = f" {self.idx + 1}/{len(self.queue)} · {age(card['created'])} "
@@ -192,7 +200,12 @@ class Judge:
         self.put(y, cx + 2, where, curses.A_BOLD | C["white"])
         self.put(y, cx + 3 + len(where), "  ".join(tag), C["dim"])
         y += 1
-        self.put(y, cx + 2, card["title"], curses.A_BOLD | (C["yellow"] if card["kind"] == "permission" else C["green"]))
+        if card["kind"] == "gate":
+            title_attr = C["red"] if conclusion in ("not-a-gate", "rubber-stamp") else (
+                C["yellow"] if conclusion in ("weak-red", "partial", "timeout", "unrunnable") else C["green"])
+        else:
+            title_attr = C["yellow"] if card["kind"] == "permission" else C["green"]
+        self.put(y, cx + 2, card["title"], curses.A_BOLD | title_attr)
         y += 1
         if m.get("prompt"):
             first = m["prompt"].splitlines()[0][:inner - 6]
@@ -203,7 +216,9 @@ class Judge:
 
         # body
         body = []
-        if card["kind"] == "review":
+        if card["kind"] == "gate":
+            body += self.gate_body(card, inner)
+        elif card["kind"] == "review":
             if m.get("files"):
                 body.append(("files", C["magenta"]))
                 body += [("  " + J.short_dir(f), C["dim"]) for f in m["files"][:12]]
@@ -237,10 +252,73 @@ class Judge:
 
         self.footer(card)
 
+    def gate_body(self, card, inner):
+        """The evidence, then the test. The evidence is why the human is here."""
+        m = card.get("meta", {})
+        v = m.get("verify") or {}
+        rows = []
+
+        if m.get("claims"):
+            rows.append(("claim", C["magenta"]))
+            rows += [("  " + c[:inner - 4], 0) for c in m["claims"][:6]]
+            if len(m["claims"]) > 6:
+                rows.append((f"  … +{len(m['claims']) - 6} more", C["dim"]))
+            rows.append(("", 0))
+
+        rows.append(("evidence", C["magenta"]))
+        status = v.get("status")
+        if status == "running":
+            rows.append(("  replaying the test against the code as it stands…", C["yellow"]))
+        elif status == "error":
+            rows.append((f"  could not replay: {v.get('error', '')}"[:inner], C["red"]))
+
+        for run in v.get("runs", []):
+            label = {"assertion": "fails on an assertion", "error": "fails on an import/compile error",
+                     "pass": "PASSES without the implementation", "timeout": "timed out",
+                     "unrunnable": "no runnable test command"}.get(run["verdict"], run["verdict"])
+            attr = C["green"] if run["verdict"] == "assertion" else (
+                C["red"] if run["verdict"] == "pass" else C["yellow"])
+            rows.append((f"  {J.short_dir(run['file'])}", C["dim"]))
+            rows.append((f"    {label}", attr))
+            if run.get("command"):
+                rows.append((f"    $ {run['command']}"[:inner], C["dim"]))
+
+        if v.get("stage") == "green":
+            scored, killed = v.get("scored", 0), v.get("killed", 0)
+            attr = C["green"] if scored and killed == scored else (C["red"] if killed == 0 else C["yellow"])
+            rows.append((f"  mutations caught   {killed}/{scored}", attr))
+            for mutant in v.get("mutants", []):
+                if mutant.get("invalid"):
+                    continue
+                mark, mattr = ("killed", C["dim"]) if mutant["killed"] else ("SURVIVED", C["red"])
+                rows.append((f"  {mark:>8}  {mutant['file']}:{mutant['line']}  {mutant['op']}"[:inner], mattr))
+                if not mutant["killed"]:
+                    rows.append((f"            still passed with: {mutant['after']}"[:inner], C["dim"]))
+        if v.get("note"):
+            rows.append(("  " + v["note"], C["dim"]))
+
+        if m.get("smells"):
+            rows.append(("", 0))
+            rows.append(("smells", C["magenta"]))
+            for smell in m["smells"]:
+                rows.append((f"  {smell['code']}", C["red"]))
+                rows += [("    " + ln, C["dim"]) for ln in wrap(smell["note"], inner - 6)]
+
+        if m.get("next_edit"):
+            rows.append(("", 0))
+            rows.append((f"held before editing  {m['next_edit']}"[:inner], C["dim"]))
+
+        rows.append(("", 0))
+        rows.append(("the test", C["magenta"]))
+        rows += [(ln, 0) for ln in wrap(card["body"], inner)]
+        return rows
+
     def footer(self, card=None):
         h, w = self.scr.getmaxyx()
         if card and card["kind"] == "permission":
             left, right = "← deny", "allow →"
+        elif card and card["kind"] == "gate":
+            left, right = "← weak gate", "real gate →"
         else:
             left, right = "← reject", "approve →"
         keys = [(left, C["red"]), ("   c comment", C["dim"]), ("   s skip", C["dim"]), ("   u undo", C["dim"]),
@@ -301,12 +379,18 @@ class Judge:
         if not card:
             return
         comment = self.drafts.pop(card["id"], "")
+        labels = {"permission": ("ALLOW", "DENY"), "gate": ("REAL GATE", "WEAK GATE")}
+        yes, no = labels.get(card["kind"], ("APPROVE", "REJECT"))
         if verdict == "approve":
-            self.swipe_anim(+1, "ALLOW" if card["kind"] == "permission" else "APPROVE", C["ok_bg"])
+            self.swipe_anim(+1, yes, C["ok_bg"])
         else:
-            self.swipe_anim(-1, "DENY" if card["kind"] == "permission" else "REJECT", C["no_bg"])
+            self.swipe_anim(-1, no, C["no_bg"])
         J.decide(card, verdict, comment)
         self.history.append(card["id"])
+        if card["kind"] == "gate":
+            # The waiting hook writes the ledger for gates it decides itself; a
+            # human decision is recorded here, at the moment it is made.
+            G.append_ledger(J.load_card(card["id"]) or card)
         note = "sent to session" if card["kind"] == "review" and (verdict == "reject" or comment) else ""
         self.say(f"{verdict}{' · ' + note if note else ''}", 1.5)
         self.scroll = 0
@@ -355,6 +439,11 @@ class Judge:
         lines = [
             "judge — human judgment queue",
             "",
+            "GATE cards are the point: a test the session just wrote, replayed",
+            "against the code to show whether it can actually fail. RED means the",
+            "implementation is still unwritten; GREEN means mutations were run.",
+            "  → / l  real gate                   ← / h  weak gate → the session is",
+            "         held and must strengthen the test before writing the code",
             "PERMISSION cards block a session until you swipe.",
             "  → / l  allow the tool call        ← / h  deny (your comment is the reason)",
             "REVIEW cards summarise a finished turn.",
@@ -365,7 +454,8 @@ class Judge:
             "  u  undo last decision (review cards; pulls back or retracts feedback)",
             "  j/k  scroll body                    r  reload      q  quit",
             "",
-            "Closing judge hands pending permission prompts back to their sessions.",
+            "`judge gates` prints the kill-rate trend from every decided gate.",
+            "Closing judge hands pending prompts and gates back to their sessions.",
             "any key to close",
         ]
         self.scr.erase()
@@ -467,6 +557,38 @@ def cmd_list():
         print(f"{c['kind']:<10} {age(c['created']):>5}  {J.short_dir(c['cwd']):<28} {c['title']}")
 
 
+def cmd_gates(limit=25):
+    """The gate ledger: what was judged, what the machine found, how it went."""
+    records = G.read_ledger()
+    if not records:
+        print("judge: no gates judged yet")
+        return
+    human = [r for r in records if not r.get("auto")]
+    weak = [r for r in records if r["verdict"] == "reject"]
+    scored = [r for r in records if r.get("scored")]
+    killed = sum(r.get("killed") or 0 for r in scored)
+    total = sum(r.get("scored") or 0 for r in scored)
+    print(f"judge gates — {len(records)} judged ({len(human)} by hand, "
+          f"{len(records) - len(human)} auto-denied), {len(weak)} called weak")
+    if total:
+        print(f"mutation kill rate across {len(scored)} scored gate(s): {killed}/{total}"
+              f" ({100 * killed // total}%)")
+    smells = {}
+    for record in records:
+        for code in record.get("smells", []):
+            smells[code] = smells.get(code, 0) + 1
+    if smells:
+        print("smells: " + "  ".join(f"{k}×{v}" for k, v in sorted(smells.items(), key=lambda kv: -kv[1])))
+    print()
+    for record in records[-limit:]:
+        when = datetime.fromtimestamp(record["ts"]).strftime("%m-%d %H:%M")
+        mark = "weak" if record["verdict"] == "reject" else "real"
+        score = f"{record['killed']}/{record['scored']}" if record.get("scored") else "—"
+        claim = (record["claims"] or record["files"] or [""])[0]
+        print(f"{when}  {record['stage']:<5} {mark:<4} {score:>5}  "
+              f"{record.get('conclusion', ''):<12} {record['repo']:<16} {claim[:44]}")
+
+
 def cmd_clear():
     n = 0
     for c in J.open_cards():
@@ -485,5 +607,7 @@ if __name__ == "__main__":
         cmd_list()
     elif arg == "clear":
         cmd_clear()
+    elif arg == "gates":
+        cmd_gates()
     else:
         tui()

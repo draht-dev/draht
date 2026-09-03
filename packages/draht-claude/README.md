@@ -82,7 +82,7 @@ All usable via Claude Code's `Task` tool (`subagent_type: <name>`):
 - **`epistemics`** — confidence calibration for investigation findings: five tiers, cite-or-label-as-inference, null results as evidence
 - **`typescript-discipline`** — make illegal states unrepresentable: discriminated unions, branded primitives, boundary parsing, exhaustiveness
 - **`blast-radius`** — impact analysis beyond the diff: reduce the safety argument to one falsifiable fact and prove it on the evidence ladder
-- **`judge`** — the human-judgment queue: how permission prompts and finished turns become cards, and how a reviewer's comment comes back into the session
+- **`judge`** — the human-judgment queue: how a new test is replayed and mutated into evidence, what a red or green gate card means, and how a reviewer's verdict comes back into the session
 
 ### 4 workflow hook scripts
 
@@ -93,26 +93,43 @@ Invoked from inside commands (not Claude Code lifecycle hooks):
 - `gsd-post-phase.cjs <phase>` — generate phase report, update ROADMAP status
 - `gsd-quality-gate.cjs [--strict]` — lint + typecheck + test + coverage enforcement
 
-### 5 Claude Code lifecycle hooks
+### 6 Claude Code lifecycle hooks
 
 - **SessionStart** — surfaces current phase, status, and CONTINUE-HERE marker when a session opens in a draht project (`session-start.cjs`)
 - **UserPromptSubmit** — prepends a tiny `[draht]` reminder of phase/status before each prompt (`prompt-context.cjs`), then delivers any pending judge feedback (`judge-hook.cjs`)
-- **PostToolUse** — after `Edit`/`Write`/`MultiEdit`, runs a fast check over the touched files (`post-edit-check.cjs`)
-- **Stop** — runs the quality gate when a session ends (`stop-quality-gate.cjs`), then files the finished turn as a judge review card (`judge-hook.cjs`)
+- **PostToolUse** — after `Edit`/`Write`/`MultiEdit`, runs a fast check over the touched files (`post-edit-check.cjs`) and records which test files the session touched (`judge-hook.cjs`)
+- **PreToolUse** — the red gate: an edit to source that follows a test edit is held while the test is replayed against the code as it stands (`judge-hook.cjs`)
+- **Stop** — runs the quality gate when a session ends (`stop-quality-gate.cjs`), then runs the mutation pass on a gate whose implementation has landed and files the finished turn as a review card (`judge-hook.cjs`)
 - **PermissionRequest** — while the judge TUI is running, parks the prompt as a card and waits for the human swipe (`judge-hook.cjs`)
 
-The judge hooks are inert unless you run the TUI, and inert again where no Python interpreter is available — the normal permission dialog appears exactly as before.
+The judge hooks are inert unless you run the TUI, and inert again where no Python interpreter is available — edits proceed and the normal permission dialog appears exactly as before.
 
-### The judge queue
+### The judge queue — reviewing gates, not decisions
 
-`judge` is a tinder-style TUI over the decisions every session on this machine is waiting on: permission prompts (→ allow, ← deny, with the comment delivered as the denial message) and finished turns (a ← reject reaches the session as a `[judge]` block it must address first). It runs in its own terminal pane, never inside a session:
+A test the agent wrote is a claim, not evidence: the same probabilistic process that gets code wrong also wrote the check meant to catch it. `judge` is a TUI over those claims, and it turns each one into evidence before asking you anything.
+
+**RED** — a test was written and the session reaches for the implementation. The test is replayed in a throwaway worktree against the code as it stands:
+
+| result | meaning |
+|---|---|
+| fails on an assertion | a real red — the test knows what wrong behaviour looks like |
+| fails on an import/compile error | a weak red — proves a module is missing, not that behaviour is checked |
+| passes without the implementation | not a gate; denied without asking anyone |
+| passes with nothing to revert | *already-green* — a test for behaviour that already exists; carded at the end of the turn, never held |
+
+**GREEN** — the implementation landed and the test passes. Single-token mutations are applied to the source lines the change touched and the test is re-run against each; survivors are the mutations your test does not notice. Mutants that fail to compile are discarded rather than counted as kills.
+
+Both stages carry static smells no run can excuse: mock-only assertions, snapshot-only, no assertion, tautologies, `.skip`/`.only`, private-internal access, swallowed exceptions.
+
+`→ real gate` lets the edit through; `← weak gate` denies it and hands the session the evidence plus your comment, so the test gets strengthened before the implementation is written. Permission prompts and finished turns still queue as their own card kinds.
 
 ```bash
 npx draht-claude install-judge   # symlink into ~/.local/bin
 judge                            # or: judge open, to pop a cmux split
+judge gates                      # the ledger: kill rates and recurring smells
 ```
 
-State lives in `~/.claude/judge/`. `judge list` prints the queue, `judge clear` expires it.
+State lives in `~/.claude/judge/`. Per-repo settings go under `"gates"` in `.planning/config.json` (`enabled`, `testCommand` with `{file}`, `timeout`, `mutants`, `budget`); `JUDGE_GATES=0` disables it outright.
 
 ### The draht status line
 

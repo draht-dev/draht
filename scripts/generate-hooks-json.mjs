@@ -63,6 +63,30 @@ function hooksTemplate() {
 							command: `node "${PLUGIN_ROOT_TOKEN}/scripts/post-edit-check.cjs"`,
 							timeout: 30,
 						},
+						{
+							type: "command",
+							command: `node "${PLUGIN_ROOT_TOKEN}/scripts/judge-hook.cjs" PostToolUse`,
+							timeout: 10,
+						},
+					],
+				},
+			],
+			// The red gate. A test edit followed by a reach for the implementation
+			// is the one moment where a human's judgement of the test is both
+			// cheapest and most useful, so the edit is held there: the test is
+			// replayed against the code as it stands, and a test that passes with
+			// no implementation is denied without asking anyone. Nothing happens
+			// unless the judge TUI is running, which is why the timeout is an hour
+			// — the hook is blocked for exactly as long as the person takes.
+			PreToolUse: [
+				{
+					matcher: "Edit|Write|MultiEdit",
+					hooks: [
+						{
+							type: "command",
+							command: `node "${PLUGIN_ROOT_TOKEN}/scripts/judge-hook.cjs" PreToolUse`,
+							timeout: 3600,
+						},
 					],
 				},
 			],
@@ -78,7 +102,9 @@ function hooksTemplate() {
 						{
 							type: "command",
 							command: `node "${PLUGIN_ROOT_TOKEN}/scripts/judge-hook.cjs" Stop`,
-							timeout: 20,
+							// Files the review card, but also runs the mutation pass on a
+							// gate whose implementation has landed and waits for that swipe.
+							timeout: 3600,
 						},
 					],
 				},

@@ -1,11 +1,13 @@
 ---
 name: judge
-description: The judge queue — a human-judgment TUI that collects open decisions (permission prompts, finished turns) from every agent session on this machine so the user can swipe through them with comments. Use when the user asks to open, start, or check judge, asks why a permission prompt is waiting, or when a "[judge]" feedback block appears in context.
+description: The judge queue — a human-judgment TUI that reviews the gates an agent writes, replaying each new test to show whether it can actually fail before the implementation is written. Use when the user asks to open, start, or check judge, asks why an edit was held or denied, asks how good the project's tests are as gates, or when a "[judge]" feedback block appears in context.
 ---
 
 # judge
 
-`judge` is a tinder-style TUI over the decisions this machine's agent sessions are waiting on. It cannot run inside an agent session — it needs its own terminal pane.
+`judge` reviews **gates**: the tests a session writes to constrain itself. A test the agent wrote is a claim, not evidence — the same process that can get the code wrong wrote the check that is supposed to catch it. This queue turns the claim into evidence wherever a machine can, and puts one question to the human: is this the right thing to gate, and is the bar high enough.
+
+It cannot run inside an agent session — it needs its own terminal pane.
 
 ## When the user asks to open it
 
@@ -17,21 +19,39 @@ That pops a new cmux split to the right with the TUI running. If it prints that 
 
 If `judge` is not on PATH, the same binary ships with this plugin at `${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$HOME/.draht/codex-marketplace/plugins/draht}}/bin/judge` — run it by path, and tell the user the plugin installer can link it onto PATH for them.
 
-Other commands: `judge list` (print the queue), `judge clear` (expire every open card). In the TUI, `u` undoes the last review decision — it pulls the feedback back, or sends a retraction when it was already delivered.
+Other commands: `judge list` (the open queue), `judge gates` (the ledger: every judged gate, its mutation kill rate, the recurring smells), `judge clear` (expire every open card).
 
-Only substantive turns become REVIEW cards: a file was edited, or there were at least 4 tool calls, or the reply ran to 700 characters or more. Slash-command turns without edits are skipped.
+## What a gate card is
 
-## What feeds it
+Two stages, because the two questions can only be answered at different moments.
 
-- **PermissionRequest hook** — while judge is running, permission prompts from any session become PERMISSION cards and the session waits for the swipe (→ allow, ← deny; a comment on a deny is delivered as the denial message). If judge is not running, the normal permission dialog appears instead.
-- **Stop hook** — every finished turn becomes a REVIEW card carrying project, branch, files touched, shell commands, and the final reply. A newer turn replaces that session's older open review card.
+**RED** — a test was written and the session is now reaching for the implementation. The test is replayed against the code as it stands, in a throwaway worktree, and the result is on the card:
 
-## Feedback delivery
+- *fails on an assertion* — a real red. The test knows what wrong behaviour looks like.
+- *fails on an import or compile error* — a weak red. It proves a module is missing, not that behaviour is checked.
+- *PASSES without the implementation* — not a gate at all. This one is denied without asking anyone: a test that already passes cannot fail when the implementation about to be written is wrong, whatever it turns out to be.
 
-A ← reject, or an approve carrying a comment, is written to that session's inbox. It reaches the session as a `[judge] Human review feedback…` block — either as additional context on the next user prompt, or by blocking the next Stop so the session continues immediately.
+A test written for behaviour that already exists is a different case, and is not treated as a lie: with no implementation coming, passing is the expected result, so it is carded as *already-green* at the end of the turn and nothing is held.
 
-When you see a `[judge]` block: it is the human's verdict on your last turn. Address it before anything else — re-examine the rejected work critically and fix what the comment points at. If the reject carried no comment, ask what was off.
+**GREEN** — the implementation landed and the test passes. Single-token mutations are applied to the source lines the change touched (comparisons flipped, boolean operators swapped, literals bumped) and the test is re-run against each. A mutation the test does not notice is a survivor, and a gate whose survivors outnumber its kills does not bite. Mutants that fail to compile are discarded rather than counted as caught.
+
+Both stages also carry static smells that no run can excuse: assertions only about mocks being called, a snapshot as the sole assertion, no assertion at all, a tautology, a skipped or `.only` test, reaching into private internals, an empty catch swallowing the failure.
+
+## What a verdict does
+
+A gate is held while it is judged, so:
+
+- **real gate →** the edit proceeds; the gate is recorded for the mutation pass once the implementation lands.
+- **weak gate ←** the edit is denied and the session receives the evidence plus the reviewer's comment. Address it by strengthening the test — assert the behaviour that would actually break — and do not write the implementation until the gate would catch a wrong one. If the reject carried no comment, work out from the evidence why the gate is too weak and say what you think was wrong before changing it.
+
+When you see a `[judge]` block, that is the human's verdict on the gate you just wrote. It comes before everything else you were doing.
+
+## What stays out of the way
+
+Nothing is gated unless the TUI is running: with judge closed, edits proceed and the host's own permission dialog behaves exactly as it did before. Permission prompts and finished turns still queue as their own card kinds. A repo with no runnable test command, no git, or a suite that will not start produces a card with less evidence on it — never a blocked session.
+
+Per-repo settings live under `"gates"` in `.planning/config.json`: `enabled`, `testCommand` (with `{file}` substituted), `timeout`, `mutants`, `budget`. `JUDGE_GATES=0` in the environment turns the whole thing off.
 
 ## State
 
-Everything lives under the host config dir, in `$CLAUDE_CONFIG_DIR/judge`: `cards` for the queue, `inbox/<session>` for undelivered feedback, and `heartbeat`, touched once a second while the TUI runs. The draht status line reads the same directory to show its `⚖ N` segment.
+Everything lives under the host config dir, in `$CLAUDE_CONFIG_DIR/judge`: `cards` for the queue, `inbox/<session>` for undelivered feedback, `sessions` for which tests are still unjudged, `gates.jsonl` for the ledger, and `heartbeat`, touched once a second while the TUI runs. The draht status line reads the same directory to show its `⚖ N` segment.

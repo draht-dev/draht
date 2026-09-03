@@ -120,7 +120,8 @@ Usage:
   npx draht-claude install --force    Reinstall even if already present
   npx draht-claude install --path DIR Custom marketplace directory
     --statusline                      Also wire the draht status line into settings.json
-    --judge                           Also link the judge TUI onto PATH (~/.local/bin)
+    --judge                           Also link the judge TUI onto PATH (~/.local/bin),
+                                       so gate cards have somewhere to appear
   npx draht-claude uninstall          Remove the plugin and marketplace
     --purge-graph-engine              Also remove ~/.draht/bin/draht-graph — WARNING: shared with
                                        draht-codex/coding-agent and baked into every repo's
@@ -157,8 +158,8 @@ What this installs:
   • 11 specialist subagents (architect, implementer, reviewer, debugger, ...)
   • 17 bundled skills (gsd-workflow, tdd-workflow, ddd-workflow, judge, ...)
   • Workflow hook scripts (pre-execute, post-task, post-phase, quality-gate)
-  • 5 Claude Code lifecycle hooks (SessionStart, UserPromptSubmit, PostToolUse, Stop,
-    PermissionRequest)
+  • 6 Claude Code lifecycle hooks (SessionStart, UserPromptSubmit, PostToolUse,
+    PreToolUse, Stop, PermissionRequest)
   • Self-contained draht-tools CLI (JS graph engine built in — works out of the box)
 
 Optional, not installed by default:
@@ -166,9 +167,11 @@ Optional, not installed by default:
     judge queue, in the draht palette). It is a settings.json change, so it is
     opt-in: pass --statusline, or run 'npx draht-claude install-statusline'.
     Any status line already configured is saved and restored on uninstall.
-  • The judge TUI on PATH. The plugin's hooks already queue permission prompts
-    and finished turns for it; the symlink into ~/.local/bin is what lets you
-    run 'judge' in a spare pane. Pass --judge, or run 'install-judge' later.
+  • The judge TUI on PATH. The plugin's hooks already do the work — replaying
+    each new test against the code as it stands, and mutating the source once
+    the implementation lands — but they stand down entirely unless the TUI is
+    running, and the symlink into ~/.local/bin is what lets you run 'judge' in
+    a spare pane. Pass --judge, or run 'install-judge' later.
   • The prebuilt draht-graph binary (~6x faster map-graph). It is an unsigned
     native binary downloaded from GitHub Releases, so it is opt-in: pass
     --graph-engine, or run 'npx draht-claude install-graph-engine' later.

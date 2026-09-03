@@ -1002,16 +1002,16 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		return true;
 	}
 
-	private getScrollbarTargetAt(x: number, y: number): ScrollbarTarget | undefined {
+	private getScrollbarTargetAt(x: number, y: number, includeHiddenAuto = false): ScrollbarTarget | undefined {
 		if (this.hasOverlay() || !this.currentLayout) return undefined;
 		for (const scrollView of getScrollViewsAt(this.currentLayout, x, y)) {
 			const box = getScrollViewBox(this.currentLayout, scrollView);
-			const geometry = box ? getScrollbarGeometry(box) : undefined;
+			const geometry = box ? getScrollbarGeometry(box, includeHiddenAuto) : undefined;
 			if (
 				geometry &&
 				x === geometry.column &&
-				y >= geometry.thumbTop &&
-				y < geometry.thumbTop + geometry.thumbHeight
+				y >= geometry.trackTop &&
+				y < geometry.trackTop + geometry.trackHeight
 			) {
 				return { scrollView, geometry };
 			}
@@ -1027,11 +1027,23 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	}
 
 	private updateScrollbarHover(x: number, y: number): void {
-		this.setScrollbarHover(this.getScrollbarTargetAt(x, y)?.scrollView);
+		this.setScrollbarHover(this.getScrollbarTargetAt(x, y, true)?.scrollView);
 	}
 
 	private stopScrollbarHover(): void {
 		this.setScrollbarHover(undefined);
+	}
+
+	private scrollScrollbarToPointer(
+		scrollView: ScrollView,
+		geometry: ScrollbarGeometry,
+		pointerY: number,
+		grabOffset: number,
+	): void {
+		const maxThumbOffset = geometry.trackHeight - geometry.thumbHeight;
+		const thumbOffset = Math.max(0, Math.min(maxThumbOffset, pointerY - geometry.trackTop - grabOffset));
+		const scrollTop = maxThumbOffset === 0 ? 0 : Math.round((thumbOffset / maxThumbOffset) * geometry.maxScrollTop);
+		scrollView.scrollTo(scrollTop);
 	}
 
 	private handleScrollbarMouseEvent(event: SgrMouseEvent): boolean {
@@ -1045,14 +1057,12 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 				: undefined;
 			const geometry = box ? getScrollbarGeometry(box) : undefined;
 			if (geometry) {
-				const maxThumbOffset = geometry.trackHeight - geometry.thumbHeight;
-				const thumbOffset = Math.max(
-					0,
-					Math.min(maxThumbOffset, event.y - geometry.trackTop - this.scrollbarDrag.grabOffset),
+				this.scrollScrollbarToPointer(
+					this.scrollbarDrag.scrollView,
+					geometry,
+					event.y,
+					this.scrollbarDrag.grabOffset,
 				);
-				const scrollTop =
-					maxThumbOffset === 0 ? 0 : Math.round((thumbOffset / maxThumbOffset) * geometry.maxScrollTop);
-				this.scrollbarDrag.scrollView.scrollTo(scrollTop);
 			}
 			return true;
 		}
@@ -1070,9 +1080,13 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.pressedUrl = undefined;
 		this.selectionDragged = false;
 		this.setScrollbarHover(target.scrollView);
+		const onThumb =
+			event.y >= target.geometry.thumbTop && event.y < target.geometry.thumbTop + target.geometry.thumbHeight;
+		const grabOffset = onThumb ? event.y - target.geometry.thumbTop : Math.floor(target.geometry.thumbHeight / 2);
+		if (!onThumb) this.scrollScrollbarToPointer(target.scrollView, target.geometry, event.y, grabOffset);
 		this.scrollbarDrag = {
 			scrollView: target.scrollView,
-			grabOffset: event.y - target.geometry.thumbTop,
+			grabOffset,
 		};
 		return true;
 	}
@@ -1572,14 +1586,17 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.scrollToEndIndicatorRect = undefined;
 		const scrollView = layout.primaryScrollView ?? this.implicitScrollView;
 		if (!this.scrollToEndIndicator || !scrollView.followEnd || scrollView.isFollowingEnd) return screen;
-		const clip = getScrollViewBox(layout, scrollView)?.clip;
+		const box = getScrollViewBox(layout, scrollView);
+		const clip = box?.clip;
 		if (!clip || clip.width <= 0 || clip.height <= 0) return screen;
 		const row = clip.y + clip.height - 1;
 		if (row >= screen.length || isImageLine(screen[row] ?? "")) return screen;
-		const text = truncateToWidth(this.scrollToEndIndicator(), clip.width, "");
+		const scrollbarColumn = box ? getScrollbarGeometry(box)?.column : undefined;
+		const availableWidth = Math.max(0, (scrollbarColumn ?? clip.x + clip.width) - clip.x);
+		const text = truncateToWidth(this.scrollToEndIndicator(), availableWidth, "");
 		const textWidth = visibleWidth(text);
 		if (textWidth === 0) return screen;
-		const column = clip.x + Math.floor((clip.width - textWidth) / 2);
+		const column = clip.x + Math.floor((availableWidth - textWidth) / 2);
 		const result = [...screen];
 		result[row] = compositeTuiLine(result[row] ?? "", text, column, textWidth, width);
 		this.scrollToEndIndicatorRect = { row, column, width: textWidth };

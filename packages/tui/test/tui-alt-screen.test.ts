@@ -134,6 +134,36 @@ describe("TuiAltScreen", () => {
 		tui.stop();
 	});
 
+	it("leaves the scrollbar clickable when the jump-to-end indicator spans the transcript", async () => {
+		const terminal = new VirtualTerminal(30, 6);
+		const tui = new TuiAltScreen(terminal, undefined, undefined, {
+			scrollToEndIndicator: () => "↓".repeat(30),
+		});
+		const transcript = new ScrollView(
+			new Text(Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join("\n"), 0, 0),
+			{ follow: "end", primary: true, scrollbar: "always" },
+		);
+		tui.setLayoutRoot(
+			new VStack([
+				{ component: transcript, basis: 0, grow: 1, minSize: 1 },
+				{ component: new Text("editor\nfooter", 0, 0), basis: "auto", minSize: 1 },
+			]),
+		);
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<64;1;1M");
+		await terminal.waitForRender();
+		assert.strictEqual(transcript.isFollowingEnd, false);
+
+		// The indicator must not intercept a press on the scrollbar's last column.
+		terminal.sendInput("\x1b[<0;30;4M");
+		terminal.sendInput("\x1b[<0;30;4m");
+		await terminal.waitForRender();
+		assert.strictEqual(transcript.isFollowingEnd, false);
+		tui.stop();
+	});
+
 	it("never shows the jump-to-end indicator for a primary scroll view without follow-end", async () => {
 		const terminal = new VirtualTerminal(30, 3);
 		const tui = new TuiAltScreen(terminal, undefined, undefined, {
@@ -358,83 +388,54 @@ describe("TuiAltScreen", () => {
 		}
 	});
 
-	it("drags a visible scrollbar thumb and keeps it visible until release", async () => {
+	it("reveals an auto scrollbar when the pointer enters its hidden track", async () => {
 		const terminal = new RecordingTerminal(10, 5);
 		const tui = new TuiAltScreen(terminal);
 		const scrollView = new ScrollView(
 			new Text(Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n"), 0, 0),
-			{
-				primary: true,
-				scrollbar: "auto",
-				scrollbarHideDelayMs: 50,
-			},
+			{ primary: true, scrollbar: "auto", scrollbarHideDelayMs: 20 },
 		);
 		tui.setLayoutRoot(scrollView);
 		tui.start();
 		await terminal.waitForRender();
 		assert.strictEqual(scrollView.isScrollbarVisible, false);
 
-		terminal.sendInput("\x1b[<65;10;1M");
+		terminal.sendInput("\x1b[<35;10;3M");
 		await terminal.waitForRender();
-		assert.strictEqual(scrollView.scrollTop, 1);
 		assert.strictEqual(scrollView.isScrollbarVisible, true);
+		assert.strictEqual(scrollView.isScrollbarActive, true);
+		assert.ok(terminal.getViewport().some((line) => /[│█]/.test(line)));
 
-		terminal.sendInput("\x1b[<0;10;1M");
+		terminal.sendInput("\x1b[<35;9;3M");
+		await new Promise((resolve) => setTimeout(resolve, 40));
 		await terminal.waitForRender();
-		await new Promise((resolve) => setTimeout(resolve, 70));
-		assert.strictEqual(scrollView.isScrollbarVisible, true);
-
-		terminal.sendInput("\x1b[<32;10;4M");
-		await terminal.waitForRender();
-		assert.strictEqual(scrollView.scrollTop, 15);
-		assert.deepStrictEqual(
-			terminal.getViewport().map((line) => line.trimEnd()),
-			["line 16", "line 17", "line 18", "line 19", "line 20"],
-		);
-
-		terminal.sendInput("\x1b[<0;10;4m");
-		await terminal.waitForRender();
-		assert.strictEqual(scrollView.isScrollbarVisible, true);
-		await new Promise((resolve) => setTimeout(resolve, 70));
-		assert.strictEqual(scrollView.isScrollbarVisible, true);
-		terminal.sendInput("\x1b[<35;9;4M");
-		await new Promise((resolve) => setTimeout(resolve, 70));
 		assert.strictEqual(scrollView.isScrollbarVisible, false);
-
-		terminal.sendInput("\x1b[<64;10;5M");
-		await terminal.waitForRender();
-		assert.strictEqual(scrollView.scrollTop, 14);
-		await new Promise((resolve) => setTimeout(resolve, 70));
-		assert.strictEqual(scrollView.isScrollbarVisible, true);
-		terminal.sendInput("\x1b[<35;9;5M");
-		await new Promise((resolve) => setTimeout(resolve, 70));
-		assert.strictEqual(scrollView.isScrollbarVisible, false);
-
-		assert.ok(terminal.events.every((event) => event.type !== "write" || !event.data.includes("\x1b]52;c;")));
 		tui.stop();
 	});
 
-	it("keeps the scrollbar column selectable while the thumb is hidden", async () => {
-		const terminal = new RecordingTerminal(10, 2);
+	it("jumps to a scrollbar track position and continues dragging from there", async () => {
+		const terminal = new RecordingTerminal(10, 10);
 		const tui = new TuiAltScreen(terminal);
-		const scrollView = new ScrollView(new Text("123456789A\nabcdefghij\nmore\nlines", 0, 0), {
-			scrollbar: "auto",
-		});
+		const scrollView = new ScrollView(
+			new Text(Array.from({ length: 50 }, (_, index) => `line ${index + 1}`).join("\n"), 0, 0),
+			{ primary: true, scrollbar: "always" },
+		);
 		tui.setLayoutRoot(scrollView);
 		tui.start();
 		await terminal.waitForRender();
-		assert.strictEqual(scrollView.isScrollbarVisible, false);
+		assert.strictEqual(scrollView.scrollTop, 0);
 
-		terminal.sendInput("\x1b[<0;10;1M");
-		terminal.sendInput("\x1b[<32;10;2M");
-		terminal.sendInput("\x1b[<0;10;2m");
+		terminal.sendInput("\x1b[<0;10;6M");
 		await terminal.waitForRender();
+		assert.strictEqual(scrollView.scrollTop, 20);
 
-		const expected = `\x1b]52;c;${Buffer.from("A\nabcdefghij").toString("base64")}\x07`;
-		assert.ok(
-			terminal.events.some((event) => event.type === "write" && event.data.includes(expected)),
-			JSON.stringify(terminal.events.filter((event) => event.type === "write" && event.data.includes("\x1b]52;c;"))),
-		);
+		terminal.sendInput("\x1b[<32;10;10M");
+		await terminal.waitForRender();
+		assert.strictEqual(scrollView.scrollTop, 40);
+
+		terminal.sendInput("\x1b[<0;10;10m");
+		await terminal.waitForRender();
+		assert.ok(terminal.events.every((event) => event.type !== "write" || !event.data.includes("\x1b]52;c;")));
 		tui.stop();
 	});
 

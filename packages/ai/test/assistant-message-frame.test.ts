@@ -283,7 +283,42 @@ describe("assistant message frames", () => {
 		]);
 	});
 
-	it("streams grammar-tool JSON compactly from an empty argument start", () => {
+	it("resumes legacy grammar tool JSON from initial arguments", () => {
+		const partial = seed();
+		const encoder = new AssistantMessageFrameEncoder();
+		const frames: AssistantMessageFrame[] = [frame(encoder, { type: "start", partial })];
+		const toolCall = { type: "toolCall" as const, id: "call", name: "bash", arguments: { input: "a" } };
+		partial.content.push(toolCall);
+		frames.push(frame(encoder, { type: "toolcall_start", contentIndex: 0, partial }));
+		toolCall.arguments = { input: "ab" };
+		frames.push(
+			frame(encoder, {
+				type: "toolcall_delta",
+				contentIndex: 0,
+				delta: '{"input":"ab',
+				partial,
+			}),
+		);
+		toolCall.arguments = { input: "abc" };
+		frames.push(
+			frame(encoder, {
+				type: "toolcall_delta",
+				contentIndex: 0,
+				delta: 'c"}',
+				partial,
+			}),
+		);
+
+		expect(frames.slice(2)).toEqual([
+			{ type: "toolcall_checkpoint", contentIndex: 0, json: '{"input":"ab' },
+			{ type: "toolcall_delta", contentIndex: 0, delta: 'c"}' },
+		]);
+		expect(reduceAssistantMessageFrames(frames)?.content).toEqual([
+			{ type: "toolCall", id: "call", name: "bash", arguments: { input: "abc" } },
+		]);
+	});
+
+	it("streams tool JSON compactly from an empty argument start", () => {
 		const partial = seed();
 		const encoder = new AssistantMessageFrameEncoder();
 		const frames: AssistantMessageFrame[] = [frame(encoder, { type: "start", partial })];

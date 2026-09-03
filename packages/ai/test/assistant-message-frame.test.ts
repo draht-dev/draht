@@ -61,6 +61,16 @@ describe("assistant message frames", () => {
 		]);
 	});
 
+	it("preserves provider thinking level from the stream start", () => {
+		const partial = seed();
+		partial.providerThinkingLevel = "high";
+		const encoder = new AssistantMessageFrameEncoder();
+		const start = frame(encoder, { type: "start", partial });
+
+		expect(start).toMatchObject({ type: "start", partial: { providerThinkingLevel: "high" } });
+		expect(reduceAssistantMessageFrames([start])?.providerThinkingLevel).toBe("high");
+	});
+
 	it("preserves initial and final thinking metadata, including redaction", () => {
 		const partial = seed();
 		const encoder = new AssistantMessageFrameEncoder();

@@ -47,7 +47,8 @@ export function exportSessionForShare(filePath: string, session: AgentSession): 
  * through gist export rather than attempting an artifact upload first.
  */
 export async function shareSession(context: SessionShareContext): Promise<void> {
-	let htmlFile: string | null = null;
+	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "draht-share-"));
+	const htmlFile = path.join(tempDir, "session.html");
 
 	try {
 		try {
@@ -62,7 +63,6 @@ export async function shareSession(context: SessionShareContext): Promise<void> 
 		}
 
 		try {
-			htmlFile = path.join(os.tmpdir(), "session.html");
 			await context.session.exportToHtml(htmlFile, { themeName: theme.name });
 		} catch (error: unknown) {
 			context.showError(`Failed to export session: ${error instanceof Error ? error.message : "Unknown error"}`);
@@ -70,12 +70,10 @@ export async function shareSession(context: SessionShareContext): Promise<void> 
 		}
 		await shareViaGist(htmlFile, context);
 	} finally {
-		if (htmlFile !== null) {
-			try {
-				fs.unlinkSync(htmlFile);
-			} catch {
-				// Ignore cleanup errors
-			}
+		try {
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		} catch {
+			// Ignore cleanup errors
 		}
 	}
 }

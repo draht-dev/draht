@@ -20,7 +20,7 @@ export interface ScrollViewScrollToOptions {
 
 export class ScrollView extends Container {
 	private readonly child: Component;
-	private readonly followEnd: boolean;
+	readonly followEnd: boolean;
 	readonly primary: boolean;
 	readonly overscroll: "chain" | "contain";
 	readonly scrollbarStyle: (text: string) => string;

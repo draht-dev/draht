@@ -60,7 +60,6 @@
 	},
 	"dependencies": {
 		"@anthropic-ai/sdk": "^0.123.0",
-		"@draht/chord": "workspace:*",
 		"@aws-sdk/client-bedrock-runtime": "^3.1030.0",
 		"@draht/telemetry": "workspace:*",
 		"@google/genai": "^1.40.0",

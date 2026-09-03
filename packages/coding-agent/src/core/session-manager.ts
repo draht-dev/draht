@@ -1513,10 +1513,27 @@ export class SessionManager {
 		// Because labels are real tree entries, later entries can be children of labels;
 		// removing labels requires re-chaining the retained path to avoid orphaned subtrees.
 		const pathWithoutLabels: SessionEntry[] = [];
+		const replacementByLabelId = new Map<string, string>();
+		const pendingLabelIds: string[] = [];
 		let pathParentId: string | null = null;
 		for (const entry of path) {
-			if (entry.type === "label") continue;
-			pathWithoutLabels.push({ ...entry, parentId: pathParentId });
+			if (entry.type === "label") {
+				pendingLabelIds.push(entry.id);
+				continue;
+			}
+			for (const labelId of pendingLabelIds) {
+				replacementByLabelId.set(labelId, entry.id);
+			}
+			pendingLabelIds.length = 0;
+			pathWithoutLabels.push(
+				entry.type === "compaction"
+					? {
+							...entry,
+							parentId: pathParentId,
+							firstKeptEntryId: replacementByLabelId.get(entry.firstKeptEntryId) ?? entry.firstKeptEntryId,
+						}
+					: { ...entry, parentId: pathParentId },
+			);
 			pathParentId = entry.id;
 		}
 

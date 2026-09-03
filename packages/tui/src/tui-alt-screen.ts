@@ -162,6 +162,8 @@ export interface TuiAltScreenOptions {
 	searchMatchStyle?: (text: string) => string;
 	/** Style the current transcript search match. */
 	searchCurrentMatchStyle?: (text: string) => string;
+	/** Style a transcript search navigation button. */
+	searchNavigationButtonStyle?: (text: string, hovered: boolean) => string;
 	/** Open an OSC 8 hyperlink activated with a primary-button click. */
 	openUrl?: (url: string) => void;
 	/** Handle an unmodified secondary-button press for clipboard paste. Currently enabled on Windows only. */
@@ -221,6 +223,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	private readonly mouseEnabled: boolean;
 	private readonly searchMatchStyle: (text: string) => string;
 	private readonly searchCurrentMatchStyle: (text: string) => string;
+	private readonly searchNavigationButtonStyle: (text: string, hovered: boolean) => string;
 	private readonly openUrl?: (url: string) => void;
 	private readonly onRightClickPaste?: () => void;
 	private copyOnSelect: boolean;
@@ -246,6 +249,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.mouseEnabled = options.mouse ?? true;
 		this.searchMatchStyle = options.searchMatchStyle ?? ((text) => `\x1b[4m${text}\x1b[24m`);
 		this.searchCurrentMatchStyle = options.searchCurrentMatchStyle ?? ((text) => `\x1b[1;7m${text}\x1b[22;27m`);
+		this.searchNavigationButtonStyle = options.searchNavigationButtonStyle ?? ((text) => text);
 		this.openUrl = options.openUrl;
 		this.onRightClickPaste = options.onRightClickPaste;
 		this.copyOnSelect = options.copyOnSelect ?? true;
@@ -472,12 +476,15 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		}
 	}
 
-	private openSearch(): void {
+	private toggleSearch(): void {
 		if (this.activeSearch) {
-			this.activeSearch.overlay?.focus();
+			this.closeSearch();
 			return;
 		}
-		const component = new AltScreenSearchComponent((query) => this.updateSearchQuery(query));
+		const component = new AltScreenSearchComponent(
+			(query) => this.updateSearchQuery(query),
+			this.searchNavigationButtonStyle,
+		);
 		const search: ActiveSearch = {
 			component,
 			query: "",
@@ -490,7 +497,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		search.overlay = this.showOverlay(component, {
 			anchor: "top-right",
 			width: "40%",
-			minWidth: 24,
+			minWidth: 32,
 			margin: 1,
 		});
 	}
@@ -519,6 +526,28 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		if (!search?.query) return;
 		search.selectionMode = direction < 0 ? "previous" : "next";
 		this.requestRender();
+	}
+
+	private getSearchNavigationDirectionAt(x: number, y: number): -1 | 1 | undefined {
+		const search = this.activeSearch;
+		const bounds = search?.overlay?.getBounds();
+		if (!search || !bounds) return undefined;
+		if (x < bounds.col || x >= bounds.col + bounds.width || y < bounds.row || y >= bounds.row + bounds.height) {
+			return undefined;
+		}
+		return search.component.getNavigationDirectionAt(y - bounds.row, x - bounds.col);
+	}
+
+	private handleSearchMouseEvent(event: SgrMouseEvent): boolean {
+		const search = this.activeSearch;
+		if (!search) return false;
+		const direction = this.getSearchNavigationDirectionAt(event.x, event.y);
+		if (search.component.setHoveredNavigationDirection(direction)) this.requestRender();
+		if (direction === undefined || event.release || (event.button & 32) !== 0 || (event.button & 3) !== 0) {
+			return false;
+		}
+		this.navigateSearch(direction);
+		return true;
 	}
 
 	private refreshSearch(layout: LayoutFrame): boolean {
@@ -602,6 +631,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			this.selectionPressActive = false;
 			this.stopSelectionAutoScroll();
 			this.stopScrollbarHover();
+			if (this.activeSearch?.component.setHoveredNavigationDirection(undefined)) this.requestRender();
 			this.stopScrollbarDrag();
 			this.pressedUrl = undefined;
 			this.selectionDragged = false;
@@ -644,7 +674,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		const keybindings = getKeybindings();
 		const isRelease = isKeyRelease(data);
 		if (keybindings.matches(data, "tui.altScreen.search")) {
-			if (!isRelease) this.openSearch();
+			if (!isRelease) this.toggleSearch();
 			return { consume: true };
 		}
 		if (this.activeSearch?.overlay?.isFocused()) {
@@ -847,6 +877,8 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			if (render) this.requestRender();
 			return;
 		}
+
+		if (this.handleSearchMouseEvent(raw)) return;
 
 		const overlay = this.dispatchMouseToOverlay(event);
 		if (!overlay.hit) {

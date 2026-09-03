@@ -35,6 +35,23 @@
             "type": "command",
             "command": "node \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/post-edit-check.cjs\"",
             "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/judge-hook.cjs\" PostToolUse",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/judge-hook.cjs\" PreToolUse",
+            "timeout": 3600
           }
         ]
       }
@@ -51,7 +68,7 @@
           {
             "type": "command",
             "command": "node \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/judge-hook.cjs\" Stop",
-            "timeout": 20
+            "timeout": 3600
           }
         ]
       }

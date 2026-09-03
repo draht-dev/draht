@@ -104,11 +104,15 @@ def all_cards():
     return cards
 
 
+BLOCKING_KINDS = ("permission", "gate")
+
+
 def open_cards():
-    """Open cards, permissions first (they block a session), then newest reviews."""
+    """Open cards, blocking ones first (a session is waiting), then newest reviews."""
     cards = [c for c in all_cards() if c["status"] == "open"]
-    cards.sort(key=lambda c: (0 if c["kind"] == "permission" else 1,
-                              c["created"] if c["kind"] == "permission" else -c["created"]))
+    order = {"permission": 0, "gate": 1}
+    cards.sort(key=lambda c: (order.get(c["kind"], 2),
+                              c["created"] if c["kind"] in BLOCKING_KINDS else -c["created"]))
     return cards
 
 
@@ -139,8 +143,8 @@ def undo(card):
     """
     if card["status"] != "decided":
         return False, "nothing to undo"
-    if card["kind"] == "permission":
-        return False, "permission already answered to the session — cannot undo"
+    if card["kind"] in BLOCKING_KINDS:
+        return False, f"{card['kind']} already answered to the session — cannot undo"
     note = "reopened"
     p = INBOX / card["session_id"] / f"{card['id']}.json"
     if card.get("verdict") == "reject" or card.get("comment"):
@@ -179,7 +183,7 @@ def gc():
     now = time.time()
     for c in all_cards():
         age = now - c["created"]
-        if c["status"] == "open" and c["kind"] == "review" and age > REVIEW_TTL:
+        if c["status"] == "open" and c["kind"] in ("review", "gate") and age > REVIEW_TTL:
             expire(c)
         elif c["status"] != "open" and age > DECIDED_TTL:
             try:

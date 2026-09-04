@@ -13,6 +13,7 @@ There are two general options. You can either
 | OpenShell | Whole `pi` process in a policy-controlled sandbox | Local or remote managed sandbox | Requires an OpenShell gateway |
 | Gondolin extension | Built-in tools and `!` commands | Local micro-VM isolation while keeping auth on host | See [`examples/extensions/gondolin/`](../examples/extensions/gondolin/). |
 | Plain Docker | Whole `pi` process in a local container | Simple local isolation | Provider API keys enter the container. |
+| Docker Sandboxes | Whole `pi` process in a managed sandbox | Local isolation with provider keys kept on the host | Requires Docker Sandboxes (`sbx`). |
 
 Extensions run wherever the `pi` process runs. If you run host `pi` with a tool-routing extension, other custom extension tools still run on the host unless they also delegate their operations.
 
@@ -109,3 +110,47 @@ docker run --rm -it \
 The `-v "$PWD:/workspace"` mounts your current directory into the container at /workspace such that reads and writes in `/workspace` inside Docker directly affect your host files, like in the Gondolin example.
 
 Use a named volume for `/root/.pi/agent` if you want container-local settings and sessions. Mounting your host `~/.pi/agent` exposes host auth and session files to the container.
+
+## Docker Sandboxes
+
+[Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) is a managed sandbox runtime from Docker that runs the whole `pi` process inside a sandbox.
+It is one of the container boundaries [No Built-in Sandbox](security.md#no-built-in-sandbox) points to.
+
+Unlike the Plain Docker pattern above, the provider credential is not passed into the container.
+The sandbox receives a sentinel value instead, and the `sbx` proxy substitutes the real credential on egress to `api.anthropic.com`.
+Credentials are wired at creation time, so store yours on the host before you create the sandbox.
+
+For a Claude Pro/Max subscription, run `claude setup-token` on a machine with Claude Code, then store the result on the host.
+If an `anthropic` secret is already bound, remove it first: otherwise the proxy adds an `x-api-key` header alongside the Bearer token and Anthropic rejects the request.
+`sbx secret set-custom` reads the token from stdin, so it stays out of shell history.
+
+```bash
+sbx secret rm anthropic
+
+sbx secret set-custom \
+  --host api.anthropic.com \
+  --env ANTHROPIC_OAUTH_TOKEN \
+  --placeholder 'sk-ant-oat01-{rand}'
+```
+
+The sandbox gets an OAuth-shaped placeholder, not the real token, and the proxy swaps it on egress to that host; `ANTHROPIC_OAUTH_TOKEN` is a variable pi already reads and prefers over an API key, so no extra pi configuration is needed.
+
+For an API key, store it with `sbx secret set anthropic` instead. The kit wires it the same way, as a sentinel the proxy substitutes on egress.
+
+With the credential stored, launch `pi` from the project you want mounted:
+
+```bash
+sbx run --kit "docker.io/sbx/pi-kit:latest" pi
+```
+
+The kit pre-bakes `pi` into its image, so the sandbox starts without installing anything, and the current directory is the sandbox workspace.
+
+Do not authenticate from inside the sandbox: `/login` there writes a real token into the container and defeats the proxy model.
+
+Scripted use works the same way:
+
+```bash
+sbx exec <sandbox-name> -- pi -p "list the failing tests"
+```
+
+See the [kit documentation](https://github.com/docker/sbx-kits-contrib/tree/main/pi) for the full credential matrix, troubleshooting, and pinning.

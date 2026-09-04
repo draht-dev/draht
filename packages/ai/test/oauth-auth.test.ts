@@ -132,6 +132,7 @@ describe.sequential("OAuthAuth adapters", () => {
 			login: async () => credential,
 			refresh: async (_current, signal) => {
 				markRefreshStarted?.();
+				if (!signal) throw new Error("expected a refresh timeout signal");
 				return new Promise<OAuthCredential>((_resolve, reject) => {
 					const rejectAborted = () => reject(signal.reason);
 					signal.addEventListener("abort", rejectAborted, { once: true });

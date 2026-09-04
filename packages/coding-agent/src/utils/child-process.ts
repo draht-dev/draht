@@ -10,10 +10,20 @@ import {
 	type StdioNull,
 	type StdioPipe,
 } from "node:child_process";
+import { constants as osConstants } from "node:os";
 import type { Readable } from "node:stream";
 import crossSpawn from "cross-spawn";
 
 const EXIT_STDIO_GRACE_MS = 100;
+
+/**
+ * Shell convention for a process terminated by a signal: 128 + signal number
+ * (137 for SIGKILL). Used when a child has no exit code so callers do not
+ * mistake a killed command for a successful one.
+ */
+export function exitCodeForSignal(signal: NodeJS.Signals): number {
+	return 128 + (osConstants.signals[signal] ?? 0);
+}
 
 export function spawnProcess(
 	command: string,
@@ -45,12 +55,16 @@ export function spawnProcessSync(
  * the grace timer is re-armed on every chunk, so an actively writing descendant keeps
  * us reading, while a quiet inherited handle (e.g. a Windows daemonized descendant
  * that never lets `close` fire) still releases us after the grace elapses.
+ *
+ * Resolves the exit code, or `128 + signal number` when the child was killed by a
+ * signal (e.g. the OOM killer) and therefore has no exit code of its own.
  */
 export function waitForChildProcess(child: ChildProcess): Promise<number | null> {
 	return new Promise((resolve, reject) => {
 		let settled = false;
 		let exited = false;
 		let exitCode: number | null = null;
+		let exitSignal: NodeJS.Signals | null = null;
 		let postExitTimer: NodeJS.Timeout | undefined;
 		let stdoutEnded = child.stdout === null;
 		let stderrEnded = child.stderr === null;
@@ -69,25 +83,25 @@ export function waitForChildProcess(child: ChildProcess): Promise<number | null>
 			child.stderr?.removeListener("data", onData);
 		};
 
-		const finalize = (code: number | null) => {
+		const finalize = () => {
 			if (settled) return;
 			settled = true;
 			cleanup();
 			child.stdout?.destroy();
 			child.stderr?.destroy();
-			resolve(code);
+			resolve(exitCode ?? (exitSignal ? exitCodeForSignal(exitSignal) : null));
 		};
 
 		const maybeFinalizeAfterExit = () => {
 			if (!exited || settled) return;
 			if (stdoutEnded && stderrEnded) {
-				finalize(exitCode);
+				finalize();
 			}
 		};
 
 		const armIdleTimer = () => {
 			if (postExitTimer) clearTimeout(postExitTimer);
-			postExitTimer = setTimeout(() => finalize(exitCode), EXIT_STDIO_GRACE_MS);
+			postExitTimer = setTimeout(() => finalize(), EXIT_STDIO_GRACE_MS);
 		};
 
 		const onData = () => {
@@ -113,17 +127,20 @@ export function waitForChildProcess(child: ChildProcess): Promise<number | null>
 			reject(err);
 		};
 
-		const onExit = (code: number | null) => {
+		const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
 			exited = true;
 			exitCode = code;
+			exitSignal = signal;
 			maybeFinalizeAfterExit();
 			if (!settled) {
 				armIdleTimer();
 			}
 		};
 
-		const onClose = (code: number | null) => {
-			finalize(code);
+		const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
+			exitCode = code;
+			exitSignal = signal;
+			finalize();
 		};
 
 		child.stdout?.once("end", onStdoutEnd);

@@ -59,7 +59,7 @@ export interface BashOperations {
 	 * @param command The command to execute
 	 * @param cwd Working directory
 	 * @param options Execution options
-	 * @returns Promise resolving to exit code (null if killed)
+	 * @returns Promise resolving to exit code; 128 + signal number when killed by a signal, null when no exit status is known
 	 */
 	exec: (
 		command: string,
@@ -448,8 +448,10 @@ export function createBashToolDefinition(
 
 				const snapshot = await finishOutput();
 				const { text: outputText, details } = formatOutput(snapshot);
-				if (exitCode !== 0 && exitCode !== null) {
-					throw new Error(appendStatus(outputText, `Command exited with code ${exitCode}`));
+				if (exitCode !== 0) {
+					const status =
+						exitCode === null ? "Command terminated without an exit code" : `Command exited with code ${exitCode}`;
+					throw new Error(appendStatus(outputText, status));
 				}
 				return { content: [{ type: "text", text: outputText }], details };
 			} finally {

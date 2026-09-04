@@ -278,9 +278,7 @@ function killProcessTree(pid: number): void {
 	}
 }
 
-function waitForChildProcess(
-	child: ChildProcess,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+function waitForChildProcess(child: ChildProcess): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
 	return new Promise((resolvePromise, reject) => {
 		let settled = false;
 		let exited = false;

@@ -450,7 +450,9 @@ export function createBashToolDefinition(
 				const { text: outputText, details } = formatOutput(snapshot);
 				if (exitCode !== 0) {
 					const status =
-						exitCode === null ? "Command terminated without an exit code" : `Command exited with code ${exitCode}`;
+						exitCode === null
+							? "Command terminated without an exit code"
+							: `Command exited with code ${exitCode}`;
 					throw new Error(appendStatus(outputText, status));
 				}
 				return { content: [{ type: "text", text: outputText }], details };

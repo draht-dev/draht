@@ -1,6 +1,10 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
-import { AltScreenSearchComponent, findAltScreenSearchMatches } from "../src/alt-screen-search.ts";
+import {
+	AltScreenSearchComponent,
+	AltScreenSearchIndex,
+	findAltScreenSearchMatches,
+} from "../src/alt-screen-search.ts";
 import { HStack } from "../src/components/h-stack.ts";
 import { Image } from "../src/components/image.ts";
 import { MouseRegion } from "../src/components/mouse-region.ts";
@@ -512,6 +516,38 @@ describe("TuiAltScreen", () => {
 				],
 			},
 		]);
+	});
+
+	it("maps normalized ASCII and Unicode search matches back to rendered columns", () => {
+		assert.deepStrictEqual(findAltScreenSearchMatches(["\x1b[31mfoo  bar\x1b[0m", "A界🙂éZ"], "oo   bar\nA界🙂é"), [
+			{
+				segments: [
+					{ row: 0, startCol: 1, endCol: 3 },
+					{ row: 0, startCol: 5, endCol: 8 },
+					{ row: 1, startCol: 0, endCol: 6 },
+				],
+			},
+		]);
+	});
+
+	it("reuses indexed transcript matches until the query or rendered lines change", () => {
+		const index = new AltScreenSearchIndex();
+		const initial = index.search(["alpha needle", "omega"], "needle");
+		assert.strictEqual(initial.changed, true);
+		assert.strictEqual(initial.matches.length, 1);
+
+		const cached = index.search(["alpha needle", "omega"], "needle");
+		assert.strictEqual(cached.changed, false);
+		assert.strictEqual(cached.matches, initial.matches);
+
+		const changedQuery = index.search(["alpha needle", "omega"], "omega");
+		assert.strictEqual(changedQuery.changed, true);
+		assert.notStrictEqual(changedQuery.matches, initial.matches);
+		assert.deepStrictEqual(changedQuery.matches[0]?.segments, [{ row: 1, startCol: 0, endCol: 5 }]);
+
+		const changedLines = index.search(["alpha needle", "no match"], "omega");
+		assert.strictEqual(changedLines.changed, true);
+		assert.deepStrictEqual(changedLines.matches, []);
 	});
 
 	it("renders transcript search with a muted placeholder and right-aligned controls", () => {

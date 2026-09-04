@@ -150,6 +150,30 @@ describe("openai-completions tool_choice", () => {
 		expect(params.tools?.length ?? 0).toBeGreaterThan(0);
 	});
 
+	it("omits toolChoice when no tools are provided", async () => {
+		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
+		const model = { ...baseModel, api: "openai-completions" } as const;
+		let payload: unknown;
+
+		await streamSimple(
+			model,
+			{
+				messages: [{ role: "user", content: "Summarize the conversation", timestamp: Date.now() }],
+			},
+			{
+				apiKey: "test",
+				toolChoice: "none",
+				onPayload: (params: unknown) => {
+					payload = params;
+				},
+			},
+		).result();
+
+		const params = (payload ?? mockState.lastParams) as { tool_choice?: string; tools?: unknown[] };
+		expect(params).not.toHaveProperty("tool_choice");
+		expect(params).not.toHaveProperty("tools");
+	});
+
 	it("omits strict when compat disables strict mode", async () => {
 		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
 		const model = {

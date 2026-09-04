@@ -734,7 +734,7 @@ function buildParams(
 		applyAnthropicCacheControl(messages, params.tools, cacheControl);
 	}
 
-	if (options?.toolChoice) {
+	if (options?.toolChoice && params.tools?.length) {
 		params.tool_choice = options.toolChoice;
 	}
 

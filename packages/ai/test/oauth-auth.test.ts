@@ -5,6 +5,8 @@ import { githubCopilotOAuth } from "../src/auth/oauth/github-copilot.ts";
 import { openaiCodexOAuth } from "../src/auth/oauth/openai-codex.ts";
 import { openRouterOAuth } from "../src/auth/oauth/openrouter.ts";
 import { XAI_OAUTH_BASE_URL, xaiOAuth } from "../src/auth/oauth/xai.ts";
+import { resolveProviderAuth } from "../src/auth/resolve.ts";
+import type { OAuthAuth, OAuthCredential } from "../src/auth/types.ts";
 import { createModels } from "../src/models.ts";
 import * as extensionOAuthCompatibility from "../src/oauth.ts";
 import { anthropicProvider } from "../src/providers/anthropic.ts";
@@ -22,6 +24,7 @@ describe.sequential("OAuthAuth adapters", () => {
 
 	afterEach(() => {
 		vi.unstubAllGlobals();
+		vi.restoreAllMocks();
 	});
 
 	it("anthropic toAuth derives the api key from the access token", async () => {
@@ -109,6 +112,47 @@ describe.sequential("OAuthAuth adapters", () => {
 		expect(refreshed.access).toBe("new-token");
 		expect(refreshed.enterpriseUrl).toBe("company.ghe.com");
 		expect(fetchedUrls[0]).toContain("api.company.ghe.com");
+	});
+
+	it("bounds OAuth refreshes and releases the credential-store lock after timeout", async () => {
+		const timeoutController = new AbortController();
+		const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+		let markRefreshStarted: (() => void) | undefined;
+		const refreshStarted = new Promise<void>((resolve) => {
+			markRefreshStarted = resolve;
+		});
+		const credential: OAuthCredential = {
+			type: "oauth",
+			access: "old-access",
+			refresh: "refresh-token",
+			expires: 0,
+		};
+		const oauth: OAuthAuth = {
+			name: "Stalled OAuth",
+			login: async () => credential,
+			refresh: async (_current, signal) => {
+				markRefreshStarted?.();
+				return new Promise<OAuthCredential>((_resolve, reject) => {
+					const rejectAborted = () => reject(signal.reason);
+					signal.addEventListener("abort", rejectAborted, { once: true });
+					if (signal.aborted) rejectAborted();
+				});
+			},
+			toAuth: async (current) => ({ apiKey: current.access }),
+		};
+		const credentials = new InMemoryCredentialStore();
+		await credentials.modify("stalled", async () => credential);
+
+		const auth = resolveProviderAuth({ id: "stalled", auth: { oauth } }, credentials, {
+			env: async () => undefined,
+			fileExists: async () => false,
+		});
+		await refreshStarted;
+		expect(timeout).toHaveBeenCalledWith(15_000);
+
+		timeoutController.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+		await expect(auth).rejects.toMatchObject({ name: "ModelsError", code: "oauth" });
+		await expect(credentials.modify("stalled", async (current) => current)).resolves.toEqual(credential);
 	});
 });
 

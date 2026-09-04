@@ -76,6 +76,7 @@ export type KnownImagesProvider = "openrouter";
 
 export type ImagesProviderId = KnownImagesProvider | string;
 
+export type ToolChoice = "auto" | "none";
 export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type ModelThinkingLevel = "off" | ThinkingLevel;
 export type ThinkingLevelMap = Partial<Record<ModelThinkingLevel, string | null>>;
@@ -304,6 +305,8 @@ export type ProviderImagesOptions = ImagesOptions & Record<string, unknown>;
 
 // Unified options with reasoning passed to streamSimple() and completeSimple()
 export interface SimpleStreamOptions extends StreamOptions {
+	/** Provider-neutral tool selection for simple requests. Default: "auto". */
+	toolChoice?: ToolChoice;
 	reasoning?: ThinkingLevel;
 	/** Custom token budgets for thinking levels (token-based providers only) */
 	thinkingBudgets?: ThinkingBudgets;

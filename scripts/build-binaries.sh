@@ -105,10 +105,13 @@ for platform in "${PLATFORMS[@]}"; do
     # into every binary. Koffi is only used on Windows for VT input and the
     # call site has a try/catch fallback. For Windows builds, we copy the
     # appropriate .node file alongside the binary below.
+    #
+    # Disable cwd bunfig.toml autoload so project preload scripts cannot crash the
+    # standalone binary before draht starts (see upstream #7684).
     if [[ "$platform" == "windows-x64" ]]; then
-        bun build --compile --external koffi --target="$bun_target" ./dist/bun/cli.js --outfile binaries/$platform/draht.exe
+        bun build --compile --no-compile-autoload-bunfig --external koffi --target="$bun_target" ./dist/bun/cli.js --outfile binaries/$platform/draht.exe
     else
-        bun build --compile --external koffi --target="$bun_target" ./dist/bun/cli.js --outfile binaries/$platform/draht
+        bun build --compile --no-compile-autoload-bunfig --external koffi --target="$bun_target" ./dist/bun/cli.js --outfile binaries/$platform/draht
     fi
 done
 

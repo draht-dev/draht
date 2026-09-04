@@ -103,7 +103,7 @@ describe("issue #6768 Copilot compaction base URL", () => {
 		}));
 		const modelRuntime = harness.session.modelRuntime;
 		modelRuntime.registerNativeProvider(provider);
-		await modelRuntime.refresh({ allowNetwork: false, providers: [catalogModel.provider] });
+		await modelRuntime.refresh({ allowNetwork: false });
 		harness.session.agent.streamFunction = (model, context, options) =>
 			modelRuntime.streamSimple(model, context, options);
 

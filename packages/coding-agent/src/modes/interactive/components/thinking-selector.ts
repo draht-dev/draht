@@ -90,14 +90,11 @@ export class ThinkingSelectorComponent extends Container implements Focusable {
 		this.selectListChildIndex = this.children.length;
 		this.addChild(this.selectList);
 		this.addChild(new Spacer(1));
-		const confirmKey = keyDisplayText("tui.select.confirm");
-		const confirmAsDefaultKey = keyDisplayText("tui.select.confirmAsDefault");
-		const cancelKey = keyDisplayText("tui.select.cancel");
 		this.addChild(
 			new Text(
 				theme.fg(
 					"dim",
-					`  ${confirmKey} to select · ${confirmAsDefaultKey} to set as default · ${cancelKey} to cancel`,
+					`  ${keyDisplayText("tui.select.confirm")} to select · ${keyDisplayText("app.thinking.save")} to set as default · ${keyDisplayText("tui.select.cancel")} to cancel`,
 				),
 				0,
 				0,
@@ -130,13 +127,13 @@ export class ThinkingSelectorComponent extends Container implements Focusable {
 	}
 
 	handleInput(keyData: string): void {
-		if (getKeybindings().matches(keyData, "tui.select.confirmAsDefault") && this.onSelectAsDefault) {
+		const kb = getKeybindings();
+		if (kb.matches(keyData, "app.thinking.save") && this.onSelectAsDefault) {
 			const item = this.selectList.getSelectedItem();
 			if (item) this.onSelectAsDefault(item.value as ThinkingLevel);
 			return;
 		}
 
-		const kb = getKeybindings();
 		const isNav =
 			kb.matches(keyData, "tui.select.up") ||
 			kb.matches(keyData, "tui.select.down") ||

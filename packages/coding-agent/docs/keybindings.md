@@ -82,7 +82,6 @@ The dedicated history actions always change history entries, regardless of the c
 | `tui.select.pageUp` | `pageUp` | Page up in list |
 | `tui.select.pageDown` | `pageDown` | Page down in list |
 | `tui.select.confirm` | `enter` | Confirm selection |
-| `tui.select.confirmAsDefault` | `ctrl+s` | Confirm selection and set as default |
 | `tui.select.cancel` | `escape`, `ctrl+c` | Cancel selection |
 
 ### TUI Fullscreen Viewport
@@ -153,7 +152,9 @@ This routing remains configurable through the ordinary action bindings. For exam
 | `app.model.select` | `ctrl+l` | Open model selector |
 | `app.model.cycleForward` | `ctrl+p` | Cycle to next model |
 | `app.model.cycleBackward` | `shift+ctrl+p` (`alt+p` on Windows and WSL) | Cycle to previous model |
+| `app.models.save` | `ctrl+s` | Save the selected default model or scoped model configuration to settings |
 | `app.thinking.cycle` | `shift+tab` | Cycle thinking level |
+| `app.thinking.save` | `ctrl+s` | Save current thinking level to settings |
 | `app.context.cycle` | `ctrl+shift+l` | Cycle supported context-window sizes for the current model |
 | `app.thinking.toggle` | `ctrl+t` | Collapse or expand thinking blocks |
 
@@ -188,7 +189,6 @@ Used inside the scoped models selector (opened via `/scoped-models`).
 
 | Keybinding id | Default | Description |
 |--------|---------|-------------|
-| `app.models.save` | `ctrl+s` | Save current model selection to settings |
 | `app.models.enableAll` | `ctrl+a` | Enable all models (or all matching the current search) |
 | `app.models.clearAll` | `ctrl+x` | Clear all models (or all matching the current search) |
 | `app.models.toggleProvider` | `ctrl+p` | Toggle all models for the current provider |

@@ -59,7 +59,11 @@ export function spawnProcessSync(
  * Resolves the exit code, or `128 + signal number` when the child was killed by a
  * signal (e.g. the OOM killer) and therefore has no exit code of its own.
  */
-export function waitForChildProcess(child: ChildProcess): Promise<number | null> {
+export function waitForChildProcess(
+	child: ChildProcess,
+	options: { exitStdioGraceMs?: number } = {},
+): Promise<number | null> {
+	const graceMs = options.exitStdioGraceMs ?? EXIT_STDIO_GRACE_MS;
 	return new Promise((resolve, reject) => {
 		let settled = false;
 		let exited = false;
@@ -101,7 +105,7 @@ export function waitForChildProcess(child: ChildProcess): Promise<number | null>
 
 		const armIdleTimer = () => {
 			if (postExitTimer) clearTimeout(postExitTimer);
-			postExitTimer = setTimeout(() => finalize(), EXIT_STDIO_GRACE_MS);
+			postExitTimer = setTimeout(() => finalize(), graceMs);
 		};
 
 		const onData = () => {

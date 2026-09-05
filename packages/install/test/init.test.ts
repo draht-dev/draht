@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { EXIT_ERROR, EXIT_OK, EXIT_PARTIAL } from "../src/exit-codes.ts";
@@ -97,8 +97,10 @@ describe("draht-init", () => {
 			const calls = h.invocations();
 			expect(calls.map((call) => call.argv[0])).toEqual(["create-project", "init-state"]);
 			expect(calls[0].argv).toEqual(["create-project", "acme"]);
-			// Invoked through argv with the project as cwd — never through a shell.
-			expect(calls.every((call) => call.cwd === h.project)).toBe(true);
+			// Invoked through argv with the project as cwd — never through a shell. The child
+			// reports its cwd canonicalised (macOS keeps temp dirs behind /private), so compare
+			// real paths.
+			expect(calls.every((call) => realpathSync(call.cwd) === realpathSync(h.project))).toBe(true);
 		} finally {
 			h.world.dispose();
 		}

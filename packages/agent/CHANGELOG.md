@@ -1,6 +1,21 @@
 # Changelog
 
-## [Unreleased]
+## [2026.9.5-1] - 2026-09-05
+
+### Changed
+
+- biome formatting for the signal exit-code ports
+- fix(agent): map signal-killed processes to non-zero exit codes (#8994)
+- fix(agent): surface proxy stream EOF without terminal event as an error (#8997)
+- fix(agent): stop prepared tools after preflight abort (#8936)
+- fix(coding-agent): prevent Windows taskkill spawn crashes
+- fix: single edit input (#8011)
+- feat(agent): allow blocked tool calls to terminate (#7715)
+- fix(agent): reject reset during active runs (#7717)
+
+### Fixed
+
+- stop the bash timeout-truncation test racing its own output
 
 ## [2026.7.30] - 2026-07-30
 

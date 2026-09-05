@@ -1,8 +1,8 @@
 # Changelog
 
-## [Unreleased]
+## [2026.9.5-1] - 2026-09-05
 
 ### Added
 
-- Added the X Markdown Worker, draht extension, and agent-skill packaging.
-- Added an `x-markdown` CLI for converting X URLs to Markdown from the terminal; `bun run dev:link` now links it globally.
+- add CLI for converting X URLs to Markdown
+- add @draht/x-markdown package for X post conversion

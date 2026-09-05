@@ -1,45 +1,78 @@
 # Changelog
 
-## [Unreleased]
+## [2026.9.5-1] - 2026-09-05
 
 ### Added
 
-- judge gates — the queue now reviews the tests a session writes rather than the decisions it already made. A `PreToolUse` hook holds the first source edit that follows a test edit and replays the test in a throwaway git worktree against the code as it stands: an assertion failure is a real red, an import or compile error a weak one, and a test that passes with no implementation is denied without asking a human. Once the implementation lands, the `Stop` hook mutates the source lines the change touched (comparisons, boolean operators, literals) and re-runs the test, so a gate that survives every mutation is reported as a rubber stamp. Static smells (mock-only assertions, snapshot-only, no assertion, tautology, `.skip`/`.only`, private internals, swallowed exceptions) ride along on every card, `judge gates` prints the kill-rate ledger, and `"gates"` in `.planning/config.json` (or `JUDGE_GATES=0`) tunes or disables it
-- `judge` — the human-judgment queue, shared with draht-claude: `judge-hook.cjs` (UserPromptSubmit, Stop, PermissionRequest) plus the TUI at `bin/judge` and the `judge` skill. Inert unless the TUI is running, and where no Python interpreter is present
-- `install-graph-engine` (alias `graph-engine`) command that fetches the prebuilt Go `draht-graph` knowledge-graph engine binary; `map-graph`/`graph-*`/`map-codebase` now dispatch to it automatically when present (`DRAHT_GRAPH_ENGINE=auto`, the default), falling back to the built-in JS engine otherwise — see `go/README.md` and `.planning/kg-integration/SPEC.md`
-- `--no-graph-engine` install flag and `DRAHT_SKIP_GRAPH_ENGINE` env var to skip the automatic fetch
-- portable `cinematic-continuation` skill with bundled style/continuity references, a neutral sequence template, Seedance adapter boundary, and offline timeline compiler
-- `grill` command wrapper skill (`$draht:grill`) for whole-frontier interrogation of any subject
-- `why` command wrapper skill (`$draht:why`): code archaeology for intent and history — one read-only `investigator` subagent per available evidence category in parallel, synthesized into a confidence-tiered, citation-backed answer with a Sources Consulted coverage map
-- `investigator` agent prompt — single-category evidence gathering with verbatim citations, null results, contradictions, and cross-category leads
-- portable `epistemics` skill — the confidence-calibration discipline the why command synthesizes with (five tiers, cite-or-label-as-inference, null results as evidence, competing hypotheses, coverage-map contract)
-- portable `unslop` prose-discipline skill — cuts AI tells from prose deliverables (docs, reports, handoffs, commit bodies), adds voice back register-aware, and covers German prose by category (Füllwörter, Werbesprache, Anglizismen)
-- portable `typescript-discipline` skill — TypeScript type-system discipline (discriminated unions over optional-field bags, constructive modeling, branded primitives, boundary parsing with trust inside, totality-triggered strengthening, compiler-enforced exhaustiveness) with a worked don't/do examples file under `references/`
-- portable `blast-radius` skill — impact analysis beyond the diff: reduce a change's safety argument to the one falsifiable fact it rests on, prove it on a five-rung evidence ladder (said so → pointed at the line → walked the failure → ran it → reproduced in the running app) with mandatory stop-rung disclosure, hunt where grep stops (wire formats, pinned library source, cross-language readers, feature flags), and report confirmed Risks separately from checked-and-Cleared items
-- `resolve-conflicts` command wrapper skill (`$draht:resolve-conflicts`): resolve an in-progress git merge, rebase, or cherry-pick by reconstructing both sides' intent — never by picking a side blind
-- `create-verification-skill` command wrapper skill (`$draht:create-verification-skill`): interviews the target repo (surface, run, drive, observe, isolate) and generates a committed project-local `verify-<app>` skill — Launch/Doctor/Drive/Evidence/Cleanup/Helpers sections plus a per-feature verification map — that drives the real app the way a user does and captures proof artifacts, proven end to end once before handover
-- `triage` command wrapper skill (`$draht:triage`): external issue-report triage — classify (bug / performance / feature request / question / reroute) after a bounded findings-only `debugger` cause trace, dedupe against GitHub Issues with four typed outcomes (confident duplicate / possibly related / weak resemblance / no match), create a ticket only behind a seven-condition fail-closed gate with `gh issue close` compensation, and end with one typed `[triage:*]` verdict marker that a follow-up fix run can consume
+- judge the gates a session writes, not the decisions it made
+- ship the judge queue and the draht status line
+- add /triage external issue-report triage command skill
+- add blast-radius impact-analysis discipline skill
+- add /create-verification-skill command skill
+- add typescript-discipline skill
+- add epistemics discipline skill (confidence tiers for investigation findings)
+- add unslop prose discipline skill
+- /speak command + speaker subagent — ElevenLabs TTS voice output
+- enforce comment discipline across code-writing and review surfaces
+- question in whole-frontier rounds, not one at a time
+- add versatile /grill frontier interrogation command
+- hold fix-plan reproducing tests to the red-capable standard
+- reproduction-first operating brief for the debugger agent
+- reproduction-loop ladder and ranked hypotheses in debugging-workflow
+- gate Phase 1 on a red-capable reproduction loop and rank Phase 3 hypotheses
+- add resolve-conflicts command skill and prompt
+- add Codex saga-spawner equivalent
+- add cinematic continuation skill
+- record symbol signatures behind --symbol-signatures
+- add java, ruby and shell import resolution
+- resolve python/go/rust imports behind --experimental-lang-edges
+- Phase 4 — cross-platform build, release CI, and the opt-in Go engine cutover
+- Phase 3 — GRAPH_REPORT.md, MAP.html viewer, and the graph-* commands
+- Phase 2 — clustering, hotspots, containers, symbols, call graph, flows
+- add Go knowledge-graph engine (Phase 1: AST, concurrency, incremental cache)
 
 ### Changed
 
-- pruned the boilerplate Atomic Reasoning section from all generated command templates; commands keep only command-specific reasoning plus a one-line pointer to the `atomic-reasoning` skill (already shipped in this plugin's skills/)
-- frontier-rounds questioning protocol in the brainstorming skill and the discuss-phase/new-project/init-project command templates and wrappers
-- the `fix` command template's Phase 1 now gates on a red-capable reproduction loop (one named command, already run, invocation and output shown, asserting the exact symptom) and Phase 3 tests 3-5 ranked falsifiable hypotheses instead of a single one; the `debugger` agent prompt and the debugging-workflow skill carry the same reproduction-first brief and reproduction ladder
-- `verify-work` fix plans now hold their reproducing tests to the same red-capable standard as `fix` Phase 1
-- comment discipline enforced across the implementer and reviewer agent prompts, the execute-phase/fix/quick/review command templates and wrappers, and the tdd-workflow skill: comments only for constraints the code cannot express
-- the pause-work/verify-work/grill command templates and wrappers, the brainstorming skill, and the git-committer agent prompt now point their prose-producing steps at the `unslop` skill
-- the reviewer agent prompt's Type Safety criteria now name the TypeScript anti-patterns to hunt (optional-field state bags, unbranded interchangeable IDs, non-exhaustive switches, unearned casts) and point at the `typescript-discipline` skill
-- the `verify-work` command template's verifier prompt and the `verifier` agent prompt now drive the real app when a project `verify-<app>` skill exists (generated by the create-verification-skill command): launch, Doctor check, drive one mapped feature as a user would, capture the named evidence artifacts, clean up without removing them — instead of stopping at the test suite
-- the `review` command template's step 7 now escalates a Critical finding whose refutation hinges on library or runtime behavior to a rung-4 script the orchestrator writes and runs against the real code (the review subagents are scoped to reading the diff) instead of settling it by argument — per the `blast-radius` skill
+- fix roster drift across plugin READMEs and install banner
+- route /triage in the draht router and the /fix entry path
+- route blast-radius in the draht router
+- route create-verification-skill in the draht router
+- route typescript-discipline in the draht router
+- route /why against /fix, debugging-workflow, and the draht router
+- route unslop in the draht router and fix the stale discipline count
+- record this branch's unchangelogged user-visible changes
+- fix agent and skill roster drift in plugin surfaces
+- list orchestrate-loop and resolve-conflicts in plugin READMEs
+- prune the Atomic Reasoning stamp from command skill sources
+- correct the shipped skill, command and agent inventories
+- preserve unified-installer partial state before rebase
 
 ### Fixed
 
-- implementer agent TDD commit prefixes now follow the enforced `red:`/`green:`/`refactor:` convention (previously `test:`/`feat:`, which the gsd-post-task hook's `red:`/`green:` cycle check could never match)
-
-### Fixed
-
-- plugin manifest version lockstep — `.codex-plugin/plugin.json` is now stamped by the automated release path (`setVersion` in `scripts/release-helpers.mjs`) as well as the manual `npm run version:*` path. The 2026.7.11 lockstep fix only patched the manual path, which the release pipeline never calls, so the manifest froze at `2026.7.7-1` while this package advanced from `2026.7.11` through `2026.7.30`. Both plugin manifests now read `2026.7.30`, matching their `package.json`
-- the two writers remain separate — the manual path stamps manifests through `scripts/lib/version-stamp.mjs`, while the automated path stamps them from its own path list in `scripts/release-helpers.mjs` — so two gates make any future divergence loud: `scripts/check-draht-customizations.mjs` fails when `.codex-plugin/plugin.json` disagrees with this package's `package.json` version, and `assertReleaseVersions` re-reads every stamped surface after a release writes it
+- keep the release gate green under an npm banner and a slow sandbox start
+- re-contend on lock identity churn instead of crashing
+- correct the /review rung-4 rationale about subagent capabilities
+- align implementer TDD commit prefixes with red:/green:
+- close scanner and installer publishability blockers
+- close transaction recovery gaps
+- bound installer archive handling
+- verify transactional updates
+- bound consumers and validate provenance
+- close runtime integrity and backpressure gaps
+- make marketplace updates atomic
+- harden graph engine coordination and provenance
+- harden runtime installers
+- support publication locks on Windows
+- coordinate graph publication across processes
+- make signatures private and defaults compatible
+- make SSE client handling concurrent
+- bound cache commits and scope arrow signatures
+- bound cache reads during file growth
+- gate npm publish on graph assets
+- make symbol signatures safe and explicit
+- harden map serving and cache loading
+- make the regex-pinned cutover actually byte-clean; key the cache on the grammar set
+- make every subcommand discoverable from `help`
 
 ## [2026.7.12] - 2026-07-12
 

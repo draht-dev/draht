@@ -1,6 +1,6 @@
 {
 	"name": "@draht/rlm-agent",
-	"version": "2026.7.30",
+	"version": "2026.9.5-1",
 	"private": true,
 	"description": "Coding-agent extension surface for @draht/rlm: /rlm slash command + rlm_query tool",
 	"type": "module",

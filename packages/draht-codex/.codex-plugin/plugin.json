@@ -1,6 +1,6 @@
 {
   "name": "draht",
-  "version": "2026.7.30",
+  "version": "2026.9.5-1",
   "description": "Draht GSD, multi-agent, TDD and DDD workflows as a Codex plugin.",
   "author": {
     "name": "Oskar Freye",

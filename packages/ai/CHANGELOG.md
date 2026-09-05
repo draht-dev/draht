@@ -1,6 +1,44 @@
 # Changelog
 
-## [Unreleased]
+## [2026.9.5-1] - 2026-09-05
+
+### Added
+
+- geist/0.5 — session_spawn, registry_resync, and the corpus
+- add @draht/x-markdown package for X post conversion
+
+### Changed
+
+- guard the optional refresh signal in the stalled-OAuth test
+- feat(ai): add simple tool choice option
+- fix(ai): prevent copilot policy login rate limits (#8254)
+- fix(ai): retry Copilot GET /models once on 429 during login
+- fix(ai): enable Copilot model policies sequentially during login
+- fix(ai): bound Copilot policy update concurrency
+- fix(ai): restore Copilot models from account policy (#7672)
+- fix(ai): process unterminated Codex SSE terminal events
+- fix(ai): route GitHub Copilot Fable 5 through Anthropic Messages
+- fix(ai): bump claude code user agent version
+- fix(ai): match subdomains and root domains in NO_PROXY (#8737)
+- fix(ai): omit tool_choice without tools closes #8607
+- fix: track kimi cached tokens (#8119)
+- fix(ai): preserve Google length stops with tool calls
+- fix(ai): sanitize empty Bedrock tool argument keys (#7882)
+- fix(ai): send max_tokens to DeepSeek APIs
+- fix(ai): retry upstream request buffer failures
+- fix(ai): bound OAuth refresh duration
+- fix(ai): preserve Gemini 3 tool call IDs (#7494)
+- fix(ai): retry transient provider errors in Google adapters (#7471)
+- fix(ai): scope Codex sockets to accounts
+- fix(ai): preserve Anthropic initial stream block content (#7358)
+- fix(ai): keep signed empty text/thinking blocks in google history (#7362)
+- fix(ai): treat only plain objects as provider error bodies (#7205)
+- fix: validateToolArguments() coerces nullable union (#7373)
+- sync model catalog overrides and test references
+
+### Fixed
+
+- restore sharded model catalog aggregator
 
 ## [2026.7.30] - 2026-07-30
 

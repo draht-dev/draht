@@ -1,6 +1,24 @@
 # Changelog
 
-## [Unreleased]
+## [2026.9.5-1] - 2026-09-05
+
+### Changed
+
+- fix(tui): wrap SIGWINCH self-signal so restricted seccomp policies do not crash startup (#8898)
+- fix(tui): detect Zed terminal capabilities (#8828)
+- fix(tui): chunk large main-screen renders closes #8028
+- fix(tui): autocomplete orders nested results (#8669)
+- fix(tui): prevent wrapped table link color leaks (#8363)
+- fix(tui): fit text padding to narrow widths, closes #8252
+- fix(tui): apply PI_TUI_ESC_TIMEOUT only to lone ESC
+- fix(tui): prevent split Alt+Enter from interrupting (#7899)
+- fix(tui): skip OSC 8 scan for plain prefixes (#7665)
+- fix(tui): close truncated OSC 8 links (#7657)
+- fix(tui): add iterm payload size for xterm.js image addon (#7612)
+- fix(tui): correct terminal progress clear sequence (#7581)
+- fix(tui): detect truecolor for Windows consoles
+- fix(tui): handle batched color scheme reports (#7550)
+- fix(tui): preserve spaces in settings searches
 
 ## [2026.7.30] - 2026-07-30
 

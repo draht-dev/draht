@@ -4,6 +4,11 @@ set -euo pipefail
 # Isolate user resources, credentials, temporary files, and tool configuration.
 temp_parent="${TMPDIR:-/tmp}"
 temp_parent="${temp_parent%/}"
+# Unix socket paths are capped at 104 bytes on macOS; the gateway and geist
+# suites cannot bind under a deep $TMPDIR such as /var/folders/.../T.
+if [[ ${#temp_parent} -gt 24 && -d /tmp && -w /tmp ]]; then
+	temp_parent=/tmp
+fi
 test_root="$(mktemp -d "$temp_parent/draht-test.XXXXXX")"
 git_askpass="$(type -P false)"
 readonly temp_parent test_root git_askpass

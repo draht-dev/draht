@@ -53,6 +53,15 @@ test("setting package versions synchronizes plugin manifests and dependency vers
 	assert.doesNotMatch(readFileSync(join(root, "bun.lock"), "utf8"), /0\.9\.0/);
 });
 
+test("setting package versions keeps each file's existing indentation", () => {
+	const root = versionFixture();
+	writeFileSync(join(root, "package.json"), '{\n\t"name": "root",\n\t"version": "1.0.0"\n}\n');
+	writeFileSync(join(root, "packages/a/package.json"), '{\n  "name": "a",\n  "version": "1.0.0"\n}\n');
+	setVersion(root, "2.0.0");
+	assert.equal(readFileSync(join(root, "package.json"), "utf8"), '{\n\t"name": "root",\n\t"version": "2.0.0"\n}\n');
+	assert.equal(readFileSync(join(root, "packages/a/package.json"), "utf8"), '{\n  "name": "a",\n  "version": "2.0.0"\n}\n');
+});
+
 test("repository uses Bun as its single authoritative dependency lock", () => {
 	assert.equal(existsSync(join(process.cwd(), "package-lock.json")), false, "stale npm lockfile must not coexist with bun.lock");
 	assert.equal(existsSync(join(process.cwd(), "bun.lock")), true);

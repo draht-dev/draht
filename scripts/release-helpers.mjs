@@ -73,7 +73,8 @@ function readJson(path) {
 	return JSON.parse(readFileSync(path, "utf8"));
 }
 
-function writeJson(path, value, indent = "\t") {
+function writeJson(path, value) {
+	const indent = existsSync(path) && /^ {2}"/m.test(readFileSync(path, "utf8")) ? 2 : "\t";
 	writeFileSync(path, `${JSON.stringify(value, null, indent)}\n`);
 }
 
@@ -162,13 +163,13 @@ export function setVersion(root, version) {
 	const rootPackagePath = join(root, "package.json");
 	const rootPackage = readJson(rootPackagePath);
 	rootPackage.version = version;
-	writeJson(rootPackagePath, rootPackage, 2);
+	writeJson(rootPackagePath, rootPackage);
 
 	for (const relativePath of PLUGIN_MANIFESTS) {
 		const manifestPath = join(root, relativePath);
 		const manifest = readJson(manifestPath);
 		manifest.version = version;
-		writeJson(manifestPath, manifest, 2);
+		writeJson(manifestPath, manifest);
 	}
 	const lockPath = join(root, "bun.lock");
 	if (existsSync(lockPath)) {

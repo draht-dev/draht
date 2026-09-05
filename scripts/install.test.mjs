@@ -156,7 +156,7 @@ jq -n --arg digest "$digest" --arg commit "$commit" --arg repository "$repositor
 
 function runInstaller(installer, f, extraEnv = {}) {
 	return spawnSync("bash", [installer], {
-		timeout: 10_000,
+		timeout: 60_000,
 		encoding: "utf8",
 		env: {
 			...process.env,

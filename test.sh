@@ -72,6 +72,19 @@ test_env=(
 	"DRAHT_TEST_TIMEOUT_MS=${DRAHT_TEST_TIMEOUT_MS:-120000}"
 )
 
+# playwright-core looks for Chromium under $HOME, which this script isolates;
+# point it at the browsers installed in the real home unless a path is given.
+playwright_browsers="${PLAYWRIGHT_BROWSERS_PATH:-}"
+if [[ -z "$playwright_browsers" ]]; then
+	for candidate in "$HOME/Library/Caches/ms-playwright" "$HOME/.cache/ms-playwright" "${LOCALAPPDATA:-}/ms-playwright"; do
+		if [[ -d "$candidate" ]]; then
+			playwright_browsers="$candidate"
+			break
+		fi
+	done
+fi
+[[ -z "$playwright_browsers" ]] || test_env+=("PLAYWRIGHT_BROWSERS_PATH=$playwright_browsers")
+
 # Native Windows needs these inherited values to launch child processes.
 for name in SystemRoot SYSTEMROOT WINDIR COMSPEC PATHEXT; do
 	value="${!name-}"

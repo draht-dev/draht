@@ -83,9 +83,6 @@
 			"rimraf": "6.1.2"
 		}
 	},
-	"optionalDependencies": {
-		"@mariozechner/clipboard": "^0.3.2"
-	},
 	"devDependencies": {
 		"@types/cross-spawn": "6.0.6",
 		"@types/hosted-git-info": "^3.0.5",

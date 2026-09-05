@@ -16,6 +16,7 @@ export default defineConfig({
 		// Tests run offline by default; opt in with allowNetwork() from test/test-network-env.ts.
 		env: { DRAHT_OFFLINE: "1" },
 		unstubEnvs: true,
+		setupFiles: ["./test/setup/restore-cwd.ts"],
 		reporters: process.env.GITHUB_ACTIONS ? ["dot", "github-actions"] : ["dot"],
 		silent: "passed-only",
 		server: {

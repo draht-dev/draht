@@ -7,8 +7,8 @@ on:
 
 env:
   RELEASE_TAG: ${{ github.ref_name }}
-  BUN_PACKAGE_VERSION: 1.4.1-canary.20260904.1
-  BUN_REVISION: 1.4.1-canary.1+b1f7b8e36
+  BUN_PACKAGE_VERSION: 1.4.2
+  BUN_REVISION: 1.4.2+744846f84
 
 jobs:
   build-runtime:
@@ -27,7 +27,7 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Install and verify pinned Bun canary
+      - name: Install and verify the pinned Bun
         run: |
           npm install --global "bun@${BUN_PACKAGE_VERSION}"
           test "$(bun --revision)" = "${BUN_REVISION}"

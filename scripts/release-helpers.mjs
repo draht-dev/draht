@@ -90,8 +90,8 @@ export function requiredBunVersion(root) {
 
 export function requiredBunRevision(root) {
 	const value = readJson(join(root, "package.json")).drahtReleaseBunRevision;
-	if (!/^\d+\.\d+\.\d+-canary\.\d+\+[0-9a-f]+$/.test(value ?? "")) {
-		throw new Error("package.json drahtReleaseBunRevision must pin an exact Bun canary revision");
+	if (!/^\d+\.\d+\.\d+(?:-canary\.\d+)?\+[0-9a-f]+$/.test(value ?? "")) {
+		throw new Error("package.json drahtReleaseBunRevision must pin an exact Bun revision (as printed by `bun --revision`)");
 	}
 	return value;
 }

@@ -162,16 +162,37 @@ func Impact(m *model.Map, argv []string, w io.Writer) int {
 	var L []string
 	L = append(L, notes...)
 
-	targetBasenames := make([]string, len(targets))
-	for i, t := range targets {
-		targetBasenames[i] = lastPathSegment(t)
-	}
 	sinksStr := "none"
 	if len(sinkKinds) > 0 {
 		sinksStr = strings.Join(sinkKinds, ", ")
 	}
+	// Full resolved paths in the header (CJS parity) — a bare `index.ts` is
+	// ambiguous in a monorepo full of them.
 	L = append(L, fmt.Sprintf("impact %s — %d modules · %d packages · %d entry points · sinks: %s",
-		strings.Join(targetBasenames, ", "), len(impactedIDs), byPkg.Len(), len(eps), sinksStr))
+		strings.Join(targets, ", "), len(impactedIDs), byPkg.Len(), len(eps), sinksStr))
+	// A barrel with no importers still fronts a public API — say so instead of
+	// a bare zero (CJS parity).
+	if len(impactedIDs) == 0 {
+		for _, t := range targets {
+			tm := resolver.ModuleByID(t)
+			if tm == nil {
+				continue
+			}
+			reexp := 0
+			for _, e := range tm.Exports {
+				if e.Kind == "re-export" {
+					reexp++
+				}
+			}
+			if reexp > 0 {
+				pkg := "this package"
+				if tm.Package != nil {
+					pkg = *tm.Package
+				}
+				L = append(L, fmt.Sprintf("note: %s is a barrel (re-exports %d symbols) with no direct importers — changes only affect external consumers of %s", t, reexp, pkg))
+			}
+		}
+	}
 
 	if len(eps) > 0 {
 		n := len(eps)

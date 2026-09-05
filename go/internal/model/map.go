@@ -82,6 +82,11 @@ type Export struct {
 	Kind string  `json:"kind"`
 	Line int     `json:"line"`
 	Doc  *string `json:"doc"`
+	// Via is set only on star-re-export-expanded entries (the module the
+	// symbol is actually defined in); omitted otherwise, matching the CJS
+	// engine's `via` field. MUST stay after Doc: encoding/json emits struct
+	// fields in declaration order and the CJS engine appends via last.
+	Via string `json:"via,omitempty"`
 }
 
 // Symbol is one symbol-level node.

@@ -2,8 +2,8 @@
 	"name": "draht-monorepo",
 	"private": true,
 	"type": "module",
-	"packageManager": "bun@1.3.13-canary.20260425.1",
-	"drahtReleaseBunRevision": "1.3.14-canary.1+ed1c48f2b",
+	"packageManager": "bun@1.4.1-canary.20260904.1",
+	"drahtReleaseBunRevision": "1.4.1-canary.1+b1f7b8e36",
 	"workspaces": [
 		"packages/*",
 		"packages/web-ui/example",

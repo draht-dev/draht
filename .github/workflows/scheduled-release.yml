@@ -19,8 +19,8 @@ permissions:
   contents: read
 
 env:
-  BUN_PACKAGE_VERSION: 1.3.13-canary.20260425.1
-  BUN_REVISION: 1.3.14-canary.1+ed1c48f2b
+  BUN_PACKAGE_VERSION: 1.4.1-canary.20260904.1
+  BUN_REVISION: 1.4.1-canary.1+b1f7b8e36
 
 jobs:
   release:

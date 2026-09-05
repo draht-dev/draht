@@ -62,14 +62,14 @@ test("repository uses Bun as its single authoritative dependency lock", () => {
 });
 
 test("release toolchain requires the exact pinned Bun canary revision", () => {
-	assert.doesNotThrow(() => assertBunToolchain(process.cwd(), () => "1.3.14-canary.1+ed1c48f2b"));
+	assert.doesNotThrow(() => assertBunToolchain(process.cwd(), () => "1.4.1-canary.1+b1f7b8e36"));
 	assert.throws(
 		() => assertBunToolchain(process.cwd(), () => "1.4.0-canary.1+wrong"),
 		/Bun revision.*does not match required/,
 	);
 	const workflow = readFileSync(join(process.cwd(), ".github/workflows/build-binaries.yml"), "utf8");
-	assert.match(workflow, /BUN_PACKAGE_VERSION: 1\.3\.13-canary\.20260425\.1/);
-	assert.match(workflow, /BUN_REVISION: 1\.3\.14-canary\.1\+ed1c48f2b/);
+	assert.match(workflow, /BUN_PACKAGE_VERSION: 1\.4\.1-canary\.20260904\.1/);
+	assert.match(workflow, /BUN_REVISION: 1\.4\.1-canary\.1\+b1f7b8e36/);
 });
 
 test("scheduled releases are opt-in, credentialed, and routed through the release script", () => {

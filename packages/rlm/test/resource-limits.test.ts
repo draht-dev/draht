@@ -40,6 +40,16 @@ describe.skipIf(!HAS_PYTHON3 || !HAS_USERNS)("Resource limits (Phase 28 Architec
 		expect(result.history).toHaveLength(0);
 	});
 
+	test("1b. a step budget far below python startup still reports the spinning step as a timeout, not a sandbox violation", async () => {
+		const rootLlm = async (_history: RlmHistoryEntry[]) => ["```python", "while True:", "    pass", "```"].join("\n");
+
+		session = new RlmSession({ prompt: "unused for this test", rootLlm, stepTimeoutMs: 20 });
+		const result = await session.run();
+
+		expect(result.kind).toBe("timeout");
+		expect(result.value as string).toContain("wall-clock timeout of 20ms");
+	});
+
 	test("2. a step allocating memory well past a deliberately small RSS ceiling gets killed", async () => {
 		const rootLlm = async (_history: RlmHistoryEntry[]) =>
 			["```python", "buf = bytearray(64 * 1024 * 1024)", "while True:", "    pass", "```"].join("\n");

@@ -30,6 +30,12 @@ const DEFAULT_STDOUT_TRUNCATE_CHARS = 2000;
 // which is explicitly a backstop, not the primary mechanism, and isn't used
 // on macOS at all per the plan).
 const DEFAULT_STEP_TIMEOUT_MS = 30_000;
+/**
+ * The startup self-test spawns python3 and drives a 2 s socket probe, so it
+ * is bounded by at least this much even when a caller sets a tiny step
+ * budget -- otherwise a slow start would be reported as a sandbox violation.
+ */
+const MIN_SELF_TEST_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_RSS_BYTES = 256 * 1024 * 1024;
 const DEFAULT_RSS_POLL_INTERVAL_MS = 250;
 
@@ -620,16 +626,16 @@ export class RlmSession {
 	 * `nextMessage()` wait) -- the explicit `reject` here is what actually
 	 * unblocks the caller in that case, not just a formality.
 	 */
-	private withStepTimeout<T>(promise: Promise<T>): Promise<T> {
-		if (!(this.stepTimeoutMs > 0)) return promise;
+	private withStepTimeout<T>(promise: Promise<T>, timeoutMs = this.stepTimeoutMs): Promise<T> {
+		if (!(timeoutMs > 0)) return promise;
 		return new Promise<T>((resolve, reject) => {
 			const timer = setTimeout(() => {
 				const error = new RlmStepTimeoutError(
-					`RlmSession: step exceeded the configured wall-clock timeout of ${this.stepTimeoutMs}ms -- killed.`,
+					`RlmSession: step exceeded the configured wall-clock timeout of ${timeoutMs}ms -- killed.`,
 				);
 				this.killAndTerminate(error);
 				reject(error);
-			}, this.stepTimeoutMs);
+			}, timeoutMs);
 			timer.unref();
 			promise.then(
 				(value) => {
@@ -715,8 +721,8 @@ export class RlmSession {
 	 * report both a network connect attempt and an out-of-workdir file read
 	 * failing. Throws `RlmSandboxViolationError` (fail-closed, refusing to run
 	 * at all) if:
-	 *   - the driver never responds (crash/hang -- guarded by the same
-	 *     wall-clock timeout as a normal step, via `withStepTimeout`),
+	 *   - the driver never responds (crash/hang -- guarded by the step
+	 *     wall-clock timeout, floored at `MIN_SELF_TEST_TIMEOUT_MS`),
 	 *   - the response isn't a well-formed `self_test_result`, or
 	 *   - either check reports the sandbox did NOT block the attempt.
 	 *
@@ -734,7 +740,10 @@ export class RlmSession {
 		this.send({ type: "self_test" });
 		let message: DriverMessage;
 		try {
-			message = await this.withStepTimeout(this.nextMessage());
+			message = await this.withStepTimeout(
+				this.nextMessage(),
+				this.stepTimeoutMs > 0 ? Math.max(this.stepTimeoutMs, MIN_SELF_TEST_TIMEOUT_MS) : 0,
+			);
 		} catch (err) {
 			throw new RlmSandboxViolationError(
 				"RlmSession: OS-level sandbox startup self-test did not complete " +

@@ -12,7 +12,7 @@
           "path": "quickstart.md"
         },
         {
-          "title": "Using Pi",
+          "title": "Using Draht",
           "path": "usage.md"
         },
         {
@@ -69,7 +69,7 @@
           "path": "themes.md"
         },
         {
-          "title": "Pi Packages",
+          "title": "Draht Packages",
           "path": "packages.md"
         },
         {

@@ -61,6 +61,10 @@ test_env=(
 	"NPM_CONFIG_CACHE=$test_root/cache/npm"
 	"PI_NO_LOCAL_LLM=1"
 	"AWS_EC2_METADATA_DISABLED=true"
+	# A single machine runs every workspace back to back; the git-backed
+	# integration suites need fewer workers and more headroom than CI's shards.
+	"VITEST_MAX_FORKS=${VITEST_MAX_FORKS:-6}"
+	"DRAHT_TEST_TIMEOUT_MS=${DRAHT_TEST_TIMEOUT_MS:-120000}"
 )
 
 # Native Windows needs these inherited values to launch child processes.

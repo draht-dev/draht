@@ -12,7 +12,9 @@ export default defineConfig({
 	test: {
 		globals: true,
 		environment: "node",
-		testTimeout: 30000,
+		// test.sh raises this for the local release gate, where the git-backed
+		// integration suites run 10x slower than on a sharded CI runner.
+		testTimeout: Number(process.env.DRAHT_TEST_TIMEOUT_MS ?? 30000),
 		// Tests run offline by default; opt in with allowNetwork() from test/test-network-env.ts.
 		env: { DRAHT_OFFLINE: "1" },
 		unstubEnvs: true,

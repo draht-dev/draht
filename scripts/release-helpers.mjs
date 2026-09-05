@@ -511,6 +511,7 @@ export async function waitForVerifiedRelease({
 	fetchImpl = globalThis.fetch,
 	token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN,
 	verifyAttestation = verifyGithubAttestation,
+	log = (line) => console.log(line),
 }) {
 	let lastError;
 	for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -519,6 +520,7 @@ export async function waitForVerifiedRelease({
 			return await validateReleaseArtifacts({ tag, version, commit, release, fetchImpl, token, verifyAttestation });
 		} catch (error) {
 			lastError = error;
+			log(`  attempt ${attempt}/${attempts}: ${error.message}${token ? "" : " (no GH_TOKEN in the environment)"}`);
 		}
 		if (attempt < attempts) await sleep(intervalMs);
 	}

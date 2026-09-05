@@ -1,4 +1,5 @@
 import type { Api, CredentialInfo, Model } from "@draht/ai";
+import { APP_NAME } from "../config.ts";
 import { resolveCliModel } from "../core/model-resolver.ts";
 import type { ModelRuntime } from "../core/model-runtime.ts";
 import type { Args } from "./args.ts";
@@ -23,20 +24,20 @@ export function isCredentialPrintHelp(args: string[]): boolean {
 
 export function printCredentialPrintHelp(): void {
 	console.log(`Usage:
-  pi auth print-api-key --model <model> [--provider <provider>]
-  pi auth print-bearer-token --model <model> [--provider <provider>] [--min-expiry <duration>]
+  ${APP_NAME} auth print-api-key --model <model> [--provider <provider>]
+  ${APP_NAME} auth print-bearer-token --model <model> [--provider <provider>] [--min-expiry <duration>]
 
 Prints the configured credential alone on stdout. Provider inference uses configured credentials; specify --provider to select explicitly. Bearer tokens have a 30-minute minimum expiry by default. --min-expiry accepts ms, s, m, or h (for example, 30m).`);
 }
 
-/** Parse the small, extensible `pi auth` command surface before normal startup. */
+/** Parse the small, extensible `auth` command surface before normal startup. */
 export function parseCredentialPrintCommand(args: string[]): CredentialPrintCommand | undefined {
 	if (args[0] !== "auth") return undefined;
 
 	const kind = args[1] === "print-api-key" ? "api_key" : args[1] === "print-bearer-token" ? "bearer_token" : undefined;
 	if (!kind) {
 		throw new CredentialPrintError(
-			`Unknown auth command "${args[1] ?? ""}". Use "pi auth print-api-key" or "pi auth print-bearer-token".`,
+			`Unknown auth command "${args[1] ?? ""}". Use "${APP_NAME} auth print-api-key" or "${APP_NAME} auth print-bearer-token".`,
 		);
 	}
 

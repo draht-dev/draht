@@ -1,0 +1,104 @@
+name: Promote Daily Release
+
+# Every release is cut as YYYY.M.D-N. Once a day is over, its newest -N is
+# re-tagged as the bare YYYY.M.D (which sorts above every -N of that day), the
+# tag-triggered Build Binaries run produces the GitHub release, and the same
+# packages are published under the bare version so `latest` lands on it.
+# Runs before Scheduled Release so a fresh -1 is never overtaken.
+
+on:
+  schedule:
+    - cron: '47 2 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Only print which day would be promoted
+        required: false
+        default: false
+        type: boolean
+      only:
+        description: Promote exactly this source tag (e.g. v2026.9.5-2)
+        required: false
+        default: ''
+        type: string
+
+concurrency:
+  group: scheduled-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  BUN_PACKAGE_VERSION: 1.4.1-canary.20260904.1
+  BUN_REVISION: 1.4.1-canary.1+b1f7b8e36
+
+jobs:
+  promote:
+    if: github.event_name == 'workflow_dispatch' || vars.DRAHT_RELEASES_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Require release credentials
+        if: ${{ !inputs.dry_run }}
+        env:
+          DRAHT_RELEASE_TOKEN: ${{ secrets.DRAHT_RELEASE_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [[ -z "${DRAHT_RELEASE_TOKEN}" ]]; then
+            echo "::error::DRAHT_RELEASE_TOKEN is not configured"
+            exit 1
+          fi
+          if [[ -z "${NPM_TOKEN}" ]]; then
+            echo "::error::NPM_TOKEN is not configured"
+            exit 1
+          fi
+
+      - name: Checkout with tags and the release identity
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ secrets.DRAHT_RELEASE_TOKEN || github.token }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install and verify pinned Bun canary
+        run: |
+          npm install --global "bun@${BUN_PACKAGE_VERSION}"
+          test "$(bun --revision)" = "${BUN_REVISION}"
+
+      - name: Plan
+        if: ${{ inputs.dry_run }}
+        run: node scripts/promote-daily-release.mjs --dry-run ${{ inputs.only && format('--only {0}', inputs.only) || '' }}
+
+      - name: Install system dependencies
+        if: ${{ !inputs.dry_run }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+
+      - name: Install workspace dependencies
+        if: ${{ !inputs.dry_run }}
+        run: bun install --frozen-lockfile --ignore-scripts --linker hoisted
+
+      - name: Verify npm publication identity
+        if: ${{ !inputs.dry_run }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm whoami --registry=https://registry.npmjs.org
+
+      - name: Promote and publish
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.DRAHT_RELEASE_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          git config user.name "draht-release[bot]"
+          git config user.email "release@draht.dev"
+          node scripts/promote-daily-release.mjs ${{ inputs.only && format('--only {0}', inputs.only) || '' }}

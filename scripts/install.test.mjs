@@ -29,6 +29,10 @@ const SYSTEM_BIN = (() => {
 	return dir;
 })();
 
+// The release payload is built for linux-x64 and the traversal fixture rewrites
+// member names on the way in; GNU tar and bsdtar spell that differently.
+const GNU_TAR = /GNU tar/.test(spawnSync("tar", ["--version"], { encoding: "utf8" }).stdout ?? "");
+
 function sha256(bytes) {
 	return createHash("sha256").update(bytes).digest("hex");
 }
@@ -56,7 +60,7 @@ function fixture({ archiveMode = "valid", withGh = true, manifestCommit = "2".re
 	const archiveName = "draht-linux-x64.tar.gz";
 	const archive = join(release, archiveName);
 	const tarArgs = archiveMode === "traversal"
-		? ["-czf", archive, "--transform=s|^|../|", "-C", join(root, "payload"), "draht"]
+		? ["-czf", archive, GNU_TAR ? "--transform=s|^|../|" : "-s|^|../|", "-C", join(root, "payload"), "draht"]
 		: archiveMode === "missing"
 			? ["-czf", archive, "-C", join(root, "payload"), "draht/README.md"]
 			: archiveMode === "duplicate"
@@ -121,13 +125,18 @@ esac > "$out"
 		writeFileSync(join(fakeBin, command), "#!/bin/sh\nexit 97\n", "utf8");
 		chmodSync(join(fakeBin, command), 0o755);
 	}
+	// The payload above is a linux-x64 release; pin the platform the installer
+	// sees to match it so the suite runs on any host, not only Linux runners.
+	writeFileSync(join(fakeBin, "uname"), "#!/bin/sh\ncase \"$1\" in -s) echo Linux;; -m) echo x86_64;; esac\n", "utf8");
+	chmodSync(join(fakeBin, "uname"), 0o755);
 	if (withGh) {
 		writeFileSync(join(fakeBin, "gh"), `#!/bin/sh
 set -eu
 printf '%s\\n' "$*" >> "$DRAHT_TEST_GH_LOG"
 [ "$DRAHT_TEST_GH_MODE" != fail ] || exit 1
 asset="$3"
-digest="$(sha256sum "$asset" | cut -d' ' -f1)"
+if command -v sha256sum >/dev/null 2>&1; then digest="$(sha256sum "$asset" | cut -d' ' -f1)"
+else digest="$(shasum -a 256 "$asset" | cut -d' ' -f1)"; fi
 commit="$DRAHT_TEST_COMMIT"
 repository="https://github.com/draht-dev/draht"
 source_uri="git+https://github.com/draht-dev/draht@refs/tags/v1.2.3"

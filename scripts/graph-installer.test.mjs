@@ -70,6 +70,12 @@ function validManifest(version = "2026.8.5") {
 	};
 }
 
+// The repair test drives the real installer, which downloads for the host it
+// runs on; bind the fixture release to that platform the way cli.mjs names it.
+const HOST_GOOS = { linux: "linux", darwin: "darwin", win32: "windows" }[process.platform];
+const HOST_GOARCH = { x64: "amd64", arm64: "arm64" }[process.arch];
+const HOST_PLATFORM = `${HOST_GOOS}-${process.arch}`;
+
 for (const implementation of IMPLEMENTATIONS) {
 	test(`${implementation} performs controlled ZIP extraction of the exact graph payload`, async () => {
 		const { extractGraphZip } = await import(`../packages/${implementation}/graph-archive.mjs`);
@@ -216,19 +222,23 @@ for (const implementation of IMPLEMENTATIONS) {
 		const releasedBinary = join(payloadDir, "draht-graph");
 		writeFileSync(releasedBinary, expected);
 		chmodSync(releasedBinary, 0o755);
-		const archive = join(fixture, "draht-graph-linux-x64.tar.gz");
+		const archive = join(fixture, `draht-graph-${HOST_PLATFORM}.tar.gz`);
 		const tar = spawnSync("tar", ["-czf", archive, "-C", join(fixture, "payload"), "draht-graph"]);
 		assert.equal(tar.status, 0, tar.stderr?.toString());
 		const archiveBytes = readFileSync(archive);
 		const manifest = validManifest("1.2.3");
 		Object.assign(manifest.artifacts[0], {
+			platform: HOST_PLATFORM,
+			goos: HOST_GOOS,
+			goarch: HOST_GOARCH,
+			archive: `draht-graph-${HOST_PLATFORM}.tar.gz`,
 			archiveSha256: createHash("sha256").update(archiveBytes).digest("hex"),
 			archiveBytes: archiveBytes.length,
 			binarySha256: createHash("sha256").update(expected).digest("hex"),
 			binaryBytes: Buffer.byteLength(expected),
 		});
 		writeFileSync(join(fixture, "manifest.json"), JSON.stringify(manifest));
-		writeFileSync(join(fixture, "SHA256SUMS"), `${manifest.artifacts[0].archiveSha256}  ${manifest.artifacts[0].archive}\n${manifest.artifacts[0].binarySha256}  linux-x64/draht-graph\n`);
+		writeFileSync(join(fixture, "SHA256SUMS"), `${manifest.artifacts[0].archiveSha256}  ${manifest.artifacts[0].archive}\n${manifest.artifacts[0].binarySha256}  ${HOST_PLATFORM}/draht-graph\n`);
 		const preload = join(fixture, "mock-fetch.mjs");
 		writeFileSync(preload, `
 			import { readFileSync, writeFileSync } from "node:fs";
@@ -305,7 +315,7 @@ for (const implementation of IMPLEMENTATIONS) {
 			},
 		});
 		assert.equal(repaired.status, 0, repaired.stderr || repaired.stdout);
-		assert.equal(readFileSync(target, "utf8"), expected);
+		assert.equal(readFileSync(target, "utf8"), expected, `${repaired.stdout}\n${repaired.stderr}`);
 		assert.match(readFileSync(ghLog, "utf8"), /api .*git\/ref\/tags\/v1\.2\.3/);
 		assert.match(readFileSync(ghLog, "utf8"), /attestation verify .*--repo draht-dev\/draht .*--format json/);
 		// Repeat through the lightweight-tag shape; both tag kinds must resolve
@@ -344,7 +354,7 @@ for (const implementation of IMPLEMENTATIONS) {
 		manifest.artifacts[0].archiveSha256 = createHash("sha256").update(expansionBytes).digest("hex");
 		manifest.artifacts[0].archiveBytes = expansionBytes.length;
 		writeFileSync(join(fixture, "manifest.json"), JSON.stringify(manifest));
-		writeFileSync(join(fixture, "SHA256SUMS"), `${manifest.artifacts[0].archiveSha256}  ${manifest.artifacts[0].archive}\n${manifest.artifacts[0].binarySha256}  linux-x64/draht-graph\n`);
+		writeFileSync(join(fixture, "SHA256SUMS"), `${manifest.artifacts[0].archiveSha256}  ${manifest.artifacts[0].archive}\n${manifest.artifacts[0].binarySha256}  ${HOST_PLATFORM}/draht-graph\n`);
 		const expansionStatement = structuredClone(statement);
 		expansionStatement.subject[0].digest.sha256 = manifest.artifacts[0].archiveSha256;
 		const expansionPayload = Buffer.from(JSON.stringify(expansionStatement)).toString("base64");

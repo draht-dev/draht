@@ -392,7 +392,9 @@ function driveFromPeer(peer, command, { timeoutMs = 60000 } = {}) {
 		const bin = process.env.GEIST_PEER_SSH_BIN ?? "ssh";
 		const user = process.env.GEIST_PEER_SSH_USER;
 		const login = user ? `${user}@${peerDnsName(peer)}` : peerDnsName(peer);
-		return spawnAsync(bin, ["-o", "BatchMode=yes", login, "sh", "-lc", command], {
+		// OpenSSH joins the remote argv into one string that the login shell
+		// re-parses, so the command must travel as a single quoted argument.
+		return spawnAsync(bin, ["-o", "BatchMode=yes", login, `sh -lc ${shellQuote(command)}`], {
 			timeoutMs,
 			onMissing: () => new TailscaleServeError("SERVE_FAILED", `could not run ${JSON.stringify(bin)}`, "Set GEIST_PEER_SSH_BIN to the OpenSSH client's path."),
 		});

@@ -173,6 +173,19 @@ export function runTailscale(args, { timeoutMs = 30000 } = {}) {
 export function runTailscaleAsync(args, { timeoutMs = 60000 } = {}) {
 	const bin = tailscaleBin();
 	assertNoFunnel(args, bin);
+	return spawnAsync(bin, args, {
+		timeoutMs,
+		onMissing: () =>
+			new TailscaleServeError(
+				"TAILSCALE_MISSING",
+				`could not run ${JSON.stringify(bin)}`,
+				"Install Tailscale and log in, or set TAILSCALE_BIN to the binary's path.",
+			),
+	});
+}
+
+/** Spawn `bin args` once, collecting stdout/stderr, with a hard timeout. */
+function spawnAsync(bin, args, { timeoutMs = 60000, onMissing }) {
 	return new Promise((resolvePromise, reject) => {
 		const child = spawn(bin, args);
 		let stdout = "";
@@ -192,14 +205,8 @@ export function runTailscaleAsync(args, { timeoutMs = 60000 } = {}) {
 		});
 		child.on("error", (error) => {
 			clearTimeout(timer);
-			if (error.code === "ENOENT") {
-				reject(
-					new TailscaleServeError(
-						"TAILSCALE_MISSING",
-						`could not run ${JSON.stringify(bin)}`,
-						"Install Tailscale and log in, or set TAILSCALE_BIN to the binary's path.",
-					),
-				);
+			if (error.code === "ENOENT" && onMissing) {
+				reject(onMissing());
 				return;
 			}
 			reject(new TailscaleServeError("SERVE_FAILED", `${bin} ${args.join(" ")} failed to run`, String(error.message ?? error)));
@@ -329,7 +336,7 @@ export function publish({ port, path = "/", serveArgs = [], log = console.log })
 /** Take the mapping down again. Best-effort: used to clean up a temporary path. */
 function unpublish(path) {
 	try {
-		runTailscale(["serve", "--https=443", "off", "--set-path", path]);
+		runTailscale(["serve", "--https=443", "--set-path", path, "off"]);
 	} catch {
 		// A cleanup failure must not mask the result of the run itself.
 	}
@@ -381,7 +388,40 @@ function shellQuote(value) {
  * the loopback listener answers, which we already knew.
  */
 function driveFromPeer(peer, command, { timeoutMs = 60000 } = {}) {
+	if (peerSshTransport() === "openssh") {
+		const bin = process.env.GEIST_PEER_SSH_BIN ?? "ssh";
+		const user = process.env.GEIST_PEER_SSH_USER;
+		const login = user ? `${user}@${peerDnsName(peer)}` : peerDnsName(peer);
+		return spawnAsync(bin, ["-o", "BatchMode=yes", login, "sh", "-lc", command], {
+			timeoutMs,
+			onMissing: () => new TailscaleServeError("SERVE_FAILED", `could not run ${JSON.stringify(bin)}`, "Set GEIST_PEER_SSH_BIN to the OpenSSH client's path."),
+		});
+	}
 	return runTailscaleAsync(["ssh", peer, "sh", "-lc", command], { timeoutMs });
+}
+
+/**
+ * How the peer is reached. `tailscale ssh` (the default) needs Tailscale SSH
+ * enabled on the peer; `openssh` drives the same tailnet node through the
+ * system OpenSSH client with the caller's agent and known_hosts, for peers
+ * that only run sshd. Either way the request originates on the peer.
+ */
+function peerSshTransport() {
+	const value = process.env.GEIST_PEER_SSH ?? "tailscale";
+	if (value !== "tailscale" && value !== "openssh") {
+		throw new TailscaleServeError("USAGE", `GEIST_PEER_SSH must be "tailscale" or "openssh", got ${JSON.stringify(value)}`, "");
+	}
+	return value;
+}
+
+/** The peer's MagicDNS name, so OpenSSH resolves it without a search domain. */
+function peerDnsName(peer) {
+	const status = readTailnetStatus();
+	for (const entry of Object.values(status?.Peer ?? {})) {
+		const dns = (entry?.DNSName ?? "").replace(/\.$/, "");
+		if (entry?.HostName === peer || dns === peer || dns.split(".")[0] === peer) return dns || peer;
+	}
+	return peer;
 }
 
 /** `https://…` GET from the peer, reporting only the status code. */
@@ -628,6 +668,9 @@ const USAGE = [
 	"  node scripts/geist-tailscale-serve.mjs --doctor [--config PATH]",
 	"",
 	"Publishes the loopback listener with `tailscale serve`. Funnel is never invoked.",
+	"",
+	"GEIST_PEER_SSH=openssh drives the peer with the system OpenSSH client instead of",
+	"`tailscale ssh` (GEIST_PEER_SSH_USER sets the login name, GEIST_PEER_SSH_BIN the binary).",
 ].join("\n");
 
 export function parseArgs(argv) {

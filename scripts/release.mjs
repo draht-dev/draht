@@ -33,6 +33,10 @@ import {
 import { computeNextVersion } from "./lib/version-stamp.mjs";
 
 const DRY_RUN = process.argv.includes("--dry-run");
+// `--resume-publish` restarts a release whose commit and tag are already
+// public but whose npm publication failed: it skips straight to step 7 on
+// the current HEAD, which must be the clean, tagged release commit.
+const RESUME_PUBLISH = process.argv.includes("--resume-publish");
 
 function run(cmd, options = {}) {
 	console.log(`$ ${cmd}`);
@@ -275,7 +279,7 @@ function addUnreleasedSection() {
 }
 
 // Main flow
-console.log(`\n=== Draht Release${DRY_RUN ? " (dry-run)" : ""} ===\n`);
+console.log(`\n=== Draht Release${DRY_RUN ? " (dry-run)" : ""}${RESUME_PUBLISH ? " (resuming publication)" : ""} ===\n`);
 
 // 1. Fetch tags from pull remote (for changelog scoping)
 console.log("Fetching tags...");
@@ -293,8 +297,21 @@ if (status && status.trim()) {
 console.log("  Working directory clean\n");
 
 // 3. Compute version
-const version = computeVersion();
+const version = RESUME_PUBLISH ? resumedVersion() : computeVersion();
 console.log(`Version: ${version}\n`);
+
+function resumedVersion() {
+	const stamped = JSON.parse(readFileSync("package.json", "utf-8")).version;
+	try {
+		execSync(`git merge-base --is-ancestor "v${stamped}" HEAD`, { stdio: "ignore" });
+	} catch {
+		console.error(`Error: --resume-publish needs HEAD to carry the commit tagged v${stamped}.`);
+		process.exit(1);
+	}
+	return stamped;
+}
+
+if (!RESUME_PUBLISH) {
 
 // 4. Set version across all packages
 console.log("Setting version across packages...");
@@ -340,6 +357,7 @@ console.log("Pushing release commit and tag...");
 run("git push origin main");
 run(`git push origin v${version}`);
 console.log();
+}
 
 // 7. Gate npm publication on the complete, content-verified GitHub release.
 // This includes both the primary Draht runtime archives and the Go graph-engine
@@ -347,7 +365,7 @@ console.log();
 // minutes and then aborts before any npm package is public.
 console.log("Waiting for and verifying required release assets...");
 if (!DRY_RUN) {
-	const commit = execSync("git rev-parse HEAD", { encoding: "utf8" }).trim();
+	const commit = execSync(`git rev-parse "v${version}^{commit}"`, { encoding: "utf8" }).trim();
 	await waitForVerifiedRelease({ tag: `v${version}`, version, commit });
 	console.log("  GitHub release identity, manifest, and runtime archives verified\n");
 } else {

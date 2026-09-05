@@ -1,5 +1,6 @@
 {
 	"name": "@draht/gateway",
+	"private": true,
 	"version": "2026.9.5-1",
 	"type": "module",
 	"bin": {

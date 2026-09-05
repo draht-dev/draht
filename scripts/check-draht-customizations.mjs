@@ -61,6 +61,7 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadWorkspaces, topologicallySortPublicPackages } from "./publish-workspaces.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "..");
@@ -477,6 +478,24 @@ for (const pkgPath of workspacePkgPaths) {
 					` packs every stray file in its directory: internal docs, planning notes,` +
 					` tests, and nested example manifests all leak into the tarball)`),
 	);
+}
+
+// ── 3e. No published package depends on a private workspace ─────────
+//
+// publish-workspaces.mjs refuses this at publish time, which during a release
+// is after the version commit and tag are already public. Catch it here, at
+// commit time, with the same resolver the publisher uses.
+
+console.log("\nPublished packages depend only on published workspaces");
+
+{
+	let publishGraphError = null;
+	try {
+		topologicallySortPublicPackages(loadWorkspaces(root));
+	} catch (error) {
+		publishGraphError = error instanceof Error ? error.message : String(error);
+	}
+	check(publishGraphError === null, `the public workspace graph is publishable${publishGraphError ? ` — ${publishGraphError}` : ""}`);
 }
 
 // ── 4. Draht-only scripts exist on disk ─────────────────────────────

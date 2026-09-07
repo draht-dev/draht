@@ -9,10 +9,12 @@ import (
 	"github.com/draht-dev/draht/go/internal/model"
 )
 
-// Query ports commands["graph-query"] (draht-tools.cjs:5503-5541): a
-// ranked, deterministic keyword+doc search over every symbol node (no
-// embeddings). All terms must AND-match (every term must score >0 against a
-// candidate symbol); the highest-scoring 15 hits are shown.
+// Query ports commands["graph-query"] (draht-tools.cjs): term coverage is
+// satisfied at the MODULE level (any symbol/path/doc/cluster hit), scaled by
+// coverage² — graphify's scheme. The old per-symbol AND required every term
+// to hit the same symbol, so "auth session" only matched files that packed
+// both words into one identifier. Tests are demoted below the code they
+// test; partial matches are labeled "(m/n terms)".
 func Query(m *model.Map, argv []string, w io.Writer) int {
 	args := ParseArgs(argv)
 	var terms []string
@@ -34,7 +36,7 @@ func Query(m *model.Map, argv []string, w io.Writer) int {
 
 	deg := map[string]int{}
 	for _, e := range m.Edges {
-		if e.Kind != "import" {
+		if e.Kind != "import" && e.Kind != "re-export" {
 			continue
 		}
 		deg[e.From]++
@@ -44,27 +46,32 @@ func Query(m *model.Map, argv []string, w io.Writer) int {
 	var cands []QueryHit
 	for _, mod := range m.Modules {
 		expDoc := map[string]string{}
+		var docParts []string
 		for _, e := range mod.Exports {
 			doc := ""
 			if e.Doc != nil {
 				doc = *e.Doc
 			}
 			expDoc[e.Name] = doc
+			if doc != "" {
+				docParts = append(docParts, doc)
+			}
 		}
 		baseLow := LowerJS(lastPathSegment(mod.Path))
+		pathLow := LowerJS(mod.Path)
 		clab := ""
 		if mod.Cluster != nil {
 			clab = clusterLabel[*mod.Cluster]
 		}
+		allDocsLow := LowerJS(strings.Join(docParts, " "))
 
-		for _, s := range mod.Symbols {
-			nameLow := LowerJS(s.Name)
-			doc := expDoc[s.Name]
-			docLow := LowerJS(doc)
-
-			total := 0
-			ok := true
-			for _, t := range terms {
+		symScores := map[string]int{} // symbol name -> summed per-term score, for display pick
+		matched := 0
+		sum := 0
+		for _, t := range terms {
+			best := 0
+			for _, s := range mod.Symbols {
+				nameLow := LowerJS(s.Name)
 				sc := 0
 				switch {
 				case nameLow == t:
@@ -74,44 +81,83 @@ func Query(m *model.Map, argv []string, w io.Writer) int {
 				case strings.Contains(nameLow, t):
 					sc = 100
 				}
-				if sc < 60 && strings.Contains(baseLow, t) {
-					sc = 60
+				if sc < 40 {
+					dl := LowerJS(expDoc[s.Name])
+					if dl != "" && (strings.Contains(dl, t) || strings.Contains(dl, stem(t))) {
+						sc = 40
+					}
 				}
-				if sc < 40 && (strings.Contains(docLow, t) || strings.Contains(docLow, stem(t))) {
-					sc = 40
+				if sc > 0 {
+					symScores[s.Name] += sc
 				}
-				if sc < 30 && strings.Contains(clab, t) {
-					sc = 30
+				if sc > best {
+					best = sc
 				}
-				if sc == 0 {
-					ok = false
-					break
-				}
-				total += sc
 			}
-			if !ok {
-				continue
+			if best < 60 && strings.Contains(baseLow, t) {
+				best = 60
 			}
-
-			mult := 1.0
-			if s.Exported {
-				mult *= 1.5
+			if best < 50 && strings.Contains(pathLow, t) {
+				best = 50
 			}
-			if mod.EntryPoint != nil {
-				mult *= 1.3
+			if best < 40 && allDocsLow != "" && (strings.Contains(allDocsLow, t) || strings.Contains(allDocsLow, stem(t))) {
+				best = 40
 			}
-
-			cands = append(cands, QueryHit{
-				Score:    ToFixed1(float64(total) * mult),
-				Deg:      deg[mod.ID],
-				Path:     mod.Path,
-				Line:     s.Line,
-				Kind:     s.Kind,
-				Name:     s.Name,
-				Exported: s.Exported,
-				Doc:      doc,
-			})
+			if best < 30 && strings.Contains(clab, t) {
+				best = 30
+			}
+			if best > 0 {
+				matched++
+			}
+			sum += best
 		}
+		if matched == 0 {
+			continue
+		}
+		coverage := float64(matched) / float64(len(terms))
+		mult := coverage * coverage
+		if mod.EntryPoint != nil {
+			mult *= 1.3
+		}
+		if mod.IsTest {
+			mult *= 0.7 // tests match everything; keep them below the code they test
+		}
+		// Display anchor: best-scoring symbol (exported preferred, first-in-file
+		// on ties), else the module itself.
+		var bestSym *model.Symbol
+		bestVal := 0.0
+		for i := range mod.Symbols {
+			s := &mod.Symbols[i]
+			v := float64(symScores[s.Name])
+			if s.Exported {
+				v *= 1.5
+			}
+			if v > bestVal {
+				bestVal = v
+				bestSym = s
+			}
+		}
+		if bestSym != nil && bestSym.Exported {
+			mult *= 1.5
+		}
+		hit := QueryHit{
+			Score:   ToFixed1(float64(sum) * mult),
+			Matched: matched,
+			Terms:   len(terms),
+			Deg:     deg[mod.ID],
+			Path:    mod.Path,
+			Line:    1,
+			Kind:    "module",
+			Name:    lastPathSegment(mod.Path),
+		}
+		if bestSym != nil {
+			hit.Line = bestSym.Line
+			hit.Kind = bestSym.Kind
+			hit.Name = bestSym.Name
+			hit.Exported = bestSym.Exported
+			hit.Doc = expDoc[bestSym.Name]
+		}
+		cands = append(cands, hit)
 	}
 
 	sort.SliceStable(cands, func(i, j int) bool {
@@ -154,7 +200,11 @@ func Query(m *model.Map, argv []string, w io.Writer) int {
 		if c.Exported {
 			expPart = "  [exported]"
 		}
-		fmt.Fprintf(w, "%s:%d  %s %s%s%s\n", c.Path, c.Line, c.Kind, c.Name, docPart, expPart)
+		partial := ""
+		if c.Matched < c.Terms {
+			partial = fmt.Sprintf("  (%d/%d terms)", c.Matched, c.Terms)
+		}
+		fmt.Fprintf(w, "%s:%d  %s %s%s%s%s\n", c.Path, c.Line, c.Kind, c.Name, docPart, expPart, partial)
 	}
 	if len(cands) > 15 {
 		fmt.Fprintf(w, "(%d more: --json for all)\n", len(cands)-15)

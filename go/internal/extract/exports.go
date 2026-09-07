@@ -11,16 +11,18 @@ import (
 // "start/end of the whole file" — each is matched against a single line via
 // FindStringSubmatch, never FindAllString over the whole content).
 var (
-	tsExportRe      = regexp.MustCompile(`^\s*export\s+(?:default\s+)?(?:async\s+)?(class|interface|type|function|const|let|enum|var)\s+([A-Za-z_$][\w$]*)`)
-	tsNamedExportRe = regexp.MustCompile(`^\s*export\s*\{([^}]+)\}`)
-	// tsNamedExportFromRe implements design §R2's RE2 workaround for
-	// namedExportRe's `(?!\s+from)`: reject a named-export match when the
-	// text immediately following the matched `}` starts with `\s+from`.
-	tsNamedExportFromRe = regexp.MustCompile(`^\s+from`)
-	tsDefaultRe         = regexp.MustCompile(`^\s*export\s+default\s`)
-	tsCommandRe         = regexp.MustCompile(`^\s*commands\s*\[\s*["']([^"']+)["']\s*\]\s*=`)
-	tsAsClauseRe        = regexp.MustCompile(`^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$`)
-	tsLeadTypeRe        = regexp.MustCompile(`^type\s+`)
+	tsExportRe = regexp.MustCompile(`^\s*export\s+(?:default\s+)?(?:async\s+)?(class|interface|type|function|const|let|enum|var)\s+([A-Za-z_$][\w$]*)`)
+	// tsNamedBlockRe is content-level (multi-line safe) so `export {\n a,\n b\n}`
+	// blocks — with or without a `from` clause — are captured. Barrels are pure
+	// re-export lists; without this every package index.ts reports exports(0)
+	// (ports the CJS namedBlockRe, draht-tools.cjs visExtractExports).
+	tsNamedBlockRe = regexp.MustCompile(`export\s+(?:type\s+)?\{([^}]*)\}(\s*from\s*["'][^"']+["'])?`)
+	// tsStarAsRe: `export * as NS from "./x"` exposes NS as a named export.
+	tsStarAsRe   = regexp.MustCompile(`export\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*["'][^"']+["']`)
+	tsDefaultRe  = regexp.MustCompile(`^\s*export\s+default\s`)
+	tsCommandRe  = regexp.MustCompile(`^\s*commands\s*\[\s*["']([^"']+)["']\s*\]\s*=`)
+	tsAsClauseRe = regexp.MustCompile(`^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$`)
+	tsLeadTypeRe = regexp.MustCompile(`^type\s+`)
 
 	pyExportRe = regexp.MustCompile(`^(class|def)\s+([A-Za-z_][A-Za-z0-9_]*)`)
 	pyDocRe    = regexp.MustCompile(`^\s*("""|''')(.*)`)
@@ -125,19 +127,6 @@ func extractExports(lang string, content []byte) []Export {
 			line := lines[i]
 			if m := tsExportRe.FindStringSubmatch(line); m != nil {
 				out = append(out, Export{Name: m[2], Kind: m[1], Line: i + 1, Doc: findLeadingDoc(lines, i)})
-			} else if m := tsNamedExportRe.FindStringSubmatch(line); m != nil && !tsNamedExportFromRe.MatchString(line[len(m[0]):]) {
-				doc := findLeadingDoc(lines, i)
-				for _, part := range strings.Split(m[1], ",") {
-					t := strings.TrimSpace(part)
-					t = tsLeadTypeRe.ReplaceAllString(t, "")
-					if am := tsAsClauseRe.FindStringSubmatch(t); am != nil {
-						name := am[2]
-						if name == "" {
-							name = am[1]
-						}
-						out = append(out, Export{Name: name, Kind: "named", Line: i + 1, Doc: doc})
-					}
-				}
 			} else if tsDefaultRe.MatchString(line) && !hasExportName(out, "default") {
 				out = append(out, Export{Name: "default", Kind: "default", Line: i + 1, Doc: findLeadingDoc(lines, i)})
 			} else if m := tsCommandRe.FindStringSubmatch(line); m != nil {
@@ -146,6 +135,52 @@ func extractExports(lang string, content []byte) []Export {
 			if len(out) > 200 {
 				break
 			}
+		}
+		// Named export lists — content-level pass mirroring the CJS namedBlockRe
+		// loop (`while (... .exec(rawContent)) && out.length <= 200`).
+		raw := string(content)
+		lineOf := func(charIdx int) int {
+			pos := 0
+			for i := 0; i < len(lines); i++ {
+				if pos+len(lines[i])+1 > charIdx {
+					return i + 1
+				}
+				pos += len(lines[i]) + 1
+			}
+			return len(lines)
+		}
+		for _, loc := range tsNamedBlockRe.FindAllStringSubmatchIndex(raw, -1) {
+			if len(out) > 200 {
+				break
+			}
+			names := raw[loc[2]:loc[3]]
+			isReExport := loc[4] != -1
+			lineNo := lineOf(loc[0])
+			doc := findLeadingDoc(lines, lineNo-1)
+			kind := "named"
+			if isReExport {
+				kind = "re-export"
+			}
+			for _, part := range strings.Split(names, ",") {
+				t := strings.TrimSpace(part)
+				t = tsLeadTypeRe.ReplaceAllString(t, "")
+				if t == "" {
+					continue
+				}
+				if am := tsAsClauseRe.FindStringSubmatch(t); am != nil {
+					name := am[2]
+					if name == "" {
+						name = am[1]
+					}
+					out = append(out, Export{Name: name, Kind: kind, Line: lineNo, Doc: doc})
+				}
+			}
+		}
+		for _, loc := range tsStarAsRe.FindAllStringSubmatchIndex(raw, -1) {
+			if len(out) > 200 {
+				break
+			}
+			out = append(out, Export{Name: raw[loc[2]:loc[3]], Kind: "re-export", Line: lineOf(loc[0]), Doc: ""})
 		}
 	case "python":
 		for i := 0; i < len(lines); i++ {

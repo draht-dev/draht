@@ -175,6 +175,11 @@ func Build(ctx context.Context, opts Options) (*model.Map, Report, error) {
 	edges := BuildEdges(mi, resolver)
 	callEdges := BuildCallEdgesAll(mi, resolver, sitesByPath)
 
+	// Star re-export expansion (CJS parity): barrels inherit their resolved
+	// targets' exported names before anything downstream (symbolIndex,
+	// hotspots samples, HTML search) reads modules' exports/symbols.
+	ExpandStarReExports(modules, StarReExports(mi, resolver))
+
 	// Language edges are appended AFTER the TS/JS set so that prefix stays
 	// byte-identical to a flag-off run; call edges stay TS/JS-only (the
 	// call-site scan is a JS-specific heuristic).
@@ -415,11 +420,12 @@ func buildModule(f scan.File, fa *extract.Facts, pkgs []scan.Package, binFiles m
 		}
 	}
 
-	// Per-module caps (draht-tools.cjs:2182-2186): exports 30, sinkSites
-	// 10, routes 20. Symbols/sinks are already capped/deduped upstream by
-	// extract (buildSymbols hard-stops at 60; DetectSinks dedupes).
-	if len(exports) > 30 {
-		exports = exports[:30]
+	// Per-module caps (draht-tools.cjs): exports 60 (raised from 30 so the
+	// graph-query doc-join covers the same range as the 60-symbol cap),
+	// sinkSites 10, routes 20. Symbols/sinks are already capped/deduped
+	// upstream by extract (buildSymbols hard-stops at 60; DetectSinks dedupes).
+	if len(exports) > 60 {
+		exports = exports[:60]
 	}
 	if len(sinkSites) > 10 {
 		sinkSites = sinkSites[:10]

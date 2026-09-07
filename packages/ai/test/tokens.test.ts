@@ -329,7 +329,7 @@ describe("Token Statistics on Abort", () => {
 			"claude-haiku-4.5 - should include token stats when aborted mid-stream",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const llm = getModel("github-copilot", "gpt-4.1");
+				const llm = getModel("github-copilot", "claude-haiku-4.5");
 				await testTokensOnAbort(llm, { apiKey: githubCopilotToken });
 			},
 		);

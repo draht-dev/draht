@@ -398,7 +398,7 @@ describe("AI Providers Unicode Surrogate Pair Tests", () => {
 			"claude-haiku-4.5 - should handle emoji in tool results",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const llm = getModel("github-copilot", "gpt-4.1");
+				const llm = getModel("github-copilot", "claude-haiku-4.5");
 				await testEmojiInToolResults(llm, { apiKey: githubCopilotToken });
 			},
 		);
@@ -407,7 +407,7 @@ describe("AI Providers Unicode Surrogate Pair Tests", () => {
 			"claude-haiku-4.5 - should handle real-world LinkedIn comment data with emoji",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const llm = getModel("github-copilot", "gpt-4.1");
+				const llm = getModel("github-copilot", "claude-haiku-4.5");
 				await testRealWorldLinkedInData(llm, { apiKey: githubCopilotToken });
 			},
 		);
@@ -416,7 +416,7 @@ describe("AI Providers Unicode Surrogate Pair Tests", () => {
 			"claude-haiku-4.5 - should handle unpaired high surrogate (0xD83D) in tool results",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const llm = getModel("github-copilot", "gpt-4.1");
+				const llm = getModel("github-copilot", "claude-haiku-4.5");
 				await testUnpairedHighSurrogate(llm, { apiKey: githubCopilotToken });
 			},
 		);

@@ -495,7 +495,7 @@ describe("Tool Results with Images", () => {
 			"claude-haiku-4.5 - should handle tool result with only image",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const llm = getModel("github-copilot", "gpt-4.1");
+				const llm = getModel("github-copilot", "claude-haiku-4.5");
 				await handleToolWithImageResult(llm, { apiKey: githubCopilotToken });
 			},
 		);
@@ -504,7 +504,7 @@ describe("Tool Results with Images", () => {
 			"claude-haiku-4.5 - should handle tool result with text and image",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const llm = getModel("github-copilot", "gpt-4.1");
+				const llm = getModel("github-copilot", "claude-haiku-4.5");
 				await handleToolWithTextAndImageResult(llm, { apiKey: githubCopilotToken });
 			},
 		);

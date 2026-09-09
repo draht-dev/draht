@@ -44,6 +44,10 @@
           "path": "attachable-sessions.md"
         },
         {
+          "title": "Duet Mode",
+          "path": "duet.md"
+        },
+        {
           "title": "Compaction",
           "path": "compaction.md"
         }
@@ -85,6 +89,10 @@
     {
       "title": "Reference",
       "items": [
+        {
+          "title": "Environment Variables",
+          "path": "environment-variables.md"
+        },
         {
           "title": "Session Format",
           "path": "session-format.md"

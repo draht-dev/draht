@@ -25,7 +25,7 @@ import type {
 	PrepareNextTurnContext,
 	ThinkingLevel,
 } from "@draht/agent-core";
-import { contentText } from "@draht/ai";
+import { contentText, retryDelayMs } from "@draht/ai";
 import type {
 	AssistantMessage,
 	AuthResult,
@@ -3043,7 +3043,7 @@ export class AgentSession {
 			return false;
 		}
 
-		const delayMs = settings.baseDelayMs * 2 ** (this._retryAttempt - 1);
+		const delayMs = retryDelayMs(settings, this._retryAttempt);
 
 		this._emit({
 			type: "auto_retry_start",

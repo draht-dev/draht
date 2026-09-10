@@ -179,7 +179,7 @@ w.start(event => {
 });
 
 // accept the input, drive the conversation until it is idle, return the answer to that input
-const answer = await c.prompt('Inspect the parser and list the public API', undefined, call);
+const answer = await c.prompt({ input: 'Inspect the parser and list the public API' }, call);
 console.log(answer?.model[0]?.content);
 
 w.unsubscribe();
@@ -470,9 +470,9 @@ Nothing to do in any of them.
   first turn diffs the two:
 
   ```typescript
-  const b = await c.fork(12, undefined, call);                    // config as of 12: tools [read, write, bash]
+  const b = await c.fork({ at: 12 }, call);                       // config as of 12: tools [read, write, bash]
   await b.settings.set({ selectedTools: ['read'] }, call);
-  await b.prompt('...', undefined, call);                         // b's turn: toolsRemoved [write, bash]; the prefix's 11 is still the baseline
+  await b.prompt({ input: '...' }, call);                         // b's turn: toolsRemoved [write, bash]; the prefix's 11 is still the baseline
   ```
 
 - **A restart** with a changed host (new skill, different cwd) emits "these sections now apply"
@@ -486,8 +486,8 @@ Nothing to do in any of them.
 explicit result for that input.
 
 ```typescript
-const answer = await c.prompt('Inspect the parser', undefined, call);
-// AssistantEntry | undefined (the run ended without an answer: aborted, failed)
+const answer = await c.prompt({ input: 'Inspect the parser' }, call);
+// AssistantEntry | undefined (the run ended without an answer)
 ```
 
 The pieces are available separately. `inputId` is always the id of the accepted `pi.inbox` list
@@ -495,66 +495,84 @@ element, even when idle acceptance places and removes it in the same commit. Gen
 `post_tools` carry input ids explicitly, so result lookup never scans the transcript:
 
 ```typescript
-const { inputId } = await c.accept('Inspect the parser', { requestId: 'req-42' }, call);
-const outcome = await c.drive(call);                       // 'idle' | 'closed'
+const { inputId } = await c.accept({ input: 'Inspect the parser', requestId: 'req-42' }, call);
+const outcome = await c.drive(call);                          // 'idle' | 'closed'
 const result = await c.result(inputId, call);                 // one sticky-value point read
-const answer = result?.status === 'done'
-  ? await h.getEntry(assistantKind, result.resultEntryId, call)
+const answer = result?.status === 'done' && result.answer
+  ? await h.getEntry(assistantKind, result.answer, call)
   : undefined;
 ```
 
-Results move from `queued` to `running`, then to `done`, `failed`, `cancelled` or `stopped`.
-Context-only writes finish as `placed`. Terminal results never change.
-
-A remote caller that lost the accept response performs an explicit request lookup:
+A result moves from `queued` to `placed` (its entry is in the transcript), then to `done` or
+`unanswered`. `done` carries the answering entry when one was owed; a context-only `write` is
+`done` with no answer, in the commit that placed it. `unanswered` names the cause:
 
 ```typescript
-const existing = await h.acceptance('req-42', call);
-if (existing) {
-  const conversation = await h.conversation(existing.conversationId, call);
-  return {
-    inputId: existing.inputId,
-    result: await conversation?.result(existing.inputId, call),
-  };
+switch (result.status) {
+  case 'queued':     return 'waiting to start';
+  case 'placed':     return 'working';
+  case 'done':       return result.answer ? render(result.answer) : 'noted';
+  case 'unanswered':
+    return result.reason === 'terminated' ? 'the run stopped itself'
+         : result.reason === 'aborted'    ? 'cancelled'
+         : 'the model could not be reached';
 }
-return c.accept(input, { requestId: 'req-42' }, call);
 ```
 
-A concurrent duplicate `accept` rejects as `RequestAlreadyAccepted` and identifies the first
-receipt. Request ids are optional; there is no payload comparison or silent replay.
+Terminal results never change.
 
-`c.drive()` resolves when the conversation's foreground set is idle: no generation, tool or
-automatic collapse in that ownership chain is live. `h.drive()` resolves when no foreground task is
-live anywhere in the session. Both start eligible background work and keep serving it after they
+`accept` is "the user hit enter": idle, it places the entry and creates a generation in one commit;
+busy, it queues, as `followUp` by default. Pass `whenBusy: 'steer'` to interrupt the running turn
+instead, or `whenBusy: 'reject'` if the caller insists on knowing. Either way you get an `inputId`
+and `result(inputId)` tells you which happened, so a caller never has to check whether a run is in
+progress first.
+
+A request key names one acceptance for the life of the session. A caller that lost the response
+retries with the same key and gets the same `inputId` back; nothing is written twice and nothing is
+compared:
+
+```typescript
+const { inputId } = await c.accept({ input, requestId: 'req-42' }, call);   // safe to repeat
+const existing = await h.acceptance('req-42', call);                        // or look it up explicitly
+```
+
+`c.drive(call)` resolves when the conversation's foreground set is idle: no generation, tool or
+automatic collapse in that ownership chain is live. `h.drive(call)` resolves when no foreground task
+is live anywhere in the session. Both start eligible background work and keep serving it after they
 resolve. A separate full-quiescence wait may intentionally never return while a recurring schedule
 is live.
 
 ### Input While Busy
 
-While a turn runs, new input is queued rather than refused. The mode determines the boundary and
-input-group behavior:
+`accept` covers the common case. `queueInput` is the explicit form when the caller wants a specific
+mode, and it is one method taking a tagged union rather than four methods:
 
 ```typescript
-const steer = await c.steer('Focus on the tokenizer first', call); // post_tools: joins current group;
-                                                              // final answer: starts next group
-const follow = await c.followUp('Then write the tests', call);      // after final answer; starts next group
-const next = await c.nextRun('Remind me to commit', call);          // waits for the next explicit idle accept
-const write = await c.write(noteKind, {                       // next safe boundary; no generation
-  data: { text: 'user stepped away' },
-}, call);
+const steer  = await c.queueInput({ mode: 'steer', input: 'Focus on the tokenizer first' }, call);
+const follow = await c.queueInput({ mode: 'followUp', input: 'Then write the tests' }, call);
+const next   = await c.queueInput({ mode: 'nextRun', input: 'Remind me to commit' }, call);
+const note   = await c.queueInput({ mode: 'write', kind: noteKind,
+                                    entry: { data: { text: 'user stepped away' } } }, call);
 ```
 
+| mode | lands | asks for |
+|---|---|---|
+| `steer` | next post_tools, or a final answer | joins the running group at post_tools; starts the next one after an answer |
+| `followUp` | after a final answer | starts the next group |
+| `nextRun` | the next idle `accept` | joins that acceptance's group |
+| `write` | next safe boundary | nothing; `done` with no answer |
+
 When a generation emits calls, its settlement creates every tool plus exactly one `post_tools`
-carrying the current input ids. That task places writes and steering, extends the ids and creates the
-continuation generation. A final-answer generation resolves its current group, then places
+carrying the current input ids. That task places writes and steering, extends the ids and creates
+the continuation generation. A final-answer generation resolves its current group, then places
 steer/followUp items into a new group. `nextRun` remains queued until a later idle `accept`.
 
-The queue exposes complete entry drafts so a UI can render text/images directly. Durable and watch
-updates are append/remove/clear operations, not whole-array replacements. Any item can be withdrawn
-until it lands:
+The queue exposes complete entry drafts so a UI can render text and images directly. Durable and
+watch updates are append/remove/clear operations, not whole-array replacements. Any item can be
+withdrawn until it lands:
 
 ```typescript
-await c.cancelQueued(steer.inputId, call);             // 'cancelled' | 'not_found'
+await c.abortInput(steer.inputId, call);              // 'aborted' | 'not_found'
 ```
 
 ### Aborting
@@ -595,11 +613,11 @@ async abort(task, runtime, call) {
   await runtime.commit(async tx => {
     for (const id of task.state.inputs) {
       const address = inputResult(id);
-      const result = await tx.value(address).get();
-      if (result?.status !== 'running') throw new Error(`Invalid active input ${id}`);
-      tx.value(address).set({ ...result, status: 'cancelled' });
+      const r = await tx.value(address).get();
+      if (r?.status !== 'placed') throw new Error(`Invalid active input ${id}`);
+      tx.value(address).set({ status: 'unanswered', requestId: r.requestId, entry: r.entry, reason: 'aborted' });
     }
-    tx.settle(task.id, 'aborted', task.state);
+    tx.settle(task, { status: 'aborted', ...common(task) });
   }, call);
 }
 ```
@@ -751,10 +769,10 @@ copied and nothing in the source is deleted. It carries the context as it was at
 rewindable values in force there, and the prompt-as-sent, so its first turn is exact.
 
 ```typescript
-const alt = await c.fork(answer.id, undefined, call);                        // the source keeps running, untouched
-await alt.prompt('Try a different implementation', undefined, call);
+const alt = await c.fork({ at: answer.id }, call);                           // the source keeps running, untouched
+await alt.prompt({ input: 'Try a different implementation' }, call);
 
-const back = await c.fork(earlier.id, { abort: true }, call);     // "go back": aborts the source's foreground first
+const back = await c.fork({ at: earlier.id, abort: true }, call); // "go back": aborts the source's foreground first
 ```
 
 Any transcript entry is a valid fork point, including an assistant with unanswered tool calls or one
@@ -785,8 +803,8 @@ Threshold and overflow compaction happen inside the generation; nothing to call.
 context over, with or without a handoff message:
 
 ```typescript
-await c.reset('Continue from here: we settled on a recursive-descent parser.', call);   // handoff
-await c.reset(undefined, call);                                                                    // /clear
+await c.reset({ handoff: 'Continue from here: we settled on a recursive-descent parser.' }, call);
+await c.reset(undefined, call);                                                        // /clear
 ```
 
 The transcript keeps everything either way; only the context changes.
@@ -811,7 +829,7 @@ subagent({ command: 'stop',   id: 88 })
 const childId = await c.spawn({ prompt: 'Profile the build', context: 'fresh',
                                 values: { inherit: [generationKind.config.model] } }, call);
 const child = await h.conversation(childId, call);
-await child.accept('also check CI', undefined, call);
+await child.accept({ input: 'also check CI' }, call);
 await child.drive(call);          // or let h.drive() / the parent's drive carry it
 await child.abort(call);
 ```

@@ -281,6 +281,13 @@ retry, a spawned subagent surviving a restart, speculative compaction under a ru
 
 Packages 1–16 are what the gate needs; 17–19 can land after it.
 
+Not packages: permissions and approval policy are plugin territory (`before_tool` can block or
+rewrite args and may wait for a person, scratch holds the durable memo, values hold whatever the
+plugin remembers, and a keyed service instance shows the question to every attached presentation),
+and session migration is a non-issue while this is experimental. A versioned wire schema generated
+from the view, event and request types is a real prerequisite, but only for a client that is not
+JavaScript; it belongs with the mobile clients, not with the gate.
+
 ## What comes from the lane harness, and how
 
 Clean room means no imports from `src/harness/runtime`, `session`, `agent-harness.ts` or the

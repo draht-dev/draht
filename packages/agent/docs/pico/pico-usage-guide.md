@@ -916,6 +916,33 @@ const entry = await c.commit(tx => {
 }, call);
 ```
 
+### Appending Entries
+
+`tx.entry` appends immediately and returns the entry id. Use it for entries that are part of what
+your task is doing, and for entries the model never sees (`data` only, no `model`).
+
+For an entry the model *will* read, written from outside a turn, use `tx.write` (or `c.write`):
+
+```typescript
+await c.write(noteKind, { data: { text: 'user stepped away' },
+                          model: [noteMessage('user stepped away')] }, call);
+```
+
+It appends immediately when no turn task is live in the conversation, and otherwise queues and lands
+at the next post_tools or final-answer boundary. That is not a style preference: appending a
+model-visible entry between an assistant's tool calls and their results changes the prefix the next
+request replays, which providers reject and which invalidates Anthropic thinking signatures.
+`tx.entry` rejects that one case rather than corrupting the next request, and the error points here.
+
+A kind that drives its own turn declares `turn: true`, which puts it in that check alongside the
+built-in generation, tool, post_tools and collapse kinds.
+
+Two more things when writing entries directly: appending a `user` entry is not the same as asking
+for an answer (nothing runs by inference; use `accept`), and a head entry may only narrow context,
+never widen it, and may not split an exchange.
+
+### Write Order
+
 One rule: rewindable conversation value/list writes must precede entries in the same commit. That
 makes state written alongside an entry visible to a fork at that entry while excluding later
 commits. Session state and sticky conversation state may appear anywhere because forks never

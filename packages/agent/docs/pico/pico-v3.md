@@ -129,10 +129,14 @@ newHead.head >= previousVisibleHead.head
 ```
 
 The commit line validates this directly from stored entries. A head cannot move context backwards.
+Its boundary must also not split an exchange, whoever appends it: the same rule compaction follows
+(§2.3), applied to plugin heads so a head can never leave tool results without their call.
 Older heads are controls, not retained context entries: the newest head replaces them and carries
 any predecessor summary information it still needs.
 
-Stored `edits` omit or replace the model projection of earlier visible entries. Edits are folded in
+Stored `edits` omit or replace the model projection of earlier visible entries. They may not target
+a `system` entry: an edit that omits the epoch baseline would make the prompt vanish while the next
+generation's `sent` fold still reads it as delivered (§8.2), so the commit rejects. Edits are folded in
 transcript order; the newest applicable edit for a target wins. The target entry is never changed,
 and an edit whose target is outside the selected range is a no-op. Retained edit entries apply again
 on later turns. Tool-result pruning and shortening are edits. Dynamic policies such as "always keep
@@ -510,6 +514,7 @@ interface Task<State extends TaskStateBase = TaskStateBase> {
   readonly state: State;                // a tagged union; the status is its discriminant
   readonly after: readonly Id[];        // dependencies, fixed at creation
   readonly background?: true;           // fixed at creation; absent = foreground (§5.6)
+  readonly turn?: true;                 // materialized from the kind; this task drives a turn (§5.8)
   readonly owns?: readonly Id[];        // conversations this task created (§5.7)
   readonly abort?: true;                // durable cancellation mark (§6.3)
 }
@@ -568,6 +573,7 @@ interface TaskKind<States extends TaskStateBase, Hooks extends HookPoints = {}, 
   readonly kind: string;
   readonly initialStatus: States["status"];
   readonly roles: Readonly<Record<States["status"], TaskRole>>;   // `orphaned` is added as terminal (§5.1)
+  readonly turn?: true;                             // this kind drives a turn (§5.8)
   readonly hooks?: HookSpecs<Hooks>;                // the points this kind runs (§8.7)
   readonly config?: Config;                         // the values this kind reads (below)
   preview?: {                                       // what UIs see while the task runs (§9.4)
@@ -780,6 +786,43 @@ A task that creates a conversation adds it to `owns`; the conversation records `
 written in the creation commit. A task may own several (a fan-out tool driving three children);
 a conversation has one owner. Ownership defines drive scope and cancellation reach. Fork
 provenance is a different link (§2.5) and creates no ownership.
+
+### 5.8 Turn tasks and appending entries
+
+A kind that drives a turn declares `turn: true`; `Tx` materializes it onto the task like `role`, and
+storage indexes it. The built-in generation, tool, post_tools and collapse kinds declare it; a
+plugin kind that drives its own turn declares it too. That gives one predicate, computed from the
+index without decoding state or knowing any kind name:
+
+```text
+inTurn(conversation) = live tasks in it with turn: true
+```
+
+It exists because of one hazard. An entry with a `model` appended between an assistant's tool calls
+and their results changes the prefix the next request replays: providers that validate message order
+reject it, and Anthropic thinking signatures are invalidated. The lane harness holds the same
+invariant by deferring custom messages while streaming; pico holds it with `inTurn`.
+
+`tx.entry` appends immediately and returns the id, which is what a turn task needs (the generation's
+assistant entry, a tool's result, a head with `"self"`). It rejects in exactly one case:
+
+```text
+reject if  the entry has a `model`
+       and the committing task is not turn: true, or there is no committing task
+       and inTurn(entry's conversation) is not empty
+```
+
+So an entry without a `model` is never blocked, a turn task writing its own exchange records is
+never blocked, and nothing is blocked in a conversation with no live turn task. The rejection names
+`tx.write`.
+
+`tx.write(kind, draft)` is the door for model-visible entries from outside a turn: it appends
+immediately when `inTurn` is empty, and otherwise queues as the `write` mode (§8.1), landing at the
+next post_tools or final-answer boundary. It returns an `inputId`, not an entry id, because the entry
+may not exist yet. `ConversationHandle.write` is the same wrapped in a commit.
+
+`inTurn` is also the honest definition of "busy" for a UI: a foreground subagent tool is in it
+because it is a tool, a background job is not.
 
 ## 6. Scheduling and cancellation
 
@@ -1296,7 +1339,7 @@ explicit form for a specific mode, and `abortInput(inputId, call)` withdraws a q
 
 | Mode | Placement | Effect on the answer group |
 |---|---|---|
-| write | next post_tools or final boundary | none; its result is `done` with no `answer` |
+| write | next post_tools or final boundary | none; its result is `done` with no `answer` (§5.8) |
 | steer | next post_tools or final boundary | joins the active group at post_tools; starts the next group after a final answer |
 | followUp | final-answer boundary | starts the next group |
 | nextRun | next explicit idle `accept` | joins the group started by that acceptance |
@@ -1660,6 +1703,7 @@ interface ConversationHandle {
   result(inputId: Id, call: Call): Promise<InputResult | undefined>;
   drive(call: Call): Promise<"idle" | "closed">;
   queueInput(input: QueuedInput, call: Call): Promise<{ inputId: Id }>;      // §8.1
+  write<E extends Entry>(kind: EntryKind<E>, input: EntryInput<E>, call: Call): Promise<{ inputId: Id }>;   // §5.8
   abortInput(inputId: Id, call: Call): Promise<"aborted" | "not_found">;
   abort(call: Call): Promise<void>;
   collapse(options: { instructions?: string } | undefined, call: Call): Promise<Id>;
@@ -1736,7 +1780,9 @@ interface Tx {
   value<T>(addr: Value<T>): { get(at?): Promise<T | undefined>; set(v: T): void; delete(): void };
   list<T>(addr: List<T>): { append(v: T): Id; remove(id: Id): void; clear(): void; read(q): Promise<Page<Element<T>>> };
   // writes; rewindable conversation state before entries (§3.2)
-  entry<E extends Entry>(kind: EntryKind<E>, conversationId: Id, input: EntryInput<E>): Id;
+  entry<E extends Entry>(kind: EntryKind<E>, conversationId: Id, input: EntryInput<E>): Id;   // §5.8
+  write<E extends Entry>(kind: EntryKind<E>, input: EntryInput<E>): Id;   // inputId; appends now or queues (§5.8)
+  queueInput(input: QueuedInput): Id;                                     // inputId (§8.1)
   task<S>(kind: TaskKind<S>, spec: { state: S; after?: Id[]; background?: true; owns?: Id[] }): Id;
   // stay in the current variant: a partial of that variant, no status
   patch<S extends TaskStateBase, K extends S["status"]>(

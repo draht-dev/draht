@@ -281,12 +281,42 @@ retry, a spawned subagent surviving a restart, speculative compaction under a ru
 
 Packages 1–16 are what the gate needs; 17–19 can land after it.
 
+## 21. Runtime schema bundle
+
+`harness.schema(call)` walks the three registries and emits one document describing everything a
+client can see in this session: the core protocol types (`ConversationView`, `ConversationEvent`,
+`InputResult`, `QueuedInput`, `DeltaOp`), plus each registered entry kind's `data`, each task
+kind's state union and preview, and each tool's parameters and details. Generated at runtime, not
+at build time, because the interesting half is per installation: the plugin kinds and tools that
+happen to be registered. A client fetches it once per session and can then read `Entry.data`,
+`Task.state` and previews from plugins its authors never heard of.
+
+Schemas are optional per kind. A kind that declares none is still usable; its payload is opaque
+JSON to a foreign client, which is the generic-fallback case a renderer already handles. Declaring
+is progressive: add a schema to the kinds you want third-party clients to understand.
+
+Two open options for how a kind declares one, to be picked after trying the first:
+
+- A small descriptor owned by pico (about twelve cases: scalars, literal, array, object with
+  optional fields, tagged union, ref, unknown) with `Static<S>` deriving the TypeScript type, plus
+  adapters `toJsonSchema` / `toTypeBox` / `toZod` and `fromTypeBox` / `fromZod` for authors who
+  already declare with a validator. Pico then depends on no validation library. Cost: hand-rolled
+  conditional types with worse errors than TypeBox's, and adapters must reject what the descriptor
+  cannot express (refinements, formats, dynamic keys) rather than silently dropping it.
+- JSON Schema as the descriptor, since tool `parameters` already is one, with adapters only for
+  authoring convenience. One representation fewer; authors without a validator library write JSON
+  Schema by hand.
+
+Schemas describe, they do not validate: stored objects are trusted (§7.3) and validation belongs at
+wire boundaries, so a host that wants strict ingest validation opts in. Versioning is per kind, not
+global; a kind that changes its shape bumps its own version, which is also the migration signal.
+
+Needed when a client is not JavaScript. Not part of the gate.
+
 Not packages: permissions and approval policy are plugin territory (`before_tool` can block or
 rewrite args and may wait for a person, scratch holds the durable memo, values hold whatever the
 plugin remembers, and a keyed service instance shows the question to every attached presentation),
-and session migration is a non-issue while this is experimental. A versioned wire schema generated
-from the view, event and request types is a real prerequisite, but only for a client that is not
-JavaScript; it belongs with the mobile clients, not with the gate.
+and session migration is a non-issue while this is experimental.
 
 ## What comes from the lane harness, and how
 

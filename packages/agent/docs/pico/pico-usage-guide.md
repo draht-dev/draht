@@ -1228,6 +1228,10 @@ The rules an execution follows, and the driver enforces:
 4. Prefer `after` for prerequisites; drive children or use the bounded job-wait API. Forward Call
    to every wait. Known self/dependency waits reject; never race away an unfinished task/tool/hook.
 
+A foreground task waiting on `after` is live, so its conversation stays busy until the dependency
+settles. Depending on a background job is fine when the job ends; depending on a recurring schedule
+keeps the conversation busy forever, so wait inside your own execute instead.
+
 The scheduler runs on the commit line, keeps live-task/dependency indexes updated from whole committed
 batches, and starts effects outside the line. It scans storage once at open, not after every call.
 Only one invocation owns each task, but different tasks run concurrently. Repeated drives share an

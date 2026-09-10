@@ -690,6 +690,12 @@ never edited. A task may create a successor whose `after` includes itself in its
 it cannot add new dependencies to itself. A dependency outside an attached subtree may require
 another explicit drive; attaching one scope never implicitly executes a sibling scope.
 
+A foreground task may depend on a background one, and it is live while it waits, so its conversation
+stays busy and `drive` does not resolve until the dependency settles. That is what the overflow
+chain wants (`G' after: [C]`). It is a trap for work that may never settle: a foreground task
+depending on a recurring schedule keeps its conversation busy forever. Depend on work that ends, or
+wait inside the task's own execute instead.
+
 ### 5.5 post_tools joins an exchange
 
 The generation's settlement publishes the exchange atomically:

@@ -754,7 +754,7 @@ async abort(task, runtime, call) {
       if (r?.status !== 'placed') throw new Error(`Invalid active input ${id}`);
       tx.value(address).set({ status: 'unanswered', requestId: r.requestId, entry: r.entry, reason: 'aborted' });
     }
-    tx.settle(task, { status: 'aborted', ...common(task) });
+    tx.settle(task, 'aborted', { inputs: task.state.inputs });
   }, call);
 }
 ```
@@ -1166,11 +1166,14 @@ goes on:
 
 ```typescript
 async execute(toolCallId, params, out, runtime, call) {
-  const job = await runtime.commit(tx => {
+  const job = await runtime.commit(async tx => {
+    const task = await tx.getTask(toolKind, runtime.taskId);
+    if (task?.state.status !== 'running') throw new Error('Expected a running tool');
+    const { status, ...payload } = task.state;
     const id = tx.task(jobKind, { background: true,
       state: { status: 'planned', cmd: params.cmd, cwd: params.cwd ?? runtime.env.cwd,
                origin: { tool: 'bash', task: runtime.taskId, callId: toolCallId } } });
-    tx.patch(task, { jobId: id, cancelJobOnAbort: !params.background });   // partial: still 'running'
+    tx.patch(task, status, { ...payload, jobId: id, cancelJobOnAbort: !params.background });
     return id;
   }, call);
 
@@ -1346,7 +1349,7 @@ type ReminderStates =
   | { status: 'done';      about: Id; at: number; fired: boolean }
   | { status: 'aborted';   about: Id; at: number };
 
-export const reminderKind = defineTaskKind({
+export const reminderKind = defineTaskKind<ReminderStates>()({
   kind: 'myplugin.reminder',
   initialStatus: 'scheduled',
   roles: { scheduled: 'start', firing: 'inflight', done: 'terminal', aborted: 'terminal' },
@@ -1355,17 +1358,17 @@ export const reminderKind = defineTaskKind({
 
   async execute(task, runtime, call) {
     if (task.state.at > runtime.now()) await runtime.sleep(task.state.at, call);        // throws on cancellation
-    await runtime.commit(tx => tx.patch(task, { status: 'firing', ...common(task) }), call);   // intent before any effect
+    await runtime.commit(tx => tx.patch(task, 'firing', common(task)), call);   // intent before any effect
     const { skip } = await runtime.hooks(reminderKind).run('before_fire', { about: task.state.about }, call);
     await runtime.commit(tx => {
-      if (!skip) tx.entry(noticeKind, { model: [noticeMessage(`Reminder: see entry ${task.state.about}`)] });
-      tx.settle(task, { status: 'done', ...common(task), fired: !skip });               // a marked task's commit rejects
+      if (!skip) tx.write(noticeKind, { model: [noticeMessage(`Reminder: see entry ${task.state.about}`)] });
+      tx.settle(task, 'done', { ...common(task), fired: !skip });               // a marked task's commit rejects
     }, call);
   },
 
   async recover(task, runtime, call) { return this.execute(task, runtime, call); },      // safe to redo
   async abort(task, runtime, call)   {
-    await runtime.commit(tx => tx.settle(task, { status: 'aborted', ...common(task) }), call);
+    await runtime.commit(tx => tx.settle(task, 'aborted', common(task)), call);
   },
 
   // no preview: nothing to show while sleeping
@@ -1374,12 +1377,37 @@ export const reminderKind = defineTaskKind({
 const common = (t: Task<ReminderStates>) => ({ about: t.state.about, at: t.state.at });
 ```
 
-State is a tagged union over status: one variant per status carrying exactly the fields that exist
-in it, so a reader narrows instead of checking optionals, and `patch` within a variant takes a
-partial (`tx.patch(task, { at: later })`) while a transition takes the whole variant. The harness
-adds an `orphaned` terminal variant with the fields common to all of yours, for the case where this
-plugin is not installed when the session is opened; you never write it, and a task that depends on
-yours handles it in the same `switch` that handles your other terminal statuses.
+`defineTaskKind<ReminderStates>()` binds the declared union; the following call infers the literal
+role map. Keep that inferred kind type so the compiler knows which statuses patch and settle accept.
+Kind definition rejects missing/extra role entries, a non-start initial status, a declared `orphaned`
+status, and inconsistent types or optionality for fields shared by every variant.
+
+State is a tagged union over status. **Both `patch` and `settle` take a status and its complete
+payload, without a second status inside it.** Patch accepts nonterminal targets; settle accepts
+terminal targets. There is no status-free partial patch or implicit merge with the old state:
+
+```typescript
+tx.patch(task, 'firing', { about: task.state.about, at: later });
+tx.settle(task, 'done', { about: task.state.about, at: task.state.at, fired: true });
+// Rejected: missing fired, extra fields, wrong field types, or using done with patch.
+```
+
+For a same-status update, narrow the state, destructure out `status`, and spread the remaining
+payload with your changes. A transition must supply the target variant's fields, not spread the
+previous variant's unrelated fields. Stored state becomes `{ ...payload, status }`. Task snapshots
+remain immutable; read the task again if a later write needs state committed since that snapshot.
+
+Typed tasks retain a compiler-only witness for the full state union and role map; no field or
+callback is added to storage. Given only an id, read through its kind before patching or settling.
+The type checks reject visible extra top-level keys even on variables/spreads and preserve correlation
+between status and payload. They cannot detect fields erased by casts or a narrower static type;
+wire validation and on-line invocation/liveness checks still apply.
+
+The harness adds `orphaned` with fields common to every variant: for this reminder, `about` and `at`,
+not `fired`. Common optional fields remain optional. This uses common keys (`keyof` on the union),
+not a literal TypeScript intersection of incompatible statuses. Typed reads include orphaned; kind
+execution methods receive only declared variants. You never write orphaned through patch/settle;
+a dependent handles it in the same switch as the other terminal outcomes.
 
 The rules an execution follows, and the driver enforces:
 

@@ -15,7 +15,8 @@ reference design; `pico-usage-guide.md` shows the intended surface.
 
 `Id`, `EntryIdentity`, `EntryBase`, the composable `EntryData` / `ModelProjection` /
 `ContextHead` / `ContextEdits` facets, `Entry`, `EntryKind`, `EntryInput`, `ContextEdit`, `Task`,
-`TaskRole`, status-tagged task-state unions and their derived `Orphaned` variant, stored task roles
+`TaskRole`, status-tagged task-state unions and their derived `Orphaned` variant, compiler-only
+`TypedTask`/`TaskDefinition` witnesses preserving the complete union and literal role map, stored task roles
 and `turn` flag, `Conversation`, `QueuedInput`, `InputResult`, `InboxOp`, acceptance
 receipts, `Call` (an alias of Chord Context), `TaskRuntime`/`ToolRuntime`, private typed invocation
 identity, `Address`/`Value`/`List`/`Scope`, `Write`/`CommitBatch`, `Page`/`Cursor` and query shapes.
@@ -50,6 +51,10 @@ definitions live only in model fields, never duplicated in SystemData.
 
 Tests: typed token/draft inference without plugin casts; owned-copy reads; JSON null versus deletion;
 every entry facet and built-in combination; persisted payload+rendered text and model-only tool definitions.
+Task type tests: `defineTaskKind<States>()({ ... })` infers literal roles; exact role-map keys, start-only
+initial status, reserved orphaned, consistent common-field types/optionality; orphaned exposes only
+common fields via `Pick<S, Exclude<keyof S, "status">>`, preserving common optional fields. Typed reads
+include orphaned; kind methods exclude it. No compiler witness is stored or needed by untyped readers.
 
 ## 2. Memory storage
 
@@ -71,8 +76,11 @@ conversation value/list writes after an entry throw, a throwing plan discards ev
 after persist; apply the entire batch to live indexes before scheduling or testing idle. Driver
 callbacks, signals and task methods dispatch outside the line. Session and sticky conversation state, task
 writes and conversation writes may appear anywhere. `task` / `patch` / `settle` materialize the role
-from the kind's status map; status lives only in `state.status`. Same-variant patches accept partial
-fields without status; transitions require a complete variant. Materialize `turn` from the kind and
+from the kind's status map; status lives only in `state.status`. `patch(task, status, payload)` and
+`settle(task, status, payload)` always require an explicit status and its complete payload without
+status. Both replace state with `{ ...payload, status }`; no partial merge or status-free overload.
+Patch targets start/inflight roles, settle targets terminal roles and retires scratch; neither exposes
+orphaned. A bare id must first be read with a kind to obtain the typed witness. Materialize `turn` from the kind and
 maintain the indexed `inTurn` predicate. `entry` rejects outside-turn model-visible writes while turn
 tasks are live; `write` places immediately or queues at a safe boundary, returning an inputId.
 `value` / `list` / `entry` / `task` / `patch` / `settle` build the batch of §7.3.
@@ -85,6 +93,13 @@ post-mark main/scratch mutation rejects before builder; only an owned task's cur
 patch its state/status or settle it (host abort marks remain allowed); caller cancellation never
 abandons admitted persistence; Tx/ScratchTx reads are asynchronous and builders may await them
 without releasing the line; writes remain synchronous. No external effects or nested line entry in builders.
+Compile-time cases: required target fields and types, no extra top-level keys on literals/variables/spreads,
+no duplicated status, status/payload correlation under union arguments, no role/status widening from
+inference, narrowed task retains all transition targets, typed reads cannot write orphaned, no bare-id
+escape. Cover valid same-status full replacement and optional fields; document structural typing/cast
+limits rather than adding deep exact-type machinery. Runtime cases: replacement drops prior-variant
+fields, rejects wrong roles/reserved statuses/duplicated payload status, current terminal tasks cannot
+change, and same-status replacement does not advance the epoch. Payload validation stays at wire boundaries.
 
 ## 4. Entry kinds and context
 

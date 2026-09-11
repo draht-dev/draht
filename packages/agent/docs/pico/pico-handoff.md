@@ -86,14 +86,27 @@ between leaves nothing to repair. Use `tx.write`: it appends immediately when sa
 until the next turn boundary:
 
 ```typescript
-const userBashKind = defineTaskKind({
+type UserBashInput = { cmd: string; cwd: string; includeInContext: boolean; limits?: ShellOutputLimits };
+type UserBashStates = UserBashInput & (
+  | { status: 'planned' }
+  | { status: 'running' }
+  | { status: 'done'; exitCode: number }
+  | { status: 'killed' }
+  | { status: 'lost' }
+);
+function userBashInput(state: UserBashStates): UserBashInput {
+  return { cmd: state.cmd, cwd: state.cwd, includeInContext: state.includeInContext,
+    ...(state.limits === undefined ? {} : { limits: state.limits }) };
+}
+
+const userBashKind = defineTaskKind<UserBashStates>()({
   kind: 'pi.user_bash',
   initialStatus: 'planned',
   roles: { planned: 'start', running: 'inflight', done: 'terminal', killed: 'terminal', lost: 'terminal' },
   preview: { init: async scratch => (await scratch.value(output).get()) ?? emptyOutput() },
 
   async execute(task, runtime, call) {
-    await runtime.commit(tx => tx.patch(task, { ...task.state, status: 'running' }), call);
+    await runtime.commit(tx => tx.patch(task, 'running', userBashInput(task.state)), call);
     const result = await execIntoScratch(runtime, task.state, call);       // same helper as jobKind
     const out = runtime.preview.state;
     await runtime.commit(tx => {
@@ -101,14 +114,14 @@ const userBashKind = defineTaskKind({
         data: { cmd: task.state.cmd, exitCode: result.exitCode, output: out },
         model: task.state.includeInContext ? [userBashMessage(task.state.cmd, out, result.exitCode)] : undefined,
       });
-      tx.settle(task, { ...task.state, status: 'done', exitCode: result.exitCode });
+      tx.settle(task, 'done', { ...userBashInput(task.state), exitCode: result.exitCode });
     }, call);
   },
   async recover(task, runtime, call) {
-    await runtime.commit(tx => tx.settle(task, { ...task.state, status: 'lost' }), call);
+    await runtime.commit(tx => tx.settle(task, 'lost', userBashInput(task.state)), call);
   },
   async abort(task, runtime, call) {
-    await runtime.commit(tx => tx.settle(task, { ...task.state, status: 'killed' }), call);
+    await runtime.commit(tx => tx.settle(task, 'killed', userBashInput(task.state)), call);
   },
 });
 
@@ -170,7 +183,8 @@ raw map the reducer and the wire use:
 ```typescript
 interface ConversationView {
   readonly previews: ReadonlyMap<Id, JsonValue>;                          // raw, kind-free
-  preview<P>(kind: TaskKind<any, any, any, P>, task: Id): P | undefined;  // typed; undefined if missing or another kind
+  preview<S extends TaskStateBase, H extends HookPoints, C extends ConfigSpec, P, R extends TaskRoles<S>>(
+    kind: TaskKind<S, H, C, P, R>, task: Id): P | undefined; // typed; undefined if missing or another kind
 }
 const msg = w.view.preview(generationKind, event.task);   // AssistantMessage | undefined
 const out = w.view.preview(toolKind, event.task);         // ToolOutputState | undefined

@@ -503,13 +503,12 @@ supplies the inputs, progress and outcome that must survive a process.
 ```ts
 type TaskRole = "start" | "inflight" | "terminal";
 
-interface TaskStateBase { readonly status: string }
+type TaskStateBase = JsonObject & { readonly status: string };   // state is strict JSON with a status
 
 interface Task<State extends TaskStateBase = TaskStateBase> {
   readonly id: Id;
   readonly conversationId: Id;
   readonly kind: string;
-  readonly status: string;              // = state.status, stored and indexed so storage never decodes state
   readonly role: TaskRole;              // materialized from the kind's roles map on every write
   readonly state: State;                // a tagged union; the status is its discriminant
   readonly after: readonly Id[];        // dependencies, fixed at creation
@@ -533,8 +532,9 @@ type ToolStates =
   | { status: "aborted";  call: ToolCall; assistant: Id; output: ToolOutputState; result: Id };
 ```
 
-`Task.status` duplicates `state.status` because storage indexes it and the driver compares it
-without decoding state; `Tx` writes both from the one variant it was given, so they cannot diverge.
+The status lives only in `state.status`. Storage extracts it into an indexed column when it writes
+the record, so a scan never decodes state, and `role` is on the record because a reader of an
+unregistered kind cannot compute it from the kind's map. `Tx` derives the role on every write.
 Fields common to every variant must have the same type in each.
 
 A kind maps its statuses to three roles:
@@ -1196,8 +1196,8 @@ type MainWrite =
   | { type: "deleteConversation"; id: number }
   | { type: "entry";   entry: Entry }
   | { type: "task";    task: Task }
-  | { type: "patch";   id: number; status?: string; role?: TaskRole; state?: JsonValue; abort?: true }
-  | { type: "settle";  id: number; status: string; role: "terminal"; state: JsonValue }; // also retires scratch
+  | { type: "patch";   id: Id; role: TaskRole; state: TaskStateBase; abort?: true }
+  | { type: "settle";  id: Id; role: "terminal"; state: TaskStateBase };  // also retires scratch
 
 type CommitBatch =
   | { readonly kind: "main";    readonly writes: readonly MainWrite[] }
@@ -1846,22 +1846,25 @@ class Tx {
     this.push({ type: "entry", entry });
     return id;
   }
-  task<S>(kind: TaskKind<S>, spec: { conversationId: number; state: S; after?: number[]; background?: true; owns?: number[] }): number {
+  task<S extends TaskStateBase>(kind: TaskKind<S>, spec: {
+    conversationId: Id; state: S; after?: Id[]; background?: true; owns?: Id[];
+  }): Id {
     const id = this.seq + 1;
-    const status = kind.initialStatus;
-    const role = getOrThrow(kind.roles[status]);
-    this.push({ type: "task", task: { id, kind: kind.kind, status, role, ...spec } });
+    if (spec.state.status !== kind.initialStatus) throw new Error(`initial status must be ${kind.initialStatus}`);
+    const role = getOrThrow(kind.roles[spec.state.status]);
+    this.push({ type: "task", task: { id, kind: kind.kind, role, turn: kind.turn, ...spec } });
     return id;
   }
-  patch(id: number, changes: { status?: string; state?: JsonValue; abort?: true }) {
-    const role = changes.status === undefined ? {} : { role: this.roleFor(id, changes.status) };
-    this.push({ type: "patch", id, ...changes, ...role });
+  patch(task: Task | Id, state: TaskStateBase) {                      // whole variant, or a partial of the current one
+    const id = typeof task === "number" ? task : task.id;
+    this.push({ type: "patch", id, role: this.roleFor(id, state.status), state });
   }
-  settle(id: number, status: string, state: JsonValue) {
-    if (this.roleFor(id, status) !== "terminal") throw new Error(`${status} is not terminal`);
-    this.push({ type: "settle", id, status, role: "terminal", state });
+  settle(task: Task | Id, state: TaskStateBase) {
+    const id = typeof task === "number" ? task : task.id;
+    if (this.roleFor(id, state.status) !== "terminal") throw new Error(`${state.status} is not terminal`);
+    this.push({ type: "settle", id, role: "terminal", state });
   }
-  private roleFor(id: number, status: string): TaskRole { /* task kind from the transaction view; reject unknown status */ }
+  private roleFor(id: Id, status: string): TaskRole { /* kind from the transaction view; reject unknown status */ }
 
   getTask = this.storage.getTask; getTasks = this.storage.getTasks;   // reads: committed state
   getEntry = this.storage.getEntry; getEntries = this.storage.getEntries;

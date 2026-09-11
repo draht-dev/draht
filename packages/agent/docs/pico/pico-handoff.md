@@ -1,54 +1,15 @@
 # Handoff: outstanding pico decisions
 
-For `packages/agent/docs/pico/` at `08dc60bc5`. Everything below came out of design review and is
-not yet in the documents. Nothing here introduces a primitive. Two parts: harness-side items, then
-the presentation side (renderers and layouts), which is client code but constrains two harness
-fields.
-
-Verified absent upstream at `08dc60bc5`: `orphaned`, preview coalescing, kinds after open, hook
-scratch, session lock, `Call` ergonomics, `byTaskId`, the renderer registry.
+Remaining additions for `packages/agent/docs/pico/`, to reconcile with `pico-v3.md`,
+`pico-usage-guide.md` and `pico-work.md` before implementation. Incorporated decisions and rejected
+or superseded proposals are omitted. Two parts: harness additions, then presentation additions
+that also require task provenance and typed preview access.
 
 ---
 
 # Part 1 — Harness
 
-## 1.1 Open degrades on missing kinds; it never refuses
-
-Entry kinds already degrade correctly (stored facets carry projection, head and edits). Task kinds
-do not: an unknown live task kind still rejects at open, so uninstalling a plugin makes a session
-unopenable.
-
-- **Background task, unknown kind**: parked. Not started, not recovered, not counted for idleness,
-  reported. It resumes through `recover` when the kind is registered again.
-- **Foreground task, unknown kind**: cannot be parked (it would keep the conversation busy forever)
-  and cannot run. Open settles it with the reserved terminal status `orphaned`, which every kind
-  has by definition, and reports it. post_tools treats a call whose tool task ended `orphaned` as a
-  call with no result and writes a "tool unavailable" error result, so the exchange resolves and
-  the input group is settled rather than stuck.
-- **Terminal tasks of unknown kinds**: untouched, they are history.
-- `inspect(call)` returns `{ start, inflight, orphaned }`.
-
-Where: §5.2 (the paragraph that currently says an unknown live kind rejects), §6.4 Open, §9.1
-`inspect`, §8.3 post_tools, and the guide's "Opening".
-
-## 1.2 Kinds may be registered after open
-
-A plugin reload adds entry and task kinds. Registration at any time is fine; removing a task kind
-is refused while live tasks of that kind exist; changing the shape of a live kind is a process
-replacement, as `plugins.md` already says. This is what makes 1.1's parking useful.
-
-Where: §9.5 near `Harness.open`'s registries.
-
-## 1.3 A session lock at open
-
-`08dc60bc5` says no renewable lease is required, and that is right for telemetry and versioning,
-but nothing addresses two processes opening the same session after a crash. Add the minimum: a lock
-file next to the JSONL (a lease row in SQLite) taken at open and released at close; a live lock
-refuses to open; a stale one is taken over after a timeout. Not renewable, not on the hot path.
-
-Where: §1 "one writer per session", §6.4 Open/Close, §7.4/§7.5.
-
-## 1.4 Preview delivery is coalesced
+## 1.1 Preview delivery is coalesced
 
 Scratch commits are never delayed, but `task_output` delivery to watchers is coalesced per task to
 a frame interval (the rules in `docs/mobile-handoff/01-harness/04-tool-output/rate-limiting.md`),
@@ -57,7 +18,7 @@ per token.
 
 Where: §9.4, next to the tracker paragraph.
 
-## 1.5 Hook handlers receive the task's scratch
+## 1.2 Hook handlers receive the task's scratch
 
 A handler that waits on a person (approval, a question) must be able to memoize its answer durably,
 or a crash mid-wait re-asks and a crash after the answer asks again. Give handlers `scratch` and
@@ -72,8 +33,13 @@ h.hooks.on(toolKind, 'before_tool', async ({ toolName, args, scratch, taskId }, 
   const decision = scratchValue<'allow' | 'deny'>('approval');
   let d = await scratch(sc => sc.value(decision).get(), call);
   if (d === undefined) {
-    d = await approvals.ask(taskId, args, call);        // keyed instance every presentation observes
-    d = await scratch(sc => sc.value(decision).get() ?? (sc.value(decision).set(d), d), call);
+    const answer = await approvals.ask(taskId, args, call); // keyed instance every presentation observes
+    d = await scratch(async sc => {
+      const stored = await sc.value(decision).get();
+      if (stored !== undefined) return stored;
+      sc.value(decision).set(answer);
+      return answer;
+    }, call);
   }
   return d === 'allow' ? { args } : { block: { reason: 'denied by user' } };
 });
@@ -81,45 +47,12 @@ h.hooks.on(toolKind, 'before_tool', async ({ toolName, args, scratch, taskId }, 
 
 Where: §8.7 and the guide's Hooks section.
 
-## 1.6 `Call` ergonomics
+## 1.3 Budget ownership transfer
 
-The required final `Call` is consistent with Chord and carries cancellation, telemetry and
-invocation identity; keep it. The cost is `undefined` placeholders and noise in every client line.
-Two mitigations, neither changing the model:
-
-- Options-object form for the multi-argument methods: `c.prompt({ input, requestId }, call)`,
-  `c.fork({ at, abort }, call)`.
-- A bound handle for callers that have one Call per request: `h.for(call)` returns the same
-  interface with Call pre-applied. Task code keeps the explicit form, because its Call changes per
-  invocation.
-
-Where: §9.1, and the guide's "Calls and cancellation".
-
-## 1.7 Read before the commit, not inside the builder
-
-Async Tx builders are necessary (post_tools reads its tool tasks) but they make the line's duration
-depend on storage reads inside plans. State the discipline: a builder may read, and a plan that
-needs more than a couple of reads should do them before the commit and pass values in. Never await
-an external effect, a driver waiter or another line operation inside a builder (already said; keep
-it adjacent).
-
-Where: §9.2, under the async-builder paragraph.
-
-## 1.8 Work plan additions
-
-- **Budget adoption** as its own package, not a paragraph: adopting a non-delegating tool's
-  in-flight work after the budget expires needs an explicit transfer of effect and sink ownership
-  before the source invocation releases its slot. The job-first path ships first.
-- **Package 21**: a versioned wire schema generated from the view, event, controller and approval
-  types, for non-JS clients and SDKs.
-- **Package 22**: a permission policy plugin over `before_tool` (ask always / once per session /
-  never for read-only / by sandbox mode) with its typed request/response in that schema.
-- **Package 23**: lane-JSONL → pico session migration, or a documented cutover; decide before lanes
-  become the installed base.
-- **Copy, never import**: nothing under `src/harness/pico/` imports from `runtime/`, `session/`,
-  `agent-harness.ts` or the `dom`/`pico`/`pico2` spikes. Reusable code (`ExecutionEnv`, output
-  capture, the built-in tools, prompt builders, telemetry helpers) is copied in and owned there;
-  pico must build with the rest of `src/harness` deleted. Real dependencies are `chord` and `pi-ai`.
+The work plan already flags arbitrary tool-work adoption as unresolved. Give it its own package
+when the ownership design is settled: adopting a non-delegating tool's in-flight work after the
+budget expires needs an explicit transfer of effect and sink ownership before the source invocation
+releases its slot. The job-first path ships first.
 
 Where: `pico-work.md`.
 
@@ -148,34 +81,41 @@ Where: §5.1, §8.3, §8.6.
 
 User-run bash is initiated by the UI, not by the model or a tool, so it is its own kind owned by
 the coding agent (or its bash plugin), sharing the exec-into-scratch helper with `jobKind`. Its
-settlement writes the transcript entry in the same commit as `settle`, so a client that dies in
-between leaves nothing to repair:
+settlement records the transcript write in the same commit as `settle`, so a client that dies in
+between leaves nothing to repair. Use `tx.write`: it appends immediately when safe, otherwise queues
+until the next turn boundary:
 
 ```typescript
 const userBashKind = defineTaskKind({
   kind: 'pi.user_bash',
   initialStatus: 'planned',
   roles: { planned: 'start', running: 'inflight', done: 'terminal', killed: 'terminal', lost: 'terminal' },
-  preview: { init: scratch => scratch.value(output).get() ?? emptyOutput() },
+  preview: { init: async scratch => (await scratch.value(output).get()) ?? emptyOutput() },
 
   async execute(task, runtime, call) {
-    await runtime.commit(tx => tx.patch(task.id, { status: 'running' }), call);
+    await runtime.commit(tx => tx.patch(task, { ...task.state, status: 'running' }), call);
     const result = await execIntoScratch(runtime, task.state, call);       // same helper as jobKind
     const out = runtime.preview.state;
     await runtime.commit(tx => {
-      tx.entry(userBashKind.entry, {
+      tx.write(userBashKind.entry, {
         data: { cmd: task.state.cmd, exitCode: result.exitCode, output: out },
         model: task.state.includeInContext ? [userBashMessage(task.state.cmd, out, result.exitCode)] : undefined,
       });
-      tx.settle(task.id, 'done', { ...task.state, exitCode: result.exitCode });
+      tx.settle(task, { ...task.state, status: 'done', exitCode: result.exitCode });
     }, call);
   },
-  async recover(task, runtime, call) { await runtime.commit(tx => tx.settle(task.id, 'lost', task.state), call); },
-  async abort(task, runtime, call)   { await runtime.commit(tx => tx.settle(task.id, 'killed', task.state), call); },
+  async recover(task, runtime, call) {
+    await runtime.commit(tx => tx.settle(task, { ...task.state, status: 'lost' }), call);
+  },
+  async abort(task, runtime, call) {
+    await runtime.commit(tx => tx.settle(task, { ...task.state, status: 'killed' }), call);
+  },
 });
 
 // the "!" handler
-await c.commit(tx => tx.task(userBashKind, { background: true, state: { cmd, cwd, includeInContext, limits } }), call);
+await c.commit(tx => tx.task(userBashKind, {
+  background: true, state: { status: 'planned', cmd, cwd, includeInContext, limits },
+}), call);
 // Escape → h.abortTask(id, call); the renderer's task_start / task_output / entry cases do the rest
 ```
 

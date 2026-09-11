@@ -127,9 +127,10 @@ npm install @draht/agent
 ## Quick Start
 
 ```typescript
-import { Harness, JsonlStorage, type Call } from '@draht/agent';
+import { Harness, JsonlStorage, systemSections, type Call } from '@draht/agent';
 import { BACKGROUND_CONTEXT } from '@draht/chord/context';
 import { readTool, writeTool, bashTool } from '@draht/agent/tools';
+import { generationKind } from '@draht/agent/kinds';
 import { builtinModels } from '@draht/ai/providers/all';
 
 const call: Call = BACKGROUND_CONTEXT;
@@ -142,29 +143,23 @@ const storage = await JsonlStorage.open('./session.jsonl');
 const h = await Harness.open(storage, {
   models: builtinModels(),
   tools: [readTool, writeTool, bashTool],
+  // Address/value pairs, applied only when creating the root; reopening preserves stored settings.
+  rootValues: [
+    [generationKind.config.model, { provider: 'anthropic', modelId: 'claude-opus-5' }],
+    [generationKind.config.thinking, 'high'],
+    [generationKind.config.selectedTools, ['read', 'write', 'bash']],
+  ],
 }, call);
-const { generation: generationKind } = h.kinds;   // the registered kinds, for config and hooks
 
 const c = await h.root(call);
 
-// Config is declared by the kinds that read it. The generation kind declares model, thinking and
-// selected tools; `settings` is shorthand for its config.
-await c.settings.set({
-  model: { provider: 'anthropic', modelId: 'claude-opus-5' },
-  thinking: 'high',
-  selectedTools: ['read', 'write', 'bash'],
-}, call);
-
-// The system prompt is not stored as config. Each turn the harness asks this hook what the
-// instructions should be right now, compares with what the transcript says the model was told,
-// and writes only the difference. See "System Prompt and Tool Loadout".
-c.hooks.on(generationKind, 'system_instructions', async ({ config }, call) => ({
-  sections: {
-    identity: 'You are a careful engineer working in this repository.',
-    cwd: `Working directory: ${process.cwd()}`,
-  },
-  tools: h.tools.select(config.selectedTools),   // complete tool definitions
-}), { subtree: true });
+// Configuration is durable state; this hook edits the prepared section payloads.
+// The harness stores changed payloads and rendered system messages before each request.
+c.hooks.on(generationKind, 'system_instructions', ({ sections, config }, call) => {
+  sections.set(systemSections.identity, 'You are a careful engineer working in this repository.');
+  sections.set(systemSections.environment, { cwd: process.cwd() });
+  return { tools: h.tools.select(config.selectedTools) }; // complete tool definitions
+}, { subtree: true });
 
 // Watch the conversation. `view` is a plain object a UI renders from; attach whenever you like,
 // the view is complete as of the moment you attach and events follow from there.
@@ -205,7 +200,14 @@ as `undefined` when unused. A task or hook always forwards its supplied Call, no
 | `tools` | what the model may call, besides the built-in `subagent` and `job` tools; a `ToolRegistry` or an array |
 | `kinds` | plugin entry and task kinds, added to the built-ins |
 | `replace` | a built-in kind swapped by name (`{ generation: myGenerationKind }`); it must keep the statuses and hook names |
-| `rootValues` | initial values for the root conversation on a fresh session |
+| `rootValues` | explicit initial root configuration, applied only in the fresh root's creation commit |
+| `sections` | initial custom typed section definitions, in addition to built-ins |
+
+Registries supply implementations, not selections. Registering read/write/edit/bash does not
+select them automatically. Supply initial model/thinking/selectedTools through `rootValues`, or
+configure the fresh conversation before generation. On reopen, `rootValues` is ignored: durable
+configuration wins. Children inherit the values selected by their spawn policy; forks inherit
+rewindable configuration at the fork point. Missing required generation configuration is an error.
 
 The built-in kinds are registered by `open` itself, because `accept`, `prompt`, `steer` and
 `collapse` cannot work without them. Refer to whatever is registered through `h.kinds`:
@@ -230,7 +232,7 @@ const h = await Harness.open(storage, { models, tools, replace: {
 Open checks the recorded kind strings without scanning the transcript and reports live work, but
 starts nothing. An unregistered historical entry kind is reported, not rejected: its stored
 `model`, `head` and `edits` still build context, while its typed data and custom renderer are
-unavailable. A live task kind is still required.
+unavailable. Missing live task kinds are handled according to foreground/background status:
 
 ```typescript
 const { start, inflight, orphaned, parked } = await h.inspect(call);
@@ -328,155 +330,290 @@ Children created by `spawn` don't inherit history; they are initialized explicit
 
 ### How It Works
 
-pi-ai models the system prompt as messages in the transcript: the first rendered prompt of a
-session is the provider's stable, cached baseline, and later changes are appended as
-`SystemMessage`s that say what changed (and carry `toolsAdded`/`toolsRemoved` with complete tool
-definitions). pico is built on that, and keeps two things apart:
+Pico sends pi-ai only `{ messages }`: no parallel top-level `systemPrompt` or `tools`. Managed system
+entries contain the exact rendered pi-ai messages, including complete tool additions/removals. Pi-ai
+owns native/fallback translation and best-effort cache preservation.
 
-- **What you want right now.** Config (model, thinking, selected tools, a profile) plus whatever
-  the host has: cwd, skills, context files, the tool catalogue. The host answers a hook with it
-  each turn. None of it is stored.
-- **What the model has been told.** `system` entries in the transcript: structured `data` for the
-  baseline or delta and the exact materialized `SystemMessage` in `model`. These are immutable facts
-  about requests that happened, so they fork and compact like every other entry.
+Configuration changes remain ordinary durable value writes. System entries separately record the
+instructions prepared for requests—not proof of delivery. Host files, discovery caches, callbacks and
+renderer functions are not stored. Section JSON payloads and final rendered text are stored, so a
+missing plugin cannot make historical requests depend on its renderer.
 
-At the top of every turn the generation renders the first, folds the second out of the context, and
-appends the difference, if any, with both its structured data and model message before it projects
-the request. The host keeps rendering "the whole prompt" the way it always did; the harness turns
-that into append-only deltas.
+The target pi-ai system-message API and messages-only adapter behavior are integration prerequisites
+([#9116](https://github.com/earendil-works/pi/pull/9116), with coding-agent integration in
+[#9117](https://github.com/earendil-works/pi/pull/9117)). They were open when reviewed; this guide describes
+the intended contract, not a claim that those PRs already implement the agreed adapter behavior.
 
 ### Answering the Hook
 
-The hook is `system_instructions` on the generation kind. It returns keyed **sections** (rendered
-in the order given) and the **tool definitions** the model may call. Register it on the conversation
-with `subtree: true` so subagents inherit it unless they register their own:
+A typed section token names the payload and its append-time renderer:
 
 ```typescript
-c.hooks.on(generationKind, 'system_instructions', async ({ conversationId, config }, call) => ({
-  sections: {
-    identity:      IDENTITY,
-    cwd:           `Working directory: ${cwd}`,
-    context_files: await renderContextFiles(cwd, call),      // AGENTS.md and friends
-    skills:        skills.render(),
-  },
-  tools: h.tools.select(config.selectedTools),         // complete definitions, from the catalogue
-}), { subtree: true });
+interface SystemSection<T> {
+  readonly key: string;
+  render(value: T): string;
+}
+
+const rulesSection = defineSystemSection<string[]>({
+  key: 'myplugin.rules',
+  render: rules => rules.map(rule => `- ${rule}`).join('\n'),
+});
+await h.sections.register(rulesSection, call);
 ```
 
-After the first turn the transcript holds what was sent:
+Tokens use stable string keys in storage. Payloads must be JSON-representable; changing a registered
+payload type requires a compatible replacement or migration. The typed token supplies normal get/set
+inference without casts in plugin code. Built-ins export tokens through `systemSections`, such as
+identity, environment and skills; their values come from the host, not from the registry.
 
-```text
-10 user      "Inspect the parser"
-11 system    { baseline, sections: [identity, cwd, context_files, skills], tools: [read, write, bash] }
-12 assistant ...
-```
-
-The tool definitions are stored in full, not as names, and the model message is materialized in the
-same append. A later change to a tool's description is therefore a change the model gets told about,
-and an old transcript is sent the way it was originally recorded without running entry-kind code.
-
-### Changing the Loadout
-
-Every change is either a config write or something the host renders differently. Nothing is
-written at that moment; the next generation notices and appends one entry:
+Each generation seeds one private ordered section draft from the last durable prepared state. Handlers
+run sequentially, harness-wide first and innermost conversation last, editing that same draft:
 
 ```typescript
-await c.settings.set({ selectedTools: ['read', 'write', 'bash', 'grep'] }, call);
-// next turn → 20 system { toolsAdded: [grep] }
-
-await c.settings.set({ selectedTools: ['read'] }, call);
-// next turn → 30 system { toolsRemoved: [write, bash, grep] }
-
-// the user installs a skill; skills.render() changes
-// next turn → 40 system { sections: [skills] }        "the skills section now reads: ..."
-
-h.tools.replace('mcp', newDefinitions);                 // an MCP server restarted with a changed schema
-// next turn → 50 system { toolsAdded: [the changed definition] }   same name, new definition = a change
+c.hooks.on(generationKind, 'system_instructions', ({ sections, config }, call) => {
+  sections.set(systemSections.identity, 'You are a coding assistant.');
+  sections.set(systemSections.skills, skillsCache.current); // complete typed skill data
+  sections.set(rulesSection, ['Run relevant tests.']);       // authoritative base for later transforms
+  return { tools: h.tools.select(config.selectedTools) };  // complete selected JSON definitions
+}, { subtree: true });
 ```
 
-The provider's cached prefix through the previous message is untouched by any of these. On models
-with native mid-conversation system messages the entry goes out as one; elsewhere pi-ai renders it
-as a tagged user turn.
+The draft provides:
+
+```typescript
+interface SystemSectionDraft {
+  get<T>(section: SystemSection<T>): T | undefined;
+  set<T>(section: SystemSection<T>, value: T): void;
+  delete(section: string | { readonly key: string }): void;
+  wrap<T>(section: SystemSection<T>, transform: (text: string) => string): void;
+}
+```
+
+`get` returns an owned copy; use `set` to change the draft. Existing keys retain their position; new
+keys append. `delete` is explicit—null remains a valid payload. Registered compatible definitions are
+required for typed get/set/wrap; deletion can use a stable key even if its definition is unavailable.
+No ordering configuration exists, and reordering alone emits no update.
+
+After handlers finish, touched sections render outside the line. Wrappers apply in registration order
+after rendering. The frozen result is diffed against stored payloads and rendered text. Changed data
+with unchanged rendering produces a metadata-only system entry (`model: []`); changed rendering with
+unchanged data still produces a system-message update. No historical read runs these functions.
 
 ### Sections from Plugins
 
-A plugin contributes sections from its own state. Handlers for the same point merge by key;
-`undefined` removes a key. Register harness-wide when the section applies to every conversation:
+A later handler can modify a built-in section's structured payload, not parse its prose:
 
 ```typescript
-const planMode = conversationValue<boolean>('plan.mode', { rewind: true });
-
-h.hooks.on(generationKind, 'system_instructions', async ({ conversationId }, call) => {
-  const conversation = await h.conversation(conversationId, call);
-  return { sections: {
-    plan_mode: (await conversation?.value(planMode).get(call)) ? PLAN_GUIDANCE : undefined,
-  } };
+c.hooks.on(generationKind, 'system_instructions', ({ sections }, call) => {
+  const skills = sections.get(systemSections.skills); // typed skill array | undefined
+  sections.set(systemSections.skills,
+    (skills ?? []).filter(skill => skill.name !== 'deploy'));
 });
-
-await c.value(planMode).set(true, call);
-// next turn → 60 system { sections: [plan_mode] }     "the plan_mode guidance now applies: ..."
-await c.value(planMode).set(false, call);
-// next turn → 70 system { sections: [plan_mode removed] }
 ```
 
-Conversation-scoped handlers run after harness-wide ones, innermost conversation last, so a child's
-sections win by key.
-
-A tool can change the loadout from inside a call. It goes through the same path: post_tools updates
-the config, the next generation emits the delta.
+Appending to the same key is ordinary typed get-and-set:
 
 ```typescript
-// inside a discovery tool
-out.addTools(['calculator']);
-// post_tools:  selectedTools += calculator
-// next turn →  80 system { toolsAdded: [calculator] }
+c.hooks.on(generationKind, 'system_instructions', ({ sections }, call) => {
+  sections.set(rulesSection, [
+    ...(sections.get(rulesSection) ?? []),
+    'Check migration safety.',
+  ]);
+  sections.wrap(rulesSection, text => `Repository policy:\n${text}`);
+});
 ```
+
+This example relies on the earlier host handler resetting `rulesSection` to its authoritative base
+on every preparation. Without that reset, repeatedly appending to a persisted seed accumulates text.
+The whole transformation chain must produce the same result when applied again, or start from a
+refreshed base; individually idempotent handlers are not sufficient when they interact.
+
+Wrappers are preparation-local. Untouched sections keep their stored rendered text, including old
+wrapper output when the contributing plugin disappears. Explicit set/wrap or a renderer replacement
+recomputes it. Refreshing the base deliberately rebuilds wrappers from currently installed handlers;
+we do not promise to preserve missing wrappers across that refresh.
+
+Skills discovery can remain in the hook owner's closure or a host service. Watch local changes or poll
+a remote source at a bounded interval; hook calls read the cached snapshot. Failed refresh is not
+removal: retain the last successful snapshot. The base hook explicitly deletes its section when the
+source really disappears. If a handler fails and is skipped, discard its draft mutations/wrappers,
+not earlier handlers' changes; a half-finished refresh must not remove instructions. No discovery callback or private cache state is attached to stored sections.
+
+### Changing the Loadout
+
+Configuration is durably persisted when changed:
+
+```typescript
+await c.settings.set({ selectedTools: ['read', 'grep'] }, call);
+```
+
+The next preparation renders the final draft and compares it with previous prepared state. A transcript
+might look like this (`readDefinition` etc. mean complete JSON definitions, not executable functions):
+
+```text
+100 user
+110 system baseline: identity + rules; add read/write
+120 assistant
+125 config write: selectedTools=read/grep             (durable state, not a transcript entry)
+130 user
+140 system delta: changed rules; remove write; add grep
+150 assistant
+```
+
+Stored baseline:
+
+```typescript
+const baseline: SystemEntry = {
+  id: 110, conversationId: 1, kind: 'system',
+  data: { baseline: true, sections: [
+    { key: 'pi.identity', action: 'set',
+      value: 'You are a coding assistant.', rendered: 'You are a coding assistant.' },
+    { key: 'myplugin.rules', action: 'set',
+      value: ['Run relevant tests.'], rendered: '- Run relevant tests.' },
+  ] },
+  model: [{
+    role: 'system',
+    content: '## pi.identity\nYou are a coding assistant.\n\n' +
+      '## myplugin.rules\n- Run relevant tests.',
+    toolsAdded: [readDefinition, writeDefinition], timestamp: 1000,
+  }],
+};
+```
+
+Stored change after a plugin modifies rules:
+
+```typescript
+const change: SystemEntry = {
+  id: 140, conversationId: 1, kind: 'system',
+  data: { sections: [{ key: 'myplugin.rules', action: 'set',
+    value: ['Run relevant tests.', 'Check migration safety.'],
+    rendered: '- Run relevant tests.\n- Check migration safety.',
+  }] },
+  model: [{
+    role: 'system',
+    content: 'The myplugin.rules section now reads:\n' +
+      '- Run relevant tests.\n- Check migration safety.',
+    toolsRemoved: [writeDefinition], toolsAdded: [grepDefinition], timestamp: 2000,
+  }],
+};
+```
+
+Tool definitions live only in SystemMessage fields, not duplicated in section data. Compare definitions
+structurally by name; a changed schema/description is a complete `toolsAdded` upsert. Removal includes
+the previous complete stored definition. Apply removals before additions. Tool-only changes may have
+empty instruction content. Hooks supplying tools replace the complete desired loadout; the last
+supplied list wins, and no list means no desired tools.
+
+Explicit section deletion stores `{ key, action: 'remove' }` and a system message saying that section
+no longer applies. Omitting a hook or unregistering its definition is not deletion.
+
+Pico sends:
+
+```typescript
+const request = {
+  messages: [user100, ...baseline.model, assistant120, user130, ...change.model],
+}; // no top-level systemPrompt or tools
+```
+
+For unsupported provider/model combinations, pi-ai translates system messages to `<system>`-bracketed
+user messages at their historical positions and derives any bulk wire tool declarations it needs.
+Pico never hoists the baseline or flattens changes into a rewritten top-level prompt. Cache preservation
+is best-effort; a fallback user message does not have native system priority.
 
 ### Subagents Have Their Own
 
-A subagent is a different agent: different instructions, different loadout, often a different
-model. `spawn` sets its config, and either the parent's `subtree` handler answers (branching on
-`config.profile`) or the child registers its own:
+Children explicitly choose their durable configuration. Subtree handlers supply defaults, and inner
+hooks can replace built-in payloads or add sections:
 
 ```typescript
-const childId = await c.spawn({
-  prompt: 'Audit the tests',
-  values: {
-    inherit: [generationKind.config.model],
-    set: [
-      [generationKind.config.selectedTools, ['read', 'grep']],
-      [generationKind.config.profile, 'auditor'],
-    ],
-  },
+const childId = await c.spawn({ prompt: 'Audit the tests',
+  values: { inherit: [generationKind.config.model],
+    set: [[generationKind.config.selectedTools, ['read', 'grep']]] },
 }, call);
-
 const child = await h.conversation(childId, call);
-child.hooks.on(generationKind, 'system_instructions', async ({ config }, call) => ({
-  sections: { identity: AUDITOR_IDENTITY, cwd: `Working directory: ${cwd}` },
-  tools: h.tools.select(config.selectedTools),
-}));
-// child's first turn → its own baseline: two sections, two tools
+child.hooks.on(generationKind, 'system_instructions', ({ sections }, call) => {
+  sections.set(systemSections.identity, AUDITOR_IDENTITY);
+});
 ```
+
+Definitions can be supplied initially through `Harness.open(..., { sections: [...] }, call)` or changed
+later through `h.sections.register/replace/remove`. Registration is mutable process state, serialized
+on the line; an in-flight preparation retains its definition snapshot. `register` rejects duplicate
+keys; `replace` is explicit and compatible; `remove` unregisters code without erasing stored sections.
+Entry/task registries follow the parallel `h.entryKinds`/`h.taskKinds` API. Task-kind removal rejects
+while live tasks of that kind exist. Missing kinds at open orphan foreground tasks and park background
+tasks, as described under [Opening](#opening); registration restores recovery for parked work in an
+attached scope, never resurrects terminal tasks.
 
 ### Compaction, Forks and Restarts
 
-Nothing to do in any of them.
+Canonical section state is reconstructed from fork-visible managed system entries back to the most
+recent baseline, then folded forward. Model heads and projection omissions do not erase these section
+payloads. This uses existing indexed kind scans, with an optional prepared-state cache. A fresh baseline
+checkpoints the whole state; no extra full-state value or token/renderer serialization is needed.
 
-- **Compaction / handoff / reset** append a head; the context after it has no baseline, so the next
-  turn writes a fresh one from the current answer to the hook. The summary never has to describe
-  the prompt, and the provider's prefix was changing at the head anyway. An older delta that a
-  compaction kept in its tail is subsumed by the new baseline and dropped at projection.
-- **A fork** carries the `system` entries in its shared prefix and its own (rewindable) config; its
-  first turn diffs the two:
+Consequently, restarting without a plugin retains its JSON payload and rendered text—even if compaction
+removed its original baseline from model context. Untouched unknown sections also appear in the next
+fresh baseline. Re-registering a compatible definition restores typed editing; explicit deletion is
+how the host removes an abandoned section.
 
-  ```typescript
-  const b = await c.fork({ at: 12 }, call);                       // config as of 12: tools [read, write, bash]
-  await b.settings.set({ selectedTools: ['read'] }, call);
-  await b.prompt({ input: '...' }, call);                         // b's turn: toolsRemoved [write, bash]; the prefix's 11 is still the baseline
-  ```
+Every generation stores `state.requestThrough`, an inclusive transcript cutoff. It captures canonical
+section state and definitions before running hooks/renderers outside the line. Preparation then checks
+on the line that no managed section write changed its seed; if one did, repeat preparation. A head-only
+change does not stale the section data, but may require a baseline rather than a delta.
 
-- **A restart** with a changed host (new skill, different cwd) emits "these sections now apply"
-  and nothing else; a host that comes back the same emits nothing.
+One line operation commits the system entry and inflight intent/cutoff, catches the live context cache
+up, and captures an immutable array of effective entry references after the full batch is durable.
+Later cache updates do not mutate that array or its replacement projections. Request-local transforms
+copy what they modify. Reconstructing an older cutoff reads storage without rewinding the live cache.
+
+```text
+prepare through 51 → requestThrough=51; capture request snapshot
+60 summary lands  → live cache changes, request snapshot does not
+70 answer lands   → answer to the already prepared request
+```
+
+A usable model baseline must follow the newest head entry. Otherwise the next preparation appends a
+full baseline carrying ordinary omission edits for superseded retained managed system entries:
+
+```text
+10 user; 11 baseline; 20 assistant; 30 user; 31 managed delta; 35 job notice; 40 assistant; 50 user
+60 summary, head=30
+context at 60: [60 summary, 30 user, 31 delta, 35 notice, 40 assistant, 50 user]
+70 assistant
+80 user
+81 system baseline, edits:[{ target:31, action:omit }]
+context at 81: [60 summary, 30 user, 35 notice, 40 assistant, 50 user, 70 assistant, 80 user, 81 baseline]
+```
+
+The baseline stays at its appended tail position. Its edits omit managed baselines/deltas, not unrelated
+notifications with role=system. This atomic baseline supersession is the only permitted edit of managed
+system projections; arbitrary omit/replace edits targeting them reject. Change their instructions through
+the section draft instead. Before preparation, old retained deltas remain visible. Generic head writers
+and context projection need no system-specific callbacks or hidden filtering.
+
+Repeated heads use the same mechanism. Fold effective tool declarations after planned omissions; add
+all desired tools and explicitly remove unwanted declarations that remain in other system messages.
+`baseline:true` is pico metadata, not a reset command understood by pi-ai.
+
+Already superseded entries omitted by the current baseline must not cause repeated baselines.
+
+A crash after configuration changes preserves them. A crash after system append but before request
+preserves prepared instructions; unchanged data/rendering yields no duplicate delta. Forks inherit
+only their visible section history and rewindable config. Current host-source or renderer changes can
+produce a new prepared update, but never re-render old model messages.
+
+```typescript
+// Fork the earlier loadout example at 120: baseline 110 selected read/write, before the grep change.
+const b = await c.fork({ at: 120 }, call);
+await b.settings.set({ selectedTools: ['read'] }, call);
+await b.prompt({ input: '...' }, call); // toolsRemoved=[write]; 110 remains the visible baseline
+```
+
+`before_request` may transform a private request copy, which must remain messages-only. These changes
+do not mutate stored section state. The transcript is not an exact audit of arbitrary transformed
+requests without optional separate capture. Tool-call validation uses the actual offered definitions
+after transformation, plus normal implementation and permission checks.
 
 ## Prompting
 
@@ -648,7 +785,7 @@ interface ConversationView {
   entries: Entry[];                        // the last `tail` entries; page older ones with h.entries(id, { before })
   context: Id[];                           // what the model currently sees, as entry ids
   tasks: Task[];                           // live tasks, typed by kind
-  inbox: Element<InboxItem>[];             // queued input
+  inbox: Element<QueuedInput>[];           // queued input
   values: Map<Address, JsonValue>;         // every value the registered kinds declare, plus the ones you asked for
   previews: Map<Id, JsonValue>;            // per live task: what it is producing right now
   faulted: boolean;
@@ -664,7 +801,7 @@ shape for its process output.
 
 ```typescript
 type InboxOp =
-  | { type: 'append'; item: Element<InboxItem> }
+  | { type: 'append'; item: Element<QueuedInput> }
   | { type: 'remove'; id: Id }
   | { type: 'clear' };
 
@@ -713,12 +850,12 @@ function render(view: ConversationView, event?: ConversationEvent) {
   const gen = view.tasks.find(t => generationKind.is(t));
   streaming.set(gen ? view.previews.get(gen.id) as AssistantMessage : undefined);
   status.set(
-    gen?.status === 'retry_wait' ? `retrying (${gen.state.attempt}/${gen.state.maxAttempts})` :
-    gen?.status === 'deferred'   ? 'waiting for provider' :
+    gen?.state.status === 'retry_wait' ? `retrying (${gen.state.attempt}/${gen.state.maxAttempts})` :
+    gen?.state.status === 'deferred'   ? 'waiting for provider' :
     view.tasks.some(collapseKind.is) ? 'compacting…' : undefined);
 
   for (const t of view.tasks.filter(toolKind.is))
-    toolBlocks.upsert(t.id, { call: t.state.call, phase: t.status, output: view.previews.get(t.id) as ToolOutputState });
+    toolBlocks.upsert(t.id, { call: t.state.call, phase: t.state.status, output: view.previews.get(t.id) as ToolOutputState });
 
   for (const t of view.tasks.filter(jobKind.is))
     jobBlocks.upsert(t.id, { tool: t.state.origin?.tool ?? 'job', output: view.previews.get(t.id) as ToolOutputState });
@@ -765,8 +902,9 @@ sw.start(e => {
 ## Forks
 
 A fork is a new conversation whose transcript starts as a shared prefix of the source. Nothing is
-copied and nothing in the source is deleted. It carries the context as it was at that entry, the
-rewindable values in force there, and the prompt-as-sent, so its first turn is exact.
+copied and nothing in the source is deleted. It carries the context, canonical prepared instructions
+and rewindable values visible at that entry. Its next preparation may append changes from current
+host sources; it does not rewrite inherited messages.
 
 ```typescript
 const alt = await c.fork({ at: answer.id }, call);                           // the source keeps running, untouched
@@ -1104,7 +1242,7 @@ Points and their fail behaviour:
 
 | kind | point | returns | on throw |
 |---|---|---|---|
-| generation | `system_instructions` | sections + tools | reported, skipped |
+| generation | `system_instructions` | edits section draft; optional complete tools | reported, skipped |
 | generation | `before_request` | a transformed request | reported, skipped |
 | generation | `after_response` | nothing | reported |
 | generation | `on_yield` | `{ continue?: string }` | reported, skipped |

@@ -12,17 +12,17 @@ export interface Address<T extends JsonValue = JsonValue> {
 	readonly scope: Scope;
 	readonly namespace: string;
 	readonly key?: string;
-	readonly collection: "value" | "list";
+	readonly kind: "value" | "list";
 	readonly rewind: boolean;
 	readonly [addressType]?: T;
 }
 
 export interface Value<T extends JsonValue> extends Address<T> {
-	readonly collection: "value";
+	readonly kind: "value";
 }
 
 export interface List<T extends JsonValue> extends Address<T> {
-	readonly collection: "list";
+	readonly kind: "list";
 }
 
 export interface Element<T extends JsonValue> {
@@ -51,7 +51,7 @@ export function defineValue<T extends JsonValue>(scope: Scope, namespace: string
 		...options,
 		scope,
 		namespace,
-		collection: "value",
+		kind: "value",
 		rewind: options?.rewind ?? false,
 	});
 }
@@ -71,7 +71,7 @@ export function defineList<T extends JsonValue>(scope: Scope, namespace: string,
 		...options,
 		scope,
 		namespace,
-		collection: "list",
+		kind: "list",
 		rewind: options?.rewind ?? false,
 	});
 }

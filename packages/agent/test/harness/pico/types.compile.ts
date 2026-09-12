@@ -2,11 +2,14 @@ import type { Context } from "@draht/chord";
 import type {
 	AbortClosure,
 	AbortedOf,
-	AbortRuntimeFor,
-	BaseAbortRuntime,
-	BaseTaskRuntime,
+	AbortTaskRuntime,
 	BaseTaskTx,
 	CheckpointOf,
+	CoreAbortClosure,
+	CoreAbortTaskRuntime,
+	CoreTaskRuntime,
+	CoreTaskTx,
+	CoreTerminalClosure,
 	Entry,
 	EntryInput,
 	ExactJsonInput,
@@ -18,19 +21,24 @@ import type {
 	PayloadsOf,
 	ReadonlyTaskOutput,
 	ResultOf,
-	RuntimeFor,
 	SummaryEntry,
+	TaskKindBase,
 	TaskOf,
 	TaskOutcome,
 	TaskOutput,
 	TaskOutputRef,
+	TaskRuntime,
 	TerminalClosure,
-	TurnAbortRuntime,
-	TurnOf,
-	TurnTaskRuntime,
 	Value,
 } from "../../../src/harness/pico/index.ts";
-import { defineEntry, defineList, defineTask, defineTaskOutput, defineValue } from "../../../src/harness/pico/index.ts";
+import {
+	defineCoreTask,
+	defineEntry,
+	defineList,
+	defineTask,
+	defineTaskOutput,
+	defineValue,
+} from "../../../src/harness/pico/index.ts";
 
 type Equal<Left, Right> = (<Type>() => Type extends Left ? 1 : 2) extends <Type>() => Type extends Right ? 1 : 2
 	? (<Type>() => Type extends Right ? 1 : 2) extends <Type>() => Type extends Left ? 1 : 2
@@ -69,8 +77,8 @@ type JsonAssertions = [
 	Assert<{ readonly value: undefined } extends JsonValue ? false : true>,
 ];
 
-const nonTurnKind = defineTask<TestInput, TestCheckpoint, TestResult, TestFailure, TestAborted>()({
-	kind: "test.non_turn",
+const ordinaryKind = defineTask<TestInput, TestCheckpoint, TestResult, TestFailure, TestAborted>()({
+	kind: "test.ordinary",
 	execute() {
 		return Promise.resolve(() => ({ status: "completed", result: { answer: "done" } }));
 	},
@@ -82,9 +90,8 @@ const nonTurnKind = defineTask<TestInput, TestCheckpoint, TestResult, TestFailur
 	},
 });
 
-const turnKind = defineTask<TestInput, TestCheckpoint, TestResult, TestFailure, TestAborted>()({
-	kind: "test.turn",
-	turn: true,
+const coreKind = defineCoreTask<TestInput, TestCheckpoint, TestResult, TestFailure, TestAborted>()({
+	kind: "pi.test_core",
 	execute() {
 		return Promise.resolve(() => ({ status: "completed", result: { answer: "done" } }));
 	},
@@ -148,55 +155,53 @@ const incompatibleCheckpointKind = defineTask<
 	},
 });
 
-type NonTurnRuntimeTx = Parameters<Parameters<RuntimeFor<TestInput, TestCheckpoint, never, false>["commit"]>[0]>[0];
-type TurnRuntimeTx = Parameters<Parameters<RuntimeFor<TestInput, TestCheckpoint, never, true>["commit"]>[0]>[0];
-type NonTurnAbortTx = Parameters<Parameters<AbortRuntimeFor<TestInput, TestCheckpoint, never, false>["commit"]>[0]>[0];
-type TurnRuntimeAbortTx = Parameters<
-	Parameters<AbortRuntimeFor<TestInput, TestCheckpoint, never, true>["commit"]>[0]
->[0];
-type NonTurnFinalTx = Parameters<TerminalClosure<TestInput, TestCheckpoint, TestResult, TestFailure, never, false>>[0];
-type TurnFinalTx = Parameters<TerminalClosure<TestInput, TestCheckpoint, TestResult, TestFailure, never, true>>[0];
-type NonTurnAbortFinalTx = Parameters<AbortClosure<TestInput, TestCheckpoint, TestAborted, never, false>>[0];
-type TurnAbortFinalTx = Parameters<AbortClosure<TestInput, TestCheckpoint, TestAborted, never, true>>[0];
-type OutputFinalTx = Parameters<
-	TerminalClosure<TestInput, TestCheckpoint, TestResult, TestFailure, TestOutput, false>
->[0];
-type OutputAbortFinalTx = Parameters<AbortClosure<TestInput, TestCheckpoint, TestAborted, TestOutput, false>>[0];
+type OrdinaryRuntimeTx = Parameters<Parameters<TaskRuntime<TestInput, TestCheckpoint>["commit"]>[0]>[0];
+type CoreRuntimeTx = Parameters<Parameters<CoreTaskRuntime<TestInput, TestCheckpoint>["commit"]>[0]>[0];
+type OrdinaryAbortTx = Parameters<Parameters<AbortTaskRuntime<TestInput, TestCheckpoint>["commit"]>[0]>[0];
+type CoreRuntimeAbortTx = Parameters<Parameters<CoreAbortTaskRuntime<TestInput, TestCheckpoint>["commit"]>[0]>[0];
+type OrdinaryFinalTx = Parameters<TerminalClosure<TestInput, TestCheckpoint, TestResult, TestFailure, never>>[0];
+type CoreFinalTx = Parameters<CoreTerminalClosure<TestInput, TestCheckpoint, TestResult, TestFailure, never>>[0];
+type OrdinaryAbortFinalTx = Parameters<AbortClosure<TestInput, TestCheckpoint, TestAborted, never>>[0];
+type CoreAbortFinalTx = Parameters<CoreAbortClosure<TestInput, TestCheckpoint, TestAborted, never>>[0];
+type OutputFinalTx = Parameters<TerminalClosure<TestInput, TestCheckpoint, TestResult, TestFailure, TestOutput>>[0];
+type OutputAbortFinalTx = Parameters<AbortClosure<TestInput, TestCheckpoint, TestAborted, TestOutput>>[0];
 
 type KindAssertions = [
-	Assert<Equal<TurnOf<typeof nonTurnKind>, false>>,
-	Assert<Equal<TurnOf<typeof turnKind>, true>>,
-	Assert<Equal<InputOf<typeof nonTurnKind>, TestInput>>,
-	Assert<Equal<CheckpointOf<typeof nonTurnKind>, TestCheckpoint>>,
-	Assert<Equal<ResultOf<typeof nonTurnKind>, TestResult>>,
-	Assert<Equal<FailureOf<typeof nonTurnKind>, TestFailure>>,
-	Assert<Equal<AbortedOf<typeof nonTurnKind>, TestAborted>>,
-	Assert<Equal<PayloadsOf<typeof nonTurnKind>["aborted"], TestAborted>>,
-	Assert<Equal<OutputOf<typeof nonTurnKind>, never>>,
+	Assert<"turn" extends keyof typeof ordinaryKind ? false : true>,
+	Assert<"turn" extends keyof typeof coreKind ? false : true>,
+	Assert<"busy" extends keyof TaskOf<typeof ordinaryKind> ? false : true>,
+	Assert<Equal<InputOf<typeof ordinaryKind>, TestInput>>,
+	Assert<Equal<InputOf<typeof coreKind>, TestInput>>,
+	Assert<Equal<CheckpointOf<typeof ordinaryKind>, TestCheckpoint>>,
+	Assert<Equal<ResultOf<typeof ordinaryKind>, TestResult>>,
+	Assert<Equal<FailureOf<typeof ordinaryKind>, TestFailure>>,
+	Assert<Equal<AbortedOf<typeof ordinaryKind>, TestAborted>>,
+	Assert<Equal<PayloadsOf<typeof ordinaryKind>["aborted"], TestAborted>>,
+	Assert<Equal<OutputOf<typeof ordinaryKind>, never>>,
 	Assert<Equal<OutputOf<typeof outputTaskKind>, TestOutput>>,
-	Assert<Equal<Parameters<typeof nonTurnKind.execute>[1], BaseTaskRuntime<TestInput, TestCheckpoint>>>,
+	Assert<Equal<Parameters<typeof ordinaryKind.execute>[1], TaskRuntime<TestInput, TestCheckpoint>>>,
+	Assert<Equal<Parameters<typeof coreKind.execute>[1], CoreTaskRuntime<TestInput, TestCheckpoint>>>,
 	Assert<Equal<Parameters<typeof outputTaskKind.execute>[1]["output"], TaskOutput<TestOutput>>>,
 	Assert<Equal<ReturnType<Parameters<TaskOutput<TestOutput>["mutate"]>[0]>, undefined>>,
-	Assert<Equal<Parameters<typeof turnKind.execute>[1], TurnTaskRuntime<TestInput, TestCheckpoint>>>,
-	Assert<Equal<Parameters<typeof nonTurnKind.abort>[1], BaseAbortRuntime<TestInput, TestCheckpoint>>>,
-	Assert<Equal<Parameters<typeof turnKind.abort>[1], TurnAbortRuntime<TestInput, TestCheckpoint>>>,
+	Assert<Equal<Parameters<typeof ordinaryKind.abort>[1], AbortTaskRuntime<TestInput, TestCheckpoint>>>,
+	Assert<Equal<Parameters<typeof coreKind.abort>[1], CoreAbortTaskRuntime<TestInput, TestCheckpoint>>>,
 	Assert<Equal<Parameters<typeof outputTaskKind.abort>[1]["output"], ReadonlyTaskOutput<TestOutput>>>,
-	Assert<Equal<HasOutput<Parameters<typeof nonTurnKind.execute>[1]>, false>>,
+	Assert<Equal<HasOutput<Parameters<typeof ordinaryKind.execute>[1]>, false>>,
 	Assert<Equal<HasOutput<Parameters<typeof outputTaskKind.execute>[1]>, true>>,
 	Assert<Equal<OutputFinalTx["output"], TestOutput>>,
 	Assert<Equal<OutputAbortFinalTx["output"], TestOutput>>,
-	Assert<Equal<HasEntry<NonTurnRuntimeTx>, false>>,
-	Assert<Equal<HasEntry<TurnRuntimeTx>, true>>,
-	Assert<Equal<HasEntry<NonTurnFinalTx>, false>>,
-	Assert<Equal<HasEntry<TurnFinalTx>, true>>,
-	Assert<Equal<HasEntry<NonTurnAbortTx>, false>>,
-	Assert<Equal<HasEntry<TurnRuntimeAbortTx>, true>>,
-	Assert<Equal<HasEntry<NonTurnAbortFinalTx>, false>>,
-	Assert<Equal<HasEntry<TurnAbortFinalTx>, true>>,
-	Assert<"sleep" extends keyof BaseAbortRuntime<TestInput, TestCheckpoint> ? false : true>,
+	Assert<Equal<HasEntry<OrdinaryRuntimeTx>, false>>,
+	Assert<Equal<HasEntry<CoreRuntimeTx>, true>>,
+	Assert<Equal<HasEntry<OrdinaryFinalTx>, false>>,
+	Assert<Equal<HasEntry<CoreFinalTx>, true>>,
+	Assert<Equal<HasEntry<OrdinaryAbortTx>, false>>,
+	Assert<Equal<HasEntry<CoreRuntimeAbortTx>, true>>,
+	Assert<Equal<HasEntry<OrdinaryAbortFinalTx>, false>>,
+	Assert<Equal<HasEntry<CoreAbortFinalTx>, true>>,
+	Assert<"sleep" extends keyof AbortTaskRuntime<TestInput, TestCheckpoint> ? false : true>,
 ];
 
-type KindOutcome = Extract<TaskOf<typeof nonTurnKind>, { readonly status: "terminal" }>["outcome"];
+type KindOutcome = Extract<TaskOf<typeof ordinaryKind>, { readonly status: "terminal" }>["outcome"];
 type OutcomeAssertions = [
 	Assert<Equal<KindOutcome, TaskOutcome<TestResult, TestFailure, TestAborted>>>,
 	Assert<Equal<Extract<KindOutcome, { readonly status: "completed" }>["result"], TestResult>>,
@@ -220,9 +225,11 @@ function verifyTaskInputs(
 	outputRef: TaskOutputRef<TestOutput>,
 	wrongOutputRef: TaskOutputRef<{ count: number }>,
 ): void {
-	tx.task(nonTurnKind, {
+	tx.task(ordinaryKind, {
 		input: { prompt: "hello", nested: { count: 1 } },
 	});
+	// @ts-expect-error ordinary task transactions cannot instantiate fixed core task kinds
+	tx.task(coreKind, { input: { prompt: "core", nested: { count: 1 } } });
 	tx.task(outputTaskKind, {
 		input: { prompt: "own output", nested: { count: 1 } },
 	});
@@ -231,7 +238,7 @@ function verifyTaskInputs(
 		output: outputRef,
 	});
 	// @ts-expect-error a no-output kind cannot receive an output reference
-	tx.task(nonTurnKind, { input: { prompt: "hello", nested: { count: 1 } }, output: outputRef });
+	tx.task(ordinaryKind, { input: { prompt: "hello", nested: { count: 1 } }, output: outputRef });
 	tx.task(outputTaskKind, {
 		input: { prompt: "wrong output", nested: { count: 1 } },
 		// @ts-expect-error a shared output reference must have the kind's output type
@@ -243,30 +250,30 @@ function verifyTaskInputs(
 		input: { prompt: "hello", nested: { count: 1 } },
 		background: true,
 	} as const;
-	tx.task(nonTurnKind, exactVariable);
+	tx.task(ordinaryKind, exactVariable);
 
 	// Top-level exactness intentionally does not recursively reject extra nested fields.
-	tx.task(nonTurnKind, {
+	tx.task(ordinaryKind, {
 		input: { prompt: "hello", nested: { count: 1, extension: true } },
 	});
 
 	// @ts-expect-error task input literals reject extra top-level fields
-	tx.task(nonTurnKind, { input: { prompt: "hello", nested: { count: 1 }, extension: true } });
+	tx.task(ordinaryKind, { input: { prompt: "hello", nested: { count: 1 }, extension: true } });
 
 	const extraInputVariable = { prompt: "hello", nested: { count: 1 }, extension: true };
 	// @ts-expect-error task input variables reject visible extra top-level fields
-	tx.task(nonTurnKind, { input: extraInputVariable });
+	tx.task(ordinaryKind, { input: extraInputVariable });
 
 	const inputBase = { prompt: "hello", nested: { count: 1 } };
 	// @ts-expect-error task input spreads reject visible extra top-level fields
-	tx.task(nonTurnKind, { input: { ...inputBase, extension: true } });
+	tx.task(ordinaryKind, { input: { ...inputBase, extension: true } });
 
 	const extraSpecVariable = {
 		input: { prompt: "hello", nested: { count: 1 } },
 		priority: 1,
 	};
 	// @ts-expect-error task specs reject visible extra top-level fields
-	tx.task(nonTurnKind, extraSpecVariable);
+	tx.task(ordinaryKind, extraSpecVariable);
 
 	tx.checkpoint({ phase: "ready", cursor: 1 });
 	// @ts-expect-error every checkpoint requires its phase
@@ -275,6 +282,21 @@ function verifyTaskInputs(
 	tx.checkpoint({ phase: "ready" });
 	// @ts-expect-error an incompatible checkpoint shape is rejected
 	tx.checkpoint({ phase: "ready", token: "cursor" });
+}
+
+function verifyOrdinaryRegistration(register: (kind: TaskKindBase) => void): void {
+	register(ordinaryKind);
+	// @ts-expect-error fixed core kinds cannot enter the ordinary task registry
+	register(coreKind);
+}
+
+function verifyCoreTaskInputs(tx: CoreTaskTx<TestCheckpoint>): void {
+	tx.task(ordinaryKind, {
+		input: { prompt: "ordinary child", nested: { count: 1 } },
+	});
+	tx.task(coreKind, {
+		input: { prompt: "core child", nested: { count: 1 } },
+	});
 }
 
 function verifyOutputMutation(
@@ -298,10 +320,10 @@ function verifyCheckpointCompatibility(
 	incompatible: CheckpointOf<typeof incompatibleCheckpointKind>,
 ): void {
 	// Checkpoints are structural: an independently declared identical shape is assignable.
-	const structurallyCompatible: CheckpointOf<typeof nonTurnKind> = checkpoint;
+	const structurallyCompatible: CheckpointOf<typeof ordinaryKind> = checkpoint;
 	void structurallyCompatible;
 	// @ts-expect-error a differently shaped kind checkpoint is not assignable
-	const structurallyIncompatible: CheckpointOf<typeof nonTurnKind> = incompatible;
+	const structurallyIncompatible: CheckpointOf<typeof ordinaryKind> = incompatible;
 	void structurallyIncompatible;
 }
 
@@ -373,6 +395,8 @@ void entryAssertions;
 void exactInputAssertion;
 void entry;
 void verifyTaskInputs;
+void verifyOrdinaryRegistration;
+void verifyCoreTaskInputs;
 void verifyOutputMutation;
 void verifyCheckpointCompatibility;
 void verifyOutcomes;

@@ -6,3 +6,4 @@ export interface JsonObject {
 }
 
 export type Id = number;
+export type Seq = number;

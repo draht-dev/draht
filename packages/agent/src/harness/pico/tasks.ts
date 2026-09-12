@@ -1,6 +1,15 @@
 import type { Context } from "@draht/chord";
 import type { Id, JsonObject, JsonValue } from "./core.ts";
-import type { AbortClosure, AbortRuntimeFor, RuntimeFor, TerminalClosure } from "./runtime.ts";
+import type {
+	AbortClosure,
+	AbortTaskRuntime,
+	CoreAbortClosure,
+	CoreAbortTaskRuntime,
+	CoreTaskRuntime,
+	CoreTerminalClosure,
+	TaskRuntime,
+	TerminalClosure,
+} from "./runtime.ts";
 
 export interface TaskCheckpoint extends JsonObject {
 	readonly phase: string;
@@ -35,7 +44,7 @@ export interface TaskOutputRef<O extends object> extends StoredTaskOutputRef {
 
 export type TaskOutputField<O extends object> = [O] extends [never] ? unknown : { readonly output: TaskOutputRef<O> };
 
-type TaskOutputDefinition<I extends JsonValue, O extends object> = [O] extends [never]
+export type TaskOutputDefinition<I extends JsonValue, O extends object> = [O] extends [never]
 	? { readonly output?: never }
 	: { readonly output: TaskOutputSpec<I, O> };
 
@@ -53,7 +62,6 @@ export interface TaskBase<I extends JsonValue, C extends TaskCheckpoint> {
 	readonly checkpoint?: C;
 	readonly after: readonly Id[];
 	readonly background?: true;
-	readonly turn?: true;
 	readonly owns: readonly Id[];
 	readonly output?: StoredTaskOutputRef;
 	readonly abort?: true;
@@ -88,8 +96,12 @@ const taskKindBrand: unique symbol = Symbol("pico.taskKind");
 
 export interface TaskKindBase {
 	readonly kind: string;
-	readonly turn: false | true;
-	readonly [taskKindBrand]: true;
+	readonly [taskKindBrand]: "ordinary";
+}
+
+export interface CoreTaskKindBase {
+	readonly kind: string;
+	readonly [taskKindBrand]: "core";
 }
 
 interface TaskKindMethods<
@@ -99,24 +111,47 @@ interface TaskKindMethods<
 	F extends JsonValue,
 	A extends JsonValue,
 	O extends object,
-	T extends false | true,
 > extends TaskKindBase {
-	readonly turn: T;
 	execute(
 		task: RunningTask<I, C, O>,
-		runtime: RuntimeFor<I, C, O, T>,
+		runtime: TaskRuntime<I, C, O>,
 		ctx: Context,
-	): Promise<TerminalClosure<I, C, R, F, O, T>>;
+	): Promise<TerminalClosure<I, C, R, F, O>>;
 	recover(
 		task: RunningTask<I, C, O>,
-		runtime: RuntimeFor<I, C, O, T>,
+		runtime: TaskRuntime<I, C, O>,
 		ctx: Context,
-	): Promise<TerminalClosure<I, C, R, F, O, T>>;
+	): Promise<TerminalClosure<I, C, R, F, O>>;
 	abort(
 		task: RunningTask<I, C, O>,
-		runtime: AbortRuntimeFor<I, C, O, T>,
+		runtime: AbortTaskRuntime<I, C, O>,
 		ctx: Context,
-	): Promise<AbortClosure<I, C, A, O, T>>;
+	): Promise<AbortClosure<I, C, A, O>>;
+}
+
+interface CoreTaskKindMethods<
+	I extends JsonValue,
+	C extends TaskCheckpoint,
+	R extends JsonValue,
+	F extends JsonValue,
+	A extends JsonValue,
+	O extends object,
+> extends CoreTaskKindBase {
+	execute(
+		task: RunningTask<I, C, O>,
+		runtime: CoreTaskRuntime<I, C, O>,
+		ctx: Context,
+	): Promise<CoreTerminalClosure<I, C, R, F, O>>;
+	recover(
+		task: RunningTask<I, C, O>,
+		runtime: CoreTaskRuntime<I, C, O>,
+		ctx: Context,
+	): Promise<CoreTerminalClosure<I, C, R, F, O>>;
+	abort(
+		task: RunningTask<I, C, O>,
+		runtime: CoreAbortTaskRuntime<I, C, O>,
+		ctx: Context,
+	): Promise<CoreAbortClosure<I, C, A, O>>;
 }
 
 export type TaskKind<
@@ -126,8 +161,16 @@ export type TaskKind<
 	F extends JsonValue,
 	A extends JsonValue,
 	O extends object = never,
-	T extends false | true = false,
-> = TaskKindMethods<I, C, R, F, A, O, T> & TaskOutputDefinition<I, O>;
+> = TaskKindMethods<I, C, R, F, A, O> & TaskOutputDefinition<I, O>;
+
+export type CoreTaskKind<
+	I extends JsonValue,
+	C extends TaskCheckpoint,
+	R extends JsonValue,
+	F extends JsonValue,
+	A extends JsonValue,
+	O extends object = never,
+> = CoreTaskKindMethods<I, C, R, F, A, O> & TaskOutputDefinition<I, O>;
 
 export type NoExtra<Expected, Actual extends Expected> = Actual & Record<Exclude<keyof Actual, keyof Expected>, never>;
 
@@ -137,39 +180,26 @@ export type ExactJsonInput<Expected extends JsonValue, Actual extends Expected> 
 		? Actual & Record<Exclude<keyof Actual, keyof Expected>, never>
 		: Actual;
 
-export type NonTurnKindDefinition<
-	I extends JsonValue,
-	C extends TaskCheckpoint,
-	R extends JsonValue,
-	F extends JsonValue,
-	A extends JsonValue,
-	O extends object,
-> = Omit<TaskKind<I, C, R, F, A, O, false>, "turn" | typeof taskKindBrand> & { readonly turn?: false };
+type KindDefinition<K> = Omit<K, typeof taskKindBrand>;
+type KindFactory<K> = <D extends KindDefinition<K>>(definition: NoExtra<KindDefinition<K>, D>) => D & K;
 
-export type TurnKindDefinition<
+export type TaskKindFactory<
 	I extends JsonValue,
 	C extends TaskCheckpoint,
 	R extends JsonValue,
 	F extends JsonValue,
 	A extends JsonValue,
 	O extends object,
-> = Omit<TaskKind<I, C, R, F, A, O, true>, typeof taskKindBrand>;
+> = KindFactory<TaskKind<I, C, R, F, A, O>>;
 
-export interface TaskKindFactory<
+export type CoreTaskKindFactory<
 	I extends JsonValue,
 	C extends TaskCheckpoint,
 	R extends JsonValue,
 	F extends JsonValue,
 	A extends JsonValue,
 	O extends object,
-> {
-	<D extends NonTurnKindDefinition<I, C, R, F, A, O>>(
-		definition: NoExtra<NonTurnKindDefinition<I, C, R, F, A, O>, D>,
-	): D & TaskKind<I, C, R, F, A, O, false>;
-	<D extends TurnKindDefinition<I, C, R, F, A, O>>(
-		definition: NoExtra<TurnKindDefinition<I, C, R, F, A, O>, D>,
-	): D & TaskKind<I, C, R, F, A, O, true>;
-}
+> = KindFactory<CoreTaskKind<I, C, R, F, A, O>>;
 
 export function defineTask<
 	I extends JsonValue,
@@ -179,29 +209,49 @@ export function defineTask<
 	A extends JsonValue,
 	O extends object = never,
 >(): TaskKindFactory<I, C, R, F, A, O> {
-	const define = (definition: NonTurnKindDefinition<I, C, R, F, A, O> | TurnKindDefinition<I, C, R, F, A, O>) =>
+	const define = (definition: KindDefinition<TaskKind<I, C, R, F, A, O>>) =>
 		Object.freeze({
 			...definition,
-			turn: definition.turn ?? false,
-			[taskKindBrand]: true as const,
+			[taskKindBrand]: "ordinary" as const,
 		});
 	return define as TaskKindFactory<I, C, R, F, A, O>;
 }
 
+/** Internal authoring helper for Pico's fixed privileged task kinds. */
+export function defineCoreTask<
+	I extends JsonValue,
+	C extends TaskCheckpoint,
+	R extends JsonValue,
+	F extends JsonValue,
+	A extends JsonValue,
+	O extends object = never,
+>(): CoreTaskKindFactory<I, C, R, F, A, O> {
+	const define = (definition: KindDefinition<CoreTaskKind<I, C, R, F, A, O>>) =>
+		Object.freeze({
+			...definition,
+			[taskKindBrand]: "core" as const,
+		});
+	return define as CoreTaskKindFactory<I, C, R, F, A, O>;
+}
+
 export type AnyTaskKind = TaskKindBase;
-export type PayloadsOf<K> = K extends TaskKind<infer I, infer C, infer R, infer F, infer A, infer O, false | true>
+export type AnyCoreTaskKind = CoreTaskKindBase;
+export type AnyDefinedTaskKind = AnyTaskKind | AnyCoreTaskKind;
+
+export type PayloadsOf<K> = K extends TaskKind<infer I, infer C, infer R, infer F, infer A, infer O>
 	? { input: I; checkpoint: C; result: R; failure: F; aborted: A; output: O }
-	: never;
+	: K extends CoreTaskKind<infer I, infer C, infer R, infer F, infer A, infer O>
+		? { input: I; checkpoint: C; result: R; failure: F; aborted: A; output: O }
+		: never;
 export type InputOf<K> = PayloadsOf<K>["input"];
 export type CheckpointOf<K> = PayloadsOf<K>["checkpoint"];
 export type ResultOf<K> = PayloadsOf<K>["result"];
 export type FailureOf<K> = PayloadsOf<K>["failure"];
 export type AbortedOf<K> = PayloadsOf<K>["aborted"];
 export type OutputOf<K> = PayloadsOf<K>["output"];
-export type TurnOf<K extends TaskKindBase> = K["turn"];
 type WithoutOutput<T> = T extends unknown ? Omit<T, "output"> : never;
 
-export type TaskOf<K extends TaskKindBase> = WithoutOutput<
+export type TaskOf<K extends AnyDefinedTaskKind> = WithoutOutput<
 	Task<InputOf<K>, CheckpointOf<K>, ResultOf<K>, FailureOf<K>, AbortedOf<K>>
 > &
 	TaskOutputField<OutputOf<K>>;

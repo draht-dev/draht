@@ -14,8 +14,12 @@ specified here.
 ## 1. Required behavior
 
 Pico stores sessions containing conversations, immutable transcript entries, durable tasks and scoped
-state. One process owns a session at a time. Task effects run concurrently; every mutation and scheduler
-decision serializes on one commit line.
+state. One process owns a session at a time. A writable Harness owns one scheduler for the whole Session.
+Once resumed, it considers eligible tasks in every conversation; foreground and background task effects both
+run concurrently. Foreground affects idle and ordinary cancellation reach, never execution eligibility.
+Every mutation and scheduler decision serializes on one commit line. Each conversation has at most one
+active turn graph: the live tasks among the fixed `pi.generation`, `pi.tool` and `pi.post_tools` kinds. Other
+tasks still run concurrently but never participate in that graph or block input admission.
 
 A task is one recoverable async operation:
 
@@ -35,8 +39,10 @@ Recoverability does not preserve a JavaScript stack and does not imply exactly-o
 A crash after an unkeyed external action but before recording its identity/result remains uncertain.
 
 Required exclusions: no imports from another harness implementation; no worker pool, polling scheduler,
-lease, effect gate, kernel-interpreted global author lifecycle graph, `patch`, `settle`, status epoch,
-workflow replay, generator DSL, one-plan-at-end restriction or specialized core verbs such as `startShell`.
+lease, effect gate, per-conversation scheduler, stable or temporary serving attachment, public drive method,
+replaceable core task kinds, public custom-turn task capability, kernel-interpreted global author lifecycle
+graph, `patch`, `settle`, status epoch, workflow replay, generator DSL, one-plan-at-end restriction or
+specialized core verbs such as `startShell`.
 The optional per-kind state-indexed authoring adapter in section 5 is explicitly allowed; it compiles to an
 ordinary `TaskKind` and changes no kernel lifecycle or scheduler behavior.
 
@@ -50,20 +56,25 @@ type JsonValue = JsonPrimitive | JsonObject | readonly JsonValue[];
 interface JsonObject { readonly [key: string]: JsonValue }
 
 type Id = number;
+type Seq = number;
 ```
 
-IDs and sequence positions are positive safe integers represented by `Id`. One session sequence orders
-every mutation in every main, scratch and shared batch. A mutation that creates an object uses its sequence as that object's ID. There are no
-reserved ranges and IDs are never reused.
+`Id` and `Seq` are distinct positive safe-integer domains. IDs are stable committed-object identity. Storage
+synchronously mints process-local ascending IDs through `nextId()` while the Session FIFO line is held;
+conversation, entry, task and list-append builders immediately carry the returned ID in their canonical
+write. A callback or validation failure discards its writes but burns those IDs in the current open binding.
+They become valid object identities only if the containing commit succeeds. Reopen derives the allocator
+high-water from committed creation/list-append writes, so it may reuse IDs that were minted but never
+committed by an earlier process; committed IDs are never reused. `commit` receives no separate allocator
+value. IDs may be used for same-batch references before commit, but must not escape a failed callback.
 
-A transaction starts from committed `lastSeq`. Its first buffered mutation receives `lastSeq + 1`.
-Rejected transactions consume no IDs. IDs may reference earlier mutations in the same batch and may be
-returned only after the outer commit is durable.
+`Seq` is storage-assigned write order. Storage assigns one ascending sequence to each committed write and
+returns the sequences in write order. Sequences order all main, scratch and shared writes but are not object
+IDs; a creation's ID never has to equal its sequence.
 
-Mutable caller values are cloned at the API boundary before buffering. Storage owns another immutable
-snapshot or an equivalently immutable representation. Mutating an object after passing it to Pico must
-never alter buffered, committed or returned historical data. Reads return immutable values or owned
-copies where the API promises mutation by the caller.
+Local transaction and Storage APIs accept trusted typed values without defensive cloning or redundant
+strict-JSON decoding. Durable values are readonly by contract; callers must not mutate values after passing
+them to Pico. External wire/plugin boundaries validate before entering this layer.
 
 Use Chord's `Context` directly:
 
@@ -141,14 +152,15 @@ type ResetEntry = EntryBase & ContextHead;
 
 Each user, assistant, tool-result, notice, summary and handoff entry contains exactly one corresponding
 message. Reset has no model. `pi.system` is reserved but has no ready typed model witness. Stored entry-kind
-names are indexed so open can report unknown kinds without scanning payload history.
+names remain directly scannable from materialized entry facets; backends may index them so open need not
+decode payload history.
 
 ### 3.2 Direct append validation
 
-A direct append validates against committed state plus prior buffered mutations:
+A direct append validates against committed state plus the builder's narrow pending-reference indexes:
 
 - The conversation exists, including one created earlier in the batch.
-- `head: "self"` becomes the minted entry ID.
+- `head: "self"` becomes the Storage-minted entry ID.
 - A numeric head is a visible transcript entry at the append point.
 - Let `P` be the newest visible prior head. A new head boundary cannot precede `P.head` in the logical
   transcript.
@@ -163,7 +175,7 @@ A direct append validates against committed state plus prior buffered mutations:
   may be stored for display but do not enter later model requests or create tool work.
 - A successful assistant's tool-call IDs are unique. A tool-result entry's single message names one visible
   call ID/name, has one result at most for that call, and belongs to the same conversation.
-  Trusted turn authors remain responsible for creating the right tasks and input ownership.
+  Fixed core task implementations remain responsible for creating the right tasks and input ownership.
 
 An exchange consists of one successful assistant entry containing tool calls and its tool-result entries.
 A head may retain the assistant (boundary at or before it) or omit the complete exchange (boundary after
@@ -239,13 +251,13 @@ interface Address<T extends JsonValue = JsonValue> {
   readonly scope: Scope;
   readonly namespace: string;
   readonly key?: string;
-  readonly collection: "value" | "list";
+  readonly kind: "value" | "list";
   readonly rewind: boolean;
   readonly [addressType]?: T;
 }
 
-interface Value<T extends JsonValue> extends Address<T> { readonly collection: "value" }
-interface List<T extends JsonValue> extends Address<T> { readonly collection: "list" }
+interface Value<T extends JsonValue> extends Address<T> { readonly kind: "value" }
+interface List<T extends JsonValue> extends Address<T> { readonly kind: "list" }
 interface Element<T extends JsonValue> { readonly id: Id; readonly value: T }
 
 type StickyOptions = { readonly key?: string; readonly rewind?: false };
@@ -274,27 +286,30 @@ ID. Handles validate the bound ID and never silently replace it. Session, task a
 non-rewindable; conversation addresses explicitly select `rewind:true` or `false`. Task scope is private
 scratch retired with that task. Shared scope is capability-referenced and retires when a committed batch
 leaves no live task reference. Ready packages compare addresses structurally by the tuple
-`[scope type, scope id or null, collection, rewind, namespace, key-present, key or null]`. String wire
-encoding is deferred to client integration.
+`[scope type, scope id or null, kind, rewind, namespace, key or null]`. `key` participates in address identity
+by selecting an optional member of a keyed family. Only property presence is non-identity: omitted `key` and
+`key:undefined` are the same unkeyed singleton, while the empty string is a distinct key. Backends represent
+the unkeyed slot directly, for example with a null sentinel. String wire encoding is deferred to client integration.
 
 Values use complete replacement and deletion. Lists use intrinsic append/remove/clear operations. For a
 rewindable value, deletion records durable absence. For a rewindable list, remove and clear hide elements
-only at and after their own sequence, preserving earlier historical reads. Sticky state exposes current
+only at and after their own write sequence, preserving earlier historical reads. Sticky state exposes current
 contents; a backend may physically discard removed sticky elements.
 
-Historical `at` is an entry ID. Rewindable conversation lookup chooses the newest local mutation with
-sequence `<= at`. If none exists and the conversation has a parent, recurse into the parent with
-`min(at, parent.at)`. Lists combine inherited and local operations under the same caps. Scratch and sticky
-historical reads reject. Forks inherit no scratch and inherit sticky conversation state only through an
-explicit copy policy at creation.
+Historical `at` is an entry ID. Storage resolves it to that entry's creation sequence. Rewindable
+conversation lookup chooses the newest local write at or before that sequence. If none exists and the
+conversation has a parent, recurse into the parent capped at the earlier of the requested entry position and
+`parent.at`. Lists combine inherited and local operations under the same caps. Scratch and sticky historical
+reads reject. Forks inherit no scratch and inherit sticky conversation state only through an explicit copy
+policy at creation.
 
-A rewindable conversation `getValue(..., at)` or `readList({at})` requires `at` to be a fork-visible entry
+A rewindable conversation `getValue(..., at)` or `readList(..., at)` requires `at` to be a fork-visible entry
 of that address's conversation; an unrelated/missing position rejects `InvalidHistoryPosition`. `undefined`
 selects current state.
 
-Within one main transaction, every rewindable conversation value/list mutation must precede every entry
-append. This makes state in the same batch visible at a fork through that entry while excluding later
-state. Sticky/session state and task mutations may occur anywhere. A violating builder throws and the
+Within one main transaction, every rewindable conversation value/list write must precede every entry
+append. This makes state in the same `Write[]` visible at a fork through that entry while excluding later
+state. Sticky/session state and task writes may occur anywhere. A violating builder throws and the
 whole transaction rolls back.
 
 Namespaces beginning `pi.` are protected. Public/plugin constructors reject them unless created with an
@@ -349,7 +364,6 @@ interface TaskBase<I extends JsonValue, C extends TaskCheckpoint> {
   readonly checkpoint?: C;
   readonly after: readonly Id[];
   readonly background?: true;
-  readonly turn?: true;
   readonly owns: readonly Id[];
   readonly output?: StoredTaskOutputRef;
   readonly abort?: true;
@@ -371,110 +385,115 @@ type Completion<R extends JsonValue, F extends JsonValue> =
   | { readonly status: "failed"; readonly failure: F };
 ```
 
-Input is immutable. A checkpoint is optional and every write replaces the complete checkpoint. Its
-`phase` is a kind-defined tag that the generic scheduler never interprets. Result, failure and abort
-payloads are kind-specific strict JSON. Structurally identical checkpoint types are intentionally
-assignable in TypeScript; kind attribution is supplied by the current runtime, not a nominal durable
-brand. Differently shaped checkpoints, partial checkpoints and another kind's incompatible shape reject.
+Kind, conversation, input, dependencies, background and output reference are immutable after creation. A
+checkpoint is optional; each checkpoint update constructs a full `task.set` snapshot containing the complete
+checkpoint. Its `phase` is a kind-defined tag that the generic scheduler never interprets. Result, failure and
+abort payloads are kind-specific strict JSON. Structurally identical checkpoint types are intentionally
+assignable in TypeScript; kind attribution is supplied by the current runtime, not a nominal durable brand.
+Differently shaped checkpoints, partial checkpoints and another kind's incompatible shape reject.
 
-A task kind has five durable payload types, a sixth task-output state type (`never` means no output), and
-one literal turn capability. Output state is a mutable object/array accepted by Chord `track`; runtime
-strict-JSON validation rejects functions, undefined, cycles and non-JSON values. `TaskOutputKind` contains
-only durable string identity plus a compile-only output witness. `TaskOutputSpec.initial(input)` is
-synchronous and pure. It runs only when task creation omits a shared ref, and its base commits atomically
-with task creation; it never runs when sharing.
+A task kind has five durable payload types and a sixth task-output state type (`never` means no output).
+Output state is a mutable object/array accepted by Chord `track`. `TaskOutputKind` contains only durable
+string identity plus a compile-only output witness. `TaskOutputSpec.initial(input)` is synchronous and pure.
+It runs only when task creation omits a shared ref; its returned object is transferred to the tracker and
+must not be retained or mutated by the author. Its base commits atomically with task creation, and it never
+runs when sharing.
+
+Ordinary extension tasks and Pico's fixed privileged core tasks use separate authoring factories. The
+separate brands make their tokens non-interchangeable. `defineTask` is public. `defineCoreTask` is an internal
+Pico authoring helper and is not a plugin extension point.
 
 ```ts
 declare const taskKindBrand: unique symbol;
 interface TaskKindBase {
   readonly kind: string;
-  readonly turn: false | true;
-  readonly [taskKindBrand]: true;
+  readonly [taskKindBrand]: "ordinary";
+}
+interface CoreTaskKindBase {
+  readonly kind: string;
+  readonly [taskKindBrand]: "core";
 }
 
 interface TaskKindMethods<I extends JsonValue, C extends TaskCheckpoint,
                           R extends JsonValue, F extends JsonValue, A extends JsonValue,
-                          O extends object, T extends false | true>
-  extends TaskKindBase {
-  readonly turn: T;
-  execute(task: RunningTask<I, C, O>, runtime: RuntimeFor<I, C, O, T>, ctx: Context):
-    Promise<TerminalClosure<I, C, R, F, O, T>>;
-  recover(task: RunningTask<I, C, O>, runtime: RuntimeFor<I, C, O, T>, ctx: Context):
-    Promise<TerminalClosure<I, C, R, F, O, T>>;
-  abort(task: RunningTask<I, C, O>, runtime: AbortRuntimeFor<I, C, O, T>, ctx: Context):
-    Promise<AbortClosure<I, C, A, O, T>>;
+                          O extends object> extends TaskKindBase {
+  execute(task: RunningTask<I, C, O>, runtime: TaskRuntime<I, C, O>, ctx: Context):
+    Promise<TerminalClosure<I, C, R, F, O>>;
+  recover(task: RunningTask<I, C, O>, runtime: TaskRuntime<I, C, O>, ctx: Context):
+    Promise<TerminalClosure<I, C, R, F, O>>;
+  abort(task: RunningTask<I, C, O>, runtime: AbortTaskRuntime<I, C, O>, ctx: Context):
+    Promise<AbortClosure<I, C, A, O>>;
+}
+interface CoreTaskKindMethods<I extends JsonValue, C extends TaskCheckpoint,
+                              R extends JsonValue, F extends JsonValue, A extends JsonValue,
+                              O extends object> extends CoreTaskKindBase {
+  execute(task: RunningTask<I, C, O>, runtime: CoreTaskRuntime<I, C, O>, ctx: Context):
+    Promise<CoreTerminalClosure<I, C, R, F, O>>;
+  recover(task: RunningTask<I, C, O>, runtime: CoreTaskRuntime<I, C, O>, ctx: Context):
+    Promise<CoreTerminalClosure<I, C, R, F, O>>;
+  abort(task: RunningTask<I, C, O>, runtime: CoreAbortTaskRuntime<I, C, O>, ctx: Context):
+    Promise<CoreAbortClosure<I, C, A, O>>;
 }
 type TaskKind<I extends JsonValue, C extends TaskCheckpoint,
               R extends JsonValue, F extends JsonValue, A extends JsonValue,
-              O extends object = never, T extends false | true = false> =
-  TaskKindMethods<I, C, R, F, A, O, T> & TaskOutputDefinition<I, O>;
+              O extends object = never> =
+  TaskKindMethods<I, C, R, F, A, O> & TaskOutputDefinition<I, O>;
+type CoreTaskKind<I extends JsonValue, C extends TaskCheckpoint,
+                  R extends JsonValue, F extends JsonValue, A extends JsonValue,
+                  O extends object = never> =
+  CoreTaskKindMethods<I, C, R, F, A, O> & TaskOutputDefinition<I, O>;
 
 type NoExtra<Expected, Actual extends Expected> =
   Actual & Record<Exclude<keyof Actual, keyof Expected>, never>;
-
 type ExactJsonInput<Expected extends JsonValue, Actual extends Expected> =
   Expected extends readonly JsonValue[] ? Actual :
   Expected extends JsonObject
     ? Actual & Record<Exclude<keyof Actual, keyof Expected>, never>
     : Actual;
 
-type NonTurnKindDefinition<I extends JsonValue, C extends TaskCheckpoint,
-                           R extends JsonValue, F extends JsonValue, A extends JsonValue,
-                           O extends object> =
-  Omit<TaskKind<I, C, R, F, A, O, false>, "turn" | typeof taskKindBrand> &
-  { readonly turn?: false };
+type KindDefinition<K> = Omit<K, typeof taskKindBrand>;
+type KindFactory<K> =
+  <D extends KindDefinition<K>>(definition: NoExtra<KindDefinition<K>, D>) => D & K;
 
-type TurnKindDefinition<I extends JsonValue, C extends TaskCheckpoint,
-                        R extends JsonValue, F extends JsonValue, A extends JsonValue,
-                        O extends object> =
-  Omit<TaskKind<I, C, R, F, A, O, true>, typeof taskKindBrand>;
-
-interface TaskKindFactory<I extends JsonValue, C extends TaskCheckpoint,
-                          R extends JsonValue, F extends JsonValue, A extends JsonValue,
-                          O extends object> {
-  <D extends NonTurnKindDefinition<I, C, R, F, A, O>>(
-    definition: NoExtra<NonTurnKindDefinition<I, C, R, F, A, O>, D>,
-  ): D & TaskKind<I, C, R, F, A, O, false>;
-  <D extends TurnKindDefinition<I, C, R, F, A, O>>(
-    definition: NoExtra<TurnKindDefinition<I, C, R, F, A, O>, D>,
-  ): D & TaskKind<I, C, R, F, A, O, true>;
-}
+type TaskKindFactory<I extends JsonValue, C extends TaskCheckpoint,
+                     R extends JsonValue, F extends JsonValue, A extends JsonValue,
+                     O extends object> =
+  KindFactory<TaskKind<I, C, R, F, A, O>>;
+type CoreTaskKindFactory<I extends JsonValue, C extends TaskCheckpoint,
+                         R extends JsonValue, F extends JsonValue, A extends JsonValue,
+                         O extends object> =
+  KindFactory<CoreTaskKind<I, C, R, F, A, O>>;
 
 declare function defineTask<I extends JsonValue, C extends TaskCheckpoint,
                             R extends JsonValue, F extends JsonValue,
                             A extends JsonValue, O extends object = never>():
   TaskKindFactory<I, C, R, F, A, O>;
+declare function defineCoreTask<I extends JsonValue, C extends TaskCheckpoint,
+                                R extends JsonValue, F extends JsonValue,
+                                A extends JsonValue, O extends object = never>():
+  CoreTaskKindFactory<I, C, R, F, A, O>;
 ```
 
-Only `defineTask` constructs the private brand. Registries store `TaskKindBase`; their private dispatch code
-validates durable kind/capability and narrows the registered definition at the invocation boundary, using
-`unknown` internally and never exported `any`. Conditional inference derives all payloads directly from
-`TaskKind`; there is no second payload-witness or adapter symbol. The helper preserves all payloads and the
-literal turn capability; omitted `turn` is returned as `false`. `tx.task`, checkpoint writes and closures infer from that token. `NoExtra` is also applied to the
-actual inferred task spec type, so visible extra top-level fields in literals, variables and spreads reject.
-Deep structural exactness, casts and erased fields remain normal TypeScript limits. Wire/plugin RPC
-boundaries validate strict JSON and optional schemas before calling trusted local APIs.
+The factories preserve all payloads and output inference. `tx.task`, checkpoint methods and closures infer
+from the token. `NoExtra` is also applied to the actual inferred task spec type, so visible extra top-level
+fields in literals, variables and spreads reject. Deep structural exactness, casts and erased fields remain
+normal TypeScript limits. Wire/plugin RPC boundaries validate strict JSON and optional schemas before calling
+trusted local APIs.
 
-`turn:true` is a trusted advanced declaration. It grants direct model-affecting entry authority and puts
-live instances in the turn barrier. It does not prove membership in the built-in graph. Third-party kinds
-may replace built-ins or construct custom turn graphs and are responsible for assistant/tool/input-group
-semantics. The runtime still enforces generic entry, head, edit, ownership and transaction invariants.
-`background` is independent: speculative manual collapse is `background + turn`; automatic collapse is
-foreground + turn.
-
-Task-kind replacement while live tasks exist requires the replacement's materialized `turn` and output
-capability to match every live task. An output-capable replacement must declare the same durable output-kind
-string as each stored ref; a no-output replacement requires every live instance to omit the ref. Replacement
-and open reject a mismatch before invocation. With no live instance, a future replacement may change either
-capability for newly created tasks. Terminal history is not rewritten. Payload and checkpoint compatibility
-beyond these runtime-checkable properties is the replacement author's responsibility.
+The fixed `pi.generation`, `pi.tool`, `pi.post_tools` and `pi.collapse` definitions use `defineCoreTask`.
+`pi.job` uses ordinary `defineTask` unless a later concrete requirement proves it needs a narrow privileged
+surface. Core definitions are installed internally and cannot be registered, replaced or removed. Ordinary
+plugin definitions cannot use a protected `pi.*` name and never receive transcript/admission authority.
+Generation, tool and post_tools are the fixed turn-task set; collapse has core transcript authority but is
+not a turn task. The kernel identifies these roles only by their fixed registered slots/names and never
+interprets their payload or checkpoint schemas.
 
 ### 5.1 Optional state-indexed task authoring
 
 `defineStateTask` is an optional authoring adapter for kinds with several durable recovery phases. It
-returns an ordinary `TaskKind`; `defineTask` remains available for simple or advanced kinds. The adapter
-makes one kind's checkpoint dispatch exhaustive without adding author phases to stored `Task.status` or to
-the scheduler.
+returns an ordinary `TaskKind`; `defineTask` remains available for simple ordinary kinds. Core kinds use the
+separate internal `defineCoreTask` factory rather than this adapter in v1. The adapter makes one kind's
+checkpoint dispatch exhaustive without adding author phases to stored `Task.status` or to the scheduler.
 
 ```ts
 type PhaseOf<C extends TaskCheckpoint> = C["phase"];
@@ -494,98 +513,96 @@ type InitialTask<I extends JsonValue, C extends TaskCheckpoint, O extends object
     readonly checkpoint?: never;
   };
 
-type StateTransitionTx<C extends TaskCheckpoint, T extends false | true> =
-  Omit<T extends true ? TurnTaskTx<C> : BaseTaskTx<C>, "checkpoint">;
-type StatePhaseTx<C extends TaskCheckpoint, P extends PhaseOf<C>, T extends false | true> =
-  StateTransitionTx<C, T> & {
+type StateTransitionTx<C extends TaskCheckpoint> =
+  Omit<BaseTaskTx<C>, "checkpoint">;
+type StatePhaseTx<C extends TaskCheckpoint, P extends PhaseOf<C>> =
+  StateTransitionTx<C> & {
     checkpoint(value: CheckpointAt<C, P>): void;
   };
 type InitialStateRuntime<I extends JsonValue, C extends TaskCheckpoint,
-                         O extends object, T extends false | true> =
-  Omit<RuntimeFor<I, C, O, T>, "commit">;
+                         O extends object> =
+  Omit<TaskRuntime<I, C, O>, "commit">;
 type StateRuntimeFor<I extends JsonValue, C extends TaskCheckpoint,
-                     O extends object, T extends false | true, P extends PhaseOf<C>> =
-  Omit<RuntimeFor<I, C, O, T>, "commit"> & {
+                     O extends object, P extends PhaseOf<C>> =
+  Omit<TaskRuntime<I, C, O>, "commit"> & {
     commit<V>(
-      build: (tx: StatePhaseTx<C, P, T>, current: PhaseTask<I, C, O, P>) => V | Promise<V>,
+      build: (tx: StatePhaseTx<C, P>, current: PhaseTask<I, C, O, P>) => V | Promise<V>,
       ctx: Context,
     ): Promise<V>;
   };
 
 interface PhaseTransition<I extends JsonValue, C extends TaskCheckpoint,
-                          O extends object, T extends false | true,
-                          P extends PhaseOf<C>> {
+                          O extends object, P extends PhaseOf<C>> {
   readonly type: "transition";
   readonly phase: P;
   readonly commit: (
-    tx: StateTransitionTx<C, T>,
+    tx: StateTransitionTx<C>,
     current: RunningTask<I, C, O>,
   ) => PhasePayload<C, P> | Promise<PhasePayload<C, P>>;
 }
 interface StateTerminal<I extends JsonValue, C extends TaskCheckpoint,
                         R extends JsonValue, F extends JsonValue,
-                        O extends object, T extends false | true> {
+                        O extends object> {
   readonly type: "terminal";
-  readonly closure: TerminalClosure<I, C, R, F, O, T>;
+  readonly closure: TerminalClosure<I, C, R, F, O>;
 }
 type StateResult<I extends JsonValue, C extends TaskCheckpoint,
                  R extends JsonValue, F extends JsonValue,
-                 O extends object, T extends false | true> =
-  | PhaseTransition<I, C, O, T, PhaseOf<C>>
-  | StateTerminal<I, C, R, F, O, T>;
+                 O extends object> =
+  | PhaseTransition<I, C, O, PhaseOf<C>>
+  | StateTerminal<I, C, R, F, O>;
 
 type ExactPhasePayload<C extends TaskCheckpoint, P extends PhaseOf<C>,
                        Actual extends PhasePayload<C, P>> =
   NoExtra<PhasePayload<C, P>, Actual>;
 interface StateActions<I extends JsonValue, C extends TaskCheckpoint,
                        R extends JsonValue, F extends JsonValue,
-                       O extends object, T extends false | true> {
+                       O extends object> {
   transition<P extends PhaseOf<C>, Actual extends PhasePayload<C, P>>(
     phase: P,
     commit: (
-      tx: StateTransitionTx<C, T>,
+      tx: StateTransitionTx<C>,
       current: RunningTask<I, C, O>,
     ) => ExactPhasePayload<C, P, Actual> | Promise<ExactPhasePayload<C, P, Actual>>,
-  ): PhaseTransition<I, C, O, T, P>;
+  ): PhaseTransition<I, C, O, P>;
   terminal(
-    closure: TerminalClosure<I, C, R, F, O, T>,
-  ): StateTerminal<I, C, R, F, O, T>;
+    closure: TerminalClosure<I, C, R, F, O>,
+  ): StateTerminal<I, C, R, F, O>;
 }
 
 type PhaseHandler<I extends JsonValue, C extends TaskCheckpoint,
                   R extends JsonValue, F extends JsonValue,
-                  O extends object, T extends false | true,
-                  P extends PhaseOf<C>> =
+                  O extends object, P extends PhaseOf<C>> =
   | {
       readonly role: "start";
       readonly recover?: never;
       run(
         task: PhaseTask<I, C, O, P>,
-        runtime: StateRuntimeFor<I, C, O, T, P>,
-        actions: StateActions<I, C, R, F, O, T>,
+        runtime: StateRuntimeFor<I, C, O, P>,
+        actions: StateActions<I, C, R, F, O>,
         ctx: Context,
-      ): Promise<StateResult<I, C, R, F, O, T>>;
+      ): Promise<StateResult<I, C, R, F, O>>;
     }
   | {
       readonly role: "inflight";
       run(
         task: PhaseTask<I, C, O, P>,
-        runtime: StateRuntimeFor<I, C, O, T, P>,
-        actions: StateActions<I, C, R, F, O, T>,
+        runtime: StateRuntimeFor<I, C, O, P>,
+        actions: StateActions<I, C, R, F, O>,
         ctx: Context,
-      ): Promise<StateResult<I, C, R, F, O, T>>;
+      ): Promise<StateResult<I, C, R, F, O>>;
       recover(
         task: PhaseTask<I, C, O, P>,
-        runtime: StateRuntimeFor<I, C, O, T, P>,
-        actions: StateActions<I, C, R, F, O, T>,
+        runtime: StateRuntimeFor<I, C, O, P>,
+        actions: StateActions<I, C, R, F, O>,
         ctx: Context,
-      ): Promise<StateResult<I, C, R, F, O, T>>;
+      ): Promise<StateResult<I, C, R, F, O>>;
     };
 
 type PhaseMap<I extends JsonValue, C extends TaskCheckpoint,
               R extends JsonValue, F extends JsonValue,
-              O extends object, T extends false | true> = {
-  readonly [P in PhaseOf<C>]: PhaseHandler<I, C, R, F, O, T, P>;
+              O extends object> = {
+  readonly [P in PhaseOf<C>]: PhaseHandler<I, C, R, F, O, P>;
 };
 type ExactPhaseHandler<Expected, Actual extends Expected> =
   Actual extends { readonly role: infer Role }
@@ -602,35 +619,24 @@ type LiteralCheckpoint<C extends TaskCheckpoint> =
 
 type StateTaskDefinition<I extends JsonValue, C extends TaskCheckpoint,
                          R extends JsonValue, F extends JsonValue,
-                         A extends JsonValue, O extends object,
-                         T extends false | true> = {
+                         A extends JsonValue, O extends object> = {
   readonly kind: string;
-  readonly turn: T;
   readonly initial: {
     readonly role: "start";
     run(
       task: InitialTask<I, C, O>,
-      runtime: InitialStateRuntime<I, C, O, T>,
-      actions: StateActions<I, C, R, F, O, T>,
+      runtime: InitialStateRuntime<I, C, O>,
+      actions: StateActions<I, C, R, F, O>,
       ctx: Context,
-    ): Promise<StateResult<I, C, R, F, O, T>>;
+    ): Promise<StateResult<I, C, R, F, O>>;
   };
-  readonly phases: PhaseMap<I, C, R, F, O, T>;
+  readonly phases: PhaseMap<I, C, R, F, O>;
   abort(
     task: RunningTask<I, C, O>,
-    runtime: AbortRuntimeFor<I, C, O, T>,
+    runtime: AbortTaskRuntime<I, C, O>,
     ctx: Context,
-  ): Promise<AbortClosure<I, C, A, O, T>>;
+  ): Promise<AbortClosure<I, C, A, O>>;
 } & TaskOutputDefinition<I, O>;
-
-type NonTurnStateTaskDefinition<I extends JsonValue, C extends TaskCheckpoint,
-                                R extends JsonValue, F extends JsonValue,
-                                A extends JsonValue, O extends object> =
-  Omit<StateTaskDefinition<I, C, R, F, A, O, false>, "turn"> & { readonly turn?: false };
-type TurnStateTaskDefinition<I extends JsonValue, C extends TaskCheckpoint,
-                             R extends JsonValue, F extends JsonValue,
-                             A extends JsonValue, O extends object> =
-  StateTaskDefinition<I, C, R, F, A, O, true>;
 
 type ExactStateTaskDefinition<Expected, Actual extends Expected> =
   NoExtra<Expected, Actual> & {
@@ -641,33 +647,28 @@ type ExactStateTaskDefinition<Expected, Actual extends Expected> =
 interface StateTaskFactory<I extends JsonValue, C extends TaskCheckpoint,
                            R extends JsonValue, F extends JsonValue,
                            A extends JsonValue, O extends object> {
-  <D extends NonTurnStateTaskDefinition<I, C, R, F, A, O>>(
+  <D extends StateTaskDefinition<I, C, R, F, A, O>>(
     definition: [LiteralCheckpoint<C>] extends [never]
       ? never
-      : ExactStateTaskDefinition<NonTurnStateTaskDefinition<I, C, R, F, A, O>, D>,
-  ): D & TaskKind<I, C, R, F, A, O, false>;
-  <D extends TurnStateTaskDefinition<I, C, R, F, A, O>>(
-    definition: [LiteralCheckpoint<C>] extends [never]
-      ? never
-      : ExactStateTaskDefinition<TurnStateTaskDefinition<I, C, R, F, A, O>, D>,
-  ): D & TaskKind<I, C, R, F, A, O, true>;
+      : ExactStateTaskDefinition<StateTaskDefinition<I, C, R, F, A, O>, D>,
+  ): D & TaskKind<I, C, R, F, A, O>;
 }
 
 declare const commitStateTransition: unique symbol;
 interface StateAdapterRuntime<I extends JsonValue, C extends TaskCheckpoint,
-                              O extends object, T extends false | true> {
+                              O extends object> {
   [commitStateTransition]<P extends PhaseOf<C>>(
     expectedSource: PhaseOf<C> | undefined,
     phase: P,
     build: (
-      tx: StateTransitionTx<C, T>,
+      tx: StateTransitionTx<C>,
       current: RunningTask<I, C, O>,
     ) => PhasePayload<C, P> | Promise<PhasePayload<C, P>>,
     ctx: Context,
   ): Promise<PhaseTask<I, C, O, P>>;
 }
 
-// Curried generics and turn/output inference mirror defineTask.
+// Curried generics and output inference mirror defineTask.
 declare function defineStateTask<I extends JsonValue, C extends TaskCheckpoint,
                                  R extends JsonValue, F extends JsonValue,
                                  A extends JsonValue, O extends object = never>():
@@ -688,7 +689,7 @@ Its compile contract is exact:
 - The target passed to `transition` determines the complete target payload. Missing or visible extra fields
   reject for literals, variables and spreads.
 - `terminal(closure)` preserves the existing typed `TerminalClosure`; terminal author phases do not exist.
-- Literal turn selection, output inference and fresh kind-level abort match `defineTask` exactly.
+- Output inference and fresh kind-level abort match `defineTask` exactly.
 
 The factory generates `TaskKind.execute` and `TaskKind.recover` around this internal loop:
 
@@ -698,7 +699,8 @@ scheduler reserves pending -> running and calls generated execute once
   handler returns actions.transition(P, commit)
   call the module-private commitStateTransition capability
   on the line: validate expected source and invocation, run commit(tx, fresh current),
-               write the complete P checkpoint, persist/apply, return applied PhaseTask<P>
+               buffer a full task.set snapshot with the complete P checkpoint,
+               persist/apply, return applied PhaseTask<P>
   assert current unmarked invocation; dispatch P.run within the same outer TaskKind invocation
   repeat until a handler returns terminal(closure)
 generated execute returns closure to the existing terminal path
@@ -715,8 +717,8 @@ module-private symbol implemented by the task-kernel runtime and consumed only b
 is not exported and grants no task-author capability. It performs one ordinary line transaction, then reads
 the already-applied live-task projection, including checkpoint and `owns`. There is no second empty commit
 and the adapter never fabricates a task from the stale handler argument. Transition callbacks run on the
-line against fresh current state, may perform transaction reads and compose same-batch entries/tasks/state,
-and cannot perform effects, waits, hooks, sleeps or nested commits.
+line against fresh current state, may perform explicit committed reads before their first write and then
+compose same-commit entries/tasks/state, and cannot perform effects, waits, hooks, sleeps or nested commits.
 
 `InitialStateRuntime` has no commit method. With no durable phase, allowing initial to commit child work would
 let a crash rerun initial and duplicate them. Initial child/task/conversation creation therefore occurs in
@@ -747,156 +749,160 @@ handlers remain cooperatively cancellable.
 ### 6.1 Mutations
 
 ```ts
-type StateMutation =
-  | { readonly type: "value.set"; readonly address: Address; readonly value: JsonValue }
-  | { readonly type: "value.delete"; readonly address: Address }
-  | { readonly type: "list.append"; readonly address: Address; readonly element: Element }
-  | { readonly type: "list.remove"; readonly address: Address; readonly elementId: Id }
-  | { readonly type: "list.clear"; readonly address: Address };
+type NewTask = Omit<Task, "abort" | "checkpoint" | "outcome" | "owns" | "status"> & {
+  readonly status: "pending";
+  readonly owns: readonly [];
+  readonly abort?: never;
+  readonly checkpoint?: never;
+  readonly outcome?: never;
+};
 
-type MainMutation = StateMutation |
+type StateWrite =
+  | { readonly type: "value.set"; readonly address: Value<JsonValue>; readonly value: JsonValue }
+  | { readonly type: "value.delete"; readonly address: Value<JsonValue> }
+  | { readonly type: "list.append"; readonly address: List<JsonValue>; readonly element: Element<JsonValue> }
+  | { readonly type: "list.remove"; readonly address: List<JsonValue>; readonly elementId: Id }
+  | { readonly type: "list.clear"; readonly address: List<JsonValue> };
+
+type Write = StateWrite |
   { readonly type: "conversation.create"; readonly conversation: Conversation } |
   { readonly type: "entry.append"; readonly entry: Entry } |
-  { readonly type: "task.create"; readonly task: Task } |
-  { readonly type: "task.running"; readonly taskId: Id } |
-  { readonly type: "task.checkpoint"; readonly taskId: Id; readonly checkpoint: TaskCheckpoint } |
-  { readonly type: "task.own"; readonly taskId: Id; readonly conversationId: Id } |
-  { readonly type: "task.abort"; readonly taskId: Id } |
-  { readonly type: "task.terminal"; readonly taskId: Id; readonly outcome: TaskOutcome<JsonValue, JsonValue, JsonValue> };
-
-type CommitBatch =
-  | { readonly kind: "main"; readonly writes: readonly MainMutation[] }
-  | { readonly kind: "scratch"; readonly taskId: Id; readonly writes: readonly StateMutation[] }
-  | { readonly kind: "shared"; readonly id: Id; readonly writerTaskId: Id;
-      readonly writes: readonly StateMutation[] };
-
-interface CommitReceipt { readonly first: Id; readonly last: Id }
+  { readonly type: "task.create"; readonly task: NewTask } |
+  { readonly type: "task.set"; readonly task: Task };
 ```
 
-Each mutation consumes one sequence. `conversation.create`, `entry.append`, `task.create` and
-`list.append` carry the ID assigned to that mutation. For a newly owned task output, the output ID defaults
-to the task ID; task creation and the protected shared `pi.output` base append occur in the same main batch.
-Main may write that initial shared base but no other shared state and no task scratch. Later output flushes
-use a shared batch containing exactly one protected append for its `id`, authorized by `writerTaskId` whose
-current live task stores that ref. A scratch batch contains only task-scope writes for its task.
+Each committed `Write` consumes one storage-assigned `Seq`; the returned sequences are contiguous, ascending
+and positionally aligned with the submitted `Write[]`. `conversation.create`, `entry.append`, `task.create` and `list.append` carry IDs previously minted by
+`Storage.nextId()`; Storage never equates them with sequences.
+For a newly owned task output, the output ID defaults to the task ID; task creation and the protected shared
+`pi.output` base append occur in the same `Write[]`.
 
-`task.terminal` atomically retires private scratch. After the whole prospective main batch, it also retires
-each shared output with no live task reference. The kind's closure reads/materializes final output into its
-entry/outcome before the kernel determines retirement; the kernel never invents kind-specific data. A new
-or same-batch task reference keeps the output live. Terminal task records do not retain it for lifetime
-purposes, and a retired ID cannot be resurrected. Empty batches are
-not passed to storage, do not advance `lastSeq` and publish no event.
+A `task.set` carries the complete replacement task snapshot. The Session/task kernel, not Storage,
+constructs running, checkpointed, ownership, abort-marked and terminal snapshots. A terminal snapshot
+atomically retires private scratch and, from the prospective complete task set, every shared output with no
+live reference. The kind's closure materializes final output into its entry/outcome before retirement. A new
+or same-commit task reference keeps the output live; terminal records do not. A retired output ID cannot be
+resurrected.
 
-Storage applies a batch atomically or not at all. It checks expected object IDs against assigned sequences,
-scope/batch consistency and references, but it does not execute kind code or validate application payload
-schemas. An uncertain commit failure poisons the storage handle; the harness fail-stops and never retries
-that closure on the same handle.
+The Session validates scope and capability before persistence. Protected output writes retain private
+per-append authorization while buffered; one `Write[]` may contain multiple authorized output appends. Each
+append is one exact nonempty central-tracker flush. Scratch transactions contain only writes for their task. Storage remains mechanical: it atomically applies the canonical writes, maintains indexes and retirement,
+assigns sequences, and derives/persists its committed ID high-water from creation/list-append IDs in the
+canonical writes. It trusts the Session-supplied IDs and complete snapshots. It does not execute kind code, derive partial task transitions or validate application
+payload schemas. Empty `Write[]` values are not passed to Storage, consume neither IDs nor sequences and
+publish no event. An uncertain commit failure poisons the binding; the Session fail-stops and never retries
+that callback on the same binding.
 
 ### 6.2 Queries
 
 ```ts
-interface Cursor { readonly after?: Id; readonly before?: Id; readonly limit: number }
-interface Page<T> { readonly items: readonly T[]; readonly next?: Id; readonly readAt: Id }
+interface PageQuery { readonly cursor?: Id; readonly limit: number }
+interface Page<T> { readonly items: readonly T[]; readonly next?: Id }
 
-interface ConversationQuery extends Cursor {
+interface ConversationScan extends PageQuery {
   readonly parent?: Id;
   readonly owner?: Id;
 }
-interface EntryQuery extends Cursor {
+interface EntryScan extends PageQuery {
   readonly conversationId: Id;
   readonly kind?: string;
-  readonly from?: Id;
   readonly through?: Id;
 }
-interface TaskQuery extends Cursor {
+interface TaskScan extends PageQuery {
   readonly conversationIds?: readonly Id[];
-  readonly live?: boolean;
-  readonly status?: "pending" | "running" | "terminal";
+  readonly statuses?: readonly ("pending" | "running" | "terminal")[];
   readonly kind?: string;
   readonly abort?: boolean;
+  readonly outputId?: Id;
 }
-interface ListQuery extends Cursor { readonly at?: Id }
 interface Storage {
-  readonly lastSeq: Id;
-  claim(ctx: Context): Promise<void>;
-  commit(batch: CommitBatch, ctx: Context): Promise<CommitReceipt>;
+  nextId(): Id;
+  commit(writes: readonly Write[], ctx: Context): Promise<readonly Seq[]>;
   getConversations(ids: readonly Id[], ctx: Context): Promise<ReadonlyMap<Id, Conversation>>;
-  scanConversations(query: ConversationQuery, ctx: Context): Promise<Page<Conversation>>;
-  getEntryKindNames(ctx: Context): Promise<ReadonlySet<string>>;
+  scanConversations(query: ConversationScan, ctx: Context): Promise<Page<Conversation>>;
   getEntries(ids: readonly Id[], ctx: Context): Promise<ReadonlyMap<Id, Entry>>;
-  scanEntries(query: EntryQuery, ctx: Context): Promise<Page<Entry>>;
+  scanEntries(query: EntryScan, ctx: Context): Promise<Page<Entry>>;
   newestHead(conversationId: Id, at: Id, ctx: Context): Promise<Entry | undefined>;
   getTasks(ids: readonly Id[], ctx: Context): Promise<ReadonlyMap<Id, Task>>;
-  scanTasks(query: TaskQuery, ctx: Context): Promise<Page<Task>>;
+  scanTasks(query: TaskScan, ctx: Context): Promise<Page<Task>>;
   getValue<T extends JsonValue>(address: Value<T>, at: Id | undefined, ctx: Context): Promise<T | undefined>;
-  readList<T extends JsonValue>(address: List<T>, query: ListQuery, ctx: Context): Promise<Page<Element<T>>>;
-  close(ctx: Context): Promise<void>; // also releases the claim
+  readList<T extends JsonValue>(address: List<T>, at: Id | undefined, ctx: Context): Promise<readonly Element<T>[]>;
 }
 ```
 
-Cursor rules:
+Scan rules:
 
-- `after` and `before` are exclusive and mutually exclusive.
-- `limit` is a positive bounded integer.
-- Filters and fork caps apply before the limit and before decoding payloads where the backend can avoid it.
-- Forward (`after` or neither) selects ascending IDs and returns ascending items; `next` is the final item ID
-  when more exist.
-- Backward (`before`) selects the nearest preceding items and still returns them in ascending transcript
-  order; `next` is the first item ID when more precede it.
-- `from` and `through` are inclusive logical-transcript bounds.
-- `readAt` is the storage `lastSeq` observed by the coherent read.
-- Conversation `parent` and `owner` filters are exact IDs and mutually composable.
-- `live:true` means pending/running. `live:false` means terminal. Omitted means all.
+- `limit` is a positive integer. A returned `next` is the cursor for the next page.
+- Conversation scans are ascending by ID; `cursor` is an exclusive lower bound. `parent` and `owner` are exact,
+  composable filters.
+- Entry scans are fork-aware and newest-first. `through` is an inclusive fork-visible upper bound; `cursor`
+  is an exclusive upper bound, so the next page continues toward older entries. `kind` filters before limit.
+- Task scans are ascending by ID; `cursor` is an exclusive lower bound. Tasks are never inherited.
+  `conversationIds`, `statuses`, `kind`, `abort` and `outputId` compose as exact filters.
+- List reads return the complete logical list ascending by element ID. `at` selects the validated historical
+  entry position for rewindable conversation lists; `undefined` selects current state. There is no paged list
+  scan in v1.
+- `newestHead` is the dedicated fork-aware descending limit-one operation through its required inclusive
+  bound. Latest value/head queries must not load and tail.
+- Scan filters and fork caps apply before the limit and before payload decoding where the backend can avoid
+  it. Pages deliberately contain no storage-sequence snapshot. A complete list read is coherent at one
+  committed state and needs no multi-page snapshot protocol.
 
-`scanEntries` and `newestHead` are fork-aware. Tasks are never inherited. Named owner-task reads may return
-terminal tasks. Latest value/head queries are indexed descending limit-one operations, not load-and-tail.
+Before Storage is called, the Session/kernel validates the complete task snapshots against committed state
+and prior buffered references. It also proves invocation identity, normal-versus-abort authority, open
+reconciliation authority, durable mark and Session phase. Storage trusts the resulting canonical writes and
+applies them atomically.
 
-Storage validates the structural state columns in this table against committed state plus prior batch
-writes. Before storage is called, transaction/driver validation separately proves current invocation,
-normal-versus-abort method, open-reconciliation authority, mark and session phase.
-
-| mutation | structural current state | structural result |
+| write | structural current state | required complete snapshot |
 |---|---|---|
-| create | absent | pending, no checkpoint/outcome/abort, empty owns; output ref/base valid when declared |
-| running | pending | normal reservation requires terminal dependencies; marked abort reservation ignores dependencies |
-| checkpoint | running | complete replacement with phase |
-| own | running | newly created child names this owner; append once in same batch |
-| abort | pending or running | set mark; repeated helper call is idempotent |
-| completed/failed terminal | running and unmarked | terminal, matching outcome required, scratch retired |
-| aborted terminal | running and marked | terminal, aborted outcome required, scratch retired |
-| orphaned terminal | pending or running | terminal, orphaned outcome required, scratch retired |
-| any mutation of terminal | terminal | reject |
+| `task.create` | absent | pending, no checkpoint/outcome/abort, empty owns; ordinary/core token and output ref/base valid when declared |
+| reservation `task.set` | pending | running; normal reservation requires terminal dependencies, marked abort reservation ignores them |
+| progress `task.set` | running | running with complete checkpoint and/or complete immutable ownership list replacement |
+| mark `task.set` | pending or running | same lifecycle state with `abort:true`; repeated mark helper is idempotent |
+| completed/failed `task.set` | running and unmarked | terminal with matching outcome; scratch retirement follows snapshot |
+| aborted `task.set` | running and marked | terminal with aborted outcome; scratch retirement follows snapshot |
+| orphaned `task.set` | pending or running | terminal with orphaned outcome; scratch retirement follows snapshot |
+| any replacement of terminal | terminal | reject |
 
 Task-output creation/reference validation is whole-batch:
 
 - A no-output kind stores no ref and cannot receive one.
 - An output-capable task with no supplied ref stores `{ id: task.id, kind: spec.kind.kind }`; its one
-  protected initial list element is the same-batch `track(deepClone(spec.initial(input))).flush()` and
-  contains exactly one `r` base. The tracker owns that clone, never the author's returned object.
-- A supplied ref names an existing output with at least one live task reference in the current transaction
-  view and matches the durable output-kind string. A task invocation may pass its own ref to a task it is
+  protected initial list element is the same-batch `track(spec.initial(input)).flush()` and starts with one
+  `r` base. The initial value is transferred to the tracker; the author must not retain or mutate it.
+- A supplied ref names an output with at least one live reference in committed tasks or the builder's private
+  pending-task index and matches the durable output-kind string. A task invocation may pass its own ref to a task it is
   authorized to create; host code may share a live ref through its unrestricted task-creation authority.
-- Several creations/terminalizations use the prospective post-batch live reference set. No ref may target a
+- Several creations/terminalizations use the prospective post-commit live reference set. No ref may target a
   retired output.
-- Every decoded `Op` passes Chord shape/path validation and Pico deep strict-JSON validation.
-- A shared batch has one `list.append` to `defineList({type:"shared",id}, "pi.output")`, its element is the
-  exact nonempty central tracker flush, and `writerTaskId` currently references that output.
+- Every protected `list.append` to `defineList({type:"shared",id}, "pi.output")` is an exact nonempty
+  central-tracker flush and has private buffered provenance from a current `writerTaskId` that references
+  that output. One commit may contain several independently authorized appends.
 
-Every owned `conversation.create` has exactly one matching `task.own` in the same batch. Reject an unpaired
-side, ownership of an existing conversation, duplicate ownership or mismatched owner IDs. Conversation
-ownership and the corresponding task `owns` element are immutable after creation.
+Every owned `conversation.create` has one matching complete `task.set` snapshot in the same `Write[]` whose
+`owns` includes the new conversation. Reject an unpaired side, ownership of an existing conversation,
+duplicate ownership or mismatched owner IDs. Conversation ownership and the corresponding task `owns`
+element are immutable after creation.
 
 List removal rejects an element ID that never existed or belongs to another list. It is idempotent only for
-an existing same-list element already hidden/removed, and still consumes its buffered sequence. Clear is valid on an empty list and
-consumes a sequence. Reading any task-scope address after its task is terminal rejects `ScratchRetired` in
-all backends; it never returns an accidentally retained sidecar value.
+an existing same-list element already hidden/removed, and still consumes a write sequence. Clear is valid on
+an empty list and consumes a sequence. Reading any task-scope address after its task is terminal rejects
+`ScratchRetired` in all backends; it never returns an accidentally retained sidecar value.
 
-Transaction reads run while the line is exclusively held and see committed state only. Generic reads do
-not see buffered writes. Builder helpers and whole-batch validation maintain a private overlay of prior
-buffered writes so they can validate references to newly created objects and deduplicate a request key
-created earlier in the same batch. Authors carry values they just wrote rather than read them back.
+Explicit author-facing transaction reads run while the line is exclusively held and see committed state
+only. They are allowed only before the first buffered write; any later explicit read rejects
+`ReadAfterWrite`. There is no general transaction overlay and no read-your-writes. Semantic builder helpers
+may continue after writes by consulting narrow private pending/reference indexes for their own same-callback
+creations, request-key deduplication and structural validation. Those indexes are not exposed as readers;
+authors carry values they just wrote.
 
 ## 7. Transaction and capability surfaces
+
+Every runtime, host or conversation `commit` callback receives a synchronous write builder backed by one
+canonical `Write[]`. Creation/list-append builders synchronously call `Storage.nextId()`, validate and buffer;
+they never call `Storage.commit`. Explicit readers may await committed Storage only until the first write is buffered. After the
+callback succeeds, the Session validates once and invokes `Storage.commit` exactly once. Public one-operation
+mutators use the same transaction path.
 
 ### 7.1 Common readers and state builders
 
@@ -917,7 +923,8 @@ interface TxValue<T extends JsonValue> {
   delete(): void;
 }
 interface TxList<T extends JsonValue> {
-  read(query: ListQuery): Promise<Page<Element<T>>>;
+  read(): Promise<readonly Element<T>[]>;
+  read(at: Id): Promise<readonly Element<T>[]>;
   append(value: T): Id;
   remove(id: Id): void;
   clear(): void;
@@ -928,19 +935,22 @@ The aliases are:
 
 ```ts
 type AnyTaskKind = TaskKindBase;
+type AnyCoreTaskKind = CoreTaskKindBase;
+type AnyDefinedTaskKind = AnyTaskKind | AnyCoreTaskKind;
 type PayloadsOf<K> =
-  K extends TaskKind<infer I, infer C, infer R, infer F, infer A, infer O, false | true>
+  K extends TaskKind<infer I, infer C, infer R, infer F, infer A, infer O>
     ? { input: I; checkpoint: C; result: R; failure: F; aborted: A; output: O }
-    : never;
+    : K extends CoreTaskKind<infer I, infer C, infer R, infer F, infer A, infer O>
+      ? { input: I; checkpoint: C; result: R; failure: F; aborted: A; output: O }
+      : never;
 type InputOf<K> = PayloadsOf<K>["input"];
 type CheckpointOf<K> = PayloadsOf<K>["checkpoint"];
 type ResultOf<K> = PayloadsOf<K>["result"];
 type FailureOf<K> = PayloadsOf<K>["failure"];
 type AbortedOf<K> = PayloadsOf<K>["aborted"];
 type OutputOf<K> = PayloadsOf<K>["output"];
-type TurnOf<K extends TaskKindBase> = K["turn"];
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
-type TaskOf<K extends TaskKindBase> =
+type TaskOf<K extends AnyDefinedTaskKind> =
   DistributiveOmit<Task<InputOf<K>, CheckpointOf<K>, ResultOf<K>, FailureOf<K>, AbortedOf<K>>, "output"> &
   TaskOutputField<OutputOf<K>>;
 ```
@@ -948,10 +958,24 @@ type TaskOf<K extends TaskKindBase> =
 The implementation may use distributive helper aliases to satisfy TypeScript variance without weakening
 these public results. None may use `any`. Task-bound checkpoint methods exist only for the current kind.
 
-### 7.2 Admission-capable base transaction
+### 7.2 Internal admission-capable transaction
 
 ```ts
 interface Acceptance { readonly requestId?: string; readonly conversationId: Id; readonly inputId: Id }
+
+interface SendInput {
+  readonly requestId?: string;
+  readonly content: UserInput;
+  readonly whenBusy?: "followUp" | "steer" | "reject";
+}
+
+interface InputHandle {
+  readonly id: Id;
+  readonly conversationId: Id;
+  result(ctx: Context): Promise<InputResult | undefined>;
+  wait(ctx: Context): Promise<TerminalInputResult>;
+  abort(ctx: Context): Promise<"aborted" | "already_placed" | "not_found">;
+}
 
 type TaskSpec<I extends JsonValue, O extends object = never> = {
   readonly conversationId?: Id;
@@ -966,48 +990,66 @@ interface ConversationCreateSpec {
   readonly parent?: { readonly conversationId: Id; readonly at: Id };
 }
 
-interface BaseTaskTx<C extends TaskCheckpoint> extends TxReaders {
-  checkpoint(value: C): void;
-  task<K extends TaskKindBase, S extends TaskSpec<InputOf<K>, OutputOf<K>>>(
+interface TaskCreator<Kinds extends AnyDefinedTaskKind> {
+  task<K extends Kinds, S extends TaskSpec<InputOf<K>, OutputOf<K>>>(
     kind: K,
     spec: NoExtra<TaskSpec<InputOf<K>, OutputOf<K>>, S> & {
       readonly input: ExactJsonInput<InputOf<K>, S["input"]>;
     },
   ): Id;
+}
+
+interface TaskTxBase<C extends TaskCheckpoint> extends TxReaders {
+  checkpoint(value: C): void;
   createConversation(spec: ConversationCreateSpec): Id;
   value<T extends JsonValue>(address: Value<T>): TxValue<T>;
   list<T extends JsonValue>(address: List<T>): TxList<T>;
-  accept(conversationId: Id, options: AcceptOptions): Promise<Acceptance>;
+}
+
+type BaseTaskTx<C extends TaskCheckpoint> =
+  TaskTxBase<C> & TaskCreator<AnyTaskKind>;
+
+interface InternalAdmissionTx {
+  accept(conversationId: Id, options: InternalAcceptOptions): Promise<Acceptance>;
   queueInput(conversationId: Id, input: QueuedInput): Promise<Acceptance>;
   write<E extends Entry>(conversationId: Id, kind: EntryKind<E>, input: EntryInput<E>, requestId?: string): Promise<Acceptance>;
 }
 
-interface TurnTaskTx<C extends TaskCheckpoint> extends BaseTaskTx<C> {
-  entry<E extends Entry>(kind: EntryKind<E>, conversationId: Id, input: EntryInput<E>): Id;
-}
+type CoreTaskTx<C extends TaskCheckpoint> =
+  TaskTxBase<C> & TaskCreator<AnyDefinedTaskKind> & InternalAdmissionTx & {
+    entry<E extends Entry>(kind: EntryKind<E>, conversationId: Id, input: EntryInput<E>): Id;
+  }
 ```
 
-A conversation-bound variant omits explicit `conversationId`. In a task transaction, omitted task target
+Ordinary task authors receive `BaseTaskTx` and can instantiate only ordinary `TaskKind` tokens. Fixed
+core definitions receive `CoreTaskTx`; its `task` method uses the same spelling but accepts either an
+ordinary child token or one of Pico's fixed `CoreTaskKind` tokens. Thus generation can atomically create
+tool and post_tools tasks, while plugin tasks cannot instantiate any core kind. `CoreTaskTx` also contains
+direct entry and protected admission authority. A conversation-bound
+internal variant omits explicit `conversationId`. In a task transaction, omitted task target
 conversation means the current task's conversation. Explicit targets must be that conversation or a
 conversation in its ownership subtree, including one created earlier in the batch. `createConversation`
-automatically records `owner=current task` plus `task.own`; a host transaction creates an independent
-conversation unless an internal owner authority is supplied. Its optional parent must be the current
+automatically records `owner=current task` plus a complete replacement task snapshot containing the new
+ownership; a host transaction creates an independent conversation unless an internal owner authority is supplied. Its optional parent must be the current
 conversation or one in the current task's owned subtree; a task cannot inherit transcript/state from an
 unrelated tree. A parent may be combined with ownership.
 Data-only appends use the capability-restricted typed `entry` method with an `EntryKind`; there is no
-parallel untyped `record` API. `accept`, `queueInput` and `write` are asynchronous because request-key lookup is
-a committed storage read; after that read they synchronously buffer all writes. They do not reenter the
-line and may operate on a conversation created earlier in the same transaction. This permits one atomic
-batch to create an owned child, copy state, accept its first input, create its first generation and
-checkpoint the child/input IDs.
+parallel untyped `record` API. `accept`, `queueInput` and `write` are protected transaction helpers, not
+ordinary public conversation methods. They remain available where built-ins must atomically compose child
+creation, initial values, first input, first generation and a parent checkpoint. They are asynchronous because request-key lookup
+may require a committed storage read; when invoked before any write they perform that read first, then synchronously buffer all
+writes. After writes, they may use only their narrow private request/pending indexes and reject any path that
+would require a new explicit read. They never reenter the line and may target a conversation created earlier
+in the callback through its pending reference. To atomically create an owned child, copy state, accept its
+first input, create its first generation and checkpoint the child/input IDs, the author performs every
+explicit source read first and then buffers the complete composition.
 
-Direct entry authorization and admission helpers are distinct. A non-turn helper may buffer an authorized
-model-visible append after validating placement; casting to `TurnTaskTx` and calling direct `entry` fails
-runtime authorization. Every builder records private provenance for validation; storage sees only the
-resulting mutation algebra.
-
-A task may create another declared `turn:true` kind. That child kind owns the advanced contract. Generic
-task creation does not transfer direct-entry capability to the caller.
+Direct entry authorization and admission helpers are distinct. Core code may buffer an authorized
+model-visible append after validating placement. An ordinary runtime constructs only `BaseTaskTx`; a cast
+cannot add the absent `entry` or protected admission methods. Every builder records private provenance for
+validation; storage sees only the resulting mutation algebra. No new invocation-authority mode is needed:
+the fixed dispatcher chooses the concrete runtime/builder implementation, while the existing invocation
+identity continues only to fence stale writes and cancellation.
 
 ### 7.3 Runtime and restricted conversation handle
 
@@ -1018,7 +1060,8 @@ interface PublicValue<T extends JsonValue> {
   delete(ctx: Context): Promise<void>;
 }
 interface PublicList<T extends JsonValue> {
-  read(query: ListQuery, ctx: Context): Promise<Page<Element<T>>>;
+  read(ctx: Context): Promise<readonly Element<T>[]>;
+  read(at: Id, ctx: Context): Promise<readonly Element<T>[]>;
   append(value: T, ctx: Context): Promise<Id>;
   remove(id: Id, ctx: Context): Promise<void>;
   clear(ctx: Context): Promise<void>;
@@ -1050,28 +1093,19 @@ type FinalOutput<O extends object> = [O] extends [never]
 
 interface TaskConversation {
   readonly id: Id;
-  accept(options: AcceptOptions, ctx: Context): Promise<Acceptance>;
-  queueInput(input: QueuedInput, ctx: Context): Promise<Acceptance>;
-  write<E extends Entry>(kind: EntryKind<E>, input: EntryInput<E>, requestId: string | undefined, ctx: Context): Promise<Acceptance>;
-  result(inputId: Id, ctx: Context): Promise<InputResult | undefined>;
-  waitForInput(inputId: Id, ctx: Context): Promise<TerminalInputResult>;
-  abortInput(inputId: Id, ctx: Context): Promise<"aborted" | "already_placed" | "not_found">;
+  send(input: SendInput, ctx: Context): Promise<InputHandle>;
   value<T extends JsonValue>(address: Value<T>): PublicValue<T>;
   list<T extends JsonValue>(address: List<T>): PublicList<T>;
 }
 
 interface AbortTaskConversation {
   readonly id: Id;
-  write<E extends Entry>(kind: EntryKind<E>, input: EntryInput<E>, requestId: string | undefined, ctx: Context): Promise<Acceptance>;
-  result(inputId: Id, ctx: Context): Promise<InputResult | undefined>;
-  waitForInput(inputId: Id, ctx: Context): Promise<TerminalInputResult>;
   value<T extends JsonValue>(address: Value<T>): PublicValue<T>;
   list<T extends JsonValue>(address: List<T>): PublicList<T>;
 }
 
-interface BaseTaskRuntime<I extends JsonValue, C extends TaskCheckpoint, O extends object = never> {
+interface TaskRuntimeBase {
   readonly taskId: Id;
-  commit<T>(build: (tx: BaseTaskTx<C>, current: RunningTask<I, C, O>) => T | Promise<T>, ctx: Context): Promise<T>;
   scratch<T>(build: (tx: ScratchTx) => T | Promise<T>, ctx: Context): Promise<T>;
   conversation(id: Id, ctx: Context): Promise<TaskConversation | undefined>;
   waitForTask(id: Id, ctx: Context): Promise<Task>;
@@ -1079,13 +1113,13 @@ interface BaseTaskRuntime<I extends JsonValue, C extends TaskCheckpoint, O exten
   now(): number;
   sleep(untilMs: number, ctx: Context): Promise<void>;
 }
-interface TurnTaskRuntime<I extends JsonValue, C extends TaskCheckpoint, O extends object = never>
-  extends Omit<BaseTaskRuntime<I, C, O>, "commit"> {
-  commit<T>(build: (tx: TurnTaskTx<C>, current: RunningTask<I, C, O>) => T | Promise<T>, ctx: Context): Promise<T>;
+interface CommitRuntime<I extends JsonValue, C extends TaskCheckpoint, O extends object, Tx> {
+  commit<T>(build: (tx: Tx, current: RunningTask<I, C, O>) => T | Promise<T>, ctx: Context): Promise<T>;
 }
-type RuntimeFor<I extends JsonValue, C extends TaskCheckpoint, O extends object,
-                T extends false | true> =
-  (T extends true ? TurnTaskRuntime<I, C, O> : BaseTaskRuntime<I, C, O>) & RuntimeOutput<O>;
+type TaskRuntime<I extends JsonValue, C extends TaskCheckpoint, O extends object = never> =
+  TaskRuntimeBase & CommitRuntime<I, C, O, BaseTaskTx<C>> & RuntimeOutput<O>;
+type CoreTaskRuntime<I extends JsonValue, C extends TaskCheckpoint, O extends object = never> =
+  TaskRuntimeBase & CommitRuntime<I, C, O, CoreTaskTx<C>> & RuntimeOutput<O>;
 ```
 
 `runtime.conversation`, `waitForTask` and `abortTask` accept only targets in the current task's ownership
@@ -1095,18 +1129,21 @@ normal lifecycle validation. This generic rule does not let one task resolve a c
 sibling task. The future gated ordinary-tool descendant resolver required by section 14.3 is the narrow
 exception; it will not broaden `runtime.conversation` or `TaskConversation`.
 
-`TaskConversation` has no raw commit, direct entry, drive, close, shutdown, delete or host-wide registry
-methods. Task operations capture the expected invocation when the runtime/handle is constructed. Every
-supplied Context must contain that exact current invocation object. An absent, foreign or stale identity
+`TaskConversation` has no raw commit, direct entry, close, shutdown, delete or host-wide registry methods.
+An `InputHandle` returned to a task is likewise invocation-bound. Task operations capture the expected
+invocation when the runtime/handle is constructed. Every supplied Context must contain that exact current
+invocation object. An absent, foreign or stale identity
 rejects; task methods never fall back to host authority.
 
 Exactly one authoritative Chord tracker is hydrated per live output ID. `read` snapshots it without exposing
-a retained proxy. `mutate` invokes its callback synchronously on the commit line against the central proxy,
-flushes one nonempty delta, and commits that delta in one shared batch before resolving. Requiring an
+a retained proxy. `mutate` invokes its callback synchronously on the commit line against the central proxy, flushes one
+nonempty delta, and buffers its authorized append in the callback's canonical `Write[]`; the Session commits
+that array once before resolving. Requiring an
 `undefined` return rejects async callbacks at compile time. The callback cannot retain the proxy, call
 another runtime method, or mutate after returning. Objects inserted through the proxy become tracker-owned;
-the author must not retain and later mutate their raw references. If the callback throws, returns a thenable, or causes Chord/strict-JSON validation to fail, nothing commits or
-publishes and the session fail-stops before releasing the line. The poisoned in-memory tracker is never used
+the author must not retain and later mutate their raw references. If the callback throws, returns a thenable,
+or causes tracker application to fail, nothing commits or publishes and the session fail-stops before
+releasing the line. The poisoned in-memory tracker is never used
 again; reopen reconstructs it from durable deltas. This avoids cloning the growing output before every delta.
 `replace` uses the same tracker's `state` setter and commit path. Concurrent task writes serialize in global
 commit order. Any persistence failure after tracker mutation also fail-stops. No observer sees uncommitted
@@ -1116,74 +1153,78 @@ identity or structural TypeScript compatibility.
 ### 7.4 Terminal and abort transactions
 
 ```ts
-interface TerminalTx<C extends TaskCheckpoint> extends BaseTaskTx<C> {}
-interface TurnTerminalTx<C extends TaskCheckpoint> extends TurnTaskTx<C> {}
-
-type FinalTx<C extends TaskCheckpoint, O extends object, T extends false | true> =
-  (T extends true ? TurnTerminalTx<C> : TerminalTx<C>) & FinalOutput<O>;
-
-type TerminalClosure<I extends JsonValue, C extends TaskCheckpoint,
-                     R extends JsonValue, F extends JsonValue,
-                     O extends object, T extends false | true> =
-  (tx: FinalTx<C, O, T>, current: RunningTask<I, C, O>) =>
+type TerminalClosureFor<Tx, I extends JsonValue, C extends TaskCheckpoint,
+                        R extends JsonValue, F extends JsonValue, O extends object> =
+  (tx: Tx & FinalOutput<O>, current: RunningTask<I, C, O>) =>
     Completion<R, F> | Promise<Completion<R, F>>;
+type FinalTx<C extends TaskCheckpoint, O extends object> = BaseTaskTx<C> & FinalOutput<O>;
+type CoreFinalTx<C extends TaskCheckpoint, O extends object> = CoreTaskTx<C> & FinalOutput<O>;
+type TerminalClosure<I extends JsonValue, C extends TaskCheckpoint,
+                     R extends JsonValue, F extends JsonValue, O extends object> =
+  TerminalClosureFor<BaseTaskTx<C>, I, C, R, F, O>;
+type CoreTerminalClosure<I extends JsonValue, C extends TaskCheckpoint,
+                         R extends JsonValue, F extends JsonValue, O extends object> =
+  TerminalClosureFor<CoreTaskTx<C>, I, C, R, F, O>;
 
 interface AbortTx<C extends TaskCheckpoint> extends TxReaders {
   checkpoint(value: C): void;
   value<T extends JsonValue>(address: Value<T>): TxValue<T>;
   list<T extends JsonValue>(address: List<T>): TxList<T>;
-  write<E extends Entry>(conversationId: Id, kind: EntryKind<E>, input: EntryInput<E>, requestId?: string): Promise<Acceptance>;
   markTask(id: Id): Promise<"marked" | "terminal">;
 }
-interface TurnAbortTx<C extends TaskCheckpoint> extends AbortTx<C> {
+interface CoreAbortTx<C extends TaskCheckpoint> extends AbortTx<C> {
   entry<E extends Entry>(kind: EntryKind<E>, conversationId: Id, input: EntryInput<E>): Id;
+  write<E extends Entry>(conversationId: Id, kind: EntryKind<E>, input: EntryInput<E>, requestId?: string): Promise<Acceptance>;
 }
-type AbortFinalTx<C extends TaskCheckpoint, O extends object, T extends false | true> =
-  (T extends true ? TurnAbortTx<C> : AbortTx<C>) & FinalOutput<O>;
-
+type AbortClosureFor<Tx, I extends JsonValue, C extends TaskCheckpoint,
+                     A extends JsonValue, O extends object> =
+  (tx: Tx & FinalOutput<O>, current: RunningTask<I, C, O>) => A | Promise<A>;
+type AbortFinalTx<C extends TaskCheckpoint, O extends object> = AbortTx<C> & FinalOutput<O>;
+type CoreAbortFinalTx<C extends TaskCheckpoint, O extends object> = CoreAbortTx<C> & FinalOutput<O>;
 type AbortClosure<I extends JsonValue, C extends TaskCheckpoint,
-                  A extends JsonValue, O extends object, T extends false | true> =
-  (tx: AbortFinalTx<C, O, T>, current: RunningTask<I, C, O>) => A | Promise<A>;
+                  A extends JsonValue, O extends object> =
+  AbortClosureFor<AbortTx<C>, I, C, A, O>;
+type CoreAbortClosure<I extends JsonValue, C extends TaskCheckpoint,
+                      A extends JsonValue, O extends object> =
+  AbortClosureFor<CoreAbortTx<C>, I, C, A, O>;
 
-interface BaseAbortRuntime<I extends JsonValue, C extends TaskCheckpoint, O extends object = never> {
+interface AbortRuntimeBase {
   readonly taskId: Id;
-  commit<T>(build: (tx: AbortTx<C>, current: RunningTask<I, C, O>) => T | Promise<T>, ctx: Context): Promise<T>;
   scratch<T>(read: (scratch: ScratchReader) => T | Promise<T>, ctx: Context): Promise<T>;
   conversation(id: Id, ctx: Context): Promise<AbortTaskConversation | undefined>;
   waitForTask(id: Id, ctx: Context): Promise<Task>;
   abortTask(id: Id, ctx: Context): Promise<"marked" | "terminal">;
   now(): number;
 }
-interface TurnAbortRuntime<I extends JsonValue, C extends TaskCheckpoint, O extends object = never>
-  extends Omit<BaseAbortRuntime<I, C, O>, "commit"> {
-  commit<T>(build: (tx: TurnAbortTx<C>, current: RunningTask<I, C, O>) => T | Promise<T>, ctx: Context): Promise<T>;
-}
-type AbortRuntimeFor<I extends JsonValue, C extends TaskCheckpoint, O extends object,
-                     T extends false | true> =
-  (T extends true ? TurnAbortRuntime<I, C, O> : BaseAbortRuntime<I, C, O>) & AbortRuntimeOutput<O>;
+type AbortTaskRuntime<I extends JsonValue, C extends TaskCheckpoint, O extends object = never> =
+  AbortRuntimeBase & CommitRuntime<I, C, O, AbortTx<C>> & AbortRuntimeOutput<O>;
+type CoreAbortTaskRuntime<I extends JsonValue, C extends TaskCheckpoint, O extends object = never> =
+  AbortRuntimeBase & CommitRuntime<I, C, O, CoreAbortTx<C>> & AbortRuntimeOutput<O>;
 ```
 
-Abort runtime exposes repeated restricted commits with the same surface as `AbortTx`, plus scratch reads
-but no scratch writes. It cannot create tasks/conversations, delete conversations, call `accept`, queue
-steer/followUp/nextRun, or drive. `write` in abort is restricted to passive `mode:"write"`; it may append
-immediately only when safe and otherwise remains queued. Turn abort keeps direct entry authority so a tool
-can atomically publish its aborted tool result. Marking immediately revokes the normal invocation's
+Ordinary abort runtime exposes repeated restricted commits with `AbortTx`, plus scratch reads but no scratch
+writes. It cannot create tasks/conversations, append entries, delete conversations, send or queue input.
+Fixed core abort receives `CoreAbortTx`, which adds direct entry authority plus only the passive protected
+`write` helper; it cannot create future work. This lets the core tool adapter atomically publish an aborted
+tool result and lets core cleanup queue a boundary-safe passive write. Marking immediately revokes the normal invocation's
 `TaskOutput` mutation authority before signaling its context. Fresh abort receives only
 `ReadonlyTaskOutput`: `ref` and `read`, never `mutate`/`replace`. Its final closure receives a detached
 `tx.output` snapshot captured on the line so it can persist final output-derived data in the same main batch
 as terminalization and possible last-reference retirement. Checkpoint replacement is allowed during lengthy
 fresh cleanup; a crash reruns abort from the newest checkpoint because the durable mark remains.
 
-Terminal closures run on the line after all effects and producer joins. They may await transaction storage
-reads and mint same-batch IDs, but may not perform external effects, hooks, sleeps, waits or nested runtime
-operations. The harness then adds `task.terminal` with the returned outcome. A throwing closure persists
-nothing and faults the session. Abort/close/fault may discard a normal closure without invoking it.
-Uncertain persistence fail-stops and does not retry the closure on that handle.
+Terminal closures run on the line after all effects and producer joins. They may await explicit committed
+reads before buffering their first write and may then mint same-commit IDs, but may not perform external
+effects, hooks, sleeps, waits or nested runtime operations. The kernel then buffers one full terminal
+`task.set` snapshot with the returned outcome. A throwing closure persists nothing and faults the session.
+Abort/close/fault may discard a normal closure without invoking it. Uncertain persistence fail-stops and
+does not retry the closure on that handle.
 
 ### 7.5 Host transactions and foundation handles
 
-Host transactions are not task invocations. They may append model-affecting entries directly only when
-`inTurn` is empty; otherwise direct append rejects and `write` is required.
+Host transactions are not task invocations. Public host transactions may append model-affecting entries
+directly only when no fixed turn task is live; otherwise direct append rejects. Protected built-in
+transactions use the internal `write` helper when boundary-safe queuing is required.
 
 ```ts
 interface HostTx extends TxReaders {
@@ -1198,12 +1239,9 @@ interface HostTx extends TxReaders {
   value<T extends JsonValue>(address: Value<T>): TxValue<T>;
   list<T extends JsonValue>(address: List<T>): TxList<T>;
   entry<E extends Entry>(kind: EntryKind<E>, conversationId: Id, input: EntryInput<E>): Id;
-  accept(conversationId: Id, options: AcceptOptions): Promise<Acceptance>;
-  queueInput(conversationId: Id, input: QueuedInput): Promise<Acceptance>;
-  write<E extends Entry>(conversationId: Id, kind: EntryKind<E>, input: EntryInput<E>, requestId?: string): Promise<Acceptance>;
 }
 
-interface ConversationTx extends Omit<HostTx, "task" | "entry" | "accept" | "queueInput" | "write"> {
+interface ConversationTx extends Omit<HostTx, "task" | "entry"> {
   task<K extends TaskKindBase,
        S extends Omit<TaskSpec<InputOf<K>, OutputOf<K>>, "conversationId">>(
     kind: K,
@@ -1212,21 +1250,21 @@ interface ConversationTx extends Omit<HostTx, "task" | "entry" | "accept" | "que
     },
   ): Id;
   entry<E extends Entry>(kind: EntryKind<E>, input: EntryInput<E>): Id;
-  accept(options: AcceptOptions): Promise<Acceptance>;
+}
+
+interface InternalConversationAdmissionTx {
+  accept(options: InternalAcceptOptions): Promise<Acceptance>;
   queueInput(input: QueuedInput): Promise<Acceptance>;
   write<E extends Entry>(kind: EntryKind<E>, input: EntryInput<E>, requestId?: string): Promise<Acceptance>;
 }
+type InternalHostTx = HostTx & InternalAdmissionTx;
+type InternalConversationTx = ConversationTx & InternalConversationAdmissionTx;
 
 interface ConversationHandle {
   readonly id: Id;
   commit<T>(build: (tx: ConversationTx) => T | Promise<T>, ctx: Context): Promise<T>;
-  accept(options: AcceptOptions, ctx: Context): Promise<Acceptance>;
-  queueInput(input: QueuedInput, ctx: Context): Promise<Acceptance>;
-  write<E extends Entry>(kind: EntryKind<E>, input: EntryInput<E>, requestId: string | undefined, ctx: Context): Promise<Acceptance>;
-  result(inputId: Id, ctx: Context): Promise<InputResult | undefined>;
-  waitForInput(inputId: Id, ctx: Context): Promise<TerminalInputResult>;
-  abortInput(inputId: Id, ctx: Context): Promise<"aborted" | "already_placed" | "not_found">;
-  drive(ctx: Context): Promise<"idle" | "closed">;
+  send(input: SendInput, ctx: Context): Promise<InputHandle>;
+  waitForIdle(ctx: Context): Promise<"idle" | "closed">;
   abort(ctx: Context): Promise<void>;
   fork(options: { readonly at: Id | "start"; readonly abort?: boolean }, ctx: Context): Promise<ConversationHandle>;
   collapse(options: { readonly instructions?: string } | undefined, ctx: Context): Promise<Id>;
@@ -1239,18 +1277,24 @@ interface Harness {
   root(ctx: Context): Promise<ConversationHandle>;
   conversation(id: Id, ctx: Context): Promise<ConversationHandle | undefined>;
   commit<T>(build: (tx: HostTx) => T | Promise<T>, ctx: Context): Promise<T>;
-  acceptance(requestId: string, ctx: Context): Promise<Acceptance | undefined>;
+  input(requestId: string, ctx: Context): Promise<InputHandle | undefined>;
   getEntry(id: Id, ctx: Context): Promise<Entry | undefined>;
   getTask(id: Id, ctx: Context): Promise<Task | undefined>;
+  waitForIdle(ctx: Context): Promise<"idle" | "closed">;
   abortTask(id: Id, ctx: Context): Promise<"marked" | "terminal">;
-  drive(ctx: Context): Promise<"idle" | "closed">;
+  resume(ctx: Context): Promise<void>;
   close(ctx: Context): Promise<void>;
   shutdown(ctx: Context): Promise<void>;
 }
 ```
 
 There is no partial public harness or feature-not-installed facade. Leaf packages are tested directly.
-The single `Harness` is exported only when its required built-in dependencies are implemented.
+The single `Harness` is exported only when its required built-in dependencies are implemented. `send`
+first commits or deduplicates durable admission, then non-abandoningly ensures scheduler activation, and only
+then returns; it never waits for generation. Caller cancellation after admission cannot strand the accepted
+input, and a request-key retry still returns its original handle. `waitForIdle`, task waits, input waits and
+abort operations are observation/progress operations: they idempotently ensure the one session scheduler is
+resumed, but a waiter never owns execution.
 
 ## 8. Input admission and boundaries
 
@@ -1268,7 +1312,7 @@ interface StoredEntryDraft {
 }
 
 type QueuedInput =
-  | { readonly mode: "steer" | "followUp" | "nextRun"; readonly input: UserInput; readonly requestId?: string }
+  | { readonly mode: "steer" | "followUp"; readonly input: UserInput; readonly requestId?: string }
   | { readonly mode: "write"; readonly entry: StoredEntryDraft; readonly requestId?: string };
 
 type InputResult =
@@ -1280,20 +1324,39 @@ type InputResult =
 
 type TerminalInputResult = Extract<InputResult, { status: "done" | "unanswered" }>;
 
-interface AcceptOptions {
+type QueueMode = "all" | "one-at-a-time";
+
+interface InternalAcceptOptions {
   readonly input: UserInput;
   readonly requestId?: string;
   readonly whenBusy?: "followUp" | "steer" | "reject";
 }
+
+// Public facade: send(input, ctx) returns InputHandle after this internal operation commits.
 ```
 
-The protected sticky list `pi.inbox` stores `QueuedInput`; its element ID is `inputId`. Protected sticky
-values store `InputResult` by input ID and `Acceptance` by session-wide request key. A request key names the
-first acceptance for the session lifetime. Request-key lookup occurs before conversation, busy, payload or
-mode comparison. Duplicate `accept`, `queueInput` or `write` returns the original receipt and buffers
-nothing, even when the retry supplied different data.
+The protected `pi.inbox` address is a conversation-scoped sticky (`rewind:false`) list bound to exactly one
+conversation. It is not inherited by forks. It stores `QueuedInput`; each list-element ID is the `inputId`,
+and ascending element IDs preserve Session admission order. Protected sticky values store `InputResult`
+directly by input ID and `Acceptance` directly by session-wide request key. Result/receipt lookup is always a
+point lookup in that protected state, never a transcript or inbox list scan. `Conversation.send` converts
+`SendInput.content` to the internal accepted user input and returns an `InputHandle` bound to the accepted
+input and its original conversation.
 
-Only protected admission/boundary helpers write input results, using this transition table:
+Inbox reads expose one complete current materialized ordered collection. MemoryStorage retains that
+collection directly; JSONL replays list operations once at open and then maintains it; SQLite reads all
+current indexed rows in element-ID order and may physically delete rows on remove/clear. No backend replays
+from the last clear on each inbox read. Historical
+rewindable-list operation storage and fork-capped reads are unrelated to this sticky protected list.
+
+A request key names the first acceptance for the Session lifetime. Lookup occurs before conversation, busy
+mode or payload comparison. A duplicate `send` returns a handle for the original acceptance and buffers
+nothing, even when retried through another conversation with different content. The internal `accept`,
+`queueInput` and `write` helpers obey the same first-key-wins rule.
+
+Only protected admission/boundary helpers write input results, using this transition table. Enqueue,
+removal, result/receipt changes, entry placement and task creation selected by one admission/boundary decision
+remain one main transaction:
 
 ```text
 absent                    -> queued
@@ -1321,7 +1384,7 @@ The foundation does not guess a provider generation payload. Input placement rec
 
 ```ts
 interface InternalBoundaryTx extends TxReaders {
-  task<K extends TaskKindBase,
+  task<K extends CoreTaskKindBase,
        S extends TaskSpec<InputOf<K>, OutputOf<K>> & { readonly conversationId: Id }>(
     kind: K,
     spec: NoExtra<TaskSpec<InputOf<K>, OutputOf<K>> & { readonly conversationId: Id }, S> & {
@@ -1329,7 +1392,7 @@ interface InternalBoundaryTx extends TxReaders {
     },
   ): Id;
 }
-interface InternalGenerationAdmission<K extends TaskKindBase = TaskKindBase> {
+interface InternalGenerationAdmission<K extends CoreTaskKindBase = CoreTaskKindBase> {
   readonly kind: K;
   create(
     tx: InternalBoundaryTx,
@@ -1340,62 +1403,109 @@ interface InternalGenerationAdmission<K extends TaskKindBase = TaskKindBase> {
 ```
 
 This is a private admission-module/test seam, not a public Harness option. The callback runs inside the
-current transaction and may perform transaction reads plus one task creation;
-it cannot append entries, mutate state, perform effects or enter the line. Validation requires exactly one
-new task in the registered core generation slot, in `conversationId`, with materialized `turn:true`, and
-requires its returned ID to be that task. The expected token/name is `strategy.kind`; production wiring
-supplies the registered generation-slot token. Accounting for exactly the supplied input IDs is the trusted
+current transaction and may perform committed transaction reads before buffering its one task creation;
+it cannot append entries, mutate state, perform effects or enter the line. Validation requires exactly one new task in the fixed core generation slot in `conversationId` and requires
+its returned ID to be that task. The expected token/name is `strategy.kind`; production wiring supplies the
+fixed generation token. Accounting for exactly the supplied input IDs is the trusted
 strategy's typed obligation; the erased kernel cannot inspect an arbitrary generation input to prove it.
-WP5 tests supply a minimal typed generation kind; the provider package supplies the production strategy.
+WP5 tests supply a minimal `defineCoreTask` generation definition; the provider package supplies the fixed
+production strategy.
 
 ### 8.3 Busy and placement predicates
 
-`inTurn(conversation)` means at least one live task in that conversation has stored `turn:true`, regardless
-of foreground/background. This is transcript admission busy, not drive idleness and not proof of input
-ownership.
+`admissionBusy(conversation)` means at least one live task directly in that conversation has kind
+`pi.generation`, `pi.tool` or `pi.post_tools`, regardless of foreground/background. The predicate is evaluated
+against the prospective complete task set for a transaction. It is transcript-admission state, not scheduler
+eligibility, idle observation or proof of input ownership. A speculative collapse has core transcript
+authority but is not in the fixed turn-task set. Ordinary plugin tasks never make a conversation admission-busy.
 
-- `accept` when `inTurn` is empty performs an idle admission transaction: drain older queued writes; combine
-  older queued steer/followUp/nextRun in admission order with the new input; append their user entries;
-  create one built-in generation owning those input IDs; mark each placed. The newly accepted input is last
-  among older queued items. `whenBusy` is irrelevant.
-- `accept` when `inTurn` is nonempty queues `followUp` by default, queues `steer` when requested, or throws
-  `ConversationBusy` and writes no request receipt when `reject` is requested.
-- `write` appends and completes immediately when `inTurn` is empty; otherwise it queues.
-- Explicit `nextRun` is never placed merely because turn activity ends; it joins the next explicit idle
-  `accept`.
+- `send` when `admissionBusy` is empty performs one idle admission transaction: select all older writes, and
+  all or the oldest steer/followUp according to their respective `QueueMode`; merge selected items in global
+  inbox order, then append the new input last; create one built-in generation owning those input IDs; mark
+  each placed; store any request receipt; commit. `whenBusy` is irrelevant. The successful main commit
+  kicks the scheduler. After that durable commit resolves, `send` non-abandoningly ensures the scheduler is
+  resumed before returning.
+- `send` when `admissionBusy` is nonempty queues `followUp` by default, queues `steer` when requested, or
+  throws `ConversationBusy` and writes no request receipt when `reject` is requested. It creates no task at
+  admission; the harmless main-commit kick still occurs.
+- Internal `write` appends and completes immediately when `admissionBusy` is empty; otherwise it queues.
 
 Boundary operations are transaction helpers, not nested commits:
 
-- **post-tools boundary:** place queued writes, then steering in admission order; steering joins the active
-  input group. FollowUp and nextRun remain queued.
-- **final-answer boundary:** resolve the active group to the answer; place writes; place steer then followUp
-  in admission order into a new group and create its generation. nextRun remains queued.
-- **idle-turn boundary:** when a normal terminal batch changes `inTurn` from nonempty to empty and creates
-  no turn successor, Pico automatically places writes and places steer/followUp into a new generation.
-  nextRun remains queued. This covers a solitary speculative collapse and a well-behaved custom turn.
+- **post-tools boundary:** select all writes and all or the oldest steer according to `steeringMode`, merge
+  selected items in global inbox order, and place them. Steering joins the active input group. FollowUp
+  remains queued.
+- **final-answer boundary:** resolve the active group to the answer; select all writes plus all or the oldest
+  steer/followUp according to `steeringMode`/`followUpMode`; merge selected items in global inbox order, place
+  them into a new group and create its generation.
+- **idle-turn boundary:** when a normal core terminal batch changes the prospective fixed turn-task set from
+  nonempty to empty and creates no fixed turn-task successor, Pico applies the same final-boundary queue-mode
+  selection and creates its new generation. Core code remains responsible for resolving its active input group;
+  the kernel never interprets a core payload or checkpoint.
 - **abort boundary:** no automatic generation or queue drain. Conversation abort separately withdraws
-  queued steer/followUp; task abort preserves queues. A later idle accept can consume preserved items.
+  queued steer/followUp; task abort preserves queues. A later idle send can consume preserved items.
+
+Canonical trace:
+
+```text
+idle send A
+TX[user A; generation G1(inputs:[A]); result A=placed; receipt]
+kick -> G1
+
+G1 calls X,Y
+TX[assistant calls; tool X; tool Y; post_tools P1(after:[X,Y],inputs:[A]);
+   terminal G1]
+kick -> X and Y concurrently
+
+busy send B(default followUp) -> TX[inbox B; result B=queued; receipt]
+busy send S(steer)            -> TX[inbox S; result S=queued; receipt]
+busy internal write W         -> TX[inbox W; result W=queued]
+
+X and Y finish in either order
+TX[tool result X; terminal X]
+TX[tool result Y; terminal Y]
+model projection orders those result messages by the assistant's call order
+
+P1 boundary
+TX[write W; user S; result S=placed;
+   generation G2(inputs:[A,S]); terminal P1]
+kick -> G2
+
+G2 final answer E2
+TX[assistant E2; A/S=done(answer:E2); user B; B=placed;
+   generation G3(inputs:[B]); terminal G2]
+kick -> G3
+```
+
+`steeringMode` and `followUpMode` are independent built-in `QueueMode` settings and default to
+`"one-at-a-time"`, matching the old lane harness. `"all"` selects every queued item of that tag;
+`"one-at-a-time"` selects only its oldest item. Selection never reorders the one inbox: selected tags are
+merged in global element-ID order and unselected items keep their relative order. There is no queue-size or
+drain-size bound in v1. An idle internal write appends and becomes `done` without creating work. Applications
+that need speculative staged context for a later explicit turn
+store it in their own sticky conversation list and fold it into that later `send`. No send creates a giant
+turn task or immutable task-per-send dependency chain.
 
 Normal terminal finalization uses this exact order:
 
 ```text
 invoke returned closure and buffer its writes
 obtain its completed/failed outcome
-buffer task.terminal
-compute prospective inTurn from committed live tasks plus the whole buffered batch
+buffer the complete terminal task.set snapshot
+compute prospective admissionBusy from committed live tasks plus the whole buffered Write[]
 when eligible, append idle-boundary inbox/result/entry/generation mutations
 validate and persist the complete batch
 ```
 
-The terminal mutation and automatic boundary are one atomic main batch. Abort, orphan reconciliation,
+The terminal snapshot and automatic boundary are one atomic `Write[]` commit. Abort, orphan reconciliation,
 close and fault never run automatic idle-boundary augmentation. WP5 implements the pure prospective planner;
 WP6 integrates it with normal closure finalization.
 
-If a speculative collapse completes while a generation/tool/post_tools task remains live, no idle boundary
-runs; the built-in owner processes the inbox later. If collapse is the sole turn task, its normal terminal
-commit triggers the idle boundary, so listener input cannot starve. A third-party turn author may explicitly
-use post-tools/final helpers when it owns an input group. If it simply ends as the last turn task, the idle
-boundary is the least-footgun fallback. Pico never infers or resolves a custom kind's private input group.
+A speculative collapse never contributes to `admissionBusy`; an idle `send` may therefore create generation
+work while collapse runs. If collapse completes while a generation/tool/post_tools task remains live, no idle
+boundary runs; the fixed core owner processes the inbox later. Ordinary third-party tasks cannot own an
+input group or participate in the turn-task set. Pico never infers or resolves an ordinary kind's private
+payload as an input group.
 
 Input ownership for built-in turns is explicit `inputs: readonly Id[]` in generation/post_tools input or
 checkpoint. Exactly one live built-in generation or post_tools owns each placed active group, and ownership
@@ -1403,49 +1513,42 @@ transfers in the same terminal batch. Generic scheduling never scans arbitrary c
 
 ### 8.4 Withdrawing input
 
-`abortInput(id)` serializes with placement. If the queued item belongs to this conversation, it atomically
-removes it and writes terminal `unanswered/aborted`, then returns `aborted`. If placement or any terminal
-result already won, it returns `already_placed` and changes nothing. A missing input or one belonging to
-another conversation returns `not_found`. If a queued result exists but its inbox element is missing, Pico
-faults the session as corrupted state.
+`InputHandle.abort()` serializes with placement. It first commits withdrawal when the queued item wins, then
+non-abandoningly ensures the scheduler is resumed so admitted cleanup can progress. If the queued item wins,
+Pico atomically removes only that item and writes terminal
+`unanswered/aborted`, then returns `aborted`. If placement or any terminal result wins, it returns
+`already_placed` and changes nothing. A missing input returns `not_found`. Later inbox items retain their
+relative order; no task dependency is rewired. If a queued result exists but its inbox element is missing,
+Pico faults the Session as corrupted state.
 
 ### 8.5 Waiting for input
 
-`result(id)` is a point read. `waitForInput(id, call)`:
+`InputHandle.result()` is a point read and does not activate work. `InputHandle.wait()`:
 
-- validates that the input exists and belongs to the target conversation, otherwise rejects `InputNotFound`;
-- returns only `done` or `unanswered`;
-- registers/checks/removes its waiter on the line without polling;
-- temporarily serves the target conversation's ownership scope until the result, caller cancellation,
-  close or fault; an existing stable attachment is unaffected;
-- removes its signal listener and temporary serving reference exactly once;
+- validates that the accepted input still exists, otherwise rejects `InputNotFound`;
+- idempotently resumes the session scheduler before observing terminal state;
+- returns an existing `done` or `unanswered` result immediately;
+- otherwise registers/checks/removes one cancellable point waiter on the line without polling;
+- removes its signal listener and waiter exactly once on result, caller cancellation, close or fault;
 - rejects caller cancellation, close and fault; shutdown eventually closes and rejects unresolved queued
   waits rather than deleting their durable input;
 - does not mark or cancel durable work when its caller cancels.
 
-Known self-progress cycles use a conservative generic rule evaluated at waiter registration and whenever
-the live/dependency graph changes:
-
-- A live turn invocation waiting for any nonterminal input in its own conversation rejects `SelfWait`,
-  whether that result is queued or placed and including `nextRun`.
-- For a non-turn caller, every current live turn task in the target conversation is a possible placer. If
-  any such task has an unresolved dependency path to the caller, reject `SelfWait`.
-- A foreground non-turn task that accepts into an idle conversation creates an independent generation and
-  may wait; its own liveness alone is not a cycle.
-- A non-turn wait on `nextRun` simply waits for a later explicit idle accept unless the dependency rule
-  above proves a cycle.
-
-No blocker set is stored at enqueue. Provider built-ins may later supply a more precise explicit boundary
-owner; the generic scheduler never infers one from task payloads. Hidden plugin-promise cycles remain the
-author's responsibility.
+The waiter observes durable state and owns no execution. Several handles or calls may wait for the same
+result. There is no serving graph, blocker set or input-specific execution cycle detector. Generic cycle
+validation remains limited to acyclic task dependencies, direct task self-wait, and waiting on a task whose
+unresolved dependency path reaches the caller. Hidden plugin-promise cycles remain the author's
+responsibility.
 
 ## 9. Commit line and runtime authorization
 
-One FIFO async line serializes commits, reservations, marks, lifecycle transitions, registry mutations,
-waiter registration/removal and watch capture. A transaction callback may await storage reads while holding
-the line. It must not await effects, hooks, task/input/drive waits, sleeps or nested line operations. Every
-intermediate, terminal and abort builder receives a fresh immutable current task read on the line after all
-committed checkpoint/mark changes; it never receives only the method's older snapshot.
+One FIFO async line serializes commits, calls to `Storage.nextId()`, reservations, marks, lifecycle
+transitions, registry mutations, waiter registration/removal and watch capture. A transaction callback may
+await committed storage reads while holding the line only before its first buffered write; a later explicit
+read rejects `ReadAfterWrite`. It must not await effects, hooks, task/input/idle waits, sleeps or nested line
+operations. Known Pico runtime/handle line reentry rejects `NestedLineOperation` before queueing rather than
+silently deadlocking. Every intermediate, terminal and abort builder receives a fresh immutable current task read on
+the line after all committed checkpoint/mark changes; it never receives only the method's older snapshot.
 
 Caller cancellation is checked while waiting to enter the line and again before the builder begins. Once
 the builder is admitted, caller cancellation cannot abandon builder completion or persistence. Storage
@@ -1457,23 +1560,30 @@ Commit sequence:
 
 ```text
 enter line
-validate session phase and caller/invocation authority
-construct capability-bound transaction
-run builder against stable committed storage; buffer writes
-validate buffered sequence/order/references/capabilities using committed state + overlay
-persist complete batch
-apply complete batch to all process indexes and views
-reserve newly eligible work and resolve affected waiters
+validate Session phase and caller/invocation authority
+construct a capability-bound builder with an empty canonical Write[]
+run callback; creation/list-append builders call Storage.nextId() synchronously on the line
+explicit reads see committed state and must precede the first buffered write
+on throw/rejection, discard Write[]; already-minted IDs remain burned in this binding
+validate writes/order/references/capabilities using committed state plus private semantic indexes
+if nonempty, call Storage.commit(Write[], internalCtx) exactly once
+Storage derives/persists its committed ID high-water from created/list-appended objects in that Write[]
+receive one storage-assigned Seq per write; returned created IDs become valid after success
+apply the complete writes and sequences to all process indexes and views
+unconditionally coalesce one session-scheduler kick for a successful main commit
+resolve affected observation waiters
 leave line
-dispatch task methods, signals and listeners outside line
+dispatch signals and listeners outside line; the scheduler drain dispatches its reservations outside line
 resolve outer commit promise
 ```
 
 Publication never precedes persistence. Every index observes a full batch before scheduling or idleness,
-so terminal task + successor has no visible idle gap.
+so terminal task + successor has no visible idle gap. Every successfully persisted main commit kicks after
+application, even when its writes cannot affect eligibility; coalescing makes redundant kicks harmless.
+Scratch and task-output-only commits need not kick because they cannot change task eligibility.
 
 Private invocation identity contains task ID, method (`execute`, `recover`, `abort`) and a unique object.
-The driver installs that exact object in a derived Context and binds every task runtime/handle to it. Runtime
+The scheduler installs that exact object in a derived Context and binds every task runtime/handle to it. Runtime
 admission compares object identity with the invocation slot. Metadata/RPC transport never confers authority.
 
 Authorization table:
@@ -1486,65 +1596,75 @@ Authorization table:
 | stopping | no | no | discard | existing/new abort only | reject |
 | closing/faulted/closed | no | no | discard | no; close/fault signal it | reject |
 
-Safe `accept`/`write` authorization and raw direct-entry authorization are separate. Protected built-in
+Internal safe admission/`write` authorization and raw direct-entry authorization are separate. Protected built-in
 state and entry operations require internal helpers. Main and scratch writes from absent/foreign/stale task
 identity reject; task-provided handles never treat them as host calls.
 
-## 10. Scheduling, ownership and waits
+## 10. Session scheduler, ownership and waits
 
-Process indexes after open:
+A writable Harness owns exactly one process-local scheduler for its Session. Process indexes after open are:
 
-- complete live task map;
+- the complete live task map across every conversation;
 - one invocation slot per running task ID;
-- tasks by conversation and live turn/foreground subsets;
+- tasks by conversation plus fixed-turn-task and foreground subsets;
 - reverse dependency edges;
-- conversation parent/owner ancestry needed by live tasks, invocations and attachments;
-- stable conversation/session attachments;
-- temporary drive/task/input waiters;
-- session phase.
+- conversation parent/owner ancestry needed for capability and cancellation reach;
+- point waiters for task, input and foreground-idle observation;
+- scheduler enabled/dirty/runner state and Session phase.
+
+Open constructs these indexes but leaves the scheduler inert. `resume(ctx)` idempotently enables it until
+close or fault, installs the drain runner if needed, records an initial coalesced kick, and returns without
+waiting for any reservation, task callback or foreground idle. It always covers every conversation. `send`, `InputHandle.wait`,
+`waitForTask`, foreground-idle waits, `collapse`, task/input/conversation abort operations, and any other
+host/plugin task-creation facade that promises execution ensure resume. Read-only
+inspection, view/watch capture, fork creation without input and configuration/state reads do not.
+
+Every successful main commit unconditionally calls the same coalescing kick after persistence and in-memory
+application. A kick while disabled records no execution obligation because a later `resume` scans all
+eligibility. While enabled, a kick sets dirty and ensures one drain runner. The drain repeatedly clears dirty,
+reserves every currently eligible task on the Session line, and dispatches all reservations outside it. If a
+commit races with drain exit, dirty causes another pass. There is no polling, per-conversation worker or lost
+kick window. Scratch and task-output-only commits need not kick.
 
 Dependencies are immutable, acyclic IDs in the same ownership tree. They may reference tasks created
 earlier in the same batch, including the current task from its terminal closure. A task becomes eligible
 when every dependency is terminal, regardless of outcome. Missing from the complete live map means terminal
 after existence was validated. A foreground task depending on endless background work intentionally keeps
-its scope busy.
+foreground idle false.
 
-Reservation on the line:
+Reservation on the line considers all conversations:
 
 ```text
 marked live task                    -> fresh abort, ignoring dependencies
-unmarked pending with terminal deps -> commit task.running, reserve execute
+unmarked pending with terminal deps -> commit full running task.set snapshot, reserve execute
 unmarked running loaded at open     -> reserve recover
 ```
 
-A pending task marked before reservation never becomes running for effects; the harness writes the running
-intent only as part of reserving fresh abort so `abort` receives `RunningTask`. A task created and marked in
-one batch is likewise cleaned by abort without execute. Open itself starts nothing; recovery reservation
-occurs only when a drive/attachment serves the task.
+A pending task marked before reservation never becomes running for effects; the kernel writes a complete
+running snapshot only as part of reserving fresh abort so `abort` receives `RunningTask`. A task created and
+marked in one commit is likewise cleaned by abort without execute. Foreground and background tasks use the
+same eligibility rules and both execute. `background:true` only excludes a task from foreground-idle and
+ordinary foreground cancellation sets.
 
 There is at most one invocation per task ID in a process. Its slot remains held through method return,
-producer/progress joins and terminal-closure acceptance or discard. Different task IDs run concurrently.
-Callbacks, methods and signals never execute on the line.
+producer/progress joins and terminal-closure acceptance or discard. The scheduler never awaits one task
+before dispatching another task ID, so tasks in the root, forks and owned child conversations may run
+concurrently. Callbacks, methods and signals never execute on the line.
 
-Serving follows ownership, not fork history. A stable conversation attachment serves tasks in that
-conversation and every recursively owned descendant, including descendants whose owner task is terminal.
-A session attachment serves all conversations. Terminal owner records needed for ancestry are fetched by
-ID and only their immutable links are retained. Historical child lists are never traversed.
+Ownership remains capability and cancellation structure, not execution structure. Foreground cancellation
+reach starts with live foreground tasks directly in the requested conversation, recursively enters
+conversations owned by those live foreground tasks, and repeats. A background or terminal owner breaks that
+reach. Fork history grants neither ownership nor cancellation reach. Queued input is not a task.
 
-Foreground cancellation reach is narrower: start with live foreground tasks directly in the requested
-conversation; recursively enter conversations owned by those live foreground tasks and repeat. A background
-or terminal owner breaks cancellation reach. Queued input is not a task.
+Conversation `waitForIdle` observes that foreground cancellation closure; Harness `waitForIdle` observes all
+session foreground tasks. Both ensure resume, return immediately when already idle, or install one
+cancellable point waiter. They do not wait for background work and do not alter scheduler scope. Cancelling a
+wait removes only that waiter/listener and never cancels durable work.
 
-Conversation drive resolves when its served root has no live foreground task in that foreground ownership
-closure. Session drive resolves when no foreground task exists anywhere. Stable attachment remains after a
-waiter resolves/cancels, so attached background recurrence continues. Each drive call adds only a temporary
-waiter. Cancelling it removes that waiter/listener and never cancels work.
-
-`waitForTask` rejects `TaskNotFound` for a missing target, returns a terminal task immediately, or installs
-one cancellable point waiter plus a temporary serving reference for a live target. It returns the terminal
-task and follows the same cancellation cleanup rules. Direct self-wait and a wait on a
-task whose unresolved dependency path reaches the caller reject. A task cannot drive its own foreground
-scope. Cycle checks occur before an admission that would create known work blocked by its caller.
+`waitForTask` ensures resume, rejects `TaskNotFound` for a missing target, returns a terminal task
+immediately, or installs one cancellable point waiter for a live target. Direct self-wait and a wait on a
+task whose unresolved dependency path reaches the caller reject. Dependency creation rejects cycles. No
+waiter owns execution, and no serving-specific cycle or recursive execution scope exists.
 
 ## 11. Cancellation, close, shutdown and fault
 
@@ -1552,26 +1672,27 @@ scope. Cycle checks occur before an admission that would create known work block
 
 `abortTask(id)` and abort-transaction `markTask(id)` reject `TaskNotFound` for a nonexistent ID, return
 `terminal` for an existing terminal task, and return `marked` for either an unmarked or already-marked live
-task. Marking does not attach an unrelated scope; cleanup starts when the task is served. Repeated marks are
-idempotent and never cancel an already-running fresh abort invocation.
+task. Each public abort operation first commits its mark or withdrawal, then non-abandoningly ensures the session
+scheduler is resumed, so cleanup becomes eligible without changing execution scope. Repeated marks are idempotent and never cancel an already-running fresh
+abort invocation.
 
 Conversation abort commits the mark/queue-withdrawal batch and records those task IDs as its tracked set.
-It temporarily serves the affected ownership scope. Any mark issued by an abort invocation whose own task
-is in that tracked set is added transitively to the same set. The operation resolves when every tracked task
-is terminal and no tracked invocation remains. Unrelated background work is excluded. Caller cancellation
-cannot abandon cleanup after the mark batch is admitted.
+Any mark issued by an abort invocation whose own task is in that tracked set is added transitively to the
+same set. The operation observes until every tracked task is terminal and no tracked invocation remains.
+Unrelated background work is excluded from the tracked set, although it continues executing normally.
+Caller cancellation cannot abandon cleanup after the mark batch is admitted.
 
 The mark transaction:
 
 1. Compute the current foreground cancellation closure from the pre-commit live/ownership snapshot.
 2. Mark every live task in it.
 3. Remove queued steer/followUp in affected conversations and write terminal `unanswered/aborted` results.
-4. Preserve queued write and nextRun.
+4. Preserve queued write.
 
 When a mark wins:
 
 ```text
-commit abort:true
+commit a full task.set snapshot with abort:true
 revoke execute/recover main and scratch writes immediately
 leave line; signal old invocation
 wait for method, effects and owned progress producers to return
@@ -1579,7 +1700,7 @@ on line discard any normal terminal closure and release old invocation
 reserve fresh abort with new identity/controller/Context
 abort may perform restricted checkpointed cleanup
 abort returns closure
-apply passive/direct turn writes + aborted outcome + scratch retirement atomically
+apply passive/direct core writes + full aborted terminal task.set snapshot + scratch retirement atomically
 release abort invocation
 ```
 
@@ -1595,15 +1716,15 @@ An uncooperative effect can delay abort indefinitely. Forced isolation is outsid
 ### 11.2 Close
 
 Close is a nonpersistent line transition that stops admission and reservation. Earlier admitted line work
-finishes; later operations reject except invocation completion. Outside the line, signal and join every outstanding invocation, then close storage. A durably terminal task
-has no outstanding invocation because terminal publication follows method return and producer joins. It writes no outcomes or marks.
+finishes; later operations reject except invocation completion. Outside the line, signal and join every
+outstanding invocation, then close the backend binding. A durably terminal task has no outstanding invocation because terminal publication follows method return and producer joins. It writes no outcomes or marks.
 Caller cancellation cannot abandon close. Repeated close calls share completion.
 
 ### 11.3 Shutdown
 
-Shutdown enters `stopping` and commits marks for every live task in one batch. It preserves every queued
-input/result. It serves abort cleanup session-wide until live tasks and invocation slots are empty, then
-closes. Fresh abort handlers may commit; all normal work/admission rejects. A failing abort faults shutdown.
+Shutdown enters `stopping` and commits full abort-marked snapshots for every live task in one batch. It
+preserves every queued input/result. Its mark commit and cleanup path activate the session scheduler; shutdown
+observes until live tasks and invocation slots are empty, then closes. Fresh abort handlers may commit; all normal work/admission rejects. A failing abort faults shutdown.
 Caller cancellation cannot abandon an admitted shutdown. Explicit close may interrupt it; shutdown rejects
 and durable marks recover later. Repeated shutdown calls share completion.
 
@@ -1624,7 +1745,7 @@ to preserve one task's unrelated scratch.
 
 Execute/recover may read and write its own scratch while unmarked. Abort may read but not write scratch;
 it persists cleanup progress in the task checkpoint or permitted main state. A crash before terminal
-outcome retains scratch. `task.terminal` retires it atomically. Every later scratch write rejects, even if a
+outcome retains scratch. The terminal `task.set` snapshot retires it atomically. Every later scratch write rejects, even if a
 sidecar unlink failed.
 
 A retry under one task ID resets attempt-specific live state through `runtime.output.replace` before new
@@ -1642,10 +1763,10 @@ The final Harness has one construction API:
 
 ```ts
 interface CoreTaskKinds {
-  readonly generation: TaskKindBase;
-  readonly tool: TaskKindBase;
-  readonly postTools: TaskKindBase;
-  readonly collapse: TaskKindBase;
+  readonly generation: CoreTaskKindBase;
+  readonly tool: CoreTaskKindBase;
+  readonly postTools: CoreTaskKindBase;
+  readonly collapse: CoreTaskKindBase;
   readonly job: TaskKindBase;
 }
 interface RootValueWrite<T extends JsonValue = JsonValue> {
@@ -1655,7 +1776,6 @@ interface RootValueWrite<T extends JsonValue = JsonValue> {
 interface HarnessOpenOptions {
   readonly taskKinds?: readonly TaskKindBase[];
   readonly entryKinds?: readonly EntryKind[];
-  readonly replace?: Partial<CoreTaskKinds>;
   readonly rootValues?: readonly RootValueWrite[];
 }
 interface OpenInspection {
@@ -1677,56 +1797,63 @@ interface Harness {
   inspect(ctx: Context): Promise<OpenInspection>;
 }
 interface HarnessFactory {
-  open(storage: Storage, options: HarnessOpenOptions, ctx: Context): Promise<Harness>;
+  open(binding: StorageBinding, options: HarnessOpenOptions, ctx: Context): Promise<Harness>;
 }
 ```
 
-The two `Harness` declarations in this specification merge into one TypeScript interface.
-`register`, `replace`, `remove` and `get` serialize on the line. Register rejects an existing name; replace
-requires an existing name. Task removal rejects when live instances exist. Core kind removal always rejects.
+The two `Harness` declarations in this specification merge into one TypeScript interface. `register`,
+`replace`, `remove` and `get` serialize on the line for ordinary plugin definitions. Register rejects an
+existing name; replace requires an existing ordinary name. Replacing or removing an ordinary task kind
+rejects while any live task of that kind exists; with no live instance, replacement affects only future
+creations and terminal history remains unchanged.
+The fixed core definitions are not members of the mutable registry and cannot be registered, replaced or
+removed. Ordinary registration rejects every protected `pi.*` task name.
 
-Stable core names and capabilities are:
+Stable core names and roles are:
 
 ```text
-generation  pi.generation   turn=true
-tool        pi.tool         turn=true
-postTools   pi.post_tools   turn=true
-collapse    pi.collapse     turn=true
-job         pi.job          turn=false
+generation  pi.generation   defineCoreTask; turn task; transcript/admission authority
+tool        pi.tool         defineCoreTask; turn task; transcript/admission authority
+postTools   pi.post_tools   defineCoreTask; turn task; transcript/admission authority
+collapse    pi.collapse     defineCoreTask; not a turn task; transcript/admission authority
+job         pi.job          defineTask;     not a turn task; ordinary task authority
 ```
 
-Harness installs the production core kinds. `replace` substitutes only named core slots and must preserve
-the required turn capability. Additional `taskKinds` cannot use a core name. The internal admission strategy
-is bound to the resulting generation slot.
+Harness installs these exact production definitions. The internal admission strategy is bound to the fixed
+generation token. `harness.kinds` exposes readonly typed witnesses for hooks, inspection and internal
+composition; possession of a witness does not make it creatable through an ordinary transaction.
 
-Empty storage means exactly `lastSeq === 0`. The root conversation is the first mutation, has ID `1`, has no
-parent/owner, and can never be deleted. Every `rootValues` address must be a value bound to conversation 1
+Empty storage means its conversation scan is empty. The root conversation is the first committed object from
+a fresh backend, has ID `1`,
+has no parent/owner, and can never be deleted. Every `rootValues` address must be a value bound to conversation 1
 (or an authorized built-in address bound there); duplicate addresses reject. Root creation and all root
 values commit atomically. Nonempty storage ignores `rootValues`.
 
-A storage handle is exclusively owned. Its first `claim` succeeds; another claim before `close` rejects.
-Every commit/query requires an active claim. `close` makes later operations reject and releases the claim;
-repeated close is harmless. `MemoryStorage` retains its data and permits a later claim after close for
-recovery tests. Closed JSONL/SQLite objects are not reusable and must be reopened through their factories.
-If driver/Harness initialization fails after claim, it closes/releases before rejecting. JSONL/SQLite also
-hold a cross-process session lock from backend open through close. Two writers must fail rather than race.
+One Session exclusively owns a Storage instance while open; this ownership guard and backend binding
+lifecycle sit above the minimal WP2 `Storage` interface, which has no `claim` or `close`. `MemoryStorage`
+retains data and may be bound to a later Session after the first closes for recovery tests. JSONL/SQLite
+bindings are not reusable and hold a cross-process session lock from backend open through binding close.
+Initialization failure releases that binding before rejecting. Two writers fail rather than race.
 
 Open order:
 
-1. Finish backend replay/recovery and establish `lastSeq`.
-2. Install required built-in entry kinds and task slots, then options and explicit replacements.
+1. Finish backend replay/recovery, initialize `Storage.nextId()` from committed creation/list-append writes,
+   and construct the disabled scheduler. Kicks from later open-time main commits are harmless while disabled.
+2. Install the fixed core entry/task definitions, then ordinary plugin options.
 3. If storage is empty, create root conversation and apply `rootValues` in one commit. Reopen ignores
    `rootValues`.
-4. Load the complete live-task seed and required ownership ancestry. Load recorded entry-kind names.
-5. Validate live replacement capability compatibility.
-6. Reconcile every live task whose kind is absent in one main commit.
-7. Build all indexes and return inspection/read handles without starting work.
+4. Load the complete live-task seed and required ownership ancestry. Discover stored entry-kind names via
+   the agreed scans; a backend may satisfy those scans from an index.
+5. Validate every live fixed-core task against its installed fixed definition.
+6. Reconcile every live ordinary task whose kind is absent in one commit of full task snapshots.
+7. Finalize all indexes used by the disabled session scheduler, then return inspection/read handles without
+   starting work. Registry/open reconciliation is complete before `resume` can dispatch anything.
 
-Core slots `generation`, `tool`, `post_tools`, `collapse` and `job` always have an implementation. They may
-be explicitly replaced but not removed. This ensures accept/boundary processing and unavailable-tool
-results remain available. Additional task kinds may be removed only when no live instance exists. Entry and
-section definitions may be removed without deleting durable records. In-flight invocations/preparations
-retain captured definitions; later operations use the new registry.
+Core slots `generation`, `tool`, `post_tools`, `collapse` and `job` always have their built-in implementation.
+This ensures internal admission/boundary processing and unavailable-tool results remain available. Ordinary
+task kinds may be removed only when no live instance exists. Entry and section definitions may be removed
+without deleting durable records. In-flight ordinary invocations/preparations retain captured definitions;
+later operations use the new registry.
 
 Missing-kind reconciliation uses one pre-reconciliation snapshot:
 
@@ -1737,8 +1864,8 @@ Missing-kind reconciliation uses one pre-reconciliation snapshot:
 - Terminalize each missing task as `orphaned`, retain input/checkpoint/history, remove live/dependency indexes
   and retire scratch atomically.
 - Dependents observe a terminal dependency and interpret `orphaned`.
-- Keep ancestry links so a later root drive serves registered marked descendants even though the owner is
-  now terminal.
+- Keep ancestry links for capability and cancellation policy; after `resume`, registered marked descendants
+  are eligible even though the owner is now terminal.
 - Report orphaned IDs from `inspect`.
 
 If validation, root creation, index loading or reconciliation fails, open closes/releases the supplied
@@ -1751,10 +1878,15 @@ author APIs.
 
 ### 14.1 Generation and post_tools
 
-Generation owns explicit input IDs and captured durable configuration. It checkpoints preparation cutoff,
-attempt, retry wait, deferred handle and any request-specific validation data needed for recovery. A
-request snapshot is immutable. `before_request` may transform a private messages-only request; actual
-offered tools after transformation are the validation basis and must be recoverable when needed.
+Generation owns explicit input IDs and only minimal effect-recovery evidence. Its checkpoint may contain the
+preparation/context cutoff, selected built-in model identity, attempt, retry wait, deferred handle and the
+specific offered tool-name/version evidence needed for uncertain-response recovery. A request snapshot is
+immutable, but it never copies generic plugin configuration or arbitrary conversation state. Built-in model,
+thinking, system-prompt and tool selection remain fork-aware conversation state: a fork sees the built-in
+configuration at its selected entry and may override it locally. A plugin needing exact recovery persists
+its own compact key/version. `before_request` may transform a private messages-only request; actual offered
+tools after transformation are the validation basis and must be recoverable only to the extent required by
+that hook/effect contract.
 
 Assistant frames mutate the generation task output; scratch contains only unrelated private recovery data.
 Retry and deferred polling loop cooperatively under one stable task ID.
@@ -1763,12 +1895,28 @@ not exist. The returned terminal closure atomically appends assistant/usage, res
 and creates tools/post_tools/continuation.
 
 For calls, generation creates every tool task and one post_tools depending on them in its closure. Each tool
-writes exactly one result. Post_tools reads terminal outcomes in call order, handles completed/failed/
-aborted/orphaned, places the post-tools boundary, and either terminates/handoffs or creates a continuation
-while transferring inputs atomically.
+atomically appends exactly one result entry while terminalizing. Parallel completion therefore controls
+transcript append chronology; request projection reorders tool-result messages into the assistant's call
+order. Post_tools reads terminal outcomes in call order, handles completed/failed/aborted/orphaned, places the
+post-tools boundary after every result exists, and either terminates/handoffs or creates a continuation while
+transferring inputs atomically.
 
 Threshold or overflow creates collapse `C` and replacement generation `G` with `after:[C]`, carrying the
 active inputs, in one closure. No invocation waits on collapse. `G` handles every terminal collapse outcome.
+
+Concrete transaction traces:
+
+- **Generation:** reservation is one full-snapshot commit. Preparation/checkpoint commits finish before the
+  provider effect, which runs outside the line; streamed output flushes use their own shared commits. After
+  the effect and producers finish, the terminal callback performs any committed reads first, then buffers
+  assistant/usage entries, tool and post_tools task creations, input transitions and the generation terminal
+  snapshot. The Session calls Storage once for that canonical `Write[]`.
+- **post_tools:** reservation is one full-snapshot commit. It reads tool outcomes and their already-committed
+  result entries before writing. Its terminal callback buffers boundary placement, optional continuation
+  creation, input ownership transfer and its terminal snapshot; all persist in one Storage call.
+
+These atomic terminal commits do not absorb external effects. Every durable checkpoint-before-effect or
+record-after-effect boundary remains a separate line transaction and Storage commit.
 
 ### 14.2 Collapse
 
@@ -1776,19 +1924,28 @@ Collapse captures reason, target prefix ending at a complete exchange, first ret
 and settings. It runs speculatively and may be background/manual or foreground/automatic. It checkpoints a
 prepared candidate. Its terminal closure reads the current newest head on the line. A newer head returns
 ordinary typed stale failure; intervening edits do not stale. Success appends summary head and completes in
-one batch. Abort publishes no summary. One live collapse per conversation; simultaneous creation is
+one commit. Concretely, reservation commits a full running snapshot; summarization runs outside the line and
+any prepared-candidate checkpoint is a separate commit. The terminal callback reads `newestHead` before its
+first write, then buffers the summary append and terminal collapse snapshot in one `Write[]` and one Storage
+call. Abort publishes no summary. One live collapse per conversation; simultaneous creation is
 serialized and duplicate creation declines or reuses the existing ID according to the calling built-in.
 
 ### 14.3 Tools, jobs and owned conversations
 
 Tool input includes immutable call and assistant entry ID. Missing implementation, invalid arguments, hook
 block and ordinary throw become model-visible error results, not session faults. Recovery retries only with
-a durable safe replay policy; otherwise it returns interrupted. Abort publishes an aborted tool result via
-turn abort authority. A missing executable tool is handled by the built-in tool kind; it is not a missing
-task kind.
+a durable safe replay policy; otherwise it returns interrupted. Abort publishes an aborted tool result
+through `CoreAbortTx` entry authority. A missing executable tool is handled by the built-in tool kind; it is
+not a missing task kind.
 
-The built-in `pi.tool` `TaskKind` owns `TaskRuntime.commit` and all transaction capabilities. An ordinary
-`ToolDefinition` receives neither. Its eventual adapter is a small `pi.tool`-mediated capability over the
+A concrete tool trace is: reserve with one full running-snapshot commit; commit any replay-policy checkpoint
+before invoking the external tool; run that effect outside the line; then invoke the terminal closure. The
+closure performs committed reads first and buffers its one tool-result append, final output-derived data and
+full terminal task snapshot. Those writes are one canonical `Write[]` and one Storage call. Abort uses the
+same one-commit final shape after its separately joined external cleanup.
+
+The fixed `pi.tool` `CoreTaskKind` owns `CoreTaskRuntime.commit` and its transaction capabilities. An
+ordinary `ToolDefinition` receives neither. Its eventual adapter is a small `pi.tool`-mediated capability over the
 current invocation's `TaskOutput`, durable scoped memos and keyed child creation; exact public names and
 TypeScript types remain gated in section 18 and must not be inferred from generic task runtime.
 
@@ -1800,7 +1957,7 @@ The later ordinary-tool bridge must preserve these requirements without exposing
   and write its ID, kind, `abortWithTool: boolean` and optional shared-output ref into the complete parent
   checkpoint before returning. Jobs remain tasks. The exact task-spawn API and checkpoint schema are gated.
 - A keyed subagent operation uses one internal parent-tool transaction to call `tx.createConversation`,
-  write the selected initial values, call `tx.accept` to create the first generation, and record the child
+  write the selected initial values, call the internal `tx.accept` helper to create the first generation, and record the child
   conversation ID, input ID, request key and `abortWithTool: boolean` in the complete parent checkpoint.
   After commit, the adapter resolves the existing restricted conversation handle and waits outside the
   line. A subagent is an owned conversation, never a subagent task.
@@ -1816,8 +1973,8 @@ The later ordinary-tool bridge must preserve these requirements without exposing
   timeout, caller cancellation, mark, close and fault races remove waiter/timer/listener state exactly once.
   The exact handle type remains gated.
 - Returned conversation handles reuse the existing restricted `TaskConversation` capabilities as the
-  ceiling: scoped accept/write, explicit-input result/wait/abort, and no raw commit/direct entry/close/
-  shutdown/unrelated state. Any model-facing status/tail projection must be specified before adding it.
+  ceiling: scoped `send` plus returned input result/wait/abort, and no raw commit/direct entry/internal
+  admission helpers/close/shutdown/unrelated state. Any model-facing status/tail projection must be specified before adding it.
 - Later sibling tool calls need one narrow built-in resolver for strict owned descendants of their current
   parent conversation, including ownership through terminal sibling tasks. Fork-only ancestry and unrelated
   roots reject. This future resolver must not broaden generic `runtime.conversation`.
@@ -1904,9 +2061,10 @@ start and await ordinary durable side work while the built-in retains exchange o
 policy and durable answer reuse belong to workspace/plugins. Exact namespaced hook scratch access remains a
 gated API decision.
 
-A long-lived non-turn background listener injects external events through request-keyed `accept`/`write`.
-It may await `waitForInput` when no self-progress cycle exists. It never mutates an already snapshotted
-provider request; steering affects the next safe request boundary.
+A long-lived ordinary background listener injects user events through request-keyed `send`; a trusted
+built-in may use the internal request-keyed `write` helper for passive transcript events. It may await the
+returned `InputHandle` outside a transaction. It never mutates an already snapshotted provider request;
+steering affects the next safe request boundary.
 
 ## 15. Watch and backend contracts
 
@@ -1928,12 +2086,12 @@ interface ConversationView {
   readonly taskOutputs: readonly WatchedTaskOutput[];
   readonly inbox: readonly Element<QueuedInput>[];
   readonly values: readonly WatchedValue[];
-  readonly readAt: Id;
+  readonly readAt: Seq;
 }
 interface SessionView {
   readonly conversations: readonly Conversation[];
   readonly values: readonly WatchedValue[];
-  readonly readAt: Id;
+  readonly readAt: Seq;
 }
 type InboxOp =
   | { readonly type: "append"; readonly item: Element<QueuedInput> }
@@ -1953,8 +2111,8 @@ type SessionEvent =
   | { readonly type: "conversation"; readonly conversation: Conversation; readonly change: "created" }
   | { readonly type: "value"; readonly value: WatchedValue };
 interface CommitEnvelope<E> {
-  readonly first: Id;
-  readonly last: Id;
+  readonly first: Seq;
+  readonly last: Seq;
   readonly events: readonly E[];
 }
 type WatchDelivery<E> =
@@ -2003,12 +2161,16 @@ reference, current inbox and exactly the requested values. Conversation watch va
 conversation; foreign-conversation/task addresses reject. A session watch accepts session addresses only.
 A later source-conversation write emits no event for an existing fork. The pure reducer uses `view.tail` to
 retain only the newest logical transcript entries. A session capture contains all current conversations and
-exactly its requested session values.
+exactly its requested session values. Rendering uses settled entries, live tasks, task outputs, inbox and
+selected values from this one view. A boundary commit removes an inbox element, appends its entry, updates
+the protected input result and creates any successor task atomically; its visible entry/inbox/task changes
+arrive in one envelope, so clients reconcile stable IDs without a transient duplicate or idle gap.
 
 Capture and subscription registration occur in one line operation. Default capacity is 256 complete commit
 envelopes; an explicit capacity must be a positive integer. `start` is synchronous and may be called once.
-It delivers commits after the captured `readAt`, then live commits, in sequence order. The view is folded
-through a whole envelope before its listener runs. Events from one commit are never split. Same-commit inbox append/remove cancels and emits no inbox event. A commit producing no events after this
+It delivers commits after the captured storage `Seq` in `readAt`, then live commits, in sequence order. The
+view is folded through a whole envelope before its listener runs. Events from one commit are never split.
+Same-commit inbox append/remove cancels and emits no inbox event. A commit producing no events after this
 subscription's filters is not delivered and consumes no buffer capacity, while the in-process
 `handle.view.readAt` still advances. Emit a full `context` event whenever the derived context-ID array
 changes, including ordinary entry appends.
@@ -2021,8 +2183,9 @@ throws, close only that watch without another listener call and invoke `options.
 never fault the session. An error thrown by `onError` is ignored. Session close delivers `closed/session` once
 unless unsubscribed.
 
-`task_start` is task creation at pending. Reservation is `task_update` to running. Checkpoint/abort/ownership
-changes are task updates. Terminal is `task_end` and always includes an outcome. Each protected shared append
+`task_start` is `task.create` at pending. Every `task.set` replacement is derived against its previous full
+snapshot: reservation and checkpoint/abort/ownership changes emit `task_update`; a terminal replacement emits
+`task_end` and always includes an outcome. Each protected shared append
 emits one `task_output`; the reducer applies its delta with `applyImmutable()`. Envelope order places output
 before a same-batch final `task_end`, after which the reducer removes an output with no remaining live task
 reference. Sharing requires no separate event. Reducers are kind-free and pure. Conversation values are only the explicitly requested addresses; session values are explicitly
@@ -2031,16 +2194,21 @@ configured by the session watch caller in the final Harness API.
 ### 15.2 Backend construction and durability
 
 ```ts
-interface MemoryStorageFactory { create(): Storage }
-interface JsonlStorageFactory { open(path: string, ctx: Context): Promise<Storage> }
+interface StorageBinding {
+  readonly storage: Storage;
+  close(ctx: Context): Promise<void>;
+}
+interface MemoryStorageFactory { create(): StorageBinding }
+interface JsonlStorageFactory { open(path: string, ctx: Context): Promise<StorageBinding> }
 interface SqliteStorageFactory {
-  open(path: string, options: { readonly session: string }, ctx: Context): Promise<Storage>;
+  open(path: string, options: { readonly session: string }, ctx: Context): Promise<StorageBinding>;
 }
 ```
 
-JSONL/SQLite `open` acquires the cross-process session lock and finishes replay before returning. Storage
-`claim` separately binds one driver to the returned object. `close` releases both and is idempotent. Memory
-has no cross-process lock but enforces one claim.
+JSONL/SQLite `open` acquires the cross-process session lock and finishes replay before returning the
+exclusive binding. Binding `close` releases resources and the lock and is idempotent. Memory has no
+cross-process lock but its binding still enforces one open Session at a time. Binding lifecycle is outside
+the minimal mechanical `Storage` interface.
 
 Every JSONL main, live-scratch and live-shared commit is fsynced before in-memory publication or commit
 resolution. Creating the main file, a sidecar or a containing directory requires fsync of the created file
@@ -2054,42 +2222,71 @@ is:
 
 ```ts
 interface JsonlRecord {
-  readonly first: Id;
-  readonly last: Id;
-  readonly batch: CommitBatch;
+  readonly first: Seq;
+  readonly last: Seq;
+  readonly writes: readonly Write[];
 }
 ```
 
-`last - first + 1` equals `batch.writes.length`; each create/element ID matches its derived sequence.
+`last - first + 1` equals `writes.length`. Replay initializes the next-ID allocator after the greatest
+conversation, entry, task or list-element ID carried by retained canonical writes. Creation and element IDs
+are validated as Storage-minted identities and need not match any sequence.
 Replay main first, including each live output's initial protected base append. From its final live tasks,
 derive the live scratch IDs and distinct live task-output refs; then replay only their existing sidecars as
 later deltas. A missing shared sidecar means no post-creation write. Retired scratch/shared files are ignored
-even if malformed, so a stale file cannot resurrect state. Every retained shared record contains only a
-matching `kind:"shared"` batch; replay folds it after the base already recovered from main. Retained ranges
-increase within each file and never overlap across retained files; gaps are valid. Validate batch kind
-against file, task/address references, object IDs, output refs and lifecycle/scope structure.
-`lastSeq` is the maximum complete retained endpoint including clear/remove.
+even if malformed, so a stale file cannot resurrect state. Every retained shared record contains only
+protected shared-address writes, and replay folds it after the base already recovered from main. Retained sequence ranges increase within each file and never overlap
+across retained files; gaps are valid. Validate file scope, task/address references, object IDs, output refs
+and lifecycle/scope structure. Reopen derives the next-ID allocator from all complete retained
+creation/list-append writes; the Session's last applied `Seq` is the maximum complete retained endpoint
+including clear/remove.
 
 A torn suffix is bytes after the final newline. Truncate those bytes and fsync before append. A
 newline-terminated record that is malformed JSON or structurally invalid fails open. Persist and fsync the
 record before applying it to memory.
 
 SQLite uses indexed conversations, full immutable entry facets, current tasks, values plus rewindable
-versions, list elements/clear markers, task scratch, shared task-output refs/deltas and commit boundaries. Index task status/abort/conversation/
-kind and entry conversation/head/kind. Terminal transaction deletes scratch rows atomically. Reopen
+versions, list elements/clear markers, task scratch, shared task-output refs/deltas and commit boundaries. Index
+task status/abort/conversation/kind/output ID and entry conversation/head/kind. Terminal transaction deletes scratch rows atomically. Reopen
 loads live tasks and named owner records, not terminal history into residency. Version mismatch rejects.
 Use durable SQLite transactions with `PRAGMA synchronous=FULL` or an explicitly documented equivalent at
 least as strong. Journal mode is backend-private if locking, atomic scratch retirement and conformance hold.
 There is no migration API until the gated migration package is specified.
+
+### 15.3 Cloudflare Durable Object host guidance
+
+Pico scheduling and platform wake-up are separate. One Durable Object should naturally host one Pico
+Session, one open Harness and its one scheduler, covering the root and every fork/owned conversation.
+Cloudflare alarms or one logical Cloudflare Task may wake an evicted process; they do not become a second
+effect-recovery authority and must not create one lane or scheduler per conversation.
+
+```text
+request wake -> open Pico -> send() durably admits -> send() ensures resume -> scheduler runs
+alarm wake   -> open Pico -> resume() -> all eligible tasks in all conversations run/recover
+```
+
+The merged Cloudflare Agents lane example uses explicit per-lane admission/execution passes because that
+lane runtime requires them; Pico must not copy that shape. If Pico admission and the platform wake cannot share
+one transaction, an adapter needs a small ordered handoff or idempotent retry rule so acknowledged durable
+work can always wake another process. Cloudflare's invocation limit still bounds one uninterrupted external
+effect; Pico checkpoints and `recover()` remain authoritative across wakes.
 
 ## 16. Complete foundation race matrix
 
 Every race is tested in both orders with fake clocks/effects and storage barriers:
 
 - Persistence paused after construction: readers see old complete state.
-- Commit callback throws: no writes and no IDs consumed.
-- Accept durable but reply lost: request-key retry and lookup return the original receipt.
-- Duplicate request key in one transaction: first receipt wins without payload comparison.
+- Commit callback throws after creating objects: no Storage commit or writes; minted IDs remain burned in
+  that open binding but may be reused after reopen because they were never committed.
+- Explicit read before first write succeeds against committed state; explicit read after a buffered write
+  rejects `ReadAfterWrite` without persistence.
+- State-only writes advance `Seq` without calling `nextId`; a later creation proves object ID and write
+  sequence are independent. Reopen initializes the next-ID allocator from that committed creation.
+- Send durable but reply lost: request-key retry and lookup return the original `InputHandle`.
+- Duplicate request key in one transaction or through another conversation: session-wide first receipt wins
+  without payload comparison and no second inbox item/task is created.
+- Idle send atomically places the input, records result/receipt and creates exactly one generation.
+- Busy send atomically queues followUp by default, records result/receipt and creates no task.
 - Main plus scratch in one batch: reject all.
 - Effect returns versus abort mark: one invocation; fresh abort only after old return.
 - Post-mark main/scratch builder: reject before callback.
@@ -2099,16 +2296,31 @@ Every race is tested in both orders with fake clocks/effects and storage barrier
 - Pending task marked before reservation: execute never runs; fresh abort does.
 - Repeated abort mark while abort runs: abort Context remains active.
 - Close versus commit: admitted earlier commit finishes; later mutation rejects; completion messages admitted.
-- Shutdown versus accept: accept commits before mark batch or rejects; queues preserved.
-- Shutdown crash before child cleanup: reopen abort marks child tasks only and preserves queues.
-- Broken abort handler: drives/shutdown reject; invocations join; session closes with task durable.
-- Two overlapping drives: one invocation per task.
-- Cancelled drive/task/input waiter: only that waiter/listener/temporary serving reference is removed.
+- Shutdown versus send: send commits before the mark batch or rejects; queues are preserved.
+- Shutdown crash before child cleanup: reopen plus resume runs fresh aborts and preserves child queues.
+- Broken abort handler: idle waits/shutdown reject; invocations join; Session closes with the task durable.
+- Open invokes no task callback; one resume dispatches all eligible restored tasks in every conversation.
+- Resume versus main commit in both orders: no eligible task is missed and no task is invoked twice.
+- Main commit while a drain exits: dirty/kick handoff cannot lose work; many commits coalesce safely.
+- Send, input wait and abort on an inert open each ensure one session-wide resume.
+- Tasks in different conversations run concurrently; foreground and background both run; background
+  continues after foreground idle.
+- Task abort preserves queued future input unless the explicit conversation policy withdraws it.
+- Generation terminalization atomically creates all tool tasks and their one post_tools dependent.
+- Each tool terminalization atomically appends its one result entry; parallel completion may determine
+  transcript order, while model projection restores assistant call order. Post_tools starts once after every
+  tool is terminal and atomically places its boundary and creates its continuation.
+- Final-answer terminalization atomically resolves the active input group and creates the selected follow-up
+  successor generation.
+- Cancelled task/input/idle waiter removes only that waiter/listener and never affects execution.
 - Dependency terminal versus dependent reservation: dependent starts once.
-- Direct/dependency/input self-waits: reject before durable deadlock.
-- Solitary background collapse plus listener accept: input queues, collapse terminal triggers idle boundary.
-- Collapse concurrent with generation plus listener accept: collapse terminal does not drain; generation boundary does.
-- Collapse abort with queued input: no successor; queue remains for later idle accept.
+- Direct self-wait and dependency cycles reject before durable deadlock.
+- Background collapse plus idle send: generation may start concurrently because collapse is not in the fixed turn-task set.
+- Collapse concurrent with generation plus listener send: generation boundaries retain inbox authority.
+- Collapse abort with queued input: no successor; queue remains for a later idle send.
+- FollowUp send versus final answer: queued then consumed, or consumed by the boundary transaction; never
+  lost or duplicated. Steering versus post_tools is tested in both orders.
+- Queued write versus post_tools preserves the complete assistant/tool-result block.
 - Queued head versus newer head: placement writes unanswered/stale, not session fault.
 - Parallel tool completion either order: post_tools starts once and projects call order.
 - Abort versus post_tools closure: no unmarked successor and every active input resolves once.
@@ -2117,18 +2329,26 @@ Every race is tested in both orders with fake clocks/effects and storage barrier
 - Overflow chain: collapse and replacement atomic; no invocation waits on collapse.
 - Competing summary head: stale failure; intervening edits do not stale.
 - Watch capture versus commit: base includes commit or stream delivers it, never gap/duplicate.
+- One boundary envelope contains inbox removal, entry placement, result update and successor creation without
+  a transient duplicate or idle gap.
+- A fork sees selected historical/config state, inherits no tasks or inbox, and executes independently after
+  its first send.
 - Watch overflow/listener throw: that watch closes; a newly opened watch captures one fresh authoritative
   base without a resumption protocol.
-- JSONL main 100/live scratch 150: reopen lastSeq 150.
-- Terminal 151/unlink failure: ignore scratch even malformed; lastSeq 151.
+- JSONL main through Seq 100/live scratch through Seq 150: reopen at applied Seq 150 and initialize
+  `nextId()` after the greatest created/list-appended ID in all retained complete records.
+- Terminal Seq 151/unlink failure: ignore scratch even malformed; applied sequence remains 151 and IDs are
+  never reused.
 - JSONL torn final suffix versus malformed complete line: truncate only former.
 - 100,000 terminal children/two live tasks: open reads live seed and required ancestry only.
 - Missing owner kind with registered descendants: owner orphaned and scratch retired; descendants marked,
-  queues retained, root drive later runs their fresh abort.
-- Capability replacement with live mismatch: reject before invocation.
-- Cast non-turn runtime to turn and direct append: reject, no writes.
+  queues retained, later session resume runs their fresh abort.
+- Ordinary task-kind replace/remove versus a live instance: reject without registry change; after every
+  instance is terminal, replacement affects only future creations.
+- Ordinary runtime/transaction has no direct-entry or core-task-creation surface; casts add no implementation.
 - New task plus initial task-output base: both persist or neither; `initial` is not called for a supplied ref.
-- Two tasks mutate one task output: central tracker commits deltas in line order without a lost update.
+- Two tasks mutate one task output: central tracker commits deltas in line order without a lost update; a
+  permitted shared `Write[]` with multiple authorized appends preserves every append atomically.
 - Mark versus task-output mutation: commit before mark wins; otherwise mutation rejects before callback.
 - Last reference terminal versus same-batch child sharing: prospective references retain output; otherwise
   final materialization and retirement are atomic.
@@ -2145,6 +2365,7 @@ Every race is tested in both orders with fake clocks/effects and storage barrier
   before the wait or neither does; post-mark commit rejects.
 - State transition versus abort mark: transition-first may admit the next fenced handler; mark-first prevents
   that handler call and unwinds the outer invocation before fresh abort.
+- Known runtime/handle line reentry rejects `NestedLineOperation` before queueing.
 
 ## 17. Ready implementation packages
 
@@ -2157,17 +2378,18 @@ memory storage; it need not expose incomplete production Harness behavior.
 Prerequisites: none.
 
 Deliver:
-- strict JSON, ID, entry, conversation, task/checkpoint/outcome and address types, including non-rewindable
-  shared scope identity;
-- `EntryKind`, `TaskKind`, `TaskOutputKind`, typed/erased output refs, payload extractors and literal turn
-  capability;
-- capability-selected runtime/output/closure declaration types, with method bodies deferred;
+- strict JSON, distinct `Id`/`Seq`, entry, conversation, task/checkpoint/outcome and address types, including
+  background mode and non-rewindable shared scope identity;
+- `EntryKind`, ordinary `TaskKind`, fixed-core `CoreTaskKind`, `TaskOutputKind`, typed/erased output refs and
+  payload extractors;
+- ordinary versus core runtime/transaction/output/closure declaration types, with method bodies deferred;
 - no imports from existing harness implementation.
 
 Accept:
-- compile tests for exact task input, full checkpoint with phase, kind-specific outcomes, literal turn and
+- compile tests for exact ordinary/core task input, full checkpoint with phase, kind-specific outcomes and
   no-output/owned-output/compatible-shared-output surfaces;
-- non-turn has no direct entry; turn does; turn abort does;
+- ordinary normal/final/abort transactions have no direct entry or core creation; core variants do;
+- `CoreTaskTx.task` accepts ordinary and core children through the same method name;
 - incompatible checkpoint shape rejects; structurally identical shape is documented assignable;
 - Pico declarations introduce and explicitly spell no `any`; imported pi-ai types are exempt;
 - compile-only focused test and repository check green.
@@ -2177,18 +2399,23 @@ Accept:
 Prerequisites: WP1.
 
 Deliver:
-- exact main/scratch/shared mutations and storage interface;
-- immutable snapshotting;
-- sequence allocation/validation, atomic memory commit and empty-batch behavior;
-- conversations, entries, task lifecycle/checkpoint/ownership/abort/terminal retirement;
+- exact canonical `Write` algebra and the minimal Storage interface, with no claim/close/kind-name methods;
+- mechanical application of canonical writes and full `task.create`/`task.set` records;
+- synchronous `Storage.nextId()`, storage-assigned write sequences, committed next-ID recovery from canonical
+  creation/list-append writes, and empty-write behavior;
+- conversations, entries, complete task snapshots and terminal scratch/shared retirement;
 - current and rewindable values/lists including tombstones/clear/remove;
-- fork-aware pages, newest head, task scans and all cursor/filter ordering.
+- ascending conversation scans, fork-aware newest-first entry scans, dedicated newest head, ascending task
+  scans, complete ordered list reads and the exact cursor/filter rules in section 6.2.
 
 Accept:
-- hand-built batch conformance for every query and mutation;
-- rejected batch leaves state/lastSeq unchanged;
-- terminal mutation makes scratch unreadable atomically and retires unreferenced shared output;
-- fork/history/deep-cap tests; committed reads return no mutable aliases;
+- hand-built `Write[]` conformance for every query and write;
+- returned `Seq[]` aligns one-for-one with writes and demonstrably differs from Session object IDs;
+- rejected storage commit leaves durable state and internal sequence unchanged while already-minted IDs stay
+  burned in the open binding;
+- a terminal task snapshot makes scratch unreadable atomically and retires unreferenced shared output;
+- fork/history/deep-cap tests; scans have no `readAt`; complete list reads are coherent at one state; callers
+  honor the readonly durable-value contract;
 - focused test and repository check green.
 
 ### WP3 — Commit line and raw transaction kernel
@@ -2196,21 +2423,25 @@ Accept:
 Prerequisites: WP2.
 
 Deliver:
-- FIFO async line;
-- transaction overlay, synchronous buffered writes, async committed reads;
-- ID minting/rollback; rewindable-before-entry rule;
-- base/turn/abort transaction capability construction and runtime validation;
+- FIFO async Session line serializing calls to synchronous `Storage.nextId()`;
+- synchronous buffering into one canonical `Write[]`; explicit async committed reads only before first write;
+- process-local ID burning on failed callbacks and the rewindable-before-entry rule;
+- ordinary/core/abort transaction construction and capability separation;
+- narrow pending/reference indexes for semantic helpers, with no general overlay or read-your-writes;
 - atomic task-output base creation, compatible reference admission and protected namespace/kind checks;
-- no public accept/write/runtime handles yet.
+- no public send/InputHandle/runtime handles yet; admission helpers remain internal.
 
 Accept:
-- concurrent commits serialize; async read holds line;
-- callback failure consumes no ID;
-- same-batch references validate from overlay;
-- non-turn cast direct entry rejects; typed data-only entry works;
+- concurrent callbacks serialize; an allowed async read holds the line; read after first write rejects
+  `ReadAfterWrite`;
+- creation/list-append builders call only synchronous `Storage.nextId`; callback failure burns those IDs in
+  the binding, and callback success invokes `Storage.commit` exactly once;
+- reopen may reuse never-committed IDs but starts after every committed created/list-appended ID; object IDs
+  and returned storage sequences are distinct;
+- same-callback references validate only through private semantic indexes and are not author-readable;
+- an ordinary transaction cannot instantiate a core token; casting adds no direct-entry implementation;
+  typed data-only host entry works;
 - managed/protected generic writes reject;
-- runtime strict-JSON validation rejects invalid entry/task/state payloads before persistence, including
-  payloads carried by imported pi-ai types;
 - no callback/signal dispatch on line.
 
 ### WP4 — Entries, context and forks
@@ -2234,16 +2465,30 @@ Accept:
 Prerequisites: WP4.
 
 Deliver:
-- queued/input-result/acceptance schemas and protected addresses;
-- async in-transaction accept/queue/write with request-key overlay dedupe;
+- queued/input-result/acceptance schemas and protected addresses, including conversation-scoped sticky inbox
+  identity/current materialization and direct protected result/receipt point lookup;
+- fixed turn-task classification by the live `pi.generation`/`pi.tool`/`pi.post_tools` set directly in each
+  conversation, evaluated prospectively over complete batches; no persisted busy flag or payload inspection;
+- protected core-task creation unavailable to ordinary task/host transactions;
+- internal async in-transaction accept/queue/write with committed pre-write lookup and private pending-key
+  dedupe, moved behind the protected admission capability;
+- `SendInput`/`InputHandle` declarations and an internal/test send facade; final public Harness export remains
+  gated, and scheduler-backed wait/activation integration belongs to WP7;
 - safe enqueue and placement revalidation;
 - post-tools/final/idle boundary transaction helpers;
-- pure prospective last-turn idle-boundary planner, without provider execution or a public factory API.
+- pure prospective fixed-turn-set idle-boundary planner, without provider execution or payload inspection.
 
 Accept:
-- complete mode table; idle same-batch append/remove; duplicate keys including same batch;
-- create conversation + accept through the private generation strategy + parent checkpoint atomically;
-- solitary and concurrent collapse traces;
+- complete followUp/steer/write mode table; idle send same-batch append/remove; busy send queues without task
+  creation; duplicate keys including same batch and cross-conversation retry;
+- inbox reads one complete current materialized ordered collection without per-read log replay; forks inherit
+  no inbox; result/receipt reads perform no list scan;
+- independent `steeringMode`/`followUpMode` all-versus-oldest selection, default one-at-a-time, preserves
+  global inbox order and unselected relative order; no v1 queue/drain bound;
+- ordinary tasks never affect admission busy; core task creation is accepted only from protected admission or
+  `CoreTaskTx`, and generation may instantiate fixed tool/post_tools children through `tx.task`;
+- create conversation + internal accept through the private fixed-generation strategy + parent checkpoint atomically;
+- speculative collapse does not make admission busy; concurrent collapse/generation traces;
 - stale queued head terminal result; no fault;
 - queued ownership never inferred from arbitrary checkpoints.
 
@@ -2252,38 +2497,43 @@ Accept:
 Prerequisites: WP5.
 
 Deliver:
-- pending creation and durable running reservation;
+- pending `task.create` and durable full-snapshot running reservation;
 - one central Chord tracker per live task output plus controlled read/mutate/replace facade;
-- capability-specific execute/recover runtime and normal terminal closures;
+- ordinary/core capability-specific execute/recover runtimes and normal terminal closures;
 - invocation identity/slot; atomic completed/failed outcome plus scratch retirement;
 - scratch transactions and normal closure seal/disposition behavior;
-- focused driver fixtures using typed test kinds and explicit task serving.
+- focused scheduler fixtures using typed test kinds while activation remains deferred to WP7.
 
 Accept:
 - running intent precedes effect; reopen chooses recover including no checkpoint;
 - repeated recovery from newer checkpoint under stable ID;
-- one closure outcome, same-batch minted result ID, throwing closure rollback/fault;
+- one closure outcome, same-commit Storage-minted result ID, throwing closure rollback/fault;
 - normal closure commits exactly once when still authorized; WP8 adds mark/close/fault discard races;
 - scratch crash retention/terminal retirement/post-retirement rejection;
 - shared output concurrent writes, final closure read/materialization and reference-derived retirement.
 
-### WP7 — Dependencies, serving and waits
+### WP7 — Session scheduler, dependencies and waits
 
 Prerequisites: WP6.
 
 Deliver:
-- live/dependency/conversation/ownership indexes;
-- stable conversation/session attachment and temporary drive/task/input waiters;
-- foreground idle and background continued serving;
-- self/dependency/input-cycle checks and temporary target serving.
+- disabled-scheduler bootstrap plus loading of the complete live-task/dependency seed needed by an internal
+  reopen/test factory; final binding lifecycle and Harness integration remain in WP8;
+- one inert-until-resumed scheduler over that complete Session live/dependency index;
+- idempotent `resume`, unconditional coalesced post-main-commit kick and no-lost-dirty drain handoff;
+- foreground-idle accounting while foreground and background tasks both execute;
+- task/input/idle point waiters that observe only and ensure resume when progress-seeking;
+- task dependency-cycle and direct/dependency self-wait checks, with no execution ownership scopes.
 
 Accept:
-- dependencies mean terminal and wake once;
-- distinct task IDs concurrent, same ID one invocation;
-- repeated/cancelled drives retain one attachment and no waiter leak;
-- terminal-owner descendants served without history traversal;
-- waitForInput result/missing/terminal-fast-path/caller-cancel and safe non-turn self-conversation case;
-- close/fault/shutdown waiter behavior is tested in WP8.
+- open invokes nothing; resume dispatches every eligible task across all conversations;
+- dependencies mean terminal and wake once; terminal/dependency commits kick successors;
+- distinct task IDs, including root/fork tasks, run concurrently; one task ID has one invocation;
+- resume/main-commit and commit/drain-exit races lose no kick and duplicate no invocation;
+- many kicks coalesce while all eligible tasks reserve; background continues after foreground idle;
+- input result/missing/terminal-fast-path/caller-cancel and task/idle waiter cleanup have no leak;
+- send and input wait on an inert reopen resume the Session; abort activation and close/fault/shutdown waiter
+  behavior are tested in WP8.
 
 ### WP8 — Cancellation and lifecycle
 
@@ -2291,20 +2541,23 @@ Prerequisites: WP7.
 
 Deliver:
 - mark/revoke (including mutable task output)/signal/join/fresh-abort sequence and abort runtime construction;
-- restricted repeated abort commits, turn abort closure, and mark/close/fault normal-closure discard;
+- restricted repeated ordinary/core abort commits and mark/close/fault normal-closure discard;
 - conversation abort operation, completion wait and queue policy;
 - close, shutdown and fault phase machines with shared repeated completions;
-- driver initialization that claims storage, loads live tasks/required ancestry, captures the task registry,
-  and performs missing-kind orphan reconciliation; any loading/validation/reconciliation failure closes and
-  releases storage before rejecting.
+- integration of the WP7 disabled-scheduler/live-task bootstrap into final Harness initialization, including
+  exclusive Storage binding, required ownership ancestry, task-registry capture and missing-kind orphan
+  reconciliation; any loading/validation/reconciliation failure closes the binding before rejecting.
 
 Accept:
 - every cancellation/lifecycle row in section 16 applicable to memory;
 - fresh abort checkpoint/reopen with read-only task output; repeated mark does not cancel abort;
-- passive abort writes but no future work; tool-like direct abort result for turn kind;
+- core passive abort writes but no future work; core tool direct abort result; ordinary abort has neither;
 - close writes no outcomes; shutdown marks all and preserves queues; fault preserves unfinished state;
-- initialization starts nothing; every missing live kind orphans, retires scratch and marks descendants;
-- failed reconciliation yields no usable driver; no history scan beyond live seed/required ancestry.
+- task/input/conversation abort on an inert Harness commits its durable request, resumes the Session and
+  completes the specified cleanup without changing scheduler scope;
+- initialization starts nothing; every missing live ordinary kind orphans, retires scratch and marks
+  descendants; ordinary task replace/remove rejects while that kind has a live instance;
+- failed reconciliation yields no usable Session; no history scan beyond live seed/required ancestry.
 
 ### WP8A — State-indexed task authoring adapter
 
@@ -2323,7 +2576,7 @@ Accept:
   fields; each handler receives its narrowed complete checkpoint variant;
 - inflight requires recover; start forbids it; initial has no checkpoint and no commit;
 - transition payloads reject missing/extra literal, variable, spread and async-return fields while preserving
-  turn/output/terminal-closure typing;
+  output/terminal-closure typing;
 - initial child creation and first checkpoint are one transition batch in crash tests; checkpoint-backed
   same-phase child creation commits before wait; direct intermediate phase change rejects;
 - one scheduler execute across multiple live transitions; reopen dispatch matrix for absent/start/inflight;
@@ -2361,9 +2614,10 @@ through a reviewed adapter boundary; no import from existing harness runtime/ses
 
 Do not implement these until their listed decision is settled and appended to this specification:
 
-- **Harness open/public handles/core registries:** wire the single final `Harness` only when the required
-  built-in kinds are implemented. It owns root/rootValues, public mutable registries, core replacements and
-  the production generation-admission strategy. There is no temporary foundation harness.
+- **Harness open/public handles/fixed core wiring:** wire the single final `Harness` only when the required
+  built-in kinds are implemented. It owns root/rootValues, public ordinary registries, fixed core kinds, the
+  one session scheduler, `resume`, `send`/`InputHandle`, idle waits and the production generation-admission
+  strategy. There is no temporary foundation harness and no public accept/queue/drive composition.
 - **Provider generation/system integration:** verify landed pi-ai messages-only behavior and define complete
   generation input/checkpoint/result/failure/abort schemas, retry/usage dedupe and deferred recovery table.
 - **Tool/post_tools:** define the complete built-in payload/checkpoint/outcome schemas, bounded/spill policy

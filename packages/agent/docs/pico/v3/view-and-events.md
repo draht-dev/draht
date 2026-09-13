@@ -10,12 +10,15 @@ Companion: `plugins.md` (harness extension surface, durability, Chord facets).
 
 1. **One snapshot, then one envelope per commit.** A watch captures the view and
    subscribes in one line operation; every later commit that touches the
-   conversation produces exactly one envelope, delivered in commit-`Seq` order.
-   No cursor, replay or acknowledgement: a gap means "open a fresh watch".
+   conversation produces exactly one envelope, delivered in commit order with a
+   contiguous per-watch `revision`. No cursor, replay or acknowledgement: a gap
+   means "open a fresh watch".
 2. **Ops are the truth, events are annotations.** The envelope carries Chord ops
    that transform the view document, and named events the kernel attaches because
-   it produced those ops and knows why. A client that folds only ops is never
-   wrong. A client that consumes only events never scans the view.
+   it produced those ops and knows why. Ops fully determine the replica: a client
+   that folds only ops is never wrong. Events annotate cause and outcome and may
+   carry transient facts the view deliberately does not retain; a client that
+   consumes only events never scans the view.
 3. **Path = event.** Every field of the view has a stable path, so an op on that
    path is a typed notification. Nothing in the view is ever discovered by
    diffing.
@@ -63,7 +66,7 @@ interface ConversationView {
   /** Non-turn live tasks (jobs, plugin kinds), described by their kind. Removed on terminal. */
   tasks: { [taskId: string]: { kind: string; background?: true; marked?: true; status: JsonValue } };
 
-  /** Plugin state slices, by namespace. */
+  /** Plugin presentation slices, by namespace: the namespace's declared `view` projection, never raw state. */
   plugins: { [namespace: string]: JsonValue };
 }
 
@@ -75,6 +78,7 @@ interface TurnView {
 }
 
 type GenerationStatus =
+  | { stage: "waiting"; on: "compaction" }                                 // replacement generation pending behind a collapse
   | { stage: "preparing" }                                                 // before `prepared`
   | { stage: "requesting"; attempt: number }                               // request sent, no frame yet
   | { stage: "streaming"; attempt: number }                                // first frame applied
@@ -84,13 +88,13 @@ type GenerationStatus =
 interface ToolSlot {
   callId: string; name: string; args: JsonValue;
   status: "pending" | "running" | "done" | "error" | "aborted";
-  waitingOn?: string;                   // set by the kernel while a beforeTool handler called BeforeToolApi.waiting(on); cleared when it returns
+  waitingOn?: string;                   // namespace of the beforeTool handler that awaited BeforeToolApi.waiting(ctx); cleared when it returns
   output?: string;                      // bounded stream so far (api.stream)
   progress?: string; details?: JsonValue;
   continuedBy?: Id;                     // background task that took over; see tasks[continuedBy]
   entry?: Id;                           // the pi.tool_result entry once landed
-  memos?: { [name: string]: JsonValue };// tool/hook memos (plugins.md §2); retired with the task
 }
+// Memos and other slot working state are never in the view (plugins.md §2); only the fields above are rendered.
 ```
 
 ### 2.1 Active transcript
@@ -120,16 +124,25 @@ interface ToolSlot {
 
 ```ts
 interface Envelope {
-  seq: Seq;                 // commit sequence; strictly increasing per watch
+  revision: number;         // contiguous per watch: snapshot.revision + 1, +2, …; storage Seq is not exposed
   ops: Op[];                // Chord ops over ConversationView (§4)
   events: ViewEvent[];      // named annotations for this commit (§5); may be empty
 }
 ```
 
-Delivery: folded into the kernel's view tracker on the line, listener called off
-the line, one envelope per commit that changed anything visible to this
-conversation. A listener throw closes that watch and reports through `onError`.
-`stop` is idempotent; nothing is delivered after `stop`.
+`revision` is per watch, not the storage commit sequence: a conversation watch
+sees only commits that touch its conversation, so the global `Seq` would have
+legitimate gaps. Storage `Seq` stays internal unless a public commit-correlation
+use appears.
+
+Delivery: folded into the kernel's view tracker on the line; the listener is
+invoked **synchronously, in order, off the line**, one envelope per commit that
+changed anything visible to this conversation. Envelopes arriving before
+`start()` are buffered (bounded; overflow closes the watch). Asynchronous
+consumers (the Chord bridge, application queues) own their own queue and
+backpressure policy (`plugins.md` §6.1). A listener throw closes that watch and
+reports through `onError`. `stop` is idempotent; nothing is delivered after
+`stop`.
 
 Base flush: after the kernel rebases the view tracker (reopen of a cold watch is a
 fresh snapshot instead), an envelope may carry `["r", view]` as its only op.
@@ -146,7 +159,7 @@ delete, `["a", path, str]` string append, `["t", path, n]` string truncate,
 |---|---|---|
 | `["entries"]` | `["p", ["entries"], n, 0, [e…]]` | entries appended (always at the end) |
 | `["entries"]` | `["p", ["entries"], 0, k, []]` then `["p", …, n, 0, [head]]` | new head: transcript truncated, head entry appended |
-| `["config", key]` | `s` / `d` | config changed / reset to default |
+| `["config", key]` | `s` / `d` | config changed; `config.reset(keys)` sets the declared default (only `model`, which has none, is deleted) |
 | `["inbox"]` | `p` | queued, placed (removed), aborted (removed) |
 | `["turn"]` | `["s", ["turn"], {…}]` / `["d", ["turn"]]` | input group started / ended |
 | `["turn","generation"]` | `s` / `d` | generation stage changes / generation ended |
@@ -155,14 +168,13 @@ delete, `["a", path, str]` string append, `["t", path, n]` string truncate,
 | `["turn","message","content",i,"arguments"]` | `s` | tool-call arguments materialized at checkpoint/end |
 | `["turn","tools"]` | `s` (whole array, with the assistant entry) | tool slots created for a new assistant message |
 | `["turn","tools",i,"status"]` | `s` | pending → running → done/error/aborted |
-| `["turn","tools",i,"waitingOn"]` | `s` / `d` | a `beforeTool` handler is waiting on a human/service (approval, question); cleared when it returns |
-| `["turn","tools",i,"memos",name]` | `s` | a memo was recorded (`api.memo` / hook memo) |
+| `["turn","tools",i,"waitingOn"]` | `s` / `d` | a `beforeTool` handler (namespace = value) is waiting on a human/service; cleared when it returns |
 | `["turn","tools",i,"output"]` | `s` | bounded stream flush (whole string; retention may drop the head) |
 | `["turn","tools",i,"progress"]`, `[…,"details"]`, `[…,"continuedBy"]` | `s` | `api.progress` |
 | `["compaction"]` | `s` / `d` | collapse started / stage changed / ended |
 | `["tasks", id]` | `s` / `d` | non-turn task appeared / status changed / terminal |
 | `["tasks", id, "status", …]` | any | kind-described status detail (jobs: stdout, exitCode, …) |
-| `["plugins", ns, …]` | any | plugin state |
+| `["plugins", ns, …]` | any | the namespace's `view` projection |
 
 Rule for kernel authors: mutate the tracked view through its proxy so the
 tracker records minimal ops; never rebuild subtrees. Streaming applies each
@@ -171,9 +183,12 @@ frame to `turn.message` in place (same reducer as pi-ai's frame reducer).
 ## 5. Events
 
 Events are emitted by core code inside the commit that causes them
-(`tx.emit(event)`, core authority). Plugin kinds may emit
-`{ type: "plugin.<ns>.<name>", … }` from their own commits. Every event is
-reconstructible from the same envelope's ops; the reverse is not required.
+(`tx.emit(event)`, core authority). Extensions emit `{ type: "plugin.<ns>.<name>", … }`
+through their namespace token from their own commits. Rule: ops fully determine
+the replica; events annotate the cause and outcome of the commit and may carry
+transient facts the view does not retain (`turn.ended.reason`,
+`task.ended.outcome`, `compaction.failed`, `warning`). An event must never be the
+only place a late joiner could learn something needed to render steady state.
 
 ```ts
 type ViewEvent =
@@ -194,7 +209,7 @@ type ViewEvent =
   | { type: "generation.completed"; taskId: Id; entry: Id; toolCalls: number }
   | { type: "generation.failed"; taskId: Id; reason: "provider" | "overflow" | "retries_exhausted" | "no_model"; detail: string; entry?: Id }
   // tools
-  | { type: "tool.waiting"; taskId: Id; callId: string; on: string }        // a beforeTool handler is waiting (approval, question, …)
+  | { type: "tool.waiting"; taskId: Id; callId: string; on: string }        // a beforeTool handler is waiting; `on` is its namespace
   | { type: "tool.started"; taskId: Id; callId: string; name: string }
   | { type: "tool.finished"; taskId: Id; callId: string; entry: Id; isError: boolean; control?: ToolControl }
   | { type: "tool.aborted"; taskId: Id; callId: string; entry: Id }
@@ -212,7 +227,7 @@ type ViewEvent =
   | { type: `plugin.${string}`; data: JsonValue };
 ```
 
-`warning` is the one event with no state counterpart; it exists for exactly the
+`warning` has no state counterpart at all; it exists for exactly the
 occurrences Codex models as `warning` / `error{willRetry}` notifications.
 
 ## 6. Commit-by-commit mapping
@@ -245,18 +260,19 @@ Ops are abbreviated; every row is one atomic envelope.
 | final answer, no triggers, no continuation (closure) | `entries +pi.assistant`; `turn` deleted; boundary placements (`inbox` splices, `entries +writes`) | `entry.added`, `generation.completed`, `turn.ended{done, answer}`, `input.placed`/`entry.added` for placed writes |
 | final answer, `onYield` continuation | `entries +pi.assistant`, `entries +pi.user{continuation}`; `turn.generation = { stage: "preparing" }` | `entry.added`×2, `generation.completed`; **no** `turn.ended` (same group continues) |
 | final answer with queued followUp/steer triggers | as "no triggers", then `entries +pi.user`, `turn = { inputs: triggers, tools: [] }`, `turn.generation = { stage:"preparing" }` | `turn.ended{done}`, `input.placed`, `entry.added`, `turn.started` |
-| terminal error / aborted-by-provider (closure) | `entries +pi.assistant` (display-only; `model` absent, message in `data`); `turn` deleted | `entry.added`, `generation.failed{provider|retries_exhausted, entry}`, `turn.ended{unanswered, failed}` |
-| `no_model`, overflow with nothing collapsible | `turn` deleted; overflow: `entries +pi.notice` (placed immediately: the closing task counts as gone) | `generation.failed`, `turn.ended{unanswered, failed}`, `entry.added` |
-| overflow with collapse (closure) | `compaction = { reason: "overflow", … }`; `turn.generation = { stage: "preparing" }` (replacement created `after` collapse) | `generation.failed{overflow}`, `compaction.started`; turn continues |
+| terminal error / aborted-by-provider (closure) | `entries +pi.assistant` (display-only; `model` absent, message in `data`); group resolved `unanswered/failed`; **final boundary runs**: placed writes, selected triggers; `turn` deleted, or replaced by a successor turn for triggers | `entry.added`, `generation.failed{provider|retries_exhausted, entry}`, `turn.ended{unanswered, failed}`, then `input.placed`/`entry.added`/`turn.started` as in "with triggers" |
+| `no_model`, overflow with nothing collapsible | as above; overflow additionally `entries +pi.notice` (placed immediately: the closing task counts as gone). `no_model` is not special-cased: a successor for queued triggers fails fast and resolves its own group | `generation.failed`, `turn.ended{unanswered, failed}`, `entry.added`, … |
+| overflow with collapse (closure) | `compaction = { reason: "overflow", … }`; `turn.generation = { stage: "waiting", on: "compaction" }` (replacement created `after` collapse) | `generation.failed{overflow}`, `compaction.started`; turn continues |
 | abort (fresh abort closure) | optional `entries +pi.assistant` (display-only partial, only if content was streamed); `turn` deleted | (`entry.added`), `turn.ended{unanswered, aborted}` |
 
 ### 6.3 Tool
 
 | moment | ops | events |
 |---|---|---|
-| `beforeTool` handler calls `api.waiting(on)` (`BeforeToolApi`, `plugins.md` §4.2) | `turn.tools[i].waitingOn = on` | `tool.waiting{callId, on}` |
-| handler returns / is withdrawn | `turn.tools[i].waitingOn` deleted | none |
-| `started` checkpoint (after `beforeTool`, before invocation) | `turn.tools[i].status = "running"` | `tool.started` |
+| `beforeTool` handler awaits `api.waiting(ctx)` (`BeforeToolApi`, `plugins.md` §4.2) | `turn.tools[i].waitingOn = ns` (its own commit) | `tool.waiting{callId, on: ns}` |
+| `started` checkpoint (after `beforeTool` allowed, before invocation) | `turn.tools[i].waitingOn` deleted; `turn.tools[i].status = "running"` (one commit) | `tool.started` |
+| handler blocks/throws | `waitingOn` deleted atomically with the synthetic error result below | |
+| handler unwinds on abort/suspend | `waitingOn` deleted in its own commit | none |
 | stream flush (≤ every 100 ms) | `turn.tools[i].output = text` | none |
 | `api.progress` | `turn.tools[i].{progress,details,continuedBy}` | none |
 | result (closure) | `entries +pi.tool_result`; `turn.tools[i].status = done|error`; `turn.tools[i].entry` | `entry.added`, `tool.finished{isError, control}`, (`warning` if truncated) |
@@ -287,8 +303,13 @@ Ops are abbreviated; every row is one atomic envelope.
 | hook-supplied summary | same as "summary lands" without a provider stage | same |
 
 Manual collapse (`c.collapse`) is `background`; it appears in `compaction`
-exactly the same way. `NothingToCollapse` rejects the call and produces no
-envelope.
+exactly the same way. At most one live collapse and exactly one live generation
+per conversation are core invariants (rejected before persistence, never
+generalized to maps in the view): a manual collapse while one is live rejects
+`CollapseInProgress`; a threshold trigger while one is live is skipped;
+`NothingToCollapse` rejects the call and produces no envelope. An overflow
+replacement generation waits behind its collapse as `turn.generation = { stage:
+"waiting", on: "compaction" }`.
 
 ### 6.6 Jobs and plugin kinds
 
@@ -390,11 +411,11 @@ own ops. Project image blobs out of `entries[].model` there, not in the kernel.
   document through its proxy, `flush()`es once, attaches the commit's events, and
   hands the same `Envelope` to every watcher. Fan-out cost is per conversation;
   the kernel never knows how many clients exist or what they render.
-- `watch(ctx)` returns `{ view, start, stop }` where `view` is a
-  `structuredClone` of the tracker target taken **on the line**, tagged with the
-  current commit `seq`, and the subscription is installed in the same line
-  operation. The first envelope a watcher receives is therefore exactly
-  `view.seq + 1`; there is no window in which a commit can land between snapshot
+- `watch(ctx)` returns `{ view, revision, start, stop }` where `view` is a
+  `structuredClone` of the tracker target taken **on the line**, `revision` is
+  this watch's starting revision, and the subscription is installed in the same
+  line operation. The first envelope a watcher receives is therefore exactly
+  `revision + 1`; there is no window in which a commit can land between snapshot
   and subscription.
 
 ### 9.2 Late joiners
@@ -407,7 +428,7 @@ in progress is state and is in the snapshot.
 | assistant message streaming | `turn.message` (partial), `turn.generation.stage === "streaming"` |
 | provider backoff | `turn.generation = { stage: "retrying", retryAt, lastError }` |
 | tool running | `turn.tools[i].status === "running"`, `output` so far |
-| tool waiting for approval / a question | `turn.tools[i].waitingOn` (+ the plugin's own Chord service instance, `plugins.md` §6) |
+| tool waiting for approval / a question | `turn.tools[i].waitingOn === ns` (+ the plugin's own Chord service instance, `plugins.md` §6) |
 | compaction | `compaction` |
 | background job | `tasks[id].status` |
 | queued follow-ups | `inbox` |
@@ -418,10 +439,12 @@ and still cannot show "retrying".
 
 ### 9.3 Reconnect
 
-A client keeps `lastSeq`. If an envelope arrives with `seq !== lastSeq + 1`
-(only possible on a transport drop between a Chord RPC service and its client),
-the client discards its replica and opens a fresh watch. Nothing is
-client-specific, so there is nothing to resume, acknowledge or replay.
+A client keeps `lastRevision`. If an envelope arrives with
+`revision !== lastRevision + 1` (only possible on a transport drop between a
+Chord RPC service and its client; in that transport Chord's own
+`ReplicatedStateDelivery.sequence` plays this role), the client discards its
+replica and opens a fresh watch. Nothing is client-specific, so there is nothing
+to resume, acknowledge or replay.
 
 ### 9.4 Concurrent decisions
 
@@ -447,9 +470,12 @@ namespaces), where its durable state lives, how it appears in this view, and how
 it is packaged as Chord facets is specified in `plugins.md`. The view-facing
 rules are:
 
-- extension state appears only as `plugins[ns]` (namespace slices),
-  `tasks[id].status` (kind-described), `turn.tools[i].{waitingOn,memos}` and
-  `tasks[id].memos` (task slots), and entries;
+- an extension's presentation is only what it projects: the namespace's
+  declared `view` projection under `plugins[ns]` (nothing by default), the kind's
+  `describe()` output under `tasks[id].status`, the core-rendered tool slot fields
+  (`status`, `waitingOn`, `output`, `progress`, `details`, `continuedBy`, `entry`),
+  and entries. Raw namespace state, memos and other slot working state never
+  appear;
 - extension events are `plugin.<ns>.*`, emitted with the namespace token from the
   extension's own commits; core events remain core-only;
 - nothing about Chord services is visible in the view. A keyed service instance
@@ -468,8 +494,14 @@ rules are:
   records by kind-owned `describe(task)`; the raw records never leave the kernel.
 - Display-only assistant entries carry the message in `data.display` and no
   `model`, so context derivation needs no special case.
-- Envelope assembly happens on the line; listener dispatch off the line; a
-  listener throw closes that watch only.
+- Envelope assembly happens on the line; listener dispatch off the line,
+  synchronous and in order; a listener throw closes that watch only.
+- Chord bridge (`plugins.md` §6.1): a bounded ordered adapter applies one raw
+  envelope's ops to the Chord `MutableReplicatedState` and calls `publish()` in
+  the same synchronous block (Chord's `subscribe()` publishes pending mutations
+  itself, so apply and publish must not be separated by an await); overflow or
+  publish failure closes and respawns that instance; a persisted commit is never
+  failed by a listener.
 - Tests: for every row in §6, assert the exact ops and events of that commit
   (memory backend, fake provider), plus snapshot-equals-fold after every
   envelope and a head-in-parent capture case.
@@ -477,6 +509,8 @@ rules are:
 ## 12. Open items
 
 - `warning` payload shape (source enum vs free string).
+- Application-level backpressure for slow asynchronous consumers is TBD; the
+  raw watch itself is not (synchronous listener, bounded pre-start buffer).
 - Whether `turn.tools` should keep finished slots of the previous assistant
   message when the continuation generation prepares (current: cleared at
   `prepared`; Codex keeps all items of the turn). Recommendation: keep them, keyed

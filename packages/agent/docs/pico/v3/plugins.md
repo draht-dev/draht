@@ -23,8 +23,11 @@ Read order: §1–§5 are the harness alone (no Chord); §6 is the Chord layer; 
    touch `turn`/`inbox`, resolve inputs, create core tasks, or write outside their
    namespace or their own task's slot. Enforced at runtime on every method, by
    type at the surface.
-5. **Everything an extension does is visible through the view** (`plugins[ns]`,
-   `tasks[id]`, `turn.tools[i]`, entries) and nowhere else.
+5. **An extension's presentation is only what it projects.** The view shows a
+   namespace's declared `view` projection (nothing by default), a kind's
+   `describe()` output, the core-rendered tool slot fields, and entries. Raw
+   namespace state (caches, keys, secrets) and slot working state (memos,
+   idempotency evidence) never appear in the view.
 
 ## 2. Durable primitives
 
@@ -40,10 +43,15 @@ Rules:
 - **Checkpoint** is the kind's recovery program counter, nothing else. It is not
   a place for working state (that is the slot) or long-lived state (namespace).
 - **Slot** is working state that should die with the task: progress, streamed
-  output, and **memos**. `memoOnce(slot, name, candidate)` is one operation:
-  `slot.memos[name] ??= candidate` inside one commit; it returns the durable
-  winner to every caller. It is the pico3 equivalent of the lane harness's
-  invocation memo and of Codex's item completion record.
+  output, and **memos**. `memoOnce(slot, key, candidate)` is one operation inside
+  one commit: if `Object.hasOwn(slot.memos, key)` return the stored value, else
+  store `candidate` and return it (`??=` is wrong: `null` is a valid value). It
+  returns the durable winner to every caller. A memo is durable coordination and
+  evidence; it is **not** exactly-once execution by itself. For an external
+  effect, persist the idempotency key *before* the effect and replay the effect
+  with the same key, relying on the external side to dedupe or to answer a
+  result lookup; persist a result *after* an effect only when a duplicate is
+  otherwise harmless. Slot contents are never in the view.
 - **Namespace slice** defaults are declared at registration, per document, and
   seeded lazily (`plugins[ns] ??= defaults` on first access). Choose the
   document by semantics: rewindable when a fork should see the value as it was
@@ -73,18 +81,22 @@ the harness is open (§5 for what happens then).
 h.registerTool(declaration: ToolDeclaration): () => void
 h.registerSection(section: SystemSection): () => void
 h.registerTaskKind(kind: Kind): () => void                     // ordinary kinds only; config keys checked for collisions
-h.namespace<T extends NamespaceShape>(ns: string, defaults: T): Namespace<T>   // token; unique, not `pi.*`
-h.hooks(kind, handlers: Partial<HooksOf<typeof kind>>, opts?): () => void       // harness-wide
-c.hooks(kind, handlers, { subtree? }): () => void                               // one conversation (+ owned)
-defineEntry<E>(kind: string): EntryKind<E>                                      // stateless; no registration
+h.namespace<T extends NamespaceShape>(ns: string, defaults: T, opts?: { view?: (slice: T) => JsonValue }): Namespace<T>
+                                                               // token with idempotent `unregister()`; unique, not `pi.*`; no `view` ⇒ nothing in the view
+h.hooks(ns: Namespace, kind, handlers: Partial<HooksOf<typeof kind>>, opts?): () => void   // harness-wide; bound to the namespace (§4.2)
+c.hooks(ns, kind, handlers, { subtree? }): () => void                             // one conversation (+ owned)
+defineEntry<E>(kind: string): EntryKind<E>                                      // stateless; throws on `pi.*` (§4.4)
 h.conversation(id, ctx): Promise<ConversationHandle | undefined>
-h.hold(): () => void                                                            // §5
+h.quiescent(): boolean;  h.hold(): () => void;  h.suspend(ctx): Promise<void>    // §5
 ```
 
 Token identity: the object passed to `tx.plugins(ns)`, `tx.emit(ns, …)`,
-`tx.createTask(kind, …)`, `h.hooks(kind, …)` must be the currently registered
-one; a redeclared or unregistered token rejects with `StaleDefinition`. This is
-what makes reload safe: code from a retired generation cannot keep writing.
+`tx.createTask(kind, …)`, `h.hooks(ns, kind, …)` must be the currently
+registered one; a redeclared or unregistered token rejects with
+`StaleDefinition`. The namespace *string* is what persists (memo keys, state
+slices); the token is only current runtime authority. This is what makes reload
+safe: code from a retired generation cannot keep writing, and a replacement
+registration of the same string finds the same state and memos.
 
 Before `resume()`: task kinds whose tasks may exist in storage, and hook
 handlers that recovery reruns (`beforeTool`, `systemInstructions`,
@@ -98,8 +110,8 @@ Inside a commit, extensions get:
 ```ts
 tx.plugins(ns): T                                   // typed slice in the declared document(s), tracked proxy
 tx.emit(ns, name: string, data: JsonValue): void    // -> { type: `plugin.${ns}.${name}`, data } in this commit's envelope
-tx.slot(task): Slot                                 // own task only (kinds); tools/hooks use api/info variants
-memoOnce(tx.slot(task), name, candidate)            // first writer wins
+tx.slot(task): Slot                                 // own task only (kinds); tools/hooks use the api variants
+memoOnce(tx.slot(task), key, candidate)             // first writer wins; hasOwn semantics (§2)
 tx.write(conversationId, entryKind, input): Promise<Id>
 tx.createTask(kind, input, opts): TaskRef<K>        // ordinary kinds
 ```
@@ -136,10 +148,13 @@ inside `pi.tool`, whose `started{call}` checkpoint is the effect evidence.
 
 How memos and `replay` interact: `beforeTool` and the `started` checkpoint
 happen before `execute`; a crash after `started` re-invokes only `replay:
-"safe"` tools. A safe tool that performed a keyed external effect records the
-key or result as a memo *before* the effect and reads it first on re-invocation,
-so the effect is not repeated. The memo is retired with the task, so it cannot
-leak into a later call with the same id.
+"safe"` tools. A safe tool that performs a keyed external effect records the
+idempotency key as a memo *before* the effect and reuses it on re-invocation;
+the external side dedupes or answers a result lookup for that key. Recording a
+result *after* the effect (as the question tool does) is only correct when a
+repeated effect is harmless, which asking a human again is. Memos are scoped to
+the tool task's slot and retired with it, so they cannot leak into a later call
+with the same id.
 
 Example: a question tool that waits for a human. `ask` is whatever the host
 wires in (§6.2 wires a Chord dialog service; a test wires a promise).
@@ -179,10 +194,15 @@ interface HookApi { readonly kind: string; readonly taskId: Id; readonly convers
 
 interface BeforeToolApi extends HookApi {
   readonly callId: string;
-  waiting(on: string): void;                         // kernel sets turn.tools[i].waitingOn = on until the handler returns (any way)
-  memo<T extends JsonValue>(name: string, candidate: T, ctx: Context): Promise<T>;   // memoOnce on the tool task's slot
+  waiting(ctx: Context): Promise<void>;              // commits turn.tools[i].waitingOn = <this handler's namespace>; idempotent
+  memo<T extends JsonValue>(name: string, candidate: T, ctx: Context): Promise<T>;   // memoOnce on the tool task's slot, keyed (task, namespace, name)
   memo<T extends JsonValue>(name: string, ctx: Context): Promise<T | undefined>;
+  emit(name: string, data: JsonValue, ctx: Context): Promise<void>;                   // plugin.<namespace>.<name>
 }
+// Hooks are registered with their namespace token (`h.hooks(ns, kind, handlers)`), so `waiting`, `memo` and
+// `emit` need no namespace argument and two plugins cannot collide on a memo name. `waitingOn` is cleared by the
+// kernel atomically with `started` (handler allowed), with the synthetic result (handler blocked or threw), or in
+// its own commit when the handler unwinds on abort or suspend.
 
 interface ToolHooks {
   beforeTool(call: ToolCall, api: BeforeToolApi, ctx: Context): { call?: ToolCall; block?: string } | void | Promise<…>;
@@ -193,30 +213,33 @@ interface ToolHooks {
 ```
 
 Durability: a hook has no task of its own. State tied to the invocation it is
-running in goes in the **hosting task's slot** via the point's `api.memo`
-(retired with that task, no cleanup code); state that outlives tasks goes in a
-**namespace**.
-Hooks commit through `h.conversation(api.conversationId, ctx)` handles and may
-wait as long as they like; `beforeTool` handlers rerun after a crash (they run
-before `started`) and after withdrawal (§5), which is why their decision must be
-a memo.
+running in goes in the **hosting task's slot** via the point's `api.memo`,
+keyed by `(hosting task, namespace string, name)` so it survives recovery and
+re-registration and cannot collide with another plugin's memo (retired with
+that task, no cleanup code); state that outlives tasks goes in a **namespace**.
+There is no hook invocation id: nothing durable identifies "the same handler
+invocation" across a crash or a reload, and the rerun must find the earlier
+decision. Hooks commit through `h.conversation(api.conversationId, ctx)`
+handles and may wait as long as they like; `beforeTool` handlers rerun after a
+crash or a suspend/reopen (they run before `started`), which is why their
+decision must be a memo.
 
 Example: tool approval.
 
 ```ts
 export function installApproval(h: Harness, ask: (req: ApprovalRequest, ctx: Context) => Promise<ApprovalDecision>): () => void {
-  const policy = h.namespace<{ autoAllow: string[] }>("approval", { sticky: { autoAllow: [] } });   // long-lived: which tools skip approval
+  const ns = h.namespace<{ autoAllow: string[] }>("approval", { sticky: { autoAllow: [] } });   // long-lived: which tools skip approval; no `view` ⇒ private
 
-  return h.hooks(kinds.tool, {
+  return h.hooks(ns, kinds.tool, {
     async beforeTool(call, api, ctx) {
       const c = await h.conversation(api.conversationId, ctx);
-      const auto = await c.commit((tx) => tx.plugins(policy).autoAllow.includes(call.name), ctx);
+      const auto = await c.commit((tx) => tx.plugins(ns).autoAllow.includes(call.name), ctx);
       if (auto) return;
-      let d = await api.memo<ApprovalDecision>("approval", ctx);             // decided before a crash / reload?
+      let d = await api.memo<ApprovalDecision>("decision", ctx);             // decided before a crash / reload? key = (task, "approval", "decision")
       if (d === undefined) {
-        api.waiting("approval");                                              // view: turn.tools[i].waitingOn = "approval"; event tool.waiting
+        await api.waiting(ctx);                                               // view: turn.tools[i].waitingOn = "approval"; event tool.waiting
         const candidate = await ask({ conversationId: c.id, callId: call.id, taskId: api.taskId, name: call.name, args: call.arguments }, ctx);
-        d = await api.memo("approval", candidate, ctx);                       // first writer wins
+        d = await api.memo("decision", candidate, ctx);                       // first writer wins
       }
       return d.decision === "deny" ? { block: `denied${d.by ? ` by ${d.by}` : ""}` } : undefined;
     },
@@ -226,8 +249,10 @@ export function installApproval(h: Harness, ask: (req: ApprovalRequest, ctx: Con
 
 No `afterTool` cleanup: the memo lives in the tool task's slot and is retired
 with it. Late joiners see `waitingOn` in the snapshot. Two clients deciding at
-once both get the memo winner. Abort unwinds `ask` through `ctx`; the kernel
-clears `waitingOn` when the handler returns for any reason.
+once both get the memo winner. Abort or suspend unwinds `ask` through `ctx`;
+the kernel clears `waitingOn` when the handler returns for any reason. Asking a
+human twice after a crash between `waiting` and the memo is harmless, which is
+why a post-effect memo is acceptable here.
 
 ### 4.3 Custom task kinds
 
@@ -266,10 +291,10 @@ export const indexer = defineTask<IndexInput, IndexCheckpoint, { files: number }
   },
   phases: {
     scanning: (task, rt, ctx) => scan(task, task.checkpoint.cursor, rt, ctx),
-    // in-flight: only entered after a crash. The batch key is the memo that tells us whether the write landed.
+    // in-flight: only entered after a crash. The batch key was persisted before the effect; the write is
+    // repeated with the same key and is safe only because writeBatch(key) is idempotent on the receiving side.
     async writing(task, rt, ctx) {
-      const done = await rt.commit((tx) => tx.slot(task).memos?.[task.checkpoint.batchKey], ctx);
-      if (done === undefined) await writeBatch(task.checkpoint.batchKey, ctx);       // idempotent by key
+      await writeBatch(task.checkpoint.batchKey, ctx);
       return { next: { phase: "scanning", cursor: task.checkpoint.batchKey } };
     },
   },
@@ -285,11 +310,10 @@ async function scan(task, cursor, rt, ctx) {
       return { status: "completed", result: { files: tx.slot(current).files } };
     } };
   }
-  await rt.commit((tx) => tx.checkpoint({ phase: "writing", batchKey: batch.key }), ctx);   // before the effect
+  await rt.commit((tx) => tx.checkpoint({ phase: "writing", batchKey: batch.key }), ctx);   // idempotency key before the effect
   await writeBatch(batch.key, ctx);
   return { next: (tx, current) => {
     const s = tx.slot(current); s.files += batch.files.length; s.lastFile = batch.files.at(-1);
-    (s.memos ??= {})[batch.key] = true;                                                    // effect evidence
     return { phase: "scanning", cursor: batch.key };
   } };
 }
@@ -313,21 +337,32 @@ for (const e of view.entries) if (ci.is(e)) render(e.data.run);
 ```
 
 Omit `model` for bookkeeping the model must not see. `head` and `edits` are
-core-only. Placement is boundary-safe: immediately when idle, otherwise at the
+core-only. `defineEntry` throws on a `pi.*` name and `c.write`/`tx.write` reject
+`pi.*` at runtime for non-core callers even after a cast, with one allow-listed
+exception: `pi.notice` (one user message, optional `data`, no `head`/`edits`),
+which hosts, jobs and tools use for notices. No entry registry or schema is
+required. Placement is boundary-safe: immediately when idle, otherwise at the
 next boundary (`view-and-events.md` §6.1).
 
 ### 4.5 Namespaces
 
 ```ts
-const ns = h.namespace<{ planMode: { enabled: boolean } }>("plan", { rewindable: { planMode: { enabled: false } } });
+const ns = h.namespace<{ planMode: { enabled: boolean }; cache: Record<string, string> }>(
+  "plan",
+  { rewindable: { planMode: { enabled: false } }, sticky: { cache: {} } },
+  { view: (s) => ({ planMode: s.planMode }) },                 // only this projection reaches the view; `cache` never does
+);
 await c.commit((tx) => { tx.plugins(ns).planMode.enabled = true; tx.emit(ns, "toggled", { enabled: true }); }, ctx);
 // view: plugins.plan.planMode; envelope: ["s", ["plugins","plan","planMode","enabled"], true] + { type: "plugin.plan.toggled", data }
+env.own(ns.unregister);                                        // idempotent; state stays, token goes stale
 ```
 
 Defaults are per document; a slice may span documents (`{ rewindable: …, sticky:
 … }`) and `tx.plugins(ns)` returns the merged typed object with each key routed
-to its document (same mechanism as core `config`). Re-registering with changed
-defaults adds new keys lazily and leaves removed keys as inert stored data.
+to its document (same mechanism as core `config`). `view` is a pure projection
+the kernel re-evaluates when the slice changes; without it the namespace has no
+presence in the view. Re-registering the same string with changed defaults adds
+new keys lazily and leaves removed keys as inert stored data.
 
 ### 4.6 Owned conversations and jobs
 
@@ -337,36 +372,46 @@ extend them. See `pico-handoff-v2.md` §8, §10.5 and the hardening handoff §15
 
 ## 5. Unregister, re-register, reload
 
-Every registration can be undone and redone while the harness is open. What
-happens to in-flight work:
+Every registration can be undone and redone while the harness is open.
 
 | contribution | on unregister | on re-register |
 |---|---|---|
-| namespace | token stale; `tx.plugins`/`tx.emit` with it reject | new token for the same `ns`; stored state untouched; new defaults seeded lazily |
-| hooks | removed from chains; a **running** handler is cancelled through its registration ctx and the chain re-runs from the start with current handlers (`beforeTool`: safe, it precedes `started`; observers: skipped) | joins the chain |
+| namespace (`ns.unregister()`, idempotent) | token stale; `tx.plugins`/`tx.emit`/`h.hooks(ns, …)` with it reject | new token for the same string; stored state and memos untouched; new defaults seeded lazily |
+| hooks | removed from future chains; a handler already running continues to completion (it is cancelled only by abort or `suspend`) | joins the chain |
 | task kind | pending tasks of the kind are not dispatched (not orphaned; orphaning is open-time only); running invocations keep the kind object they captured | pending tasks dispatch with the new implementation; config keys re-checked |
 | tool / section | revision bump; in-flight invocations keep their captured declaration; preparation snapshots retry | same |
 | entry kind | nothing | nothing |
 
-Handler withdrawal is what makes a reload of the approval feature safe: the old
-handler's `ask` promise can never settle once its dialog is gone, so the kernel
-cancels it and re-runs `beforeTool`; the new handler asks again through the new
-dialog, or finds the memo if a decision had already landed.
+Reload replaces code, never durable state. Two modes, chosen by the host:
 
-`h.hold(): () => void` defers *starting* new hook chains and new task dispatch
-until released; commits, streaming and running invocations continue. The
-reload sequence a host must follow:
+- **Quiescent reload.** `h.quiescent()` is true when the scheduler holds **no
+  invocation**, running or sleeping: no phase handler, no `retrying`/`deferred`
+  sleep, no job poll, no waiting `beforeTool`. Live task *records* may exist
+  (pending, or between invocations). Then: `release = h.hold()` (defers new
+  dispatch and new hook chains; commits and reads continue) → deactivate old
+  facets (their disposals unregister) → activate new ones (re-register) →
+  `release()`.
+- **Suspend and reopen** when not quiescent (the first safe version for active
+  work). `h.suspend(ctx)`: stop dispatch, cancel every in-process invocation
+  context, await unwind, close storage; task records stay live and nothing is
+  terminalized. Reopen with the new registrations and let ordinary recovery run:
+  pre-effect phases rerun, `started` tools replay if safe and still safe, unsafe
+  ones become interrupted results, other phases recover per their kind. Memos
+  make reruns cheap (an approval already decided is not asked again). The
+  injected `ProcessHost` must outlive the harness instance so running jobs
+  reconcile through `status(key)` instead of becoming `unknown`.
 
-```text
-release = h.hold()
-  deactivate old facets      → their env.own() disposals unregister
-  activate new facets        → onActivate re-registers (same ns / kind names, new tokens)
-release()
-```
+Cancelling live calls of a tool or kind that the new generation no longer
+registers is not a transparent migration: it durably aborts them, cannot undo
+external effects, and post-tools observes aborted results. It is an explicit
+host policy (`suspend({ abortRemoved: true })`), never the default. Generation
+leases (old registrations kept alive until captured invocations drain while new
+work uses replacements) are a possible later refinement; they are not required
+for v1.
 
-Registration therefore belongs in `onActivate`, not `setup`: during a
-shape-preserving reload the replacement's `setup` runs before the old facet is
-deactivated, and two live registrations of one namespace would collide.
+Registration belongs in `onActivate`, not `setup`: during a shape-preserving
+reload the replacement's `setup` runs before the old facet is deactivated, and
+two live registrations of one namespace string would collide.
 
 ## 6. The Chord layer
 
@@ -400,7 +445,7 @@ export const harnessSessionFacet = defineFacet({
       await handle.open(storage, { models, processHost }, ctx);
       handle.onConversation((c) => {                            // existing at open, and every fork/subagent created later
         const view = env.replicatedState(c.snapshot());         // built on the line
-        c.attachView(view);                                     // kernel mutates view.state and calls view.publish(ctx) on the line after each commit
+        c.attachView(view);                                     // bounded ordered adapter: raw envelopes → view.state + publish(), off the line (below)
         env.own(conversations.spawn(String(c.id), { view, send: (i, cx) => c.send(i, cx).then((r) => r.id), /* … */ }));
       });
     });
@@ -409,11 +454,23 @@ export const harnessSessionFacet = defineFacet({
 });
 ```
 
-`ConversationView` gains `commit: { seq, events }` so events ride inside the
-replicated member (one Chord sequence = one commit); a subscriber reads
-`value.commit.events` after each delivery. Chord's subscription snapshot gives
-late joiners the member at its current sequence, so §9 of `view-and-events.md`
-is implemented by Chord, not by us.
+`ConversationView` gains `commit: { events }` so events ride inside the
+replicated member; a subscriber reads `value.commit.events` after each delivery.
+No revision or storage sequence is placed in the view: Chord's
+`ReplicatedStateDelivery.sequence` is contiguous per member and plays that role.
+
+Publication must not happen on the Session line. Chord's `publish()` invokes
+source and subscriber listeners synchronously and a subscriber may throw or be
+slow, and `subscribe()` itself publishes pending mutations. The bridge is a
+bounded ordered adapter: the kernel enqueues raw envelopes from its own view
+tracker; the adapter, off the line, applies one envelope's ops to
+`view.state`, sets `commit.events`, and calls `publish(ctx)` in the **same
+synchronous block** (no await between apply and publish). One raw envelope =
+one publish = one Chord sequence. If the queue overflows or `publish` throws,
+close that keyed instance and respawn it with a fresh snapshot; a persisted Pico
+commit is never turned into a failure. Chord's subscription snapshot then gives
+late joiners the member at its current sequence, so §9 of
+`view-and-events.md` is implemented by Chord, not by us.
 
 ### 6.2 A feature: contract + session facet + presentation facet
 
@@ -493,31 +550,46 @@ export const indexerSessionFacet = defineFacet({
 ### 6.3 What the session worker does at reload
 
 ```text
-release = harness.hold()
-FacetHost.reload(candidates)      // old facets' env.own() disposals unregister; new onActivate re-registers
-release()
+if (harness.quiescent()) {
+  release = harness.hold()
+  FacetHost.reload(candidates)    // old facets' env.own() disposals unregister; new onActivate re-registers
+  release()
+} else {
+  await harness.suspend(ctx)      // cancel invocations, close storage; task records stay live
+  FacetHost.reload(candidates)
+  await harness.reopen(ctx)       // recovery runs against the new registrations
+}
 ```
 
-Nothing else. Durable state, running tasks and open conversations are
-untouched; withdrawn hook handlers are re-run per §5.
+Durable state, task records and open conversations are untouched either way
+(§5).
 
 ## 7. Tests the hardening must include
 
-- Memo: two concurrent `api.memo` writers receive the same winner; a crash after
-  the memo skips `ask`; before it re-asks; the memo is gone after the tool task
-  terminalizes.
-- Hooks: `BeforeToolApi.waiting` sets/clears `waitingOn` (also on throw and abort);
-  withdrawal cancels a waiting `beforeTool` and re-runs the chain; the decision
-  memo survives a crash between `waiting` and `started`.
-- Custom kind: crash in the in-flight phase re-enters it; batch memo prevents a
-  duplicate write; `describe()` output appears in `tasks[id].status`;
+- Memo: two concurrent `api.memo` writers receive the same winner; `null` is a
+  stored value (hasOwn, not `??=`); a crash after the memo skips `ask`, before it
+  re-asks; the memo is gone after the tool task terminalizes; two namespaces
+  using the same memo name on one task do not collide.
+- Hooks: `await api.waiting(ctx)` sets `waitingOn` in its own commit and it is
+  cleared atomically with `started`, with the synthetic result on block/throw,
+  and in its own commit on abort/suspend; the decision memo survives a crash
+  between `waiting` and `started`; memos never appear in the view.
+- Custom kind: crash in the in-flight phase re-enters it and repeats the keyed
+  effect (test with a fake idempotent sink and a crash between effect and the
+  next checkpoint); `describe()` output appears in `tasks[id].status`;
   unregistered kind leaves pending tasks pending and orphans only at open.
 - Namespaces: writes outside `plugins[ns]` reject; stale token rejects;
-  re-register keeps values and seeds new defaults; rewindable slice is inherited
-  by a fork and readable at an entry.
-- Reload: `hold()` defers dispatch and hook chains but not commits; the
-  hold/reload/release sequence with the approval facet lets a pending call be
-  approved through the new generation.
+  `unregister` is idempotent; re-register keeps values and memos and seeds new
+  defaults; only the `view` projection appears in the view; rewindable slice is
+  inherited by a fork and readable at an entry.
+- Entries: `defineEntry("pi.x")` throws; `write` of any `pi.*` except `pi.notice`
+  rejects at runtime after a cast; `pi.notice` with `head`/`edits` rejects.
+- Reload: `quiescent()` is false while any invocation exists (including a
+  waiting `beforeTool` and a polling job); `hold()` defers dispatch and hook
+  chains but not commits; suspend/reopen with the approval facet lets a pending
+  call be approved through the new generation without asking twice when a
+  memo exists; `ProcessHost` survives suspend/reopen and a running job
+  reconciles.
 - Chord: loopback facet tests for approval and question (session + presentation
   fixtures), late-joiner hydration of an open dialog instance, and
   `ConversationService.view` sequence equals commit sequence.

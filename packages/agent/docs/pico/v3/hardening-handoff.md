@@ -32,11 +32,15 @@ Specifically superseded in this document:
 |---|---|
 | Accepted direction #3 (separate `rewindable`/`sticky` view fields with separate op lists) | one flat view document with `config`, `inbox`, `turn`, `compaction`, `tasks`, `plugins` and one op list (`view-and-events.md` §2–§4); the storage split stays |
 | Accepted direction #2 "live task slots ... in the view" and §13 last paragraph (`TaskRef<K>` slot typing) | slots remain, but the view publishes kind-described `tasks[id].status` via `describe()`, never raw task records (`view-and-events.md` §2.2, §6.6; `plugins.md` §4.3) |
-| §9 Watch protocol: envelope shape and `applyDelta` | `Envelope { seq, ops, events }` folded with `applyImmutable`; the active-transcript definition and capture rules in §9 here remain normative (`view-and-events.md` §3, §5, §9) |
-| §9 bounded capacity / overflow-close | retained for in-process watches; with Chord `ReplicatedState` as the transport (`plugins.md` §6.1) Chord owns sequencing and gap detection |
+| §9 Watch protocol: envelope shape, `Seq` ordering and `applyDelta` | `Envelope { revision, ops, events }` with a contiguous per-watch `revision` (storage `Seq` is not exposed), folded with `applyImmutable`; the active-transcript definition and capture rules in §9 here remain normative (`view-and-events.md` §3, §5, §9) |
+| §9 bounded capacity / overflow-close | the raw watch invokes its listener synchronously in order; only the pre-`start` buffer is bounded (overflow closes the watch); asynchronous consumers own their queue (`view-and-events.md` §3; `plugins.md` §6.1 for the Chord bridge) |
+| §13 plugin state visibility | a namespace is in the view only through its declared `view` projection; memos and slot working state are never in the view (`plugins.md` §1.5, §2, §4.5) |
+| §15 `beforeTool` throw = block; hooks by name | hooks are registered with their namespace token (`h.hooks(ns, kind, handlers)`); `BeforeToolApi.waiting(ctx)` is asynchronous; memo keys are `(task, namespace, name)` (`plugins.md` §4.2) |
+| §16 / view §6.2 generation failure closures | every generation failure resolves the group `unanswered/failed`, runs the final boundary and starts a successor for queued triggers (`view-and-events.md` §6.2) |
+| §4.4 entries / §1 `pi.*` | `pi.*` entry names reject for non-core callers except the allow-listed `pi.notice` (`plugins.md` §4.4) |
 | §13 plugin state (`plugins[pluginId]` slices, extra document shard) | `h.namespace(ns, defaults)` tokens, `tx.plugins(ns)`, `tx.emit(ns, …)`, lazy seeding; extra shards stay deferred (`plugins.md` §2, §3, §4.5) |
 | §15 tool API (candidate) | `ToolApi` with `memo` (slot memoOnce), `waiting`/`memo` on `BeforeToolApi`, `waitingOn` on the tool slot (`plugins.md` §4.1–§4.2; `view-and-events.md` §2, §6.3) |
-| §1 "install fixed built-ins internally" / registration at open | registration capabilities callable while open, before-`resume()` rule, `hold()/release()`, handler withdrawal and chain rerun (`plugins.md` §3, §5) |
+| §1 "install fixed built-ins internally" / registration at open | registration capabilities callable while open, before-`resume()` rule, `quiescent()/hold()` for idle reload and `suspend()/reopen` otherwise; no handler-withdrawal machinery in v1 (`plugins.md` §3, §5) |
 | §16 `pi.plugin` handlers map | folded into custom task kinds; `pi.plugin` may stay as a convenience kind but is not the plugin mechanism |
 
 Everything else here (authority explanation, proxy lifetime, prospective busy,
@@ -262,11 +266,11 @@ Cancellation only removes/rejects that waiter; it does not cancel durable work. 
 Keep the rendering-friendly `ConversationView` and Chord document ops, but implement the settled watch behavior:
 
 - capture and subscription are one line operation;
-- committed envelopes are delivered in commit-`Seq` order;
+- committed envelopes are delivered in commit order with a contiguous per-watch `revision` (storage `Seq` is not exposed);
 - one commit produces one envelope folded into the view before the listener runs;
-- listener execution is off-line;
+- listener execution is off-line, synchronous and in order;
 - listener throw or decoder failure closes only that watch and reports through `onError`; it never rejects the already-persisted writer;
-- bounded capacity (default 256); overflow closes the watch;
+- envelopes before `start()` are buffered with a bounded capacity (default 256); overflow closes the watch; no other queue exists in the raw watch;
 - no cursor, replay, acknowledgement, deduplication, or resnapshot protocol; the client opens a fresh watch;
 - `stop`/unsubscribe is idempotent;
 - no callbacks after close/stop.
@@ -352,7 +356,7 @@ Make the standalone `tsconfig` portable: no `/home/claude` paths, exclude design
 Keep fixed core document fields and the flat typed `c.config` facade.
 
 - Derive/seed defaults from registered kind definitions rather than duplicating them in `defaultRewindable`/`defaultSticky` and kind configs.
-- Deleting/unsetting a key restores its declared default; only model remains optional among built-ins.
+- Resetting a key is an explicit operation (`config.reset(keys)`; RPC `configReset`), never assigning `null`: storage deletes the override, the resolved view sets the declared default; only `model`, which has no default, is deleted from the view.
 - Do not use `value ?? default`, because durable `null` is a legitimate value. Test property presence.
 - Custom kind config defaults must be visible both through `c.config` and to the task itself before any explicit set.
 - Reject config-key collisions at compile time where practical and always at installation.

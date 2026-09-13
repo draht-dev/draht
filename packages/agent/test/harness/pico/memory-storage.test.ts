@@ -1,21 +1,38 @@
-import { TODO_CONTEXT } from "@draht/chord/context";
+import { TODO_CONTEXT, withCancel } from "@draht/chord/context";
 import { describe, expect, it, vi } from "vitest";
+import { defineInternalList, defineInternalValue } from "../../../src/harness/pico/addresses.ts";
 import {
+	conversationList,
+	conversationValue,
 	defineList,
 	defineValue,
 	InvalidHistoryPosition,
 	type JsonValue,
 	MemoryStorage,
-	ReadAfterWrite,
+	OutputRetired,
 	ScratchRetired,
-	Session,
-	SharedOutputRetired,
+	sessionValue,
 	type Task,
+} from "../../../src/harness/pico/index.ts";
+import {
+	Closed,
+	Faulted,
+	NestedLineOperation,
+	ReadAfterWrite,
+	Session,
 	type TaskCreate,
 	type Transaction,
-} from "../../../src/harness/pico/index.ts";
+} from "../../../src/harness/pico/session.ts";
 
 const ctx = TODO_CONTEXT;
+
+function deferred(): { readonly promise: Promise<void>; readonly resolve: () => void } {
+	let resolve!: () => void;
+	const promise = new Promise<void>((settled) => {
+		resolve = settled;
+	});
+	return { promise, resolve };
+}
 
 function taskSpec(
 	conversationId: number,
@@ -44,13 +61,13 @@ async function setTask(session: Session, id: number, update: (task: LiveTask) =>
 
 describe("Pico Session over MemoryStorage", () => {
 	it("separates IDs from sequences and burns IDs from failed callbacks", async () => {
-		const storage = new MemoryStorage();
+		const storage = MemoryStorage.create();
 		expect(await storage.commit([{ type: "conversation.create", conversation: { id: 10 } }], ctx)).toEqual([1]);
 		const state = defineValue<string>({ type: "session" }, "test.state");
 		expect(await storage.commit([{ type: "value.set", address: state, value: "set" }], ctx)).toEqual([2]);
 		expect(await new Session(storage).commit((tx) => tx.createConversation({}), ctx)).toBe(11);
 
-		const sessionStorage = new MemoryStorage();
+		const sessionStorage = MemoryStorage.create();
 		const commit = vi.spyOn(sessionStorage, "commit");
 		const session = new Session(sessionStorage);
 		await expect(
@@ -71,14 +88,14 @@ describe("Pico Session over MemoryStorage", () => {
 			}, ctx),
 		).rejects.toBeInstanceOf(ReadAfterWrite);
 		expect(await session.commit((tx) => tx.createConversation({}), ctx)).toBe(4);
-		expect(
-			await session.commit(async (tx) => {
+		await expect(
+			session.commit(async (tx) => {
 				const read = tx.getConversation(1);
 				expect(() => tx.createConversation({})).toThrow("Transaction writes must await reads");
 				await read;
-				return tx.createConversation({});
 			}, ctx),
-		).toBe(5);
+		).rejects.toThrow("Transaction writes must await reads");
+		expect(await session.commit((tx) => tx.createConversation({}), ctx)).toBe(5);
 
 		let leaked!: Transaction;
 		await session.commit((tx) => {
@@ -97,24 +114,248 @@ describe("Pico Session over MemoryStorage", () => {
 		expect(commit).toHaveBeenCalledTimes(5);
 	});
 
-	it("leaves state and sequence unchanged when persistence rejects", async () => {
-		const storage = new MemoryStorage();
-		const commit = vi.spyOn(storage, "commit").mockRejectedValueOnce(new Error("persistence failed"));
-		await expect(new Session(storage).commit((tx) => tx.createConversation({}), ctx)).rejects.toThrow(
-			"persistence failed",
-		);
+	it("serializes direct reads and commits in invocation order", async () => {
+		const session = new Session(MemoryStorage.create());
+		const entered = deferred();
+		const release = deferred();
+		const holding = session.commit(async () => {
+			entered.resolve();
+			await release.promise;
+		}, ctx);
+		await entered.promise;
+
+		let firstReadSettled = false;
+		const firstRead = session.getConversations([1], ctx).then((conversations) => {
+			firstReadSettled = true;
+			return conversations;
+		});
+		const created = session.commit((tx) => tx.createConversation({}), ctx);
+		const secondRead = session.getConversations([1], ctx);
+		await Promise.resolve();
+		expect(firstReadSettled).toBe(false);
+
+		release.resolve();
+		await holding;
+		expect(await firstRead).toEqual(new Map());
+		expect(await created).toBe(1);
+		expect((await secondRead).has(1)).toBe(true);
+	});
+
+	it("checks commit cancellation before queueing and before invoking its callback", async () => {
+		const storage = MemoryStorage.create();
+		const commit = vi.spyOn(storage, "commit");
+		const session = new Session(storage);
+		const entered = deferred();
+		const release = deferred();
+		const holding = session.commit(async () => {
+			entered.resolve();
+			await release.promise;
+		}, ctx);
+		await entered.promise;
+
+		const beforeEntry = withCancel(ctx);
+		const beforeEntryError = new Error("cancelled before entry");
+		beforeEntry.cancel(beforeEntryError);
+		let beforeEntryCallbackRan = false;
+		await expect(
+			session.commit(() => {
+				beforeEntryCallbackRan = true;
+			}, beforeEntry.context),
+		).rejects.toBe(beforeEntryError);
+		expect(beforeEntryCallbackRan).toBe(false);
+
+		const beforeCallback = withCancel(ctx);
+		const beforeCallbackError = new Error("cancelled before callback");
+		let beforeCallbackRan = false;
+		const queued = session.commit(() => {
+			beforeCallbackRan = true;
+		}, beforeCallback.context);
+		beforeCallback.cancel(beforeCallbackError);
+		release.resolve();
+		await holding;
+		await expect(queued).rejects.toBe(beforeCallbackError);
+		expect(beforeCallbackRan).toBe(false);
+		expect(commit).not.toHaveBeenCalled();
+	});
+
+	it("uses a non-cancellable context for admitted persistence", async () => {
+		const storage = MemoryStorage.create();
+		const commit = vi.spyOn(storage, "commit");
+		const read = vi.spyOn(storage, "getConversations");
+		const session = new Session(storage);
+		const caller = withCancel(ctx);
+		const callerError = new Error("cancelled after callback admission");
+		expect(
+			await session.commit((tx) => {
+				const id = tx.createConversation({});
+				caller.cancel(callerError);
+				return id;
+			}, caller.context),
+		).toBe(1);
 		expect(commit).toHaveBeenCalledTimes(1);
+		expect(commit.mock.calls[0]![1].abortSignal).toBeUndefined();
+		expect(caller.context.abortSignal?.reason).toBe(callerError);
+		expect((await session.getConversations([1], ctx)).has(1)).toBe(true);
+		expect(read.mock.calls[0]![1]).toBe(ctx);
+	});
+
+	it("rejects nested Session line entry immediately", async () => {
+		const session = new Session(MemoryStorage.create());
+		const otherSession = new Session(MemoryStorage.create());
+		expect(
+			await session.commit(async (tx) => {
+				await expect(session.getConversations([], ctx)).rejects.toBeInstanceOf(NestedLineOperation);
+				await expect(session.commit(() => undefined, ctx)).rejects.toBeInstanceOf(NestedLineOperation);
+				await expect(session.close(ctx)).rejects.toBeInstanceOf(NestedLineOperation);
+				await expect(otherSession.getConversations([], ctx)).rejects.toBeInstanceOf(NestedLineOperation);
+				return tx.createConversation({});
+			}, ctx),
+		).toBe(1);
+		expect((await session.getConversations([1], ctx)).has(1)).toBe(true);
+		await otherSession.close(ctx);
+	});
+
+	it("rejects a transaction when a caught ReadAfterWrite poisoned it", async () => {
+		const storage = MemoryStorage.create();
+		const commit = vi.spyOn(storage, "commit");
+		const session = new Session(storage);
+		await expect(
+			session.commit(async (tx) => {
+				tx.createConversation({});
+				try {
+					await tx.getConversation(1);
+				} catch (error) {
+					expect(error).toBeInstanceOf(ReadAfterWrite);
+				}
+			}, ctx),
+		).rejects.toBeInstanceOf(ReadAfterWrite);
+		expect(commit).not.toHaveBeenCalled();
+		expect(await session.commit((tx) => tx.createConversation({}), ctx)).toBe(2);
+	});
+
+	it("reopens from the committed-ID high-water and reuses only uncommitted IDs", async () => {
+		const storage = MemoryStorage.create();
+		expect(storage.nextId()).toBe(1);
+		await storage.close(ctx);
+		await storage.close(ctx);
+		expect(storage.nextId()).toBe(1);
+		const session = new Session(storage);
+
+		expect(await session.commit((tx) => tx.createConversation({}), ctx)).toBe(2);
+		expect(storage.nextId()).toBe(3);
+		await session.close(ctx);
+		expect(storage.nextId()).toBe(3);
+
+		const list = defineList<string>({ type: "session" }, "test.high-water");
+		expect(
+			await storage.commit(
+				[
+					{ type: "list.append", address: list, element: { id: 20, value: "retired" } },
+					{ type: "list.clear", address: list },
+				],
+				ctx,
+			),
+		).toEqual([2, 3]);
+		await storage.close(ctx);
+		expect(storage.nextId()).toBe(21);
+	});
+
+	it("faults and closes the Session after an uncertain persistence failure", async () => {
+		const storage = MemoryStorage.create();
+		const commit = vi.spyOn(storage, "commit").mockRejectedValueOnce(new Error("persistence failed"));
+		const close = vi.spyOn(storage, "close");
+		const session = new Session(storage);
+		const caller = withCancel(ctx);
+		await expect(
+			session.commit((tx) => {
+				const id = tx.createConversation({});
+				caller.cancel(new Error("cancelled during persistence"));
+				return id;
+			}, caller.context),
+		).rejects.toThrow("persistence failed");
+		expect(commit).toHaveBeenCalledTimes(1);
+		expect(close).toHaveBeenCalledTimes(1);
+		expect(close.mock.calls[0]![0].abortSignal).toBeUndefined();
+		await expect(session.getConversations([1], ctx)).rejects.toBeInstanceOf(Faulted);
+		await expect(session.commit((tx) => tx.createConversation({}), ctx)).rejects.toBeInstanceOf(Faulted);
+		await session.close(ctx);
+		await session.close(ctx);
+		expect(close).toHaveBeenCalledTimes(1);
+		const recovered = new Session(storage);
+		await recovered.close(ctx);
+		expect(close).toHaveBeenCalledTimes(2);
 		expect(await storage.getConversations([1], ctx)).toEqual(new Map());
 		commit.mockRestore();
 
 		const state = defineValue<string>({ type: "session" }, "test.after-failure");
 		expect(await storage.commit([{ type: "value.set", address: state, value: "stored" }], ctx)).toEqual([1]);
 		expect(await storage.getValue(state, undefined, ctx)).toBe("stored");
-		expect(storage.nextId()).toBe(2);
+		expect(storage.nextId()).toBe(1);
+	});
+
+	it("makes operations queued behind an uncertain commit observe Faulted", async () => {
+		const storage = MemoryStorage.create();
+		const enteredCommit = deferred();
+		const rejectCommit = deferred();
+		vi.spyOn(storage, "commit").mockImplementationOnce(async () => {
+			enteredCommit.resolve();
+			await rejectCommit.promise;
+			throw new Error("uncertain");
+		});
+		const session = new Session(storage);
+		const failing = session.commit((tx) => tx.createConversation({}), ctx);
+		await enteredCommit.promise;
+
+		let laterCallbackRan = false;
+		const queuedRead = session.scanConversations({ limit: 1 }, ctx);
+		const queuedCommit = session.commit(() => {
+			laterCallbackRan = true;
+		}, ctx);
+		rejectCommit.resolve();
+
+		await expect(failing).rejects.toThrow("uncertain");
+		await expect(queuedRead).rejects.toBeInstanceOf(Faulted);
+		await expect(queuedCommit).rejects.toBeInstanceOf(Faulted);
+		expect(laterCallbackRan).toBe(false);
+	});
+
+	it("enforces exclusive Storage ownership until Session close succeeds", async () => {
+		const storage = MemoryStorage.create();
+		const first = new Session(storage);
+		expect(() => new Session(storage)).toThrow("already owned");
+		await first.close(ctx);
+		const reopened = new Session(storage);
+		await reopened.close(ctx);
+	});
+
+	it("keeps Storage owned when close fails", async () => {
+		const storage = MemoryStorage.create();
+		const close = vi.spyOn(storage, "close").mockRejectedValueOnce(new Error("close failed"));
+		const session = new Session(storage);
+		await expect(session.close(ctx)).rejects.toThrow("close failed");
+		await expect(session.close(ctx)).rejects.toThrow("close failed");
+		expect(close).toHaveBeenCalledTimes(1);
+		expect(() => new Session(storage)).toThrow("already owned");
+	});
+
+	it("closes once and rejects later low-level Session operations", async () => {
+		const storage = MemoryStorage.create();
+		const close = vi.spyOn(storage, "close");
+		const session = new Session(storage);
+		const caller = withCancel(ctx);
+		caller.cancel(new Error("close caller cancelled"));
+		const first = session.close(caller.context);
+		const second = session.close(ctx);
+		expect(second).toBe(first);
+		await first;
+		expect(close).toHaveBeenCalledTimes(1);
+		expect(close.mock.calls[0]![0].abortSignal).toBeUndefined();
+		await expect(session.getConversations([], ctx)).rejects.toBeInstanceOf(Closed);
+		await expect(session.commit(() => undefined, ctx)).rejects.toBeInstanceOf(Closed);
 	});
 
 	it("uses write sequences for historical state inside one atomic storage batch", async () => {
-		const storage = new MemoryStorage();
+		const storage = MemoryStorage.create();
 		const conversation = storage.nextId();
 		const entry = storage.nextId();
 		const beforeElement = storage.nextId();
@@ -146,8 +387,143 @@ describe("Pico Session over MemoryStorage", () => {
 		expect((await storage.readList(list, undefined, ctx)).map((item) => item.value)).toEqual(["before", "after"]);
 	});
 
+	it("rejects rewindable state writes after an entry in a transaction", async () => {
+		const storage = MemoryStorage.create();
+		const session = new Session(storage);
+		const value = defineValue<string>({ type: "conversation", conversationId: 1 }, "test.order", {
+			rewind: true,
+		});
+		await expect(
+			session.commit((tx) => {
+				tx.createConversation({});
+				tx.entry({ conversationId: 1, kind: "test.entry" });
+				try {
+					tx.value(value).set("too late");
+				} catch (error) {
+					expect(error).toHaveProperty("message", "Rewindable state writes must precede entry appends");
+				}
+			}, ctx),
+		).rejects.toThrow("must precede");
+		expect(await storage.getConversations([1], ctx)).toEqual(new Map());
+		expect(await session.commit((tx) => tx.createConversation({}), ctx)).toBe(3);
+	});
+
+	it("validates list removals against their logical lineage", async () => {
+		const storage = MemoryStorage.create();
+		const rootList = defineList<string>({ type: "conversation", conversationId: 1 }, "test.lineage", {
+			rewind: true,
+		});
+		await storage.commit(
+			[
+				{
+					type: "conversation.create",
+					conversation: {
+						id: 1,
+						sectionSeed: [{ key: "identity", action: "set", value: "test", rendered: "test" }],
+					},
+				},
+				{ type: "list.append", address: rootList, element: { id: 2, value: "inherited" } },
+				{ type: "entry.append", entry: { id: 3, conversationId: 1, kind: "test.fork-point" } },
+				{ type: "conversation.create", conversation: { id: 4, parent: { conversationId: 1, at: 3 } } },
+				{ type: "conversation.create", conversation: { id: 5 } },
+			],
+			ctx,
+		);
+		expect((await storage.getConversations([1], ctx)).get(1)).toEqual({ id: 1 });
+		expect((await storage.scanConversations({ limit: 10 }, ctx)).items[0]).toEqual({ id: 1 });
+		const childList = defineList<string>({ type: "conversation", conversationId: 4 }, "test.lineage", {
+			rewind: true,
+		});
+		const unrelatedList = defineList<string>({ type: "conversation", conversationId: 5 }, "test.lineage", {
+			rewind: true,
+		});
+		const otherDefinition = defineList<string>({ type: "conversation", conversationId: 4 }, "test.other", {
+			rewind: true,
+		});
+		const marker = defineValue<string>({ type: "session" }, "test.atomic-remove");
+		expect(
+			await storage.commit(
+				[{ type: "list.append", address: rootList, element: { id: 6, value: "after fork" } }],
+				ctx,
+			),
+		).toEqual([6]);
+		await expect(
+			storage.commit(
+				[
+					{ type: "value.set", address: marker, value: "must not land" },
+					{ type: "list.remove", address: childList, elementId: 6 },
+				],
+				ctx,
+			),
+		).rejects.toThrow("does not belong");
+		expect(await storage.getValue(marker, undefined, ctx)).toBeUndefined();
+
+		expect(await storage.commit([{ type: "list.remove", address: childList, elementId: 2 }], ctx)).toEqual([7]);
+		expect(await storage.commit([{ type: "list.remove", address: childList, elementId: 2 }], ctx)).toEqual([8]);
+		expect((await storage.readList(rootList, undefined, ctx)).map(({ id }) => id)).toEqual([2, 6]);
+		expect(await storage.readList(childList, undefined, ctx)).toEqual([]);
+		await expect(
+			storage.commit([{ type: "list.remove", address: unrelatedList, elementId: 2 }], ctx),
+		).rejects.toThrow("does not belong");
+		await expect(
+			storage.commit([{ type: "list.remove", address: otherDefinition, elementId: 2 }], ctx),
+		).rejects.toThrow("does not belong");
+		expect(await storage.commit([{ type: "list.clear", address: childList }], ctx)).toEqual([9]);
+	});
+
+	it("validates inherited list removal against earlier writes in the same batch", async () => {
+		const storage = MemoryStorage.create();
+		const session = new Session(storage);
+		const parentList = defineList<string>({ type: "conversation", conversationId: 1 }, "test.same-batch-lineage", {
+			rewind: true,
+		});
+		const seeded = await session.commit((tx) => {
+			const parent = tx.createConversation({});
+			const element = tx.list(parentList).append("persisted");
+			const at = tx.entry({ conversationId: parent, kind: "test.fork-point" });
+			return { parent, element, at };
+		}, ctx);
+
+		const child = await session.commit((tx) => {
+			const id = tx.createConversation({ parent: { conversationId: seeded.parent, at: seeded.at } });
+			const childList = defineList<string>({ type: "conversation", conversationId: id }, "test.same-batch-lineage", {
+				rewind: true,
+			});
+			tx.list(childList).remove(seeded.element);
+			return id;
+		}, ctx);
+		const childList = defineList<string>({ type: "conversation", conversationId: child }, "test.same-batch-lineage", {
+			rewind: true,
+		});
+		expect(await storage.readList(childList, undefined, ctx)).toEqual([]);
+		expect((await storage.readList(parentList, undefined, ctx)).map(({ id }) => id)).toEqual([seeded.element]);
+
+		const prospectiveChildList = defineList<string>(
+			{ type: "conversation", conversationId: 22 },
+			"test.same-batch-lineage",
+			{ rewind: true },
+		);
+		expect(
+			await storage.commit(
+				[
+					{ type: "list.append", address: parentList, element: { id: 20, value: "prospective" } },
+					{ type: "entry.append", entry: { id: 21, conversationId: seeded.parent, kind: "test.next-fork" } },
+					{
+						type: "conversation.create",
+						conversation: { id: 22, parent: { conversationId: seeded.parent, at: 21 } },
+					},
+					{ type: "list.remove", address: prospectiveChildList, elementId: 20 },
+				],
+				ctx,
+			),
+		).toEqual([6, 7, 8, 9]);
+		expect((await storage.readList(prospectiveChildList, undefined, ctx)).map(({ id }) => id)).toEqual([
+			seeded.element,
+		]);
+	});
+
 	it("pages conversations and fork-visible entries", async () => {
-		const session = new Session(new MemoryStorage());
+		const session = new Session(MemoryStorage.create());
 		const ids = await session.commit((tx) => {
 			const root = tx.createConversation({});
 			const first = tx.entry({ conversationId: root, kind: "test.first" });
@@ -159,6 +535,12 @@ describe("Pico Session over MemoryStorage", () => {
 			return { root, first, head, fork, forkEntry, late, ownedFork };
 		}, ctx);
 		expect(ids).toEqual({ root: 1, first: 2, head: 3, fork: 4, forkEntry: 5, late: 6, ownedFork: 7 });
+		const filteredIds = await session.commit((tx) => {
+			const older = tx.entry({ conversationId: ids.root, kind: "test.match" });
+			tx.entry({ conversationId: ids.root, kind: "test.other" });
+			const newer = tx.entry({ conversationId: ids.root, kind: "test.match" });
+			return { older, newer };
+		}, ctx);
 
 		const conversations = await session.scanConversations({ limit: 1 }, ctx);
 		expect(conversations.items.map(({ id }) => id)).toEqual([1]);
@@ -189,13 +571,68 @@ describe("Pico Session over MemoryStorage", () => {
 				({ id }) => id,
 			),
 		).toEqual([ids.head]);
+		const filtered = await session.scanEntries({ conversationId: ids.root, kind: "test.match", limit: 1 }, ctx);
+		expect(filtered.items.map(({ id }) => id)).toEqual([filteredIds.newer]);
+		expect(filtered.next).toBe(filteredIds.newer);
+		const filteredNext = await session.scanEntries(
+			{ conversationId: ids.root, kind: "test.match", cursor: filtered.next, limit: 1 },
+			ctx,
+		);
+		expect(filteredNext.items.map(({ id }) => id)).toEqual([filteredIds.older]);
+		expect(filteredNext.next).toBeUndefined();
 		expect((await session.getEntries([ids.first, 999_999], ctx)).has(ids.first)).toBe(true);
 		expect((await session.newestHead(1, 3, ctx))?.id).toBe(3);
 		expect(await session.newestHead(4, 5, ctx)).toBeUndefined();
 	});
 
+	it("uses entry sequences for scans, cutoffs, cursors, and nested fork caps", async () => {
+		const storage = MemoryStorage.create();
+		await storage.commit(
+			[
+				{ type: "conversation.create", conversation: { id: 100 } },
+				{ type: "entry.append", entry: { id: 900, conversationId: 100, kind: "root.old", head: 900 } },
+				{ type: "entry.append", entry: { id: 700, conversationId: 100, kind: "root.fork" } },
+				{ type: "conversation.create", conversation: { id: 200, parent: { conversationId: 100, at: 700 } } },
+				{ type: "entry.append", entry: { id: 950, conversationId: 100, kind: "root.late" } },
+				{ type: "entry.append", entry: { id: 10, conversationId: 200, kind: "child.fork" } },
+				{ type: "entry.append", entry: { id: 5, conversationId: 200, kind: "child.late" } },
+				{ type: "conversation.create", conversation: { id: 300, parent: { conversationId: 200, at: 10 } } },
+				{ type: "entry.append", entry: { id: 1, conversationId: 300, kind: "grand.local" } },
+				{ type: "conversation.create", conversation: { id: 400 } },
+				{ type: "entry.append", entry: { id: 2, conversationId: 400, kind: "unrelated" } },
+			],
+			ctx,
+		);
+
+		expect((await storage.scanEntries({ conversationId: 300, limit: 10 }, ctx)).items.map(({ id }) => id)).toEqual([
+			1, 10, 700, 900,
+		]);
+		expect(
+			(await storage.scanEntries({ conversationId: 300, through: 10, limit: 10 }, ctx)).items.map(({ id }) => id),
+		).toEqual([10, 700, 900]);
+		expect(
+			(await storage.scanEntries({ conversationId: 300, through: 700, limit: 10 }, ctx)).items.map(({ id }) => id),
+		).toEqual([700, 900]);
+		const first = await storage.scanEntries({ conversationId: 300, limit: 2 }, ctx);
+		expect(first.items.map(({ id }) => id)).toEqual([1, 10]);
+		expect(first.next).toBe(10);
+		expect(
+			(await storage.scanEntries({ conversationId: 300, cursor: first.next, limit: 2 }, ctx)).items.map(
+				({ id }) => id,
+			),
+		).toEqual([700, 900]);
+		expect((await storage.newestHead(300, 10, ctx))?.id).toBe(900);
+		await expect(storage.scanEntries({ conversationId: 300, through: 2, limit: 10 }, ctx)).rejects.toBeInstanceOf(
+			InvalidHistoryPosition,
+		);
+		await expect(storage.scanEntries({ conversationId: 300, cursor: 2, limit: 10 }, ctx)).rejects.toBeInstanceOf(
+			InvalidHistoryPosition,
+		);
+		await expect(storage.newestHead(300, 2, ctx)).rejects.toBeInstanceOf(InvalidHistoryPosition);
+	});
+
 	it("buffers values and list elements into one commit", async () => {
-		const session = new Session(new MemoryStorage());
+		const session = new Session(MemoryStorage.create());
 		const value = defineValue<JsonValue>({ type: "conversation", conversationId: 1 }, "test.value", {
 			rewind: false,
 		});
@@ -221,8 +658,63 @@ describe("Pico Session over MemoryStorage", () => {
 		expect(await session.readList(list, undefined, ctx)).toEqual([]);
 	});
 
+	it("resolves value defaults in Session and transaction reads", async () => {
+		const storage = MemoryStorage.create();
+		const session = new Session(storage);
+		const sessionName = sessionValue<string>("test.default.session", { default: "default" });
+		const conversationDefinition = conversationValue<number>("test.default.conversation", {
+			rewind: true,
+			default: 7,
+		});
+		const boundConversationValue = conversationDefinition.bind(1);
+		const initial = await session.commit((tx) => {
+			tx.createConversation({});
+			return tx.entry({ conversationId: 1, kind: "test.initial" });
+		}, ctx);
+
+		expect(await session.getValue(sessionName, undefined, ctx)).toBe("default");
+		expect(await session.getValue(boundConversationValue, undefined, ctx)).toBe(7);
+		expect(await session.getValue(boundConversationValue, initial, ctx)).toBe(7);
+		expect(
+			await session.commit(
+				async (tx) => ({
+					session: await tx.value(sessionName).get(),
+					historical: await tx.value(boundConversationValue).get(initial),
+				}),
+				ctx,
+			),
+		).toEqual({ session: "default", historical: 7 });
+
+		const setAt = await session.commit((tx) => {
+			tx.value(sessionName).set("set");
+			tx.value(boundConversationValue).set(9);
+			return tx.entry({ conversationId: 1, kind: "test.set" });
+		}, ctx);
+		const deletedAt = await session.commit((tx) => {
+			tx.value(sessionName).delete();
+			tx.value(boundConversationValue).delete();
+			return tx.entry({ conversationId: 1, kind: "test.deleted" });
+		}, ctx);
+
+		expect(await session.getValue(sessionName, undefined, ctx)).toBe("default");
+		expect(await session.getValue(boundConversationValue, setAt, ctx)).toBe(9);
+		expect(await session.getValue(boundConversationValue, deletedAt, ctx)).toBe(7);
+		expect(await storage.getValue(sessionName, undefined, ctx)).toBeUndefined();
+		expect(await storage.getValue(boundConversationValue, deletedAt, ctx)).toBeUndefined();
+		expect(
+			await session.commit(
+				async (tx) => ({
+					session: await tx.value(sessionName).get(),
+					current: await tx.value(boundConversationValue).get(),
+					historical: await tx.value(boundConversationValue).get(deletedAt),
+				}),
+				ctx,
+			),
+		).toEqual({ session: "default", current: 7, historical: 7 });
+	});
+
 	it("rewinds values through fork caps and preserves local tombstones", async () => {
-		const storage = new MemoryStorage();
+		const storage = MemoryStorage.create();
 		const session = new Session(storage);
 		const root = await session.commit((tx) => tx.createConversation({}), ctx);
 		const rootValue = defineValue<string>({ type: "conversation", conversationId: root }, "test.history", {
@@ -314,7 +806,7 @@ describe("Pico Session over MemoryStorage", () => {
 		});
 		const sessionValue = defineValue<string>({ type: "session" }, "test.history");
 		const taskList = defineList<string>({ type: "task", taskId: 100 }, "test.history");
-		const sharedValue = defineValue<string>({ type: "shared", id: 200 }, "test.history");
+		const sharedValue = defineInternalValue<string>({ type: "shared", id: 200 }, "test.history");
 		await expect(storage.getValue(sticky, first, ctx)).rejects.toBeInstanceOf(InvalidHistoryPosition);
 		await expect(storage.getValue(sessionValue, first, ctx)).rejects.toBeInstanceOf(InvalidHistoryPosition);
 		await expect(storage.readList(taskList, first, ctx)).rejects.toBeInstanceOf(InvalidHistoryPosition);
@@ -322,7 +814,7 @@ describe("Pico Session over MemoryStorage", () => {
 	});
 
 	it("rewinds complete lists through append, remove, clear, and nested fork caps", async () => {
-		const session = new Session(new MemoryStorage());
+		const session = new Session(MemoryStorage.create());
 		const root = await session.commit((tx) => tx.createConversation({}), ctx);
 		const rootList = defineList<string>({ type: "conversation", conversationId: root }, "test.history-list", {
 			rewind: true,
@@ -433,8 +925,22 @@ describe("Pico Session over MemoryStorage", () => {
 		await expect(session.readList(stickyList, childRemove, ctx)).rejects.toBeInstanceOf(InvalidHistoryPosition);
 	});
 
+	it("reserves internal namespaces and shared address construction", () => {
+		const sharedAsSession = { type: "shared", id: 1 } as unknown as { readonly type: "session" };
+		expect(() => defineValue<string>(sharedAsSession, "plugin.shared")).toThrow("Shared scope is internal");
+		expect(() => defineList<string>(sharedAsSession, "plugin.shared")).toThrow("Shared scope is internal");
+		expect(() => defineValue<string>({ type: "session" }, "pi.internal")).toThrow("reserved");
+		expect(() => defineList<string>({ type: "task", taskId: 1 }, "pi.internal")).toThrow("reserved");
+		expect(() => conversationValue<string>("pi.internal", { rewind: true })).toThrow("reserved");
+		expect(() => conversationList<string>("pi.internal", { rewind: false })).toThrow("reserved");
+		expect(defineInternalList<JsonValue>({ type: "shared", id: 1 }, "pi.output").scope).toEqual({
+			type: "shared",
+			id: 1,
+		});
+	});
+
 	it("keeps scopes, kinds, optional keys, and rewind stores separate", async () => {
-		const session = new Session(new MemoryStorage());
+		const session = new Session(MemoryStorage.create());
 		const conversation = await session.commit((tx) => tx.createConversation({}), ctx);
 		const scope = { type: "conversation", conversationId: conversation } as const;
 		const stickyValue = defineValue<string>(scope, "test.identity", { key: "same", rewind: false });
@@ -467,19 +973,19 @@ describe("Pico Session over MemoryStorage", () => {
 	});
 
 	it("stores task snapshots and retires scratch and shared output", async () => {
-		const storage = new MemoryStorage();
+		const storage = MemoryStorage.create();
 		const session = new Session(storage);
 		const ids = await session.commit((tx) => {
 			const conversation = tx.createConversation({});
 			const producer = tx.task(taskSpec(conversation, { output: { kind: "test.output" } }));
-			const output = defineList<JsonValue>({ type: "shared", id: producer }, "pi.output");
+			const output = defineInternalList<JsonValue>({ type: "shared", id: producer }, "pi.output");
 			tx.list(output).append([["r", { text: "" }]]);
 			const consumer = tx.task(taskSpec(conversation, { output: { id: producer, kind: "test.output" } }));
 			return { conversation, producer, consumer };
 		}, ctx);
 		expect(ids).toEqual({ conversation: 1, producer: 2, consumer: 4 });
 
-		const output = defineList<JsonValue>({ type: "shared", id: ids.producer }, "pi.output");
+		const output = defineInternalList<JsonValue>({ type: "shared", id: ids.producer }, "pi.output");
 		const scratch = defineValue<JsonValue>({ type: "task", taskId: ids.producer }, "test.scratch");
 		await session.commit((tx) => {
 			tx.value(scratch).set({ n: 1 });
@@ -495,7 +1001,7 @@ describe("Pico Session over MemoryStorage", () => {
 			outcome: { status: "completed", result: null },
 		}));
 		await expect(session.getValue(scratch, undefined, ctx)).rejects.toBeInstanceOf(ScratchRetired);
-		expect(await storage.getValue(scratch, undefined, ctx)).toBeUndefined();
+		await expect(storage.getValue(scratch, undefined, ctx)).rejects.toBeInstanceOf(ScratchRetired);
 
 		await setTask(session, ids.consumer, (task) => ({ ...task, status: "running" }));
 		const replacement = await session.commit(async (tx) => {
@@ -511,12 +1017,12 @@ describe("Pico Session over MemoryStorage", () => {
 			status: "terminal",
 			outcome: { status: "completed", result: null },
 		}));
-		await expect(session.readList(output, undefined, ctx)).rejects.toBeInstanceOf(SharedOutputRetired);
-		expect(await storage.readList(output, undefined, ctx)).toEqual([]);
+		await expect(session.readList(output, undefined, ctx)).rejects.toBeInstanceOf(OutputRetired);
+		await expect(storage.readList(output, undefined, ctx)).rejects.toBeInstanceOf(OutputRetired);
 	});
 
 	it("filters and pages tasks", async () => {
-		const session = new Session(new MemoryStorage());
+		const session = new Session(MemoryStorage.create());
 		const ids = await session.commit((tx) => {
 			const conversation = tx.createConversation({});
 			const otherConversation = tx.createConversation({});

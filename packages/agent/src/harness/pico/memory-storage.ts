@@ -6,9 +6,12 @@ import {
 	type ConversationScan,
 	type EntryScan,
 	InvalidHistoryPosition,
+	OutputRetired,
 	type Page,
 	type PageQuery,
+	ScratchRetired,
 	type Storage,
+	type StoredConversation,
 	type TaskScan,
 	type Write,
 } from "./storage.ts";
@@ -25,7 +28,12 @@ type ListHistoryWrite =
 
 type StoredState =
 	| { readonly kind: "value"; readonly rewind: false; value?: JsonValue }
-	| { readonly kind: "list"; readonly rewind: false; readonly elements: Map<Id, Element<JsonValue>> }
+	| {
+			readonly kind: "list";
+			readonly rewind: false;
+			readonly elements: Map<Id, Element<JsonValue>>;
+			readonly known: Set<Id>;
+	  }
 	| { readonly kind: "value"; readonly rewind: true; readonly writes: ValueHistoryWrite[] }
 	| { readonly kind: "list"; readonly rewind: true; readonly writes: ListHistoryWrite[] };
 
@@ -53,6 +61,12 @@ interface StoredEntry {
 	readonly entry: Entry;
 }
 
+interface ProspectiveWrites {
+	readonly conversations: Map<Id, StoredConversation>;
+	readonly entries: Map<Id, StoredEntry>;
+	readonly listAppends: { readonly seq: Seq; readonly address: List<JsonValue>; readonly elementId: Id }[];
+}
+
 function rewindable(
 	address: Address,
 ): address is Address & { readonly scope: Extract<Address["scope"], { type: "conversation" }>; readonly rewind: true } {
@@ -75,7 +89,8 @@ function page<T>(
 ): Page<T> {
 	const items: T[] = [];
 	let more = false;
-	for (const value of values) {
+	const ordered = [...values].sort((left, right) => (ascending ? id(left) - id(right) : id(right) - id(left)));
+	for (const value of ordered) {
 		const valueId = id(value);
 		if (
 			!matches(value) ||
@@ -94,8 +109,9 @@ function page<T>(
 
 export class MemoryStorage implements Storage {
 	private nextObjectId: Id = 1;
+	private committedIdHighWater: Id = 0;
 	private nextSeq: Seq = 1;
-	private readonly conversations = new Map<Id, Conversation>();
+	private readonly conversations = new Map<Id, StoredConversation>();
 	private readonly entries = new Map<Id, StoredEntry>();
 	private readonly entriesByConversation = new Map<Id, StoredEntry[]>();
 	private readonly tasks = new Map<Id, Task>();
@@ -106,19 +122,24 @@ export class MemoryStorage implements Storage {
 	private readonly taskState = new Map<Id, ScopeState>();
 	private readonly sharedState = new Map<Id, ScopeState>();
 
+	static create(): MemoryStorage {
+		return new MemoryStorage();
+	}
+
 	nextId(): Id {
 		return this.nextObjectId++;
 	}
 
 	async commit(writes: readonly Write[], _ctx: Context): Promise<readonly Seq[]> {
+		this.validateListRemovals(writes);
 		const seqs = writes.map((_, index) => this.nextSeq + index);
 		const affectedOutputs = new Set<Id>();
-		let nextObjectId = this.nextObjectId;
+		let batchMaxId = this.committedIdHighWater;
 		for (const write of writes) {
-			if (write.type === "conversation.create") nextObjectId = Math.max(nextObjectId, write.conversation.id + 1);
-			else if (write.type === "entry.append") nextObjectId = Math.max(nextObjectId, write.entry.id + 1);
-			else if (write.type === "task.create") nextObjectId = Math.max(nextObjectId, write.task.id + 1);
-			else if (write.type === "list.append") nextObjectId = Math.max(nextObjectId, write.element.id + 1);
+			if (write.type === "conversation.create") batchMaxId = Math.max(batchMaxId, write.conversation.id);
+			else if (write.type === "entry.append") batchMaxId = Math.max(batchMaxId, write.entry.id);
+			else if (write.type === "task.create") batchMaxId = Math.max(batchMaxId, write.task.id);
+			else if (write.type === "list.append") batchMaxId = Math.max(batchMaxId, write.element.id);
 			if (write.type !== "task.create" && write.type !== "task.set") continue;
 			const currentOutput = this.tasks.get(write.task.id)?.output?.id;
 			if (currentOutput !== undefined) affectedOutputs.add(currentOutput);
@@ -131,23 +152,28 @@ export class MemoryStorage implements Storage {
 		for (const id of affectedOutputs) {
 			if (!this.outputReferences.has(id)) this.sharedState.delete(id);
 		}
-		this.nextObjectId = nextObjectId;
+		this.committedIdHighWater = batchMaxId;
+		this.nextObjectId = Math.max(this.nextObjectId, batchMaxId + 1);
 		this.nextSeq += writes.length;
 		return seqs;
+	}
+
+	async close(_ctx: Context): Promise<void> {
+		this.nextObjectId = this.committedIdHighWater + 1;
 	}
 
 	async getConversations(ids: readonly Id[], _ctx: Context): Promise<ReadonlyMap<Id, Conversation>> {
 		const result = new Map<Id, Conversation>();
 		for (const id of ids) {
 			const conversation = this.conversations.get(id);
-			if (conversation !== undefined) result.set(id, conversation);
+			if (conversation !== undefined) result.set(id, this.publicConversation(conversation));
 		}
 		return result;
 	}
 
 	async scanConversations(query: ConversationScan, _ctx: Context): Promise<Page<Conversation>> {
 		return page(
-			this.conversations.values(),
+			[...this.conversations.values()].map((conversation) => this.publicConversation(conversation)),
 			query,
 			(conversation) => conversation.id,
 			(conversation) =>
@@ -167,18 +193,24 @@ export class MemoryStorage implements Storage {
 	}
 
 	async scanEntries(query: EntryScan, _ctx: Context): Promise<Page<Entry>> {
-		return page(
-			this.visibleEntries(query.conversationId, query.through),
-			query,
-			(entry) => entry.id,
-			(entry) => query.kind === undefined || entry.kind === query.kind,
-			false,
-		);
+		const cursor = query.cursor === undefined ? undefined : this.historyPosition(query.conversationId, query.cursor);
+		const items: Entry[] = [];
+		let more = false;
+		for (const stored of this.visibleEntries(query.conversationId, query.through)) {
+			if (cursor !== undefined && stored.seq >= cursor) continue;
+			if (query.kind !== undefined && stored.entry.kind !== query.kind) continue;
+			if (items.length === query.limit) {
+				more = true;
+				break;
+			}
+			items.push(stored.entry);
+		}
+		return { items, ...(more && items.length > 0 ? { next: items.at(-1)!.id } : {}) };
 	}
 
 	async newestHead(conversationId: Id, at: Id, _ctx: Context): Promise<Entry | undefined> {
-		for (const entry of this.visibleEntries(conversationId, at)) {
-			if (entry.head !== undefined) return entry;
+		for (const stored of this.visibleEntries(conversationId, at)) {
+			if (stored.entry.head !== undefined) return stored.entry;
 		}
 		return undefined;
 	}
@@ -210,8 +242,10 @@ export class MemoryStorage implements Storage {
 	async getValue<T extends JsonValue>(address: Value<T>, at: Id | undefined, _ctx: Context): Promise<T | undefined> {
 		if (at !== undefined) {
 			if (!rewindable(address)) throw new InvalidHistoryPosition(at);
+			this.assertScopeReadable(address);
 			return this.rewindValue(address, this.historyPosition(address.scope.conversationId, at));
 		}
+		this.assertScopeReadable(address);
 		if (rewindable(address)) return this.rewindValue(address, undefined);
 		const state = this.storedState(address);
 		return state?.kind === "value" && !state.rewind ? (state.value as T | undefined) : undefined;
@@ -224,26 +258,31 @@ export class MemoryStorage implements Storage {
 	): Promise<readonly Element<T>[]> {
 		if (at !== undefined) {
 			if (!rewindable(address)) throw new InvalidHistoryPosition(at);
+			this.assertScopeReadable(address);
 			return this.rewindListElements(address, this.historyPosition(address.scope.conversationId, at));
 		}
+		this.assertScopeReadable(address);
 		if (rewindable(address)) return this.rewindListElements(address, undefined);
 		const state = this.storedState(address);
 		if (state?.kind !== "list" || state.rewind) return [];
-		return [...(state.elements.values() as Iterable<Element<T>>)];
+		return [...(state.elements.values() as Iterable<Element<T>>)].sort((left, right) => left.id - right.id);
 	}
 
-	private historyPosition(conversationId: Id, at: Id): Seq {
-		const stored = this.entries.get(at);
+	private historyPosition(conversationId: Id, at: Id, prospective?: ProspectiveWrites): Seq {
+		const stored = prospective?.entries.get(at) ?? this.entries.get(at);
 		if (stored === undefined) throw new InvalidHistoryPosition(at);
 
 		let currentId = conversationId;
 		let cap: Seq | undefined;
 		while (true) {
 			if (stored.entry.conversationId === currentId && (cap === undefined || stored.seq <= cap)) return stored.seq;
-			const conversation = this.conversations.get(currentId);
+			const conversation = prospective?.conversations.get(currentId) ?? this.conversations.get(currentId);
 			if (conversation?.parent === undefined) throw new InvalidHistoryPosition(at);
-			const parentAtSeq = this.entries.get(conversation.parent.at)?.seq;
-			if (parentAtSeq === undefined) throw new InvalidHistoryPosition(at);
+			const parentAtSeq = this.historyPosition(
+				conversation.parent.conversationId,
+				conversation.parent.at,
+				prospective,
+			);
 			cap = Math.min(cap ?? parentAtSeq, parentAtSeq);
 			currentId = conversation.parent.conversationId;
 		}
@@ -294,21 +333,131 @@ export class MemoryStorage implements Storage {
 				else elements.clear();
 			}
 		}
-		return [...elements.values()];
+		return [...elements.values()].sort((left, right) => left.id - right.id);
 	}
 
-	private *visibleEntries(conversationId: Id, through: Id | undefined): Iterable<Entry> {
+	private *visibleEntries(conversationId: Id, through: Id | undefined): Iterable<StoredEntry> {
 		let conversation = this.conversations.get(conversationId);
-		let cap = through;
+		let cap = through === undefined ? undefined : this.historyPosition(conversationId, through);
 		while (conversation !== undefined) {
 			const entries = this.entriesByConversation.get(conversation.id) ?? [];
 			for (let index = entries.length - 1; index >= 0; index--) {
-				const entry = entries[index]!.entry;
-				if (cap === undefined || entry.id <= cap) yield entry;
+				const stored = entries[index]!;
+				if (cap === undefined || stored.seq <= cap) yield stored;
 			}
 			if (conversation.parent === undefined) return;
-			cap = Math.min(cap ?? conversation.parent.at, conversation.parent.at);
+			const parentAtSeq = this.historyPosition(conversation.parent.conversationId, conversation.parent.at);
+			cap = Math.min(cap ?? parentAtSeq, parentAtSeq);
 			conversation = this.conversations.get(conversation.parent.conversationId);
+		}
+	}
+
+	private validateListRemovals(writes: readonly Write[]): void {
+		const prospective: ProspectiveWrites = {
+			conversations: new Map(),
+			entries: new Map(),
+			listAppends: [],
+		};
+		for (let index = 0; index < writes.length; index++) {
+			const write = writes[index]!;
+			const seq = this.nextSeq + index;
+			if (write.type === "conversation.create") {
+				prospective.conversations.set(write.conversation.id, write.conversation);
+			} else if (write.type === "entry.append") {
+				prospective.entries.set(write.entry.id, { seq, entry: write.entry });
+			} else if (write.type === "list.append") {
+				prospective.listAppends.push({ seq, address: write.address, elementId: write.element.id });
+			} else if (
+				write.type === "list.remove" &&
+				!this.listKnowsElement(write.address, write.elementId, prospective)
+			) {
+				throw new Error(`List element ${write.elementId} does not belong to this list lineage`);
+			}
+		}
+	}
+
+	private listKnowsElement(address: List<JsonValue>, elementId: Id, prospective?: ProspectiveWrites): boolean {
+		if (!rewindable(address)) {
+			const state = this.storedState(address);
+			return (
+				(state?.kind === "list" && !state.rewind && state.known.has(elementId)) ||
+				(prospective?.listAppends.some(
+					(append) => append.elementId === elementId && this.sameAddress(append.address, address),
+				) ??
+					false)
+			);
+		}
+		let conversationId = address.scope.conversationId;
+		let cap: Seq | undefined;
+		while (true) {
+			const state = this.conversationStoredState(conversationId, address);
+			const appendedProspectively = prospective?.listAppends.some(
+				(append) =>
+					append.elementId === elementId &&
+					append.address.scope.type === "conversation" &&
+					append.address.scope.conversationId === conversationId &&
+					append.address.rewind === address.rewind &&
+					append.address.namespace === address.namespace &&
+					append.address.key === address.key &&
+					(cap === undefined || append.seq <= cap),
+			);
+			if (
+				appendedProspectively ||
+				(state?.kind === "list" &&
+					state.rewind &&
+					state.writes.some(
+						(write) =>
+							write.type === "append" &&
+							write.element.id === elementId &&
+							(cap === undefined || write.seq <= cap),
+					))
+			) {
+				return true;
+			}
+			const conversation = prospective?.conversations.get(conversationId) ?? this.conversations.get(conversationId);
+			if (conversation?.parent === undefined) return false;
+			const parentAtSeq = this.historyPosition(
+				conversation.parent.conversationId,
+				conversation.parent.at,
+				prospective,
+			);
+			cap = Math.min(cap ?? parentAtSeq, parentAtSeq);
+			conversationId = conversation.parent.conversationId;
+		}
+	}
+
+	private sameAddress(left: Address, right: Address): boolean {
+		if (
+			left.kind !== right.kind ||
+			left.rewind !== right.rewind ||
+			left.namespace !== right.namespace ||
+			left.key !== right.key ||
+			left.scope.type !== right.scope.type
+		) {
+			return false;
+		}
+		if (left.scope.type === "session") return true;
+		if (left.scope.type === "conversation" && right.scope.type === "conversation") {
+			return left.scope.conversationId === right.scope.conversationId;
+		}
+		if (left.scope.type === "task" && right.scope.type === "task") return left.scope.taskId === right.scope.taskId;
+		return left.scope.type === "shared" && right.scope.type === "shared" && left.scope.id === right.scope.id;
+	}
+
+	private publicConversation(conversation: StoredConversation): Conversation {
+		return {
+			id: conversation.id,
+			...(conversation.parent === undefined ? {} : { parent: conversation.parent }),
+			...(conversation.owner === undefined ? {} : { owner: conversation.owner }),
+		};
+	}
+
+	private assertScopeReadable(address: Address): void {
+		if (address.scope.type === "task") {
+			const task = this.tasks.get(address.scope.taskId);
+			if (task === undefined || task.status === "terminal") throw new ScratchRetired(address.scope.taskId);
+		} else if (address.scope.type === "shared" && !this.outputReferences.has(address.scope.id)) {
+			throw new OutputRetired(address.scope.id);
 		}
 	}
 
@@ -345,8 +494,10 @@ export class MemoryStorage implements Storage {
 				else if (write.type === "list.remove")
 					state.writes.push({ seq, type: "remove", elementId: write.elementId });
 				else state.writes.push({ seq, type: "clear" });
-			} else if (write.type === "list.append") state.elements.set(write.element.id, write.element);
-			else if (write.type === "list.remove") state.elements.delete(write.elementId);
+			} else if (write.type === "list.append") {
+				state.known.add(write.element.id);
+				state.elements.set(write.element.id, write.element);
+			} else if (write.type === "list.remove") state.elements.delete(write.elementId);
 			else state.elements.clear();
 		}
 	}
@@ -382,7 +533,7 @@ export class MemoryStorage implements Storage {
 	private listState(address: List<JsonValue>): Extract<StoredState, { kind: "list" }> {
 		const initial: StoredState = rewindable(address)
 			? { kind: "list", rewind: true, writes: [] }
-			: { kind: "list", rewind: false, elements: new Map() };
+			: { kind: "list", rewind: false, elements: new Map(), known: new Set() };
 		return this.ensureState(address, initial) as Extract<StoredState, { kind: "list" }>;
 	}
 

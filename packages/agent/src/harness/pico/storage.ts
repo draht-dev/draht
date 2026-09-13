@@ -1,8 +1,8 @@
 import type { Context } from "@draht/chord";
 import type { Element, List, Value } from "./addresses.ts";
 import type { Id, JsonValue, Seq } from "./core.ts";
-import type { Conversation, Entry } from "./entries.ts";
-import type { Task } from "./tasks.ts";
+import type { Conversation, Entry, SectionRecord } from "./entries.ts";
+import type { Task, TaskBase } from "./tasks.ts";
 
 export interface PageQuery {
 	/** Last item returned by the same scan. */
@@ -15,6 +15,26 @@ export interface Page<T> {
 	readonly next?: Id;
 }
 
+export class ScratchRetired extends Error {
+	readonly taskId: Id;
+
+	constructor(taskId: Id) {
+		super(`Scratch for task ${taskId} is retired`);
+		this.name = "ScratchRetired";
+		this.taskId = taskId;
+	}
+}
+
+export class OutputRetired extends Error {
+	readonly outputId: Id;
+
+	constructor(outputId: Id) {
+		super(`Task output ${outputId} is retired`);
+		this.name = "OutputRetired";
+		this.outputId = outputId;
+	}
+}
+
 export class InvalidHistoryPosition extends Error {
 	readonly at: Id;
 
@@ -25,7 +45,7 @@ export class InvalidHistoryPosition extends Error {
 	}
 }
 
-export type NewTask = Omit<Task, "abort" | "checkpoint" | "outcome" | "owns" | "status"> & {
+export type NewTask = Omit<TaskBase, "abort" | "checkpoint" | "owns"> & {
 	readonly status: "pending";
 	readonly owns: readonly [];
 	readonly abort?: never;
@@ -40,9 +60,11 @@ export type StateWrite =
 	| { readonly type: "list.remove"; readonly address: List<JsonValue>; readonly elementId: Id }
 	| { readonly type: "list.clear"; readonly address: List<JsonValue> };
 
+export type StoredConversation = Conversation & { readonly sectionSeed?: readonly SectionRecord[] };
+
 export type Write =
 	| StateWrite
-	| { readonly type: "conversation.create"; readonly conversation: Conversation }
+	| { readonly type: "conversation.create"; readonly conversation: StoredConversation }
 	| { readonly type: "entry.append"; readonly entry: Entry }
 	| { readonly type: "task.create"; readonly task: NewTask }
 	| { readonly type: "task.set"; readonly task: Task };
@@ -78,4 +100,5 @@ export interface Storage {
 	scanTasks(query: TaskScan, ctx: Context): Promise<Page<Task>>;
 	getValue<T extends JsonValue>(address: Value<T>, at: Id | undefined, ctx: Context): Promise<T | undefined>;
 	readList<T extends JsonValue>(address: List<T>, at: Id | undefined, ctx: Context): Promise<readonly Element<T>[]>;
+	close(ctx: Context): Promise<void>;
 }

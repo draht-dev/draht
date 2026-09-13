@@ -268,22 +268,25 @@ interface Address<T extends JsonValue = JsonValue> {
   readonly kind: "value" | "list"; readonly rewind: boolean;
   readonly [addressType]?: T;                           // makes Value<string> and Value<number> distinct types
 }
-interface Value<T extends JsonValue> extends Address<T> { readonly kind: "value" }
+interface Value<T extends JsonValue> extends Address<T> { readonly kind: "value"; readonly default?: T }
 interface List<T extends JsonValue> extends Address<T> { readonly kind: "list" }
 interface Element<T extends JsonValue> { readonly id: Id; readonly value: T }
 
 type PublicScope = Exclude<Scope, { type: "shared" }>;                    // exported constructors never accept shared scope
 type StickyScope = Extract<PublicScope, { type: "session" | "task" }>;
 type ConversationScope = Extract<PublicScope, { type: "conversation" }>;
-// `defineValue({ type: "shared", id }, ...)` is a compile error; the task-output list is built by an internal constructor
+// `defineValue({ type: "shared", id }, ...)` is a compile error and runtime rejection; the task-output list is built by an internal constructor
 // external constructors reject every `pi.*` namespace at runtime
-declare function defineValue<T extends JsonValue>(scope: StickyScope, namespace: string, options?: { readonly key?: string; readonly default?: T }): Value<T>;
-declare function defineValue<T extends JsonValue>(scope: ConversationScope, namespace: string, options: { readonly key?: string; readonly rewind: boolean; readonly default?: T }): Value<T>;
+type DefaultedUnboundValue<T extends JsonValue, R extends boolean> = Omit<UnboundValue<T, R>, "bind" | "default"> & { readonly default: T; bind(conversationId: Id): Value<T> & { readonly default: T } };
+declare function defineValue<T extends JsonValue>(scope: StickyScope, namespace: string, options: { readonly key?: string; readonly default: T }): Value<T> & { readonly default: T };
+declare function defineValue<T extends JsonValue>(scope: StickyScope, namespace: string, options?: { readonly key?: string }): Value<T>;
+declare function defineValue<T extends JsonValue>(scope: ConversationScope, namespace: string, options: { readonly key?: string; readonly rewind: boolean; readonly default: T }): Value<T> & { readonly default: T };
+declare function defineValue<T extends JsonValue>(scope: ConversationScope, namespace: string, options: { readonly key?: string; readonly rewind: boolean }): Value<T>;
 declare function defineList<T extends JsonValue>(scope: StickyScope, namespace: string, options?: { readonly key?: string }): List<T>;
 declare function defineList<T extends JsonValue>(scope: ConversationScope, namespace: string, options: { readonly key?: string; readonly rewind: boolean }): List<T>;
 // one public type argument (T); rewind is a literal picked by overload, so `conversationValue<boolean>("x", { rewind: true })` infers UnboundValue<boolean, true>
-declare function conversationValue<T extends JsonValue>(namespace: string, options: { readonly key?: string; readonly rewind: true;  readonly default: T }): UnboundValue<T, true>  & { readonly default: T };
-declare function conversationValue<T extends JsonValue>(namespace: string, options: { readonly key?: string; readonly rewind: false; readonly default: T }): UnboundValue<T, false> & { readonly default: T };
+declare function conversationValue<T extends JsonValue>(namespace: string, options: { readonly key?: string; readonly rewind: true;  readonly default: T }): DefaultedUnboundValue<T, true>;
+declare function conversationValue<T extends JsonValue>(namespace: string, options: { readonly key?: string; readonly rewind: false; readonly default: T }): DefaultedUnboundValue<T, false>;
 declare function conversationValue<T extends JsonValue>(namespace: string, options: { readonly key?: string; readonly rewind: true }): UnboundValue<T, true>;
 declare function conversationValue<T extends JsonValue>(namespace: string, options: { readonly key?: string; readonly rewind: false }): UnboundValue<T, false>;
 declare function conversationList<T extends JsonValue>(namespace: string, options: { readonly key?: string; readonly rewind: true }): UnboundList<T, true>;
@@ -372,7 +375,7 @@ type CoreConfigBundle = UnionToIntersection<CoreConfigs[keyof CoreConfigs]>;
 type _ConfigsMatchKinds = Assert<{ [K in keyof CoreConfigs]: CoreTaskKinds[K]["config"] extends CoreConfigs[K] ? true : false }[keyof CoreConfigs]>;   // the kinds attach exactly these bundles
 
 type BundleValues<B> = { [K in keyof B]: B[K] extends ConversationValueDefinition<infer T, boolean> ? T : never };   // payload types (for set patches)
-type ResolvedValue<D> = D extends { readonly default: infer V } ? V : D extends ConversationValueDefinition<infer T, boolean> ? T | undefined : never;   // read type: defaulted members never undefined
+type ResolvedValue<D> = D extends { readonly default: infer V } ? V : PayloadOf<D> | undefined;   // bound or unbound; defaulted members never undefined
 type ResolvedValues<B> = { readonly [K in keyof B]: ResolvedValue<B[K]> };
 type Settings = BundleValues<CoreConfigBundle>;
 
@@ -631,8 +634,9 @@ Query rules:
 
 - Conversation and task scans ascend by ID; `cursor` is an exclusive lower bound.
 - Entry scans are fork-aware and newest-first; `through` is an inclusive upper bound, `cursor` an exclusive
-  upper bound; `kind` filters before `limit`. `newestHead` is the dedicated "newest entry with a head at or
-  before `at`" query so context derivation never tails a scan.
+  upper bound; `kind` filters before `limit`. `through`, `cursor`, and `newestHead`'s `at` must name a
+  fork-visible entry of the scanned conversation or the read rejects `InvalidHistoryPosition`. `newestHead`
+  is the dedicated "newest entry with a head at or before `at`" query so context derivation never tails a scan.
 - `readList` returns the complete logical list ascending by element ID. No paging.
 - Pages carry no snapshot sequence. Reason: reads happen on the line or against immutable history; a
   multi-page snapshot protocol is unnecessary.
@@ -653,8 +657,8 @@ writing) poisons the session: fail-stop, never retry the callback.
 ## 5. The commit line
 
 One FIFO async mutex serializes every commit, every `nextId()` call, every reservation, mark, registry change,
-watch capture and waiter registration. Callbacks, kind methods, hooks and signals never run while the line is
-held.
+watch capture and waiter registration. Only explicit transaction builders run while the line is held; kind
+methods, hooks, signals/listeners and other application callbacks never do.
 
 ```text
 enter line (caller ctx checked before entering and again before the callback)
@@ -676,10 +680,13 @@ A transaction may read committed state only until its first buffered write; a la
 `ReadAfterWrite`. Reason: there is no read-your-writes overlay. Allowing reads after writes would either
 require the kernel to merge the pending `Write[]` into every query (a second storage engine) or return stale
 answers that silently disagree with what the callback just wrote. Authors read first, decide, then write,
-carrying the values they wrote in local variables. The builder does remember its own same-batch creations for
-validation (a task created earlier in the batch is a valid `after` target), but does not expose them as reads.
+carrying the values they wrote in local variables. A builder validation failure poisons that transaction:
+catching `ReadAfterWrite`, a pending-read write, or a rewindable-after-entry error does not permit earlier
+buffered writes to commit. The builder does remember its own same-batch creations for validation (a task
+created earlier in the batch is a valid `after` target), but does not expose them as reads.
 
-Reads while holding the line block every other commit. Keep them small and few.
+Reads while holding the line block every other commit. Keep them small and few. Entering any Session line
+from inside an active Session callback rejects `NestedLineOperation` immediately; use only the supplied `tx`.
 
 ### 5.2 What the Session checks
 
@@ -724,14 +731,14 @@ interface TxReaders {
   getTask<K extends AnyDefinedKind>(kind: K, id: Id): Promise<TaskOf<K> | undefined>;
   getTasks(ids: readonly Id[]): Promise<ReadonlyMap<Id, Task>>;
 }
-interface TxValue<T extends JsonValue> { get(at?: Id): Promise<T | undefined>; set(v: T): void; delete(): void }
+interface TxValue<T extends JsonValue, Read = T | undefined> { get(at?: Id): Promise<Read>; set(v: T): void; delete(): void }
 interface TxList<T extends JsonValue>  { read(at?: Id): Promise<readonly Element<T>[]>; append(v: T): Id; remove(id: Id): void; clear(): void }
 interface TxState {                                        // bound addresses only (host scope is unbound)
-  value<T extends JsonValue>(a: Value<T>): TxValue<T>;
+  value<D extends Value<JsonValue>>(a: D): TxValue<PayloadOf<D>, ResolvedValue<D>>;
   list<T extends JsonValue>(a: List<T>): TxList<T>;
 }
 interface BoundTxState {                                   // binds unbound definitions to own conversation
-  value<T extends JsonValue>(a: Value<T> | UnboundValue<T>): TxValue<T>;
+  value<D extends Value<JsonValue> | UnboundValue<JsonValue>>(a: D): TxValue<PayloadOf<D>, ResolvedValue<D>>;
   list<T extends JsonValue>(a: List<T> | UnboundList<T>): TxList<T>;
 }
 
@@ -808,8 +815,8 @@ interface TaskRuntimeBase<H extends HookPoints> {
 interface CommitRuntime<I extends JsonValue, C extends TaskCheckpoint, O extends OutputState, Tx> {
   commit<T>(build: (tx: Tx, current: RunningTask<I,C,O>) => T | Promise<T>, ctx: Context): Promise<T>;
 }
-type RuntimeOutput<O extends OutputState>      = [O] extends [never] ? { readonly output?: never } : { readonly output: TaskOutput<O> };
-type AbortRuntimeOutput<O extends OutputState> = [O] extends [never] ? { readonly output?: never } : { readonly output: ReadonlyTaskOutput<O> };
+type RuntimeOutput<O extends OutputState>      = [O] extends [never] ? Record<never, never> : { readonly output: TaskOutput<O> };
+type AbortRuntimeOutput<O extends OutputState> = [O] extends [never] ? Record<never, never> : { readonly output: ReadonlyTaskOutput<O> };
 
 type TaskRuntime<I extends JsonValue, C extends TaskCheckpoint, O extends OutputState = never, H extends HookPoints = {}> =
   TaskRuntimeBase<H> & CommitRuntime<I,C,O,BaseTaskTx<C>> & RuntimeOutput<O>;
@@ -1747,7 +1754,8 @@ interface HookPoint<In, Out, F extends Fold = Fold> {
                                                    // abort: stop, kind receives { threw: error }
   readonly [hookIn]?: In; readonly [hookOut]?: Out;   // compile-only
 }
-declare function defineHookPoint<In, Out = void, F extends "collect" | "first" = "collect">(options: { readonly fold: F; readonly onThrow: "skip" | "abort" }): HookPoint<In, Out, F>;
+declare function defineHookPoint<In, Out = void>(options: { readonly fold: "collect"; readonly onThrow: "skip" | "abort" }): HookPoint<In, Out, "collect">;
+declare function defineHookPoint<In, Out = void>(options: { readonly fold: "first"; readonly onThrow: "skip" | "abort" }): HookPoint<In, Out, "first">;
 declare function defineHookPoint<In extends object, Out extends Partial<In>>(options: { readonly fold: "chain"; readonly onThrow: "skip" | "abort" }): HookPoint<In, Out, "chain">;   // chain: object input, output is a patch of In
 type HookPoints = Record<string, HookPoint<unknown, unknown>>;
 
@@ -2118,7 +2126,7 @@ type _HooksMatchKinds = Assert<{ [K in keyof CoreHooks]: NonNullable<CoreTaskKin
 const generationHooks = {
   systemInstructions: defineHookPoint<{ readonly sections: SystemSectionDraft; readonly config: Settings; readonly tools: readonly ToolDeclaration[] }, { readonly tools?: readonly ToolDeclaration[] }>({ fold: "collect", onThrow: "skip" }),
   beforeRequest:      defineHookPoint<{ readonly request: { readonly messages: readonly Message[] }; readonly cutoff: Id }, { readonly request?: { readonly messages: readonly Message[] } }>({ fold: "chain", onThrow: "skip" }),
-  onYield:            defineHookPoint<{ readonly answer: AssistantMessage }, { readonly continue: string }, "first">({ fold: "first", onThrow: "skip" }),
+  onYield:            defineHookPoint<{ readonly answer: AssistantMessage }, { readonly continue: string }>({ fold: "first", onThrow: "skip" }),
   afterResponse:      defineHookPoint<{ readonly message: AssistantMessage; readonly usage?: Usage; readonly attempt: number }>({ fold: "collect", onThrow: "skip" }),
 } satisfies HookPoints;
 const toolHooks = {
@@ -2129,7 +2137,7 @@ const postToolsHooks = {
   afterTools: defineHookPoint<{ readonly assistant: Id; readonly results: readonly Id[] }>({ fold: "collect", onThrow: "skip" }),
 } satisfies HookPoints;
 const collapseHooks = {
-  beforeCollapse: defineHookPoint<{ readonly reason: "threshold" | "manual" | "overflow"; readonly through: Id; readonly entries: readonly Entry[] }, { readonly decline: true } | { readonly instructions?: string; readonly summary?: string }, "first">({ fold: "first", onThrow: "skip" }),
+  beforeCollapse: defineHookPoint<{ readonly reason: "threshold" | "manual" | "overflow"; readonly through: Id; readonly entries: readonly Entry[] }, { readonly decline: true } | { readonly instructions?: string; readonly summary?: string }>({ fold: "first", onThrow: "skip" }),
 } satisfies HookPoints;
 
 // Usage:
@@ -2155,7 +2163,9 @@ kind.hooks.point, ...)`, `h.watchConversation(id, ...)`, `rootValues`. The prima
 ### 13.2 Cloudflare Durable Objects
 
 One Durable Object hosts one Session, one Harness and one scheduler covering the root and every fork and
-subagent. A request wake opens Pico, `send` durably admits and ensures `resume`. An alarm or one logical
+subagent. The Node implementation uses `AsyncLocalStorage` to reject line entry from inside any active Session
+callback; a Cloudflare deployment therefore enables `nodejs_compat`. A request wake opens Pico, `send` durably
+admits and ensures `resume`. An alarm or one logical
 Cloudflare Task wake opens Pico and calls `resume`, which recovers all eligible work in all conversations.
 Platform wake-up is not effect recovery: do not create one lane or scheduler per conversation, and do not use
 platform replay as a second authority for provider/tool effects. If admission and the platform wake cannot
@@ -2784,7 +2794,8 @@ type ModelRef = { readonly provider: string; readonly modelId: string };   // fi
 type AssistantEntryData = { readonly attempt: number };   // usage is already on AssistantMessage.usage; not duplicated
 type UsageEntryData = { readonly attempt: number; readonly usage?: Stored<Usage>; readonly error: string };
 type UsageEntry = EntryBase & { readonly data: UsageEntryData };   // pi.usage, data-only
-interface UnboundValue<T extends JsonValue, R extends boolean = boolean> { readonly namespace: string; readonly key?: string; readonly rewind: R; readonly default?: T; readonly [addressType]?: T; bind(conversationId: Id): Value<T> }   // the defaulted overload returns UnboundValue<T,R> & { readonly default: T }
+interface UnboundValue<T extends JsonValue, R extends boolean = boolean> { readonly namespace: string; readonly key?: string; readonly rewind: R; readonly default?: T; readonly [addressType]?: T; bind(conversationId: Id): Value<T> }
+// DefaultedUnboundValue: section 2; its bind result retains required default metadata.
 type PayloadOf<D> = D extends Address<infer T> | UnboundValue<infer T, boolean> ? T : never;
 interface UnboundList<T extends JsonValue, R extends boolean = boolean>  { readonly namespace: string; readonly key?: string; readonly rewind: R; readonly [addressType]?: T; bind(conversationId: Id): List<T> }
 // `addressType` is declared in section 2; bound and unbound definitions both carry the witness so inference survives binding
@@ -2825,9 +2836,9 @@ type CoreAbortClosure<I extends JsonValue, C extends TaskCheckpoint, A extends J
 interface TaskOutputKind<O extends OutputState> { readonly kind: string; readonly [taskOutputType]?: O }
 declare function defineTaskOutput<O extends OutputState>(kind: string): TaskOutputKind<O>;
 interface TaskOutputRef<O extends OutputState> { readonly id: Id; readonly kind: string; readonly [taskOutputType]?: O }
-type TaskOutputField<O extends OutputState> = [O] extends [never] ? { readonly output?: never } : { readonly output: TaskOutputRef<O> };   // no-output arm forbids the key rather than leaving it unconstrained
+type TaskOutputField<O extends OutputState> = [O] extends [never] ? Record<never, never> : { readonly output: TaskOutputRef<O> };   // no-output tasks have no output key
 type TaskOutputDefinition<I extends JsonValue, O extends OutputState> = [O] extends [never] ? { readonly output?: never } : { readonly output: { readonly kind: TaskOutputKind<O>; initial(input: I): O } };
-type FinalOutput<O extends OutputState> = [O] extends [never] ? { readonly output?: never } : { readonly output: O };
+type FinalOutput<O extends OutputState> = [O] extends [never] ? Record<never, never> : { readonly output: O };
 // RuntimeOutput, AbortRuntimeOutput, TaskRuntimeBase, CommitRuntime, AbortRuntimeBase: section 5.4
 interface TaskOutput<O extends OutputState> { readonly ref: TaskOutputRef<O>; read(ctx: Context): Promise<O>; mutate(m: (state: O) => undefined, ctx: Context): Promise<void>; replace(value: O, ctx: Context): Promise<void> }
 interface ReadonlyTaskOutput<O extends OutputState> { readonly ref: TaskOutputRef<O>; read(ctx: Context): Promise<O> }
@@ -2862,7 +2873,7 @@ type ExactStateTaskDefinition<Expected, Actual extends Expected> = NoExtra<Expec
 // state facades
 interface PublicValue<T extends JsonValue, Read = T | undefined> { get(ctx: Context): Promise<Read>; get(at: Id, ctx: Context): Promise<Read>; set(value: T, ctx: Context): Promise<void>; delete(ctx: Context): Promise<void> }   // Read = resolved type; both current and historical get apply the definition's default when nothing is stored at that position
 interface PublicList<T extends JsonValue> { read(ctx: Context): Promise<readonly Element<T>[]>; read(at: Id, ctx: Context): Promise<readonly Element<T>[]>; append(value: T, ctx: Context): Promise<Id>; remove(id: Id, ctx: Context): Promise<void>; clear(ctx: Context): Promise<void> }
-interface ScratchReader { value<T extends JsonValue>(a: Value<T>): Pick<TxValue<T>, "get">; list<T extends JsonValue>(a: List<T>): Pick<TxList<T>, "read"> }
+interface ScratchReader { value<D extends Value<JsonValue>>(a: D): Pick<TxValue<PayloadOf<D>, ResolvedValue<D>>, "get">; list<T extends JsonValue>(a: List<T>): Pick<TxList<T>, "read"> }
 
 // registries and hooks
 interface MutableRegistry<D extends { readonly kind: string } | { readonly key: string } | { readonly name: string }> {   // async, on the line

@@ -496,6 +496,8 @@ rules are:
   `model`, so context derivation needs no special case.
 - Envelope assembly happens on the line; listener dispatch off the line,
   synchronous and in order; a listener throw closes that watch only.
+- No `AsyncLocalStorage`: line re-entry is detected through the Chord context
+  the Session hands to its callbacks (`hardening-handoff.md` §7).
 - Chord bridge (`plugins.md` §6.1): a bounded ordered adapter applies one raw
   envelope's ops to the Chord `MutableReplicatedState` and calls `publish()` in
   the same synchronous block (Chord's `subscribe()` publishes pending mutations

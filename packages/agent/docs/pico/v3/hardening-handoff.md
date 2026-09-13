@@ -238,7 +238,7 @@ Retain and expand the existing recovery tests for generation, tool, collapse, jo
 ### 7. Session line, failure, and cancellation
 
 - Every storage interaction, waiter registration, watch capture, registry mutation, reservation, and commit enters one FIFO Session line.
-- Known nested Session-line entry rejects immediately.
+- **No `AsyncLocalStorage` / `node:async_hooks`, anywhere.** Nested-line detection uses Chord contexts only: the Session derives a line context for every callback it runs (`withContextValue(LINE_KEY, marker, ctx)` with a private `createContextKey`), passes it to transaction builders (`commit((tx, ctx) => …)`; task builders receive `(tx, current, ctx)`), and `commit`/`read`/`onLine` reject `NestedLineOperation` when the supplied `ctx` carries `LINE_KEY`. Inside a builder, authors use the builder's `ctx` for everything; calling the Session from inside a builder with an outer ctx is a documented, undetectable self-wait, not something the kernel prevents.
 - Check caller cancellation before queuing and again before invoking a transaction callback.
 - Once persistence starts, call `Storage.commit` exactly once with `withoutAbortSignal(ctx)`.
 - A storage commit rejection faults the Session, closes storage with a non-cancellable context, and makes already-queued/later operations reject `Faulted`.

@@ -220,7 +220,8 @@ that task, no cleanup code); state that outlives tasks goes in a **namespace**.
 There is no hook invocation id: nothing durable identifies "the same handler
 invocation" across a crash or a reload, and the rerun must find the earlier
 decision. Hooks commit through `h.conversation(api.conversationId, ctx)`
-handles and may wait as long as they like; `beforeTool` handlers rerun after a
+handles (never from inside a transaction builder: use the builder's own `ctx`
+there, see `hardening-handoff.md` §7) and may wait as long as they like; `beforeTool` handlers rerun after a
 crash or a suspend/reopen (they run before `started`), which is why their
 decision must be a memo.
 

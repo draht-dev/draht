@@ -291,7 +291,7 @@ The captured transcript must retain all of the following:
 5. every entry's edits verbatim; the view is the transcript, not the edited/model-message projection;
 6. every later committed entry for the lifetime of the watch—there is no live cutoff.
 
-When a committed entry carries a new head, `applyDelta` truncates the existing active transcript using this same fork-aware boundary definition and then appends the new entry at its chronological position. It must not apply context derivation's special treatment of heads. A fresh capture and a client that folded every committed delta must produce identical `entries`.
+When a committed entry carries a new head, `applyEnvelope` truncates the existing active transcript using this same fork-aware boundary definition and then appends the new entry at its chronological position. It must not apply context derivation's special treatment of heads. A fresh capture and a client that folded every committed envelope must produce identical `entries`.
 
 Add a regression with a child conversation whose newest head points to an entry in its parent and with an older head entry still inside that retained range. Assert that capture includes the inherited target, preserves both heads in chronological order, and equals the result of incremental folding.
 
@@ -321,6 +321,13 @@ JSONL multi-file publication:
 10. A malformed complete record fails open; a stale retired task sidecar cannot resurrect state.
 
 Add fault-injection tests for a crash after each sidecar append and before/after the main marker. Graceful `Harness.close()` is not a storage crash test.
+
+Durability modes and failure boundary:
+
+- `fsync: false` covers callback failures, append failures, and process termination while the OS/filesystem remain alive. Complete published records recover; torn final lines are truncated; unconfirmed sidecar tails roll back.
+- `fsync: false` does **not** promise that a returned commit survives power loss, kernel/VM-host failure, storage-cache loss, or a filesystem that loses or reorders completed writes.
+- Worst case without fsync: acknowledged tail commits disappear. If sidecars survive without their marker, replay rolls them back. If a marker survives without a required sidecar, open fails rather than exposing a half-commit. If the lost commit was a pre-effect tool/job checkpoint or memo, recovery may attempt the external effect again; external idempotency is still required.
+- `fsync: true` flushes each sidecar before flushing the main marker, strengthening file-data durability and ordering. It is not a complete database guarantee until parent-directory metadata for file creation, rename, and unlink is also synchronized, and it cannot strengthen a filesystem or device that provides weaker guarantees.
 
 ### 11. Terminal task retention
 

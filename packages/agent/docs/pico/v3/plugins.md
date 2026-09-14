@@ -29,6 +29,13 @@ Read order: §1–§5 are the harness alone (no Chord); §6 is the Chord layer; 
    namespace state (caches, keys, secrets) and slot working state (memos,
    idempotency evidence) never appear in the view.
 
+Here, “durable” means recoverable according to the selected storage mode. JSONL
+with `fsync: false` covers process termination while the OS/filesystem remain
+alive, but acknowledged tail commits may disappear after power, kernel, VM-host,
+or storage-cache failure. `fsync: true` strengthens file-data durability; see
+`hardening-handoff.md` §10 for the exact boundary and worst cases. Neither mode
+makes an external effect exactly once without an external idempotency key.
+
 ## 2. Durable primitives
 
 | primitive | lives in | lifetime | written by | forks / history | in the view |

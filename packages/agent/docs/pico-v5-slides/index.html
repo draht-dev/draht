@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Pico5 — durable documents</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #08090d;
+      --panel: rgba(255,255,255,.045);
+      --panel-strong: rgba(255,255,255,.075);
+      --text: rgba(238,241,245,.93);
+      --muted: rgba(198,207,218,.58);
+      --faint: rgba(198,207,218,.34);
+      --line: rgba(255,255,255,.10);
+      --blue: #9db9ff;
+      --green: #b7dca2;
+      --gold: #e4c88f;
+      --purple: #d2baff;
+      --red: #efaaa4;
+      --mono: "SFMono-Regular", ui-monospace, "Cascadia Code", Consolas, monospace;
+      --pad-x: clamp(24px, 6vw, 112px);
+      --pad-y: clamp(28px, 5vh, 72px);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body {
+      background:
+        radial-gradient(ellipse at 15% 15%, rgba(70,95,160,.12), transparent 42%),
+        radial-gradient(ellipse at 85% 85%, rgba(105,70,145,.09), transparent 45%),
+        var(--bg);
+      color: var(--text);
+      font-family: var(--mono);
+      overscroll-behavior: none;
+    }
+
+    .slide {
+      display: none;
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      padding: var(--pad-y) var(--pad-x) clamp(54px, 7vh, 88px);
+    }
+    .slide.active { display: flex; flex-direction: column; }
+    .frame {
+      flex: 1;
+      min-height: 0;
+      width: 100%;
+      max-width: 1500px;
+      margin: auto;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+    .wide { max-width: 1720px; }
+    .center { align-items: center; text-align: center; }
+
+    h1, h2, h3, p, ul, pre { margin: 0; }
+    h1 {
+      max-width: 1400px;
+      font: 500 clamp(46px, 7vw, 108px)/.98 var(--mono);
+      letter-spacing: -.045em;
+      text-wrap: balance;
+    }
+    h2 {
+      font: 500 clamp(30px, 5vw, 72px)/1.04 var(--mono);
+      letter-spacing: -.035em;
+      text-wrap: balance;
+    }
+    h3 {
+      margin-bottom: clamp(8px, 1.2vh, 18px);
+      color: var(--muted);
+      font: 500 clamp(12px, 1.35vw, 20px)/1.3 var(--mono);
+      letter-spacing: .09em;
+      text-transform: uppercase;
+    }
+    p, li {
+      font: 400 clamp(18px, 2.35vw, 38px)/1.34 var(--mono);
+      letter-spacing: -.015em;
+    }
+    ul { padding-left: clamp(22px, 3vw, 44px); margin-top: clamp(12px, 2vh, 28px); }
+    li { margin: clamp(5px, .8vh, 13px) 0; }
+    .compact li { font-size: clamp(15px, 1.85vw, 30px); line-height: 1.32; }
+    .tight li { font-size: clamp(14px, 1.55vw, 25px); line-height: 1.28; }
+    .subtitle {
+      margin-top: clamp(14px, 2.4vh, 34px);
+      color: var(--muted);
+      font: 400 clamp(15px, 1.8vw, 28px)/1.45 var(--mono);
+      letter-spacing: .05em;
+      text-transform: uppercase;
+    }
+    .big {
+      max-width: 1450px;
+      font: 450 clamp(28px, 4.4vw, 68px)/1.12 var(--mono);
+      letter-spacing: -.035em;
+      text-wrap: balance;
+    }
+    .small { font-size: clamp(14px, 1.55vw, 24px); color: var(--muted); }
+    .accent { color: var(--blue); }
+    .good { color: var(--green); }
+    .warn { color: var(--gold); }
+    .bad { color: var(--red); }
+    .purple { color: var(--purple); }
+
+    pre {
+      margin-top: clamp(12px, 2vh, 28px);
+      padding: clamp(14px, 2vw, 28px);
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      white-space: pre-wrap;
+    }
+    pre code { font: 400 clamp(13px, 1.45vw, 23px)/1.48 var(--mono); }
+    .code-small code { font-size: clamp(11px, 1.15vw, 18px); line-height: 1.43; }
+    .code-tight code { font-size: clamp(10px, 1vw, 16px); line-height: 1.38; }
+    code.inline {
+      padding: .12em .34em;
+      border-radius: 4px;
+      background: var(--panel-strong);
+      font: .86em var(--mono);
+    }
+    .kw { color: var(--blue); }
+    .str { color: var(--green); }
+    .num { color: var(--gold); }
+    .type { color: var(--purple); }
+    .comment { color: var(--faint); font-style: italic; }
+
+    .grid2, .grid3 {
+      display: grid;
+      gap: clamp(14px, 2.5vw, 38px);
+      margin-top: clamp(14px, 2.4vh, 34px);
+      align-items: stretch;
+    }
+    .grid2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .panel {
+      min-width: 0;
+      padding: clamp(16px, 2.3vw, 34px);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+    }
+    .panel p, .panel li { font-size: clamp(14px, 1.7vw, 28px); }
+    .panel ul { margin-top: 0; padding-left: clamp(18px, 2vw, 30px); }
+    .flow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: clamp(8px, 1.7vw, 28px);
+      margin-top: clamp(18px, 4vh, 54px);
+    }
+    .node {
+      flex: 1;
+      padding: clamp(14px, 2.2vw, 30px);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      text-align: center;
+      font-size: clamp(13px, 1.55vw, 25px);
+      line-height: 1.3;
+    }
+    .arrow { color: var(--faint); font-size: clamp(22px, 3vw, 46px); }
+    .table {
+      width: 100%;
+      margin-top: clamp(14px, 2.3vh, 30px);
+      border-collapse: collapse;
+      font-size: clamp(13px, 1.45vw, 23px);
+    }
+    .table th, .table td {
+      padding: clamp(8px, 1.2vw, 18px);
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    .table th { color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: .06em; }
+
+    .step.hidden { visibility: hidden; }
+    .footer {
+      position: absolute;
+      left: clamp(16px, 2vw, 32px);
+      right: clamp(16px, 2vw, 32px);
+      bottom: clamp(12px, 1.6vh, 24px);
+      display: flex;
+      justify-content: space-between;
+      color: var(--faint);
+      font: 400 clamp(10px, 1vw, 15px)/1 var(--mono);
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .progress {
+      position: fixed;
+      z-index: 10;
+      left: 0;
+      bottom: 0;
+      height: 2px;
+      width: 0;
+      background: var(--blue);
+      opacity: .65;
+      transition: width .15s ease;
+    }
+    .hint {
+      position: fixed;
+      right: 18px;
+      top: 14px;
+      z-index: 10;
+      color: var(--faint);
+      font-size: 11px;
+      letter-spacing: .05em;
+    }
+
+    @media (max-width: 800px) {
+      .grid2, .grid3 { grid-template-columns: 1fr; }
+      .flow { flex-wrap: wrap; }
+      .arrow { transform: rotate(90deg); }
+      .slide { overflow: auto; }
+    }
+    @media print {
+      html, body { overflow: visible; background: #fff; color: #111; }
+      .slide, .slide.active { display: flex; break-after: page; }
+      .progress, .hint { display: none; }
+      .step.hidden { visibility: visible; }
+    }
+  </style>
+</head>
+<body>
+  <div class="hint">← → · space · f</div>
+  <div class="progress" id="progress"></div>
+
+  <section class="slide" data-slide="1">
+    <div class="frame center">
+      <h1>Pico5</h1>
+      <p class="big" style="margin-top:28px">Durable documents without a whole-session DOM</p>
+      <p class="subtitle step">Usage, state → view, and why Lane stops short</p>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="2">
+    <div class="frame wide">
+      <h2>The target is not one coding session</h2>
+      <div class="grid2">
+        <div class="panel step"><h3>Products</h3><ul class="compact"><li>coding agent</li><li>personal assistant</li><li>cloud agents in Durable Objects</li><li>Slack bots across years of channels and threads</li></ul></div>
+        <div class="panel step"><h3>Required invariants</h3><ul class="compact"><li>survive process death mid-effect</li><li>fork historical conversation state</li><li>attach many presentations</li><li>let facets persist application state without inventing storage</li></ul></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="3">
+    <div class="frame wide">
+      <h2>Lane solved a real problem</h2>
+      <div class="grid3">
+        <div class="panel step"><h3>Execution</h3><p>Complete operation-state replacements make recovery a switch, not inference.</p></div>
+        <div class="panel step"><h3>Effects</h3><p>Durable intent → uncertain effect → durable outcome.</p></div>
+        <div class="panel step"><h3>Transactions</h3><p>Entries, values, and lists commit atomically in memory, JSONL, and SQLite.</p></div>
+      </div>
+      <p class="subtitle step">Keep those properties. Replace the application-state substrate.</p>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="4">
+    <div class="frame wide">
+      <h2>Lane exposes values and lists</h2>
+      <pre><code><span class="kw">const</span> review = value&lt;<span class="type">ReviewState</span>&gt;(<span class="str">"app.review"</span>, id);
+<span class="kw">const</span> findings = list&lt;<span class="type">Finding</span>&gt;(<span class="str">"app.findings"</span>, id);
+
+<span class="kw">await</span> session.setValue(review, completeNextReview, context);
+<span class="kw">await</span> session.appendList(findings, finding, context);
+<span class="kw">await</span> session.deleteList(findings, context);</code></pre>
+      <ul class="compact steps">
+        <li class="step">A scalar is replaced whole.</li>
+        <li class="step">A list appends or is deleted whole.</li>
+        <li class="step">Nested changes, splices, checkpoints, and reconstruction belong to the caller.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="5">
+    <div class="frame wide">
+      <h2>Canvas on Lane: choose your own machinery</h2>
+      <div class="grid2">
+        <div class="panel step">
+          <h3>Store the whole canvas</h3>
+          <pre class="code-small"><code><span class="kw">const</span> CanvasValue = value&lt;<span class="type">CanvasState</span>&gt;(<span class="str">"app.canvas"</span>);
+<span class="kw">const</span> stored = <span class="kw">await</span> session.getValue(CanvasValue, context);
+<span class="kw">const</span> next = stored?.value ?? { strokes: [] };
+next.strokes.push(stroke);
+<span class="kw">await</span> session.setValue(CanvasValue, next, context);</code></pre>
+          <p class="small">Simple API; complete serialization and replacement for every stroke.</p>
+        </div>
+        <div class="panel step">
+          <h3>Store stroke deltas</h3>
+          <pre class="code-small"><code><span class="kw">const</span> StrokeLog = list&lt;<span class="type">StrokeOp</span>&gt;(<span class="str">"app.canvas.strokes"</span>);
+<span class="kw">await</span> session.appendList(StrokeLog, toStrokeOp(stroke), context);
+<span class="comment">// define reducer and operation vocabulary
+// define checkpoints
+// coordinate append + compact
+// reconstruct after restart</span></code></pre>
+          <p class="small">Efficient writes; every facet authors a private state engine.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="6">
+    <div class="frame wide">
+      <h2>Diff review on Lane: durability leaks upward</h2>
+      <pre class="code-small"><code><span class="kw">const</span> ReviewRecord = (id: <span class="type">string</span>) =&gt; value&lt;<span class="type">Review</span>&gt;(<span class="str">"app.review"</span>, id);
+<span class="kw">const</span> activity = env.replicatedState({ review: initialReview });
+
+<span class="kw">return</span> regionFor(reviewId).run(signal, <span class="kw">async</span> () =&gt; {
+  <span class="kw">const</span> stored = <span class="kw">await</span> session.getValue(ReviewRecord(reviewId), context);
+  <span class="kw">const</span> next = validateAndReplace(stored!.value, action);
+  <span class="kw">await</span> session.setValue(ReviewRecord(reviewId), next, context);
+  activity.state.review = project(next);
+  activity.publish(context);
+});</code></pre>
+      <ul class="compact steps">
+        <li class="step">The facet owns locking and read-modify-write correctness.</li>
+        <li class="step">It reconstructs live state after worker restart.</li>
+        <li class="step">Persistence and replication are two separately coordinated writes.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="7">
+    <div class="frame wide">
+      <h2>Lane forks transcript, not application state</h2>
+      <pre><code>branch A:  e1 ─ e2 ─ e3 ─ e4
+                         └──── fork at e3 → branch B
+
+value("plan-mode")       current replacement only
+list("canvas-strokes")   surviving elements only
+
+question: what was either value at e3?    <span class="bad">not representable</span></code></pre>
+      <p class="subtitle step">The JSONL bytes may contain old writes. The storage contract does not expose them as history.</p>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="8">
+    <div class="frame wide">
+      <h2>The gap is narrow but foundational</h2>
+      <div class="grid2">
+        <div class="panel step"><h3>Lane gives facets</h3><ul class="compact"><li>typed scalar replacement</li><li>append/delete list</li><li>atomic storage calls</li><li>separate volatile ReplicatedState</li></ul></div>
+        <div class="panel step"><h3>Products need</h3><ul class="compact"><li>ordinary nested mutation</li><li>automatic delta + base policy</li><li>historical document reads</li><li>commit and replication as one path</li></ul></div>
+      </div>
+      <p class="subtitle step">Lane remains a good execution design. It is not enough as the state substrate for products and facets.</p>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="9">
+    <div class="frame center">
+      <p class="big">A Session is a store of <span class="accent">entries</span>, <span class="good">documents</span>, and <span class="purple">live task bookmarks</span>.</p>
+      <p class="subtitle step">Not one giant DOM. Not a bag of extension-owned repositories.</p>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="10">
+    <div class="frame wide">
+      <h2>Four durable primitives</h2>
+      <table class="table">
+        <thead><tr><th>Primitive</th><th>Use</th><th>Storage</th></tr></thead>
+        <tbody>
+          <tr class="step"><td class="accent">Entry</td><td>Transcript and unbounded history</td><td>Immutable, paged</td></tr>
+          <tr class="step"><td class="good">Document</td><td>Current application and presentation state</td><td>Chord ops + bases</td></tr>
+          <tr class="step"><td class="purple">Task state</td><td>Private recovery phase/bookmark</td><td>Complete replacement, retireable</td></tr>
+          <tr class="step"><td class="warn">Memo</td><td>Hook/tool idempotency receipt</td><td>Small, first writer wins</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="11">
+    <div class="frame wide">
+      <h2>Create a durable document</h2>
+      <pre><code><span class="comment">// Module-level typed declaration token.</span>
+<span class="kw">const</span> CanvasDoc = defineDoc&lt;<span class="type">CanvasState</span>&gt;({
+  id: <span class="str">"@app/canvas"</span>,
+  scope: <span class="str">"session"</span>,
+  history: <span class="str">"latest"</span>,
+  initial: () =&gt; ({ strokes: [] }),
+});
+
+<span class="comment">// Tx resolves CanvasDoc to this Session's mutable draft.</span>
+<span class="kw">await</span> session.commit(tx =&gt; {
+  tx.doc(CanvasDoc).strokes.push(stroke);
+}, context);</code></pre>
+      <p class="subtitle step"><span class="code inline">CanvasDoc</span> is the token. <span class="code inline">tx.doc(CanvasDoc)</span> is this transaction's draft.</p>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="12">
+    <div class="frame wide">
+      <h2>Expose the same document through Chord</h2>
+      <pre class="code-small"><code><span class="kw">interface</span> <span class="type">CanvasService</span> {
+  <span class="kw">readonly</span> state: ReplicatedState&lt;<span class="type">CanvasState</span>&gt;;
+  addStroke(stroke: <span class="type">Stroke</span>, context: <span class="type">Context</span>): Promise&lt;<span class="kw">void</span>&gt;;
+}
+<span class="kw">const</span> Canvas = defineService&lt;<span class="type">CanvasService</span>&gt;(<span class="str">"@app/canvas"</span>);
+
+<span class="comment">// Committed source for the CanvasDoc token declared previously.</span>
+<span class="kw">const</span> canvasDocument = session.document(CanvasDoc);
+<span class="kw">const</span> canvasState = replicatedState.own(canvasDocument);
+
+env.provide(Canvas, {
+  state: canvasState,
+  addStroke: (stroke, context) =&gt; session.commit(tx =&gt; {
+    tx.doc(CanvasDoc).strokes.push(stroke);
+  }, context),
+});</code></pre>
+      <ul class="compact steps"><li class="step">No second tracker.</li><li class="step">No facet-authored delta protocol.</li><li class="step">No restart reconstruction code.</li></ul>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="13">
+    <div class="frame wide">
+      <h2>One mutation path</h2>
+      <div class="flow">
+        <div class="node step">mutate<br><span class="good">transaction draft</span></div><div class="arrow step">→</div>
+        <div class="node step">Chord derives<br><span class="accent">ops</span></div><div class="arrow step">→</div>
+        <div class="node step">storage commits<br><span class="warn">all or nothing</span></div><div class="arrow step">→</div>
+        <div class="node step">publish committed ops<br><span class="purple">to replicas</span></div>
+      </div>
+      <p class="subtitle step">If a client can see it, recovery can reconstruct it.</p>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="14">
+    <div class="frame wide">
+      <h2>No volatile task publication</h2>
+      <pre><code><span class="kw">for await</span> (<span class="kw">const</span> event <span class="kw">of</span> model.stream(request)) {
+  applyEvent(partial, event);
+
+  <span class="kw">if</span> (flushDue()) {
+    <span class="kw">await</span> rt.commit(tx =&gt; {
+      <span class="comment">// LiveDoc is the built-in defineDoc&lt;LiveState&gt; token.</span>
+      tx.doc(LiveDoc, task.conversationId).message = partial;
+    }, context);
+  }
+}</code></pre>
+      <ul class="compact steps"><li class="step">The UI sees only committed throttle points.</li><li class="step">A crash loses at most the uncommitted window.</li><li class="step">There is one tracker baseline: the last durable commit.</li></ul>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="15">
+    <div class="frame wide">
+      <h2>Three built-in conversation documents</h2>
+      <pre><code><span class="kw">interface</span> <span class="type">ConversationView</span> {
+  conversation: <span class="type">ConversationInfo</span>;
+  entries: <span class="type">Entry</span>[];             <span class="comment">// bounded active transcript</span>
+  rewindable: <span class="type">RewindableState</span>; <span class="comment">// historical fork state</span>
+  sticky: <span class="type">StickyState</span>;         <span class="comment">// inbox and present policy</span>
+  live: <span class="type">LiveState</span>;             <span class="comment">// turn, streaming, tools, collapse</span>
+}</code></pre>
+      <pre class="code-small"><code>rewindable ["s", ["model"], model]
+       view ["s", ["rewindable", "model"], model]
+
+live       ["a", ["message", ...], delta]
+view       ["a", ["live", "message", ...], delta]</code></pre>
+      <p class="subtitle step">A fixed structural mount. No config merge, task description pass, or plugin projection.</p>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="16">
+    <div class="frame wide">
+      <h2>Task state stays private and small</h2>
+      <pre><code><span class="kw">const</span> attempt = task.state.attempt + <span class="num">1</span>;
+
+<span class="comment">// Provisional spelling: transition replaces the complete kind state.</span>
+<span class="kw">await</span> rt.transition(
+  { phase: <span class="str">"requesting"</span>, attempt, requestId },
+  tx =&gt; {
+    tx.doc(LiveDoc, task.conversationId).generation = {
+      stage: <span class="str">"requesting"</span>, attempt,
+    };
+  },
+  context,
+);</code></pre>
+      <p class="subtitle step">Recovery state and presentation state are updated atomically, but are not the same object.</p>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="17">
+    <div class="frame wide">
+      <h2>Crash-visible tool progress</h2>
+      <pre><code>TX 40  task state = { phase: "running" }
+       live.tools[2] = { status: "running", output: "" }
+
+TX 41  live.tools[2].output = "... first 12 KiB ..."
+TX 42  live.tools[2].output = "... latest 50 KiB window ..."
+       <span class="bad">PROCESS DIES</span>
+
+restart  task says running
+         view says exactly how far output reached
+         recovery writes interrupted result or safely resumes</code></pre>
+      <p class="subtitle step">The partial is useful UI state even when it never enters model context.</p>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="18">
+    <div class="frame wide">
+      <h2>Rewind belongs to documents</h2>
+      <pre><code>commit 100  entry E + rewindable plan.enabled = true
+commit 101  live streaming progress
+commit 102  rewindable plan.enabled = false
+
+fork at E:
+  rewindable → state at commit 100
+  sticky     → fresh defaults
+  live       → fresh defaults
+  tasks      → not copied
+  child      → new document IDs + initial bases</code></pre>
+      <ul class="compact steps"><li class="step">Bases bound replay distance.</li><li class="step">Rewindable history remains while ancient forks are supported.</li><li class="step">The parent and its live work remain untouched.</li></ul>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="19">
+    <div class="frame wide">
+      <h2>One atomic Session commit</h2>
+      <pre class="code-small"><code><span class="comment">// Provisional spelling; all writes below are one transaction.</span>
+<span class="kw">await</span> rt.transition({ phase: <span class="str">"tools"</span>, calls }, tx =&gt; {
+  tx.appendEntry(task.conversationId, finalAssistant);
+
+  <span class="kw">const</span> live = tx.doc(LiveDoc, task.conversationId);
+  <span class="kw">delete</span> live.message;
+  <span class="kw">delete</span> live.generation;
+  live.tools = pendingToolSlots(calls);
+
+  <span class="kw">for</span> (<span class="kw">const</span> spec <span class="kw">of</span> toolTaskSpecs(calls)) tx.createTask(spec);
+}, context);</code></pre>
+      <p class="subtitle step">Storage publishes all or none. ConversationView emits one combined operation batch.</p>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="20">
+    <div class="frame wide">
+      <h2>Storage chooses delta or base</h2>
+      <pre><code><span class="kw">interface</span> <span class="type">DocumentChange</span> {
+  id: <span class="type">DocumentId</span>;
+  ops: <span class="kw">readonly</span> <span class="type">Op</span>[];
+  value: <span class="type">JsonValue</span>; <span class="comment">// borrowed; not serialized normally</span>
+}
+
+<span class="kw">if</span> (bytesSinceBase + encodedSize(ops) &lt; threshold)
+  persist(ops);
+<span class="kw">else</span>
+  persist([[<span class="str">"r"</span>, value]]);</code></pre>
+      <ul class="compact steps"><li class="step">Latest: committed base allows reclaiming the old tail.</li><li class="step">Rewindable: bases accelerate reads; old addressable segments remain.</li><li class="step">Chord clients still receive incremental ops.</li></ul>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="21">
+    <div class="frame wide">
+      <h2>SQLite: the long-running backend</h2>
+      <div class="grid2">
+        <div class="panel step"><h3>Documents</h3><ul class="compact"><li>metadata row</li><li>indexed base/delta records</li><li>range query for current or as-of</li><li>transactional latest reclamation</li></ul></div>
+        <div class="panel step"><h3>Tasks + entries</h3><ul class="compact"><li>one complete row per live task</li><li>DELETE on retirement</li><li>immutable paged entry rows</li><li>all writes in one SQL transaction</li></ul></div>
+      </div>
+      <p class="subtitle step">No sidecar publication protocol. No scan of unrelated conversations or documents.</p>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="22">
+    <div class="frame wide">
+      <h2>JSONL: one uniform publication rule</h2>
+      <pre><code>main.jsonl               tables + one publication marker per commit
+task-&lt;id&gt;.jsonl          retireable task state
+doc-&lt;id&gt;.jsonl           one file per document instance
+
+commit                   append every sidecar first
+                         append one compact main marker last
+retire task              publish terminal marker → unlink task sidecar
+rebase latest document   publish base marker → atomic sidecar rewrite</code></pre>
+      <p class="subtitle step">Sidecars are a JSONL backend decision. Harness and facet code never see them.</p>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="23">
+    <div class="frame wide">
+      <h2>The benchmark changed one decision</h2>
+      <div class="grid2">
+        <div class="panel step"><h3>Measured</h3><ul class="tight"><li>72 storage runs + 48 SQLite materialization runs validated</li><li>task sidecars: 1.13 MB → 59 KB after retirement</li><li>SQLite task deletion + checkpoint: 4.45 MB → 0.30 MB</li></ul></div>
+        <div class="panel step"><h3>Rejected optimization</h3><ul class="tight"><li>JSONB replacement 10–18% slower than TEXT</li><li>SQL JSON patching used 2–4× CPU</li><li>large canvas DB+WAL: ~80 MB → ~155 MB</li></ul></div>
+      </div>
+      <p class="subtitle step">Persist Chord ops and periodic bases. Do not build a second op interpreter in SQL.</p>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="24">
+    <div class="frame wide">
+      <h2>Years-long sessions stay bounded in memory</h2>
+      <pre><code>Session
+├─ entries                         paged rows; unbounded on disk
+├─ conversation A
+│  ├─ active entry window          bounded
+│  ├─ pi.rewindable                loaded while active
+│  ├─ pi.sticky                    loaded while active
+│  └─ pi.live                      loaded only while needed
+├─ conversation B                 evictable while idle
+├─ @app/canvas                    loaded while service is active
+└─ task 91                        one live row; deleted at terminal</code></pre>
+      <p class="subtitle step">There is no whole-session materialization, snapshot, or subscriber payload.</p>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="25">
+    <div class="frame wide">
+      <h2>What Pico5 does not add yet</h2>
+      <div class="grid2">
+        <div class="panel step"><ul class="compact"><li>generic plugin mounting into ConversationView</li><li>per-subtree history policies</li><li>visible-but-undurable updates</li><li>CRDT or offline writes</li></ul></div>
+        <div class="panel step"><ul class="compact"><li>SQL JSON patch translation</li><li>one whole-Session DOM</li><li>history pruning semantics</li><li>public semantic event machinery</li><li>pico3 config/plugin projections</li></ul></div>
+      </div>
+      <p class="subtitle step">The first release mounts only the three built-in conversation documents.</p>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="26">
+    <div class="frame wide">
+      <h2>Build the owl one piece at a time</h2>
+      <div class="flow">
+        <div class="node step"><span class="num">1</span><br>memory + SQLite<br><span class="small">storage semantics</span></div><div class="arrow step">→</div>
+        <div class="node step"><span class="num">2</span><br>JSONL<br><span class="small">crash matrix</span></div><div class="arrow step">→</div>
+        <div class="node step"><span class="num">3</span><br>documents + Chord<br><span class="small">narrow proof</span></div><div class="arrow step">→</div>
+        <div class="node step"><span class="num">4</span><br>tasks<br><span class="small">effect sandwich</span></div><div class="arrow step">→</div>
+        <div class="node step"><span class="num">5</span><br>view + rest<br><span class="small">policy last</span></div>
+      </div>
+      <p class="subtitle step">Do not implement the scheduler while storage semantics are still moving.</p>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="27">
+    <div class="frame wide">
+      <h2>Families: one typed document per task</h2>
+      <pre class="code-small"><code><span class="kw">const</span> JobOutputDoc = defineDocFamily&lt;<span class="type">JobOutput</span>, <span class="type">JobInput</span>&gt;({
+  id: <span class="str">"pi.job-output"</span>,
+  scope: <span class="str">"conversation"</span>,
+  history: <span class="str">"latest"</span>,
+  owner: <span class="str">"task"</span>,
+  initial: input =&gt; ({ command: input.command, stdout: <span class="str">""</span> }),
+});
+
+<span class="comment">// task.id selects the family instance owned by this task</span>
+<span class="kw">await</span> rt.commit(tx =&gt; {
+  tx.doc(JobOutputDoc, task.id).stdout += chunk;
+}, context);</code></pre>
+      <p class="subtitle step">Terminal settlement retires the task and every task-owned family instance atomically.</p>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="28">
+    <div class="frame wide">
+      <h2>Watch another task's durable output</h2>
+      <pre class="code-small"><code><span class="kw">const</span> job = <span class="kw">await</span> api.task(JobKind, input, { background: <span class="kw">true</span> }, context);
+<span class="kw">const</span> watch = <span class="kw">await</span> api.watchDoc(JobOutputDoc, job.id, context);
+
+consume(watch.value);                    <span class="comment">// atomic initial snapshot</span>
+watch.start((_ops, value) =&gt; consume(value));
+
+<span class="kw">try</span> {
+  <span class="kw">return await</span> api.waitForTask(job, context);
+} <span class="kw">finally</span> {
+  watch.stop();                           <span class="comment">// idempotent, invocation-owned</span>
+}</code></pre>
+      <ul class="compact steps"><li class="step">Callbacks run off the Session mutation line.</li><li class="step">Recovery re-enters and captures a fresh snapshot; no durable subscription cursor.</li><li class="step">Retirement appears as document absence.</li></ul>
+    </div>
+  </section>
+
+  <section class="slide" data-slide="29">
+    <div class="frame center">
+      <p class="big">Lane made execution durable.</p>
+      <p class="big step" style="margin-top:30px">Pico5 makes <span class="good">application state</span> durable by default.</p>
+      <p class="subtitle step">Ordinary objects → one commit → storage + view</p>
+    </div>
+  </section>
+
+  <script>
+    (() => {
+      const slides = Array.from(document.querySelectorAll('.slide'));
+      const progress = document.getElementById('progress');
+      let index = 0;
+      let step = 0;
+
+      slides.forEach((slide, i) => {
+        const footer = document.createElement('div');
+        footer.className = 'footer';
+        footer.innerHTML = `<span>pico5 · durable documents</span><span>${i + 1} / ${slides.length}</span>`;
+        slide.appendChild(footer);
+      });
+
+      const steps = slide => Array.from(slide.querySelectorAll('.step'));
+      const applySteps = slide => steps(slide).forEach((el, i) => el.classList.toggle('hidden', i >= step));
+
+      function show(nextIndex, nextStep = 0) {
+        index = Math.max(0, Math.min(slides.length - 1, nextIndex));
+        step = Math.max(0, Math.min(steps(slides[index]).length, nextStep));
+        slides.forEach((slide, i) => slide.classList.toggle('active', i === index));
+        applySteps(slides[index]);
+        progress.style.width = `${((index + 1) / slides.length) * 100}%`;
+        const suffix = step ? `.${step}` : '';
+        history.replaceState(null, '', `#${index + 1}${suffix}`);
+      }
+
+      function next() {
+        if (step < steps(slides[index]).length) { step++; applySteps(slides[index]); show(index, step); }
+        else if (index < slides.length - 1) show(index + 1);
+      }
+
+      function previous() {
+        if (step > 0) show(index, step - 1);
+        else if (index > 0) show(index - 1, steps(slides[index - 1]).length);
+      }
+
+      function fromHash() {
+        const [rawSlide, rawStep] = location.hash.slice(1).split('.');
+        const parsedSlide = Number.parseInt(rawSlide, 10);
+        const parsedStep = Number.parseInt(rawStep, 10);
+        show(Number.isFinite(parsedSlide) ? parsedSlide - 1 : 0, Number.isFinite(parsedStep) ? parsedStep : 0);
+      }
+
+      document.addEventListener('keydown', event => {
+        if (['ArrowRight', ' ', 'PageDown', 'j', 'l'].includes(event.key)) { event.preventDefault(); next(); }
+        if (['ArrowLeft', 'PageUp', 'k', 'h'].includes(event.key)) { event.preventDefault(); previous(); }
+        if (event.key === 'Home') { event.preventDefault(); show(0); }
+        if (event.key === 'End') { event.preventDefault(); show(slides.length - 1); }
+        if (event.key.toLowerCase() === 'f') {
+          event.preventDefault();
+          if (document.fullscreenElement) document.exitFullscreen();
+          else document.documentElement.requestFullscreen().catch(() => {});
+        }
+      });
+
+      document.addEventListener('click', event => {
+        if (window.getSelection()?.toString()) return;
+        if (event.clientX < window.innerWidth / 2) previous(); else next();
+      });
+      window.addEventListener('hashchange', fromHash);
+      fromHash();
+    })();
+  </script>
+</body>
+</html>

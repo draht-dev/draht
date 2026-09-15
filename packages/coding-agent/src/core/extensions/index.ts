@@ -102,6 +102,7 @@ export type {
 	MarkdownTransformer,
 	// Events - Message
 	MessageEndEvent,
+	MessageEndEventResult,
 	MessageRenderer,
 	MessageRenderOptions,
 	MessageStartEvent,
@@ -154,6 +155,7 @@ export type {
 	SetModelHandler,
 	SetThinkingLevelHandler,
 	TerminalInputHandler,
+	ThinkingLevelSelectEvent,
 	ThinkingLevelSelectionOptions,
 	// Events - Tool
 	ToolCallEvent,

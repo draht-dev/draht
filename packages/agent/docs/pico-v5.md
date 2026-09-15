@@ -8,9 +8,12 @@ import type { Context, JsonValue } from "@draht/chord";
 import type { Op } from "@draht/chord/delta";
 import type {
   Message as ModelMessage,
+  Models,
   TextContent,
   Tool,
   ToolReference,
+  ToolResultMessage,
+  UserMessage,
 } from "@draht/ai";
 
 type JsonObject = { [key: string]: JsonValue };
@@ -167,6 +170,278 @@ Context derivation:
 Views carry raw active entries. UI reduction and model-context reduction are
 separate consumers. Older stored history is available through cursor-based
 entry scans.
+
+### 2.2 Public Harness surface
+
+This is the v1 host-facing API. Pico5 is not implemented yet, but implementations
+must expose this shape rather than inventing a different facade during package
+25.
+
+```ts
+type ModelRef = {
+  readonly provider: string;
+  readonly modelId: string;
+};
+
+type UserInput = UserMessage["content"];
+
+type SendInput = {
+  readonly content: UserInput;
+  readonly requestId?: string;
+  readonly whenBusy?: "steer" | "followUp" | "reject";
+};
+
+type SectionSeed =
+  | { readonly key: string; readonly value: JsonValue }
+  | { readonly key: string; readonly remove: true };
+
+type ConversationSpec = {
+  readonly parent?: { readonly conversationId: Id; readonly at: Id };
+  readonly model?: ModelRef;
+  readonly sections?: readonly SectionSeed[];
+};
+
+type AnyTaskKind = {
+  readonly definition: {
+    readonly name: string;
+    readonly version: number;
+    readonly initial: unknown;
+    readonly phases: Readonly<Record<string, unknown>>;
+    readonly abort: unknown;
+    readonly migrate?: unknown;
+    readonly hooks?: object;
+  };
+};
+
+type HarnessOptions = {
+  readonly models: Models; // the pi-ai Models interface
+  readonly tools?: readonly ToolRegistration[];
+  readonly taskKinds?: readonly AnyTaskKind[];
+  readonly documents?: readonly AnyDocToken[];
+  readonly sections?: readonly SystemSection<JsonValue>[];
+  readonly plugins?: Readonly<Record<string, PluginHandler>>;
+  readonly processHost?: ProcessHost;
+  readonly now?: () => number;
+  readonly root?: Omit<ConversationSpec, "parent">;
+  readonly onReport?: (error: unknown) => void;
+};
+
+interface EntryKind<E extends Entry = Entry> {
+  readonly kind: string;
+  is(entry: Entry | undefined): entry is E;
+}
+
+function defineEntry<E extends Entry>(kind: string): EntryKind<E>;
+
+type ContextView = {
+  readonly head: Entry | undefined;
+  readonly entries: readonly Entry[];
+  readonly messages: readonly RequestMessage[];
+};
+
+type SettledInput = Input & {
+  readonly status: "done" | "unanswered";
+};
+
+interface InputHandle {
+  readonly id: Id;
+  result(context: Context): Promise<Input | undefined>;
+  wait(context: Context): Promise<SettledInput>;
+  abort(
+    context: Context,
+  ): Promise<"aborted" | "already_placed" | "not_found">;
+}
+
+type SettledTask<R> = Task<JsonValue, JsonValue, R> & {
+  readonly state: TerminalTask<R>;
+};
+
+interface ConversationWatch {
+  readonly value: ConversationView;
+  readonly revision: number;
+  start(listener: (
+    value: ConversationView,
+    ops: readonly Op[],
+    revision: number,
+    context: Context,
+  ) => void): void;
+  stop(): void;
+}
+
+type HooksOf<K> = K extends TaskKind<infer _I, infer _S, infer _R, infer H>
+  ? H
+  : never;
+
+interface ConversationHandle {
+  readonly id: Id;
+  send(input: SendInput, context: Context): Promise<InputHandle>;
+  write(entry: EntryDraft, context: Context): Promise<InputHandle>;
+  commit<T>(
+    change: (tx: Tx) => T | Promise<T>,
+    context: Context,
+  ): Promise<T>;
+  context(context: Context): Promise<ContextView>;
+  fork(
+    at: Id,
+    spec: Omit<ConversationSpec, "parent">,
+    context: Context,
+  ): Promise<ConversationHandle>;
+  collapse(instructions: string | undefined, context: Context): Promise<Id>;
+  reset(handoff: string | undefined, context: Context): Promise<void>;
+  abort(context: Context): Promise<void>;
+  waitForIdle(context: Context): Promise<void>;
+  hooks<K extends AnyTaskKind>(
+    owner: string,
+    kind: K,
+    handlers: Partial<HooksOf<K>>,
+    options?: { readonly subtree?: boolean },
+  ): () => void;
+  watch(context: Context): Promise<ConversationWatch>;
+}
+
+interface Harness extends Session {
+  resume(): void;
+  suspend(context: Context): Promise<void>;
+  quiescent(): boolean;
+  hold(): () => void;
+
+  registerDocument(token: AnyDocToken): () => void;
+  registerTaskKind(kind: AnyTaskKind): () => void;
+  registerTool(tool: ToolRegistration): () => void;
+  registerSection(section: SystemSection<JsonValue>): () => void;
+  registerEntryKind(kind: EntryKind): () => void;
+  hooks<K extends AnyTaskKind>(
+    owner: string,
+    kind: K,
+    handlers: Partial<HooksOf<K>>,
+  ): () => void;
+
+  root(context: Context): Promise<ConversationHandle>;
+  onConversation(listener: (conversation: ConversationHandle) => void): () => void;
+  conversation(id: Id, context: Context): Promise<ConversationHandle | undefined>;
+  createConversation(
+    spec: ConversationSpec & { readonly input?: UserInput },
+    context: Context,
+  ): Promise<ConversationHandle>;
+  entries(
+    query: EntryQuery,
+    cursor: EntryCursor | undefined,
+    limit: number,
+    context: Context,
+  ): Promise<Page<Entry, EntryCursor>>;
+
+  getTask(id: Id, context: Context): Promise<Task<JsonValue, JsonValue, JsonValue> | undefined>;
+  abortInput(
+    id: Id,
+    context: Context,
+    conversationId?: Id,
+  ): Promise<"aborted" | "already_placed" | "not_found">;
+  abortTask(id: Id, context: Context): Promise<"marked" | "terminal">;
+  markTask(id: Id, context: Context): Promise<"marked" | "terminal">;
+  waitForTask<R>(ref: TaskRef<R>, context: Context): Promise<SettledTask<R>>;
+  waitForIdle(context: Context): Promise<void>;
+}
+
+declare const Harness: {
+  open(
+    storage: Storage,
+    options: HarnessOptions,
+    context: Context,
+  ): Promise<Harness>;
+};
+```
+
+This intentionally retains the useful Pico3 host shape. It removes Pico3's
+fixed `rewindable()`/`sticky()` accessors, namespace router, semantic view events,
+and manual Chord view bridge. Typed Pico5 documents and the structural
+conversation watch replace those surfaces. `write()` now returns an
+`InputHandle`, because a busy passive write may remain queued before it receives
+an entry ID.
+
+`Harness.open()` installs built-in definitions followed by supplied documents,
+task kinds, tools, sections, and plugins. It then completes document migration,
+changes surviving `running` tasks to `pending`, migrates task records, and
+settles unknown or unmigratable live kinds as `orphaned` before resolving. IDs
+and names must be unique. No handler dispatches during open. Dynamic registration is available
+after open and does not resurrect a task already settled by that pass.
+
+Storage contains one stable root conversation ID in Session metadata. Empty
+storage creates the conversation and metadata together from `options.root`;
+reopen reads that ID rather than inferring it from a conversation scan.
+`options.root` never overwrites existing state. `root()` returns the stored
+handle. A conversation with no configured model produces a durable `no_model`
+generation failure.
+
+`resume()` is idempotent while running and only enables scheduling. It does not
+repeat open-time reconciliation. `suspend()` is terminal for that Harness
+instance and follows the close semantics below; `resume()` after suspend/close
+rejects. `quiescent()` means no task invocation is currently executing; eligible
+or delayed durable tasks may still exist. `hold()` is available only while
+quiescent and pauses reservation until its idempotent release function runs.
+
+Runtime registration rejects duplicate IDs/names and returns an idempotent
+function that unregisters only that exact token. It supports declaration
+movement during normal operation, not replacement of executing plugin code;
+section 7.4 governs code reload.
+
+Conversation creation atomically commits the conversation, built-in
+configuration and section seeds, and optional input admission. For a fork,
+omitted model/section values follow their document definitions' fork policies;
+provided values override those forked built-in values in the same commit. Other
+documents follow their own definitions without special handling.
+
+A `ConversationHandle.commit()` is a Session commit bound to that conversation.
+`tx.createTask()` defaults `TaskOptions.conversationId` to the bound conversation.
+Generic Session-wide document operations remain available directly on `Harness`
+because `Harness extends Session`.
+
+`fork()` requires a concrete visible parent entry and applies section 3.7.
+`collapse()` returns the newly admitted background collapse task ID, not its
+future summary entry. `reset()` durably admits a passive self-head reset or
+handoff write and then resolves; while busy, placement follows section 6 and may
+occur later. Observe its placement through the conversation watch. An idle wait
+does not guarantee placement of queued passive writes.
+
+`markTask()` only commits `abortRequested`; it neither signals nor joins an
+active invocation. The scheduler notices the mark on its next drain.
+`abortTask()` also signals and joins an active run before starting the abort
+invocation. `ConversationHandle.abort()` withdraws queued non-write inputs, marks
+non-background tasks in the conversation and owned subtree, signals them, and
+resolves only after that subtree is ordinarily idle. Passive writes and
+background tasks survive. Conversation idle means no non-background live task
+in that conversation or its ownership subtree; Harness idle applies the same
+rule Session-wide. Pending dependency- or deadline-blocked work is still live
+and therefore not idle. Cancelling an idle wait aborts only that waiter.
+
+`onConversation()` synchronously visits the currently loaded committed
+conversations in ascending ID order, then reports each later creation after its
+commit. Listener failures go to `onReport` and do not stop other listeners. Its
+idempotent disposer removes the listener; Harness close removes all remaining
+listeners.
+
+`send()` and `write()` return after durable admission, not settlement. `send`
+creates a user message with the admission timestamp. `whenBusy` defaults to
+`followUp`. `write()` uses the ordered passive path in section 6 and never starts
+generation. A completed passive write identifies its entry in `Input.entry`; a
+completed send identifies the answer in `Input.answer`. Cancelling `wait()` only
+cancels that wait. It does not withdraw or abort the input; `InputHandle.abort()`
+is the explicit queued-input withdrawal operation.
+
+`abortTask()` durably requests cancellation and returns `marked` after the mark
+is committed, any active run invocation has joined, and an abort invocation has
+been scheduled; it does not await terminal settlement. `waitForTask()` observes
+the terminal receipt. Aborting an already terminal task returns `terminal`; an
+unknown ID rejects. Explicit task abort includes a background task. Cancelling a
+task or idle wait does not abort work.
+
+`ConversationHandle.watch()` atomically captures the current structural view and
+subscribes to later complete Session commits. It has the same stopped-start,
+unbounded pre-start buffering, listener isolation, and close ownership as
+`watchDoc()`. It carries no semantic events and owns no second tracker.
+
+`close()` is equivalent to `suspend()` for v1: it stops reservation, signals and
+joins invocations, closes watches and storage, and writes no task outcome. Handles
+belong to that open Harness and must be reacquired after reopen.
 
 ## 3. Documents
 
@@ -710,7 +985,7 @@ settles, the scheduler rereads the task and applies the first matching rule:
 6. Checkpoint unchanged: write terminal `faulted` because no durable progress
    was made.
 
-On open, orphan reconciliation changes surviving `running` tasks back to
+On open, running-task reconciliation changes surviving `running` tasks back to
 `pending`, preserving their checkpoint and abort mark. Task migration then runs
 before dispatch. One callback handles every supported older version; newer or
 unmigratable live tasks become orphaned.
@@ -886,6 +1161,89 @@ semantic event channel; current UI status is document state.
 
 ### 7.2 Tools
 
+```ts
+type ToolControl = {
+  readonly addTools?: readonly string[];
+  readonly terminate?: true;
+  readonly handoff?: string;
+};
+
+type ToolExecutionResult = {
+  readonly content?: ToolResultMessage["content"];
+  readonly isError?: boolean;
+  readonly details?: JsonValue;
+  readonly control?: ToolControl;
+};
+
+interface OwnedConversationHandle {
+  readonly id: Id;
+  send(input: SendInput, context: Context): Promise<InputHandle>;
+  abort(context: Context): Promise<void>;
+  waitForIdle(context: Context): Promise<void>;
+}
+
+interface ToolExecutionApi extends DocumentObserver {
+  readonly taskId: Id;
+  readonly conversationId: Id;
+  readonly callId: string;
+  stream(chunk: string | Uint8Array): void;
+  commit<T>(change: (tx: Tx) => T | Promise<T>, context: Context): Promise<T>;
+  progress(value: JsonObject, context: Context): Promise<void>;
+  memo<T extends JsonValue>(name: string, context: Context): Promise<T | undefined>;
+  memo<T extends JsonValue>(name: string, candidate: T, context: Context): Promise<T>;
+  createTask<I, S extends { phase: string }, R, H extends object>(
+    kind: TaskKind<I, S, R, H>,
+    input: I,
+    options: Omit<TaskOptions, "conversationId">,
+    context: Context,
+  ): Promise<TaskRef<R>>;
+  getTask<R>(ref: TaskRef<R>, context: Context): Promise<Task<JsonValue, JsonValue, R> | undefined>;
+  waitForTask<R>(ref: TaskRef<R>, context: Context): Promise<SettledTask<R>>;
+  createConversation(
+    spec: Omit<ConversationSpec, "parent"> & { readonly inherit?: boolean },
+    context: Context,
+  ): Promise<OwnedConversationHandle>;
+}
+
+type PluginHandler = (
+  input: JsonValue,
+  api: ToolExecutionApi,
+  context: Context,
+) => Promise<JsonValue>;
+
+type ToolRegistration = Tool & {
+  readonly replay?: "safe" | "unsafe";
+  readonly output?: {
+    readonly maxBytes?: number;
+    readonly maxLines?: number;
+    readonly retain?: "head" | "tail";
+  };
+  execute(
+    args: JsonValue,
+    api: ToolExecutionApi,
+    context: Context,
+  ): Promise<ToolExecutionResult>;
+};
+```
+
+Omitted `replay` is `unsafe`. Omitted output bounds are 64 KiB, 200 lines, and
+`retain: "head"`. `stream()` synchronously accepts UTF-8 output into that
+invocation-owned bounded buffer and throws after invocation end. Throttled
+commits publish the retained output and dropped byte/line counts in the tool
+presentation document. If `execute()` omits `content`, the final retained stream
+becomes one text content item; no stream becomes an empty content list. Explicit
+text in explicit result content is bounded by the same limits before transcript
+persistence; non-text content is retained as declared by its pi-ai type.
+
+`progress(value)` replaces the invocation's complete JSON `progress` payload; it
+does not merge keys. Its promise resolves after the corresponding or coalesced
+document commit. During normal settlement, accepted output updates drain before
+the tool-result entry and terminal task record commit. Abort and close obey
+invocation and Session admission gates: uncommitted buffered updates may be
+discarded, while admitted commits settle. Pre-flush cancellation or callback
+failure does not poison the Session. Post-flush, checkpoint, or storage failure
+follows the fatal Session rule.
+
 Tools are dynamically registered declarations with name, description, JSON
 schema, replay policy, and execute function. A tool call is accepted only if it
 was offered in the request's effective system/tool history. Arguments are
@@ -902,7 +1260,24 @@ A tool executes in a durable task. It may:
 - create and wait for tasks;
 - create owned conversations;
 - observe documents for which it has a token/reference;
+- mutate authorized documents through `commit()`;
 - return bounded model content and separate diagnostic details.
+
+Tool and plugin operations use the invoking task's admission and
+invocation-lifetime gates. Task creation defaults to that task's conversation.
+Trusted document access follows sections 3.3 and 9.2; there is no additional
+document subtree authorization layer. `createConversation()` records the
+invoking task as owner and returns an invocation-bound handle. `inherit` defaults
+to `false`. When true, creation atomically selects the invoking conversation's
+newest committed visible entry as `parent.at`; if no entry exists, it creates no
+history parent. Conversation documents then apply section 3.7 at that entry, and
+explicit model/section seeds override their inherited built-in values. With no
+parent, documents initialize normally. That handle's
+operations reject after the invocation ends. An `InputHandle` returned by its
+`send()` is invocation-bound in the same way; the admitted input itself remains
+durable after those methods reject. Invocation-owned document watches stop when
+the invocation ends. A
+plugin handler receives the same API; `callId` is its durable invocation key.
 
 A tool result may request `addTools`, `terminate`, or `handoff`. Post-tools
 applies added tool names to configured loadout, uses a final boundary for
@@ -916,6 +1291,18 @@ durable partial output. Completed, failed, and aborted
 tool terminal outcomes retain their tool-result entry ID for post-tools.
 
 ### 7.3 System sections and dynamic tools
+
+```ts
+interface SystemSection<T extends JsonValue = JsonValue> {
+  readonly key: string;
+  render(value: T): string;
+}
+
+function defineSystemSection<T extends JsonValue>(definition: {
+  readonly key: string;
+  render(value: T): string;
+}): SystemSection<T>;
+```
 
 Pico stores prompt and tool changes directly as PR #9548 `SystemMessage` values
 at their transcript positions:
@@ -1011,6 +1398,43 @@ isolation and is not a v1 promise.
 
 ## 8. Built-in tasks
 
+```ts
+type ProcessSpec = {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly cwd: string;
+  readonly env?: Readonly<Record<string, string>>;
+};
+
+type ProcessStatus =
+  | {
+      readonly status: "running";
+      readonly stdout: string;
+      readonly stderr: string;
+      readonly droppedStdout: number;
+      readonly droppedStderr: number;
+    }
+  | {
+      readonly status: "exited";
+      readonly exitCode: number;
+      readonly stdout: string;
+      readonly stderr: string;
+      readonly droppedStdout: number;
+      readonly droppedStderr: number;
+    }
+  | { readonly status: "unknown" };
+
+interface ProcessHost {
+  start(key: string, spec: ProcessSpec, context: Context): Promise<void>;
+  status(key: string, context: Context): Promise<ProcessStatus>;
+  kill(
+    key: string,
+    signal: "SIGTERM" | "SIGKILL",
+    context: Context,
+  ): Promise<void>;
+}
+```
+
 The initial implementation provides:
 
 | kind | responsibility |
@@ -1021,6 +1445,14 @@ The initial implementation provides:
 | collapse | select a transcript range, summarize, append a headed summary |
 | job | run a process, persist bounded output, delay or reschedule |
 | plugin | run a registered durable handler when needed |
+
+Generation uses `HarnessOptions.models` without a Pico-specific model adapter. It
+resolves `models.getModel(ref.provider, ref.modelId)`, builds a pi-ai `Context`
+from the prepared prompt/messages/tools, and calls `models.streamSimple()` with
+the task invocation's abort signal and configured reasoning/options. Deferred
+continuation calls `models.fetchDeferred()` and `models.cancelDeferred()` with
+that same model and signal. Missing models and synchronous/streamed pi-ai errors
+are classified into the durable generation outcomes below.
 
 Generation and tool progress are throttled durable document commits. A crash may
 lose only the uncommitted throttle window. Recovery converts committed partials
@@ -1143,6 +1575,14 @@ Entry appends/head changes and every changed mounted document are included in
 the same publication. The mount owns no tracker and performs no semantic
 projection. Its revision is contiguous per view.
 
+`ConversationHandle.watch()` exposes that mount directly. Capture of
+`ConversationView`, revision, and listener registration is atomic on the Session
+line. Like `watchDoc()`, it returns stopped, buffers without a fixed bound until
+`start()` or `stop()`, drains in order, isolates listener failures, and stops on
+Harness close. Chord Session facets may forward the captured value and committed
+ops through services, but that product wiring is not part of the Harness facade
+and must not add another tracker or semantic event envelope.
+
 ## 10. Storage contract
 
 Ordered scans are cursor-based. Exact identity lookups are keyed.
@@ -1194,7 +1634,12 @@ type StoredDocument = {
   ];
 };
 
+type SessionMetadata = {
+  readonly rootConversationId: Id;
+};
+
 type StorageWrite =
+  | { readonly type: "session.metadata"; readonly value: SessionMetadata }
   | { readonly type: "conversation"; readonly value: Conversation }
   | { readonly type: "entry"; readonly value: Entry }
   | { readonly type: "task"; readonly value: Task<JsonValue, JsonValue, JsonValue> }
@@ -1218,6 +1663,7 @@ interface Storage {
   commit(writes: readonly StorageWrite[], context: Context): Promise<Seq>;
   mintId(): Id;
 
+  metadata(context: Context): Promise<SessionMetadata | undefined>;
   conversation(id: Id, context: Context): Promise<Conversation | undefined>;
   scanConversations(cursor: ConversationCursor | undefined, limit: number, context: Context): Promise<Page<Conversation, ConversationCursor>>;
 
@@ -1237,6 +1683,11 @@ interface Storage {
   close(context: Context): Promise<void>;
 }
 ```
+
+`metadata()` is absent only for empty storage. The first root creation commits
+its conversation and metadata together. Existing records with missing metadata,
+or metadata naming a missing conversation, make open fail rather than guessing a
+root.
 
 `EntryQuery` supports conversation ancestry, a strict `before` entry cursor,
 kind filtering, and `withHead`. Document queries support definition, scope,
@@ -1335,8 +1786,9 @@ These are contracts, not invitations to add defensive machinery:
 - **Schema stability:** definition IDs, mounted document IDs, and visible paths
   are persisted/public protocol. Value migration cannot rename an ID; an ID
   change requires explicit copy and retirement.
-- **Unstarted watches:** `watchDoc()` buffers every committed update until
-  `start()` or `stop()`. Delaying both can consume unbounded memory.
+- **Unstarted watches:** `watchDoc()` and `ConversationHandle.watch()` buffer
+  every committed update until `start()` or `stop()`. Delaying both can consume
+  unbounded memory.
 - **Durable progress cadence:** clients see only committed progress. A crash may
   lose the current uncommitted throttle window.
 - **Large terminal results:** terminal task records remain queryable. Put large

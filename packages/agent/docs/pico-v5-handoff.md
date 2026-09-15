@@ -15,10 +15,13 @@ facades, membranes, document routing, view projection, events, or clone chains.
 
 ## 1. Records, cursors, and memory tables
 
-Implement IDs, sequences, conversations, entries, inputs, live/terminal tasks,
-document metadata, storage writes, cursors, and detached `MemoryStorage` tables.
+Implement IDs, sequences, Session metadata with stable root ID, conversations,
+entries, inputs, live/terminal tasks, document metadata, storage writes, cursors,
+and detached `MemoryStorage` tables.
 
-Test mixed atomic commits, rollback, detached reads/writes, cursor boundaries,
+Test atomic root-metadata/conversation creation, missing or dangling root
+metadata rejection, mixed atomic commits, rollback, detached reads/writes,
+cursor boundaries,
 fork-aware entry scans through deep ancestor caps, head lookup,
 entry-to-commit lookup, and full task replacement.
 
@@ -170,8 +173,10 @@ Implement durable abort marks, signal/join/fresh-abort invocation, owned
 conversation creation, subtree traversal, background behavior, and idle waits.
 
 Test commit rejection after a run task is marked, crashes at every abort stage,
-close precedence over a previously marked task, deep ownership trees, and atomic
-retirement of task-scoped documents.
+close precedence over a previously marked task, deep ownership trees, atomic
+retirement of task-scoped documents, default non-inheritance, inheritance from
+the current committed tail, an empty source conversation, document fork
+policies, and explicit model/section seed overrides.
 
 ## 18. Inputs and positional inbox
 
@@ -222,14 +227,18 @@ progress, owned APIs, interrupted/replay-safe recovery, result entries,
 post-tools joining, controls, and boundaries using fake tools.
 
 Test recovery from every phase, both stored/current replay-policy directions,
-and atomic assistant/tool/post-tools settlement. Use a fake generation
-successor; package 22 replaces it and reruns integration.
+default and overridden bounds, streamed-content fallback, progress replacement
+and coalesced commit settlement, drain-before-terminal ordering,
+abort/close with buffered output, invocation-bound owned handles, and atomic
+assistant/tool/post-tools settlement. Use a fake
+generation successor; package 22 replaces it and reruns integration.
 
 ## 22. Generation task
 
 Implement preparation, request intent, durable throttled partials, attempts,
 retry policy, response classification, continuation, and deferred polling/
-cancellation with the faux provider.
+cancellation through pi-ai's exported `Models` interface. Do not add a Pico
+model adapter. The faux test double implements that same interface.
 
 Test every phase before and after reopen, aborted partial conversion, overflow
 through a fake collapse kind, input settlement, and no visible-undurable update.
@@ -254,13 +263,32 @@ state or entries, and plugin handler recovery.
 
 ## 25. Harness integration
 
-Expose conversation/input/task handles, watches, dynamic registries, close,
-suspend, service withdrawal/client detach, and product wiring. Implement the v1
+Implement the exact Pico3-shaped public surface in specification §2.2:
+`Harness.open/resume/suspend/close`, lifecycle gates, root/create/lookup
+conversations, ordered `write` handles, send/input handles, conversation-bound
+commits, fork/collapse/reset/abort/idle, typed task wait/abort, generic document
+access, registries, and structural conversation watches. Do not restore Pico3's
+namespace router, fixed document accessors, semantic view events, or manual Chord
+view bridge.
+
+Expose service withdrawal/client detach and product wiring. Implement the v1
 host-plugin reload path as stop admission, close/join, dispose, rebuild with all
 new definitions, reopen/migrate, and resume. Test that closing seals commit and
 get-or-create admission, lets storage settlement for already-flushed admitted
-commits finish despite caller cancellation, writes no abort or terminal outcome, starts no fresh abort
-invocation, and does not run old and new generations concurrently.
+commits finish despite caller cancellation, writes no abort or terminal outcome,
+starts no fresh abort invocation, and does not run old and new generations
+concurrently.
 
-Run all package-specific tests and the repository check. Verify a local
+Test stable persisted root identity; atomic conversation/config/section/input
+creation; fork seed overrides; concrete-entry forks; collapse task-ID return;
+busy reset admission and later placement; mark-only versus signalling abort;
+conversation abort/join with surviving passive writes and background tasks;
+quiescence with eligible work; listener initial/future delivery and isolation;
+and runtime registration between open and resume without resurrection of a task
+settled during open.
+
+Compile-test every §2.2 signature and every usage sequence shown in slides
+20–26. The erased registry test must include a concrete task with narrowed
+input, multiple checkpoint phases, and custom hooks. Run all package-specific
+tests and the repository check. Verify a local
 coding-agent turn and a reopened interrupted turn, then stop for final review.

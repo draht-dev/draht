@@ -132,89 +132,92 @@ Recovery records them as interrupted, then retries only when safe.</code></pre>
   </div></section>
 
   <section class="slide" data-slide="7"><div class="frame wide">
-    <h2>What Lane got right</h2>
-    <pre><code>TX 10  operation = { phase: "requesting", requestId: "r1" }
-       <span class="comment">// durable intent</span>
-
-       provider request runs
-       <span class="comment">// process may die here</span>
-
-TX 11  assistant entry + operation = { phase: "tools", calls: [...] }
-       <span class="comment">// durable outcome</span></code></pre>
-    <p class="subtitle step">Atomic transactions and explicit restart points were correct.</p>
+    <h2>Lane solved a narrower problem well</h2>
+    <div class="grid2">
+      <div class="panel step"><h3>Session</h3><ul class="tight"><li>immutable entry tree</li><li>typed current values and lists</li><li>atomic commits</li><li>usage ledger</li></ul></div>
+      <div class="panel step"><h3>AgentLane</h3><ul class="tight"><li>one configured branch</li><li>queued input</li><li>at most one core operation</li><li>durable restart state</li></ul></div>
+    </div>
+    <p class="subtitle step">Lane is our durable conversation runtime. One operation is an agent run, compaction, or navigation.</p>
   </div></section>
 
   <section class="slide" data-slide="8"><div class="frame wide">
-    <h2>Lane’s state machine was one fixed machine</h2>
-    <pre class="code-small"><code><span class="kw">type</span> <span class="type">OperationState</span> =
-  | Starting | Checkpoint | AssistantReady | AssistantEffectPending
-  | AssistantRetryWait | Tools | DeferredSuspended | DeferredEffectPending
-  | SummaryDeciding | SummaryReady | SummaryEffectPending
-  | SummaryRetryWait | NavigationReadyToCommit;
+    <h2>Products need independently registered durable tasks</h2>
+    <pre><code>generation G7
+├─ tool T8 ───────────────┐
+├─ tool T9 ───────────────┴─ post-tools P10 ─ generation G11
+└─ collapse C12              <span class="comment">independent background work</span>
 
-<span class="kw">switch</span> (state.at) {
-  <span class="comment">// one core driver understands every operation and recovery edge</span>
-}</code></pre>
-    <p class="subtitle step">Adding a first-class durable operation kind required changing the core graph and recovery.</p>
-  </div></section>
-
-  <section class="slide" data-slide="9"><div class="frame wide">
-    <h2>Lane’s application storage was values + lists</h2>
-    <pre><code>value&lt;T&gt;       set or replace the complete value
-list&lt;T&gt;        append one element or delete the whole list
-entry          append immutable transcript content
-transaction    commit all writes atomically</code></pre>
-    <p class="subtitle step">Good storage primitives. Poor extension programming model for nested shared state.</p>
-  </div></section>
-
-  <section class="slide" data-slide="10"><div class="frame wide">
-    <h2>Canvas with a Lane value: naive split read/write</h2>
-    <pre class="code-small"><code><span class="kw">const</span> Canvas = value&lt;<span class="type">CanvasState</span>&gt;(<span class="str">"app.canvas"</span>);
-
-<span class="kw">const</span> stored = <span class="kw">await</span> session.getValue(Canvas, context);
-<span class="kw">const</span> next = stored?.value ?? { strokes: [] };
-next.strokes.push(stroke);
-<span class="kw">await</span> session.setValue(Canvas, next, context);</code></pre>
+background job J20 ─ poll ─ output ─ reschedule
+plugin task K30 ─ owned conversation ─ child tasks</code></pre>
     <ul class="compact steps">
-      <li class="step">Read, copy, and serialize the complete canvas per stroke.</li>
-      <li class="step">Use Lane’s existing <code class="inline">session.mutate()</code> to serialize read-modify-write.</li>
-      <li class="step">Maintain a separate replicated UI copy.</li>
+      <li class="step">Lane already supports multiple lanes and parallel tools.</li>
+      <li class="step">Missing: plugin-defined tasks with their own checkpoints, recovery, cancellation, and dependencies.</li>
     </ul>
   </div></section>
 
-  <section class="slide" data-slide="11"><div class="frame wide">
-    <h2>Canvas with a Lane list</h2>
-    <pre class="code-small"><code><span class="kw">const</span> CanvasOps = list&lt;<span class="type">CanvasOp</span>&gt;(<span class="str">"app.canvas.ops"</span>);
-<span class="kw">await</span> session.appendList(CanvasOps, {
-  type: <span class="str">"stroke.added"</span>, stroke,
-}, context);
+  <section class="slide" data-slide="9"><div class="frame wide">
+    <h2>New first-class operation kinds require core changes</h2>
+    <pre class="code-small"><code><span class="comment">// selected states from the fixed core union</span>
+<span class="kw">type</span> <span class="type">OperationState</span> =
+  | Starting | AssistantEffectPending | AssistantRetryWait
+  | Tools | DeferredEffectPending
+  | SummaryEffectPending | SummaryRetryWait
+  | NavigationReadyToCommit;
 
-<span class="comment">// The extension now owns:</span>
-foldOperations(); checkpoint(); compact(); restore(); publishToClients();</code></pre>
-    <p class="subtitle step">Small writes—but every extension starts building its own document store.</p>
+<span class="kw">switch</span> (state.at) {
+  <span class="comment">// one driver owns every phase, recovery edge, and terminal path</span>
+}</code></pre>
+    <p class="subtitle step">A plugin job can store markers—but first-class scheduling means editing Lane itself.</p>
+  </div></section>
+
+  <section class="slide" data-slide="10"><div class="frame wide">
+    <h2>Concrete example: a durable plugin job</h2>
+    <pre class="code-small"><code>download(url), independent of an agent run
+  1  persist intent + stable request ID
+  2  start remote work; persist returned handle
+  3  poll handle + checkpoint bounded progress
+  4  restart: poll, deduplicate if supported, or report interruption
+  5  abort and clean up
+  6  persist a terminal result for dependent jobs
+
+Lane tools already have checkpoints, memos, cancellation, and recovery.
+Independent jobs still need plugin-owned scheduling,
+recovery, cancellation, and dependency handling.</code></pre>
+    <p class="subtitle step">That is a second task runtime hidden inside an extension.</p>
+  </div></section>
+
+  <section class="slide" data-slide="11"><div class="frame wide">
+    <h2>Values and lists are storage—not documents</h2>
+    <table class="table"><thead><tr><th>Lane primitive</th><th>Canvas write</th><th>Application must add</th></tr></thead><tbody>
+      <tr class="step"><td><code class="inline">value&lt;Canvas&gt;</code></td><td><code class="inline">session.mutate()</code>, copy and replace full canvas</td><td>nested deltas and replica updates</td></tr>
+      <tr class="step"><td><code class="inline">list&lt;CanvasOp&gt;</code></td><td>append one small stroke operation</td><td>fold, base, compact, restore, hydrate</td></tr>
+    </tbody></table>
+    <p class="subtitle step">Both are valid primitives. Neither is a tracked JSON document with a committed change stream.</p>
   </div></section>
 
   <section class="slide" data-slide="12"><div class="frame wide">
-    <h2>Durability and UI replication split</h2>
-    <pre class="code-small"><code><span class="kw">await</span> session.setValue(ReviewValue, next, context); <span class="comment">// durable copy</span>
+    <h2>Application replication is a second pipeline</h2>
+    <pre><code>Lane application value/list            application-owned Chord/UI mirror
+────────────────────────────            ─────────────────────────────────
+atomic durable writes                  materialized nested document
+current reads + recovery     ────────→  snapshots + incremental updates
+serialized mutation line               subscriptions + remote hydration
 
-uiState.state.review = next;                            <span class="comment">// second mutable copy</span>
-uiState.publish(context);                               <span class="comment">// second publication</span>
-
-<span class="comment">// On restart: read storage, reconstruct uiState, avoid races.</span></code></pre>
-    <p class="subtitle step">Every facet owns the seam between storage and Chord.</p>
+for every application:
+  define the mapping, startup hydration, ordering, and failure handling</code></pre>
+    <p class="subtitle step">Lane exposes its own snapshots/events; arbitrary application values do not become ReplicatedState.</p>
   </div></section>
 
   <section class="slide" data-slide="13"><div class="frame wide">
-    <h2>Lane lacked entry-anchored application-state history</h2>
-    <pre><code>conversation A:  e1 ─ e2 ─ e3 ─ e4
-                              └── fork B at e3
+    <h2>Forking cannot recover application state at an entry</h2>
+    <pre><code>source:  canvas A ── e1 ── add B ── e2 ── delete A ── e3
 
-transcript at e3:            available
-current plan-mode value:     available
-plan-mode value at e3:       <span class="bad">not available</span>
-review comments at e3:       <span class="bad">not available</span></code></pre>
-    <p class="subtitle step">Tree forks copy current application state; branch forks exclude it. Neither reconstructs state at e3.</p>
+                       fork requested at e2 after e3 exists
+
+Lane branch fork     transcript through e2; application values/lists excluded
+Lane tree fork       whole entry tree; <span class="warn">current</span> application state: only B
+needed for product   transcript through e2; application state: A + B</code></pre>
+    <p class="subtitle step">Current values have no replaced/deleted history to reconstruct the state at e2.</p>
   </div></section>
 
   <section class="slide" data-slide="14"><div class="frame wide">
@@ -293,6 +296,127 @@ many independently attached presentations</code></pre>
   </div></section>
 
   <section class="slide" data-slide="20"><div class="frame wide">
+    <h2>The specified Pico5 host API</h2>
+    <pre class="code-small"><code><span class="comment">// Normative public surface; implementation is package 25.</span>
+<span class="kw">const</span> storage: <span class="type">Storage</span> = <span class="kw">await</span> openAppStorage(context);
+<span class="kw">const</span> options: <span class="type">HarnessOptions</span> = {
+  models, <span class="comment">// pi-ai Models</span>
+  tools: [read, bash],
+  taskKinds: [Reindex],
+  documents: [PlanDoc, JobOutputDoc],
+  sections,
+  root: { model: { provider: <span class="str">"anthropic"</span>, modelId: <span class="str">"claude-sonnet-4-5"</span> } },
+};
+
+<span class="kw">const</span> harness = <span class="kw">await</span> Harness.open(storage, options, context);
+harness.resume();
+<span class="kw">const</span> conversation = <span class="kw">await</span> harness.root(context);</code></pre>
+    <p class="subtitle step">Definitions are installed before migration, recovery, and task dispatch.</p>
+  </div></section>
+
+  <section class="slide" data-slide="21"><div class="frame wide">
+    <h2>Send input and await its durable answer</h2>
+    <pre class="code-small"><code><span class="kw">const</span> input = <span class="kw">await</span> conversation.send({
+  content: <span class="str">"Summarize the repository."</span>,
+  requestId: <span class="str">"slack:1719432.0021"</span>,
+  whenBusy: <span class="str">"followUp"</span>,
+}, context);
+
+<span class="kw">const</span> settled = <span class="kw">await</span> input.wait(context);
+<span class="kw">if</span> (settled.status === <span class="str">"done"</span>) {
+  console.log(<span class="str">"answer entry"</span>, settled.answer);
+} <span class="kw">else</span> {
+  console.log(<span class="str">"unanswered"</span>, settled.reason);
+}</code></pre>
+    <p class="subtitle step">Send returns after durable admission. Cancelling wait does not withdraw the input.</p>
+  </div></section>
+
+  <section class="slide" data-slide="22"><div class="frame wide">
+    <h2>Write without starting another turn</h2>
+    <pre class="code-small"><code><span class="kw">const</span> first = <span class="kw">await</span> conversation.write({
+  kind: <span class="str">"app.note"</span>, data: { text: <span class="str">"Build passed"</span> },
+}, context);
+<span class="kw">const</span> second = <span class="kw">await</span> conversation.write({
+  kind: <span class="str">"app.note"</span>, data: { text: <span class="str">"Deploy started"</span> },
+}, context);
+
+<span class="kw">const</span> [a, b] = <span class="kw">await</span> Promise.all([
+  first.wait(context), second.wait(context),
+]);
+console.log(a.entry, b.entry); <span class="comment">// passive writes settle with entry, not answer</span></code></pre>
+    <ul class="compact steps">
+      <li class="step">Idle: append immediately.</li>
+      <li class="step">Busy: queue, then append at a safe boundary in input-ID order.</li>
+      <li class="step">A passive write never triggers generation.</li>
+    </ul>
+  </div></section>
+
+  <section class="slide" data-slide="23"><div class="frame wide">
+    <h2>Create, wait for, or abort a custom task</h2>
+    <pre class="code-small"><code><span class="kw">const</span> ref = <span class="kw">await</span> conversation.commit(
+  tx =&gt; tx.createTask(Reindex, { path: <span class="str">"/repo"</span> }, {
+    background: <span class="kw">true</span>, <span class="comment">// conversationId defaults to this handle</span>
+  }),
+  context,
+);
+
+<span class="comment">// Request durable cancellation, then observe terminal settlement.</span>
+<span class="kw">await</span> harness.abortTask(ref.id, context);
+<span class="kw">const</span> task = <span class="kw">await</span> harness.waitForTask(ref, context);
+console.log(task.state.outcome);</code></pre>
+    <p class="subtitle step">Dependencies use terminal task records; no separate receipt store.</p>
+  </div></section>
+
+  <section class="slide" data-slide="24"><div class="frame wide">
+    <h2>Fork at an entry and inspect historical state</h2>
+    <pre class="code-small"><code><span class="comment">// PlanDoc is rewindable; checkpointEntryId is visible in the parent.</span>
+<span class="kw">const</span> child = <span class="kw">await</span> conversation.fork(checkpointEntryId, {}, context);
+
+<span class="kw">const</span> historicalPlan = <span class="kw">await</span> harness.snapshotAsOf(
+  PlanDoc, conversation.id, checkpointEntryId, context,
+); <span class="comment">// undefined when no instance existed at that commit</span>
+
+<span class="kw">const</span> childPlan = <span class="kw">await</span> harness.snapshot(PlanDoc, {
+  scope: <span class="str">"conversation"</span>, conversationId: child.id,
+}, context); <span class="comment">// normal access may initialize</span></code></pre>
+    <p class="subtitle step"><code class="inline">asOf</code>, <code class="inline">current</code>, or <code class="inline">initial</code> determines the child document.</p>
+  </div></section>
+
+  <section class="slide" data-slide="25"><div class="frame wide">
+    <h2>Observe the conversation as committed state</h2>
+    <pre class="code-small"><code><span class="kw">const</span> watch = <span class="kw">await</span> conversation.watch(context);
+render(watch.value);
+
+watch.start((view, ops, revision, _context) =&gt; {
+  render(view);
+  console.log(revision, ops);
+});
+
+<span class="comment">// A Session facet may forward the same committed ops.</span>
+<span class="kw">function</span> disposeUi() { <span class="comment">// on UI teardown</span>
+  watch.stop();
+}</code></pre>
+    <p class="subtitle step">Capture and listener registration are atomic; close stops the watch.</p>
+  </div></section>
+
+  <section class="slide" data-slide="26"><div class="frame wide">
+    <h2>Close and reopen without aborting work</h2>
+    <pre class="code-small"><code><span class="kw">await</span> harness.close(context);
+<span class="comment">// Close causes no abort/terminal write. Admitted commits settle;</span>
+<span class="comment">// remaining work and checkpoints stay durable.</span>
+
+<span class="kw">const</span> reopenedStorage = <span class="kw">await</span> openAppStorage(context);
+<span class="kw">const</span> recovered =
+  <span class="kw">await</span> Harness.open(reopenedStorage, options, context);
+recovered.resume();
+
+<span class="kw">const</span> recoveredConversation =
+  <span class="kw">await</span> recovered.conversation(conversation.id, context);
+<span class="comment">// Old handles/sources are closed; reacquire from recovered.</span></code></pre>
+    <p class="subtitle step">Plugin reload also disposes old facets and constructs the new definition set before reopen.</p>
+  </div></section>
+
+  <section class="slide" data-slide="27"><div class="frame wide">
     <h2>Four durable concepts</h2>
     <table class="table"><thead><tr><th>Concept</th><th>What it stores</th><th>Lifetime</th></tr></thead><tbody>
       <tr class="step"><td class="accent">Entry</td><td>Transcript and permanent facts</td><td>Session history</td></tr>
@@ -302,7 +426,7 @@ many independently attached presentations</code></pre>
     </tbody></table>
   </div></section>
 
-  <section class="slide" data-slide="21"><div class="frame wide">
+  <section class="slide" data-slide="28"><div class="frame wide">
     <h2>Conversations are cheap branches</h2>
     <pre><code>Conversation A
   entries: e1 ─ e2 ─ e3 ─ e4
@@ -314,7 +438,7 @@ head entry        → model context begins here; old entries remain stored</code
     <p class="subtitle step">No transcript copy. No whole-Session tree in memory.</p>
   </div></section>
 
-  <section class="slide" data-slide="22"><div class="frame wide">
+  <section class="slide" data-slide="29"><div class="frame wide">
     <h2>A document declares its semantics</h2>
     <pre class="code-small"><code><span class="kw">type</span> <span class="type">Stroke</span> = { color: <span class="type">string</span>; points: { x: <span class="type">number</span>; y: <span class="type">number</span> }[] };
 <span class="kw">type</span> <span class="type">CanvasState</span> = { strokes: <span class="type">Stroke</span>[] };
@@ -329,7 +453,7 @@ head entry        → model context begins here; old entries remain stored</code
     <p class="subtitle step">Scope defines lifetime. Only conversation documents choose history and fork.</p>
   </div></section>
 
-  <section class="slide" data-slide="23"><div class="frame wide">
+  <section class="slide" data-slide="30"><div class="frame wide">
     <h2>Conversation history and fork are explicit</h2>
     <table class="table"><thead><tr><th>Setting</th><th>Meaning</th></tr></thead><tbody>
       <tr class="step"><td><code class="inline">history: latest</code></td><td>Only current value matters; old records can be reclaimed after a base.</td></tr>
@@ -340,7 +464,7 @@ head entry        → model context begins here; old entries remain stored</code
     </tbody></table>
   </div></section>
 
-  <section class="slide" data-slide="24"><div class="frame wide">
+  <section class="slide" data-slide="31"><div class="frame wide">
     <h2>One mutation, one authority</h2>
     <pre class="code-small"><code><span class="kw">const</span> target = { scope: <span class="str">"session"</span> } <span class="kw">as const</span>;
 
@@ -356,7 +480,7 @@ head entry        → model context begins here; old entries remain stored</code
     </div>
   </div></section>
 
-  <section class="slide" data-slide="25"><div class="frame wide">
+  <section class="slide" data-slide="32"><div class="frame wide">
     <h2>Chord: the live delivery half</h2>
     <ul class="compact steps">
       <li class="step"><span class="accent">Facet</span> — one feature’s setup unit.</li>
@@ -367,7 +491,7 @@ head entry        → model context begins here; old entries remain stored</code
     <p class="subtitle step">Chord transports state. Pico5 commits it.</p>
   </div></section>
 
-  <section class="slide" data-slide="26"><div class="frame wide">
+  <section class="slide" data-slide="33"><div class="frame wide">
     <h2>Canvas service: acquire once</h2>
     <pre class="code-tight"><code><span class="kw">interface</span> <span class="type">CanvasService</span> {
   <span class="kw">readonly</span> state: ReplicatedState&lt;<span class="type">CanvasState</span> | <span class="kw">null</span>&gt;;
@@ -381,7 +505,7 @@ head entry        → model context begins here; old entries remain stored</code
 <span class="comment">// documentReplicatedState is the small Pico5→Chord adapter.</span></code></pre>
   </div></section>
 
-  <section class="slide" data-slide="27"><div class="frame wide">
+  <section class="slide" data-slide="34"><div class="frame wide">
     <h2>Canvas service: provide durable methods</h2>
     <pre class="code-tight"><code><span class="kw">const</span> CanvasFacet = defineFacet({
   id: <span class="str">"app.canvas/session"</span>,
@@ -400,7 +524,7 @@ head entry        → model context begins here; old entries remain stored</code
     <p class="subtitle step">The method resolves after durability—not after every UI callback.</p>
   </div></section>
 
-  <section class="slide" data-slide="28"><div class="frame wide">
+  <section class="slide" data-slide="35"><div class="frame wide">
     <h2>Consumers see snapshots, then updates</h2>
     <pre class="code-small"><code><span class="kw">const</span> CanvasConsumer = defineFacet({
   id: <span class="str">"app.canvas/consumer"</span>,
@@ -421,7 +545,7 @@ head entry        → model context begins here; old entries remain stored</code
     <p class="subtitle step">Late join: current value. Connected client: ordered committed updates.</p>
   </div></section>
 
-  <section class="slide" data-slide="29"><div class="frame wide">
+  <section class="slide" data-slide="36"><div class="frame wide">
     <h2>A generation task commits what clients see</h2>
     <pre class="code-small"><code><span class="comment">// Schematic: LiveDoc is the conversation-scoped presentation document.</span>
 <span class="comment">// Read provider frames off the Session line.</span>
@@ -438,7 +562,7 @@ head entry        → model context begins here; old entries remain stored</code
     <p class="subtitle step">Storage and every Chord client receive the same committed operations.</p>
   </div></section>
 
-  <section class="slide" data-slide="30"><div class="frame wide">
+  <section class="slide" data-slide="37"><div class="frame wide">
     <h2>Task kinds replace the fixed graph</h2>
     <pre class="code-small"><code><span class="kw">type</span> <span class="type">GenerationState</span> =
   | { phase: <span class="str">"prepare"</span> }
@@ -455,7 +579,7 @@ head entry        → model context begins here; old entries remain stored</code
     <p class="subtitle step">Core scheduler knows tasks. Each kind knows its own phases.</p>
   </div></section>
 
-  <section class="slide" data-slide="31"><div class="frame wide">
+  <section class="slide" data-slide="38"><div class="frame wide">
     <h2>The generation task graph grows by commits</h2>
     <pre class="code-tight"><code><span class="comment">Selected business commits; reservation/preparation/progress omitted</span>
 
@@ -475,7 +599,7 @@ F  ordinary post-tools settlement:
     <p class="subtitle step">The scheduler knows dependencies. Generation, tools, and post-tools create the graph.</p>
   </div></section>
 
-  <section class="slide" data-slide="32"><div class="frame wide">
+  <section class="slide" data-slide="39"><div class="frame wide">
     <h2>The effect sandwich stays</h2>
     <pre><code><span class="comment">successful response with no tool calls</span>
 
@@ -488,7 +612,7 @@ commit  append assistant entry E
         replace task with completed result { entryId: E }</code></pre>
   </div></section>
 
-  <section class="slide" data-slide="33"><div class="frame wide">
+  <section class="slide" data-slide="40"><div class="frame wide">
     <h2>Private task state ≠ presentation state</h2>
     <div class="grid2">
       <div class="panel step"><h3>Task record</h3><pre class="code-small"><code>{
@@ -505,7 +629,7 @@ commit  append assistant entry E
     </div>
   </div></section>
 
-  <section class="slide" data-slide="34"><div class="frame wide">
+  <section class="slide" data-slide="41"><div class="frame wide">
     <h2>Task scope carries bounded output</h2>
     <pre class="code-tight"><code><span class="kw">type</span> <span class="type">JobOutputState</span> = { stdout: <span class="type">string</span>; chunks: <span class="type">number</span> };
 
@@ -525,7 +649,7 @@ watch.start((value, ops) =&gt; consume(value, ops));
     <p class="subtitle step">The producer bounds stdout on append; checkpoints only bound replay cost.</p>
   </div></section>
 
-  <section class="slide" data-slide="35"><div class="frame wide">
+  <section class="slide" data-slide="42"><div class="frame wide">
     <h2>Abort is durable and semantic</h2>
     <pre><code>conversation C
 ├─ generation G7 ──owns──→ sub-conversation D ── tool T9
@@ -540,7 +664,7 @@ crash anywhere → durable marks remain → reopen continues abort</code></pre>
     <p class="subtitle step">Clients observe committed consequences; process-local abort signals are not replicated state.</p>
   </div></section>
 
-  <section class="slide" data-slide="36"><div class="frame wide">
+  <section class="slide" data-slide="43"><div class="frame wide">
     <h2>Close is not abort</h2>
     <table class="table"><thead><tr><th>Operation</th><th>Durable writes</th><th>Distribution and reopen</th></tr></thead><tbody>
       <tr class="step"><td>Cancel a Context</td><td>None by itself</td><td>Requests cancellation of one call/wait; remote propagation depends on transport. Committed work is not undone.</td></tr>
@@ -550,7 +674,7 @@ crash anywhere → durable marks remain → reopen continues abort</code></pre>
     <p class="subtitle step">Disconnecting a client does not silently abort shared work.</p>
   </div></section>
 
-  <section class="slide" data-slide="37"><div class="frame wide">
+  <section class="slide" data-slide="44"><div class="frame wide">
     <h2>Hooks and tools remain extensible</h2>
     <div class="grid2">
       <div class="panel step"><h3>Hooks</h3><ul class="tight"><li>declared by task kind</li><li>replacement chains or first decision</li><li>may rerun before their consuming commit</li><li>memos persist idempotency receipts</li></ul></div>
@@ -559,7 +683,7 @@ crash anywhere → durable marks remain → reopen continues abort</code></pre>
     <p class="subtitle step">V1: client facets may reload; Session-side plugin code closes and reopens the Harness.</p>
   </div></section>
 
-  <section class="slide" data-slide="38"><div class="frame wide">
+  <section class="slide" data-slide="45"><div class="frame wide">
     <h2>Target contract: open pi-ai PR #9548</h2>
     <pre class="code-tight"><code><span class="comment">// e10 — complete baseline</span>
 { role: <span class="str">"system"</span>, content: basePrompt,
@@ -577,7 +701,7 @@ crash anywhere → durable marks remain → reopen continues abort</code></pre>
     <p class="subtitle step">Replay in transcript order; stored rendered sections remain authoritative.</p>
   </div></section>
 
-  <section class="slide" data-slide="39"><div class="frame wide">
+  <section class="slide" data-slide="46"><div class="frame wide">
     <h2>The conversation view is a mount</h2>
     <pre class="code-small"><code><span class="kw">type</span> <span class="type">ConversationView</span> = {
   conversation: <span class="type">Conversation</span>;
@@ -590,7 +714,7 @@ crash anywhere → durable marks remain → reopen continues abort</code></pre>
     <p class="subtitle step">Path prefixing, not a second tracker or semantic projection.</p>
   </div></section>
 
-  <section class="slide" data-slide="40"><div class="frame wide">
+  <section class="slide" data-slide="47"><div class="frame wide">
     <h2>Status is state, not an event</h2>
     <pre><code>live.collapse = { stage: "summarizing", through: 920 }
 live.collapse = { stage: "retrying", retryAt: 1730000000 }
@@ -602,7 +726,7 @@ late client during retry:
     <p class="subtitle step">A “started” event cannot help a client that attaches later.</p>
   </div></section>
 
-  <section class="slide" data-slide="41"><div class="frame wide">
+  <section class="slide" data-slide="48"><div class="frame wide">
     <h2>Storage is one contract, two products</h2>
     <div class="grid2">
       <div class="panel step"><h3>SQLite</h3><ul class="tight"><li>long-running/cloud Sessions</li><li>one SQL transaction per commit</li><li>indexed base + delta ranges</li><li>current task rows</li></ul></div>
@@ -611,7 +735,7 @@ late client during retry:
     <p class="subtitle step">Backends receive the same entries, task records, document ops, and candidate values.</p>
   </div></section>
 
-  <section class="slide" data-slide="42"><div class="frame wide">
+  <section class="slide" data-slide="49"><div class="frame wide">
     <h2>Build it in reviewable slices</h2>
     <div class="flow">
       <div class="node step"><span class="num">1</span><br>storage<br><span class="small">memory · SQLite · JSONL</span></div><div class="arrow step">→</div>
@@ -622,7 +746,7 @@ late client during retry:
     <p class="subtitle step">Each slice has intrinsic conformance tests and stops for sign-off.</p>
   </div></section>
 
-  <section class="slide" data-slide="43"><div class="frame wide">
+  <section class="slide" data-slide="50"><div class="frame wide">
     <h2>The deliberate sharp edges</h2>
     <div class="grid2">
       <div class="panel step"><h3>Ownership</h3><ul class="tight"><li>draft/proxy escape</li><li>inserted and duplicated aliases</li><li>table read after table write</li><li>large values in terminal task records</li></ul></div>
@@ -631,7 +755,7 @@ late client during retry:
     <p class="subtitle step">Stable definition IDs, mounted paths, and fork settings are persisted protocol.</p>
   </div></section>
 
-  <section class="slide" data-slide="44"><div class="frame wide">
+  <section class="slide" data-slide="51"><div class="frame wide">
     <h2>Footguns: drafts have one owner</h2>
     <pre class="code-small"><code><span class="kw">let</span> escaped: <span class="type">CanvasState</span> | <span class="kw">undefined</span>;
 <span class="kw">await</span> session.commit(<span class="kw">async</span> tx =&gt; {
@@ -651,7 +775,7 @@ escaped!.strokes.push(otherStroke); <span class="bad">// wrong: transaction ende
     <p class="subtitle step">Do not retain drafts, nested proxies, bound methods, or assigned mutable aliases.</p>
   </div></section>
 
-  <section class="slide" data-slide="45"><div class="frame wide">
+  <section class="slide" data-slide="52"><div class="frame wide">
     <h2>Footguns: do not block or outrun the line</h2>
     <pre class="code-tight"><code><span class="comment">// Independent mistake 1: external effect on the Session line.</span>
 <span class="kw">await</span> session.commit(<span class="kw">async</span> _tx =&gt; requestModel(context), context);
@@ -676,7 +800,7 @@ callback failure before flush              → <span class="good">baseline resto
     <p class="subtitle step">Also remember: normal document reads may create, and IDs/paths are protocol.</p>
   </div></section>
 
-  <section class="slide" data-slide="46"><div class="frame center">
+  <section class="slide" data-slide="53"><div class="frame center">
     <p class="big">Entries preserve history.</p>
     <p class="big step" style="margin-top:24px">Tasks preserve work.</p>
     <p class="big step" style="margin-top:24px">Documents preserve <span class="good">current truth</span>.</p>

@@ -73,5 +73,19 @@ export async function copyToClipboard(text: string): Promise<void> {
 		}
 	}
 	if (isRemoteSession()) copied = emitOsc52(text) || copied;
-	if (!copied) throw new Error("Failed to copy to clipboard");
+	if (!copied) {
+		if (p === "linux") {
+			if (process.env.TERMUX_VERSION) {
+				throw new Error("Clipboard unavailable: install the Termux:API app and `termux-api` package");
+			}
+			if (process.env.WAYLAND_DISPLAY) {
+				throw new Error("Clipboard unavailable: install `wl-clipboard` (`wl-copy`) or check Wayland access");
+			}
+			if (process.env.DISPLAY) {
+				throw new Error("Clipboard unavailable: install `xclip` or `xsel`, or check X11 access");
+			}
+			throw new Error("Clipboard unavailable: no Wayland or X11 display detected");
+		}
+		throw new Error("Clipboard unavailable");
+	}
 }

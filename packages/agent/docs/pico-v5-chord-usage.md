@@ -1,0 +1,364 @@
+# Pico5 documents through Chord
+
+This guide uses the contracts in the [Pico5 specification](pico-v5.md).
+
+- **Session:** a durable container for conversations, entries, tasks, and documents;
+  it serializes mutations on one commit line.
+- **Facet:** a feature's setup unit in a Chord host. Setup declares services and
+  dependencies synchronously; `onActivate` runs after dependencies are ready.
+- **Context:** explicitly passed cancellation and invocation values. Forward the caller's context.
+- **Service:** a typed token and implementation acquired with `env.use`. Remote
+  services contain replicated state and async methods with JSON arguments plus a trailing `Context`.
+- **Durable document:** JSON persisted as a complete base, Chord operations, and
+  checkpoints. Its definition token declares schema, version, scope, and initialization;
+  conversation scope also declares history and fork behavior.
+- **Transaction draft:** the mutable tracked object from `await tx.doc`, valid
+  only inside that commit callback, including all nested objects.
+- **DocumentSource:** an opaque handle to one document incarnation's committed changes,
+  not a mutable value or a public subscription API.
+- **ReplicatedState:** Chord's immutable complete values through `value` and
+  `subscribe(listener)`. `value` is `undefined` before hydration or while disconnected.
+  The listener receives `(value, context, delivery)`; delivery contains `kind`
+  (`hydrate` or `update`) and a stream `sequence`, not a Session commit number.
+
+Documents are scoped directly to a Session, conversation, or task. A task is
+durable work attached to a conversation; its documents retire when it becomes
+terminal and never participate in conversation forks.
+
+## Imports and the adapter boundary
+
+Examples build on one another. Pico5 names (`defineDoc`, `defineDocFamily`,
+`Session`, `DocumentSource`, `Id`, `TaskRuntime`, `DocumentObserver`)
+refer to normative contracts, without a specified import path or runnable Pico5
+package. These Chord imports exist today:
+
+```ts
+import {
+  createFacetHost, createRemoteServiceBinding, defineFacet, defineService,
+  type Context, type Facet, type JsonValue, type RemoteServiceTransport,
+  type ReplicatedState,
+} from "@draht/chord";
+import { BACKGROUND_CONTEXT } from "@draht/chord/context";
+
+// The spec calls this JsonObject; current Chord exports JsonValue, not JsonObject.
+type JsonObject = { [key: string]: JsonValue };
+
+// Required by Pico5, but not a current Chord export yet.
+declare function documentReplicatedState<T extends JsonObject>(
+  source: DocumentSource<T>, context: Context,
+): Promise<{ readonly state: ReplicatedState<T | null>; dispose(): void }>;
+```
+
+The adapter must register Chord-recognized state, atomically hydrate matching
+committed value/revision and subscribe, and forward committed ops without another
+tracker or re-diff. Disposal releases observation, not the document. Even Chord's
+hydration requests must never flush an uncommitted draft.
+
+Current `env.replicatedState(initial)` creates a **mutable, in-memory** tracker
+with `.state` and `.publish(context)`, not a durable source adapter. There is no
+`replicatedState.own(source)`. Do not mirror documents into another tracker.
+
+## 1. A Session-wide canvas
+
+All conversations in this Session share one canvas. Session documents are
+current-only and have no history or fork settings.
+
+```ts
+type Stroke = { color: string; points: { x: number; y: number }[] };
+type CanvasState = { strokes: Stroke[] };
+
+const CanvasDoc = defineDoc<CanvasState>({
+  id: "app.canvas", version: 1, scope: "session",
+  initial: () => ({ strokes: [] }),
+  // This append-only example adds one stroke per commit.
+  checkpointWhen: value => value.strokes.length % 100 === 0,
+});
+
+interface CanvasService {
+  readonly state: ReplicatedState<CanvasState | null>;
+  addStroke(stroke: Stroke, context: Context): Promise<void>;
+}
+const Canvas = defineService<CanvasService>("app.canvas");
+
+async function createCanvasFacet(session: Session, context: Context): Promise<Facet> {
+  const target = { scope: "session" } as const;
+  // Get-or-create: an absent canvas is initialized in a serialized commit.
+  const source = await session.documentSource(CanvasDoc, target, context);
+  const replica = await documentReplicatedState(source, context);
+  return defineFacet({
+    id: "app.canvas/session",
+    setup(env) {
+      env.own(() => replica.dispose());
+      env.provide(Canvas, {
+        state: replica.state,
+        async addStroke(stroke, context) {
+          await session.commit(async tx => {
+            const draft = await tx.doc(CanvasDoc, target);
+            draft.strokes.push(stroke); // The draft now owns stroke; caller must not mutate it.
+          }, context);
+        },
+      });
+    },
+  });
+}
+
+const CanvasConsumer = defineFacet({
+  id: "app.canvas/consumer",
+  setup(env) {
+    const canvas = env.use(Canvas); // Declare now; access only after activation.
+    env.onActivate(() => {
+      env.own(canvas.state.subscribe((value, _context, delivery) => {
+        console.log(delivery.kind, delivery.sequence, value?.strokes.length ?? "retired");
+      })); // subscribe delivers the current hydrated value, then updates.
+    });
+  },
+});
+
+async function runCanvasExample(session: Session): Promise<void> {
+  const context = BACKGROUND_CONTEXT;
+  const provider = await createCanvasFacet(session, context);
+  const host = await createFacetHost({ facets: [provider, CanvasConsumer] });
+  try {
+    await host.services.use(Canvas).addStroke({
+      color: "black", points: [{ x: 10, y: 20 }, { x: 30, y: 40 }],
+    }, context);
+  } finally {
+    await host.dispose(); // Unsubscribes; does not delete the canvas or close Session.
+  }
+}
+```
+
+The application owns the open Session. Acquire state **before** synchronous
+`setup`; `env.provide` cannot run in `onActivate`. Install one provider per
+Session host. Chord may reload presentation facets independently, but v1 does
+not use facet reload to replace Session-side task or hook implementations. A
+host plugin code change closes and reopens the Harness with the new definition
+set.
+
+Remote clients supply a `RemoteServiceTransport` connected to the host's `services`
+provider; Chord prescribes no socket protocol. `CanvasConsumer` also works unchanged
+in a UI host configured with a remote service source.
+
+```ts
+async function connectCanvas(transport: RemoteServiceTransport, context: Context) {
+  const services = createRemoteServiceBinding({ services: [Canvas], transport });
+  const canvas = services.use(Canvas);
+  const stop = canvas.state.subscribe((value, _context, delivery) => {
+    console.log(delivery.kind, delivery.sequence, value?.strokes ?? "retired");
+  });
+  try {
+    await services.ready(context); // Initial snapshot installed; not all future updates.
+  } catch (error) {
+    stop();
+    await services.dispose(BACKGROUND_CONTEXT);
+    throw error;
+  }
+  return async () => {
+    stop();
+    await services.dispose(BACKGROUND_CONTEXT);
+  };
+}
+```
+
+```text
+first acquisition -> commit base { strokes: [] }
+addStroke(A)       -> commit A -> local and remote subscribers see A
+worker restarts   -> open same durable storage; install canvas facet again
+acquire source    -> load base + committed deltas, without rerunning initial()
+late client       -> hydrate complete canvas including A, then ordered updates
+conversation fork -> still uses this same Session canvas
+```
+
+Use persistent storage for restart survival. The memory backend is not persistent.
+A method's successful commit does not promise every remote callback has run yet.
+
+## 2. Conversation-scoped diff reviews
+
+A **document family** uses one definition for many instances. The logical key is
+`(definition, conversationId, instanceId)`; the persisted numeric document ID
+identifies an incarnation and is never reused. Initializer input is not identity.
+
+```ts
+type ReviewInput = { path: string; patch: string };
+type ReviewComment = { id: string; line: number; text: string };
+type ReviewState = ReviewInput & { comments: ReviewComment[] };
+const ReviewDoc = defineDocFamily<ReviewState, ReviewInput>({
+  id: "app.diff-review", version: 1, family: true, scope: "conversation",
+  history: "latest", fork: "current",
+  initial: input => ({ path: input.path, patch: input.patch, comments: [] }),
+  checkpointWhen: value => value.comments.length % 50 === 0,
+});
+interface DiffReviewService {
+  readonly state: ReplicatedState<ReviewState | null>;
+  identity(context: Context): Promise<{ conversationId: Id; instanceId: string }>;
+  addComment(comment: ReviewComment, context: Context): Promise<void>;
+}
+const DiffReviews = defineService<DiffReviewService>("app.diff-reviews");
+
+function reviewFacet(
+  session: Session, conversationId: Id,
+  reviews: readonly { instanceId: string; initial: ReviewInput }[], context: Context,
+): Facet {
+  return defineFacet({
+    id: "app.diff-reviews/session",
+    setup(env) {
+      const instances = env.provideMany(DiffReviews);
+      env.onActivate(async () => {
+        for (const review of reviews) {
+          const target = { scope: "conversation" as const, conversationId, ...review };
+          const source = await session.documentSource(ReviewDoc, target, context);
+          const replica = await documentReplicatedState(source, context);
+          env.own(() => replica.dispose());
+          // Chord instance keys route services; they are not persisted document IDs.
+          instances.spawn(JSON.stringify([conversationId, review.instanceId]), {
+            state: replica.state,
+            async identity() { return { conversationId, instanceId: review.instanceId }; },
+            async addComment(comment, context) {
+              await session.commit(async tx => {
+                const draft = await tx.doc(ReviewDoc, target);
+                draft.comments.push(comment); // Do not mutate comment after this assignment.
+              }, context);
+            },
+          }); // The facet owns spawned service lifetimes automatically.
+        }
+      });
+    },
+  });
+}
+```
+
+Example input: `[{ instanceId: "review-7", initial: { path: "a.ts", patch: "-old\n+new" } }]`.
+Pass distinct instance IDs and a real conversation ID; install the facet as above.
+Keyed consumers use `env.observe(DiffReviews, handler)`, not `env.use`. The handler
+receives `(review, context)`; call `review.identity(context)` to identify it and
+`review.state.subscribe` to observe comments.
+
+These comments are conversation-scoped: ending the generating task or unloading
+the facet does not retire them. `current` copies every logically
+present review at fork-commit time into independent child instances with new
+numeric IDs, retaining family instance IDs. Parent and child then diverge.
+
+```text
+parent review-7: comment A -> transcript entry E -> comment B
+fork at E with current: child review-7 contains A and B
+child adds C: parent still contains only A and B
+```
+
+With `fork: "initial"`, no instance copies; first child access uses supplied input.
+`latest` cannot read history or fork `asOf`; use `history: "rewindable"` with `asOf`
+to reflect E's commit. Reaccess ignores `initial`; updating the patch requires
+an explicit mutation or a distinct review instance ID.
+
+## 3. Task-scoped output and a tool/task watch
+
+This is a bounded progress window, not the permanent result. Scope itself gives
+it task lifetime; no history, fork, owner, or conversation setting is needed.
+
+```ts
+type JobInput = { command: string };
+type JobOutput = { stdout: string; chunks: number };
+const JobOutputDoc = defineDoc<JobOutput>({
+  id: "app.job-output", version: 1, scope: "task",
+  initial: () => ({ stdout: "", chunks: 0 }),
+  checkpointWhen: value => value.chunks % 100 === 0,
+});
+function jobOutputTarget(taskId: Id) {
+  return { scope: "task" as const, taskId };
+}
+async function appendJobOutput(
+  runtime: TaskRuntime<JobInput, { phase: "running" }, null, {}>,
+  chunk: string, context: Context,
+): Promise<void> {
+  // Read process output outside this callback. The runtime gates the live task.
+  await runtime.commit(async tx => {
+    const draft = await tx.doc(JobOutputDoc, jobOutputTarget(runtime.taskId));
+    draft.stdout = (draft.stdout + chunk).slice(-50_000);
+    draft.chunks += 1;
+  }, context);
+}
+async function observeJob(
+  api: DocumentObserver, producerTaskId: Id,
+  finished: Promise<void>, context: Context,
+): Promise<void> {
+  const target = jobOutputTarget(producerTaskId);
+  const watch = await api.watchDoc(JobOutputDoc, target, context);
+  try {
+    console.log(watch.revision, watch.value.stdout); // Consume captured initial value.
+    watch.start((value, ops, revision, _context) => {
+      console.log(revision, value === null ? "retired" : value.stdout, ops);
+    }); // Drain buffered changes in order, then continue live delivery.
+    await finished; // Caller-supplied observation lifetime; outside any commit.
+  } finally {
+    watch.stop(); // Idempotent; discards any remaining buffer.
+  }
+}
+```
+
+The running phase calls `appendJobOutput` and must also commit its next checkpoint
+or terminal outcome. `api` is the invocation's `DocumentObserver`; `TaskRuntime`
+includes that interface. Acquisition validates the target task is live and
+derives its conversation from the task record.
+
+```text
+watchDoc: capture value V at revision 8 + register listener atomically on Session line
+producer commits revision 9 before start: buffer 9
+consumer reads watch.value (V), calls start: deliver 9, then subsequent revisions
+producer becomes terminal: same commit retires output; watch receives null + ["r", null]
+```
+
+Watches automatically stop when their invocation ends. A Session-acquired watch
+is caller-owned and stops on Session close. Retirement ends the incarnation's
+stream; recreation requires a new watch/source and a new numeric
+document ID. A terminal task cannot create more output. Task-scoped documents
+never copy into forks. Preserve required output in result entries or Session- or
+conversation-scoped documents in the terminal commit before retirement. Use a
+task-scoped family only when one task needs several independently keyed documents.
+
+## 4. Built-in conversation views and commit delivery
+
+`ConversationView` contains `conversation`, raw transcript `entries`, and
+`docs: Readonly<Record<string, JsonObject>>`. Selected built-in singletons mount
+under `docs` by stable definition ID, not numeric incarnation ID. The spec's
+illustrative path mapping is:
+
+```text
+document ["s", ["message"], value]
+ -> view ["s", ["docs", "pi.live", "message"], value]
+```
+
+Built-in IDs/fields await approval; `pi.live` is illustrative, not an available API.
+The mount publishes one batch per complete Session commit: entry/head changes and
+changed mounted documents together, without a tracker or semantic projection.
+Third-party documents are **not automatically mounted**; use their own Chord
+services or trusted invocation watches. A retired source publishes `null`; a
+dynamic service should then withdraw its instance rather than expose stale data.
+
+```text
+addStroke -> hold Session mutation line -> await tx.doc -> mutate tracked draft
+callback succeeds -> tracker flush: incremental ops + candidate value
+atomic storage commit: all document and record writes; checkpoint predicate selects ops or base
+storage succeeds -> adopt committed baseline + enqueue source publication, still on line
+release line -> deliver committed source ops -> adapter -> local/remote Chord consumers
+late subscriber -> atomically capture committed value/revision + subscription
+```
+
+No visible-undurable path exists. Callback failure restores the unchanged
+baseline. Failure after flush, including checkpoint/storage failure, publishes
+nothing and poisons the open Session; close and reopen it instead of continuing.
+
+## Footguns
+
+- Never retain drafts, nested proxies, or bound array methods across commits.
+  Never mutate inserted aliases or insert one mutable object at multiple paths.
+- Async commit holds the line through storage settlement and baseline adoption.
+  Await document access there, not models, processes, network calls, or humans.
+- Normal `snapshot`, `documentSource`, and `watchDoc` reads are get-or-create.
+  Family `initial` is first-creation input, not an update.
+- An unstarted watch buffers without a fixed bound. Start or stop promptly.
+- Definitions own checkpoints, not storage heuristics. Revise the counting predicates
+  above if mutations change. Keep schema IDs, versions, fork policies, and public
+  paths stable; schema changes require migration, not a source-only rename.
+
+Chord sources: [types](../../chord/src/types.ts), [facet examples](../../chord/test/facets.test.ts),
+[state](../../chord/src/services/state.ts), [provider](../../chord/src/services/provider.ts),
+[Context](../../chord/src/context/index.ts), [Delta](../../chord/src/delta/README.md).

@@ -72,6 +72,6 @@ export async function copyToClipboard(text: string): Promise<void> {
 			}
 		}
 	}
-	if (isRemoteSession() || !copied) copied = emitOsc52(text) || copied;
+	if (isRemoteSession()) copied = emitOsc52(text) || copied;
 	if (!copied) throw new Error("Failed to copy to clipboard");
 }

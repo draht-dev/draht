@@ -1333,6 +1333,10 @@ function processBasetenModels(provider: ModelsDevProvider | undefined): Model<Ap
 		supportsUsageInStreaming: true,
 		maxTokensField: "max_tokens",
 		supportsStrictMode: true,
+		// Baseten automatic prompt caching needs session affinity so related
+		// requests land on the same replica. See:
+		// https://docs.baseten.co/inference/model-apis/pricing-and-limits
+		sendSessionAffinityHeaders: true,
 		supportsLongCacheRetention: false,
 	};
 	const reasoningEffortCompat: OpenAICompletionsCompat = {

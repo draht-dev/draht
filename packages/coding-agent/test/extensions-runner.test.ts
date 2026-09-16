@@ -617,6 +617,84 @@ describe("ExtensionRunner", () => {
 			expect(errors[0].error).toContain("Handler error!");
 			expect(errors[0].event).toBe("context");
 		});
+
+		// Regression test for #9068.
+		it("fails closed when a user_bash handler throws", async () => {
+			const extCode = `
+				export default function(pi) {
+					pi.on("user_bash", async () => {
+						throw new Error("Routing failed");
+					});
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "throws.ts"), extCode);
+
+			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+			const errors: Array<{ event: string; error: string }> = [];
+			runner.onError((error) => errors.push(error));
+
+			await expect(
+				runner.emitUserBash({ type: "user_bash", command: "pwd", excludeFromContext: false, cwd: tempDir }),
+			).rejects.toThrow("Routing failed");
+			expect(errors).toMatchObject([{ event: "user_bash", error: "Routing failed" }]);
+		});
+
+		// Regression test for #9068.
+		it.each([
+			["an empty object", "{}"],
+			["null operations", "{ operations: null }"],
+			["operations without exec", "{ operations: {} }"],
+			["a null result", "{ result: null }"],
+			["an incomplete result", '{ result: { output: "handled" } }'],
+			[
+				"operations and a result",
+				'{ operations: { exec: async () => ({ exitCode: 0 }) }, result: { output: "handled", exitCode: 0, cancelled: false, truncated: false } }',
+			],
+		])("fails closed when a user_bash handler returns %s", async (_description, handlerResult) => {
+			const extCode = `
+				export default function(pi) {
+					pi.on("user_bash", async () => (${handlerResult}));
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "invalid-result.ts"), extCode);
+
+			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+			const errors: Array<{ event: string; error: string }> = [];
+			runner.onError((error) => errors.push(error));
+
+			await expect(
+				runner.emitUserBash({ type: "user_bash", command: "pwd", excludeFromContext: false, cwd: tempDir }),
+			).rejects.toThrow("Invalid user_bash handler result");
+			expect(errors).toMatchObject([
+				{ event: "user_bash", error: expect.stringContaining("Invalid user_bash handler result") },
+			]);
+		});
+
+		it("accepts valid user_bash operations and result overrides", async () => {
+			const extCode = `
+				export default function(pi) {
+					pi.on("user_bash", async (event) => {
+						if (event.command === "operations") {
+							return { operations: { exec: async () => ({ exitCode: 0 }) } };
+						}
+						return { result: { output: "handled", exitCode: 0, cancelled: false, truncated: false } };
+					});
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "valid-results.ts"), extCode);
+
+			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+			const event = { type: "user_bash" as const, excludeFromContext: false, cwd: tempDir };
+
+			const operations = await runner.emitUserBash({ ...event, command: "operations" });
+			expect(operations).toEqual({ operations: { exec: expect.any(Function) } });
+			await expect(runner.emitUserBash({ ...event, command: "result" })).resolves.toEqual({
+				result: { output: "handled", exitCode: 0, cancelled: false, truncated: false },
+			});
+		});
 	});
 
 	describe("message and entry renderers", () => {

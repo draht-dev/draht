@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { convertMessages } from "../src/api/openai-completions.js";
+import { normalizeContext } from "../src/compat.js";
 import type { AssistantMessage, Context, Model, OpenAICompletionsCompat, Usage } from "../src/types.js";
 
 const emptyUsage: Usage = {
@@ -15,9 +16,10 @@ const emptyUsage: Usage = {
 // Used for tests that exercise convertMessages directly.
 const deepseekCompat: Omit<
 	Required<OpenAICompletionsCompat>,
-	"deferredToolsMode" | "thinkingTokenBudgetField" | "vllmPriority"
+	"thinkingTokenBudgetField" | "supportsMidConvoSystemMessages" | "supportsMidConvoToolAdditions" | "vllmPriority"
 > & {
-	deferredToolsMode?: OpenAICompletionsCompat["deferredToolsMode"];
+	supportsMidConvoSystemMessages?: OpenAICompletionsCompat["supportsMidConvoSystemMessages"];
+	supportsMidConvoToolAdditions?: OpenAICompletionsCompat["supportsMidConvoToolAdditions"];
 	thinkingTokenBudgetField?: OpenAICompletionsCompat["thinkingTokenBudgetField"];
 	vllmPriority?: OpenAICompletionsCompat["vllmPriority"];
 } = {
@@ -112,7 +114,7 @@ describe("openai-completions DeepSeek reasoning_content replay", () => {
 			],
 		};
 
-		const messages = convertMessages(model, context, deepseekCompat);
+		const messages = convertMessages(model, normalizeContext(context), deepseekCompat);
 		const replayedAssistant = messages.find((m) => m.role === "assistant");
 		expect(replayedAssistant).toBeDefined();
 		expect((replayedAssistant as { reasoning_content?: string }).reasoning_content).toBe(
@@ -152,7 +154,7 @@ describe("openai-completions DeepSeek reasoning_content replay", () => {
 			],
 		};
 
-		const messages = convertMessages(model, context, deepseekCompat);
+		const messages = convertMessages(model, normalizeContext(context), deepseekCompat);
 		const replayedAssistant = messages.find((m) => m.role === "assistant");
 		expect(replayedAssistant).toBeDefined();
 		expect((replayedAssistant as { reasoning_content?: string }).reasoning_content).toBe("Let me think about this.");
@@ -207,7 +209,7 @@ describe("openai-completions DeepSeek reasoning_content replay", () => {
 			],
 		};
 
-		const messages = convertMessages(model, context, deepseekCompat);
+		const messages = convertMessages(model, normalizeContext(context), deepseekCompat);
 		const replayedAssistant = messages.find((m) => m.role === "assistant");
 		expect(replayedAssistant).toBeDefined();
 		expect((replayedAssistant as { reasoning_content?: string }).reasoning_content).toBeDefined();
@@ -243,7 +245,7 @@ describe("openai-completions DeepSeek reasoning_content replay", () => {
 			],
 		};
 
-		const messages = convertMessages(model, context, deepseekCompat);
+		const messages = convertMessages(model, normalizeContext(context), deepseekCompat);
 		const replayedAssistant = messages.find((m) => m.role === "assistant");
 		expect(replayedAssistant).toBeDefined();
 		expect((replayedAssistant as { reasoning_content?: string }).reasoning_content).toBe(

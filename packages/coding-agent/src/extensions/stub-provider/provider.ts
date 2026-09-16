@@ -15,7 +15,7 @@
  */
 
 import { writeFileSync } from "node:fs";
-import type { Provider } from "@draht/ai";
+import { getCurrentSystemPrompt, type Provider } from "@draht/ai";
 import {
 	type FauxContentBlock,
 	type FauxResponseFactory,
@@ -185,7 +185,7 @@ export function createStubProvider(env: NodeJS.ProcessEnv = process.env): Provid
 			// recorder that overwrites the first request's evidence with a later one.
 			recorded = true;
 			try {
-				writeFileSync(recordContextPath, context.systemPrompt ?? "", "utf-8");
+				writeFileSync(recordContextPath, getCurrentSystemPrompt(context.messages), "utf-8");
 			} catch {
 				// Never throw out of the response factory: a broken recorder must not change
 				// what the provider answers, or the test it exists to serve stops being about

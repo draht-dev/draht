@@ -4,6 +4,7 @@ import {
 	getApiProvider,
 	getModel,
 	type Model,
+	normalizeContext,
 	type SimpleStreamOptions,
 	type StreamOptions,
 } from "@draht/ai/compat";
@@ -71,7 +72,7 @@ export class ModelRouter {
 		options?: StreamOptions,
 	): AsyncGenerator<import("@draht/ai").AssistantMessageEvent> {
 		yield* this.streamWithFallback(role, context, options, (provider, model, opts) =>
-			provider.stream(model, context, opts),
+			provider.stream(model, normalizeContext(context), opts),
 		);
 	}
 
@@ -88,7 +89,7 @@ export class ModelRouter {
 		options?: SimpleStreamOptions,
 	): AsyncGenerator<import("@draht/ai").AssistantMessageEvent> {
 		yield* this.streamWithFallback(role, context, options, (provider, model, opts) =>
-			provider.streamSimple(model, context, opts as SimpleStreamOptions),
+			provider.streamSimple(model, normalizeContext(context), opts as SimpleStreamOptions),
 		);
 	}
 

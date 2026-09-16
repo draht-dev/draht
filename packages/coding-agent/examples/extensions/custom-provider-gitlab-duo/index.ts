@@ -13,7 +13,6 @@ import {
 	type Api,
 	type AssistantMessageEventStream,
 	anthropicMessagesApi,
-	type Context,
 	createAssistantMessageEventStream,
 	type Model,
 	type OAuthCredentials,
@@ -21,6 +20,7 @@ import {
 	openAIResponsesApi,
 	type SimpleStreamOptions,
 	type ThinkingLevelMap,
+	type TranscriptContext,
 } from "@draht/ai/compat";
 import type { ExtensionAPI } from "@draht/coding-agent";
 
@@ -306,7 +306,7 @@ async function refreshGitLabToken(credentials: OAuthCredentials, signal: AbortSi
 
 export function streamGitLabDuo(
 	model: Model<Api>,
-	context: Context,
+	context: TranscriptContext,
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
 	const stream = createAssistantMessageEventStream();

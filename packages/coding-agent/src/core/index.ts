@@ -60,6 +60,7 @@ export {
 	type LoadExtensionsResult,
 	type MessageRenderer,
 	type ModelSelectionOptions,
+	type NormalizedBuildSystemPromptOptions,
 	type RegisteredCommand,
 	type SessionBeforeCompactEvent,
 	type SessionBeforeForkEvent,

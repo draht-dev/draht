@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { lazyApi } from "../src/api/lazy.ts";
 import { envApiKeyAuth } from "../src/auth/helpers.ts";
 import type { AuthContext, AuthEvent } from "../src/auth/types.ts";
-import { createModels, createProvider } from "../src/models.ts";
+import { createModels, createProvider, getSupportedThinkingLevels } from "../src/models.ts";
 import { InMemoryModelsStore } from "../src/models-store.ts";
 import { builtinModels, builtinProviders, getBuiltinModel } from "../src/providers/all.ts";
 import { amazonBedrockProvider } from "../src/providers/amazon-bedrock.ts";
@@ -64,6 +64,29 @@ describe("builtin providers", () => {
 			supportsOpenAIGrammarTools: true,
 		});
 		expect(getBuiltinModel("anthropic", "claude-haiku-4-5").compat?.supportsStrictTools).toBe(true);
+	});
+
+	it("uses models.dev effort levels for Google thinking models", () => {
+		// Regression test for https://github.com/earendil-works/pi/issues/9455
+		for (const provider of ["google", "google-vertex"] as const) {
+			expect(getSupportedThinkingLevels(getBuiltinModel(provider, "gemini-3.6-flash"))).toContain("minimal");
+			expect(getSupportedThinkingLevels(getBuiltinModel(provider, "gemini-3.8-flash"))).toEqual([
+				"low",
+				"medium",
+				"high",
+			]);
+			expect(getSupportedThinkingLevels(getBuiltinModel(provider, "gemini-3.1-pro-preview"))).toEqual([
+				"low",
+				"medium",
+				"high",
+			]);
+		}
+		expect(getSupportedThinkingLevels(getBuiltinModel("opencode", "gemini-3.8-flash"))).toEqual([
+			"low",
+			"medium",
+			"high",
+		]);
+		expect(getSupportedThinkingLevels(getBuiltinModel("google", "gemma-4-31b-it"))).toEqual(["minimal", "high"]);
 	});
 
 	it("enables mid-conversation system messages only for verified models", () => {

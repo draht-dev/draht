@@ -555,10 +555,6 @@ function supportsOpenAiMax(model: Model<Api>): boolean {
 	);
 }
 
-function isGoogleThinkingApi(model: Model<any>): boolean {
-	return model.api === "google-generative-ai" || model.api === "google-vertex";
-}
-
 const VERIFIED_ANTHROPIC_MID_CONVO_EFFORT_PROVIDERS = new Set(["anthropic", "openrouter"]);
 // OpenRouter rejects `configuration_update` system messages on Opus 5 ("Mid-conversation
 // reasoning effort (configuration_update) is not supported on anthropic/claude-opus-5-20260723")
@@ -930,17 +926,20 @@ function applyOpenAIExplicitPromptCacheMetadata(model: Model<Api>): void {
 	};
 }
 
-function isGemini3ProModel(modelId: string): boolean {
-	return /gemini-3(?:\.\d+)?-pro/.test(modelId.toLowerCase());
-}
-
-function isGemini3FlashModel(modelId: string): boolean {
-	const id = modelId.toLowerCase();
-	return /gemini-3(?:\.\d+)?-flash/.test(id) || id === "gemini-flash-latest" || id === "gemini-flash-lite-latest";
-}
-
 function isGemma4Model(modelId: string): boolean {
 	return /gemma-?4/.test(modelId.toLowerCase());
+}
+
+function getGoogleThinkingLevelMap(
+	modelId: string,
+	reasoningOptions: readonly ModelsDevReasoningOption[],
+): NonNullable<Model<Api>["thinkingLevelMap"]> | undefined {
+	const effortMap = getEffortThinkingLevelMap(reasoningOptions);
+	if (effortMap) return effortMap;
+	if (isGemma4Model(modelId)) {
+		return { off: null, minimal: "MINIMAL", low: null, medium: null, high: "HIGH" };
+	}
+	return undefined;
 }
 
 function applyThinkingLevelMetadata(model: Model<any>): void {
@@ -1035,15 +1034,6 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 					? DEEPSEEK_V4_FLASH_THINKING_LEVEL_MAP
 					: DEEPSEEK_V4_THINKING_LEVEL_MAP,
 		);
-	}
-	if (isGoogleThinkingApi(model) && isGemini3ProModel(model.id)) {
-		mergeThinkingLevelMap(model, { off: null, minimal: null, low: "LOW", medium: null, high: "HIGH" });
-	}
-	if (isGoogleThinkingApi(model) && isGemini3FlashModel(model.id)) {
-		mergeThinkingLevelMap(model, { off: null });
-	}
-	if (isGoogleThinkingApi(model) && isGemma4Model(model.id)) {
-		mergeThinkingLevelMap(model, { off: null, minimal: "MINIMAL", low: null, medium: null, high: "HIGH" });
 	}
 	if (model.provider === "groq" && model.id === "qwen/qwen3.6-27b") {
 		mergeThinkingLevelMap(model, { minimal: null, low: null, medium: null, high: "default" });
@@ -1496,6 +1486,84 @@ function processBasetenModels(provider: ModelsDevProvider | undefined): Model<Ap
 	return models;
 }
 
+function processGoogleModels(data: ModelsDevCatalog): Model<Api>[] {
+	const models: Model<Api>[] = [];
+	const googleModels = data.google?.models;
+	if (googleModels) {
+		for (const [modelId, model] of Object.entries(googleModels)) {
+			if (model.tool_call !== true) continue;
+			const source =
+				modelId === "gemini-flash-latest"
+					? (googleModels["gemini-3.5-flash"] ?? model)
+					: modelId === "gemini-flash-lite-latest"
+						? (googleModels["gemini-3.1-flash-lite"] ?? model)
+						: model;
+			const thinkingLevelMap = getGoogleThinkingLevelMap(modelId, source.reasoning_options ?? []);
+
+			models.push({
+				id: modelId,
+				name: model.name || modelId,
+				api: "google-generative-ai",
+				provider: "google",
+				baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+				reasoning: source.reasoning === true,
+				...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+				input: source.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+				cost: {
+					input: source.cost?.input || 0,
+					output: source.cost?.output || 0,
+					cacheRead: source.cost?.cache_read || 0,
+					cacheWrite: source.cost?.cache_write || 0,
+				},
+				contextWindow: source.limit?.context || 4096,
+				maxTokens: source.limit?.output || 4096,
+			});
+		}
+	}
+
+	// The google-vertex models.dev catalog also includes Claude, OpenAI, and other
+	// MaaS models that do not use the @google/genai Gemini streaming path.
+	const vertexModels = data["google-vertex"]?.models;
+	if (vertexModels) {
+		for (const [modelId, model] of Object.entries(vertexModels)) {
+			if (model.tool_call !== true || !modelId.startsWith("gemini-")) continue;
+			if (modelId === "gemini-3.1-flash-lite-preview") continue;
+			const source =
+				modelId === "gemini-flash-latest"
+					? (vertexModels["gemini-3.5-flash"] ?? model)
+					: modelId === "gemini-flash-lite-latest"
+						? (vertexModels["gemini-3.1-flash-lite"] ?? model)
+						: model;
+			const thinkingLevelMap = getGoogleThinkingLevelMap(modelId, source.reasoning_options ?? []);
+			// models.dev reports Vertex cache_read/cache_write values for Gemini 2.5 Flash that
+			// do not match the official Gemini API standard pricing table. pi only accounts
+			// cachedContentTokenCount as cacheRead.
+			const cacheRead = modelId === "gemini-2.5-flash" ? 0.03 : source.cost?.cache_read || 0;
+
+			models.push({
+				id: modelId,
+				name: model.name || modelId,
+				api: "google-vertex",
+				provider: "google-vertex",
+				baseUrl: VERTEX_BASE_URL,
+				reasoning: source.reasoning === true,
+				...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+				input: source.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+				cost: {
+					input: source.cost?.input || 0,
+					output: source.cost?.output || 0,
+					cacheRead,
+					cacheWrite: 0,
+				},
+				contextWindow: source.limit?.context || 4096,
+				maxTokens: source.limit?.output || 4096,
+			});
+		}
+	}
+
+	return models;
+}
+
 function processFireworksModels(provider: ModelsDevProvider | undefined): Model<Api>[] {
 	if (!provider?.models) return [];
 
@@ -1660,81 +1728,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 			}
 		}
 
-		// Process Google models
-		if (data.google?.models) {
-			for (const [modelId, model] of Object.entries(data.google.models)) {
-				const m = model as ModelsDevModel;
-				if (m.tool_call !== true) continue;
-				let source = m;
-				if (modelId === "gemini-flash-latest") {
-					source = (data.google.models["gemini-3.5-flash"] as ModelsDevModel | undefined) ?? m;
-				}
-				if (modelId === "gemini-flash-lite-latest") {
-					source = (data.google.models["gemini-3.1-flash-lite"] as ModelsDevModel | undefined) ?? m;
-				}
-
-				models.push({
-					id: modelId,
-					name: m.name || modelId,
-					api: "google-generative-ai",
-					provider: "google",
-					baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-					reasoning: source.reasoning === true,
-					input: source.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: source.cost?.input || 0,
-						output: source.cost?.output || 0,
-						cacheRead: source.cost?.cache_read || 0,
-						cacheWrite: source.cost?.cache_write || 0,
-					},
-					contextWindow: source.limit?.context || 4096,
-					maxTokens: source.limit?.output || 4096,
-				});
-				recordModelsDevReasoningOptions("google", modelId, source);
-			}
-		}
-
-		// Process Google Vertex Gemini models. The google-vertex models.dev catalog also includes
-		// Claude, OpenAI, and other MaaS models that do not use the @google/genai Gemini streaming
-		// path implemented by our google-vertex provider.
-		if (data["google-vertex"]?.models) {
-			for (const [modelId, model] of Object.entries(data["google-vertex"].models)) {
-				const m = model as ModelsDevModel;
-				if (m.tool_call !== true) continue;
-				if (!modelId.startsWith("gemini-")) continue;
-				if (modelId === "gemini-3.1-flash-lite-preview") continue;
-				let source = m;
-				if (modelId === "gemini-flash-latest") {
-					source = (data["google-vertex"].models["gemini-3.5-flash"] as ModelsDevModel | undefined) ?? m;
-				}
-				if (modelId === "gemini-flash-lite-latest") {
-					source = (data["google-vertex"].models["gemini-3.1-flash-lite"] as ModelsDevModel | undefined) ?? m;
-				}
-
-				// models.dev reports Vertex cache_read/cache_write values for Gemini 2.5 Flash that
-				// do not match the official Gemini API standard pricing table. pi only accounts
-				// cachedContentTokenCount as cacheRead.
-				const cacheRead = modelId === "gemini-2.5-flash" ? 0.03 : source.cost?.cache_read || 0;
-				models.push({
-					id: modelId,
-					name: m.name || modelId,
-					api: "google-vertex",
-					provider: "google-vertex",
-					baseUrl: VERTEX_BASE_URL,
-					reasoning: source.reasoning === true,
-					input: source.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: source.cost?.input || 0,
-						output: source.cost?.output || 0,
-						cacheRead,
-						cacheWrite: 0,
-					},
-					contextWindow: source.limit?.context || 4096,
-					maxTokens: source.limit?.output || 4096,
-				});
-				recordModelsDevReasoningOptions("google-vertex", modelId, source);
-			}
-		}
+		models.push(...processGoogleModels(data));
 
 		// Process OpenAI models
 		if (data.openai?.models) {
@@ -2186,6 +2180,10 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					}
 				}
 
+				const thinkingLevelMap =
+					api === "google-generative-ai"
+						? getGoogleThinkingLevelMap(modelId, m.reasoning_options ?? [])
+						: undefined;
 				models.push({
 					id: modelId,
 					name: m.name || modelId,
@@ -2193,6 +2191,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					provider: variant.provider,
 					baseUrl,
 					reasoning: m.reasoning === true,
+					...(thinkingLevelMap ? { thinkingLevelMap } : {}),
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
 					cost: {
 						input: m.cost?.input || 0,

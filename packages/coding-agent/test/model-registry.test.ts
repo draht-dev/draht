@@ -708,6 +708,52 @@ describe("ModelRegistry", () => {
 			expect(opus?.name).not.toBe("Custom Sonnet Name");
 		});
 
+		test("Anthropic model override replaces allowed fallback metadata", async () => {
+			const allowedFallbackModels = [
+				{
+					provider: "anthropic",
+					model: "claude-opus-5",
+					cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+				},
+				{
+					provider: "anthropic",
+					model: "claude-opus-4-8",
+					cost: { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 },
+				},
+			];
+			writeRawModelsJson({
+				anthropic: {
+					modelOverrides: {
+						"claude-fable-5": {
+							compat: { allowedFallbackModels },
+						},
+					},
+				},
+			});
+
+			const registry = await createModelRegistry(authStorage, modelsJsonPath);
+			const compat = registry.find("anthropic", "claude-fable-5")?.compat as AnthropicMessagesCompat | undefined;
+
+			expect(registry.getError()).toBeUndefined();
+			expect(compat?.allowedFallbackModels).toEqual(allowedFallbackModels);
+		});
+
+		test("empty allowed fallback model override disables server-side fallback", async () => {
+			writeRawModelsJson({
+				anthropic: {
+					modelOverrides: {
+						"claude-fable-5": { compat: { allowedFallbackModels: [] } },
+					},
+				},
+			});
+
+			const registry = await createModelRegistry(authStorage, modelsJsonPath);
+			const compat = registry.find("anthropic", "claude-fable-5")?.compat as AnthropicMessagesCompat | undefined;
+
+			expect(registry.getError()).toBeUndefined();
+			expect(compat?.allowedFallbackModels).toEqual([]);
+		});
+
 		test("custom model and model override carry sampling params", async () => {
 			writeRawModelsJson({
 				openrouter: {

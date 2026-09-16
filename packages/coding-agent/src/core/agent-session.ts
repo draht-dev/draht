@@ -117,7 +117,7 @@ import type { SlashCommandInfo } from "./slash-commands.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
 import {
 	buildSystemPrompt,
-	buildSystemPromptSections,
+	buildSystemPromptState,
 	diffSystemPromptSections,
 	type NormalizedBuildSystemPromptOptions,
 	normalizeBuildSystemPromptOptions,
@@ -1139,6 +1139,10 @@ export class AgentSession {
 	 * returns a system message patching the prompt sections the model currently has (replayed
 	 * from `messages`), or undefined when the prompt is unchanged. Tool changes are declared by
 	 * the agent loop before the request.
+	 *
+	 * A forced prompt is opaque, so entering, changing, or leaving one cannot be expressed as
+	 * a section patch: it returns a `replace` message that discards the replayed state. The
+	 * agent loop fills in the full tool set, since replay through a replacement starts empty.
 	 */
 	private _preparePromptAndToolLoadout(
 		options: NormalizedBuildSystemPromptOptions,
@@ -1149,10 +1153,17 @@ export class AgentSession {
 			const tool = this._toolRegistry.get(name);
 			return tool ? [tool] : [];
 		});
-		const sections = diffSystemPromptSections(
-			getCurrentSystemMessage(messages)?.sections ?? {},
-			buildSystemPromptSections(options),
-		);
+		const current = getCurrentSystemMessage(messages);
+		const desired = buildSystemPromptState(options);
+		const currentIsOpaque = current !== undefined && current.sections === undefined;
+		if (desired.sections === undefined || currentIsOpaque) {
+			const unchanged =
+				currentIsOpaque &&
+				desired.sections === undefined &&
+				contentText(current.content) === contentText(desired.content);
+			return unchanged ? undefined : { role: "system", ...desired, replace: true, timestamp: Date.now() };
+		}
+		const sections = diffSystemPromptSections(current?.sections ?? {}, desired.sections);
 		return sections ? { role: "system", content: "", sections, timestamp: Date.now() } : undefined;
 	}
 

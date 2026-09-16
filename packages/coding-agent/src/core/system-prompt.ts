@@ -117,12 +117,11 @@ function buildRules(
 	return rules.map((rule) => `- ${rule}`).join("\n");
 }
 
-/** Build the ordered, independently replaceable sections of the system prompt. */
+/** Build the ordered, independently replaceable sections of the structured system prompt. */
 export function buildSystemPromptSections(input: BuildSystemPromptOptions): SystemPromptSections {
 	const options = normalizeBuildSystemPromptOptions(input);
 	const {
 		customPrompt,
-		forceSystemPrompt,
 		selectedTools,
 		toolSnippets,
 		toolGuidelines,
@@ -133,10 +132,6 @@ export function buildSystemPromptSections(input: BuildSystemPromptOptions): Syst
 		contextFiles,
 		skills,
 	} = options;
-
-	if (forceSystemPrompt !== undefined) {
-		return { preamble: forceSystemPrompt };
-	}
 
 	for (const name of Object.keys(customSections)) {
 		if (!SYSTEM_PROMPT_SECTION_NAME.test(name) || name === "preamble") {
@@ -183,14 +178,21 @@ export function buildSystemPromptSections(input: BuildSystemPromptOptions): Syst
 	return sections;
 }
 
+/**
+ * The complete prompt state for `input`. A forced prompt is opaque and lives in `content`
+ * with no sections; otherwise `content` is empty and the structured sections carry the prompt.
+ */
+export function buildSystemPromptState(input: BuildSystemPromptOptions): {
+	content: string;
+	sections?: SystemPromptSections;
+} {
+	if (input.forceSystemPrompt !== undefined) return { content: input.forceSystemPrompt };
+	return { content: "", sections: buildSystemPromptSections(input) };
+}
+
 /** Build the system prompt text, rendered exactly as the transcript's system message replays it. */
 export function buildSystemPrompt(input: BuildSystemPromptOptions): string {
-	return getSystemMessageText({
-		role: "system",
-		content: "",
-		sections: buildSystemPromptSections(input),
-		timestamp: 0,
-	});
+	return getSystemMessageText({ role: "system", ...buildSystemPromptState(input), timestamp: 0 });
 }
 
 /**

@@ -8,7 +8,6 @@ import {
 	getCurrentSystemMessage,
 	getCurrentSystemPrompt,
 	getSystemMessageText,
-	resolveTranscript,
 	type TranscriptContext,
 } from "@draht/ai";
 import { getModel } from "@draht/ai/compat";
@@ -110,12 +109,13 @@ describe("system prompt updates", () => {
 		);
 	});
 
-	test("a forced prompt replaces the prompt and tool state and is replayed as the leading prompt", async () => {
+	test("a forced prompt is sent as the leading prompt for the run and never recorded", async () => {
 		let turn = 0;
 		const extension: ExtensionFactory = (pi) => {
-			pi.on("before_agent_start", () =>
-				++turn === 2 || turn === 3 ? { systemPrompt: "Exact prompt." } : undefined,
-			);
+			pi.on("before_agent_start", (event) => {
+				if (++turn === 3) event.systemPromptOptions.sections.plan_mode = "Plan only.";
+				return turn === 2 || turn === 3 ? { systemPrompt: "Exact prompt." } : undefined;
+			});
 		};
 		const harness = await createHarness({ extensionFactories: [extension] });
 		try {
@@ -130,19 +130,20 @@ describe("system prompt updates", () => {
 			const systemMessages = requests.map((request) =>
 				request.messages.filter((message) => message.role === "system"),
 			);
-			expect(systemMessages.map((messages) => messages.length)).toEqual([1, 2, 2, 3]);
+			// Forced turns collapse to one leading message; the unforced fourth turn passes the
+			// recorded head and both plan_mode patches through.
+			expect(systemMessages.map((messages) => messages.length)).toEqual([1, 1, 1, 3]);
 
 			const forced = systemMessages[1]?.at(-1);
 			expect(forced).toEqual({
 				role: "system",
 				content: "Exact prompt.",
 				toolsAdded: systemMessages[0]?.[0]?.toolsAdded,
-				replace: true,
-				timestamp: expect.any(Number),
+				timestamp: systemMessages[0]?.[0]?.timestamp,
 			});
+			expect(systemMessages[2]?.at(-1)).toEqual(forced);
 			expect(getCurrentSystemPrompt(requests[2]!.messages)).toBe("Exact prompt.");
-			// Anthropic-style providers keep later system messages in place, but a replacement collapses.
-			expect(resolveTranscript(requests[2]!, true).messages.map((message) => message.role)).toEqual([
+			expect(requests[2]!.messages.map((message) => message.role)).toEqual([
 				"system",
 				"user",
 				"assistant",
@@ -151,9 +152,15 @@ describe("system prompt updates", () => {
 				"user",
 			]);
 
-			const restored = systemMessages[3]?.at(-1);
-			expect(restored).toMatchObject({ content: "", replace: true, sections: systemMessages[0]?.[0]?.sections });
-			expect(restored?.toolsAdded).toEqual(forced?.toolsAdded);
+			// The transcript only records the structured sections, never the forced text.
+			const recorded = harness.session.messages.flatMap((message) =>
+				message.role === "system" ? [message.sections] : [],
+			);
+			expect(recorded).toEqual([
+				systemMessages[0]?.[0]?.sections,
+				{ plan_mode: "<plan_mode>\nPlan only.\n</plan_mode>" },
+				{ plan_mode: null },
+			]);
 			expect(getCurrentSystemPrompt(harness.session.messages)).toBe(harness.session.systemPrompt);
 		} finally {
 			harness.cleanup();

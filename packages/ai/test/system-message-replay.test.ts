@@ -11,7 +11,6 @@ import {
 	hasNonAdditiveToolChanges,
 	hasToolRedefinitions,
 	normalizeContext,
-	resolveTranscript,
 } from "../src/utils/transcript.ts";
 
 function tool(name: string, description = `${name} tool`): Tool {
@@ -58,29 +57,6 @@ describe("system message replay", () => {
 		const collapsed = collapseSystemMessages(transcript);
 		expect(collapsed.messages.map((message) => message.role)).toEqual(["system", "user", "assistant"]);
 		expect(collapseSystemMessages(collapsed)).toEqual(collapsed);
-	});
-
-	test("a replacement discards replayed state and collapses even for native providers", () => {
-		const replacement: Message = {
-			role: "system",
-			content: "forced",
-			toolsAdded: [tool("third")],
-			replace: true,
-			timestamp: 15,
-		};
-		const patch: Message = { role: "system", content: "", sections: { d: "<d>1</d>" }, timestamp: 16 };
-		const context = { messages: [...transcript.messages, replacement, patch] } as TranscriptContext;
-		expect(getCurrentSystemMessage(context.messages)).toEqual({
-			role: "system",
-			content: "forced",
-			sections: { d: "<d>1</d>" },
-			toolsAdded: [tool("third")],
-			timestamp: 10,
-		});
-		expect(resolveTranscript(context, true)).toEqual(collapseSystemMessages(context));
-		expect(resolveTranscript(transcript, true)).toBe(transcript);
-		const leading = { messages: [replacement, patch] } as TranscriptContext;
-		expect(resolveTranscript(leading, true)).toBe(leading);
 	});
 
 	test("replay of a transcript without system messages is empty", () => {

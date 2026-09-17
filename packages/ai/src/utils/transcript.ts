@@ -59,7 +59,6 @@ export function getCurrentTools(messages: TranscriptMessages): Tool[] {
 	const tools = new Map<string, Tool>();
 	for (const message of messages) {
 		if (!isSystemMessage(message)) continue;
-		if (message.replace) tools.clear();
 		for (const tool of message.toolsRemoved ?? []) tools.delete(tool.name);
 		for (const tool of message.toolsAdded ?? []) tools.set(tool.name, tool);
 	}
@@ -69,8 +68,7 @@ export function getCurrentTools(messages: TranscriptMessages): Tool[] {
 /**
  * Replay every system message into one leading system message holding the current
  * prompt and tools. Later `content` is appended to the base prompt, `sections` are
- * patched by name, a `replace` message starts over, and tools are resolved with
- * {@link getCurrentTools}.
+ * patched by name, and tools are resolved with {@link getCurrentTools}.
  */
 export function getCurrentSystemMessage(messages: TranscriptMessages): SystemMessage | undefined {
 	const content: string[] = [];
@@ -78,10 +76,6 @@ export function getCurrentSystemMessage(messages: TranscriptMessages): SystemMes
 	let timestamp: number | undefined;
 	for (const message of messages) {
 		if (!isSystemMessage(message)) continue;
-		if (message.replace) {
-			content.length = 0;
-			sections.clear();
-		}
 		timestamp ??= message.timestamp;
 		const text = contentText(message.content);
 		if (text.length > 0) content.push(text);
@@ -117,19 +111,12 @@ export function collapseSystemMessages(context: TranscriptContext): TranscriptCo
 	return { messages: head ? [head, ...messages] : messages } as TranscriptContext;
 }
 
-/**
- * Keep later system messages in place when the model accepts them; otherwise collapse them.
- * A replacement after the leading message always collapses: no provider can retract the
- * prompt it already received, so the replayed state must become the leading prompt.
- */
+/** Keep later system messages in place when the model accepts them; otherwise collapse them. */
 export function resolveTranscript(
 	context: TranscriptContext,
 	supportsMidConvoSystemMessages: boolean | undefined,
 ): TranscriptContext {
-	const lateReplacement = context.messages.some(
-		(message, index) => index > 0 && isSystemMessage(message) && message.replace === true,
-	);
-	return supportsMidConvoSystemMessages && !lateReplacement ? context : collapseSystemMessages(context);
+	return supportsMidConvoSystemMessages ? context : collapseSystemMessages(context);
 }
 
 /** Strip executable and display-only fields from a tool before transcript comparison or persistence. */

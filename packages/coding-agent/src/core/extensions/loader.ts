@@ -277,11 +277,21 @@ function createExtensionAPI(
 
 	const api = {
 		// Registration methods - write to extension
-		on(event: string, handler: HandlerFn): void {
+		on(event: string, handler: HandlerFn): () => void {
 			assertActive();
+			const registeredHandler: HandlerFn = (...args) => handler(...args);
 			const list = extension.handlers.get(event) ?? [];
-			list.push(handler);
+			list.push(registeredHandler);
 			extension.handlers.set(event, list);
+
+			return () => {
+				const handlers = extension.handlers.get(event);
+				if (!handlers) return;
+				const handlerIndex = handlers.indexOf(registeredHandler);
+				if (handlerIndex === -1) return;
+				handlers.splice(handlerIndex, 1);
+				if (handlers.length === 0) extension.handlers.delete(event);
+			};
 		},
 
 		registerTool(tool: ToolDefinition): void {

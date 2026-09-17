@@ -1329,7 +1329,16 @@ export default function (pi: ExtensionAPI) {
 
 ### pi.on(event, handler)
 
-Subscribe to events. See [Events](#events) for event types and return values.
+Subscribe to events. Returns an unsubscribe function that removes only that registration. See [Events](#events) for event types and return values.
+
+```typescript
+const unsubscribe = pi.on("agent_end", async (event) => {
+  unsubscribe();
+  await updateIntegration(event.messages);
+});
+```
+
+Handlers run in extension load order, then registration order within each extension. Adding or removing a handler does not affect a dispatch already in progress.
 
 ### pi.registerTool(definition)
 

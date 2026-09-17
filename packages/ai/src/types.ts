@@ -472,7 +472,7 @@ export interface AssistantMessage {
 	api: Api;
 	provider: ProviderId;
 	model: string;
-	responseModel?: string; // Concrete `chunk.model` when different from the requested `model` (e.g. OpenRouter `auto` -> `anthropic/...`)
+	responseModel?: string; // Concrete model reported by the provider when different from the requested `model`
 	responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
 	/** Exact provider-native effort level used for this response. Absent for legacy or unmanaged responses. */
 	providerThinkingLevel?: string;

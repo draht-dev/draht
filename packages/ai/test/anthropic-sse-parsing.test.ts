@@ -2,8 +2,9 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { stream as streamAnthropic } from "../src/api/anthropic-messages.ts";
+import { transformMessages } from "../src/api/transform-messages.ts";
 import { getModel, normalizeContext } from "../src/compat.ts";
-import type { ToolCall } from "../src/types.ts";
+import type { Model, ToolCall } from "../src/types.ts";
 
 function createSseResponse(events: Array<{ event: string; data: string }>): Response {
 	const body = events.map(({ event, data }) => `event: ${event}\ndata: ${data}\n`).join("\n");
@@ -80,7 +81,92 @@ function createFakeAnthropicClient(response: Response): Anthropic {
 	} as unknown as Anthropic;
 }
 
+type ResponseContentBlock = { type: "thinking"; thinking: string; signature: string } | { type: "text"; text: string };
+
+function createResponseModelSseResponse(model: string, contentBlock: ResponseContentBlock): Response {
+	return createSseResponse([
+		{
+			event: "message_start",
+			data: JSON.stringify({
+				type: "message_start",
+				message: { id: "msg_response_model", model, usage: { input_tokens: 100, output_tokens: 0 } },
+			}),
+		},
+		{
+			event: "content_block_start",
+			data: JSON.stringify({ type: "content_block_start", index: 0, content_block: contentBlock }),
+		},
+		{ event: "content_block_stop", data: JSON.stringify({ type: "content_block_stop", index: 0 }) },
+		{
+			event: "message_delta",
+			data: JSON.stringify({
+				type: "message_delta",
+				delta: { stop_reason: "end_turn" },
+				usage: { input_tokens: 100, output_tokens: 20 },
+			}),
+		},
+		{ event: "message_stop", data: JSON.stringify({ type: "message_stop" }) },
+	]);
+}
+
 describe("Anthropic raw SSE parsing", () => {
+	it("keeps signed thinking replayable when a proxy relabels the model", async () => {
+		// Regression test for earendil-works/pi#9188.
+		const model = getModel("anthropic", "claude-opus-5");
+		const responseModel = "kimi-for-coding";
+		const initialContext = normalizeContext({
+			messages: [{ role: "user", content: "Hello", timestamp: 1 }],
+		});
+		const first = await streamAnthropic(model, initialContext, {
+			client: createFakeAnthropicClient(
+				createResponseModelSseResponse(responseModel, {
+					type: "thinking",
+					thinking: "reasoning",
+					signature: "signature",
+				}),
+			),
+		}).result();
+
+		expect(first.model).toBe(model.id);
+		expect(first.responseModel).toBe(responseModel);
+
+		const transformed = transformMessages([...initialContext.messages, first], model);
+		const replayedAssistant = transformed.find((message) => message.role === "assistant");
+		expect(replayedAssistant?.content).toEqual([
+			{ type: "thinking", thinking: "reasoning", thinkingSignature: "signature" },
+		]);
+	});
+
+	it("uses a returned fallback model for cost attribution", async () => {
+		const fallbackModel = "fallback-model";
+		const model: Model<"anthropic-messages"> = {
+			...getModel("anthropic", "claude-opus-5"),
+			compat: {
+				allowedFallbackModels: [
+					{
+						provider: "anthropic",
+						model: fallbackModel,
+						cost: { input: 3, output: 5, cacheRead: 0, cacheWrite: 0 },
+					},
+				],
+			},
+		};
+		const result = await streamAnthropic(
+			model,
+			normalizeContext({ messages: [{ role: "user", content: "Hello", timestamp: 1 }] }),
+			{
+				client: createFakeAnthropicClient(
+					createResponseModelSseResponse(fallbackModel, { type: "text", text: "done" }),
+				),
+			},
+		).result();
+
+		expect(result.model).toBe(model.id);
+		expect(result.responseModel).toBe(fallbackModel);
+		expect(result.usage.cost.input).toBeCloseTo(0.0003, 10);
+		expect(result.usage.cost.output).toBeCloseTo(0.0001, 10);
+	});
+
 	it("fails safely when Anthropic falls back after output begins", async () => {
 		const model = getModel("anthropic", "claude-opus-5");
 		const response = createSseResponse([

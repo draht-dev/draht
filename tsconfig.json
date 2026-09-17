@@ -21,6 +21,9 @@
 			"@draht/agent-core/harness/session/testing": [
 				"./packages/agent/src/harness/session/testing/index.ts"
 			],
+			"@draht/agent-core/experimental/pico3": [
+				"./packages/agent/src/harness/pico3/index.ts"
+			],
 			"@draht/agent-core/node": ["./packages/agent/src/node.ts"],
 			"@draht/agent-core/*": [
 				"./packages/agent/src/*.ts",

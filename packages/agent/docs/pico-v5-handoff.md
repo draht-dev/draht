@@ -130,24 +130,30 @@ published value; do not materialize another document copy.
 Implement get-or-create `watchDoc` as an incarnation-bound `WatchHandle` that
 atomically captures one fixed immutable value and registers for later committed
 operation batches. `start()` installs one serialized asynchronous listener.
-Bound the pending queue by batch count and estimated retained payload; compact an
-overdue undelivered suffix into one root replacement using the matching latest
-immutable published value from package 6; never retain mutable tracker or borrowed
-storage candidates.
+Bound the pending queue only by the total number of operations in its undelivered
+batches. Never estimate serialized bytes or call `JSON.stringify()` for delta
+queue accounting. When the operation-count limit is exceeded, compact the entire
+undelivered suffix into one root replacement using the matching latest immutable
+published value from package 6; never retain mutable tracker or borrowed storage
+candidates.
 
 Test updates between acquisition/return/start; asynchronous consumer
 initialization; no callback overlap; listener-initiated commits; compaction
-before start and behind an in-flight callback; one oversized replacement;
-immutable earlier values; retirement before start and while active; recreation;
-idempotent stop; second-start rejection; cancellation during acquisition;
+before start and behind an in-flight callback; one over-limit commit batch;
+repeated overload behind a pending reset; empty batches and repeated unchanged
+view commits consuming no queue space; no serialization during queue accounting;
+immutable earlier values; retirement before start and while active;
+recreation; idempotent stop; second-start rejection; cancellation during acquisition;
 cancellation/close during a callback; listener-error settlement; `closed`
 self-join misuse; and invocation-owned
 cleanup in package 15.
 
 ## 13. Conversations and entries
 
-Implement conversation history/ownership records, entry creation, cursor-based
-fork-aware scans, head lookup, and entry edits.
+Implement conversation history/ownership records, entry creation,
+conversation-bound cursor-based fork-aware scans, head lookup, and entry edits.
+Expose public history pagination through `Conversation.entries()`, never through
+`Harness`.
 
 Test conversation creation and actual forks, deep ancestor caps, same-commit
 entry prefixes, newest-edit wins, self-head resolution, raw head-to-tail
@@ -286,9 +292,9 @@ state or entries, and plugin handler recovery.
 Implement the exact Pico3-shaped public surface in specification §2.2:
 `Harness.open/resume/suspend/close`, lifecycle gates, root/create/lookup
 `Conversation` objects, ordered `write` handles, send/input handles,
-conversation-bound
-commits, fork/collapse/reset/abort/idle, typed task wait/abort, generic document
-access, registries, and structural conversation watches. Do not restore Pico3's
+conversation-bound commits and history pagination, fork/collapse/reset/abort/idle,
+typed task wait/abort, generic document access,
+registries, and structural conversation watches. Do not restore Pico3's
 namespace router, fixed document accessors, semantic view events, or manual Chord
 view bridge.
 
@@ -323,8 +329,8 @@ quiescence with eligible work; listener initial/future delivery and isolation;
 and runtime registration between open and resume without resurrection of a task
 settled during open.
 
-Compile-test every §2.2 signature and every usage sequence shown in slides
-20–26. The erased registry test must include a concrete task with narrowed
+Compile-test every §2.2 signature and the usage sequences in the normative
+specification and Chord guide. The erased registry test must include a concrete task with narrowed
 input, multiple checkpoint phases, and custom hooks. Run all package-specific
 tests and the repository check. Verify a local
 coding-agent turn and a reopened interrupted turn, then stop for final review.

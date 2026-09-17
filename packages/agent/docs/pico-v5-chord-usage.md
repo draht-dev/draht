@@ -309,9 +309,10 @@ derives its conversation from the task record.
 ```text
 watchDoc: capture immutable V0 + register for later committed operation batches
 producer commits D1 and D2 before start: queue D1, D2
-queue exceeds its limit: replace pending suffix with [["r", V2]]
+pending operation count exceeds its limit: replace suffix with [["r", V2]]
 start: caller has initialized from V0; deliver the reset through the async listener
 producer commits D3 while listener awaits: queue D3; never overlap callbacks
+unrelated commit has no source ops: enqueue nothing
 producer becomes terminal: queue [["r", null]], deliver it, then close as retired
 ```
 
@@ -367,8 +368,10 @@ nothing and poisons the open Session; close and reopen it instead of continuing.
 - Normal `snapshot`, `documentSource`, and `watchDoc` reads are get-or-create.
   Family `initial` is first-creation input, not an update.
 - Initialize from the fixed `watch.value` before `start()`. Slow or unstarted
-  delivery may coalesce an undelivered suffix into a root replacement, omitting
-  intermediate states. Do not use a watch as an audit log.
+  delivery may coalesce an undelivered suffix into a root replacement when its
+  operation count exceeds the limit, omitting intermediate states. Queue
+  accounting never serializes operations to estimate bytes. Do not use a watch
+  as an audit log.
 - A listener may call `stop()`, but must not await its own `closed` promise.
 - Definitions own checkpoints, not storage heuristics. Revise the counting predicates
   above if mutations change. Keep schema IDs, versions, fork policies, and public

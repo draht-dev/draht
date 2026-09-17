@@ -169,8 +169,8 @@ Context derivation:
    `deferred` stop reasons from future provider requests.
 
 Views carry raw active entries. UI reduction and model-context reduction are
-separate consumers. Older stored history is available through cursor-based
-entry scans.
+separate consumers. Older stored history is available through the owning
+`Conversation` object's cursor-based `entries()` scan.
 
 ### 2.2 Public Harness surface
 
@@ -290,6 +290,12 @@ interface Conversation {
     context: Context,
   ): Promise<T>;
   context(context: Context): Promise<ContextView>;
+  entries(
+    query: Omit<EntryQuery, "conversationId">,
+    cursor: EntryCursor | undefined,
+    limit: number,
+    context: Context,
+  ): Promise<Page<EntryRecord, EntryCursor>>;
   fork(
     at: Id,
     spec: Omit<ConversationSpec, "parent">,
@@ -332,12 +338,6 @@ interface Harness extends Session {
     spec: ConversationSpec & { readonly input?: UserInput },
     context: Context,
   ): Promise<Conversation>;
-  entries(
-    query: EntryQuery,
-    cursor: EntryCursor | undefined,
-    limit: number,
-    context: Context,
-  ): Promise<Page<EntryRecord, EntryCursor>>;
 
   getTask(id: Id, context: Context): Promise<TaskRecord<JsonValue, JsonValue, JsonValue> | undefined>;
   abortInput(
@@ -438,6 +438,8 @@ the exact declarations actually offered to prior requests.
 
 A `Conversation.commit()` is a Session commit bound to that conversation.
 `tx.createTask()` defaults `TaskOptions.conversationId` to the bound conversation.
+`Conversation.entries()` binds the query to that conversation and paginates its
+fork-aware stored history; callers cannot substitute another conversation ID.
 Generic Session-wide document operations remain available directly on `Harness`
 because `Harness extends Session`.
 
@@ -1637,24 +1639,28 @@ after stop, throws.
 
 One per-watch delivery line awaits each callback before starting the next, so
 callbacks never overlap. Commits never wait for callback settlement: while one
-batch is in flight, later batches append to the pending queue. An update accepted
-between acquisition and return, or between return and `start()`, is therefore not
-lost. The listener's promise covers all work the watch serializes; fire-and-forget
-work started by the listener is outside that guarantee.
+batch is in flight, later batches append to the pending queue. Empty operation
+batches are discarded before enqueueing and cannot consume queue bookkeeping. An
+update accepted between acquisition and return, or between return and `start()`,
+is therefore not lost. The listener's promise covers all work the watch
+serializes; fire-and-forget work started by the listener is outside that
+guarantee.
 
-The pending queue is bounded by operation-batch count and estimated retained
-payload. When either threshold is exceeded, the handle leaves the in-flight batch
-untouched and replaces the entire pending suffix with one newly allocated root
-replacement batch:
+The pending queue is bounded only by the total number of operations in its
+undelivered batches. It never estimates serialized size or calls
+`JSON.stringify()` to make a compaction decision. When the operation-count limit
+is exceeded, the handle leaves the in-flight batch untouched and replaces the
+entire pending suffix with one newly allocated root replacement batch:
 
 ```ts
 [["r", latestImmutablePublishedValue]]
 ```
 
-Later deltas append behind that reset. A single reset may exceed the payload
-threshold because compaction cannot bound document size; while it remains
-pending, further overload replaces it with a newer reset rather than accumulating
-an unbounded suffix. This watch observes convergent committed state, not every
+The reset counts as one pending operation regardless of the document's in-memory
+size. Later deltas append behind it. If the operation-count limit is exceeded
+again, the whole pending suffix is replaced with a newer reset rather than
+accumulating an unbounded operation list. This bounds delta bookkeeping, not the
+document value itself. This watch observes convergent committed state, not every
 intermediate transition.
 
 The replacement value is the immutable publication value corresponding exactly
@@ -1716,7 +1722,8 @@ delivery sequence per view source lifetime.
 
 `Conversation.watch()` exposes that mount through the same immutable acquisition
 snapshot, serialized asynchronous listener, and reset-compacted pending queue as
-`watchDoc()`. Each operation batch represents one complete Session commit. Chord
+`watchDoc()`. Each non-empty operation batch represents one complete Session
+commit; a commit that does not change the mounted view emits no watch batch. Chord
 Session facets may forward the captured value and committed operations through
 services, but that product wiring is not part of the Harness facade and must not
 add another tracker or semantic event envelope.

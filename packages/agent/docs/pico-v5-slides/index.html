@@ -301,7 +301,7 @@ many independently attached presentations</code></pre>
 <span class="kw">const</span> storage: <span class="type">Storage</span> = <span class="kw">await</span> openAppStorage(context);
 <span class="kw">const</span> options: <span class="type">HarnessOptions</span> = {
   models, <span class="comment">// pi-ai Models</span>
-  tools: [read, bash],
+  tools: [read, bash], <span class="comment">// register; new root defaults both active</span>
   taskKinds: [Reindex],
   documents: [PlanDoc, JobOutputDoc],
   sections,
@@ -311,7 +311,7 @@ many independently attached presentations</code></pre>
 <span class="kw">const</span> harness = <span class="kw">await</span> Harness.open(storage, options, context);
 harness.resume();
 <span class="kw">const</span> conversation = <span class="kw">await</span> harness.root(context);</code></pre>
-    <p class="subtitle step">Definitions are installed before migration, recovery, and task dispatch.</p>
+    <p class="subtitle step">Registration declares code; only conversation configuration changes an existing active loadout.</p>
   </div></section>
 
   <section class="slide" data-slide="21"><div class="frame wide">
@@ -385,18 +385,20 @@ console.log(task.state.outcome);</code></pre>
   <section class="slide" data-slide="25"><div class="frame wide">
     <h2>Observe the conversation as committed state</h2>
     <pre class="code-small"><code><span class="kw">const</span> watch = <span class="kw">await</span> conversation.watch(context);
-render(watch.value);
+<span class="kw">let</span> view = watch.value;
+<span class="kw">await</span> render(view);
 
-watch.start((view, ops, revision, _context) =&gt; {
-  render(view);
-  console.log(revision, ops);
+watch.start(<span class="kw">async</span> (ops, _context) =&gt; {
+  view = applyImmutable(view, ops);
+  <span class="kw">await</span> render(view);
 });
 
 <span class="comment">// A Session facet may forward the same committed ops.</span>
-<span class="kw">function</span> disposeUi() { <span class="comment">// on UI teardown</span>
+<span class="kw">async function</span> disposeUi() { <span class="comment">// on UI teardown</span>
   watch.stop();
+  <span class="kw">await</span> watch.closed;
 }</code></pre>
-    <p class="subtitle step">Capture and listener registration are atomic; close stops the watch.</p>
+    <p class="subtitle step">The fixed snapshot plus serialized async updates converge without overlapping callbacks.</p>
   </div></section>
 
   <section class="slide" data-slide="26"><div class="frame wide">
@@ -642,8 +644,12 @@ commit  append assistant entry E
 <span class="comment">// taskId identifies the supplied live producer task.</span>
 <span class="kw">const</span> target = { scope: <span class="str">"task"</span>, taskId } <span class="kw">as const</span>;
 <span class="kw">const</span> watch = <span class="kw">await</span> api.watchDoc(JobOutput, target, context);
-consume(watch.value);
-watch.start((value, ops) =&gt; consume(value, ops));
+<span class="kw">let</span> value = watch.value;
+<span class="kw">await</span> consume(value);
+watch.start(<span class="kw">async</span> (ops, _context) =&gt; {
+  value = applyImmutable(value, ops);
+  <span class="kw">await</span> consume(value);
+});
 <span class="comment">// Producer commit: output.stdout = (output.stdout + chunk).slice(-50_000)</span>
 <span class="comment">// Terminal task commit retires the document.</span></code></pre>
     <p class="subtitle step">The producer bounds stdout on append; checkpoints only bound replay cost.</p>
@@ -669,7 +675,7 @@ crash anywhere → durable marks remain → reopen continues abort</code></pre>
     <table class="table"><thead><tr><th>Operation</th><th>Durable writes</th><th>Distribution and reopen</th></tr></thead><tbody>
       <tr class="step"><td>Cancel a Context</td><td>None by itself</td><td>Requests cancellation of one call/wait; remote propagation depends on transport. Committed work is not undone.</td></tr>
       <tr class="step"><td>Abort task/conversation</td><td>Abort marks, then terminal outcomes</td><td>Traverses ownership; reopen finishes marked aborts.</td></tr>
-      <tr class="step"><td>Close Session</td><td>No abort/terminal writes caused by close</td><td>Admitted commits may settle; then join, stop watches, close storage, and withdraw services. Reopen resumes checkpoints.</td></tr>
+      <tr class="step"><td>Close Session</td><td>No abort/terminal writes caused by close</td><td>Seal admission; signal invocations and stop watches; settle commits and join callbacks; close storage and withdraw services. Reopen resumes checkpoints.</td></tr>
     </tbody></table>
     <p class="subtitle step">Disconnecting a client does not silently abort shared work.</p>
   </div></section>
@@ -704,8 +710,8 @@ crash anywhere → durable marks remain → reopen continues abort</code></pre>
   <section class="slide" data-slide="46"><div class="frame wide">
     <h2>The conversation view is a mount</h2>
     <pre class="code-small"><code><span class="kw">type</span> <span class="type">ConversationView</span> = {
-  conversation: <span class="type">Conversation</span>;
-  entries: <span class="kw">readonly</span> <span class="type">Entry</span>[];  <span class="comment">// raw active head → tail</span>
+  conversation: <span class="type">ConversationRecord</span>;
+  entries: <span class="kw">readonly</span> <span class="type">EntryRecord</span>[];  <span class="comment">// raw active head → tail</span>
   docs: <span class="type">Readonly</span>&lt;<span class="type">Record</span>&lt;<span class="type">string</span>, <span class="type">JsonObject</span>&gt;&gt;;
 };
 
@@ -715,7 +721,7 @@ crash anywhere → durable marks remain → reopen continues abort</code></pre>
   </div></section>
 
   <section class="slide" data-slide="47"><div class="frame wide">
-    <h2>Status is state, not an event</h2>
+    <h2>Status is state, not only an event</h2>
     <pre><code>live.collapse = { stage: "summarizing", through: 920 }
 live.collapse = { stage: "retrying", retryAt: 1730000000 }
 delete live.collapse
@@ -723,7 +729,7 @@ delete live.collapse
 late client during retry:
   hydrates the current value
   knows compaction is running and when it retries</code></pre>
-    <p class="subtitle step">A “started” event cannot help a client that attaches later.</p>
+    <p class="subtitle step">Active JSON/RPC clients may receive committed notifications; late clients hydrate state.</p>
   </div></section>
 
   <section class="slide" data-slide="48"><div class="frame wide">
@@ -750,7 +756,7 @@ late client during retry:
     <h2>The deliberate sharp edges</h2>
     <div class="grid2">
       <div class="panel step"><h3>Ownership</h3><ul class="tight"><li>draft/proxy escape</li><li>inserted and duplicated aliases</li><li>table read after table write</li><li>large values in terminal task records</li></ul></div>
-      <div class="panel step"><h3>Liveness</h3><ul class="tight"><li>external or nested waits on the line</li><li>get-or-create “reads”</li><li>unstarted watch buffering</li><li>checkpoint starvation</li><li>continuing after storage failure</li></ul></div>
+      <div class="panel step"><h3>Liveness</h3><ul class="tight"><li>external or nested waits on the line</li><li>get-or-create “reads”</li><li>watch callback self-join</li><li>checkpoint starvation</li><li>continuing after storage failure</li></ul></div>
     </div>
     <p class="subtitle step">Stable definition IDs, mounted paths, and fork settings are persisted protocol.</p>
   </div></section>
@@ -792,7 +798,7 @@ escaped!.strokes.push(otherStroke); <span class="bad">// wrong: transaction ende
 
 <span class="kw">await</span> session.snapshot(Doc, target, context); <span class="warn">// may create + commit</span>
 <span class="kw">const</span> watch = <span class="kw">await</span> session.watchDoc(Doc, target, context);
-<span class="comment">// never start()/stop(): buffered commits are unbounded</span>
+<span class="comment">// initialize from watch.value; slow pending suffixes may compact to a reset</span>
 checkpointWhen: () =&gt; <span class="kw">false</span> <span class="bad">// replay/storage can grow while live</span>
 
 known post-flush/checkpoint/storage failure → <span class="bad">close + reopen</span>

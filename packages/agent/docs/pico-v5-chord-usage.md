@@ -30,7 +30,10 @@ terminal and never participate in conversation forks.
 Examples build on one another. Pico5 names (`defineDoc`, `defineDocFamily`,
 `Session`, `DocumentSource`, `Id`, `TaskRuntime`, `DocumentObserver`)
 refer to normative contracts, without a specified import path or runnable Pico5
-package. These Chord imports exist today:
+package. In those contracts, `ConversationRecord`, `EntryRecord`, and
+`TaskRecord` are persisted records, while `Conversation` is the public
+conversation object and `Entry`/`Task` are typed definitions. These Chord imports
+exist today:
 
 ```ts
 import {
@@ -39,6 +42,7 @@ import {
   type ReplicatedState,
 } from "@draht/chord";
 import { BACKGROUND_CONTEXT } from "@draht/chord/context";
+import { applyImmutable } from "@draht/chord/delta";
 
 // The spec calls this JsonObject; current Chord exports JsonValue, not JsonObject.
 type JsonObject = { [key: string]: JsonValue };
@@ -49,8 +53,8 @@ declare function documentReplicatedState<T extends JsonObject>(
 ): Promise<{ readonly state: ReplicatedState<T | null>; dispose(): void }>;
 ```
 
-The adapter must register Chord-recognized state, atomically hydrate matching
-committed value/revision and subscribe, and forward committed ops without another
+The adapter must register Chord-recognized state, atomically hydrate a matching
+committed value and adapter-owned delivery sequence, and forward committed ops without another
 tracker or re-diff. Disposal releases observation, not the document. Even Chord's
 hydration requests must never flush an uncommitted draft.
 
@@ -282,14 +286,17 @@ async function observeJob(
 ): Promise<void> {
   const target = jobOutputTarget(producerTaskId);
   const watch = await api.watchDoc(JobOutputDoc, target, context);
+  let value = watch.value;
+  console.log(value === null ? "retired" : value.stdout);
   try {
-    console.log(watch.revision, watch.value.stdout); // Consume captured initial value.
-    watch.start((value, ops, revision, _context) => {
-      console.log(revision, value === null ? "retired" : value.stdout, ops);
-    }); // Drain buffered changes in order, then continue live delivery.
+    watch.start(async (ops, _context) => {
+      value = applyImmutable(value, ops);
+      await render(value === null ? "retired" : value.stdout);
+    }); // Serialized callbacks never overlap.
     await finished; // Caller-supplied observation lifetime; outside any commit.
   } finally {
-    watch.stop(); // Idempotent; discards any remaining buffer.
+    watch.stop(); // Idempotent; prevents another callback from starting.
+    await watch.closed; // Wait for an in-flight callback to settle.
   }
 }
 ```
@@ -300,16 +307,21 @@ includes that interface. Acquisition validates the target task is live and
 derives its conversation from the task record.
 
 ```text
-watchDoc: capture value V at revision 8 + register listener atomically on Session line
-producer commits revision 9 before start: buffer 9
-consumer reads watch.value (V), calls start: deliver 9, then subsequent revisions
-producer becomes terminal: same commit retires output; watch receives null + ["r", null]
+watchDoc: capture immutable V0 + register for later committed operation batches
+producer commits D1 and D2 before start: queue D1, D2
+queue exceeds its limit: replace pending suffix with [["r", V2]]
+start: caller has initialized from V0; deliver the reset through the async listener
+producer commits D3 while listener awaits: queue D3; never overlap callbacks
+producer becomes terminal: queue [["r", null]], deliver it, then close as retired
 ```
 
 Watches automatically stop when their invocation ends. A Session-acquired watch
-is caller-owned and stops on Session close. Retirement ends the incarnation's
-stream; recreation requires a new watch/source and a new numeric
-document ID. A terminal task cannot create more output. Task-scoped documents
+is caller-owned and stops on Session close. Previously delivered snapshots never
+mutate. Slow or unstarted delivery may coalesce an undelivered suffix into a
+complete reset, so a watch is convergent state observation rather than a
+transition journal. Retirement ends the incarnation's stream; recreation
+requires a new watch/source and a new numeric document ID. A terminal task cannot
+create more output. Task-scoped documents
 never copy into forks. Preserve required output in result entries or Session- or
 conversation-scoped documents in the terminal commit before retirement. Use a
 task-scoped family only when one task needs several independently keyed documents.
@@ -337,9 +349,9 @@ dynamic service should then withdraw its instance rather than expose stale data.
 addStroke -> hold Session mutation line -> await tx.doc -> mutate tracked draft
 callback succeeds -> tracker flush: incremental ops + candidate value
 atomic storage commit: all document and record writes; checkpoint predicate selects ops or base
-storage succeeds -> adopt committed baseline + enqueue source publication, still on line
+storage succeeds -> materialize immutable published value + enqueue value/ops, still on line
 release line -> deliver committed source ops -> adapter -> local/remote Chord consumers
-late subscriber -> atomically capture committed value/revision + subscription
+late subscriber -> atomically capture committed value + adapter sequence + subscription
 ```
 
 No visible-undurable path exists. Callback failure restores the unchanged
@@ -354,7 +366,10 @@ nothing and poisons the open Session; close and reopen it instead of continuing.
   Await document access there, not models, processes, network calls, or humans.
 - Normal `snapshot`, `documentSource`, and `watchDoc` reads are get-or-create.
   Family `initial` is first-creation input, not an update.
-- An unstarted watch buffers without a fixed bound. Start or stop promptly.
+- Initialize from the fixed `watch.value` before `start()`. Slow or unstarted
+  delivery may coalesce an undelivered suffix into a root replacement, omitting
+  intermediate states. Do not use a watch as an audit log.
+- A listener may call `stop()`, but must not await its own `closed` promise.
 - Definitions own checkpoints, not storage heuristics. Revise the counting predicates
   above if mutations change. Keep schema IDs, versions, fork policies, and public
   paths stable; schema changes require migration, not a source-only rename.

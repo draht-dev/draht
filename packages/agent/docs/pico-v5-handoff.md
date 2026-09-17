@@ -15,9 +15,12 @@ facades, membranes, document routing, view projection, events, or clone chains.
 
 ## 1. Records, cursors, and memory tables
 
-Implement IDs, sequences, Session metadata with stable root ID, conversations,
-entries, inputs, live/terminal tasks, document metadata, storage writes, cursors,
-and detached `MemoryStorage` tables.
+Implement IDs, sequences, Session metadata with stable root ID,
+`ConversationRecord`, `EntryRecord`, inputs, live/terminal `TaskRecord` values,
+document metadata, storage writes, cursors, and detached `MemoryStorage` tables.
+Reserve `Conversation` for the public conversation object, `Entry` for the typed
+entry definition, and `Task` for the typed executable definition returned by
+`defineTask()`.
 
 Test atomic root-metadata/conversation creation, missing or dangling root
 metadata rejection, mixed atomic commits, rollback, detached reads/writes,
@@ -63,11 +66,14 @@ never reclaimed and default no-fsync behavior matches the specification.
 
 Keep one tracker per loaded document. Add transaction begin, callback rollback
 from the unchanged baseline, flush, fatal post-flush failure, committed baseline
-adoption, and eviction.
+adoption, and eviction. After storage succeeds, materialize one immutable
+published value per changed document with `applyImmutable(previous, ops)`,
+separate from mutable tracker and borrowed storage candidates.
 
 Do not add membranes, transaction proxy graphs, capability facades, or defensive
 full-document clones. Test callback failure, no-op transactions, storage failure
-poisoning, and unload/reload.
+poisoning, immutable prior published values, replacement-payload ownership, and
+unload/reload.
 
 ## 7. Document definitions and access
 
@@ -114,19 +120,29 @@ unchanged previous immutable snapshots. Internal flushes must remain one commit.
 Add the thin opaque-source adapter to `ReplicatedState`. It must use committed
 value/ops directly, with no tracker or re-diff.
 
-Test contiguous revisions, atomic hydrate/subscribe, attachment races,
-retirement ending one incarnation, recreation requiring reacquisition, and
-listener isolation.
+Test contiguous Chord adapter delivery sequences, atomic hydrate/subscribe,
+attachment races, retirement ending one incarnation, recreation requiring
+reacquisition, and listener isolation. Reuse the transaction core's immutable
+published value; do not materialize another document copy.
 
 ## 12. Document watches
 
-Implement get-or-create `watchDoc`: capture value/revision and register its
-listener atomically, buffer without a cap until `start()` or `stop()`, and always
-deliver value plus ops.
+Implement get-or-create `watchDoc` as an incarnation-bound `WatchHandle` that
+atomically captures one fixed immutable value and registers for later committed
+operation batches. `start()` installs one serialized asynchronous listener.
+Bound the pending queue by batch count and estimated retained payload; compact an
+overdue undelivered suffix into one root replacement using the matching latest
+immutable published value from package 6; never retain mutable tracker or borrowed
+storage candidates.
 
-Test ordered draining, live delivery, retirement as absence, idempotent stop,
-listener errors, and explicit cleanup. Invocation-owned cleanup is integrated in
-package 15.
+Test updates between acquisition/return/start; asynchronous consumer
+initialization; no callback overlap; listener-initiated commits; compaction
+before start and behind an in-flight callback; one oversized replacement;
+immutable earlier values; retirement before start and while active; recreation;
+idempotent stop; second-start rejection; cancellation during acquisition;
+cancellation/close during a callback; listener-error settlement; `closed`
+self-join misuse; and invocation-owned
+cleanup in package 15.
 
 ## 13. Conversations and entries
 
@@ -144,7 +160,8 @@ tool-result ordering, and missing post-fork tool results. Replay `content`,
 ordered named `sections` with `null` removal, then tool removals/additions.
 
 Test model-less and excluded-stop-reason entries, replacements/omissions,
-multiple heads, section replacement/removal/re-addition order, rejection of
+multiple heads, section replacement/removal/re-addition order, order-only
+configuration changes between separate request preparations, rejection of
 integer-like section keys, tool addition/removal/replacement order, and raw-view
 versus model context.
 
@@ -198,16 +215,19 @@ specification.
 Implement `{ conversation, entries, docs }`. Test direct task writes, one
 publication per Session commit, atomic
 entry/preview settlement, head changes, contiguous revisions, stable public
-paths, retry/collapse late-join status, bounded-output truncation metadata, and
-absence of semantic projection. Specify which diagnostics become entries,
+paths, immutable acquisition snapshots, asynchronous consumer initialization,
+serialized updates, reset compaction, retry/collapse late-join status,
+bounded-output truncation metadata, and absence of semantic projection. Specify which
+diagnostics become entries,
 terminal details, or bounded document state.
 
 ## 20. Registries, hooks, and sections
 
 Implement task/tool/entry/section registries, Session and owned-subtree hooks,
 positional PR #9548 section/tool updates, complete baselines after a head cut,
-and preparation revision checks. Do not add a public event stream or
-plugin-state router.
+and preparation revision checks. Do not add a Session-kernel semantic event
+journal or plugin-state router; package 25 adds the thin product notification
+adapter from specification §9.4.
 
 Test registration lifetimes, hook replay with memos, exact persisted rendered
 section strings, minimal section patches and `null` removals, complete baseline
@@ -265,22 +285,38 @@ state or entries, and plugin handler recovery.
 
 Implement the exact Pico3-shaped public surface in specification §2.2:
 `Harness.open/resume/suspend/close`, lifecycle gates, root/create/lookup
-conversations, ordered `write` handles, send/input handles, conversation-bound
+`Conversation` objects, ordered `write` handles, send/input handles,
+conversation-bound
 commits, fork/collapse/reset/abort/idle, typed task wait/abort, generic document
 access, registries, and structural conversation watches. Do not restore Pico3's
 namespace router, fixed document accessors, semantic view events, or manual Chord
 view bridge.
 
-Expose service withdrawal/client detach and product wiring. Implement the v1
-host-plugin reload path as stop admission, close/join, dispose, rebuild with all
-new definitions, reopen/migrate, and resume. Test that closing seals commit and
+Expose service withdrawal/client detach and product wiring. Implement the §9.4
+agent-mode notification adapter directly from uncoalesced committed publication,
+without another tracker or persistence authority. Migrate TUI hydration to the
+structural conversation watch, make print await its own `InputHandle`, and expose
+JSON/RPC correlated commands plus ordered committed notifications. Test that
+watch reset compaction cannot erase a subscribed notification lifecycle, late
+clients use structural hydration rather than event replay, progress notifications
+reflect durable throttled state rather than every provider frame, and stdout
+backpressure/disconnect policy stays in the mode adapter.
+
+Implement the v1 host-plugin reload path as stop admission, close/join, dispose,
+rebuild with all new definitions, reopen/migrate, and resume. Test that closing seals commit and
 get-or-create admission, lets storage settlement for already-flushed admitted
-commits finish despite caller cancellation, writes no abort or terminal outcome,
-starts no fresh abort invocation, and does not run old and new generations
-concurrently.
+commits finish despite caller cancellation, stops watches, joins in-flight watch
+callbacks and task/tool/hook invocations outside the Session line, writes no abort
+or terminal outcome, starts no fresh abort invocation, and does not run old and
+new generations concurrently. Include cancellation during watch acquisition and
+a non-cooperative watch callback in shutdown/plugin-reload quiescence tests.
 
 Test stable persisted root identity; atomic conversation/config/section/input
-creation; fork seed overrides; concrete-entry forks; collapse task-ID return;
+creation; default `"off"` thinking; every configuration getter/setter; explicit
+active-tool seed duplicate/unregistered rejection; default active registry
+snapshot; as-of fork inheritance including unavailable historical names; durable
+`missing_active_tool` settlement; fork seed overrides; concrete-entry forks;
+collapse task-ID return;
 busy reset admission and later placement; mark-only versus signalling abort;
 conversation abort/join with surviving passive writes and background tasks;
 quiescence with eligible work; listener initial/future delivery and isolation;

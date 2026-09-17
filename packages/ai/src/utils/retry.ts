@@ -33,6 +33,7 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"502",
 	"503",
 	"504",
+	"520",
 	"524",
 	"service.?unavailable",
 	"server.?error",

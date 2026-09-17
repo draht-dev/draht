@@ -124,6 +124,36 @@ describe("tracker: intent", () => {
 		expect(apply(structuredClone(initial), ops)).toEqual(t.state);
 	});
 
+	it("updates an anchored string through a later container replacement", () => {
+		const initial = { xs: [{ k: "a" }] };
+		const t = track(structuredClone(initial));
+		t.flush();
+		t.state.xs[0]!.k += "b";
+		t.state.xs = [{ k: "abc" }, { k: "z" }];
+		expect(apply(structuredClone(initial), t.flush())).toEqual(t.state);
+	});
+
+	it("preserves string history across a null-prototype container replacement", () => {
+		const initial = { value: { text: "a" } };
+		const t = track(structuredClone(initial));
+		t.flush();
+		const replacement = Object.assign(Object.create(null) as { text: string }, { text: "ab" });
+		t.state.value = replacement;
+		t.state.value.text = "abc";
+		const ops = decoder().decode(JSON.parse(JSON.stringify(encoder().encode(t.flush()))) as WireOp[]);
+		expect(applyImmutable(structuredClone(initial), ops)).toEqual(JSON.parse(JSON.stringify(t.state)));
+	});
+
+	it("front-truncates a pending string set from the correct end", () => {
+		const initial = { xs: [0] as Array<number | string> };
+		const t = track(structuredClone(initial));
+		t.flush();
+		t.state.xs[0] = "abc";
+		t.state.xs = ["bc", 0];
+		const ops = decoder().decode(JSON.parse(JSON.stringify(encoder().encode(t.flush()))) as WireOp[]);
+		expect(applyImmutable(structuredClone(initial), ops)).toEqual(t.state);
+	});
+
 	it("emits nothing when a replacement is deeply equal", () => {
 		const t = track({ value: { nested: [1, { text: "same" }] } });
 		t.flush();
@@ -259,6 +289,53 @@ describe("tracker: root ops", () => {
 		t.state.xs.splice(1, 0, "inserted");
 		t.state.xs[1] = "changed";
 		expect(apply(structuredClone(initial), t.flush())).toEqual(t.state);
+	});
+
+	it("drops detached element writes when a root array is replaced", () => {
+		const initial = [{ k: "a" }, { k: "b" }];
+		const t = track(structuredClone(initial));
+		t.flush();
+		t.state[0]!.k += "x";
+		t.state.unshift({ k: "head" });
+		t.state.splice(0, t.state.length, { k: "final" });
+		const ops = t.flush();
+		expect(ops[0]?.[0]).toBe("r");
+		expect(apply(structuredClone(initial), ops)).toEqual(t.state);
+	});
+
+	it("keeps nested writes ordered across an inserted array reindex", () => {
+		const initial: number[][] = [];
+		const t = track(structuredClone(initial));
+		t.flush();
+		t.state.push([10, 20]);
+		t.state[0]!.shift();
+		t.state[0]![0] = 30;
+		const ops = decoder().decode(JSON.parse(JSON.stringify(encoder().encode(t.flush()))) as WireOp[]);
+		expect(applyImmutable(structuredClone(initial), ops)).toEqual(t.state);
+	});
+
+	it.each([
+		[
+			"replacement",
+			(state: JsonValue[]) => {
+				state[0] = 0;
+			},
+		],
+		[
+			"clear",
+			(state: JsonValue[]) => {
+				(state[0] as JsonValue[]).length = 0;
+			},
+		],
+	] as const)("invalidates nested operations folded into an inserted payload on %s", (_name, replace) => {
+		const initial: JsonValue[] = [];
+		const t = track(structuredClone(initial));
+		t.flush();
+		t.state.push([]);
+		(t.state[0] as JsonValue[]).push(1);
+		replace(t.state);
+		const ops = decoder().decode(JSON.parse(JSON.stringify(encoder().encode(t.flush()))) as WireOp[]);
+		expect(applyImmutable(structuredClone(initial), ops)).toEqual(t.state);
 	});
 
 	it("round-trips deterministic element mutations across reindexing splices", () => {
@@ -480,7 +557,7 @@ describe("the first flush", () => {
 		expect(t.flush()).toEqual([]);
 	});
 
-	it("discard accepts pending changes into the local baseline", () => {
+	it("discard accepts pending changes without publishing them", () => {
 		const t = track({ x: 0, y: 0 });
 		t.flush();
 		t.state.x = 1;
@@ -568,9 +645,9 @@ describe("apply and fan-out", () => {
 	});
 });
 
-describe("flush-time minimization", () => {
-	// Mutations only mark dirty paths. Flush compares the last published baseline
-	// with the current value, so repeated writes never accumulate pending ops.
+describe("pending operation coalescing", () => {
+	// Repeated operations are coalesced when ordering and array index semantics
+	// make that safe. Exact operation shape is not part of the contract.
 	type DeadOpState = { a: Record<string, JsonValue>; x?: number; y?: number };
 	const run = (mutate: (state: DeadOpState) => void, init: DeadOpState = { a: { b: 1 }, x: 1, y: 2 }) => {
 		const t = track(structuredClone(init));
@@ -642,13 +719,29 @@ describe("flush-time minimization", () => {
 		).toEqual([["s", ["x"], 5]]);
 	});
 
-	it("derives an append after delete-then-recreate", () => {
-		const t = track<{ x?: string; y: number }>({ x: "", y: 1 });
+	it("converges after delete-then-recreate without requiring an append", () => {
+		const initial = { x: "", y: 1 };
+		const t = track<{ x?: string; y: number }>(structuredClone(initial));
 		t.flush();
 		delete t.state.x;
 		t.state.x = "ab";
 		t.state.x += "cd";
-		expect(t.flush()).toEqual([["a", ["x"], "abcd"]]);
+		const ops = t.flush();
+		expect(ops).toEqual([["s", ["x"], "abcd"]]);
+		expect(apply(structuredClone(initial), ops)).toEqual(t.state);
+	});
+
+	it("may publish a redundant batch when mutations restore the prior value", () => {
+		const initial = { x: 1, xs: [1, 2] };
+		const t = track(structuredClone(initial));
+		t.flush();
+		t.state.x = 2;
+		t.state.x = 1;
+		t.state.xs.reverse();
+		t.state.xs.reverse();
+		const ops = t.flush();
+		expect(ops.length).toBeGreaterThan(0);
+		expect(apply(structuredClone(initial), ops)).toEqual(t.state);
 	});
 
 	it("is linear in the number of ops", () => {
@@ -681,6 +774,20 @@ describe("flush-time minimization", () => {
 		const ops = t.flush();
 		expect(ops).toHaveLength(3);
 		expect(apply({ a: { b: 1 }, x: 1 }, ops)).toEqual(t.state);
+	});
+
+	it("bounds long structural windows by collapsing them to a base", () => {
+		const initial = { xs: [{ value: 0 }, { value: 1 }] };
+		const t = track(structuredClone(initial));
+		t.flush();
+		for (let i = 0; i < 5000; i++) {
+			t.state.xs[0]!.value = i;
+			t.state.xs.shift();
+			t.state.xs.push({ value: i });
+		}
+		const ops = t.flush();
+		expect(isBase(ops)).toBe(true);
+		expect(apply(structuredClone(initial), ops)).toEqual(t.state);
 	});
 });
 
@@ -738,6 +845,47 @@ describe("flush", () => {
 		const out = apply({}, [["s", ["a"], JSON.parse('{"__proto__":{"z":1}}')]]);
 		expect(({} as Record<string, unknown>).z).toBeUndefined();
 		expect(out).toBeDefined();
+	});
+
+	it("clones tracked values without invoking inherited setters", () => {
+		const root = {} as Record<string, JsonValue>;
+		Object.defineProperty(root, "trap", { value: 1, writable: true, enumerable: true, configurable: true });
+		Object.defineProperty(Object.prototype, "trap", {
+			set() {
+				throw new Error("inherited setter ran");
+			},
+			configurable: true,
+		});
+		try {
+			expect(() => track(root).flush()).not.toThrow();
+		} finally {
+			delete (Object.prototype as Record<string, unknown>).trap;
+		}
+
+		let arrayOps: Op[] | undefined;
+		Object.defineProperty(Array.prototype, "0", {
+			set() {
+				throw new Error("inherited array setter ran");
+			},
+			configurable: true,
+		});
+		try {
+			arrayOps = track({ values: [1, 2] }).flush();
+		} finally {
+			delete (Array.prototype as unknown as Record<number, unknown>)[0];
+		}
+		expect(arrayOps).toEqual([["r", { values: [1, 2] }]]);
+	});
+
+	it("replaces the safe parent when an assigned object removes a reserved value key", () => {
+		const initial: { value: Record<string, JsonValue> } = {
+			value: JSON.parse('{"constructor":{"label":"data"},"x":1}') as Record<string, JsonValue>,
+		};
+		const t = track(structuredClone(initial));
+		t.flush();
+		t.state.value = { x: 2 };
+		const ops = decoder().decode(JSON.parse(JSON.stringify(encoder().encode(t.flush()))) as WireOp[]);
+		expect(applyImmutable(structuredClone(initial), ops)).toEqual(t.state);
 	});
 
 	it("clones and reads reserved value keys without invoking prototype setters", () => {
@@ -1031,7 +1179,7 @@ describe("codec: path interning and arity omission", () => {
 	});
 });
 
-describe("property: flush-time tracking", () => {
+describe("property: operation-log tracking", () => {
 	it("converges across mixed nested writes, replacements, and array mutations", () => {
 		type State = { rows: { text: string; count: number }[]; meta: { revision: number } };
 		let seed = 0x5eed1234;

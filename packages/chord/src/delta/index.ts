@@ -130,21 +130,14 @@ const isObj = (value: unknown): value is object => value !== null && typeof valu
 const cloneJson = <T extends JsonValue>(value: T): T => {
 	if (!isObj(value)) return value;
 	if (Array.isArray(value)) return value.map((item) => cloneJson(item)) as T;
-	const nullProto = Object.getPrototypeOf(value) === null;
-	const result = (nullProto ? Object.create(null) : {}) as Record<string, JsonValue>;
-	for (const key of Object.keys(value as Record<string, JsonValue>)) {
-		const child = (value as Record<string, JsonValue>)[key]!;
-		const copied = isObj(child) ? cloneJson(child) : child;
-		if (!nullProto && key in result) {
-			Object.defineProperty(result, key, {
-				value: copied,
-				writable: true,
-				enumerable: true,
-				configurable: true,
-			});
-		} else {
-			result[key] = copied;
-		}
+	// Spread preserves compact object layouts instead of reserving extra slots
+	// while growing an empty object. Both branches create own writable properties.
+	const result = (
+		Object.getPrototypeOf(value) === null ? Object.assign(Object.create(null), value) : { ...value }
+	) as Record<string, JsonValue>;
+	for (const key of Object.keys(result)) {
+		const child = result[key]!;
+		if (isObj(child)) result[key] = cloneJson(child);
 	}
 	return result as T;
 };
@@ -762,8 +755,6 @@ export function track<T extends object>(root: T, options: TrackerOptions = {}): 
 		return segment;
 	};
 
-	const adoptItems = (values: readonly unknown[]): JsonValue[] => values as JsonValue[];
-
 	const integer = (value: unknown): number => {
 		const number = Number(value);
 		if (Number.isNaN(number) || number === 0) return 0;
@@ -782,19 +773,80 @@ export function track<T extends object>(root: T, options: TrackerOptions = {}): 
 		return { index, remove };
 	};
 
-	// Paths are walked from the cell chain rather than baked, so a renumber is
-	// enough to correct every descendant. The walk allocates, and writes are far
-	// more frequent than renumbers, so each cell caches its path against a counter
-	// that only a structural mutation bumps.
+	// Paths are walked from placement cells rather than baked into proxies. A held
+	// descendant keeps its cells and their owner entries alive, so an ancestor can
+	// be re-created after GC without losing array-renumbering metadata. Entries keep
+	// only weak references to public proxies; parent caches keep only weak cells.
 	let shape = 0;
-	type Cell = { parent: Cell | undefined; seg: Seg; dead: boolean; at?: number; cached?: Path };
-	// One wrapper per target. A tracked object can occupy several positions in the
-	// document tree; each position is a cell, and a write emits one op per live
-	// cell, which is what a baseline diff produces for the same shape.
-	const wrappers = new WeakMap<
-		object,
-		{ proxy: object; target: object; cells: Set<Cell>; blocked: Seg | undefined }
-	>();
+	type Entry = {
+		target: object;
+		cells: Set<Cell>;
+		fallback: Cell;
+		blocked: Seg | undefined;
+		proxy: WeakRef<object> | undefined;
+		childProxies: Map<PropertyKey, WeakRef<Cell>> | undefined;
+		childCells: Set<WeakRef<Cell>> | undefined;
+	};
+	type Cell = {
+		parent: Cell | undefined;
+		owner: Entry | undefined;
+		entry: Entry | undefined;
+		target: object | undefined;
+		cleanup?: CellCleanup;
+		seg: Seg;
+		dead: boolean;
+		at?: number;
+		cached?: Path;
+	};
+	type EntrySlot = { ref: WeakRef<Entry>; token: object };
+	type EntryCleanup = { target: WeakRef<object>; token: object };
+	type CellCleanup = { owner: WeakRef<Entry>; key: PropertyKey | undefined; ref: WeakRef<Cell> };
+
+	// Ordinary tree entries are weak values. Explicit aliases are sparse and stay
+	// strong while their raw weak key is alive so alias locations survive a period
+	// in which no public proxy exists.
+	const entries = new WeakMap<object, EntrySlot>();
+	const aliases = new WeakMap<object, Entry>();
+	// A live public proxy retains its entry through this ephemeron. Raw proxy RHS
+	// values can therefore be unwrapped before they are written into plain targets.
+	const proxyEntries = new WeakMap<object, Entry>();
+	// WeakRef targets already stay alive through the current JavaScript job. These
+	// strong job-local caches avoid repeated deref bookkeeping without extending
+	// that lifetime; one microtask drops both maps before the next job.
+	let jobCells = new WeakMap<WeakRef<Cell>, Cell>();
+	let jobProxies = new WeakMap<Entry, object>();
+	let jobCleanupScheduled = false;
+	const scheduleJobCleanup = (): void => {
+		if (jobCleanupScheduled) return;
+		jobCleanupScheduled = true;
+		queueMicrotask(() => {
+			jobCells = new WeakMap();
+			jobProxies = new WeakMap();
+			jobCleanupScheduled = false;
+		});
+	};
+	const keepCellForJob = (ref: WeakRef<Cell>, cell: Cell): void => {
+		jobCells.set(ref, cell);
+		scheduleJobCleanup();
+	};
+	const derefCell = (ref: WeakRef<Cell>): Cell | undefined => {
+		const cached = jobCells.get(ref);
+		if (cached !== undefined) return cached;
+		const cell = ref.deref();
+		if (cell !== undefined) keepCellForJob(ref, cell);
+		return cell;
+	};
+	const entryFinalizer = new FinalizationRegistry<EntryCleanup>(({ target, token }) => {
+		const raw = target.deref();
+		if (raw !== undefined && entries.get(raw)?.token === token) entries.delete(raw);
+	});
+	const cellFinalizer = new FinalizationRegistry<CellCleanup>(({ owner, key, ref }) => {
+		const entry = owner.deref();
+		if (entry === undefined) return;
+		if (key !== undefined && entry.childProxies?.get(key) === ref) entry.childProxies.delete(key);
+		entry.childCells?.delete(ref);
+	});
+
 	// Almost no document ever puts one object at two positions. Until one does,
 	// every write has exactly one path, so the per-write cell walk is skipped.
 	let aliased = false;
@@ -811,337 +863,510 @@ export function track<T extends object>(root: T, options: TrackerOptions = {}): 
 		cell.cached = out as Path;
 		return out as Path;
 	};
+	const liveCells = (entry: Entry): Cell[] => {
+		const out: Cell[] = [];
+		for (const cell of entry.cells) if (!isDetached(cell)) out.push(cell);
+		return out;
+	};
+	const primary = (entry: Entry): Cell => (aliased ? (liveCells(entry)[0] ?? entry.fallback) : entry.fallback);
+	const pathNow = (entry: Entry): Path => pathOf(primary(entry));
+	const findEntry = (target: object): Entry | undefined => {
+		const alias = aliases.get(target);
+		if (alias !== undefined) return alias;
+		const slot = entries.get(target);
+		const entry = slot?.ref.deref();
+		if (slot !== undefined && entry === undefined) entries.delete(target);
+		return entry;
+	};
+	const indexEntry = (entry: Entry): void => {
+		const token = {};
+		entries.set(entry.target, { ref: new WeakRef(entry), token });
+		entryFinalizer.register(entry, { target: new WeakRef(entry.target), token });
+	};
+	const addPlacement = (entry: Entry, cell: Cell): void => {
+		if (entry.cells.has(cell)) return;
+		let hasLive = false;
+		for (const existing of entry.cells) {
+			if (!isDetached(existing)) {
+				hasLive = true;
+				break;
+			}
+		}
+		cell.entry = entry;
+		cell.target = entry.target;
+		entry.cells.add(cell);
+		if (!hasLive) {
+			const previous = entry.fallback;
+			entry.fallback = cell;
+			if (previous !== cell) {
+				shape++;
+				// Reattaching a held container moves every known immediate child to
+				// its new placement. Array registrations survive cache clears.
+				const children = new Set<Cell>();
+				for (const ref of entry.childProxies?.values() ?? []) {
+					const child = derefCell(ref);
+					if (child !== undefined) children.add(child);
+				}
+				for (const ref of entry.childCells ?? []) {
+					const child = derefCell(ref);
+					if (child !== undefined) children.add(child);
+				}
+				for (const child of children) {
+					if (!child.dead && child.parent === previous) child.parent = cell;
+				}
+			}
+		} else if (entry.blocked === undefined) {
+			aliased = true;
+			aliases.set(entry.target, entry);
+		}
+	};
+	const cachePlacement = (owner: Entry, key: PropertyKey, cell: Cell): void => {
+		let cleanup = cell.cleanup;
+		if (cleanup === undefined) {
+			cleanup = { owner: new WeakRef(owner), key: undefined, ref: new WeakRef(cell) };
+			cell.cleanup = cleanup;
+			cellFinalizer.register(cell, cleanup);
+		}
+		keepCellForJob(cleanup.ref, cell);
+		if (cleanup.key !== undefined && cleanup.key !== key && owner.childProxies?.get(cleanup.key) === cleanup.ref) {
+			owner.childProxies.delete(cleanup.key);
+		}
+		if (owner.childProxies === undefined) owner.childProxies = new Map();
+		owner.childProxies.set(key, cleanup.ref);
+		cleanup.key = key;
+		if (Array.isArray(owner.target)) {
+			if (owner.childCells === undefined) owner.childCells = new Set();
+			owner.childCells.add(cleanup.ref);
+		}
+	};
+	const findPlacement = (
+		owner: Entry,
+		parent: Cell,
+		segment: Seg,
+		target: object,
+		blocked: Seg | undefined,
+	): Cell | undefined => {
+		if (blocked === undefined) {
+			const known = findEntry(target);
+			if (known !== undefined) {
+				for (const cell of known.cells) {
+					if (!cell.dead && cell.owner === owner && cell.parent === parent && cell.seg === segment) return cell;
+				}
+			}
+			return undefined;
+		}
+		// Blocked views are intentionally absent from the ordinary raw-entry index.
+		for (const ref of owner.childCells ?? []) {
+			const cell = derefCell(ref);
+			if (
+				cell !== undefined &&
+				!cell.dead &&
+				cell.target === target &&
+				cell.entry?.blocked === blocked &&
+				cell.parent === parent &&
+				cell.seg === segment
+			) {
+				return cell;
+			}
+		}
+		return undefined;
+	};
+	const unwrap = (value: unknown): unknown => (isObj(value) ? (proxyEntries.get(value)?.target ?? value) : value);
+	const adoptItems = (values: readonly unknown[]): JsonValue[] => values.map(unwrap) as JsonValue[];
+
+	// Every operation is emitted once per live location of an explicitly aliased
+	// object. Alias cells are independent of public proxy lifetimes.
+	const emit = (entry: Entry, op: Op): void => {
+		record(op);
+		if (!aliased) return;
+		const live = liveCells(entry);
+		if (live.length <= 1) return;
+		const base = pathNow(entry);
+		const head = primary(entry);
+		for (const cell of live) {
+			if (cell === head || op[0] === "r") continue;
+			const rest = (op[1] as Seg[]).slice(base.length);
+			const cloned = [...op] as unknown as Op;
+			(cloned as unknown as Seg[][])[1] = [...pathOf(cell), ...rest];
+			record(cloned);
+		}
+	};
+
+	// Structural mutation updates every still-live placement cell, including cells
+	// retained only by held descendants. Dead weak registrations are pruned lazily;
+	// finalizers keep idle live parents from accumulating them indefinitely.
+	const renumber = (
+		entry: Entry,
+		key: string,
+		before: number,
+		after: number,
+		spliceAt: number,
+		spliceRemove: number,
+		spliceInsert: number,
+	): void => {
+		shape++;
+		const childCells = entry.childCells;
+		if (key === "push" || !Array.isArray(entry.target) || childCells === undefined || childCells.size === 0) return;
+		let index: number;
+		let remove = 0;
+		let insert = 0;
+		if (key === "pop") {
+			index = before - 1;
+			remove = before > 0 ? 1 : 0;
+		} else if (key === "shift") {
+			index = 0;
+			remove = before > 0 ? 1 : 0;
+		} else if (key === "unshift") {
+			index = 0;
+			insert = after - before;
+		} else if (key === "splice") {
+			index = spliceAt;
+			remove = spliceRemove;
+			insert = spliceInsert;
+		} else {
+			for (const ref of [...childCells]) {
+				const cell = derefCell(ref);
+				if (cell === undefined) {
+					childCells.delete(ref);
+					continue;
+				}
+				const at = (entry.target as unknown[]).indexOf(cell.target);
+				if (at < 0) {
+					cell.dead = true;
+					childCells.delete(ref);
+				} else cell.seg = at;
+			}
+			entry.childProxies?.clear();
+			return;
+		}
+		const delta = insert - remove;
+		for (const ref of [...childCells]) {
+			const cell = derefCell(ref);
+			if (cell === undefined) {
+				childCells.delete(ref);
+				continue;
+			}
+			const at = cell.seg;
+			if (typeof at !== "number") continue;
+			if (at >= index && at < index + remove) {
+				cell.dead = true;
+				childCells.delete(ref);
+			} else if (at >= index + remove) cell.seg = at + delta;
+		}
+		entry.childProxies?.clear();
+	};
 
 	const wrap = <V extends object>(object: V, cell: Cell, blockedSegment?: Seg): V => {
-		// A wrapper is shared across the positions an object occupies, but only when
-		// the access is equally (un)blocked: the reserved-key guard is a property of
-		// how the object was reached, not of the object.
-		const existing = wrappers.get(object);
-		if (existing !== undefined && existing.blocked === blockedSegment) {
-			existing.cells.add(cell);
-			return existing.proxy as V;
+		const placed = cell.entry;
+		if (placed !== undefined && placed.target === object && placed.blocked === blockedSegment) {
+			return proxyFor(placed) as V;
 		}
-		// otherwise fall through and build a separate wrapper for this blocked view;
-		// it is not registered as a position, and its traps throw before recording
-		const cells = new Set<Cell>([cell]);
-		const liveCells = (): Cell[] => {
-			const out: Cell[] = [];
-			for (const c of cells) if (!isDetached(c)) out.push(c);
-			return out;
+		const existing = blockedSegment === undefined ? findEntry(object) : undefined;
+		if (existing !== undefined) {
+			addPlacement(existing, cell);
+			return proxyFor(existing) as V;
+		}
+		const entry: Entry = {
+			target: object,
+			cells: new Set(),
+			fallback: cell,
+			blocked: blockedSegment,
+			proxy: undefined,
+			childProxies: undefined,
+			childCells: undefined,
 		};
-		const primary = (): Cell => (aliased ? (liveCells()[0] ?? cell) : cell);
-		const pathNow = (): Path => pathOf(primary());
-		// every op is emitted once per live position of this object
-		const emit = (op: Op): void => {
-			record(op);
-			if (!aliased) return;
-			const live = liveCells();
-			if (live.length <= 1) return;
-			const base = pathNow();
-			const head = primary();
-			for (const c of live) {
-				if (c === head) continue;
-				if (op[0] === "r") continue;
-				const rest = (op[1] as Seg[]).slice(base.length);
-				const cloned = [...op] as unknown as Op;
-				(cloned as unknown as Seg[][])[1] = [...pathOf(c), ...rest];
-				record(cloned);
-			}
-		};
-		const childProxies = new Map<string | symbol, { target: object; proxy: object; cell: Cell }>();
-		// Renumbering is driven by this, not by the cache: two shifting children can
-		// collide on one cache key, and the evicted one would silently stop tracking.
-		const childCells = new Set<{ target: object; cell: Cell }>();
-		// Structural mutation shifts indices. Live children are renumbered so a
-		// reference taken before the mutation keeps addressing its own element;
-		// children whose element was removed are marked dead and throw on write.
-		const renumber = (
-			key: string,
-			before: number,
-			after: number,
-			spliceAt: number,
-			spliceRemove: number,
-			spliceInsert: number,
-		): void => {
-			shape++; // invalidate cached paths
-			if (key === "push") return; // an append shifts nothing
-			if (!Array.isArray(object)) return;
-			if (childCells.size === 0) return; // nobody took a reference
-			let index: number;
-			let remove = 0;
-			let insert = 0;
-			if (key === "pop") {
-				index = before - 1;
-				remove = before > 0 ? 1 : 0;
-			} else if (key === "shift") {
-				index = 0;
-				remove = before > 0 ? 1 : 0;
-			} else if (key === "unshift") {
-				index = 0;
-				insert = after - before;
-			} else if (key === "splice") {
-				index = spliceAt;
-				remove = spliceRemove;
-				insert = spliceInsert;
-			} else {
-				// sort/reverse/fill/copyWithin permute rather than shift: locate each
-				// held child by identity. Held children are few and these are rare.
-				for (const entry of [...childCells]) {
-					const at = (object as unknown as unknown[]).indexOf(entry.target);
-					if (at < 0) {
-						entry.cell.dead = true;
-						childCells.delete(entry);
-					} else entry.cell.seg = at;
-				}
-				childProxies.clear();
-				return;
-			}
-			const delta = insert - remove;
-			for (const entry of [...childCells]) {
-				const at = entry.cell.seg;
-				if (typeof at !== "number") continue;
-				if (at >= index && at < index + remove) {
-					entry.cell.dead = true;
-					childCells.delete(entry);
-				} else if (at >= index + remove) entry.cell.seg = at + delta;
-			}
-			childProxies.clear(); // the cache is keyed by index; rebuild it lazily
-		};
+		addPlacement(entry, cell);
+		if (blockedSegment === undefined) indexEntry(entry);
+		return proxyFor(entry) as V;
+	};
 
-		const proxy = new Proxy(object, {
-			get(target, key, receiver) {
-				if (Array.isArray(target) && typeof key === "string" && MUTATORS.has(key)) {
-					return (...args: unknown[]) => {
-						if (blockedSegment !== undefined) throw new UnsafePathError(blockedSegment);
-						if (aliased ? liveCells().length === 0 : isDetached(cell))
-							return Reflect.apply(Array.prototype[key as "push"], target, args);
-						const before = target.length;
-						let spliceAt = -1;
-						let spliceRemove = 0;
-						let spliceInsert = 0;
-						let insertAt = -1;
-						let insertCount = 0;
-						let result: unknown;
-						switch (key) {
-							case "push": {
-								const items = adoptItems(args);
-								if (items.length > 0) emit(["p", [...pathNow()], before, 0, cloneJson(items)]);
-								insertAt = before;
-								insertCount = items.length;
-								spliceItems(target, before, 0, items);
-								result = target.length;
-								break;
-							}
-							case "unshift": {
-								const items = adoptItems(args);
-								if (items.length > 0) emit(["p", [...pathNow()], 0, 0, cloneJson(items)]);
-								insertAt = 0;
-								insertCount = items.length;
-								spliceItems(target, 0, 0, items);
-								result = target.length;
-								break;
-							}
-							case "pop":
-								if (before > 0) emit(["p", [...pathNow()], before - 1, 1, []]);
-								result = Reflect.apply(Array.prototype.pop, target, args);
-								break;
-							case "shift":
-								if (before > 0) emit(["p", [...pathNow()], 0, 1, []]);
-								result = Reflect.apply(Array.prototype.shift, target, args);
-								break;
-							case "splice": {
-								const items = adoptItems(args.slice(2));
-								const { index, remove } = spliceRange(before, args);
-								spliceAt = index;
-								spliceRemove = remove;
-								spliceInsert = items.length;
-								insertAt = index;
-								insertCount = items.length;
-								if (remove > 0 || items.length > 0) {
-									// a splice that clears the whole array is a replacement of it
-									if (index === 0 && remove === before) {
-										if (pathNow().length === 0) emit(["r", cloneJson(items as JsonValue)]);
-										else
-											emit(["s", [...pathNow()] as unknown as NonEmptyPath, cloneJson(items as JsonValue)]);
-									} else emit(["p", [...pathNow()], index, remove, cloneJson(items)]);
-								}
-								result = spliceItems(target, index, remove, items);
-								break;
-							}
-							default: {
-								result = Reflect.apply(Array.prototype[key as "sort"], target, args);
-								if (pathNow().length === 0) emit(["r", cloneJson(target as unknown as JsonValue)]);
-								else
-									emit([
-										"s",
-										[...pathNow()] as unknown as NonEmptyPath,
-										cloneJson(target as unknown as JsonValue),
-									]);
-							}
-						}
-						collapsePending();
-						renumber(key, before, target.length, spliceAt, spliceRemove, spliceInsert);
-						// an inserted value may already live elsewhere: record the new position.
-						// Only the inserted range is examined; scanning the array would make
-						// every structural mutation O(n).
-						for (let i = insertAt; insertCount > 0 && i < insertAt + insertCount; i++) {
-							const item = (target as unknown[])[i];
-							if (!isObj(item)) continue;
-							const known = wrappers.get(item as object);
-							if (known === undefined || known.target === object) continue;
-							let seen = false;
-							for (const c of known.cells) if (!c.dead && c.parent === primary() && c.seg === i) seen = true;
-							if (!seen && [...known.cells].some((c) => !c.dead)) {
-								known.cells.add({ parent: primary(), seg: i, dead: false });
-								aliased = true;
-							}
-						}
-						return key === "sort" || key === "reverse" || key === "fill" || key === "copyWithin" ? proxy : result;
-					};
-				}
-				const value = Reflect.get(target, key, receiver);
-				if (!isObj(value)) return value;
-				const cached = childProxies.get(key);
-				if (cached?.target === value) return cached.proxy;
-				const rawSegment = norm(target, key);
-				let segment: Seg;
-				let childBlocked = blockedSegment;
-				if (blockedSegment !== undefined) {
-					if (typeof rawSegment === "symbol") throw new UnsafePathError(String(rawSegment));
-					segment = rawSegment;
-				} else if (
-					typeof rawSegment === "string" &&
-					RESERVED_SEGMENTS.has(rawSegment) &&
-					Object.hasOwn(target, key)
-				) {
-					segment = rawSegment;
-					childBlocked = rawSegment;
-				} else segment = guard(rawSegment);
-				const childCell: Cell = { parent: cell, seg: segment, dead: false };
-				const child = wrap(value, childCell, childBlocked);
-				childProxies.set(key, { target: value, proxy: child, cell: childCell });
-				if (Array.isArray(target)) childCells.add({ target: value, cell: childCell });
-				return child;
-			},
-
-			set(target, key, value) {
-				if (blockedSegment !== undefined) throw new UnsafePathError(blockedSegment);
-				// detached means the object has no live position left in the document
-				if (aliased ? liveCells().length === 0 : isDetached(cell)) return Reflect.set(target, key, value);
-				// the assigned value may already live elsewhere in the document; the
-				// destination becomes another position of the same object, so later
-				// writes through it emit an op for both
-				if (isObj(value)) {
-					const known = wrappers.get(value as object);
-					if (known !== undefined) {
-						known.cells.add({ parent: primary(), seg: guard(norm(target, key)), dead: false });
-						aliased = true;
+	type EntryHandler = ProxyHandler<object> & { entry: Entry };
+	const handlerPrototype: ProxyHandler<object> = {
+		get(this: EntryHandler, target, key, receiver) {
+			const entry = this.entry;
+			if (Array.isArray(target) && typeof key === "string" && MUTATORS.has(key)) {
+				return (...args: unknown[]) => {
+					if (entry.blocked !== undefined) throw new UnsafePathError(entry.blocked);
+					const detached = aliased ? liveCells(entry).length === 0 : isDetached(entry.fallback);
+					if (detached) {
+						return Reflect.apply(Array.prototype[key as "push"], target, args.map(unwrap));
 					}
-				}
-				if (Array.isArray(target) && key === "length") {
 					const before = target.length;
-					const next = Number(value);
-					if (!Number.isSafeInteger(next) || next < 0 || next > 4_294_967_295) {
-						return Reflect.set(target, key, value);
-					}
-					if (next < before) {
-						if (next === 0) {
-							if (pathNow().length === 0) emit(["r", []]);
-							else emit(["s", [...pathNow()] as unknown as NonEmptyPath, []]);
-						} else emit(["p", [...pathNow()], next, before - next, []]);
-						Reflect.set(target, key, next);
-						// truncation removes elements: renumber held children too
-						renumber("splice", before, next, next, before - next, 0);
-						childProxies.clear();
-					} else if (next > before) {
-						target.length = next;
-						target.fill(null, before);
-						const grown = new Array(next - before).fill(null) as JsonValue[];
-						emit(["p", [...pathNow()], before, 0, grown]);
+					let spliceAt = -1;
+					let spliceRemove = 0;
+					let spliceInsert = 0;
+					let insertAt = -1;
+					let insertCount = 0;
+					let result: unknown;
+					switch (key) {
+						case "push": {
+							const items = adoptItems(args);
+							if (items.length > 0) emit(entry, ["p", [...pathNow(entry)], before, 0, cloneJson(items)]);
+							insertAt = before;
+							insertCount = items.length;
+							spliceItems(target, before, 0, items);
+							result = target.length;
+							break;
+						}
+						case "unshift": {
+							const items = adoptItems(args);
+							if (items.length > 0) emit(entry, ["p", [...pathNow(entry)], 0, 0, cloneJson(items)]);
+							insertAt = 0;
+							insertCount = items.length;
+							spliceItems(target, 0, 0, items);
+							result = target.length;
+							break;
+						}
+						case "pop":
+							if (before > 0) emit(entry, ["p", [...pathNow(entry)], before - 1, 1, []]);
+							result = Reflect.apply(Array.prototype.pop, target, args);
+							break;
+						case "shift":
+							if (before > 0) emit(entry, ["p", [...pathNow(entry)], 0, 1, []]);
+							result = Reflect.apply(Array.prototype.shift, target, args);
+							break;
+						case "splice": {
+							const items = adoptItems(args.slice(2));
+							const { index, remove } = spliceRange(before, args);
+							spliceAt = index;
+							spliceRemove = remove;
+							spliceInsert = items.length;
+							insertAt = index;
+							insertCount = items.length;
+							if (remove > 0 || items.length > 0) {
+								if (index === 0 && remove === before) {
+									if (pathNow(entry).length === 0) emit(entry, ["r", cloneJson(items as JsonValue)]);
+									else
+										emit(entry, [
+											"s",
+											[...pathNow(entry)] as unknown as NonEmptyPath,
+											cloneJson(items as JsonValue),
+										]);
+								} else emit(entry, ["p", [...pathNow(entry)], index, remove, cloneJson(items)]);
+							}
+							result = spliceItems(target, index, remove, items);
+							break;
+						}
+						default: {
+							result = Reflect.apply(Array.prototype[key as "sort"], target, args.map(unwrap));
+							if (pathNow(entry).length === 0) emit(entry, ["r", cloneJson(target as unknown as JsonValue)]);
+							else
+								emit(entry, [
+									"s",
+									[...pathNow(entry)] as unknown as NonEmptyPath,
+									cloneJson(target as unknown as JsonValue),
+								]);
+						}
 					}
 					collapsePending();
-					return true;
-				}
-
-				const segment = guard(norm(target, key));
-				if (Array.isArray(target)) {
-					if (typeof segment !== "number") throw new UnsafePathError(segment);
-					if (segment > target.length) throw new UnsafePathError(segment);
-				}
-				const at = [...pathNow(), segment] as unknown as NonEmptyPath;
-
-				if (value === undefined) {
-					if (Array.isArray(target)) {
-						throw new TypeError("undefined would create a sparse array; use splice instead");
+					renumber(entry, key, before, target.length, spliceAt, spliceRemove, spliceInsert);
+					for (let index = insertAt; insertCount > 0 && index < insertAt + insertCount; index++) {
+						const item = target[index];
+						if (!isObj(item)) continue;
+						const known = findEntry(item);
+						if (known === undefined || known.target === entry.target) continue;
+						const parent = primary(entry);
+						let seen = false;
+						for (const existingCell of known.cells) {
+							if (!existingCell.dead && existingCell.parent === parent && existingCell.seg === index)
+								seen = true;
+						}
+						if (!seen) {
+							const inserted: Cell = {
+								parent,
+								owner: entry,
+								entry: undefined,
+								target: item,
+								seg: index,
+								dead: false,
+							};
+							addPlacement(known, inserted);
+							cachePlacement(entry, String(index), inserted);
+						}
 					}
-					if (Object.hasOwn(target, key)) emit(["d", at]);
-					childProxies.delete(key);
-					const deleted = Reflect.deleteProperty(target, key);
-					if (deleted) collapsePending();
-					return deleted;
-				}
+					return key === "sort" || key === "reverse" || key === "fill" || key === "copyWithin" ? receiver : result;
+				};
+			}
+			const value = Reflect.get(target, key, receiver);
+			if (!isObj(value)) return value;
+			const cachedRef = entry.childProxies?.get(key);
+			const cached = cachedRef === undefined ? undefined : derefCell(cachedRef);
+			if (cached !== undefined && cached.target === value && cached.entry !== undefined) {
+				return proxyFor(cached.entry);
+			}
+			if (cachedRef !== undefined && cached === undefined && entry.childProxies?.get(key) === cachedRef) {
+				entry.childProxies?.delete(key);
+			}
+			const rawSegment = norm(target, key);
+			let segment: Seg;
+			let childBlocked = entry.blocked;
+			if (entry.blocked !== undefined) {
+				if (typeof rawSegment === "symbol") throw new UnsafePathError(String(rawSegment));
+				segment = rawSegment;
+			} else if (typeof rawSegment === "string" && RESERVED_SEGMENTS.has(rawSegment) && Object.hasOwn(target, key)) {
+				segment = rawSegment;
+				childBlocked = rawSegment;
+			} else segment = guard(rawSegment);
+			const parent = primary(entry);
+			const existingCell = findPlacement(entry, parent, segment, value, childBlocked);
+			if (existingCell?.entry !== undefined) {
+				cachePlacement(entry, key, existingCell);
+				return proxyFor(existingCell.entry);
+			}
+			const childCell: Cell = {
+				parent,
+				owner: entry,
+				entry: undefined,
+				target: value,
+				seg: segment,
+				dead: false,
+			};
+			const child = wrap(value, childCell, childBlocked);
+			cachePlacement(entry, key, childCell);
+			return child;
+		},
 
-				const previous = (target as Record<string | symbol, unknown>)[key];
-				if (previous === value) return true;
-				const cached = childProxies.get(key);
-				if (cached !== undefined && cached.target === previous && cached.proxy === value) return true;
-				if (Array.isArray(target) && (segment as number) === target.length) {
-					emit(["p", [...pathNow()], target.length, 0, [cloneJson(value as JsonValue)]]);
-				} else if (isObj(previous) && isObj(value)) {
-					// whole-container assignment: diff locally so a producer that rebuilds
-					// its partial each frame still emits appends rather than replacements
-					diffInto(previous as JsonValue, value as JsonValue, [...pathNow(), segment] as Seg[]);
-				} else if (typeof previous === "string" && typeof value === "string") {
-					// A string path keeps an anchor: the value it had at the first write in
-					// this window. Every later write updates the anchored value, and flush
-					// diffs anchor -> final once. That gives the same truncate/append pair a
-					// baseline diff would, without keeping a baseline for the whole document.
-					if (!aliased) recordString([...pathNow(), segment] as Path, previous, value);
-					else for (const c of liveCells()) recordString([...pathOf(c), segment] as Path, previous, value);
-				} else {
-					emit(["s", at, cloneJson(value as JsonValue)]);
+		set(this: EntryHandler, target, key, value) {
+			const entry = this.entry;
+			if (entry.blocked !== undefined) throw new UnsafePathError(entry.blocked);
+			const rawValue = unwrap(value);
+			if (aliased ? liveCells(entry).length === 0 : isDetached(entry.fallback)) {
+				return Reflect.set(target, key, rawValue);
+			}
+			if (Array.isArray(target) && key === "length") {
+				const before = target.length;
+				const next = Number(rawValue);
+				if (!Number.isSafeInteger(next) || next < 0 || next > 4_294_967_295) {
+					return Reflect.set(target, key, rawValue);
 				}
-				childProxies.delete(key);
-				const updated = Reflect.set(target, key, value);
-				if (updated) collapsePending();
-				return updated;
-			},
+				if (next < before) {
+					if (next === 0) {
+						if (pathNow(entry).length === 0) emit(entry, ["r", []]);
+						else emit(entry, ["s", [...pathNow(entry)] as unknown as NonEmptyPath, []]);
+					} else emit(entry, ["p", [...pathNow(entry)], next, before - next, []]);
+					Reflect.set(target, key, next);
+					renumber(entry, "splice", before, next, next, before - next, 0);
+					entry.childProxies?.clear();
+				} else if (next > before) {
+					target.length = next;
+					target.fill(null, before);
+					const grown = new Array(next - before).fill(null) as JsonValue[];
+					emit(entry, ["p", [...pathNow(entry)], before, 0, grown]);
+				}
+				collapsePending();
+				return true;
+			}
 
-			deleteProperty(target, key) {
-				if (blockedSegment !== undefined) throw new UnsafePathError(blockedSegment);
-				if (aliased ? liveCells().length === 0 : isDetached(cell)) return Reflect.deleteProperty(target, key);
-				const segment = guard(norm(target, key));
-				if (Array.isArray(target)) {
-					if (typeof segment !== "number") throw new UnsafePathError(segment);
-					throw new TypeError("delete would create a sparse array; use splice instead");
-				}
-				if (Object.hasOwn(target, key)) emit(["d", [...pathNow(), segment] as unknown as NonEmptyPath]);
-				childProxies.delete(key);
+			const segment = guard(norm(target, key));
+			if (Array.isArray(target)) {
+				if (typeof segment !== "number") throw new UnsafePathError(segment);
+				if (segment > target.length) throw new UnsafePathError(segment);
+			}
+			const at = [...pathNow(entry), segment] as unknown as NonEmptyPath;
+
+			if (rawValue === undefined) {
+				if (Array.isArray(target)) throw new TypeError("undefined would create a sparse array; use splice instead");
+				if (Object.hasOwn(target, key)) emit(entry, ["d", at]);
+				entry.childProxies?.delete(key);
 				const deleted = Reflect.deleteProperty(target, key);
 				if (deleted) collapsePending();
 				return deleted;
-			},
+			}
 
-			defineProperty() {
-				throw new TypeError("defineProperty is not supported on tracked state; use assignment");
-			},
-			setPrototypeOf() {
-				throw new TypeError("setPrototypeOf is not supported on tracked state");
-			},
-			preventExtensions() {
-				throw new TypeError("preventExtensions is not supported on tracked state");
-			},
-		});
+			const previous = (target as Record<string | symbol, unknown>)[key];
+			if (previous === rawValue) return true;
+			if (Array.isArray(target) && (segment as number) === target.length) {
+				emit(entry, ["p", [...pathNow(entry)], target.length, 0, [cloneJson(rawValue as JsonValue)]]);
+			} else if (isObj(previous) && isObj(rawValue)) {
+				diffInto(previous as JsonValue, rawValue as JsonValue, [...pathNow(entry), segment] as Seg[]);
+			} else if (typeof previous === "string" && typeof rawValue === "string") {
+				if (!aliased) recordString([...pathNow(entry), segment] as Path, previous, rawValue);
+				else
+					for (const cell of liveCells(entry))
+						recordString([...pathOf(cell), segment] as Path, previous, rawValue);
+			} else {
+				emit(entry, ["s", at, cloneJson(rawValue as JsonValue)]);
+			}
+			entry.childProxies?.delete(key);
+			const updated = Reflect.set(target, key, rawValue);
+			if (updated) {
+				if (isObj(rawValue)) {
+					const known = findEntry(rawValue);
+					if (known !== undefined) {
+						const placement: Cell = {
+							parent: primary(entry),
+							owner: entry,
+							entry: undefined,
+							target: rawValue,
+							seg: segment,
+							dead: false,
+						};
+						addPlacement(known, placement);
+						cachePlacement(entry, key, placement);
+					}
+				}
+				collapsePending();
+			}
+			return updated;
+		},
 
-		const entry = { proxy, target: object, cells, blocked: blockedSegment };
-		if (existing === undefined) {
-			wrappers.set(object, entry);
-			wrappers.set(proxy, entry); // so an assigned proxy resolves to the same entry
-		}
-		return proxy as V;
+		deleteProperty(this: EntryHandler, target, key) {
+			const entry = this.entry;
+			if (entry.blocked !== undefined) throw new UnsafePathError(entry.blocked);
+			if (aliased ? liveCells(entry).length === 0 : isDetached(entry.fallback)) {
+				return Reflect.deleteProperty(target, key);
+			}
+			const segment = guard(norm(target, key));
+			if (Array.isArray(target)) {
+				if (typeof segment !== "number") throw new UnsafePathError(segment);
+				throw new TypeError("delete would create a sparse array; use splice instead");
+			}
+			if (Object.hasOwn(target, key)) emit(entry, ["d", [...pathNow(entry), segment] as unknown as NonEmptyPath]);
+			entry.childProxies?.delete(key);
+			const deleted = Reflect.deleteProperty(target, key);
+			if (deleted) collapsePending();
+			return deleted;
+		},
+
+		defineProperty() {
+			throw new TypeError("defineProperty is not supported on tracked state; use assignment");
+		},
+		setPrototypeOf() {
+			throw new TypeError("setPrototypeOf is not supported on tracked state");
+		},
+		preventExtensions() {
+			throw new TypeError("preventExtensions is not supported on tracked state");
+		},
 	};
 
-	let state = wrap(root, { parent: undefined, seg: "", dead: false });
+	function proxyFor(entry: Entry): object {
+		const cached = jobProxies.get(entry);
+		if (cached !== undefined) return cached;
+		const existing = entry.proxy?.deref();
+		if (existing !== undefined) {
+			jobProxies.set(entry, existing);
+			scheduleJobCleanup();
+			return existing;
+		}
+		const handler = Object.create(handlerPrototype) as EntryHandler;
+		handler.entry = entry;
+		const proxy = new Proxy(entry.target, handler);
+		entry.proxy = new WeakRef(proxy);
+		jobProxies.set(entry, proxy);
+		scheduleJobCleanup();
+		proxyEntries.set(proxy, entry);
+		return proxy;
+	}
+
+	const rootCell: Cell = {
+		parent: undefined,
+		owner: undefined,
+		entry: undefined,
+		target: root,
+		seg: "",
+		dead: false,
+	};
+	let state = wrap(root, rootCell);
 
 	return {
 		get state() {
@@ -1151,14 +1376,22 @@ export function track<T extends object>(root: T, options: TrackerOptions = {}): 
 			return root;
 		},
 		set state(next: T) {
-			if (next === state) {
+			const rawNext = unwrap(next) as T;
+			if (rawNext === root) {
 				clearPending();
 				forceBase = true;
 				return;
 			}
 			clearPending();
-			root = next;
-			state = wrap(root, { parent: undefined, seg: "", dead: false });
+			root = rawNext;
+			state = wrap(root, {
+				parent: undefined,
+				owner: undefined,
+				entry: undefined,
+				target: root,
+				seg: "",
+				dead: false,
+			});
 			forceBase = true;
 		},
 		rebase() {

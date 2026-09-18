@@ -6877,7 +6877,7 @@ ${cycleContextWindow ? `| \`${cycleContextWindow}\` | Cycle context window |\n` 
 | \`${expandTools}\` | Toggle tool output expansion |
 | \`${toggleThinking}\` | Toggle thinking block visibility |
 | \`${externalEditor}\` | Edit message in external editor |
-| \`${copyMessage}\` | Copy last assistant message |
+| \`${copyMessage}\` | Copy selection or last assistant message |
 | \`${followUp}\` | Queue follow-up message |
 | \`${dequeue}\` | Restore queued messages |
 | \`${pasteImage}\` | Paste image or text from clipboard |

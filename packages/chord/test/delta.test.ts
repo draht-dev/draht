@@ -1420,15 +1420,14 @@ describe("one object at several positions", () => {
 	});
 
 	it("still blocks a reserved key reached after a safe alias", () => {
+		const reservedKey = "__proto__";
 		const raw = JSON.parse('{"safe":null,"holder":{"__proto__":{"x":1}}}');
-		// biome-ignore lint/complexity/useLiteralKeys: Preserve the reserved key spelling this test exercises.
-		raw.safe = raw.holder["__proto__"];
+		raw.safe = raw.holder[reservedKey];
 		const t = track(raw);
 		t.flush();
 		expect(t.state.safe).toBeDefined(); // warm the unblocked wrapper
 		expect(() => {
-			// biome-ignore lint/complexity/useLiteralKeys: Preserve the reserved key spelling this test exercises.
-			t.state.holder["__proto__"].x = 9;
+			t.state.holder[reservedKey].x = 9;
 		}).toThrow(UnsafePathError);
 	});
 });

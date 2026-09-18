@@ -11,6 +11,7 @@ import {
 	type Op,
 	overlap,
 	track,
+	UnsafePathError,
 	type WireOp,
 } from "../src/delta/index.ts";
 
@@ -1285,5 +1286,147 @@ describe("property: random round-trip", () => {
 		// Most random pairs are shape-incompatible and skipped; this only guards
 		// against the loop silently checking nothing.
 		expect(checked).toBeGreaterThan(200);
+	});
+});
+
+describe("references held across structural mutation", () => {
+	const roundTrip = (initial: JsonValue, mutate: (state: any) => void): { live: JsonValue; replica: JsonValue } => {
+		const t = track(structuredClone(initial) as object);
+		t.flush();
+		mutate(t.state);
+		const replica = apply(structuredClone(initial), t.flush());
+		return { live: JSON.parse(JSON.stringify(t.state)) as JsonValue, replica: replica as JsonValue };
+	};
+	const xs = () => ({ xs: [{ k: "v0" }, { k: "v1" }, { k: "v2" }, { k: "v3" }, { k: "v4" }] });
+
+	// A wrapper must not address its old index after the array is renumbered.
+	const mutators: Array<[string, (a: any[]) => void]> = [
+		["push", (a) => a.push({ k: "n" })],
+		["pop", (a) => a.pop()],
+		["shift", (a) => a.shift()],
+		["unshift", (a) => a.unshift({ k: "n" })],
+		["splice insert", (a) => a.splice(2, 0, { k: "n" })],
+		["splice remove", (a) => a.splice(2, 1)],
+		["splice replace", (a) => a.splice(2, 1, { k: "n" })],
+		["splice remove two", (a) => a.splice(1, 2)],
+		["sort", (a) => a.sort((x, y) => (x.k < y.k ? 1 : -1))],
+		["reverse", (a) => a.reverse()],
+		[
+			"length truncate",
+			(a) => {
+				a.length = 3;
+			},
+		],
+		[
+			"length grow",
+			(a) => {
+				a.length = 7;
+			},
+		],
+	];
+	for (const [name, mutate] of mutators) {
+		for (const hold of [0, 2, 4]) {
+			it(`renumbers a held element across ${name} (held ${hold})`, () => {
+				const { live, replica } = roundTrip(xs(), (s) => {
+					const held = s.xs[hold];
+					mutate(s.xs);
+					held.k = "EDITED";
+				});
+				expect(replica).toEqual(live);
+			});
+		}
+	}
+
+	it("renumbers a held nested object and array", () => {
+		const initial = {
+			xs: [
+				{ k: "a", obj: { deep: 1 }, arr: [1] },
+				{ k: "b", obj: { deep: 2 }, arr: [2] },
+			],
+		};
+		const { live, replica } = roundTrip(initial, (s) => {
+			const obj = s.xs[1].obj;
+			const arr = s.xs[1].arr;
+			s.xs.unshift({ k: "n", obj: { deep: 0 }, arr: [] });
+			obj.deep = 99;
+			arr.push(99);
+		});
+		expect(replica).toEqual(live);
+	});
+
+	it("drops writes through an element that left the document", () => {
+		const { live, replica } = roundTrip(xs(), (s) => {
+			const held = s.xs[2];
+			s.xs.splice(2, 1);
+			held.k = "EDITED"; // no position: mutates the object, records nothing
+		});
+		expect(replica).toEqual(live);
+	});
+
+	it("records again when a removed element is reinserted", () => {
+		const { live, replica } = roundTrip(xs(), (s) => {
+			const held = s.xs[2];
+			s.xs.splice(2, 1);
+			held.k = "EDITED";
+			s.xs.push(held);
+		});
+		expect(replica).toEqual(live);
+	});
+});
+
+describe("one object at several positions", () => {
+	const roundTrip = (initial: JsonValue, mutate: (state: any) => void) => {
+		const t = track(structuredClone(initial) as object);
+		t.flush();
+		mutate(t.state);
+		const replica = apply(structuredClone(initial), t.flush());
+		return { live: JSON.parse(JSON.stringify(t.state)) as JsonValue, replica: replica as JsonValue };
+	};
+
+	it("emits an op per position when a tracked value is assigned elsewhere", () => {
+		const { live, replica } = roundTrip({ xs: [{ k: "v0" }, { k: "v1" }], a: null }, (s) => {
+			const held = s.xs[1];
+			s.a = held;
+			held.k = "EDITED";
+		});
+		expect(replica).toEqual(live);
+	});
+
+	it("emits an op per position when a tracked value is pushed into an array", () => {
+		const { live, replica } = roundTrip({ xs: [{ k: "v0" }] }, (s) => {
+			const held = s.xs[0];
+			s.xs.push(held);
+			held.k = "EDITED";
+		});
+		expect(replica).toEqual(live);
+	});
+
+	it("keeps the surviving position when one is removed", () => {
+		const { live, replica } = roundTrip({ xs: [{ k: "v0" }, { k: "v1" }], a: null }, (s) => {
+			const held = s.xs[1];
+			s.a = held;
+			s.xs.splice(1, 1);
+			held.k = "EDITED";
+		});
+		expect(replica).toEqual(live);
+	});
+
+	it("gives one proxy per object, so identity survives tracking", () => {
+		const raw: any = { xs: [{ k: "v0" }], a: null };
+		raw.a = raw.xs[0];
+		const t = track(raw);
+		t.flush();
+		expect(t.state.a).toBe(t.state.xs[0]);
+	});
+
+	it("still blocks a reserved key reached after a safe alias", () => {
+		const raw = JSON.parse('{"safe":null,"holder":{"__proto__":{"x":1}}}');
+		raw.safe = raw.holder["__proto__"];
+		const t = track(raw);
+		t.flush();
+		expect(t.state.safe).toBeDefined(); // warm the unblocked wrapper
+		expect(() => {
+			t.state.holder["__proto__"].x = 9;
+		}).toThrow(UnsafePathError);
 	});
 });

@@ -186,7 +186,7 @@ export function fake(o: FakeOptions): Models & { calls: number; requests: Reques
 					type: "toolCall",
 					id: `call_${n}_${index}`,
 					name: tc.name,
-					arguments: tc.arguments as Record<string, unknown>,
+					arguments: tc.arguments as ToolCall["arguments"],
 				};
 				partial.content.push(call);
 				yield { type: "toolcall_start", contentIndex: index, partial };

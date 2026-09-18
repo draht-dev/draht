@@ -7,7 +7,7 @@ Pico5 uses existing package types as follows:
 import type { Context, JsonValue } from "@draht/chord";
 import { applyImmutable, type Op } from "@draht/chord/delta";
 import type {
-  Message as ModelMessage,
+  Message,
   Models,
   ModelThinkingLevel,
   TextContent,
@@ -66,6 +66,7 @@ these contracts.
 ```ts
 type Id = number;
 type Seq = number;
+const ROOT_CONVERSATION_ID: Id = 1;
 
 type ConversationRecord = {
   readonly id: Id;
@@ -78,8 +79,6 @@ type ConversationRecord = {
     readonly taskId: Id;
   };
 };
-
-type RequestMessage = ModelMessage;
 ```
 
 The referenced pi-ai member is:
@@ -105,14 +104,14 @@ order yields the effective prompt and tool set.
 type ContextEdit = {
   readonly target: Id;
   readonly action: "omit" | "replace";
-  readonly messages?: readonly RequestMessage[];
+  readonly messages?: readonly Message[];
 };
 
 type EntryRecord = {
   readonly id: Id;
   readonly conversationId: Id;
   readonly kind: string;
-  readonly model?: readonly RequestMessage[];
+  readonly model?: readonly Message[];
   readonly data?: JsonValue;
   readonly head?: Id;
   readonly edits?: readonly ContextEdit[];
@@ -123,16 +122,27 @@ type EntryDraft = Omit<EntryRecord, "id" | "conversationId" | "byTaskId" | "head
   readonly head?: Id | "self";
 };
 
-type Input = {
+type InputBase = {
   readonly id: Id;
   readonly conversationId: Id;
   readonly requestId?: string;
-  readonly status: "queued" | "placed" | "done" | "unanswered";
-  readonly entry?: Id;
-  readonly answer?: Id;
-  readonly reason?: string;
-  readonly detail?: JsonValue;
 };
+
+type Input = InputBase & (
+  | { readonly status: "queued" }
+  | { readonly status: "placed"; readonly entry: Id }
+  | {
+      readonly status: "done";
+      readonly entry: Id;
+      readonly answer?: Id; // absent for a completed passive write
+    }
+  | {
+      readonly status: "unanswered";
+      readonly entry?: Id; // present when placement preceded failure
+      readonly reason: string;
+      readonly detail?: JsonValue;
+    }
+);
 ```
 
 Conversation history parenting and task ownership are separate:
@@ -238,7 +248,7 @@ function defineEntry<E extends EntryRecord>(kind: string): Entry<E>;
 type ContextView = {
   readonly head: EntryRecord | undefined;
   readonly entries: readonly EntryRecord[];
-  readonly messages: readonly RequestMessage[];
+  readonly messages: readonly Message[];
 };
 
 type SettledInput = Input & {
@@ -292,10 +302,10 @@ interface Conversation {
   context(context: Context): Promise<ContextView>;
   entries(
     query: Omit<EntryQuery, "conversationId">,
-    cursor: EntryCursor | undefined,
+    cursor: Cursor | undefined,
     limit: number,
     context: Context,
-  ): Promise<Page<EntryRecord, EntryCursor>>;
+  ): Promise<Page<EntryRecord, Cursor>>;
   fork(
     at: Id,
     spec: Omit<ConversationSpec, "parent">,
@@ -374,12 +384,11 @@ settles unknown or unmigratable live kinds as `orphaned` before resolving. IDs
 and names must be unique. No handler dispatches during open. Dynamic registration is available
 after open and does not resurrect a task already settled by that pass.
 
-Storage contains one stable root conversation ID in Session metadata. Empty
-storage creates the conversation and metadata together from `options.root`;
-reopen reads that ID rather than inferring it from a conversation scan.
-`options.root` never overwrites existing state. `root()` returns the stored
-handle. A conversation with no configured model produces a durable `no_model`
-generation failure.
+The root conversation always has reserved ID `ROOT_CONVERSATION_ID` (`1`). Empty
+storage creates that conversation from `options.root`; reopen looks it up by the
+reserved ID. `options.root` never overwrites existing state. `root()` returns
+that handle. A conversation with no configured model produces a durable
+`no_model` generation failure.
 
 `resume()` is idempotent while running and only enables scheduling. It does not
 repeat open-time reconciliation. `suspend()` is terminal for that Harness
@@ -1140,7 +1149,7 @@ conversation document containing tagged items:
 
 ```ts
 type InboxItem =
-  | { readonly id: Id; readonly mode: "steer" | "followUp"; readonly input: ModelMessage }
+  | { readonly id: Id; readonly mode: "steer" | "followUp"; readonly input: Message }
   | { readonly id: Id; readonly mode: "write"; readonly entry: EntryDraft };
 ```
 
@@ -1769,11 +1778,7 @@ type Page<T, C> = {
   readonly next?: C;
 };
 
-type Cursor<K extends string> = string & { readonly __kind?: K };
-type ConversationCursor = Cursor<"conversation">;
-type EntryCursor = Cursor<"entry">;
-type TaskCursor = Cursor<"task">;
-type DocumentCursor = Cursor<"document">;
+type Cursor = Readonly<Record<string, JsonValue>>;
 
 type EntryQuery = {
   readonly conversationId: Id;
@@ -1810,12 +1815,7 @@ type StoredDocument = {
   ];
 };
 
-type SessionMetadata = {
-  readonly rootConversationId: Id;
-};
-
 type StorageWrite =
-  | { readonly type: "session.metadata"; readonly value: SessionMetadata }
   | { readonly type: "conversation"; readonly value: ConversationRecord }
   | { readonly type: "entry"; readonly value: EntryRecord }
   | { readonly type: "task"; readonly value: TaskRecord<JsonValue, JsonValue, JsonValue> }
@@ -1836,34 +1836,34 @@ type StorageWrite =
   | { readonly type: "document.retire"; readonly id: Id };
 
 interface Storage {
+  /** The owning Session serializes calls on its mutation line. */
   commit(writes: readonly StorageWrite[], context: Context): Promise<Seq>;
   mintId(): Id;
 
-  metadata(context: Context): Promise<SessionMetadata | undefined>;
   conversation(id: Id, context: Context): Promise<ConversationRecord | undefined>;
-  scanConversations(cursor: ConversationCursor | undefined, limit: number, context: Context): Promise<Page<ConversationRecord, ConversationCursor>>;
+  scanConversations(cursor: Cursor | undefined, limit: number, context: Context): Promise<Page<ConversationRecord, Cursor>>;
 
   entries(ids: readonly Id[], context: Context): Promise<ReadonlyMap<Id, EntryRecord>>;
-  scanEntries(query: EntryQuery, cursor: EntryCursor | undefined, limit: number, context: Context): Promise<Page<EntryRecord, EntryCursor>>;
+  scanEntries(query: EntryQuery, cursor: Cursor | undefined, limit: number, context: Context): Promise<Page<EntryRecord, Cursor>>;
   entryCommit(id: Id, context: Context): Promise<Seq | undefined>;
 
   task(id: Id, context: Context): Promise<TaskRecord<JsonValue, JsonValue, JsonValue> | undefined>;
-  scanTasks(query: TaskQuery, cursor: TaskCursor | undefined, limit: number, context: Context): Promise<Page<TaskRecord<JsonValue, JsonValue, JsonValue>, TaskCursor>>;
+  scanTasks(query: TaskQuery, cursor: Cursor | undefined, limit: number, context: Context): Promise<Page<TaskRecord<JsonValue, JsonValue, JsonValue>, Cursor>>;
 
   input(id: Id, context: Context): Promise<Input | undefined>;
   inputByRequest(conversationId: Id, requestId: string, context: Context): Promise<Input | undefined>;
 
   document(id: Id, at: Seq | "current", context: Context): Promise<StoredDocument | undefined>;
-  scanDocuments(query: DocumentQuery, cursor: DocumentCursor | undefined, limit: number, context: Context): Promise<Page<DocumentMetadata, DocumentCursor>>;
+  scanDocuments(query: DocumentQuery, cursor: Cursor | undefined, limit: number, context: Context): Promise<Page<DocumentMetadata, Cursor>>;
 
   close(context: Context): Promise<void>;
 }
 ```
 
-`metadata()` is absent only for empty storage. The first root creation commits
-its conversation and metadata together. Existing records with missing metadata,
-or metadata naming a missing conversation, make open fail rather than guessing a
-root.
+Cursors are backend-owned JSON objects. Callers only round-trip them to the same
+scan on the same storage; cross-storage or cross-query use is unsupported. The
+Session owns the mutation line, so storage implementations do not add a second
+caller-facing commit mutex. Each backend still makes one admitted batch atomic.
 
 `EntryQuery` supports conversation ancestry, a strict `before` entry cursor,
 kind filtering, and `withHead`. Document queries support definition, scope,

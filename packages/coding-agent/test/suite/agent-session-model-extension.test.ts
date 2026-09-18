@@ -1,5 +1,12 @@
 import type { AgentTool, ThinkingLevel } from "@draht/agent-core";
-import { fauxAssistantMessage, fauxToolCall, getCurrentSystemPrompt, type Model, type Usage } from "@draht/ai";
+import {
+	fauxAssistantMessage,
+	fauxToolCall,
+	getCurrentSystemPrompt,
+	type JsonObject,
+	type Model,
+	type Usage,
+} from "@draht/ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BuildSystemPromptOptions, ExtensionAPI } from "../../src/index.ts";
@@ -339,7 +346,12 @@ describe("AgentSession model and extension characterization", () => {
 
 		expect(getAssistantTexts(harness)).toContain("patched result");
 		const toolResult = harness.session.messages.find(
-			(message) => message.role === "toolResult" && message.details?.patched === true,
+			(message) =>
+				message.role === "toolResult" &&
+				typeof message.details === "object" &&
+				message.details !== null &&
+				!Array.isArray(message.details) &&
+				(message.details as JsonObject).patched === true,
 		);
 		expect(observedToolUsage).toEqual(toolUsage);
 		expect(toolResult).toBeDefined();

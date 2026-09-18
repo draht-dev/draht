@@ -15,16 +15,16 @@ facades, membranes, document routing, view projection, events, or clone chains.
 
 ## 1. Records, cursors, and memory tables
 
-Implement IDs, sequences, Session metadata with stable root ID,
-`ConversationRecord`, `EntryRecord`, inputs, live/terminal `TaskRecord` values,
-document metadata, storage writes, cursors, and detached `MemoryStorage` tables.
+Implement IDs, sequences, reserved root conversation ID `1`,
+`ConversationRecord`, `EntryRecord`, tagged inputs, live/terminal `TaskRecord`
+values, document metadata, storage writes, backend-opaque JSON cursors, and
+detached `MemoryStorage` tables.
 Reserve `Conversation` for the public conversation object, `Entry` for the typed
 entry definition, and `Task` for the typed executable definition returned by
 `defineTask()`.
 
-Test atomic root-metadata/conversation creation, missing or dangling root
-metadata rejection, mixed atomic commits, rollback, detached reads/writes,
-cursor boundaries,
+Test reserved root identity and immutable creation, mixed atomic commits,
+rollback, detached reads/writes, cursor boundaries,
 fork-aware entry scans through deep ancestor caps, head lookup,
 entry-to-commit lookup, and full task replacement.
 

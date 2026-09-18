@@ -111,7 +111,7 @@ export function generateTelemetryDocs(outputPath: string, check: boolean): void 
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
 	generateTelemetryDocs(
-		resolve(import.meta.dirname, "../telemetry-schema.md"),
+		resolve(import.meta.dirname, "../docs/telemetry-schema.md"),
 		process.argv.includes("--check"),
 	);
 }

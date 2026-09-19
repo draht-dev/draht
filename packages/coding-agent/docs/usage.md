@@ -53,6 +53,7 @@ Type `/` in the editor to open command completion. Extensions can register custo
 | `/copy` | Copy last assistant message to clipboard |
 | `/export [file]` | Export session to HTML |
 | `/share` | Upload as private GitHub gist with shareable HTML link |
+| `/bug [description]` | Collect a bug report as a zip archive (or upload it to a configured Radius gateway); see [Sessions](sessions.md#reporting-bugs) |
 | `/reload` | Reload keybindings, extensions, skills, prompts, themes, and context files |
 | `/hotkeys` | Show all keyboard shortcuts |
 | `/changelog` | Display version history |

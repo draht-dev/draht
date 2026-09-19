@@ -54,6 +54,7 @@ import { sleep } from "../utils/sleep.ts";
 import { normalizeToolResultImages } from "../utils/tool-result-images.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
+import { generateBugReportSummary } from "./bug-report.ts";
 import {
 	type CompactionPreparation,
 	type CompactionResult,
@@ -3677,6 +3678,31 @@ export class AgentSession {
 	 */
 	exportToJsonl(outputPath?: string): string {
 		return exportSessionToJsonl(this.sessionManager, outputPath);
+	}
+
+	/**
+	 * Ask the current model to describe what went wrong in this session for a bug report.
+	 * Used when the user declines to share the transcript itself.
+	 */
+	async summarizeForBugReport(options: { hint?: string; signal: AbortSignal }): Promise<string> {
+		const model = this.model;
+		if (!model) {
+			throw new Error("No model selected");
+		}
+		const { model: requestModel, apiKey, headers, env } = await this._getSummarizationRequestAuth(model);
+		return generateBugReportSummary({
+			messages: this.messages,
+			hint: options.hint,
+			model: requestModel,
+			apiKey,
+			headers,
+			env,
+			signal: options.signal,
+			thinkingLevel: this.thinkingLevel,
+			streamFn: this.agent.streamFunction,
+			retry: this.settingsManager.getRetrySettings(),
+			sessionId: this.sessionId,
+		});
 	}
 
 	// =========================================================================

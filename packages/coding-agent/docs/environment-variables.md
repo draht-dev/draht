@@ -86,6 +86,7 @@ These variables are read by draht itself:
 | `DRAHT_TELEMETRY` | Override install/update telemetry and provider attribution headers: `1`/`true`/`yes` or `0`/`false`/`no` |
 | `DRAHT_CACHE_RETENTION` | Set to `long` for extended provider prompt caching where supported |
 | `DRAHT_SHARE_VIEWER_URL` | Override the base URL used by `/share` |
+| `DRAHT_RADIUS_GATEWAY` | Override the Radius gateway origin used by `/bug` uploads and Radius relay connections |
 | `DRAHT_HARDWARE_CURSOR` | Set to `1` to show the hardware cursor; see [Terminal setup](terminal-setup.md) |
 | `DRAHT_HYPERLINKS` | Override OSC 8 hyperlink detection with `1`, `0`, or `auto` |
 | `DRAHT_IMAGE_PROTOCOL` | Override inline image detection with `kitty`, `iterm2`, `none`, or `auto` |

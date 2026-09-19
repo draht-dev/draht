@@ -18,11 +18,12 @@ import {
 	openSync,
 	readdirSync,
 	readSync,
+	type Stats,
 	statSync,
 	writeFileSync,
 } from "fs";
 import { readdir, stat } from "fs/promises";
-import { join, resolve } from "path";
+import { basename, join, resolve } from "path";
 import { createInterface } from "readline";
 import { StringDecoder } from "string_decoder";
 import { APP_NAME, getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.ts";
@@ -769,9 +770,13 @@ function getMessageActivityTime(entry: SessionMessageEntry): number | undefined 
 	return Number.isNaN(t) ? undefined : t;
 }
 
-async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
+async function buildSessionInfo(
+	filePath: string,
+	signal?: AbortSignal,
+	fileStats?: Stats,
+): Promise<SessionInfo | null> {
 	try {
-		const stats = await stat(filePath);
+		const stats = fileStats ?? (await stat(filePath));
 		let header: SessionHeader | null = null;
 		let messageCount = 0;
 		let firstMessage = "";
@@ -780,7 +785,7 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 		let lastActivityTime: number | undefined;
 
 		const rl = createInterface({
-			input: createReadStream(filePath, { encoding: "utf8" }),
+			input: createReadStream(filePath, { encoding: "utf8", signal }),
 			crlfDelay: Infinity,
 		});
 
@@ -845,85 +850,101 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 			allMessagesText: allMessages.join(" "),
 		};
 	} catch {
+		signal?.throwIfAborted();
 		return null;
 	}
 }
 
-export type SessionListProgress = (loaded: number, total: number) => void;
+export type SessionListProgress = (
+	loaded: number,
+	total: number,
+	/** Sessions loaded so far, sorted by activity. Present on periodic updates. */
+	partialSessions?: readonly SessionInfo[],
+) => void;
 
 const MAX_CONCURRENT_SESSION_INFO_LOADS = 10;
+const MAX_CONCURRENT_SESSION_DISCOVERY_LOADS = 64;
+const CURRENT_SESSION_LIST_PUBLISH_INTERVAL = 10;
+const ALL_SESSION_LIST_PUBLISH_INTERVAL = 100;
 
-async function buildSessionInfosWithConcurrency(
-	files: string[],
-	onLoaded: () => void,
-): Promise<(SessionInfo | null)[]> {
-	const results: (SessionInfo | null)[] = new Array(files.length).fill(null);
-	const inFlight = new Set<Promise<void>>();
+interface SessionFileCandidate {
+	path: string;
+	stats?: Stats;
+}
+
+async function mapWithConcurrency<T, R>(
+	items: T[],
+	limit: number,
+	map: (item: T, index: number) => Promise<R>,
+	signal?: AbortSignal,
+): Promise<R[]> {
+	const results = new Array<R>(items.length);
 	let nextIndex = 0;
-
-	const startNext = (): void => {
-		const index = nextIndex++;
-		const file = files[index];
-		if (!file) return;
-
-		let task: Promise<void>;
-		task = buildSessionInfo(file)
-			.then((info) => {
-				results[index] = info;
-			})
-			.catch(() => {
-				results[index] = null;
-			})
-			.finally(() => {
-				inFlight.delete(task);
-				onLoaded();
-			});
-		inFlight.add(task);
+	const worker = async (): Promise<void> => {
+		while (nextIndex < items.length) {
+			signal?.throwIfAborted();
+			const index = nextIndex++;
+			results[index] = await map(items[index]!, index);
+		}
 	};
-
-	while (nextIndex < files.length || inFlight.size > 0) {
-		while (nextIndex < files.length && inFlight.size < MAX_CONCURRENT_SESSION_INFO_LOADS) {
-			startNext();
-		}
-		if (inFlight.size > 0) {
-			await Promise.race(inFlight);
-		}
-	}
-
+	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
 	return results;
+}
+
+function sortSessionInfos(sessions: SessionInfo[]): SessionInfo[] {
+	return sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+}
+
+function buildSessionInfosWithConcurrency(
+	files: SessionFileCandidate[],
+	onLoaded: (info: SessionInfo | null, index: number) => void,
+	signal?: AbortSignal,
+): Promise<(SessionInfo | null)[]> {
+	return mapWithConcurrency(
+		files,
+		MAX_CONCURRENT_SESSION_INFO_LOADS,
+		async (file, index) => {
+			const info = await buildSessionInfo(file.path, signal, file.stats);
+			onLoaded(info, index);
+			return info;
+		},
+		signal,
+	);
 }
 
 async function listSessionsFromDir(
 	dir: string,
 	onProgress?: SessionListProgress,
-	progressOffset = 0,
-	progressTotal?: number,
+	signal?: AbortSignal,
 ): Promise<SessionInfo[]> {
-	const sessions: SessionInfo[] = [];
-	if (!existsSync(dir)) {
-		return sessions;
-	}
+	signal?.throwIfAborted();
+	if (!existsSync(dir)) return [];
 
 	try {
 		const dirEntries = await readdir(dir);
-		const files = dirEntries.filter((f) => f.endsWith(".jsonl")).map((f) => join(dir, f));
-		const total = progressTotal ?? files.length;
-
+		const files = dirEntries
+			.filter((file) => file.endsWith(".jsonl"))
+			.sort((a, b) => b.localeCompare(a))
+			.map((file) => ({ path: join(dir, file) }));
+		const total = files.length;
+		const partialSessions: SessionInfo[] = [];
 		let loaded = 0;
-		const results = await buildSessionInfosWithConcurrency(files, () => {
-			loaded++;
-			onProgress?.(progressOffset + loaded, total);
-		});
-		for (const info of results) {
-			if (info) {
-				sessions.push(info);
-			}
-		}
+		const results = await buildSessionInfosWithConcurrency(
+			files,
+			(info) => {
+				loaded++;
+				if (info) partialSessions.push(info);
+				const publishPartial =
+					loaded === 1 || loaded % CURRENT_SESSION_LIST_PUBLISH_INTERVAL === 0 || loaded === files.length;
+				onProgress?.(loaded, total, publishPartial ? sortSessionInfos([...partialSessions]) : undefined);
+			},
+			signal,
+		);
+		return results.filter((info): info is SessionInfo => info !== null);
 	} catch {
-		// Return empty list on error
+		signal?.throwIfAborted();
+		return [];
 	}
-
-	return sessions;
 }
 
 /**
@@ -1827,79 +1848,116 @@ export class SessionManager {
 	 * @param sessionDir Optional session directory. If omitted, uses default (~/.pi/agent/sessions/<encoded-cwd>/).
 	 * @param onProgress Optional callback for progress updates (loaded, total)
 	 */
-	static async list(cwd: string, sessionDir?: string, onProgress?: SessionListProgress): Promise<SessionInfo[]> {
+	static async list(
+		cwd: string,
+		sessionDir?: string,
+		onProgress?: SessionListProgress,
+		signal?: AbortSignal,
+	): Promise<SessionInfo[]> {
 		const dir = sessionDir ? normalizePath(sessionDir) : getDefaultSessionDir(cwd);
 		const filterCwd = sessionDir !== undefined && dir !== getDefaultSessionDirPath(cwd);
 		const resolvedCwd = resolvePath(cwd);
-		const sessions = (await listSessionsFromDir(dir, onProgress)).filter(
-			(session) => !filterCwd || sessionCwdMatches(session.cwd, resolvedCwd),
-		);
-		sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
-		return sessions;
+		const includeSession = (session: SessionInfo) => !filterCwd || sessionCwdMatches(session.cwd, resolvedCwd);
+		const progress: SessionListProgress | undefined = onProgress
+			? (loaded, total, partialSessions) => onProgress(loaded, total, partialSessions?.filter(includeSession))
+			: undefined;
+		const sessions = (await listSessionsFromDir(dir, progress, signal)).filter(includeSession);
+		return sortSessionInfos(sessions);
 	}
 
 	/**
 	 * List all sessions across all project directories.
 	 * @param onProgress Optional callback for progress updates (loaded, total)
 	 */
-	static async listAll(onProgress?: SessionListProgress): Promise<SessionInfo[]>;
-	static async listAll(sessionDir?: string, onProgress?: SessionListProgress): Promise<SessionInfo[]>;
+	static async listAll(onProgress?: SessionListProgress, signal?: AbortSignal): Promise<SessionInfo[]>;
+	static async listAll(
+		sessionDir?: string,
+		onProgress?: SessionListProgress,
+		signal?: AbortSignal,
+	): Promise<SessionInfo[]>;
 	static async listAll(
 		sessionDirOrOnProgress?: string | SessionListProgress,
-		onProgress?: SessionListProgress,
+		onProgressOrSignal?: SessionListProgress | AbortSignal,
+		signal?: AbortSignal,
 	): Promise<SessionInfo[]> {
 		const customSessionDir =
 			typeof sessionDirOrOnProgress === "string" ? normalizePath(sessionDirOrOnProgress) : undefined;
-		const progress = typeof sessionDirOrOnProgress === "function" ? sessionDirOrOnProgress : onProgress;
+		const progress =
+			typeof sessionDirOrOnProgress === "function"
+				? sessionDirOrOnProgress
+				: typeof onProgressOrSignal === "function"
+					? onProgressOrSignal
+					: undefined;
+		const abortSignal =
+			typeof sessionDirOrOnProgress === "string" || typeof onProgressOrSignal === "function"
+				? signal
+				: (onProgressOrSignal ?? signal);
+		abortSignal?.throwIfAborted();
 		if (customSessionDir) {
-			const sessions = await listSessionsFromDir(customSessionDir, progress);
-			sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
-			return sessions;
+			return sortSessionInfos(await listSessionsFromDir(customSessionDir, progress, abortSignal));
 		}
 
 		const sessionsDir = getSessionsDir();
 
 		try {
-			if (!existsSync(sessionsDir)) {
-				return [];
-			}
+			if (!existsSync(sessionsDir)) return [];
 			const entries = await readdir(sessionsDir, { withFileTypes: true });
 			const dirs = entries
 				.filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
 				.map((entry) => join(sessionsDir, entry.name));
 
-			// Count total files first for accurate progress
-			let totalFiles = 0;
-			const dirFiles: string[][] = [];
-			for (const dir of dirs) {
-				try {
-					const files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl"));
-					dirFiles.push(files.map((f) => join(dir, f)));
-					totalFiles += files.length;
-				} catch {
-					dirFiles.push([]);
-				}
-			}
-
-			// Process all files with progress tracking
-			let loaded = 0;
-			const sessions: SessionInfo[] = [];
+			const dirFiles = await mapWithConcurrency(
+				dirs,
+				MAX_CONCURRENT_SESSION_DISCOVERY_LOADS,
+				async (dir) => {
+					try {
+						return (await readdir(dir)).filter((file) => file.endsWith(".jsonl")).map((file) => join(dir, file));
+					} catch {
+						return [];
+					}
+				},
+				abortSignal,
+			);
 			const allFiles = dirFiles.flat();
+			const candidates = await mapWithConcurrency(
+				allFiles,
+				MAX_CONCURRENT_SESSION_DISCOVERY_LOADS,
+				async (path): Promise<SessionFileCandidate> => {
+					try {
+						return { path, stats: await stat(path) };
+					} catch {
+						return { path };
+					}
+				},
+				abortSignal,
+			);
+			candidates.sort(
+				(a, b) =>
+					(b.stats?.mtimeMs ?? Number.NEGATIVE_INFINITY) - (a.stats?.mtimeMs ?? Number.NEGATIVE_INFINITY) ||
+					basename(b.path).localeCompare(basename(a.path)),
+			);
 
-			const results = await buildSessionInfosWithConcurrency(allFiles, () => {
-				loaded++;
-				progress?.(loaded, totalFiles);
-			});
+			const totalFiles = candidates.length;
+			let loaded = 0;
+			let firstCandidateLoaded = false;
+			const partialSessions: SessionInfo[] = [];
+			const results = await buildSessionInfosWithConcurrency(
+				candidates,
+				(info, index) => {
+					loaded++;
+					if (index === 0) firstCandidateLoaded = true;
+					if (info) partialSessions.push(info);
+					const publishPartial =
+						firstCandidateLoaded &&
+						(index === 0 || loaded % ALL_SESSION_LIST_PUBLISH_INTERVAL === 0 || loaded === totalFiles);
+					progress?.(loaded, totalFiles, publishPartial ? sortSessionInfos([...partialSessions]) : undefined);
+				},
+				abortSignal,
+			);
 
-			for (const info of results) {
-				if (info) {
-					sessions.push(info);
-				}
-			}
-
-			sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
-			return sessions;
+			return sortSessionInfos(results.filter((info): info is SessionInfo => info !== null));
 		} catch {
+			abortSignal?.throwIfAborted();
 			return [];
 		}
 	}

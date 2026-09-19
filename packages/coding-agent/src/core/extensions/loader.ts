@@ -8,25 +8,10 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as _bundledPiAgentCore from "@draht/agent-core";
 import type { Provider } from "@draht/ai";
-import * as _bundledPiAiCompat from "@draht/ai/compat";
-import * as _bundledPiAiOauth from "@draht/ai/oauth";
-import * as _bundledPiAiProviders from "@draht/ai/providers/all";
-import * as _bundledPiAiProvidersFaux from "@draht/ai/providers/faux";
 import type { KeyId } from "@draht/tui";
-import * as _bundledPiTui from "@draht/tui";
-import { createJiti } from "@mariozechner/jiti";
-// Static imports of packages that extensions may use.
-// These MUST be static so Bun bundles them into the compiled binary.
-// The virtualModules option then makes them available to extensions.
-import * as _bundledTypebox from "typebox";
-import * as _bundledTypeboxCompile from "typebox/compile";
-import * as _bundledTypeboxValue from "typebox/value";
+import type { createJiti } from "@mariozechner/jiti";
 import { CONFIG_DIR_NAME, getAgentDir, isBunBinary } from "../../config.ts";
-// NOTE: This import works because loader.ts exports are NOT re-exported from index.ts,
-// avoiding a circular dependency. Extensions can import from @draht/coding-agent.
-import * as _bundledPiCodingAgent from "../../index.ts";
 import { resolvePath } from "../../utils/paths.ts";
 import type { CheckpointRestoreOptions } from "../checkpoints/checkpoint-manager.ts";
 import { createEventBus, type EventBus } from "../event-bus.ts";
@@ -52,31 +37,6 @@ import type {
 /** Reason reported by `pi.checkpoints` when the session has no checkpoint storage. */
 const CHECKPOINTS_UNAVAILABLE = "checkpoints are unavailable for this session";
 
-/** Modules available to extensions via virtualModules (for compiled binaries) */
-const VIRTUAL_MODULES: Record<string, unknown> = {
-	typebox: _bundledTypebox,
-	"typebox/compile": _bundledTypeboxCompile,
-	"typebox/value": _bundledTypeboxValue,
-	"@sinclair/typebox": _bundledTypebox,
-	"@sinclair/typebox/compile": _bundledTypeboxCompile,
-	"@sinclair/typebox/value": _bundledTypeboxValue,
-	"@draht/agent-core": _bundledPiAgentCore,
-	"@draht/tui": _bundledPiTui,
-	// Extensions resolve the @draht/ai root to the compat entrypoint (a strict
-	// superset of the core entrypoint): existing extensions using the old
-	// global API keep working at runtime until compat is removed.
-	"@draht/ai": _bundledPiAiCompat,
-	"@draht/ai/compat": _bundledPiAiCompat,
-	"@draht/ai/oauth": _bundledPiAiOauth,
-	"@draht/ai/providers/all": _bundledPiAiProviders,
-	// Every @draht/ai subpath an extension may import needs its own entry here and
-	// in getAliases(): the bare "@draht/ai" key below is a PREFIX match, so an
-	// unlisted subpath is rewritten onto the compat entrypoint
-	// ("<compat.js>/providers/faux") and fails to resolve.
-	"@draht/ai/providers/faux": _bundledPiAiProvidersFaux,
-	"@draht/coding-agent": _bundledPiCodingAgent,
-};
-
 const require = createRequire(import.meta.url);
 
 const isNodeSeaBinary =
@@ -85,6 +45,21 @@ const isNodeSeaBinary =
 declare const DRAHT_BUNDLED_NODE: boolean;
 const isBundledNode = typeof DRAHT_BUNDLED_NODE !== "undefined" && DRAHT_BUNDLED_NODE;
 const isTypeScriptSourceRuntime = !isBunBinary && path.extname(fileURLToPath(import.meta.url)) === ".ts";
+const usesEmbeddedModules = isBunBinary || isNodeSeaBinary || isBundledNode;
+
+let createJitiPromise: Promise<typeof createJiti> | undefined;
+
+function getCreateJiti(): Promise<typeof createJiti> {
+	createJitiPromise ??= import("./jiti-loader.ts").then((module) => module.createJiti);
+	return createJitiPromise;
+}
+
+let virtualModulesPromise: Promise<Record<string, unknown>> | undefined;
+
+function getVirtualModules(): Promise<Record<string, unknown>> {
+	virtualModulesPromise ??= import("./virtual-modules.ts").then((module) => module.VIRTUAL_MODULES);
+	return virtualModulesPromise;
+}
 
 /**
  * Get aliases for jiti (used in built Node.js mode).
@@ -540,16 +515,18 @@ async function loadExtensionModule(extensionPath: string, cacheToken?: Extension
 		}
 	}
 
-	const jiti = createJiti(import.meta.url, {
+	const createJitiImpl = await getCreateJiti();
+	// Compiled binaries and the bundled Node distribution use embedded modules.
+	// Source TypeScript reuses host modules and root tsconfig paths. Unbundled
+	// Node builds use dist aliases and do not need the bundled virtual modules.
+	const resolutionOptions = usesEmbeddedModules
+		? { virtualModules: await getVirtualModules(), tryNative: false }
+		: isTypeScriptSourceRuntime
+			? { virtualModules: await getVirtualModules(), tsconfigPaths: true }
+			: { alias: getAliases() };
+	const jiti = createJitiImpl(import.meta.url, {
 		moduleCache: false,
-		// Compiled binaries and the bundled Node distribution use embedded modules.
-		// Source TypeScript reuses host modules and root tsconfig paths. Unbundled
-		// Node builds use dist aliases.
-		...(isBunBinary || isNodeSeaBinary || isBundledNode
-			? { virtualModules: VIRTUAL_MODULES, tryNative: false }
-			: isTypeScriptSourceRuntime
-				? { virtualModules: VIRTUAL_MODULES, tsconfigPaths: true }
-				: { alias: getAliases() }),
+		...resolutionOptions,
 	});
 
 	const module = await jiti.import(extensionPath, { default: true });

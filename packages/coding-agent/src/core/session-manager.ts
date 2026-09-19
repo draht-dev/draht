@@ -723,18 +723,16 @@ export function findMostRecentSession(sessionDir: string, cwd?: string): string 
 	const resolvedCwd = cwd ? resolvePath(cwd) : undefined;
 	try {
 		const files = readdirSync(resolvedSessionDir)
-			.filter((f) => f.endsWith(".jsonl"))
-			.map((f) => join(resolvedSessionDir, f))
-			.map((path) => ({ path, header: readSessionHeaderForDiscovery(path) }))
-			.filter(
-				(file): file is { path: string; header: SessionHeader } =>
-					file.header !== null &&
-					(!resolvedCwd || sessionCwdMatches(getSessionHeaderCwd(file.header), resolvedCwd)),
-			)
-			.map(({ path }) => ({ path, mtime: statSync(path).mtime }))
-			.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+			.filter((file) => file.endsWith(".jsonl"))
+			.map((file) => join(resolvedSessionDir, file))
+			.map((path) => ({ path, mtime: statSync(path).mtimeMs }))
+			.sort((a, b) => b.mtime - a.mtime);
 
-		return files[0]?.path || null;
+		for (const { path } of files) {
+			const header = readSessionHeaderForDiscovery(path);
+			if (header && (!resolvedCwd || sessionCwdMatches(getSessionHeaderCwd(header), resolvedCwd))) return path;
+		}
+		return null;
 	} catch {
 		// Directory access and stat races make recent-session discovery unavailable.
 		return null;

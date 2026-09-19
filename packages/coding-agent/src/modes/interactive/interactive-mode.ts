@@ -6743,6 +6743,7 @@ export class InteractiveMode {
 				ui: this.ui,
 				editorContainer: this.editorContainer,
 				editor: this.editor,
+				keybindings: this.keybindings,
 				showStatus: (message) => this.showStatus(message),
 				showError: (message) => this.showError(message),
 			},

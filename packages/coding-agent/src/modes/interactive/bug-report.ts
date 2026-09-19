@@ -14,10 +14,11 @@ import {
 } from "../../core/bug-report.ts";
 import { uploadBugReport } from "../../core/bug-report-upload.ts";
 import { clearCrashLog, readCrashLog } from "../../core/crash-log.ts";
+import type { KeybindingsManager } from "../../core/keybindings.ts";
 import { ENV_RADIUS_GATEWAY, getBugReportGatewayUrl, RADIUS_PROVIDER_ID } from "../../core/radius.ts";
 import { serializeSessionBranch } from "../../core/session-export.ts";
 import { BorderedLoader } from "./components/bordered-loader.ts";
-import { ExtensionInputComponent } from "./components/extension-input.ts";
+import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
 import { createShareTrailingEntries } from "./session-share.ts";
 import { theme } from "./theme/theme.ts";
@@ -27,6 +28,7 @@ interface BugReportContext {
 	ui: TUI;
 	editorContainer: Container;
 	editor: EditorComponent;
+	keybindings: KeybindingsManager;
 	showStatus: (message: string) => void;
 	showError: (message: string) => void;
 }
@@ -231,20 +233,20 @@ function input(
 	initialValue?: string,
 ): Promise<string | null> {
 	return new Promise((resolve) => {
-		let component: ExtensionInputComponent;
+		let component: ExtensionEditorComponent;
 		const finish = (value: string | null) => {
 			restoreEditor(context, component);
 			resolve(value);
 		};
-		component = new ExtensionInputComponent(
+		component = new ExtensionEditorComponent(
+			context.ui,
+			context.keybindings,
 			title,
-			undefined,
+			initialValue,
 			(value) => finish(value),
 			() => finish(null),
-			{
-				initialValue,
-				description,
-			},
+			{ description },
+			context.session.settingsManager.getExternalEditorCommand(),
 		);
 		showOverlay(context, component);
 	});

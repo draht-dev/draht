@@ -85,7 +85,7 @@ import {
 	rewindScopeForLabel,
 } from "../../core/checkpoints/rewind.ts";
 import { formatContextWindow } from "../../core/context-windows.ts";
-import { recordCrash, takeUnnotifiedCrash } from "../../core/crash-log.ts";
+import { findExtensionStackMatches, recordCrash, takeUnnotifiedCrash } from "../../core/crash-log.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "../../core/defaults.ts";
 import type {
 	AutocompleteProviderFactory,
@@ -282,6 +282,23 @@ function isDeadTerminalError(error: unknown): boolean {
 	}
 	const code = (error as NodeJS.ErrnoException).code;
 	return code !== undefined && DEAD_TERMINAL_ERROR_CODES.has(code);
+}
+
+export function formatCrashExtensionHint(extensionMatches: readonly string[] | undefined): string | undefined {
+	const matches = Array.isArray(extensionMatches)
+		? extensionMatches.filter((match): match is string => typeof match === "string" && match.length > 0)
+		: [];
+	if (matches.length === 0) return undefined;
+	const quoted = matches.map((match) => `\`${match}\``);
+	const labels =
+		quoted.length === 1
+			? quoted[0]
+			: quoted.length === 2
+				? quoted.join(" and ")
+				: `${quoted.slice(0, -1).join(", ")}, and ${quoted[quoted.length - 1]}`;
+	const noun = matches.length === 1 ? "extension" : "extensions";
+	const pronoun = matches.length === 1 ? "it" : "them";
+	return `A stack frame came from loaded ${noun} ${labels}, which may be involved. Try disabling ${pronoun} with \`${APP_NAME} config\`, or run \`${APP_NAME} -ne\` to confirm.`;
 }
 
 const ANTHROPIC_SUBSCRIPTION_AUTH_WARNING =
@@ -2056,12 +2073,29 @@ export class InteractiveMode {
 	private async handleFatalRuntimeError(prefix: string, error: unknown): Promise<never> {
 		const message = error instanceof Error ? error.message : String(error);
 		this.showError(`${prefix}: ${message}`);
+		const extensionHint = this.getCrashExtensionHint(error);
+		if (extensionHint) {
+			this.chatContainer.addChild(new Text(theme.fg("warning", extensionHint), this.outputPad, 0));
+		}
 		if (this.recordCrash("fatal_error", error)) {
 			this.chatContainer.addChild(new Text(theme.fg("muted", this.crashReportInstructions()), this.outputPad, 0));
 		}
 		stopThemeWatcher();
 		this.stop("transcript");
 		process.exit(1);
+	}
+
+	private getCrashExtensionHint(error: unknown): string | undefined {
+		try {
+			return formatCrashExtensionHint(
+				findExtensionStackMatches(
+					error instanceof Error ? error.stack : undefined,
+					this.session.resourceLoader.getExtensions().extensions,
+				),
+			);
+		} catch {
+			return undefined;
+		}
 	}
 
 	/** Persist a crash so the next start can point the user at `/bug`. Returns false when nothing was written. */
@@ -4396,6 +4430,8 @@ export class InteractiveMode {
 		} catch {}
 		console.error(`${APP_NAME} exiting due to uncaughtException:`);
 		console.error(error);
+		const extensionHint = this.getCrashExtensionHint(error);
+		if (extensionHint) console.error(`\n${extensionHint}`);
 		if (this.recordCrash("uncaught_exception", error)) {
 			console.error(`\n${this.crashReportInstructions()}`);
 		}

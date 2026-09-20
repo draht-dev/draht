@@ -198,6 +198,7 @@ const lazyResult = await build({
 		"google-gemini-cli": join(aiDistDir, "auth", "oauth", "google-gemini-cli.js"),
 		"image-resize-worker": join(codingAgentDistDir, "utils", "image-resize-worker.js"),
 		"kimi-coding": join(aiDistDir, "auth", "oauth", "kimi-coding.js"),
+		meta: join(aiDistDir, "auth", "oauth", "meta.js"),
 		"openai-codex": join(aiDistDir, "auth", "oauth", "openai-codex.js"),
 		"opencode-go": join(aiDistDir, "auth", "oauth", "opencode-go.js"),
 		openrouter: join(aiDistDir, "auth", "oauth", "openrouter.js"),

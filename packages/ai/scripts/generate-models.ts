@@ -400,6 +400,16 @@ const OPENAI_LONG_CONTEXT_PRICING_MODEL_IDS = new Set([
 	"gpt-6-astra",
 ]);
 
+// Keep the generated default no less restrictive than coding-agent's historical
+// image preprocessing. Provider limits can narrow this profile, but unknown
+// providers retain the cache-safe 2000px / 4.5 MiB behavior.
+const DEFAULT_IMAGE_RESIZE = {
+	maxWidth: 2000,
+	maxHeight: 2000,
+	maxBytes: 4.5 * 1024 * 1024,
+	jpegQuality: 80,
+} as const;
+
 function withOpenAiLongContextPricing(cost: Model<Api>["cost"]): Model<Api>["cost"] {
 	return {
 		...cost,
@@ -945,6 +955,34 @@ function applyPromptCacheMetadata(model: Model<Api>): void {
 	// Do not add OpenAI lifetimes yet. Before enabling warming for explicit
 	// OpenAI caches, re-evaluate it using observed expiry, replay, and billing
 	// behavior; a documented TTL alone does not establish full cache loss.
+}
+
+function applyImageInputMetadata(model: Model<Api>): void {
+	if (!model.input.includes("image")) return;
+
+	const providerLimits: Model<Api>["inputLimits"] =
+		model.provider === "anthropic"
+			? {
+					maxRequestBytes: 32 * 1024 * 1024,
+					images: { maxPerRequest: model.contextWindow === 200000 ? 100 : 600 },
+				}
+			: model.provider === "amazon-bedrock"
+				? { images: { maxPerMessage: 20 } }
+				: model.provider === "openai"
+					? { maxRequestBytes: 512 * 1024 * 1024, images: { maxPerRequest: 1500 } }
+					: model.provider === "google"
+						? { maxRequestBytes: 20 * 1024 * 1024, images: { maxPerRequest: 3600 } }
+						: undefined;
+	const configuredImages = model.inputLimits?.images;
+	model.inputLimits = {
+		...providerLimits,
+		...model.inputLimits,
+		images: {
+			...providerLimits?.images,
+			...configuredImages,
+			resize: { ...DEFAULT_IMAGE_RESIZE, ...configuredImages?.resize },
+		},
+	};
 }
 
 function isGemma4Model(modelId: string): boolean {
@@ -3099,6 +3137,7 @@ async function generateModels() {
 		applyOpenAIResponsesTranscriptMetadata(model);
 		applyOpenAIExplicitPromptCacheMetadata(model);
 		applyPromptCacheMetadata(model);
+		applyImageInputMetadata(model);
 	}
 	applyAnthropicAllowedFallbackModelMetadata(allModels.filter(isAnthropicFallbackMetadataModel));
 

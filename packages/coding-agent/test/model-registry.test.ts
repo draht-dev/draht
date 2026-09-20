@@ -815,6 +815,54 @@ describe("ModelRegistry", () => {
 			expect(registry.find("anthropic", "claude-sonnet-4-6")?.promptCache).toEqual({ short: 300, long: 1800 });
 		});
 
+		// Regression test for https://github.com/earendil-works/pi/issues/9631
+		test("model override deep-merges image resize limits", async () => {
+			writeRawModelsJson({
+				test: {
+					baseUrl: "https://example.com",
+					apiKey: "test-key",
+					api: "openai-completions",
+					models: [
+						{
+							id: "vision-model",
+							input: ["text", "image"],
+							inputLimits: {
+								maxRequestBytes: 32 * 1024 * 1024,
+								images: {
+									maxPerRequest: 100,
+									resize: {
+										maxWidth: 2000,
+										maxHeight: 2000,
+										maxBytes: 4.5 * 1024 * 1024,
+										jpegQuality: 80,
+									},
+								},
+							},
+						},
+					],
+					modelOverrides: {
+						"vision-model": {
+							inputLimits: {
+								images: { resize: { maxWidth: 1568, maxBytes: 524288, jpegQuality: 75 } },
+							},
+						},
+					},
+				},
+			});
+
+			const registry = await createModelRegistry(authStorage, modelsJsonPath);
+			const model = registry.find("test", "vision-model");
+
+			expect(registry.getError()).toBeUndefined();
+			expect(model?.inputLimits).toMatchObject({
+				maxRequestBytes: 32 * 1024 * 1024,
+				images: {
+					maxPerRequest: 100,
+					resize: { maxWidth: 1568, maxHeight: 2000, maxBytes: 524288, jpegQuality: 75 },
+				},
+			});
+		});
+
 		test("model override with compat.openRouterRouting", async () => {
 			writeRawModelsJson({
 				openrouter: {

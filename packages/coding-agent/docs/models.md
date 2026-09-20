@@ -204,6 +204,7 @@ If your command is slow, expensive, rate-limited, or should keep using a previou
 | `reasoning` | No | `false` | Supports extended thinking |
 | `thinkingLevelMap` | No | omitted | Maps pi thinking levels to provider values and marks unsupported levels (see below) |
 | `input` | No | `["text"]` | Input types: `["text"]` or `["text", "image"]` |
+| `inputLimits` | No | omitted | Request limits and image preprocessing for this model (see below) |
 | `contextWindow` | No | `128000` | Context window size in tokens |
 | `maxTokens` | No | `16384` | Maximum output tokens |
 | `samplingParams` | No | omitted | Sampling parameters merged verbatim into every request body (see below) |
@@ -236,6 +237,33 @@ A cost tier supplies a complete alternate rate set and applies to the full reque
 Current behavior:
 - `/model`, `--list-models`, and the interactive footer display entries by model `id`.
 - The configured `name` is used for model matching and secondary model detail text. It does not replace the footer/status-bar model id.
+
+### Image Input Limits
+
+Use `inputLimits.images.resize` to configure how new images are encoded before they enter conversation history:
+
+```json
+{
+  "id": "vision-model",
+  "input": ["text", "image"],
+  "inputLimits": {
+    "images": {
+      "resize": {
+        "maxWidth": 1568,
+        "maxHeight": 1568,
+        "maxBytes": 524288,
+        "jpegQuality": 75
+      }
+    }
+  }
+}
+```
+
+`maxBytes` is the maximum base64-encoded payload size. Omitted resize fields use pi's conservative defaults: 2000×2000, 4.5 MiB encoded, and JPEG quality 80. Built-in vision models carry that profile explicitly so unknown gateways never receive larger images than before.
+
+Pi applies the selected model's resize profile to `@file` attachments, the `read` tool, and images returned by tools. Images are encoded once before they enter history; changing models does not rewrite historical images or invalidate the cached conversation prefix. The `images.autoResize` setting can disable resizing globally.
+
+The catalog can also record `inputLimits.maxRequestBytes`, `images.maxPerMessage`, and `images.maxPerRequest`. These fields describe hard provider limits; this initial implementation does not yet rewrite or reject conversation history based on them.
 
 ### Prompt Cache Lifetimes
 
@@ -373,7 +401,7 @@ Use `modelOverrides` to customize built-in models and matching extension-registe
 }
 ```
 
-`modelOverrides` supports these fields per model: `name`, `reasoning`, `thinkingLevelMap`, `input`, `cost` (partial), `promptCache` (merged per tier), `contextWindow`, `maxTokens`, `samplingParams` (merged per key), `headers`, `compat`.
+`modelOverrides` supports these fields per model: `name`, `reasoning`, `thinkingLevelMap`, `input`, `inputLimits` (deep-merged), `cost` (partial), `promptCache` (merged per tier), `contextWindow`, `maxTokens`, `samplingParams` (merged per key), `headers`, `compat`.
 
 Use a `promptCache` override to enable cache warming through a proxy whose backing cache you know, for example OpenRouter routed to Anthropic:
 

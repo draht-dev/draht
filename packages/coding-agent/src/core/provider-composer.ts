@@ -64,6 +64,7 @@ export interface ProviderConfigInput {
 		reasoning: boolean;
 		thinkingLevelMap?: Model<Api>["thinkingLevelMap"];
 		input: ("text" | "image")[];
+		inputLimits?: Model<Api>["inputLimits"];
 		cost: Model<Api>["cost"];
 		promptCache?: Model<Api>["promptCache"];
 		contextWindow: number;
@@ -105,6 +106,26 @@ function mergeCompat(
 	return merged;
 }
 
+function mergeInputLimits(
+	base: Model<Api>["inputLimits"],
+	override: ModelsJsonModelOverride["inputLimits"],
+): Model<Api>["inputLimits"] {
+	if (!override) return base;
+	return {
+		...base,
+		...override,
+		images: override.images
+			? {
+					...base?.images,
+					...override.images,
+					resize: override.images.resize
+						? { ...base?.images?.resize, ...override.images.resize }
+						: base?.images?.resize,
+				}
+			: base?.images,
+	};
+}
+
 function applyModelOverride(model: Model<Api>, override: ModelsJsonModelOverride): Model<Api> {
 	return {
 		...model,
@@ -114,6 +135,7 @@ function applyModelOverride(model: Model<Api>, override: ModelsJsonModelOverride
 			? { ...model.thinkingLevelMap, ...override.thinkingLevelMap }
 			: model.thinkingLevelMap,
 		input: (override.input as ("text" | "image")[] | undefined) ?? model.input,
+		inputLimits: mergeInputLimits(model.inputLimits, override.inputLimits),
 		cost: override.cost
 			? {
 					input: override.cost.input ?? model.cost.input,
@@ -162,6 +184,7 @@ function modelFromJson(
 		reasoning: definition.reasoning ?? false,
 		thinkingLevelMap: definition.thinkingLevelMap,
 		input: (definition.input ?? ["text"]) as ("text" | "image")[],
+		inputLimits: definition.inputLimits,
 		cost: definition.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		promptCache: definition.promptCache,
 		contextWindow: definition.contextWindow ?? 128000,

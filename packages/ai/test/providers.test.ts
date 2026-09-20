@@ -4,7 +4,13 @@ import { envApiKeyAuth } from "../src/auth/helpers.ts";
 import type { AuthContext, AuthEvent } from "../src/auth/types.ts";
 import { createModels, createProvider, getSupportedThinkingLevels } from "../src/models.ts";
 import { InMemoryModelsStore } from "../src/models-store.ts";
-import { builtinModels, builtinProviders, getBuiltinModel } from "../src/providers/all.ts";
+import {
+	builtinModels,
+	builtinProviders,
+	getBuiltinModel,
+	getBuiltinModels,
+	getBuiltinProviders,
+} from "../src/providers/all.ts";
 import { amazonBedrockProvider } from "../src/providers/amazon-bedrock.ts";
 import { anthropicProvider } from "../src/providers/anthropic.ts";
 import { cloudflareAIGatewayProvider } from "../src/providers/cloudflare-ai-gateway.ts";
@@ -32,6 +38,13 @@ function fakeAuthContext(env: Record<string, string>, files: string[] = []): Aut
 const neverAbortedSignal = new AbortController().signal;
 
 const context = normalizeContext({ messages: [{ role: "user", content: "hi", timestamp: Date.now() }] });
+
+const DEFAULT_IMAGE_RESIZE = {
+	maxWidth: 2000,
+	maxHeight: 2000,
+	maxBytes: 4.5 * 1024 * 1024,
+	jpegQuality: 80,
+};
 
 describe("builtin providers", () => {
 	it("builtinModels registers every builtin provider with models", async () => {
@@ -66,6 +79,40 @@ describe("builtin providers", () => {
 			supportsOpenAIGrammarTools: true,
 		});
 		expect(getBuiltinModel("anthropic", "claude-haiku-4-5").compat?.supportsStrictTools).toBe(true);
+	});
+
+	it("keeps the conservative resize profile on every vision model", () => {
+		const visionModels = getBuiltinProviders()
+			.flatMap((provider) => getBuiltinModels(provider))
+			.filter((model) => model.input.includes("image"));
+		expect(visionModels.length).toBeGreaterThan(0);
+		for (const model of visionModels) {
+			expect(model.inputLimits?.images?.resize).toEqual(DEFAULT_IMAGE_RESIZE);
+		}
+	});
+
+	it("records known direct-provider image request limits", () => {
+		expect(getBuiltinModel("anthropic", "claude-haiku-4-5").inputLimits).toMatchObject({
+			maxRequestBytes: 32 * 1024 * 1024,
+			images: { maxPerRequest: 100 },
+		});
+		expect(getBuiltinModel("anthropic", "claude-opus-5").inputLimits?.images?.maxPerRequest).toBe(600);
+		expect(getBuiltinModel("amazon-bedrock", "anthropic.claude-haiku-4-5-20251001-v1:0").inputLimits).toMatchObject({
+			images: { maxPerMessage: 20 },
+		});
+		expect(getBuiltinModel("openai", "gpt-4o").inputLimits).toMatchObject({
+			maxRequestBytes: 512 * 1024 * 1024,
+			images: { maxPerRequest: 1500 },
+		});
+		expect(getBuiltinModel("google", "gemini-2.5-flash").inputLimits).toMatchObject({
+			maxRequestBytes: 20 * 1024 * 1024,
+			images: { maxPerRequest: 3600 },
+		});
+	});
+
+	it("does not infer image limits from gateway API compatibility", () => {
+		const openRouterModel = getBuiltinModels("openrouter").find((model) => model.input.includes("image"));
+		expect(openRouterModel?.inputLimits).toEqual({ images: { resize: DEFAULT_IMAGE_RESIZE } });
 	});
 
 	it("uses models.dev effort levels for Google thinking models", () => {

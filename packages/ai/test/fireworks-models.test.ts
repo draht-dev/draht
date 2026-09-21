@@ -81,6 +81,7 @@ describe("Fireworks models", () => {
 		const compat = {
 			supportsStore: false,
 			supportsDeveloperRole: false,
+			supportsStrictMode: true,
 			requiresReasoningContentOnAssistantMessages: true,
 			thinkingFormat: "openai",
 			supportsMidConvoSystemMessages: true,

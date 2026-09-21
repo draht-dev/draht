@@ -20,8 +20,8 @@ export type PathRef<P extends Path = Path> = P | number;
  * Tuples are the form — in memory, on the wire, on disk.
  *
  * `r` is the ONLY op that replaces a whole value. `s`/`d`/`a`/`t` cannot target
- * the root: the type forbids it. `p` may, because a tracked value can itself be
- * an array. Operation shape is not canonical: an array may be emptied by either
+ * the root: the type forbids it. `p` and `m` may, because a tracked value can
+ * itself be an array. Operation shape is not canonical: an array may be emptied by either
  * a replacement or a root splice.
  *
  * `Op` knows nothing about the path dictionary. Interning, id references and
@@ -33,7 +33,9 @@ export type Op =
 	| readonly ["d", NonEmptyPath]
 	| readonly ["a", NonEmptyPath, string]
 	| readonly ["t", NonEmptyPath, number]
-	| readonly ["p", Path, number, number, JsonValue[]];
+	| readonly ["p", Path, number, number, JsonValue[]]
+	/** Reorder an array in place: `new[i] = old[permutation[i]]`. */
+	| readonly ["m", Path, number[]];
 
 /**
  * What crosses a boundary. Adds two compressions and nothing else:
@@ -57,6 +59,8 @@ export type WireOp =
 	| readonly ["t", number]
 	| readonly ["p", PathRef, number, number, JsonValue[]]
 	| readonly ["p", number, number, JsonValue[]]
+	| readonly ["m", PathRef, number[]]
+	| readonly ["m", number[]]
 	| readonly ["#", number, Path];
 
 // ─── Classification ──────────────────────────────────────────────────────────
@@ -1493,6 +1497,11 @@ export function assertValidOp(op: unknown): asserts op is Op {
 			if (!Array.isArray(op[4])) throw new TypeError("p items");
 			return;
 		}
+		case "m":
+			if (op.length !== 3) throw new TypeError("m arity");
+			assertPathArg(op[1]);
+			assertPermutation(op[2]);
+			return;
 		// Silently skipping an unknown verb is how a newer producer's op vanishes.
 		default:
 			throw new TypeError(`unknown op verb: ${String(op[0])}`);
@@ -1503,6 +1512,17 @@ function assertPathArg(p: unknown, nonEmpty = false): void {
 	if (!Array.isArray(p)) throw new TypeError("path is not an array");
 	if (nonEmpty && p.length === 0) throw new TypeError("path is empty");
 	assertSafePath(p as Path);
+}
+
+function assertPermutation(value: unknown): asserts value is number[] {
+	if (!Array.isArray(value)) throw new TypeError("m permutation is not an array");
+	const seen = new Uint8Array(value.length);
+	for (const index of value) {
+		if (!Number.isInteger(index) || index < 0 || index >= value.length || seen[index] !== 0) {
+			throw new TypeError("m permutation is not a bijection");
+		}
+		seen[index] = 1;
+	}
 }
 
 /** The same, for the wire grammar: ids and short forms are legal here. */
@@ -1556,6 +1576,11 @@ export function assertValidWireOp(op: unknown): asserts op is WireOp {
 			if (!Array.isArray(items)) throw new TypeError("p items");
 			return;
 		}
+		case "m":
+			if (op.length === 3) okRef(op[1]);
+			else if (op.length !== 2) throw new TypeError("m arity");
+			assertPermutation(op[op.length - 1]);
+			return;
 		case "#": {
 			if (op.length !== 3 || !Number.isInteger(op[1]) || (op[1] as number) < 0 || !Array.isArray(op[2])) {
 				throw new TypeError("# shape");
@@ -1650,6 +1675,13 @@ function applyOps<T>(target: T | undefined, ops: readonly Op[]): T {
 			}
 			continue;
 		}
+		if (op[0] === "m") {
+			const target_ = path.length === 0 ? root : resolve(root, path);
+			if (!Array.isArray(target_) || target_.length !== op[2].length) throw new PathError(path);
+			const previous = target_.slice();
+			for (let index = 0; index < op[2].length; index++) target_[index] = previous[op[2][index]!]!;
+			continue;
+		}
 
 		// s/d/a/t can never target the root — the type forbids it.
 		const parent = resolve(root, path.slice(0, -1)) as Record<Seg, JsonValue>;
@@ -1700,7 +1732,7 @@ export function applyImmutable<T>(target: T | undefined, ops: readonly Op[]): T 
 			root = op[1];
 			continue;
 		}
-		root = copyContainers(root, op[0] === "p" ? op[1] : op[1].slice(0, -1));
+		root = copyContainers(root, op[0] === "p" || op[0] === "m" ? op[1] : op[1].slice(0, -1));
 		root = applyOps(root, [op]);
 	}
 	return root as unknown as T;
@@ -1831,6 +1863,9 @@ export function encoder(): Encoder {
 						case "p":
 							out.push(["p", op[2], op[3], op[4]]);
 							break;
+						case "m":
+							out.push(["m", op[2]]);
+							break;
 					}
 					continue;
 				}
@@ -1863,6 +1898,9 @@ export function encoder(): Encoder {
 						break;
 					case "p":
 						out.push(["p", ref, op[2], op[3], op[4]]);
+						break;
+					case "m":
+						out.push(["m", ref, op[2]]);
 						break;
 				}
 				previous = key;
@@ -1919,7 +1957,7 @@ export function decoder(): Decoder {
 					previous = path;
 				}
 
-				if (op[0] !== "p" && path.length === 0) throw new PathError(path);
+				if (op[0] !== "p" && op[0] !== "m" && path.length === 0) throw new PathError(path);
 				switch (op[0]) {
 					case "s":
 						out.push(["s", path as NonEmptyPath, (short ? op[1] : op[2]) as JsonValue]);
@@ -1940,6 +1978,9 @@ export function decoder(): Decoder {
 						out.push(["p", path, i, r, items]);
 						break;
 					}
+					case "m":
+						out.push(["m", path, (short ? op[1] : op[2]) as number[]]);
+						break;
 				}
 			}
 			return out;

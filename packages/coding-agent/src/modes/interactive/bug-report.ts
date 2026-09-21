@@ -48,6 +48,11 @@ const TRANSCRIPT_NOTE =
 
 /** Run the `/bug` flow: consent, optional summary, then upload or export. */
 export async function reportBug(context: BugReportContext, initialHint?: string): Promise<void> {
+	if (process.env.PI_OFFLINE) {
+		context.showError("/bug requires online mode.");
+		return;
+	}
+
 	const options = await promptForOptions(context, initialHint);
 	if (!options) {
 		context.showStatus("Bug report cancelled");

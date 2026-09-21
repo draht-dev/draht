@@ -95,6 +95,8 @@ interface AgentSession {
 
   // State access
   agent: Agent;
+  sessionManager: SessionManager;
+  refreshContext(): void;
   model: Model | undefined;
   thinkingLevel: ThinkingLevel;
   messages: AgentMessage[];
@@ -255,8 +257,8 @@ const state = session.agent.state;
 // state.streamingMessage?: AgentMessage - current partial assistant message
 // state.errorMessage?: string - latest assistant error
 
-// Replace messages (useful for branching or restoration)
-session.agent.state.messages = messages; // copies the top-level array
+// Model-visible messages are projected from session.sessionManager.
+// agent.state.messages is a refreshed inspection cache; do not assign it for restoration.
 
 // Replace tools
 session.agent.state.tools = tools; // copies the top-level array
@@ -264,6 +266,15 @@ session.agent.state.tools = tools; // copies the top-level array
 // Wait for agent to finish processing
 await session.agent.waitForIdle();
 ```
+
+Provider requests use `session.sessionManager` as the canonical finalized context. Assigning `session.agent.state.messages` does not replace persisted context and may be overwritten at the next request boundary. Restore externally stored history when constructing the session instead:
+
+```typescript
+const restoredManager = SessionManager.inMemory(process.cwd(), { id: sessionId }, entries);
+const { session } = await createAgentSession({ sessionManager: restoredManager });
+```
+
+For an existing session, use `session.navigateTree(entryId)` to move its active branch. Use `session.sessionManager.appendMessage(...)` plus `session.refreshContext()` only when intentionally appending externally managed entries.
 
 ### Events
 

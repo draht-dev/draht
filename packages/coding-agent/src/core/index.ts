@@ -32,6 +32,9 @@ export { createEventBus, type EventBus, type EventBusController } from "./event-
 export { areExperimentalFeaturesEnabled } from "./experimental.ts";
 // Extensions system
 export {
+	type AgentActivityOutcome,
+	type AgentBeforeSettleEvent,
+	type AgentBeforeSettleEventResult,
 	type AgentEndEvent,
 	type AgentSettledEvent,
 	type AgentStartEvent,
@@ -39,10 +42,17 @@ export {
 	type AgentToolUpdateCallback,
 	type BeforeAgentStartEvent,
 	type BeforeAgentStartEventResult,
+	type BoundaryContextPreview,
+	type BoundaryResult,
+	type BoundaryState,
 	type BuildSystemPromptOptions,
 	type CacheWarmingDecisionEvent,
 	type CacheWarmingDecisionEventResult,
+	type CompactionEntryDraft,
+	type ContextEditEntryDraft,
 	type ContextEvent,
+	type CustomEntryDraft,
+	type CustomMessageEntryDraft,
 	defineTool,
 	discoverAndLoadExtensions,
 	type ExecOptions,
@@ -69,6 +79,7 @@ export {
 	type SessionBeforeForkEvent,
 	type SessionBeforeSwitchEvent,
 	type SessionBeforeTreeEvent,
+	type SessionBoundaryDraft,
 	type SessionCompactEvent,
 	type SessionShutdownEvent,
 	type SessionStartEvent,
@@ -80,6 +91,7 @@ export {
 	type ToolRenderResultOptions,
 	type ToolResultEvent,
 	type TurnEndEvent,
+	type TurnEndEventResult,
 	type TurnStartEvent,
 	type WorkingIndicatorOptions,
 } from "./extensions/index.ts";

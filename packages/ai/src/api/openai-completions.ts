@@ -1257,21 +1257,23 @@ export function convertMessages(
 					content: sanitizeSurrogates(msg.content),
 				});
 			} else {
-				const content: ChatCompletionContentPart[] = msg.content.map((item): ChatCompletionContentPart => {
-					if (item.type === "text") {
-						return {
-							type: "text",
-							text: sanitizeSurrogates(item.text),
-						} satisfies ChatCompletionContentPartText;
-					} else {
-						return {
-							type: "image_url",
-							image_url: {
-								url: `data:${item.mimeType};base64,${item.data}`,
-							},
-						} satisfies ChatCompletionContentPartImage;
-					}
-				});
+				const content: ChatCompletionContentPart[] = msg.content
+					.filter((item) => item.type !== "text" || item.text.length > 0)
+					.map((item): ChatCompletionContentPart => {
+						if (item.type === "text") {
+							return {
+								type: "text",
+								text: sanitizeSurrogates(item.text),
+							} satisfies ChatCompletionContentPartText;
+						} else {
+							return {
+								type: "image_url",
+								image_url: {
+									url: `data:${item.mimeType};base64,${item.data}`,
+								},
+							} satisfies ChatCompletionContentPartImage;
+						}
+					});
 				if (content.length === 0) continue;
 				params.push({
 					role: "user",

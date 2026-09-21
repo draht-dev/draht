@@ -825,9 +825,25 @@ export interface CheckpointCreatedEvent {
 // Agent Events
 // ============================================================================
 
-/** Fired before each LLM call. Can modify messages. */
+/**
+ * Fired before each LLM call. Can modify messages.
+ *
+ * `messages` holds the conversation without system messages. The prompt and tool state
+ * belong to Pi: it restores them after the handler returns, so a handler cannot drop
+ * them and does not need to preserve them.
+ */
 export interface ContextEvent {
 	type: "context";
+	messages: AgentMessage[];
+}
+
+/**
+ * Fired before each LLM call, after every `context` handler has run and Pi has restored
+ * the prompt and tool state. `messages` is the full transcript including system messages,
+ * and the result is sent as returned: the handler owns the prompt and tool declarations.
+ */
+export interface ContextWithSystemEvent {
+	type: "context_with_system";
 	messages: AgentMessage[];
 }
 
@@ -1294,6 +1310,7 @@ export type ExtensionEvent =
 	| SessionEvent
 	| CheckpointCreatedEvent
 	| ContextEvent
+	| ContextWithSystemEvent
 	| CacheWarmingDecisionEvent
 	| BeforeProviderRequestEvent
 	| BeforeProviderHeadersEvent
@@ -1509,6 +1526,7 @@ export interface ExtensionAPI {
 	on(event: "session_tree", handler: ExtensionHandler<SessionTreeEvent>): () => void;
 	on(event: "checkpoint_created", handler: ExtensionHandler<CheckpointCreatedEvent>): () => void;
 	on(event: "context", handler: ExtensionHandler<ContextEvent, ContextEventResult>): () => void;
+	on(event: "context_with_system", handler: ExtensionHandler<ContextWithSystemEvent, ContextEventResult>): () => void;
 	on(
 		event: "cache_warming_decision",
 		handler: ExtensionHandler<CacheWarmingDecisionEvent, CacheWarmingDecisionEventResult>,

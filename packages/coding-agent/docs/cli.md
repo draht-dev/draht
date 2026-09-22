@@ -1,0 +1,313 @@
+<a id="cli-and-modes-reference"></a>
+
+# Command Line
+
+This page documents draht's built-in command-line commands and options. Run `draht --help` or append `--help` to a command for the exact interface in your installed version. The top-level help also includes options registered by loaded extensions.
+
+```sh
+draht [options] [--] [@files...] [messages...]
+draht install <source> [options]
+draht remove <source> [options]
+draht uninstall <source> [options]
+draht update [target] [options]
+draht list
+draht config [options]
+draht auth <check|print-api-key|print-bearer-token> [options]
+draht checkpoint prune [--days <n>] [--max-per-session <n>] [--dry-run]
+draht rlm --input <path|glob|url> --query "..." [--max-cost <n>]
+draht rlm replay <trajectory-id> [--verbose]
+draht --list-sessions
+draht --attach <session-id>
+```
+
+<a id="modes"></a>
+
+## Invocation and output
+
+```sh
+draht
+draht --print "Summarize this repository"
+git diff | draht --print "Review this change"
+draht --mode json "Inspect this repository" > events.jsonl
+```
+
+With terminal stdin and stdout, draht opens the terminal UI unless `--print`, `--mode json`, or `--mode rpc` selects another interface. When either stream is redirected and neither JSON nor RPC mode is selected, draht uses print mode. See [CLI Integration](cli-integration.md) for choosing between interactive, print, JSON, RPC, and SDK integration.
+
+| Input | Behavior |
+|---|---|
+| `message` | Provide an initial prompt |
+| `@path` | Include a text file or image in the first prompt |
+| Piped stdin | Prepend its contents to the first prompt |
+| `--` | Stop option parsing so a prompt can begin with `-` |
+
+draht resolves `@path` from the current working directory. The working directory also controls project configuration, resource discovery, and session grouping.
+
+`--print` controls whether draht runs once and exits. `--mode` selects the output interface. `--mode text` does not force one-shot execution when stdin and stdout are terminals; use `--print` for that behavior.
+
+| Option | Behavior |
+|---|---|
+| `-p`, `--print` | Run the supplied prompts, write the final assistant text to stdout, then exit |
+| `--mode text` | Select text output; still open the terminal UI when stdin and stdout are terminals |
+| `--mode json` | Run the supplied prompts, write JSONL events to stdout, then exit |
+| `--mode rpc` | Read JSONL commands from stdin and write responses and events to stdout until shutdown |
+| `--export <input> [output]` | Export a session file to HTML and exit; derive the destination when `output` is omitted |
+
+RPC mode rejects `@file` arguments. JSON and RPC modes reserve stdout for protocol records. See [JSON Event Stream](json.md) and [RPC Protocol](rpc.md).
+
+<a id="model-options"></a>
+
+## Models
+
+```sh
+draht --model sonnet:high
+```
+
+See [Choose a Model](models.md) for model selection and [Provider Authentication](providers.md) for credentials.
+
+- `--provider <name>`<br>
+  Restricts `--model` lookup to one provider.
+- `--model <pattern>`<br>
+  Selects by exact ID or fuzzy ID/name match. It accepts `provider/id` and an optional `:<thinking>` suffix.
+- `--api-key <key>`<br>
+  Uses a non-persistent API-key override. It requires a model selected through `--model` or `--models`.
+- `--thinking <level>`<br>
+  Sets `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. It overrides a `--model` suffix and is clamped to the model's capabilities.
+- `--models <patterns>`<br>
+  Sets a comma-separated scope for startup and cycling. It accepts exact IDs, fuzzy matches, case-insensitive globs, and optional `:<thinking>` suffixes.
+- `--list-models [search]`<br>
+  Lists available models, optionally filtered by a fuzzy search, then exits.
+
+<a id="session-options"></a>
+
+## Sessions
+
+```sh
+draht --continue
+```
+
+See [Sessions and Context](sessions.md) for resuming, forking, naming, and storing sessions.
+
+- `-c`, `--continue`<br>
+  Continues the most recent session for the current project.
+- `-r`, `--resume`<br>
+  Opens the session selector.
+- `--session <path|id>`<br>
+  Opens by file path, exact ID, or partial ID. draht searches the current project first and offers to fork a cross-project match.
+- `--session-id <id>`<br>
+  Opens the exact project session ID or creates it if absent. IDs accept letters, numbers, `.`, `_`, and `-`.
+- `--fork <path|id>`<br>
+  Forks an existing session into a new session for the current project.
+- `--session-dir <dir>`<br>
+  Overrides storage and lookup. It takes precedence over `DRAHT_CODING_AGENT_SESSION_DIR` and the `sessionDir` setting.
+- `--no-session`<br>
+  Uses an in-memory session that is not persisted.
+- `-n`, `--name <name>`<br>
+  Sets the session display name.
+- `--attachable`<br>
+  Exposes the session on an owner-only Unix socket so your other terminals can attach. Interactive sessions do this by default; the flag also enables it in `--print` and `--mode rpc` and makes a registration failure fatal. See [Attachable Sessions](attachable-sessions.md).
+- `--no-attachable`<br>
+  Does not expose the session on a socket. Equivalent to `DRAHT_NO_ATTACHABLE=1` or `"attachableSessions": false` in global settings.
+- `--attach <session-id>`<br>
+  Attaches to a running attachable session by its full ID.
+- `--list-sessions`<br>
+  Lists running attachable sessions, then exits.
+
+Constraints:
+
+- Session IDs must start and end with a letter or number.
+- `--fork` cannot be combined with `--session`, `--continue`, `--resume`, or `--no-session`.
+- `--session-id` cannot be combined with `--session`, `--continue`, or `--resume`. Combine it with `--fork` to choose the new ID.
+
+<a id="tool-options"></a>
+
+## Tools
+
+```sh
+draht --tools read,grep,find,ls --print "Review this project"
+```
+
+See [Settings](settings.md#tools) for configuring the default tool selection.
+
+- `-t`, `--tools <list>`<br>
+  Replaces the default selection with a comma-separated allowlist of built-in, extension, or custom tools.
+- `-xt`, `--exclude-tools <list>`<br>
+  Disables comma-separated tool names after all other selection options.
+- `-nbt`, `--no-builtin-tools`<br>
+  Disables default built-in tools while retaining extension and custom tools.
+- `-nt`, `--no-tools`<br>
+  Starts with all built-in, extension, and custom tools disabled.
+
+Default enabled tools are `read`, `bash`, `edit`, and `write`, unless `defaultTools` changes them.
+
+| Built-in | Purpose |
+|---|---|
+| `read` | Read text files and supported images |
+| `bash` | Run shell commands |
+| `powershell` | Run PowerShell commands on Windows |
+| `edit` | Apply exact text replacements to an existing file |
+| `write` | Create or overwrite a file |
+| `grep` | Search file contents |
+| `find` | Find paths using glob patterns |
+| `ls` | List directory contents |
+
+<a id="resource-options"></a>
+
+## Resources
+
+```sh
+draht --extension ./review.ts
+```
+
+See [Configuration](configuration.md) for conventional directories and project trust, [Settings](settings.md#resources) for configured paths, and [draht Packages](packages.md) for package sources.
+
+- `-e`, `--extension <path>`<br>
+  Loads an extension file or directory and is repeatable.
+- `-ne`, `--no-extensions`<br>
+  Disables discovered and configured extensions. Explicit `-e` paths still load.
+- `--skill <path>`<br>
+  Loads a skill file or directory and is repeatable.
+- `-ns`, `--no-skills`<br>
+  Disables discovered and configured skills. Explicit `--skill` paths still load.
+- `--prompt-template <path>`<br>
+  Loads a prompt-template file or directory and is repeatable.
+- `-np`, `--no-prompt-templates`<br>
+  Disables discovered and configured templates. Explicit `--prompt-template` paths still load.
+- `--theme <path>`<br>
+  Loads a theme file or directory and is repeatable.
+- `--use-theme <name[/name]>`<br>
+  Selects the initial interactive theme for this run.
+- `--no-themes`<br>
+  Disables discovered and configured themes. Explicit `--theme` paths still load.
+- `-nc`, `--no-context-files`<br>
+  Disables `AGENTS.md` and `CLAUDE.md` discovery.
+- `--context-root <path>`<br>
+  Confines `AGENTS.md` and `CLAUDE.md` discovery to an absolute project root. The ancestor walk stops at that root, and context files that resolve outside it are refused. Relative paths are rejected.
+
+Resource paths apply only to the current process. Relative paths resolve from the current working directory.
+
+<a id="prompt-and-display-options"></a>
+
+## Prompts and process
+
+```sh
+draht --append-system-prompt ./instructions.md
+```
+
+See [Configuration](configuration.md) for saved configuration, [Security](security.md#understand-project-trust) for project trust, and [Environment Variables](environment-variables.md) for process controls.
+
+- `--system-prompt <text|path>`<br>
+  Replaces the default system prompt with text or the contents of an existing file.
+- `--append-system-prompt <text|path>`<br>
+  Appends text or an existing file to the system prompt and is repeatable.
+- `--tui-mode <mode>`<br>
+  Uses `regular` or `fullscreen` terminal mode.
+- `--verbose`<br>
+  Shows verbose interactive startup information, overriding `quietStartup`.
+- `-a`, `--approve`<br>
+  Trusts project-local configuration and resources for this process.
+- `-na`, `--no-approve`<br>
+  Ignores trust-gated project-local configuration and resources for this process.
+- `--offline`<br>
+  Disables automatic network activity, including model catalog refreshes. Equivalent to `DRAHT_OFFLINE=1`.
+- `-h`, `--help`<br>
+  Shows help, including flags registered by loaded extensions, then exits.
+- `-v`, `--version`<br>
+  Shows the draht version, then exits.
+
+Extensions may register additional long-form options. Unknown short options are rejected.
+
+## Package commands
+
+```sh
+draht install npm:@scope/package
+```
+
+See [draht Packages](packages.md) for source formats, filtering, installation, and project scope.
+
+### Common tasks
+
+| Task | Command |
+|---|---|
+| Install a package | `draht install <source>` |
+| List configured packages | `draht list` |
+| Remove a package and its settings entry | `draht remove <source>` |
+| Configure which package resources load | `draht config` |
+
+Add `--local` or `-l` to `install`, `remove`, `uninstall`, or `config` to use project settings instead of global settings.
+
+### Update draht or packages
+
+Running `draht update` without a target updates draht itself.
+
+| Task | Command |
+|---|---|
+| Update draht | `draht update` |
+| Update all installed packages | `draht update --extensions` |
+| Update one installed package | `draht update <source>` |
+| Refresh model catalogs | `draht update --models` |
+| Update draht and all installed packages | `draht update --all` |
+
+Add `--force` to reinstall draht when the selected update includes draht.
+
+### Aliases and command options
+
+- `draht uninstall <source>` is an alias for `draht remove <source>`.
+- `draht update --self` and `draht update self` are aliases for `draht update`.
+- `draht update --extension <source>` is an alias for `draht update <source>`.
+- `-a`, `--approve` trusts project-local files for one command. `-na`, `--no-approve` ignores trust-gated project-local files.
+- Append `-h` or `--help` to a command for its exact usage and option constraints.
+
+## Credential commands
+
+```sh
+draht auth check --provider openai --json
+```
+
+Authentication commands require `--provider <provider>` or `--model <model>`. See [Provider Authentication](providers.md) for supported methods.
+
+| Command | Description |
+|---|---|
+| `draht auth check` | Print `ready`, `not_ready`, or `invalid`; exit with status `0`, `1`, or `2`, respectively |
+| `draht auth print-api-key` | Print the resolved API key |
+| `draht auth print-bearer-token` | Print a resolved OAuth bearer token |
+
+| Option | Applies to | Description |
+|---|---|---|
+| `--provider <provider>` | All | Resolve credentials for a provider |
+| `--model <model>` | All | Resolve credentials from a model; may be combined with `--provider` |
+| `--json` | `auth check` | Write the structured result as JSON |
+| `--credentials` | `auth check` | Emit the resolved credential when ready |
+| `--no-refresh` | `auth check` | Do not refresh expired OAuth credentials; refresh is the default |
+| `--min-expiry <duration>` | `print-bearer-token` | Require remaining token lifetime using `ms`, `s`, `m`, or `h`, such as `30m` |
+
+Credential-printing commands write secrets to stdout.
+
+## Checkpoint commands
+
+```sh
+draht checkpoint prune --dry-run
+```
+
+`draht checkpoint prune` deletes checkpoint snapshots for the repository in the current directory. Without options it applies the configured retention policy (`checkpoints.retentionDays` and `checkpoints.maxPerSession`, see [Settings](settings.md)).
+
+| Option | Description |
+|---|---|
+| `--days <n>` | Delete snapshots older than `n` days |
+| `--max-per-session <n>` | Keep at most `n` snapshots per session |
+| `--dry-run` | Report what would be deleted without deleting it |
+
+## RLM commands
+
+```sh
+draht rlm --input ./big-log.txt --query "What caused the outage?"
+```
+
+`draht rlm` runs a Recursive Language Model query against a large input without loading it into a session's context. The root model writes Python that inspects the input inside a sandboxed REPL and returns a final answer.
+
+| Option | Description |
+|---|---|
+| `--input <source>` | Required. A file path, glob pattern, `http(s)://` URL, or `knowledge:<client-slug>` reference |
+| `--query <text>` | Required. The question to answer about the input |
+| `--max-cost <n>` | Optional soft USD cost hint |
+
+`draht rlm replay <trajectory-id>` prints the recorded final answer from `.draht/rlm/<trajectory-id>.jsonl` without calling a model. Add `--verbose` to also print each recorded step.

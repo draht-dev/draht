@@ -580,14 +580,14 @@ const MID_CONVO_EFFORT_UNSUPPORTED_ANTHROPIC_MODELS = new Set(["openrouter:anthr
 function supportsAnthropicMidConvoEffort(modelId: string): boolean {
 	const id = modelId.toLowerCase().replace(/^~?anthropic\//, "");
 	return (
-		/^claude-opus-5(?:-\d{8})?$/.test(id) ||
+		/^claude-opus-(?:5|5[.-]5)(?:-\d{8})?$/.test(id) ||
 		/^claude-(?:fable|mythos)-5(?:[.-]1)(?:-\d{8})?$/.test(id)
 	);
 }
 
 function supportsAnthropicMidConvoSystemMessages(modelId: string): boolean {
 	return (
-		/^claude-opus-(?:4[.-]8|5)(?:-\d{8})?$/.test(modelId) ||
+		/^claude-opus-(?:4[.-]8|5(?:[.-]5)?)(?:-\d{8})?$/.test(modelId) ||
 		/^claude-(?:fable|mythos)-5(?:[.-]1)?(?:-\d{8})?$/.test(modelId)
 	);
 }
@@ -2661,6 +2661,32 @@ async function generateModels() {
 			!(model.provider === "xai" && XAI_BUILTIN_EXCLUDED_MODEL_IDS.has(model.id)) &&
 			!((model.provider === "opencode" || model.provider === "opencode-go") && model.id === "gpt-5.3-codex-spark"),
 	);
+
+	// Add Claude Opus 5.5 until models.dev includes it.
+	// https://platform.claude.com/docs/en/models/opus-5-5/overview
+	if (!allModels.some((model) => model.provider === "anthropic" && model.id === "claude-opus-5-5")) {
+		allModels.push({
+			id: "claude-opus-5-5",
+			name: "Claude Opus 5.5",
+			api: "anthropic-messages",
+			provider: "anthropic",
+			baseUrl: "https://api.anthropic.com",
+			reasoning: true,
+			thinkingLevelMap: {
+				off: null,
+				minimal: null,
+				low: "low",
+				medium: "medium",
+				high: "high",
+				xhigh: "xhigh",
+				max: "max",
+			},
+			input: ["text", "image"],
+			cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
+			contextWindow: 1000000,
+			maxTokens: 128000,
+		});
+	}
 
 	// Temporary overrides until upstream model metadata is corrected.
 	for (const candidate of allModels) {

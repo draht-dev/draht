@@ -27,6 +27,7 @@ import type {
 	OAuthLoginCallbacks,
 	Provider,
 	ProviderHeaders,
+	ProviderId,
 	RefreshModelsContext,
 	SimpleStreamOptions,
 	TextContent,
@@ -870,6 +871,15 @@ export interface AfterProviderResponseEvent {
 	headers: Record<string, string>;
 }
 
+/** Fired for a parsed provider stream event before Pi normalizes it. */
+export interface ProviderStreamEvent {
+	type: "provider_stream_event";
+	provider: ProviderId;
+	api: Api;
+	model: string;
+	data: unknown;
+}
+
 /** Fired after user submits prompt but before agent loop. */
 export interface BeforeAgentStartEvent {
 	type: "before_agent_start";
@@ -1315,6 +1325,7 @@ export type ExtensionEvent =
 	| BeforeProviderRequestEvent
 	| BeforeProviderHeadersEvent
 	| AfterProviderResponseEvent
+	| ProviderStreamEvent
 	| BeforeAgentStartEvent
 	| AgentStartEvent
 	| AgentEndEvent
@@ -1537,6 +1548,7 @@ export interface ExtensionAPI {
 	): () => void;
 	on(event: "before_provider_headers", handler: ExtensionHandler<BeforeProviderHeadersEvent>): () => void;
 	on(event: "after_provider_response", handler: ExtensionHandler<AfterProviderResponseEvent>): () => void;
+	on(event: "provider_stream_event", handler: ExtensionHandler<ProviderStreamEvent>): () => void;
 	on(
 		event: "before_agent_start",
 		handler: ExtensionHandler<BeforeAgentStartEvent, BeforeAgentStartEventResult>,
@@ -1829,7 +1841,9 @@ export interface ProviderConfig {
 	 * (`getCurrentSystemPrompt(context.messages)`, `getCurrentTools(context.messages)`).
 	 * Implementations must invoke `options.onPayload` before sending the provider request and use any
 	 * returned replacement payload. They must invoke `options.onResponse` after receiving the response
-	 * and before consuming its body, matching built-in providers.
+	 * and before consuming its body, matching built-in providers. Implementations may invoke
+	 * `options.onProviderStreamEvent(data, model)` with parsed stream events before normalization.
+	 * Event data is adapter-owned and must be treated as read-only.
 	 */
 	streamSimple?: (
 		model: Model<Api>,

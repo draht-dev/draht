@@ -636,6 +636,7 @@ async function loadExtensionsInternal(
 ): Promise<LoadExtensionsResult> {
 	const extensions: Extension[] = [];
 	const errors: Array<{ path: string; error: string }> = [];
+	const warnings: Array<{ path: string; warning: string }> = [];
 	const cacheToken = useCache ? useExtensionCacheCwd(cwd) : undefined;
 	const resolvedCwd = cacheToken?.cwd ?? resolvePath(cwd);
 	const resolvedEventBus = eventBus ?? createEventBus();
@@ -663,6 +664,7 @@ async function loadExtensionsInternal(
 	return {
 		extensions,
 		errors,
+		warnings,
 		runtime: resolvedRuntime,
 	};
 }

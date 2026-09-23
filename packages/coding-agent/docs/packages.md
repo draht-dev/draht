@@ -87,7 +87,9 @@ draht supplies these packages to extensions and skills:
 - `@draht/tui`
 - `typebox`
 
-Declare imported draht packages in `peerDependencies` with a `"*"` range and do not bundle them. Other draht packages used as dependencies must be included in the published tarball and referenced through their `node_modules` resource paths.
+Declare the host-provided packages listed above in `peerDependencies` with a `"*"` range and do not bundle them. draht suppresses automatic peer installation for managed npm packages and git packages installed with npm, pnpm, or Bun. Local packages are not installed or modified, so their dependency tree remains the package author's responsibility.
+
+Do not list host-provided packages in `dependencies`. A physical copy can bypass draht's extension module mapping in compiled ESM and create duplicate classes, registries, and initialization work. draht reports an extension warning when it detects this manifest configuration. Other draht packages used as dependencies must be included in the published tarball and referenced through their `node_modules` resource paths.
 
 Installed packages load with separate module roots. Do not rely on two packages sharing one dependency instance or one package resolving another package’s undeclared dependency.
 

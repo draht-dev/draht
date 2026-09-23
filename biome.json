@@ -38,5 +38,6 @@
 			"!.claude",
 			"!!**/node_modules"
 		]
-	}
+	},
+	"plugins": ["./scripts/biome/model-type-comparison.grit"]
 }

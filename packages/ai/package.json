@@ -55,8 +55,7 @@
 		"dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
 		"dev:tsc": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
 		"test": "vitest --run",
-		"prepublishOnly": "npm run clean && npm run build",
-		"generate-image-models": "npx tsx scripts/generate-image-models.ts --strict"
+		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"dependencies": {
 		"@anthropic-ai/sdk": "^0.124.0",

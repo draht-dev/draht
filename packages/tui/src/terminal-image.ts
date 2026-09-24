@@ -437,11 +437,21 @@ export function cropKittyImageLine(line: string, hiddenRows: number, visibleRows
 	return `${line.slice(0, match.index)}\x1b_G${controls.join(",")};${line.slice(match.index + match[0].length)}`;
 }
 
+function chooseLessDistortedCellCount(upperCount: number, idealCount: number): number {
+	if (upperCount <= 1) return upperCount;
+
+	const lowerCount = upperCount - 1;
+	const upperDistortion = Math.max(upperCount / idealCount, idealCount / upperCount);
+	const lowerDistortion = Math.max(lowerCount / idealCount, idealCount / lowerCount);
+	return lowerDistortion < upperDistortion ? lowerCount : upperCount;
+}
+
 export function calculateImageCellSize(
 	imageDimensions: ImageDimensions,
 	maxWidthCells: number,
 	maxHeightCells?: number,
 	cellDimensions: CellDimensions = { widthPx: 9, heightPx: 18 },
+	optimizeAspectRatio = false,
 ): ImageCellSize {
 	const maxWidth = Math.max(1, Math.floor(maxWidthCells));
 	const maxHeight = maxHeightCells === undefined ? undefined : Math.max(1, Math.floor(maxHeightCells));
@@ -454,13 +464,26 @@ export function calculateImageCellSize(
 
 	const scaledWidthPx = imageWidth * scale;
 	const scaledHeightPx = imageHeight * scale;
-	const columns = Math.ceil(scaledWidthPx / cellDimensions.widthPx);
-	const rows = Math.ceil(scaledHeightPx / cellDimensions.heightPx);
+	let columns = Math.max(1, Math.min(maxWidth, Math.ceil(scaledWidthPx / cellDimensions.widthPx)));
+	const heightRows = scaledHeightPx / cellDimensions.heightPx;
+	let rows = Math.max(1, Math.ceil(heightRows));
+	if (maxHeight !== undefined) {
+		rows = Math.min(maxHeight, rows);
+	}
 
-	return {
-		columns: Math.max(1, Math.min(maxWidth, columns)),
-		rows: Math.max(1, maxHeight === undefined ? rows : Math.min(maxHeight, rows)),
-	};
+	if (!optimizeAspectRatio) {
+		return { columns, rows };
+	}
+
+	if (widthScale <= heightScale) {
+		const idealRows = (columns * cellDimensions.widthPx * imageHeight) / (imageWidth * cellDimensions.heightPx);
+		rows = chooseLessDistortedCellCount(rows, idealRows);
+	} else {
+		const idealColumns = (rows * cellDimensions.heightPx * imageWidth) / (imageHeight * cellDimensions.widthPx);
+		columns = chooseLessDistortedCellCount(columns, idealColumns);
+	}
+
+	return { columns, rows };
 }
 
 export function calculateImageRows(
@@ -624,7 +647,14 @@ export function renderImage(
 	}
 
 	const maxWidth = options.maxWidthCells ?? 80;
-	const size = calculateImageCellSize(imageDimensions, maxWidth, options.maxHeightCells, getCellDimensions());
+	// Reduce Kitty's cell-aligned distortion without shrinking iTerm2 reservations.
+	const size = calculateImageCellSize(
+		imageDimensions,
+		maxWidth,
+		options.maxHeightCells,
+		getCellDimensions(),
+		caps.images === "kitty",
+	);
 
 	if (caps.images === "kitty") {
 		if (options.imageId !== undefined) {

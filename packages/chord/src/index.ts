@@ -11,7 +11,7 @@ export {
 	replicatedState,
 } from "./api.ts";
 export type { Draft } from "./delta/index.ts";
-export { isJsonValue } from "./json.ts";
+export { type CopyJsonOptions, copyJson, isJsonValue } from "./json.ts";
 export {
 	isRemoteServiceErrorCode,
 	REMOTE_SERVICE_ERROR_CODES,

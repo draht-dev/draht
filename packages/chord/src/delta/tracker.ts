@@ -388,6 +388,10 @@ const sharedObjectHandler: ProxyHandler<object> = {
 		throw new TypeError("Defining overlay properties is not supported");
 	},
 	get(target, property) {
+		if (property === "then") {
+			const node = (target as Record<PropertyKey, unknown>)[NODE] as OverlayNode | undefined;
+			if (node === undefined || isSettledContext(node.context)) return undefined;
+		}
 		const node = nodeForTarget(target);
 		if (property === NODE) return node;
 		return getProperty(node, property);
@@ -499,15 +503,17 @@ function nodeForTarget(target: object): OverlayNode {
 	return node;
 }
 
-function assertReadable(context: OverlayContext): void {
-	if (
+function isSettledContext(context: OverlayContext): boolean {
+	return (
 		context.overlayReleased ||
 		context.status.value === "consumed" ||
 		context.status.value === "aborted" ||
 		context.status.value === "stale"
-	) {
-		throw new TypeError("Cannot use a settled overlay");
-	}
+	);
+}
+
+function assertReadable(context: OverlayContext): void {
+	if (isSettledContext(context)) throw new TypeError("Cannot use a settled overlay");
 }
 
 function assertWritable(context: OverlayContext): void {

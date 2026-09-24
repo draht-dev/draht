@@ -86,6 +86,35 @@ describe("delta tracker transactional overlay lifecycle", () => {
 		tracker.adopt(prepared);
 	});
 
+	it("allows Promise resolution to inspect a settled draft without reporting a false failure", async () => {
+		const initial = JSON.parse('{"then":"document-value","value":1}') as { then: string; value: number };
+		const tracker = track(initial);
+		const change = tracker.beginChange();
+		const draft = change.state;
+		expect(draft.then).toBe("document-value");
+		draft.value = 2;
+		const prepared = change.prepare();
+
+		const resolved = await Promise.resolve(draft);
+		expect(resolved).toBe(draft);
+		expect(resolved.then).toBeUndefined();
+		expect(() => resolved.value).toThrow(/settled/);
+
+		tracker.adopt(prepared);
+		expect(tracker.value.then).toBe("document-value");
+		expect(tracker.value.value).toBe(2);
+
+		const largeTracker = track({ rows: Array.from({ length: 4_100 }, (_, value) => ({ value })) });
+		const largeChange = largeTracker.beginChange();
+		const largeDraft = largeChange.state;
+		for (const row of largeDraft.rows) expect(row.value).toBeGreaterThanOrEqual(0);
+		largeDraft.rows[0]!.value = -1;
+		const largePrepared = largeChange.prepare();
+		expect(await Promise.resolve(largeDraft)).toBe(largeDraft);
+		expect(() => largeDraft.rows).toThrow(/settled/);
+		largeTracker.adopt(largePrepared);
+	});
+
 	it("aborts idempotently and revokes held descendants", () => {
 		const tracker = track({ child: { value: 1 } });
 		const change = tracker.beginChange();

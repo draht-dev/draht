@@ -1,4 +1,4 @@
-import type { JsonValue } from "../../types.ts";
+import type { JsonValue } from "../types.ts";
 import {
 	apply as applyMutable,
 	assertValidOp,
@@ -7,7 +7,7 @@ import {
 	PathError,
 	type Seg,
 	UnsafePathError,
-} from "../index.ts";
+} from "./index.ts";
 
 type JsonContainer = JsonValue[] | Record<string, JsonValue>;
 

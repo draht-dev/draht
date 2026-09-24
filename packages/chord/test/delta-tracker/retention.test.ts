@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-describe("delta change retention across GC jobs", () => {
+describe("delta tracker retention across GC jobs", () => {
 	it.each([
 		"aborted-payload",
 		"unadopted-prepared",
@@ -11,6 +11,12 @@ describe("delta change retention across GC jobs", () => {
 		"obsolete-revisions",
 		"retained-settled-prepared",
 		"retained-settled-change",
+		"retained-settled-proxy",
+		"retained-large-settled-proxy",
+		"retained-large-placement-proxies",
+		"stale-unprepared-change",
+		"same-job-fast-cleanup",
+		"same-job-folded-ops-cleanup",
 		"lifecycle-churn",
 	])(
 		"validates %s retention semantics",

@@ -7,8 +7,8 @@ import {
 	diffRevisions,
 	encoder,
 	type Op,
-} from "../../src/delta/cow/index.ts";
-import type { JsonValue } from "../../src/types.ts";
+} from "../src/delta/index.ts";
+import type { JsonValue } from "../src/types.ts";
 
 const expectDiff = (before: JsonValue, after: JsonValue, expected: unknown): void => {
 	const operations = diffRevisions(before, after);
@@ -257,11 +257,11 @@ describe("immutable revision diff", () => {
 		expect(diffRevisions(before, after)).toEqual([["r", after]]);
 	});
 
-	it("uses normalized array fallback without payload-cost policy", () => {
+	it("bounds a wide normalized array fallback with a root replacement", () => {
 		const before = { values: Array.from({ length: 40_000 }, () => 0) };
 		const after = { values: Array.from({ length: 40_000 }, () => 1) };
 		const operations = diffRevisions(before, after);
-		expect(operations).toEqual([["p", ["values"], 0, 40_000, after.values]]);
+		expect(operations).toEqual([["r", after]]);
 		expect(applyImmutable(before, operations)).toEqual(after);
 	});
 });

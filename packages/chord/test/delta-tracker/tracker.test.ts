@@ -1,7 +1,6 @@
 import { isProxy } from "node:util/types";
 import { describe, expect, it } from "vitest";
-import { type Draft, type Op, track } from "../../src/delta/astra/index.ts";
-import { apply, decoder, encoder, type JsonValue } from "../../src/delta/index.ts";
+import { apply, type Draft, decoder, encoder, type JsonValue, type Op, track } from "../../src/delta/index.ts";
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
@@ -9,20 +8,41 @@ function replay<T>(base: T, operations: readonly Op[]): T {
 	return apply(clone(base), clone(operations));
 }
 
+function expectAliasFree(value: unknown): void {
+	const seen = new WeakMap<object, string>();
+	const visit = (current: unknown, path: string): void => {
+		if (current === null || typeof current !== "object") return;
+		const previous = seen.get(current);
+		if (previous !== undefined) throw new Error(`container at ${path} aliases ${previous}`);
+		seen.set(current, path);
+		if (Array.isArray(current)) {
+			for (let index = 0; index < current.length; index++) visit(current[index], `${path}[${index}]`);
+			return;
+		}
+		for (const key of Object.keys(current)) visit((current as Record<string, unknown>)[key], `${path}.${key}`);
+	};
+	visit(value, "$root");
+}
+
 function settle<T extends object>(tracker: ReturnType<typeof track<T>>, mutate: (draft: Draft<T>) => void): T {
-	const base = clone(tracker.value);
+	const baseRoot = tracker.value;
+	const base = clone(baseRoot);
 	const change = tracker.beginChange();
 	mutate(change.state);
 	const prepared = change.prepare();
 	const candidate = clone(prepared.value);
+	expect(isProxy(prepared.value)).toBe(false);
 	expect(replay(base, prepared.ops)).toEqual(candidate);
+	expect(baseRoot).toEqual(base);
 	tracker.adopt(prepared);
+	expect(baseRoot).toEqual(base);
+	expect(tracker.value).toBe(prepared.value);
 	expect(tracker.value).toEqual(candidate);
 	return candidate;
 }
 
-describe("astra transactional overlay lifecycle", () => {
-	it("borrows the committed root and leaves it untouched until adopt", () => {
+describe("delta tracker transactional overlay lifecycle", () => {
+	it("materializes an immutable next revision and adopts it by pointer swap", () => {
 		const initial = { count: 1, nested: { text: "a" }, values: [1] };
 		const tracker = track(initial);
 		expect(tracker.value).toBe(initial);
@@ -32,28 +52,24 @@ describe("astra transactional overlay lifecycle", () => {
 		change.state.values.push(2);
 		expect(initial).toEqual({ count: 1, nested: { text: "a" }, values: [1] });
 		const prepared = change.prepare();
+		const next = prepared.value;
 		expect(prepared.baseRevision).toBe(0);
 		expect(prepared.base).toBe(initial);
-		expect(prepared.value).toEqual({ count: 2, nested: { text: "ab" }, values: [1, 2] });
+		expect(next).not.toBe(initial);
+		expect(isProxy(next)).toBe(false);
+		expect(next).toEqual({ count: 2, nested: { text: "ab" }, values: [1, 2] });
 		expect(prepared.ops).toEqual([
 			["s", ["count"], 2],
 			["a", ["nested", "text"], "b"],
 			["p", ["values"], 1, 0, [2]],
 		]);
-		expect(() => {
-			(prepared.value as { count: number }).count = 9;
-		}).toThrow(/read-only/);
+		expect(tracker.value).toBe(initial);
 		tracker.adopt(prepared);
-		expect(initial).toEqual({ count: 2, nested: { text: "ab" }, values: [1, 2] });
-		expect(prepared.value).toBe(tracker.value);
-		expect(prepared.value).toEqual({ count: 2, nested: { text: "ab" }, values: [1, 2] });
-		expect(prepared.base).toBe(prepared.value);
+		expect(initial).toEqual({ count: 1, nested: { text: "a" }, values: [1] });
+		expect(tracker.value).toBe(next);
+		expect(prepared.value).toBe(next);
+		expect(prepared.base).toBe(initial);
 		expect(() => change.state.count).toThrow(TypeError);
-		expect(prepared.ops).toEqual([
-			["s", ["count"], 2],
-			["a", ["nested", "text"], "b"],
-			["p", ["values"], 1, 0, [2]],
-		]);
 	});
 
 	it("keeps a transaction live across await and seals it only at prepare", async () => {
@@ -66,7 +82,7 @@ describe("astra transactional overlay lifecycle", () => {
 		expect(prepared.value).toEqual({ left: 1, nested: { right: 2 } });
 		expect(() => {
 			change.state.left = 3;
-		}).toThrow(/read-only/);
+		}).toThrow(/settled/);
 		tracker.adopt(prepared);
 	});
 
@@ -93,12 +109,31 @@ describe("astra transactional overlay lifecycle", () => {
 		const held = secondPrepared.value;
 		tracker.adopt(firstPrepared);
 		expect(tracker.value.value).toBe(1);
-		expect(() => held.value).toThrow(TypeError);
+		expect(held.value).toBe(2);
 		expect(() => tracker.adopt(secondPrepared)).toThrow(/stale/);
 		expect(() => tracker.adopt(firstPrepared)).toThrow(/already been used/);
 	});
 
-	it("adopts object edits in place with ordinary fast-layout descriptors", () => {
+	it("invalidates competing open overlays without changing their base revision", () => {
+		const initial = { rows: [{ value: 0 }, { value: 1 }] };
+		const tracker = track(initial);
+		const staleChange = tracker.beginChange();
+		const held = staleChange.state.rows[1]!;
+		held.value = 2;
+
+		const winner = tracker.beginChange();
+		winner.state.rows[0]!.value = 3;
+		const prepared = winner.prepare();
+		tracker.adopt(prepared);
+
+		expect(initial).toEqual({ rows: [{ value: 0 }, { value: 1 }] });
+		expect(tracker.value).toEqual({ rows: [{ value: 3 }, { value: 1 }] });
+		expect(() => held.value).toThrow(/settled/);
+		expect(() => staleChange.prepare()).toThrow(/settled/);
+		staleChange.abort();
+	});
+
+	it("adopts object edits as ordinary fast-layout immutable revisions", () => {
 		const initial = { first: 1, second: 2 } as { first: number; second?: number; third?: number };
 		const tracker = track(initial);
 		const change = tracker.beginChange();
@@ -107,9 +142,10 @@ describe("astra transactional overlay lifecycle", () => {
 		change.state.third = 4;
 		const prepared = change.prepare();
 		tracker.adopt(prepared);
-		expect(tracker.value).toBe(initial);
+		expect(tracker.value).not.toBe(initial);
+		expect(initial).toEqual({ first: 1, second: 2 });
 		expect(tracker.value).toEqual({ first: 3, third: 4 });
-		expect(Object.getOwnPropertyDescriptor(initial, "third")).toEqual({
+		expect(Object.getOwnPropertyDescriptor(tracker.value, "third")).toEqual({
 			value: 4,
 			writable: true,
 			enumerable: true,
@@ -137,9 +173,10 @@ describe("astra transactional overlay lifecycle", () => {
 		next.state.value = 2;
 		const nextPrepared = next.prepare();
 		tracker.adopt(nextPrepared);
-		// In-place adoption intentionally advances retained references to the mutable committed root.
-		expect(published).toBe(tracker.value);
-		expect(prepared.value).toEqual({ value: 2, nested: { count: 1 } });
+		// Retained immutable publications remain at their original revision.
+		expect(published).not.toBe(tracker.value);
+		expect(prepared.value).toEqual({ value: 1, nested: { count: 1 } });
+		expect(tracker.value).toEqual({ value: 2, nested: { count: 1 } });
 	});
 
 	it("keeps replacement base/value structurally compatible and readable after adoption", () => {
@@ -148,22 +185,22 @@ describe("astra transactional overlay lifecycle", () => {
 		const tracker = track(original);
 		const prepared = tracker.prepareReplace(replacement);
 		expect(prepared.base).toBe(original);
-		expect(prepared.value).not.toBe(replacement);
+		expect(prepared.value).toBe(replacement);
 		tracker.adopt(prepared);
 		expect(prepared.base).toBe(original);
 		expect(prepared.value).toBe(replacement);
 		expect(prepared.value).toBe(tracker.value);
 	});
 
-	it("revokes aborted and stale prepared candidate views", () => {
+	it("keeps aborted and stale materialized candidates readable", () => {
 		const tracker = track({ value: 0 });
 		const abortedChange = tracker.beginChange();
 		abortedChange.state.value = 1;
 		const aborted = abortedChange.prepare();
 		const abortedView = aborted.value;
 		aborted.abort();
-		expect(() => abortedView.value).toThrow(TypeError);
-		expect(() => aborted.value.value).toThrow(TypeError);
+		expect(abortedView.value).toBe(1);
+		expect(aborted.value.value).toBe(1);
 
 		const loserChange = tracker.beginChange();
 		loserChange.state.value = 2;
@@ -171,8 +208,21 @@ describe("astra transactional overlay lifecycle", () => {
 		const loserView = loser.value;
 		const winner = tracker.prepareReplace({ value: 3 });
 		tracker.adopt(winner);
-		expect(() => loserView.value).toThrow(TypeError);
-		expect(() => loser.value.value).toThrow(TypeError);
+		expect(loserView.value).toBe(2);
+		expect(loser.value.value).toBe(2);
+	});
+
+	it("lets a settled Change abort its prepared result without retaining its context", () => {
+		const tracker = track({ value: 0, nested: { value: 1 } });
+		const change = tracker.beginChange();
+		change.state.value = 1;
+		const prepared = change.prepare();
+		const operations = prepared.ops;
+		change.abort();
+		change.abort();
+		expect(prepared.ops).toBe(operations);
+		expect(prepared.value).toEqual({ value: 1, nested: { value: 1 } });
+		expect(() => tracker.adopt(prepared)).toThrow(/aborted/);
 	});
 
 	it("rejects foreign and aborted prepared values", () => {
@@ -186,26 +236,28 @@ describe("astra transactional overlay lifecycle", () => {
 	});
 
 	it("reads deleted own properties as absent", () => {
-		Object.defineProperty(Object.prototype, "astraInherited", {
+		Object.defineProperty(Object.prototype, "trackerInherited", {
 			value: 7,
 			writable: true,
 			configurable: true,
 		});
 		try {
-			const tracker = track({ value: 1 } as { value?: number; astraInherited?: number });
+			const tracker = track({ value: 1 } as { value?: number; trackerInherited?: number });
 			const change = tracker.beginChange();
 			delete change.state.value;
-			change.state.astraInherited = 1;
-			delete change.state.astraInherited;
+			change.state.trackerInherited = 1;
+			delete change.state.trackerInherited;
 			expect(change.state.value).toBeUndefined();
-			expect(change.state.astraInherited).toBeUndefined();
+			expect(change.state.trackerInherited).toBeUndefined();
 			const prepared = change.prepare();
 			expect(prepared.value.value).toBeUndefined();
-			expect(prepared.value.astraInherited).toBeUndefined();
+			// Plain committed values expose inherited properties through ordinary
+			// JavaScript reads; strict-JSON membership remains own-properties only.
+			expect(prepared.value.trackerInherited).toBe(7);
 			tracker.adopt(prepared);
 			expect(Object.keys(tracker.value)).toEqual([]);
 		} finally {
-			delete (Object.prototype as Record<string, unknown>).astraInherited;
+			delete (Object.prototype as Record<string, unknown>).trackerInherited;
 		}
 	});
 
@@ -252,24 +304,21 @@ describe("astra transactional overlay lifecycle", () => {
 		expect(tracker.value).toBe(initial);
 	});
 
-	it("takes O(1) ownership for replacement and detaches its operation payload", () => {
+	it("takes O(1) immutable ownership for replacement and its operation payload", () => {
 		const tracker = track({ value: 0, rows: [] as { value: number }[] });
 		const replacement = { value: 1, rows: [{ value: 2 }] };
 		const prepared = tracker.prepareReplace(replacement);
 		expect(prepared.base).toBe(tracker.value);
-		expect(prepared.value.rows).not.toBe(replacement.rows);
+		expect(prepared.value).toBe(replacement);
 		const operations = prepared.ops;
 		expect(operations).toEqual([["r", replacement]]);
-		expect((operations[0] as readonly ["r", typeof replacement])[1]).not.toBe(replacement);
+		expect((operations[0] as readonly ["r", typeof replacement])[1]).toBe(replacement);
 		tracker.adopt(prepared);
 		expect(tracker.value).toBe(replacement);
-		expect(prepared.value).toBe(replacement);
-		replacement.rows[0]!.value = 9;
-		expect(operations).toEqual([["r", { value: 1, rows: [{ value: 2 }] }]]);
 	});
 });
 
-describe("astra policy view", () => {
+describe("delta tracker policy view", () => {
 	it("supports native reads, descriptors, keys, iteration, map, and JSON", () => {
 		const tracker = track({ values: [1, 2, 3], object: { a: 1 } as { a: number; b?: number } });
 		const change = tracker.beginChange();
@@ -284,6 +333,26 @@ describe("astra policy view", () => {
 		expect(Object.keys(change.state.object)).toEqual(["a", "b"]);
 		expect(JSON.parse(JSON.stringify(change.state))).toEqual({ values: [1, 4, 5, 3], object: { a: 1, b: 2 } });
 		change.abort();
+	});
+
+	it("keeps document keys distinct from object proxy target fields", () => {
+		const tracker = track({
+			object: {
+				context: 1,
+				base: 2,
+				parent: 3,
+				dirty: 4,
+				target: 5,
+				proxy: 6,
+			},
+		});
+		const change = tracker.beginChange();
+		change.state.object.context = 7;
+		change.state.object.proxy = 8;
+		expect(Object.keys(change.state.object)).toEqual(["context", "base", "parent", "dirty", "target", "proxy"]);
+		const prepared = change.prepare();
+		expect(prepared.value.object).toEqual({ context: 7, base: 2, parent: 3, dirty: 4, target: 5, proxy: 8 });
+		tracker.adopt(prepared);
 	});
 
 	it("keeps native coercion side effects and string operation forms", () => {
@@ -349,6 +418,21 @@ describe("astra policy view", () => {
 		tracker.adopt(prepared);
 		expect(tracker.value.first).toBe("1");
 		expect(Object.keys(tracker.value.object)).toEqual(["1", "2", "label"]);
+	});
+
+	it("normalizes deeply equal container assignments before direct candidate materialization", () => {
+		const initial = { child: { a: 1, b: 2 }, count: 0 };
+		const tracker = track(initial);
+		const change = tracker.beginChange();
+		change.state.child = { b: 2, a: 1 };
+		change.state.count = 1;
+		const prepared = change.prepare();
+		const replayed = replay(initial, prepared.ops);
+		expect(prepared.ops).toEqual([["s", ["count"], 1]]);
+		expect(Object.keys(prepared.value.child)).toEqual(["a", "b"]);
+		expect(Object.keys(replayed.child)).toEqual(["a", "b"]);
+		expect(prepared.value).toEqual(replayed);
+		tracker.adopt(prepared);
 	});
 
 	it("keeps native integer and string ordering across deletion and re-addition", () => {
@@ -568,7 +652,7 @@ describe("astra policy view", () => {
 	});
 });
 
-describe("astra by-value placements", () => {
+describe("delta tracker by-value placements", () => {
 	it("clones property, index, push, unshift, splice, fill, and copyWithin placements", () => {
 		const tracker = track({
 			property: null as { value: number } | null,
@@ -597,6 +681,81 @@ describe("astra by-value placements", () => {
 		tracker.adopt(prepared);
 	});
 
+	it("rejects non-strict JSON placements before changing the draft", () => {
+		const initial = {
+			optional: "remove" as string | undefined,
+			payload: null as JsonValue,
+			number: 0,
+			values: [1, 2] as JsonValue[],
+		};
+		const tracker = track(initial);
+		const change = tracker.beginChange();
+		const undefinedValue = undefined as unknown as JsonValue;
+
+		expect(() => {
+			change.state.values[0] = undefinedValue;
+		}).toThrow(/strict JSON/);
+		expect(() => change.state.values.push({ staged: true }, undefinedValue)).toThrow(/strict JSON/);
+		expect(() => change.state.values.unshift(undefinedValue)).toThrow(/strict JSON/);
+		expect(() => change.state.values.splice(1, 0, undefinedValue)).toThrow(/strict JSON/);
+		expect(() => change.state.values.fill(undefinedValue)).toThrow(/strict JSON/);
+		expect(() => {
+			change.state.payload = { nested: undefined } as unknown as JsonValue;
+		}).toThrow(/strict JSON/);
+		expect(() => {
+			change.state.payload = { nested: () => 1 } as unknown as JsonValue;
+		}).toThrow(/strict JSON/);
+		expect(() => {
+			change.state.payload = { nested: Symbol("invalid") } as unknown as JsonValue;
+		}).toThrow(/strict JSON/);
+		expect(() => {
+			change.state.payload = { nested: 1n } as unknown as JsonValue;
+		}).toThrow(/strict JSON/);
+		expect(() => {
+			change.state.number = Number.NaN;
+		}).toThrow(/strict JSON/);
+		expect(() => {
+			change.state.number = Number.POSITIVE_INFINITY;
+		}).toThrow(/strict JSON/);
+		expect(() => {
+			change.state.payload = new Date() as unknown as JsonValue;
+		}).toThrow(/plain objects/);
+
+		const sparse: JsonValue[] = new Array<JsonValue>(1);
+		expect(() => {
+			change.state.payload = sparse;
+		}).toThrow(/dense plain arrays/);
+		const cyclic: { self?: unknown } = {};
+		cyclic.self = cyclic;
+		expect(() => {
+			change.state.payload = cyclic as JsonValue;
+		}).toThrow(/cycles/);
+		let accessorReads = 0;
+		const accessor = Object.defineProperty({}, "value", {
+			enumerable: true,
+			get() {
+				accessorReads += 1;
+				return 1;
+			},
+		});
+		expect(() => {
+			change.state.payload = accessor as JsonValue;
+		}).toThrow(/data properties/);
+		expect(accessorReads).toBe(0);
+
+		expect(change.state).toEqual(initial);
+		change.state.optional = undefined;
+		const dictionary = Object.create(null) as Record<string, JsonValue>;
+		dictionary.valid = true;
+		change.state.payload = dictionary;
+		change.state.values.push({ valid: true });
+		const prepared = change.prepare();
+		expect(prepared.value).toEqual({ payload: { valid: true }, number: 0, values: [1, 2, { valid: true }] });
+		expect(Object.getPrototypeOf(prepared.value.payload)).toBeNull();
+		expect(replay(initial, prepared.ops)).toEqual(prepared.value);
+		tracker.adopt(prepared);
+	});
+
 	it("expands repeated source aliases into independent placements", () => {
 		const tracker = track({
 			left: null as { nested: { value: number } } | null,
@@ -620,6 +779,36 @@ describe("astra by-value placements", () => {
 		expect(prepared.value.rows[0]).not.toBe(prepared.value.rows[1]);
 		expect(replay(tracker.value, prepared.ops)).toEqual(prepared.value);
 		tracker.adopt(prepared);
+	});
+
+	it("deep-clones draft-sourced placements within and across revisions", () => {
+		const tracker = track({
+			a: { child: { value: 1 } },
+			b: null as { child: { value: number } } | null,
+			rows: [{ child: { value: 1 } }, { child: { value: 2 } }],
+		});
+		const first = tracker.beginChange();
+		first.state.b = first.state.a;
+		first.state.b.child.value = 3;
+		first.state.rows[1] = first.state.rows[0]!;
+		const firstPrepared = first.prepare();
+		expect(firstPrepared.value.a.child.value).toBe(1);
+		expect(firstPrepared.value.b?.child.value).toBe(3);
+		expect(firstPrepared.value.a).not.toBe(firstPrepared.value.b);
+		expect(firstPrepared.value.a.child).not.toBe(firstPrepared.value.b?.child);
+		expect(firstPrepared.value.rows[0]).not.toBe(firstPrepared.value.rows[1]);
+		expect(firstPrepared.value.rows[0]!.child).not.toBe(firstPrepared.value.rows[1]!.child);
+		expectAliasFree(firstPrepared.value);
+		tracker.adopt(firstPrepared);
+
+		const base = clone(tracker.value);
+		const second = tracker.beginChange();
+		second.state.rows[1]!.child.value = 4;
+		const secondPrepared = second.prepare();
+		expect(secondPrepared.value.rows.map((row) => row.child.value)).toEqual([1, 4]);
+		expect(replay(base, secondPrepared.ops)).toEqual(secondPrepared.value);
+		expectAliasFree(secondPrepared.value);
+		tracker.adopt(secondPrepared);
 	});
 
 	it("distinguishes raw committed references from draft references", () => {
@@ -684,7 +873,7 @@ describe("astra by-value placements", () => {
 		sparseTracker.adopt(sparsePrepared);
 	}, 30_000);
 
-	it("keeps operation payloads detached from candidate and adopted placement mutation", () => {
+	it("shares immutable operation placements with the materialized candidate", () => {
 		const tracker = track({ rows: [] as { value: number }[] });
 		const change = tracker.beginChange();
 		change.state.rows.push({ value: 1 });
@@ -697,13 +886,15 @@ describe("astra by-value placements", () => {
 			expect(isProxy(value)).toBe(false);
 			pending.push(...Object.values(value));
 		}
+		const splice = operations[0];
+		if (splice?.[0] !== "p") throw new Error("expected splice");
+		expect(splice[4][0]).toBe(prepared.value.rows[0]);
 		tracker.adopt(prepared);
-		tracker.value.rows[0]!.value = 9;
-		expect(operations).toEqual([["p", ["rows"], 0, 0, [{ value: 1 }]]]);
+		expect(tracker.value).toBe(prepared.value);
 	});
 });
 
-describe("astra piece arrays", () => {
+describe("delta tracker piece arrays", () => {
 	it("keeps adoption independent from mutable detached permutation metadata", () => {
 		const tracker = track({ values: [3, 1, 2] });
 		const change = tracker.beginChange();
@@ -714,6 +905,31 @@ describe("astra piece arrays", () => {
 		permutation[2].reverse();
 		tracker.adopt(prepared);
 		expect(tracker.value.values).toEqual([1, 2, 3]);
+	});
+
+	it("matches native splice with zero or one argument", () => {
+		const noArguments = track({ values: [1, 2, 3] });
+		const noArgumentsChange = noArguments.beginChange();
+		expect(Reflect.apply(noArgumentsChange.state.values.splice, noArgumentsChange.state.values, [])).toEqual([]);
+		const noArgumentsPrepared = noArgumentsChange.prepare();
+		expect(noArgumentsPrepared.value.values).toEqual([1, 2, 3]);
+		expect(noArgumentsPrepared.ops).toEqual([]);
+		noArguments.adopt(noArgumentsPrepared);
+
+		const oneArgument = track({ values: [1, 2, 3, 4] });
+		const oneArgumentChange = oneArgument.beginChange();
+		expect(oneArgumentChange.state.values.splice(1)).toEqual([2, 3, 4]);
+		const oneArgumentPrepared = oneArgumentChange.prepare();
+		expect(oneArgumentPrepared.value.values).toEqual([1]);
+		expect(replay(oneArgument.value, oneArgumentPrepared.ops)).toEqual(oneArgumentPrepared.value);
+		oneArgument.adopt(oneArgumentPrepared);
+
+		const pastEnd = track({ values: [1, 2, 3] });
+		const pastEndChange = pastEnd.beginChange();
+		expect(pastEndChange.state.values.splice(3)).toEqual([]);
+		const pastEndPrepared = pastEndChange.prepare();
+		expect(pastEndPrepared.value.values).toEqual([1, 2, 3]);
+		pastEnd.adopt(pastEndPrepared);
 	});
 
 	it("supports all structural mutators and native return values", () => {
@@ -818,21 +1034,34 @@ describe("astra piece arrays", () => {
 	});
 
 	it("normalizes duplicate entries created by structurally reentrant sort callbacks", () => {
-		const tracker = track({ values: [{ rank: 2 }, { rank: 1 }] });
+		const tracker = track({
+			values: [
+				{ rank: 2, edited: 0, nested: { value: 0 } },
+				{ rank: 1, edited: 0, nested: { value: 0 } },
+			],
+		});
 		const base = clone(tracker.value);
 		const change = tracker.beginChange();
 		let inserted = false;
 		change.state.values.sort((left, right) => {
+			left.edited = left.rank * 10;
+			left.nested.value = left.rank * 100;
+			right.edited = right.rank * 10;
+			right.nested.value = right.rank * 100;
 			if (!inserted) {
 				inserted = true;
-				change.state.values.unshift({ rank: 4 });
+				change.state.values.unshift({ rank: 4, edited: 0, nested: { value: 0 } });
 			}
 			return left.rank - right.rank;
 		});
 		const prepared = change.prepare();
 		expect(prepared.value.values.map((value) => value.rank)).toEqual([1, 2, 1]);
+		expect(prepared.value.values.map((value) => value.edited)).toEqual([10, 20, 10]);
+		expect(prepared.value.values.map((value) => value.nested.value)).toEqual([100, 200, 100]);
 		expect(prepared.value.values[0]).not.toBe(prepared.value.values[2]);
+		expect(prepared.value.values[0]!.nested).not.toBe(prepared.value.values[2]!.nested);
 		expect(replay(base, prepared.ops)).toEqual(prepared.value);
+		expectAliasFree(prepared.value);
 		tracker.adopt(prepared);
 	});
 
@@ -1025,7 +1254,7 @@ describe("astra piece arrays", () => {
 	);
 });
 
-describe("astra randomized transactions", () => {
+describe("delta tracker randomized transactions", () => {
 	type Document = {
 		values: { id: number; score: number }[];
 		text: string;
@@ -1091,7 +1320,8 @@ describe("astra randomized transactions", () => {
 			const tracker = track(initial);
 			const expected = clone(initial);
 			for (let transaction = 0; transaction < 25; transaction++) {
-				const base = clone(tracker.value);
+				const baseRoot = tracker.value;
+				const base = clone(baseRoot);
 				const change = tracker.beginChange();
 				for (let operation = 0; operation < 5; operation++) {
 					const choice = Math.floor(rng() * 11);
@@ -1101,16 +1331,43 @@ describe("astra randomized transactions", () => {
 				}
 				const prepared = change.prepare();
 				const policy = clone(prepared.value);
+				expect(isProxy(prepared.value)).toBe(false);
+				expect(baseRoot, `prepare changed base seed ${seed} transaction ${transaction}`).toEqual(base);
 				expect(policy, `policy seed ${seed} transaction ${transaction}`).toEqual(expected);
 				expect(replay(base, prepared.ops), `replay seed ${seed} transaction ${transaction}`).toEqual(policy);
 				tracker.adopt(prepared);
+				expect(baseRoot, `adopt changed base seed ${seed} transaction ${transaction}`).toEqual(base);
+				expect(tracker.value, `adopt seed ${seed} transaction ${transaction}`).toBe(prepared.value);
 				expect(tracker.value, `adopt seed ${seed} transaction ${transaction}`).toEqual(policy);
+				expectAliasFree(tracker.value);
 			}
 		}
 	}, 30_000);
 });
 
-describe("astra security and storage-style cloning", () => {
+describe("delta tracker object emission scaling", () => {
+	it("orders many reverse-depth object edits through the bounded fallback", () => {
+		type DeepNode = { value: number; next?: DeepNode };
+		let initial: DeepNode = { value: 0 };
+		for (let depth = 0; depth < 512; depth++) initial = { value: 0, next: initial };
+		const tracker = track(initial);
+		const change = tracker.beginChange();
+		const nodes: Array<Draft<DeepNode>> = [];
+		let node: Draft<DeepNode> | undefined = change.state;
+		while (node !== undefined) {
+			nodes.push(node);
+			node = node.next;
+		}
+		for (let index = nodes.length - 1; index >= 0; index--) nodes[index]!.value = index + 1;
+		const prepared = change.prepare();
+		expect(prepared.ops).toHaveLength(nodes.length);
+		expect(replay(initial, prepared.ops)).toEqual(prepared.value);
+		tracker.adopt(prepared);
+		expectAliasFree(tracker.value);
+	});
+});
+
+describe("delta tracker security and storage-style cloning", () => {
 	it("defines own properties without invoking inherited setters", () => {
 		const tracker = track({} as Record<string, JsonValue>);
 		Object.defineProperty(Object.prototype, "trap", {

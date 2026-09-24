@@ -405,22 +405,35 @@ function applyOps<T>(target: T | undefined, ops: readonly Op[]): T {
 	return root as unknown as T;
 }
 
-/** Apply decoded operations without mutating the previous immutable value. */
+/** Apply one decoded operation batch without mutating the previous immutable value. */
 export function applyImmutable<T>(target: T | undefined, ops: readonly Op[]): T {
+	return applyImmutableBatches(target, [ops]);
+}
+
+/**
+ * Apply decoded operation batches as one final-result-only replay.
+ *
+ * Containers copied for an earlier batch may be mutated while applying a later
+ * batch, so this deliberately exposes no intermediate revisions.
+ */
+export function applyImmutableBatches<T>(target: T | undefined, batches: Iterable<readonly Op[]>): T {
 	let root = target as unknown as JsonValue;
-	for (const op of ops) {
-		assertValidOp(op);
-		if (op[0] === "r") {
-			root = op[1];
-			continue;
+	const owned = new WeakSet<object>();
+	for (const ops of batches) {
+		for (const op of ops) {
+			assertValidOp(op);
+			if (op[0] === "r") {
+				root = op[1];
+				continue;
+			}
+			root = copyContainers(root, op[0] === "p" || op[0] === "m" ? op[1] : op[1].slice(0, -1), owned);
+			root = applyOps(root, [op]);
 		}
-		root = copyContainers(root, op[0] === "p" || op[0] === "m" ? op[1] : op[1].slice(0, -1));
-		root = applyOps(root, [op]);
 	}
 	return root as unknown as T;
 }
 
-function copyContainers(root: JsonValue, path: Path): JsonValue {
+function copyContainers(root: JsonValue, path: Path, owned: WeakSet<object>): JsonValue {
 	const copy = (value: JsonValue): JsonValue[] | Record<string, JsonValue> => {
 		if (Array.isArray(value)) return value.slice();
 		if (!isObj(value)) throw new PathError(path);
@@ -438,13 +451,23 @@ function copyContainers(root: JsonValue, path: Path): JsonValue {
 		}
 		return result;
 	};
-	const copiedRoot = copy(root);
-	let source = root;
+	if (!isObj(root)) throw new PathError(path);
+	let copiedRoot: JsonValue[] | Record<string, JsonValue>;
+	if (owned.has(root)) copiedRoot = root as JsonValue[] | Record<string, JsonValue>;
+	else {
+		copiedRoot = copy(root);
+		owned.add(copiedRoot);
+	}
 	let destination = copiedRoot;
 	for (const segment of path) {
-		if (!isObj(source) || !Object.hasOwn(source, segment)) throw new PathError(path);
-		if (Array.isArray(source) && typeof segment !== "number") throw new UnsafePathError(segment);
-		const child = (source as Record<Seg, JsonValue>)[segment]!;
+		if (!Object.hasOwn(destination, segment)) throw new PathError(path);
+		if (Array.isArray(destination) && typeof segment !== "number") throw new UnsafePathError(segment);
+		const child = (destination as Record<Seg, JsonValue>)[segment]!;
+		if (!isObj(child)) throw new PathError(path);
+		if (owned.has(child)) {
+			destination = child as JsonValue[] | Record<string, JsonValue>;
+			continue;
+		}
 		const copiedChild = copy(child);
 		Object.defineProperty(destination, segment, {
 			value: copiedChild,
@@ -452,7 +475,7 @@ function copyContainers(root: JsonValue, path: Path): JsonValue {
 			enumerable: true,
 			configurable: true,
 		});
-		source = child;
+		owned.add(copiedChild);
 		destination = copiedChild;
 	}
 	return copiedRoot;

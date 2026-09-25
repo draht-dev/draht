@@ -525,8 +525,9 @@ export class RpcClient {
 				return;
 			}
 
-			// Otherwise it's an event
-			for (const listener of this.eventListeners) {
+			// Otherwise it's an event. Iterate a snapshot so listeners that unsubscribe during dispatch
+			// do not cause later listeners to miss this event.
+			for (const listener of [...this.eventListeners]) {
 				listener(data as JsonAgentSessionEvent);
 			}
 		} catch {

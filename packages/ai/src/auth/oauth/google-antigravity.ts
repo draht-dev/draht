@@ -7,7 +7,7 @@
  */
 
 import type { Server } from "node:http";
-import type { AuthInteraction, OAuthAuth, OAuthCredential } from "../types.ts";
+import type { OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "../types.ts";
 import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.ts";
 import { generatePKCE } from "./pkce.ts";
 
@@ -146,7 +146,11 @@ interface LoadCodeAssistPayload {
 /**
  * Discover or provision a project for the user
  */
-async function discoverProject(accessToken: string, onProgress?: (message: string) => void): Promise<string> {
+async function discoverProject(
+	accessToken: string,
+	signal: AbortSignal,
+	onProgress?: (message: string) => void,
+): Promise<string> {
 	const headers = {
 		Authorization: `Bearer ${accessToken}`,
 		"Content-Type": "application/json",
@@ -176,6 +180,7 @@ async function discoverProject(accessToken: string, onProgress?: (message: strin
 						pluginType: "GEMINI",
 					},
 				}),
+				signal,
 			});
 
 			if (loadResponse.ok) {
@@ -206,12 +211,13 @@ async function discoverProject(accessToken: string, onProgress?: (message: strin
 /**
  * Get user email from the access token
  */
-async function getUserEmail(accessToken: string): Promise<string | undefined> {
+async function getUserEmail(accessToken: string, signal: AbortSignal): Promise<string | undefined> {
 	try {
 		const response = await fetch("https://www.googleapis.com/oauth2/v1/userinfo?alt=json", {
 			headers: {
 				Authorization: `Bearer ${accessToken}`,
 			},
+			signal,
 		});
 
 		if (response.ok) {
@@ -227,7 +233,11 @@ async function getUserEmail(accessToken: string): Promise<string | undefined> {
 /**
  * Refresh Antigravity token
  */
-export async function refreshAntigravityToken(refreshToken: string, projectId: string): Promise<OAuthCredential> {
+export async function refreshAntigravityToken(
+	refreshToken: string,
+	projectId: string,
+	signal: AbortSignal,
+): Promise<OAuthCredential> {
 	const response = await fetch(TOKEN_URL, {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -237,6 +247,7 @@ export async function refreshAntigravityToken(refreshToken: string, projectId: s
 			refresh_token: refreshToken,
 			grant_type: "refresh_token",
 		}),
+		signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
 	});
 
 	if (!response.ok) {
@@ -265,7 +276,7 @@ export async function refreshAntigravityToken(refreshToken: string, projectId: s
  * The pasted-redirect-URL prompt races the local browser callback — whichever
  * completes first wins.
  */
-export async function loginAntigravity(interaction: AuthInteraction): Promise<OAuthCredential> {
+export async function loginAntigravity(interaction: ProviderAuthInteraction): Promise<OAuthCredential> {
 	const onProgress = (message: string) => interaction.notify({ type: "progress", message });
 	const { verifier, challenge } = await generatePKCE();
 
@@ -379,6 +390,7 @@ export async function loginAntigravity(interaction: AuthInteraction): Promise<OA
 				redirect_uri: REDIRECT_URI,
 				code_verifier: verifier,
 			}),
+			signal: interaction.signal,
 		});
 
 		if (!tokenResponse.ok) {
@@ -398,10 +410,10 @@ export async function loginAntigravity(interaction: AuthInteraction): Promise<OA
 
 		// Get user email
 		onProgress("Getting user info...");
-		const email = await getUserEmail(tokenData.access_token);
+		const email = await getUserEmail(tokenData.access_token, interaction.signal);
 
 		// Discover project
-		const projectId = await discoverProject(tokenData.access_token, onProgress);
+		const projectId = await discoverProject(tokenData.access_token, interaction.signal, onProgress);
 
 		// Calculate expiry time (current time + expires_in seconds - 5 min buffer)
 		const expiresAt = Date.now() + tokenData.expires_in * 1000 - 5 * 60 * 1000;
@@ -434,7 +446,8 @@ export const antigravityOAuth: OAuthAuth = {
 	name: "Antigravity (Gemini 3, Claude, GPT-OSS)",
 	loginLabel: "Sign in with Google (Antigravity)",
 	login: loginAntigravity,
-	refresh: (credential) => refreshAntigravityToken(credential.refresh, antigravityProjectId(credential)),
+	refresh: (credential, signal) =>
+		refreshAntigravityToken(credential.refresh, antigravityProjectId(credential), signal),
 
 	/**
 	 * Antigravity requests need both the access token and the discovered project

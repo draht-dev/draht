@@ -180,7 +180,11 @@ class PyReprParseError extends Error {}
 /** Minimal recursive-descent parser for a subset of Python literal syntax. */
 class PyReprParser {
 	private i = 0;
-	constructor(private readonly src: string) {}
+	private readonly src: string;
+
+	constructor(src: string) {
+		this.src = src;
+	}
 
 	private skipWs(): void {
 		while (this.i < this.src.length && /\s/.test(this.src[this.i])) this.i++;
@@ -409,7 +413,10 @@ export class RlmSession {
 	private rssPollTimer: NodeJS.Timeout | undefined;
 	private rssPollInFlight = false;
 
-	constructor(private readonly opts: RlmSessionOptions) {
+	private readonly opts: RlmSessionOptions;
+
+	constructor(opts: RlmSessionOptions) {
+		this.opts = opts;
 		this.stdoutTruncateChars = opts.stdoutTruncateChars ?? DEFAULT_STDOUT_TRUNCATE_CHARS;
 		this.maxIterations = opts.maxIterations ?? DEFAULT_MAX_ITERATIONS;
 		this.stepTimeoutMs = opts.stepTimeoutMs ?? DEFAULT_STEP_TIMEOUT_MS;

@@ -1,7 +1,7 @@
 {
 	"name": "@draht/telemetry",
 	"version": "2026.7.30",
-	"description": "Vendor-neutral telemetry contracts and typed schema utilities for pi",
+	"description": "Vendor-neutral telemetry contracts and typed schema utilities for draht",
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",

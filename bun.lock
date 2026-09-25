@@ -315,10 +315,8 @@
       "name": "@draht/geist-protocol",
       "version": "2026.7.30",
       "dependencies": {
-        "zod": "^3.25.0",
-      },
-      "devDependencies": {
         "yaml": "^2.9.0",
+        "zod": "^3.25.0",
       },
     },
     "packages/infra": {

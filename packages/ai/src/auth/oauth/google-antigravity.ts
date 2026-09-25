@@ -199,7 +199,8 @@ async function discoverProject(
 				}
 			}
 		} catch {
-			// Try next endpoint
+			// Try the next endpoint, unless the login was cancelled
+			if (signal.aborted) throw signal.reason;
 		}
 	}
 
@@ -225,7 +226,8 @@ async function getUserEmail(accessToken: string, signal: AbortSignal): Promise<s
 			return data.email;
 		}
 	} catch {
-		// Ignore errors, email is optional
+		// Email is optional, but a cancelled login must not continue
+		if (signal.aborted) throw signal.reason;
 	}
 	return undefined;
 }

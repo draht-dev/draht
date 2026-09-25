@@ -2655,7 +2655,7 @@ interface AssistantMessage {
 // part of this interface.
 interface ProviderRequestOptions<TModel = Model<Api>> {
   signal?: AbortSignal;
-  /** Explicit parent for this logical pi-ai operation. Inherited by stream,
+  /** Explicit parent for this logical @draht/ai operation. Inherited by stream,
       simple-stream, deferred fetch/cancel, and image options. */
   telemetryContext?: TelemetryContext;
   apiKey?: string;
@@ -3043,20 +3043,20 @@ If an outcome attribute is set, run spans never use `declined`; that value exist
 The span tree follows execution scopes:
 
 ```text
-draht.harness.run
-├─ draht.harness.checkpoint
-│  └─ draht.harness.step          compaction, attempt
-├─ draht.harness.turn
-│  ├─ draht.harness.step          assistant, attempt
-│  │  ├─ draht.ai.request         provider, model, stop reason
-│  │  └─ draht.harness.sleep      retry delay
-│  └─ draht.harness.tool          tool name, call id, replay
-├─ draht.harness.hook
-├─ draht.harness.event_handler
-└─ draht.session.write            entry/record/lane/fact
+pi.harness.run
+├─ pi.harness.checkpoint
+│  └─ pi.harness.step          compaction, attempt
+├─ pi.harness.turn
+│  ├─ pi.harness.step          assistant, attempt
+│  │  ├─ pi.ai.request         provider, model, stop reason
+│  │  └─ pi.harness.sleep      retry delay
+│  └─ pi.harness.tool          tool name, call id, replay
+├─ pi.harness.hook
+├─ pi.harness.event_handler
+└─ pi.session.write            entry/record/lane/fact
 
-draht.harness.compaction          manual operation
-draht.harness.navigation
+pi.harness.compaction          manual operation
+pi.harness.navigation
 ```
 
 The procedure layer owns operation, checkpoint, turn, and step scopes. `Effects` owns session writes, phase-2 tool execution, hooks, and sleep. The request-dispatch wrapper around `Models` owns `pi.ai.request`; passive event delivery owns handler spans. Each owner receives its parent context explicitly.
@@ -3270,12 +3270,12 @@ These packages own `packages/agent/src/harness/session/jsonl/**`, the concrete `
 I0, I1, and I2 may proceed independently. I3 → I4 → I5 is serial and begins after R2 fixes the `LaneState` shape. These packages use separate modules with focused unit tests; I5 remains primitive-only and does not edit `agent-harness.ts`.
 
 - [x] **I0 — telemetry contracts, typed schemas, and no-op context.** Dependencies: none.
-  - Primary files: `packages/telemetry/src/index.ts`, `packages/telemetry/src/memory.ts`, `packages/telemetry/src/testing/`, and focused tests; pi-ai request-option types/propagation and focused tests; `packages/agent/src/harness/telemetry.ts`, `packages/agent/src/index.ts`, focused tests, package scripts, `packages/agent/scripts/generate-telemetry-docs.ts`, and generated `packages/agent/docs/telemetry-schema.md`. Do not edit `agent-harness.ts`; its canonical context type is landed, while H0 owns option renaming/defaulting/storage and execution threading after convergence.
+  - Primary files: `packages/telemetry/src/index.ts`, `packages/telemetry/src/memory.ts`, `packages/telemetry/src/testing/`, and focused tests; @draht/ai request-option types/propagation and focused tests; `packages/agent/src/harness/telemetry.ts`, `packages/agent/src/index.ts`, focused tests, package scripts, `packages/agent/scripts/generate-telemetry-docs.ts`, and generated `packages/agent/docs/telemetry-schema.md`. Do not edit `agent-harness.ts`; its canonical context type is landed, while H0 owns option renaming/defaulting/storage and execution threading after convergence.
   - In telemetry, implement the one canonical section 18 callback-based `TelemetryContext` / `TelemetrySpan` contract, shared no-op context, deterministic in-memory reference adapter, runner-independent adapter conformance cases, serializable `defineTelemetrySchema()` machinery, and `createTypedSpanStarter(context, schemas)` composition with child-bound starters.
-  - In pi-ai, add optional `telemetryContext` to `ProviderRequestOptions` so every stream, deferred, and image option inherits it; provider, `Models`, `ImagesModels`, direct dispatch, and simple-option conversion preserve it. Pi-ai owns no domain schema or helper.
+  - In @draht/ai, add optional `telemetryContext` to `ProviderRequestOptions` so every stream, deferred, and image option inherits it; provider, `Models`, `ImagesModels`, direct dispatch, and simple-option conversion preserve it. @draht/ai owns no domain schema or helper.
   - In agent, define the complete normative `AI_TELEMETRY_SCHEMA` and `HARNESS_TELEMETRY_SCHEMA`, their inferred types, the readonly `AGENT_TELEMETRY_SCHEMAS` composition tuple, and typed `startAiSpan()` / `startHarnessSpan()` helpers. Export both schemas, the tuple, and helpers, and re-export the generic telemetry surface from the agent package root. Do not duplicate the generic contract and do not adopt OTel or another external semantic convention.
   - Generate the combined repository-only Markdown reference from the runtime schema values with the named agent package scripts. Production helpers perform no runtime schema validation; schemas compile-time-check each pi-written start/end/event call and remain importable as machine-readable data.
-  - Wire telemetry before pi-ai in workspace, local-release, publish, profiling, and coding-agent binary build order; add source-test aliases and refresh workspace/generated dependency locks.
+  - Wire telemetry before @draht/ai in workspace, local-release, publish, profiling, and coding-agent binary build order; add source-test aliases and refresh workspace/generated dependency locks.
   - Landed coverage: focused tests exercise no-op synchronous admission, returned-value and sync/async rejection preservation, explicit no-op child propagation, one shared frozen inert span with no payload inspection, exact start/optional-end inference, multi-schema vocabulary composition, child-starter parent propagation, rejection of duplicate span names and missing, unknown, empty-schema, and invalid closed-set attributes, absence of declared span events, schema JSON serialization, the in-memory reference against every exported adapter conformance case, option propagation across provider/`Models` stream and deferred dispatch, direct and `ImagesModels` image dispatch, built-in simple-option conversion, and generated-document freshness. O2 will use the reference adapter to test pi's runtime status and nesting behavior with captured spans.
 - [ ] **I1 — hook registry and runner.** Dependencies: none.
   - Primary files: `packages/agent/src/harness/hooks.ts`, `packages/agent/test/harness/hooks.test.ts`.
@@ -3344,7 +3344,7 @@ H0 converges restore and primitives into `agent-harness.ts`. H0–H8 then merge 
   - Consume R2's X1–X5 reduced state and reconcile it; replay only when persisted and current declarations are safe, preserve ordinals, and handle truncated batches without execution. Do not duplicate reducer logic.
   - Acceptance: complete tool crash matrix, changed replay declarations, parallel-prefix crashes, and idempotent second recovery.
 - [ ] **H8 — deferred provider redemption.** Dependencies: H7.
-  - Integrate the already-landed pi-ai deferred APIs: suspend, pending re-park, ready continuation, terminal/rejected fetch failure, handle mismatch, and best-effort cancellation.
+  - Integrate the already-landed @draht/ai deferred APIs: suspend, pending re-park, ready continuation, terminal/rejected fetch failure, handle mismatch, and best-effort cancellation.
   - Select and document whether `resume()` uses a non-zero `fetchDeferred` wait or checks once and re-parks immediately.
   - Acceptance: one fetch per resume; pending writes nothing except reported usage; terminal errors never start replacement requests.
 

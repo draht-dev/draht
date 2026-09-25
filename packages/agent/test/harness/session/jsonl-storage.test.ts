@@ -19,7 +19,7 @@ import type { AgentMessage } from "../../../src/types.ts";
 const tempDirs: string[] = [];
 
 function createTempDir(): string {
-	const directory = mkdtempSync(join(tmpdir(), "pi-agent-jsonl-storage-"));
+	const directory = mkdtempSync(join(tmpdir(), "draht-agent-jsonl-storage-"));
 	tempDirs.push(directory);
 	return directory;
 }

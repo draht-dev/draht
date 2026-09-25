@@ -23,7 +23,7 @@ import { FileError } from "../../../src/harness/types.ts";
 const tempDirs: string[] = [];
 
 function createTempDir(): string {
-	const directory = mkdtempSync(join(tmpdir(), "pi-agent-jsonl-v4-"));
+	const directory = mkdtempSync(join(tmpdir(), "draht-agent-jsonl-v4-"));
 	tempDirs.push(directory);
 	return directory;
 }

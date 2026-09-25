@@ -2123,7 +2123,8 @@ export class DefaultPackageManager implements PackageManager {
 
 	private getGitInstallPath(source: GitSource, scope: SourceScope): string {
 		if (scope === "temporary") {
-			return this.getTemporaryDir(`git-${source.host}`, source.path);
+			// Include the ref in the hash so each pinned ref gets its own checkout.
+			return this.getTemporaryDir(`git-${source.host}`, source.path, source.ref);
 		}
 		const installRoot = this.getGitInstallRoot(scope);
 		if (!installRoot) {
@@ -2143,10 +2144,10 @@ export class DefaultPackageManager implements PackageManager {
 		return join(this.agentDir, "git");
 	}
 
-	private getTemporaryDir(prefix: string, suffix?: string): string {
+	private getTemporaryDir(prefix: string, suffix?: string, ref?: string): string {
 		const root = this.resolveManagedPath(getExtensionTempFolder(this.agentDir), prefix);
 		const hash = createHash("sha256")
-			.update(`${prefix}-${suffix ?? ""}`)
+			.update(`${prefix}-${suffix ?? ""}${ref ? `@${ref}` : ""}`)
 			.digest("hex")
 			.slice(0, 8);
 		return this.resolveManagedPath(root, hash, suffix ?? "");

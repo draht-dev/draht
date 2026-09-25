@@ -2615,6 +2615,35 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 			expect(refreshTemporaryGitSourceSpy).not.toHaveBeenCalled();
 		});
 
+		// https://github.com/earendil-works/pi/issues/9982
+		it("should load a new checkout when a pinned temporary git source changes ref", async () => {
+			const managerWithInternals = packageManager as unknown as PackageManagerInternals;
+			const oldSource = "git:github.com/example/repo@aaaaaaa";
+			const newSource = "git:github.com/example/repo@bbbbbbb";
+			const oldParsed = managerWithInternals.parseSource(oldSource);
+			const newParsed = managerWithInternals.parseSource(newSource);
+			if (oldParsed.type !== "git" || newParsed.type !== "git") {
+				throw new Error("Expected git sources");
+			}
+
+			const oldPath = managerWithInternals.getGitInstallPath(oldParsed, "temporary");
+			mkdirSync(join(oldPath, "extensions"), { recursive: true });
+			writeFileSync(join(oldPath, "extensions", "old.ts"), "export default function() {};");
+
+			const installParsedSourceSpy = vi
+				.spyOn(packageManager as any, "installParsedSource")
+				.mockImplementation(async () => {
+					const newPath = managerWithInternals.getGitInstallPath(newParsed, "temporary");
+					mkdirSync(join(newPath, "extensions"), { recursive: true });
+					writeFileSync(join(newPath, "extensions", "new.ts"), "export default function() {};");
+				});
+
+			const result = await packageManager.resolveExtensionSources([newSource], { temporary: true });
+			expect(installParsedSourceSpy).toHaveBeenCalledTimes(1);
+			expect(result.extensions.some((r) => pathEndsWith(r.path, "extensions/new.ts") && r.enabled)).toBe(true);
+			expect(result.extensions.some((r) => pathEndsWith(r.path, "extensions/old.ts"))).toBe(false);
+		});
+
 		it("should not run npm view during resolve for installed unpinned packages", async () => {
 			process.env.DRAHT_OFFLINE = "1";
 			const installedPath = join(tempDir, ".draht", "npm", "node_modules", "example");

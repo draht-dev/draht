@@ -83,7 +83,7 @@ Checkpoints back `/rewind`. See [Checkpoint commands](cli.md#checkpoint-commands
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `theme` | string | Detected | Built-in or custom theme name. |
+| `theme` | string | `"system"` | Built-in or custom theme name. `system` derives colors from the terminal theme. |
 | `quietStartup` | boolean | `false` | Hide the startup header. |
 | `tuiMode` | `"regular" \| "fullscreen"` | `"regular"` | Interactive terminal UI mode. |
 | `fullscreenExitOutput` | `"transcript" \| "resume-hint"` | `"transcript"` | Output printed when fullscreen mode exits. |

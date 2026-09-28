@@ -4,7 +4,7 @@ description: "Audit test value or gate new tests at the owning behavior boundary
 
 # /test-audit
 
-Audit the value of tests in a scope, or gate a proposed new test before it lands. Load the shipped `test-audit` skill first; it defines the complete junk-pattern, retention, candidate-evidence, campaign, and handoff rules.
+Audit the value of tests in a scope, or gate a proposed new test before it lands. Follow the evidence, retention, candidate-evidence, campaign, and handoff rules below.
 
 ## Usage
 ```

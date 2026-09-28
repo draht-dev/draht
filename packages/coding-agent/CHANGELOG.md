@@ -4,7 +4,7 @@
 
 ### Added
 
-- ship the test-audit skill and `/test-audit` command for high-value behavior-focused test coverage
+- ship the `/test-audit` command for high-value behavior-focused test coverage
 
 ## [2026.9.5-1] - 2026-09-05
 

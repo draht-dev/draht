@@ -1212,6 +1212,10 @@ function getAnthropicMessagesCompat(provider: string, modelId: string): Anthropi
 	if (provider === "xiaomi" || provider.startsWith("xiaomi-token-plan-")) {
 		compat.allowEmptySignature = true;
 	}
+	// OpenCode Qwen 3.8 Flash emits and accepts thinking blocks with empty signatures.
+	if ((provider === "opencode" || provider === "opencode-go") && modelId === "qwen3.8-flash") {
+		compat.allowEmptySignature = true;
+	}
 	return Object.keys(compat).length > 0 ? compat : undefined;
 }
 

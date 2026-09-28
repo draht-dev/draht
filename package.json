@@ -27,6 +27,7 @@
 		"generate:geist-conformance": "bun scripts/generate-geist-conformance.mjs",
 		"check:bun-serve-hostname": "node scripts/check-bun-serve-hostname.mjs",
 		"check:browser-smoke": "node scripts/check-browser-smoke.mjs",
+		"sync:skills": "node scripts/generate-skills-artifacts.mjs",
 		"check:skills-artifacts": "node scripts/generate-skills-artifacts.mjs --check",
 		"check:hooks": "node scripts/generate-hooks-json.mjs --check",
 		"check:install-publishable": "node scripts/check-install-publishable.mjs",

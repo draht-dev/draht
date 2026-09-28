@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- add `$draht:test-audit` command wrapper for behavior-focused test coverage review
+
 ## [2026.9.5-1] - 2026-09-05
 
 ### Added

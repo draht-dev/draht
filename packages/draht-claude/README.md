@@ -12,7 +12,7 @@ This bundles everything draht gives its own CLI — slash commands, specialist s
 
 ## What you get
 
-### 23 slash commands
+### 24 slash commands
 
 **Project lifecycle**
 - `/new-project` — greenfield: questioning → domain model → requirements → roadmap
@@ -43,6 +43,7 @@ This bundles everything draht gives its own CLI — slash commands, specialist s
 - `/why <question>` — code archaeology: parallel `investigator` subagents gather evidence per category, synthesized into a confidence-tiered, citation-backed answer
 - `/triage <report>` — classify an external issue report after a bounded cause trace, dedupe against GitHub Issues, create a ticket only behind a fail-closed gate
 - `/create-verification-skill [app]` — generate a committed project-local `verify-<app>` skill that drives the real app the way a user does and captures proof artifacts
+- `/test-audit [scope]` — audit test value or gate new tests at the owning behavior boundary
 - `/speak [text]` — speak text aloud via the ElevenLabs text-to-speech helper; with no text, voices a short summary of the latest result
 
 ### 11 specialist subagents

@@ -75,7 +75,7 @@ Codex subagent availability depends on the active Codex feature/configuration. W
 
 ### Command prompt wrappers
 
-The plugin ships 17 command prompt wrappers, one per `commands/*.md` template:
+The plugin ships 24 command prompt wrappers, one per `commands/*.md` template:
 
 - `new-project`
 - `init-project`
@@ -99,11 +99,12 @@ The plugin ships 17 command prompt wrappers, one per `commands/*.md` template:
 - `why`
 - `triage`
 - `create-verification-skill`
+- `test-audit`
 - `speak`
 
 ### Support skills
 
-The GSD workflow templates live in `commands/`. Alongside the 23 command wrappers above, the plugin ships 16 support skills (39 skill directories in total), loaded by description match or by name.
+The GSD workflow templates live in `commands/`. Alongside the 24 command wrappers above, the plugin ships 16 support skills (41 skill directories in total, including the router), loaded by description match or by name.
 
 Router:
 

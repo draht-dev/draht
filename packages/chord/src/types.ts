@@ -46,7 +46,13 @@ export interface ReplicatedState<T> {
 	 * in-process provider; consumers must not mutate it. Later updates do not mutate previously returned values.
 	 */
 	readonly value: T | undefined;
-	/** Listener values follow the same immutable ownership contract and may share unchanged revision data. */
+	/**
+	 * Each subscription serializes callbacks, awaiting hydration before updates. Values are immutable and may
+	 * share unchanged revision data. At most 100 deliveries wait behind the running callback; overflow keeps
+	 * only the newest pending value/context/delivery, so update sequences may skip. Failures are reported in
+	 * isolation and delivery continues. Unsubscribe discards pending work without aborting or joining a callback.
+	 */
+	subscribe(listener: (value: T, context: Context, delivery: ReplicatedStateDelivery) => Promise<void>): () => void;
 	subscribe(listener: (value: T, context: Context, delivery: ReplicatedStateDelivery) => void): () => void;
 }
 
@@ -211,6 +217,8 @@ export type ServiceProviderUpdate =
 			readonly sequence: number;
 			readonly ops: readonly Op[];
 	  }
+	/** Full subscription rebaseline after overflow; every state is a root replacement at its new sequence. */
+	| { readonly type: "reset"; readonly snapshot: ServiceSubscriptionSnapshot }
 	| { readonly type: "unavailable" }
 	| { readonly type: "replaced"; readonly snapshot: ServiceInstanceSnapshot }
 	| { readonly type: "spawned"; readonly instance: ServiceInstanceSnapshot }
@@ -225,6 +233,7 @@ export type ServiceCall = {
 };
 
 export interface ServiceSubscription {
+	/** Atomic baseline. Later updates buffer until activation, with a full reset on pending delivery 101. */
 	readonly snapshot: ServiceSubscriptionSnapshot;
 	activate(): void;
 	close(context?: Context): void | Promise<void>;

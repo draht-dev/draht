@@ -629,6 +629,48 @@ describe("SettingsManager", () => {
 			expect(SettingsManager.inMemory({ defaultTools: [] }).getDefaultTools()).toEqual([]);
 			expect(SettingsManager.inMemory().getDefaultTools()).toBeUndefined();
 		});
+
+		it("applies +name and -name to the default selection", () => {
+			expect(SettingsManager.inMemory({ defaultTools: ["+codemode", "-write"] }).getDefaultTools()).toEqual([
+				"read",
+				"bash",
+				"edit",
+				"codemode",
+			]);
+			expect(SettingsManager.inMemory({ defaultTools: ["read", "+grep", "+read"] }).getDefaultTools()).toEqual([
+				"read",
+				"grep",
+			]);
+		});
+
+		it("layers project modifiers on top of the global selection", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ defaultTools: ["read", "bash", "+codemode"] }),
+			);
+			writeFileSync(
+				join(projectDir, ".pi", "settings.json"),
+				JSON.stringify({ defaultTools: ["-codemode", "+tool_search"] }),
+			);
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getDefaultTools()).toEqual(["read", "bash", "tool_search"]);
+
+			manager.applyOverrides({ defaultTools: ["+codemode"] });
+			expect(manager.getDefaultTools()).toEqual(["read", "bash", "tool_search", "codemode"]);
+		});
+
+		it("applies project modifiers to the built-in defaults without a global setting", () => {
+			writeFileSync(join(projectDir, ".pi", "settings.json"), JSON.stringify({ defaultTools: ["+codemode"] }));
+
+			expect(SettingsManager.create(projectDir, agentDir).getDefaultTools()).toEqual([
+				"read",
+				"bash",
+				"edit",
+				"write",
+				"codemode",
+			]);
+		});
 	});
 
 	describe("getSessionDir", () => {

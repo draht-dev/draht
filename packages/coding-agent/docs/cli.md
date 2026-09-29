@@ -13,6 +13,7 @@ draht update [target] [options]
 draht list
 draht config [options]
 draht auth <check|print-api-key|print-bearer-token> [options]
+draht mcp <list|login|logout> [options]
 draht checkpoint prune [--days <n>] [--max-per-session <n>] [--dry-run]
 draht rlm --input <path|glob|url> --query "..." [--max-cost <n>]
 draht rlm replay <trajectory-id> [--verbose]
@@ -149,6 +150,27 @@ Default enabled tools are `read`, `bash`, `edit`, and `write`, unless `defaultTo
 | `grep` | Search file contents |
 | `find` | Find paths using glob patterns |
 | `ls` | List directory contents |
+
+Built-in extensions add two more tools. They are off by default; name them in `--tools` or `defaultTools` to enable them.
+
+| Built-in extension | Purpose |
+|---|---|
+| `codemode` | Run JavaScript that calls the other tools, for example in parallel with `Promise.allSettled`; only the script's output reaches the model |
+| `tool_search` | Search tools that are not declared to the model (`codemode` and `deferred` exposure, such as MCP tools) and declare the matches for the next call |
+
+Codemode scripts run in a QuickJS sandbox that can only reach the other tools, through `tools.<name>(args)`; `ALL_TOOLS` lists them. Output comes from `text(value)`, `image(dataUrlOrImageContent)`, `console.*`, and a top-level `return value`; `exit()` ends the script early. The result starts with `Script completed` or `Script failed`, the wall time, and the output; a failed script keeps its partial output, followed by `Script error:` and the error.
+
+A script may start with an options line such as `// @options: {"max_output_tokens": 2000, "timeout_ms": 60000}`. `max_output_tokens` (default 10000) limits the output: longer output keeps its start and end, and the full text is written to a temp file whose path is included in the result. `timeout_ms` is a hard deadline, unset by default.
+
+While `codemode` is active, `codemode.mode` in [settings](settings.md#tools) decides how the other tools are presented. With `on` (default) declared tools keep being declared and their descriptions show how to call them from scripts. With `only` they are hidden from the model and listed in the `codemode` description instead, so the model calls them through scripts.
+
+The `codemode` description lists the callable tools with their TypeScript declarations, grouped by namespace (for example one MCP server). Declarations share a budget of 3000 estimated tokens (`codemode.inlineBudget` in [settings](settings.md#tools)); every namespace is still listed with its tool count, and the description says whether the list is complete. Scripts find the rest with `await searchTools(query, { limit, namespace })`, which ranks tools with BM25, and `await describeTool(name)`, or by filtering `ALL_TOOLS`.
+
+`tool_search` is off by default; enable it with `--tools` or `defaultTools`. It uses the same ranking over tools that are not declared yet and declares the matches for the next model call. Loaded tools are recorded in the session like other tool changes, so they stay declared on that branch.
+
+Tools with an output schema resolve to structured values: `bash` to `{ output, exit_code, wall_time_seconds }`, also for non-zero exit codes, and MCP tools to their `CallToolResult`. Other tools resolve to their text output.
+
+`store(key, value)` and `load(key)` keep JSON values across `codemode` calls: each successful script that stores values appends a `codemode-store` custom entry to the session, so resumed sessions keep the values and each branch sees only the values written on its path. Scripts can also use `models`: `getModelsOfType`, `getAvailableOfType`, and `getModelOfType` list the model catalog, and `classify(model, context)` runs a classifier model with the session's credentials, at most four at a time per script.
 
 <a id="resource-options"></a>
 
@@ -311,3 +333,20 @@ draht rlm --input ./big-log.txt --query "What caused the outage?"
 | `--max-cost <n>` | Optional soft USD cost hint |
 
 `draht rlm replay <trajectory-id>` prints the recorded final answer from `.draht/rlm/<trajectory-id>.jsonl` without calling a model. Add `--verbose` to also print each recorded step.
+
+## MCP commands
+
+These commands work outside a session, so agents can run them through `bash`. See [MCP Servers](mcp.md).
+
+| Command | Description |
+|---|---|
+| `draht mcp add <server> [options] -- <command> [args...]` | Add or replace a stdio server in `mcp.json`; `--env KEY=VALUE` (repeatable) and `--cwd <dir>` set its environment and working directory. Arguments after the command are passed to it |
+| `draht mcp add <server> [options] --url <url>` | Add or replace a streamable HTTP server; `--header KEY=VALUE` (repeatable), `--bearer-token-env-var <NAME>` (sends `Authorization: Bearer ${NAME}`), `--oauth-client-id`, `--oauth-client-secret`, and `--oauth-callback-port` configure authentication |
+| `draht mcp remove <server>` | Remove a server from `mcp.json`; stored OAuth credentials are kept |
+| `draht mcp list [--json]` | Connect to every enabled server and print its state, tools, and errors; exit with `1` when a config entry is invalid or an enabled server is not connected |
+| `draht mcp login <server> [--timeout <seconds>]` | Sign in to an OAuth server: open the authorization page and wait for the browser (default 300 seconds); a terminal also accepts the pasted redirect URL |
+| `draht mcp logout <server>` | Delete the stored OAuth credentials of a server |
+
+`add` and `remove` change `~/.draht/agent/mcp.json`, or `.draht/mcp.json` in the current directory with `--local` (`-l`). `add` also takes `--exposure <mode>` (see [Exposure](mcp.md#exposure)) and does not connect; run `draht mcp list` to check the server.
+
+Project `.draht/mcp.json` files are only read for projects that are already trusted.

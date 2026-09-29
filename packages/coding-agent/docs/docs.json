@@ -99,6 +99,10 @@
             {
               "title": "Use draht Packages",
               "path": "packages.md"
+            },
+            {
+              "title": "Connect MCP Servers",
+              "path": "mcp.md"
             }
           ]
         },

@@ -22,7 +22,9 @@ const WORKSPACE = {
 	"@draht/chord": "packages/chord/src",
 	"@draht/ai": "packages/ai/src",
 	"@draht/agent-core": "packages/agent/src",
+	"@draht/codemode": "packages/codemode/src",
 	"@draht/telemetry": "packages/telemetry/src",
+	"@draht/mcp": "packages/mcp/src",
 	"@draht/tui": "packages/tui/src",
 };
 

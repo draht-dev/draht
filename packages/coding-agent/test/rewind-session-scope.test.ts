@@ -139,6 +139,7 @@ const extensionActions: ExtensionActions = {
 	setModel: async () => false,
 	getThinkingLevel: () => "off",
 	setThinkingLevel: () => {},
+	getSettings: () => ({}),
 };
 
 const extensionContextActions: ExtensionContextActions = {

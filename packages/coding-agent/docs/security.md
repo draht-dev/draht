@@ -37,6 +37,7 @@ Project trust does not limit what tool calls can access or affect. After draht s
 draht requires a project-trust decision when it finds any of these resources from the current working directory:
 
 - `.draht/settings.json`
+- `.draht/mcp.json`
 - `.draht/extensions`, `.draht/skills`, `.draht/prompts`, or `.draht/themes`
 - `.draht/SYSTEM.md` or `.draht/APPEND_SYSTEM.md`
 - project `.agents/skills` in the current directory or an ancestor directory
@@ -46,6 +47,7 @@ A bare `.draht` directory does not require project trust.
 Granting project trust allows draht to load:
 
 - project settings
+- project MCP servers from `.draht/mcp.json`
 - extensions, skills, prompt templates, themes, and system-prompt files under `.draht`
 - missing packages configured through project settings
 - project-local and project-package extensions

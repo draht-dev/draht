@@ -4,7 +4,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeBashWithOperations } from "../src/core/bash-executor.ts";
-import type { ExtensionContext } from "../src/core/extensions/types.ts";
+import type { ExtensionToolContext } from "../src/core/extensions/types.ts";
 import {
 	type BashOperations,
 	createBashTool,
@@ -490,10 +490,19 @@ describe("Coding Agent Tools", () => {
 			expect(result.details).toBeUndefined();
 		});
 
-		it("should handle command errors", async () => {
-			await expect(bashTool.execute("test-call-9", { command: "exit 1" })).rejects.toThrow(
-				/(Command failed|code 1)/,
-			);
+		it("should report non-zero exit codes as error results with structured content", async () => {
+			const result = await bashTool.execute("test-call-9", { command: "echo out; exit 3" });
+			expect(result.isError).toBe(true);
+			expect(getTextOutput(result)).toBe("out\n\n\nCommand exited with code 3");
+			expect(result.structuredContent).toEqual({
+				output: "out\n",
+				exit_code: 3,
+				wall_time_seconds: expect.any(Number),
+			});
+
+			const ok = await bashTool.execute("test-call-9b", { command: "echo fine" });
+			expect(ok.isError).toBeUndefined();
+			expect(ok.structuredContent).toMatchObject({ output: "fine\n", exit_code: 0 });
 		});
 
 		// Regression tests for https://github.com/earendil-works/pi/issues/9577
@@ -512,16 +521,17 @@ describe("Coding Agent Tools", () => {
 		);
 
 		it.skipIf(process.platform === "win32")(
-			"should reject signal-killed commands while preserving partial output",
+			"should report signal-killed commands as errors while preserving partial output",
 			async () => {
 				for (const { signal, exitCode } of [
 					{ signal: "KILL", exitCode: 137 },
 					{ signal: "TERM", exitCode: 143 },
 				]) {
-					const execution = bashTool.execute(`test-call-signal-${signal}`, {
+					const result = await bashTool.execute(`test-call-signal-${signal}`, {
 						command: `printf 'before-kill\\n'; kill -${signal} $$`,
 					});
-					await expect(execution).rejects.toThrow(
+					expect(result.isError).toBe(true);
+					expect(getTextOutput(result)).toMatch(
 						new RegExp(`before-kill\\s+Command exited with code ${exitCode}$`),
 					);
 				}
@@ -947,8 +957,8 @@ describe("Coding Agent Tools", () => {
 	});
 });
 
-function fakeCtx(cwd: string): ExtensionContext {
-	return { cwd } as ExtensionContext;
+function fakeCtx(cwd: string): ExtensionToolContext {
+	return { cwd } as ExtensionToolContext;
 }
 
 describe("tool cwd resolution", () => {

@@ -24,6 +24,8 @@ const run = (cmd, cwd = ROOT) => {
 run("cd packages/chord && bun run build");
 run("cd packages/tui && bun run build");
 run("cd packages/telemetry && bun run build");
+run("cd packages/codemode && bun run build");
+run("cd packages/mcp && bun run build");
 run("cd packages/ai && bun run build");
 run("cd packages/agent && bun run build");
 run("cd packages/router && bun run build");

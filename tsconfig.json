@@ -12,6 +12,13 @@
 			"@draht/chord/node": ["./packages/chord/src/node.ts"],
 			"@draht/telemetry": ["./packages/telemetry/src/index.ts"],
 			"@draht/telemetry/testing": ["./packages/telemetry/src/testing/index.ts"],
+			"@draht/codemode": ["./packages/codemode/src/index.ts"],
+			"@draht/codemode/declarations": ["./packages/codemode/src/declarations.ts"],
+			"@draht/codemode/source": ["./packages/codemode/src/source.ts"],
+			"@draht/codemode/worker": ["./packages/codemode/src/runtime/worker.ts"],
+			"@draht/mcp": ["./packages/mcp/src/index.ts"],
+			"@draht/mcp/oauth": ["./packages/mcp/src/oauth/index.ts"],
+			"@draht/mcp/testing": ["./packages/mcp/src/testing/index.ts"],
 			"@draht/ai": ["./packages/ai/src/index.ts"],
 			"@draht/ai/oauth": ["./packages/ai/src/oauth.ts"],
 			"@draht/ai/*": ["./packages/ai/src/*.ts", "./packages/ai/src/providers/*.ts"],
@@ -58,7 +65,7 @@
 			"@draht/x-markdown/*": ["./packages/x-markdown/src/*"]
 		}
 	},
-	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "packages/coding-agent/examples/**/*"],
+	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "packages/coding-agent/examples/**/*", "packages/agent/examples/**/*"],
 	"exclude": [
 		"packages/web-ui/**/*",
 		"packages/coding-agent/examples/**/*",

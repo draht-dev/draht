@@ -2681,7 +2681,8 @@ async function loadModelsDevClassifierModels(): Promise<ClassifierModel<"typesaf
 				provider: "typesafe",
 				baseUrl: "https://api.typesafe.ai/v1/",
 				input: metadata.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-				// The canonical models.dev entry has no direct-provider pricing and System One reports no token usage.
+				// The canonical models.dev entry has no direct-provider pricing. System One reports token usage,
+				// so classify() results carry token counts but price them at zero.
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow: metadata.limit?.context || 64000,
 			},

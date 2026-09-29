@@ -32,7 +32,12 @@ import { APP_NAME, VERSION } from "../../config.ts";
 import { resolveConfigValueOrThrow, resolveHeadersOrThrow } from "../../core/resolve-config-value.ts";
 import type { McpServerEntry } from "./config.ts";
 import type { McpServerLog } from "./log.ts";
-import { createMcpAuthProvider, type McpOAuthCredentialStore, type McpOAuthSettings } from "./oauth.ts";
+import {
+	createMcpAuthProvider,
+	type McpAuthProvider,
+	type McpOAuthCredentialStore,
+	type McpOAuthSettings,
+} from "./oauth.ts";
 import { isMcpAppResource, type McpResourceServer } from "./resources.ts";
 import type { McpToolCaller } from "./tools.ts";
 
@@ -169,7 +174,7 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
 	private stderrTail: string | undefined;
 	private readonly cwd: string;
 	private readonly createTransport: McpTransportFactory;
-	private readonly authProvider: AuthProvider | undefined;
+	private readonly authProvider: McpAuthProvider | undefined;
 	private readonly onTools: (connection: McpServerConnection) => void;
 	private readonly onChange: ((connection: McpServerConnection) => void) | undefined;
 	private readonly log: McpServerLog | undefined;
@@ -452,5 +457,8 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
 		const client = this.client;
 		this.client = undefined;
 		await client?.close().catch(() => undefined);
+		// A refresh the server already answered may have rotated the refresh token; exiting before the
+		// new tokens are saved would lose the grant.
+		await this.authProvider?.settled();
 	}
 }

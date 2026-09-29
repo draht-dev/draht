@@ -9,10 +9,11 @@
  * Credentials live in `<agent-dir>/mcp-auth.json`, keyed by server URL.
  */
 
+import { createHash } from "node:crypto";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { AuthProvider } from "@draht/mcp";
+import type { AuthProvider, McpFetch } from "@draht/mcp";
 import {
-	adaptOAuthProvider,
 	authorizeMcp,
 	McpOAuthAuthorizationRequiredError,
 	McpOAuthProvider,
@@ -23,6 +24,7 @@ import {
 	type OAuthClientInformationMixed,
 	parseWwwAuthenticate,
 } from "@draht/mcp/oauth";
+import lockfile from "proper-lockfile";
 import { APP_NAME, getAgentDir } from "../../config.ts";
 import { type AuthStorageBackend, FileAuthStorageBackend } from "../../core/auth-storage.ts";
 
@@ -32,6 +34,13 @@ const CALLBACK_PATH = "/callback";
 const FALLBACK_REDIRECT_URL = `http://${CALLBACK_HOST}${CALLBACK_PATH}`;
 /** Access tokens this close to expiry are refreshed before they are sent. */
 const REFRESH_SKEW_MS = 30_000;
+/** Bounds each request of a refresh, so it cannot hold the refresh lock or delay shutdown for long. */
+const REFRESH_REQUEST_TIMEOUT_MS = 15_000;
+/** A refresh lock that its holder stopped renewing (the process was killed) is taken over after this. */
+const REFRESH_LOCK_STALE_MS = 20_000;
+/** How long to wait for another process's refresh: longer than a stale lock lives. */
+const REFRESH_LOCK_WAIT_MS = 25_000;
+const REFRESH_LOCK_RETRY_MS = 100;
 
 export interface McpOAuthSettings {
 	clientId?: string;
@@ -91,15 +100,23 @@ function parseStates(content: string | undefined): StoredStates {
 	return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as StoredStates) : {};
 }
 
+export interface McpOAuthServerStore extends McpOAuthStateStore {
+	/** Run `fn` while no other process refreshes the server's tokens. */
+	withRefreshLock<T>(fn: () => Promise<T>): Promise<T>;
+}
+
 /** Per-server OAuth state (client registration, tokens, pending PKCE verifier) in `mcp-auth.json`. */
 export class McpOAuthCredentialStore {
 	private readonly backend: AuthStorageBackend;
+	/** Directory for the refresh lock files. Without one, refreshes are only serialized in this process. */
+	private readonly lockDir: string | undefined;
 
-	constructor(backend: AuthStorageBackend = new FileAuthStorageBackend(join(getAgentDir(), "mcp-auth.json"))) {
-		this.backend = backend;
+	constructor(backend?: AuthStorageBackend, lockDir?: string) {
+		this.backend = backend ?? new FileAuthStorageBackend(join(getAgentDir(), "mcp-auth.json"));
+		this.lockDir = backend ? lockDir : getAgentDir();
 	}
 
-	forServer(serverUrl: string): McpOAuthStateStore {
+	forServer(serverUrl: string): McpOAuthServerStore {
 		const key = String(new URL(serverUrl));
 		return {
 			load: () => this.read()[key],
@@ -107,7 +124,35 @@ export class McpOAuthCredentialStore {
 				this.write((states) => {
 					states[key] = state;
 				}),
+			withRefreshLock: (fn) => this.withRefreshLock(key, fn),
 		};
+	}
+
+	/**
+	 * A lock file per server. When the process exits, proper-lockfile removes the locks it holds; when
+	 * it is killed, the lock goes stale because it is no longer renewed, and the next process takes it over.
+	 */
+	private async withRefreshLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+		if (!this.lockDir) return fn();
+		mkdirSync(this.lockDir, { recursive: true, mode: 0o700 });
+		const hash = createHash("sha256").update(key).digest("hex").slice(0, 16);
+		const release = await lockfile.lock(join(this.lockDir, `mcp-auth-refresh-${hash}`), {
+			realpath: false,
+			stale: REFRESH_LOCK_STALE_MS,
+			retries: {
+				retries: REFRESH_LOCK_WAIT_MS / REFRESH_LOCK_RETRY_MS,
+				factor: 1,
+				minTimeout: REFRESH_LOCK_RETRY_MS,
+				maxTimeout: REFRESH_LOCK_RETRY_MS,
+			},
+			// The default throws from a timer. A lost lock at worst lets two refreshes overlap.
+			onCompromised: () => {},
+		});
+		try {
+			return await fn();
+		} finally {
+			await release().catch(() => undefined);
+		}
 	}
 
 	/** The stored tokens of a server, for noticing sign-ins done by another process. */
@@ -160,6 +205,11 @@ function createProvider(
 	});
 }
 
+export interface McpAuthProvider extends AuthProvider {
+	/** Resolves when no refresh is running, so shutdown does not drop rotated tokens before they are saved. */
+	settled(): Promise<void>;
+}
+
 /**
  * Auth provider for MCP connections: sends the stored access token and refreshes it when it is about
  * to expire or after a 401. Throws `McpOAuthAuthorizationRequiredError` when the user has to sign in,
@@ -168,37 +218,46 @@ function createProvider(
  * `settings` is only called when a refresh is needed, so a secret that fails to resolve fails the
  * refresh instead of the whole connection setup.
  *
- * Concurrent requests share one refresh, and a 401 for a token that was already replaced just
- * retries: many servers rotate refresh tokens, so refreshing twice with the same one would fail
- * and discard the new grant.
+ * Many servers rotate refresh tokens, so two refreshes with the same refresh token lose the grant.
+ * Requests in this process share one refresh, and other processes are kept out by the store's
+ * refresh lock, held from reading the tokens to saving new ones. Tokens that changed meanwhile
+ * (another process refreshed them, or the user signed in) are used without refreshing.
  */
 export function createMcpAuthProvider(options: {
 	serverUrl: string;
-	store: McpOAuthStateStore;
+	store: McpOAuthServerStore;
 	settings: () => McpOAuthSettings;
 	onChallenge: (challenge: OAuthChallenge) => void;
-}): AuthProvider {
+}): McpAuthProvider {
 	const { serverUrl, store } = options;
 	let refreshing: Promise<void> | undefined;
 
-	const refresh = (context: Parameters<NonNullable<AuthProvider["onUnauthorized"]>>[0] | undefined) => {
-		refreshing ??= (async () => {
-			const state = await store.load();
-			if (!state?.tokens?.refresh_token) throw new McpOAuthAuthorizationRequiredError();
-			const settings = options.settings();
-			const redirectUrl =
-				callbackSettings(settings).fixedRedirectUrl ??
-				registeredRedirectUrls(state.clientInformation)[0] ??
-				FALLBACK_REDIRECT_URL;
-			const provider = createProvider(serverUrl, store, settings, redirectUrl, () => {});
-			// Refreshes the tokens, or reports that a new sign-in is needed.
-			const result = context
-				? await adaptOAuthProvider(provider).onUnauthorized?.(context)
-				: await authorizeMcp(provider, { serverUrl });
-			if (result === "REDIRECT") throw new McpOAuthAuthorizationRequiredError();
-		})().finally(() => {
-			refreshing = undefined;
-		});
+	/** Replace `staleToken`, the access token that expired or was rejected. */
+	const refresh = (staleToken: string | undefined, fetch: McpFetch = globalThis.fetch, challenge?: OAuthChallenge) => {
+		refreshing ??= store
+			.withRefreshLock(async () => {
+				const state = await store.load();
+				if (state?.tokens?.access_token !== staleToken) return;
+				if (!state?.tokens?.refresh_token) throw new McpOAuthAuthorizationRequiredError();
+				const settings = options.settings();
+				const redirectUrl =
+					callbackSettings(settings).fixedRedirectUrl ??
+					registeredRedirectUrls(state.clientInformation)[0] ??
+					FALLBACK_REDIRECT_URL;
+				const provider = createProvider(serverUrl, store, settings, redirectUrl, () => {});
+				// Refreshes the tokens, or reports that a new sign-in is needed.
+				const result = await authorizeMcp(provider, {
+					serverUrl,
+					resourceMetadataUrl: challenge?.resourceMetadataUrl,
+					scope: challenge?.scope,
+					fetch: (input, init) =>
+						fetch(input, { ...init, signal: AbortSignal.timeout(REFRESH_REQUEST_TIMEOUT_MS) }),
+				});
+				if (result === "REDIRECT") throw new McpOAuthAuthorizationRequiredError();
+			})
+			.finally(() => {
+				refreshing = undefined;
+			});
 		return refreshing;
 	};
 
@@ -206,10 +265,11 @@ export function createMcpAuthProvider(options: {
 		token: async () => {
 			await refreshing?.catch(() => undefined);
 			const state = await store.load();
+			const token = state?.tokens?.access_token;
 			const expired = state?.tokensExpireAt !== undefined && state.tokensExpireAt - REFRESH_SKEW_MS <= Date.now();
-			if (!expired || !state?.tokens?.refresh_token) return state?.tokens?.access_token;
+			if (!expired || !state?.tokens?.refresh_token) return token;
 			// Failures fall through: the request goes out with the old token and a 401 decides what happens.
-			await refresh(undefined).catch(() => undefined);
+			await refresh(token).catch(() => undefined);
 			return (await store.load())?.tokens?.access_token;
 		},
 		onUnauthorized: async (context) => {
@@ -217,11 +277,10 @@ export function createMcpAuthProvider(options: {
 			options.onChallenge(challenge);
 			// A refresh keeps the granted scope, so more scope needs a new sign-in.
 			if (challenge.error === "insufficient_scope") throw new McpOAuthAuthorizationRequiredError();
-			if (!refreshing && context.token !== undefined) {
-				const current = (await store.load())?.tokens?.access_token;
-				if (current !== undefined && current !== context.token) return;
-			}
-			await refresh(context);
+			await refresh(context.token, context.fetch, challenge);
+		},
+		settled: async () => {
+			await refreshing?.catch(() => undefined);
 		},
 	};
 }

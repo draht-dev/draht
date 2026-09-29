@@ -29,11 +29,15 @@ const WORKSPACE = {
 };
 
 /**
- * Budgets are deliberate. `.` and `./node` are batteries-included entries and stay unbounded; every
- * narrow entry states the graph it is allowed to reach.
+ * Budgets are deliberate. Entries with no budget remain unbounded; each listed entry states the
+ * graph it is allowed to reach.
  */
 const BUDGETS = {
 	"packages/ai": {
+		"./models": {
+			maxFiles: 15,
+			forbid: ["providers/", "models.generated.ts", "index.ts", "utils/validation.ts", "utils/typebox-helpers.ts"],
+		},
 		"./utils/*": { maxFiles: 3, forbid: ["providers/", "api/", "index.ts"] },
 	},
 	"packages/agent": {

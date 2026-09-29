@@ -12,9 +12,9 @@
  */
 
 import type { Server } from "node:http";
+import { oauthErrorHtml, oauthSuccessHtml } from "../../utils/oauth-page.ts";
 import { getProviderEnvValue } from "../../utils/provider-env.ts";
 import type { OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "../types.ts";
-import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.ts";
 import { generatePKCE } from "./pkce.ts";
 
 type NodeApis = {

@@ -7,8 +7,8 @@
  */
 
 import type { Server } from "node:http";
+import { oauthErrorHtml, oauthSuccessHtml } from "../../utils/oauth-page.ts";
 import type { OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "../types.ts";
-import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.ts";
 import { generatePKCE } from "./pkce.ts";
 
 let _createServer: typeof import("node:http").createServer | null = null;

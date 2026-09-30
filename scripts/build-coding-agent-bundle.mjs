@@ -93,10 +93,10 @@ function commonBuildOptions() {
 		minifySyntax: true,
 		minifyWhitespace: true,
 		platform: "node",
-		// The source uses jiti/static so Bun embeds its Babel transform. The Node
-		// package replaces it with a synchronous lazy require so jiti loads only
-		// when importing an extension; Babel remains deferred until a cache miss
-		// needs transformation.
+		// The source imports @mariozechner/jiti directly, which would otherwise
+		// pull its Babel transform into the bundle eagerly. lazyJitiPlugin
+		// rewrites the import to a synchronous lazy require, so jiti (and Babel)
+		// loads only when an extension is actually imported.
 		plugins: [lazyJitiPlugin, httpsProxyAgentNamedExportPlugin],
 		sourcemap: false,
 		target: "node22.19",

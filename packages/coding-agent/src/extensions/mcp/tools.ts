@@ -23,12 +23,13 @@ import {
 	type Tool as McpTool,
 	toLlmContent,
 } from "@draht/mcp";
-import { Text } from "@draht/tui";
+import { Container, Spacer, Text } from "@draht/tui";
 import type { TSchema } from "typebox";
 import type { ToolAnnotations, ToolDefinition, ToolExposure, ToolNamespace } from "../../core/extensions/types.ts";
 import { formatToolCallWithArgs, getTextOutput, replaceTabs } from "../../core/tools/render-utils.ts";
 import { formatSize, truncateMiddle } from "../../core/tools/truncate.ts";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
+import { VisualLinePreview } from "../../modes/interactive/components/visual-truncate.ts";
 import type { McpExposure } from "./config.ts";
 
 /**
@@ -43,7 +44,7 @@ export function toToolExposure(exposure: McpExposure): ToolExposure {
 const MAX_TOOL_NAME_LENGTH = 64;
 /** Model-facing text of an MCP result beyond this is cut in the middle. */
 export const MCP_OUTPUT_MAX_BYTES = 20 * 1024;
-/** Result lines shown before the output is expanded. */
+/** Visual (wrapped) result lines shown before the output is expanded. */
 const OUTPUT_PREVIEW_LINES = 5;
 /** Tool that reads the resources named by resource links. */
 export const READ_MCP_RESOURCE_TOOL = "read_mcp_resource";
@@ -279,16 +280,32 @@ export function createMcpToolDefinition(options: {
 			return component;
 		},
 		renderResult(result, options, theme, context) {
+			const component = (context.lastComponent as Container | undefined) ?? new Container();
+			component.clear();
 			const output = getTextOutput(result, context.showImages).trim();
-			const lines = output ? replaceTabs(output).split("\n") : [];
-			const shown = options.expanded ? lines : lines.slice(0, OUTPUT_PREVIEW_LINES);
+			if (!output) return component;
 			const color = context.isError ? "error" : "toolOutput";
-			let text = shown.map((line) => theme.fg(color, line)).join("\n");
-			if (shown.length < lines.length) {
-				text += `\n${theme.fg("muted", `... (${lines.length - shown.length} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+			const styled = replaceTabs(output)
+				.split("\n")
+				.map((line) => theme.fg(color, line))
+				.join("\n");
+			component.addChild(new Spacer(1));
+			if (options.expanded) {
+				component.addChild(new Text(styled, 0, 0));
+			} else {
+				// Limit wrapped lines, not logical ones: MCP results are often one long JSON line.
+				component.addChild(
+					new VisualLinePreview({
+						text: styled,
+						maxVisualLines: OUTPUT_PREVIEW_LINES,
+						keep: "start",
+						formatHint: (hidden) =>
+							`${theme.fg("muted", `... (${hidden} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`,
+					}),
+				);
+				const fullOutputPath = result.details?.fullOutputPath;
+				if (fullOutputPath) component.addChild(new Text(theme.fg("muted", `Full output: ${fullOutputPath}`), 0, 0));
 			}
-			const component = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			component.setText(text ? `\n${text}` : "");
 			return component;
 		},
 		async execute(_toolCallId, params, signal, onUpdate) {

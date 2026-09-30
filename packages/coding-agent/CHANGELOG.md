@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `pi.setModel`/`pi.setThinkingLevel` extension API and the SDK's `setModel`/`setThinkingLevel`: the `{ persistDefault?: boolean }` option (default `true`, updating the user's global default) is now `{ persist?: boolean }` (default `false`, session-scoped). Extensions relying on the old "persists by default" behavior must now pass `{ persist: true }` explicitly
+
 ### Added
 
 - shipped (builtin) skills: the package now bundles a `skills/` directory that is always discovered (disabled by `--no-skills`; user/project skills with the same name win). First builtin skill: `hexagon-animation`, which generates a randomized 3D hexagon grid animation as a self-contained HTML file
@@ -21,6 +25,13 @@
 - `spec-reviewer` builtin agent — six commands (`/execute-phase`, `/orchestrate`, `/orchestrate-loop`, `/quick`, `/review`, `/verify-work`) dispatch it, but it previously shipped only in the plugin packages; unknown agents hard-fail in the subagent tool, so `/execute-phase` Stage 2 was broken out of the box
 - bundled `draht-tools.cjs` now dispatches `map-graph`/`graph-*`/`map-codebase` to a prebuilt Go `draht-graph` binary when one resolves (`~/.draht/bin`, `$DRAHT_GRAPH_BIN`, or `$PATH`; `DRAHT_GRAPH_ENGINE=auto|go|js`), falling back to the existing JS engine otherwise — install the binary via `npx draht-claude install-graph-engine` or `npx draht-codex install-graph-engine`; see `go/README.md`
 - attachable sessions (experimental, opt-in): `--attachable` exposes a running session on an owner-only Unix socket in `~/.draht/agent/sockets/`, `--list-sessions` lists running ones, and `--attach <session-id>` attaches from another terminal (tmux-style output streaming and input echo). Single user only - the socket and lock are 0600 in a 0700 directory with no other authentication - one live owner per session id, no history replay, and no input while the agent is streaming; see [Attachable Sessions](docs/attachable-sessions.md)
+- Node bundle distribution: the npm package now ships a bundled `dist/bundle/cli.js` alongside the existing entry point, raising the minimum Node version to `>=22.19.0`
+- `powershell` tool, alongside `bash`, for shell execution on Windows
+- `/thinking` command to change the reasoning effort level mid-session
+- `--` end-of-options marker for CLI argument parsing
+- terminal capability overrides via `DRAHT_HYPERLINKS`, `DRAHT_IMAGE_PROTOCOL`, and `DRAHT_TRUE_COLOR` environment variables
+- `tui.select.confirmAsDefault` keybinding (default `ctrl+s`) to confirm a selection and set it as the default
+- experimental mini agent, a three-process coding agent variant on the durable harness (not CLI-wired)
 
 ### Fixed
 

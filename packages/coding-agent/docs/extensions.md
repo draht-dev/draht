@@ -1661,7 +1661,7 @@ Typical `sourceInfo.source` values:
 
 ### pi.setModel(model, options?)
 
-Set the current model. Returns `false` if no API key is available for the model. See [models.md](models.md) for configuring custom models. Pass `{ persistDefault: false }` for session-scoped orchestration that must not replace the user's global default model.
+Set the current model. Returns `false` if no API key is available for the model. See [models.md](models.md) for configuring custom models. Defaults to session-scoped; pass `{ persist: true }` to also update the user's global default model.
 
 ```typescript
 const model = ctx.modelRegistry.find("anthropic", "claude-sonnet-4-5");
@@ -1675,7 +1675,7 @@ if (model) {
 
 ### pi.getThinkingLevel() / pi.setThinkingLevel(level, options?)
 
-Get or set the thinking level. Level is clamped to model capabilities (non-reasoning models always use "off"). Changes emit `thinking_level_select`. Pass `{ persistDefault: false }` when the change should remain session-scoped.
+Get or set the thinking level. Level is clamped to model capabilities (non-reasoning models always use "off"). Changes emit `thinking_level_select`. Defaults to session-scoped; pass `{ persist: true }` to also update the user's global default thinking level.
 
 ```typescript
 const current = pi.getThinkingLevel();  // "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"

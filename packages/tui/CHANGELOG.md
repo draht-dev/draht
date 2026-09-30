@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `tui.select.confirmAsDefault` keybinding (default `ctrl+s`) to confirm a `SelectList` selection and mark it as the default
+
 ## [2026.7.30] - 2026-07-30
 
 ### Changed

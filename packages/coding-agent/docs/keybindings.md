@@ -82,6 +82,7 @@ The dedicated history actions always change history entries, regardless of the c
 | `tui.select.pageUp` | `pageUp` | Page up in list |
 | `tui.select.pageDown` | `pageDown` | Page down in list |
 | `tui.select.confirm` | `enter` | Confirm selection |
+| `tui.select.confirmAsDefault` | `ctrl+s` | Confirm selection and set as default |
 | `tui.select.cancel` | `escape`, `ctrl+c` | Cancel selection |
 
 ### TUI Fullscreen Viewport

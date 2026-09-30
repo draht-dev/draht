@@ -33,6 +33,8 @@
 - attachable sessions: sockets left behind by a `SIGKILL`ed or crashed session accumulated forever. Discovery now reaps `.sock`/`.lock` pairs whose recorded PID is dead, and leaves live sessions alone
 - attachable sessions: `--attach` interpolated its argument straight into a socket path. The value is now validated with the same rule the session manager applies to session ids, so it cannot traverse out of the socket directory
 - `--attachable` help text no longer implies other people can attach: the socket is owner-only
+- permission gate: the `powershell` tool fell through to the generic "approve" default, skipping bash's deny rules, the auto-mode danger filter, and yolo downgrade. `powershell` is now treated like `bash` in all permission modes
+- extensions: `registerEntryRenderer` required an active runtime again, blocking registration from extensions whose session had already been replaced; restored so it always registers regardless of runtime state, as fixed previously
 
 ### Changed
 

@@ -343,8 +343,10 @@ function createExtensionAPI(
 			extension.markdownTransformer = transformer;
 		},
 
+		// Unlike the other registration methods, this must stay usable while the
+		// extension's runtime is not yet active (e.g. during extension init,
+		// before Runner.bindCore() runs) — see 8783a2f9c.
 		registerEntryRenderer<T>(customType: string, renderer: EntryRenderer<T>): void {
-			assertActive();
 			extension.entryRenderers ??= new Map();
 			extension.entryRenderers.set(customType, renderer as EntryRenderer);
 		},

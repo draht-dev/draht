@@ -710,11 +710,14 @@ export class PermissionGate {
 			return { action: "allow", reason: `no rule matched; "${toolName}" is allowed by default` };
 		}
 
-		if (toolName === "bash") {
+		if (toolName === "bash" || toolName === "powershell") {
 			if (this.mode === "auto") {
 				const command = getCommandArg(args);
 				if (command === undefined) {
-					return { action: "approve", reason: "auto mode: bash call without a command string requires approval" };
+					return {
+						action: "approve",
+						reason: `auto mode: ${toolName} call without a command string requires approval`,
+					};
 				}
 				const dangerous = findDangerousPattern(command);
 				if (dangerous !== undefined) {
@@ -725,7 +728,7 @@ export class PermissionGate {
 				}
 				return { action: "allow", reason: "auto mode: no rule matched and command passed the danger filter" };
 			}
-			return { action: "approve", reason: "no rule matched; bash commands require approval by default" };
+			return { action: "approve", reason: `no rule matched; ${toolName} commands require approval by default` };
 		}
 
 		if (PATH_SCOPED_TOOLS.has(toolName)) {

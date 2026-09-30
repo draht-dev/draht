@@ -85,4 +85,25 @@ describe("issue #8423 extension factory failure", () => {
 		await expect(failingLoad).rejects.toThrow("factory failed");
 		expect(runtime.pendingProviderRegistrations.map(({ name }) => name)).toEqual(["working-provider"]);
 	});
+
+	it("registerEntryRenderer stays usable after the runtime goes stale (8783a2f9c)", async () => {
+		const runtime = createExtensionRuntime();
+		const eventBus = createEventBus();
+
+		let capturedApi: ExtensionAPI | undefined;
+		await loadExtensionFromFactory(
+			(pi) => {
+				capturedApi = pi;
+			},
+			process.cwd(),
+			eventBus,
+			runtime,
+			"<entry-renderer>",
+		);
+		runtime.invalidate("stale for this test");
+
+		expect(capturedApi).toBeDefined();
+		expect(() => capturedApi?.registerEntryRenderer("late-entry", () => undefined)).not.toThrow();
+		expect(() => capturedApi?.registerFlag("late-flag", { type: "boolean", default: true })).toThrow();
+	});
 });

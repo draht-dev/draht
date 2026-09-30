@@ -87,6 +87,12 @@ describe("PermissionGate.evaluate", () => {
 		expect(gate.evaluate("bash", { command: "ls -la" }).action).toBe("approve"); // falls through to default
 	});
 
+	it("matches powershell deny rules the same way as bash", () => {
+		const gate = new PermissionGate([{ tool: "powershell", pattern: "Remove-Item -Recurse *", action: "deny" }]);
+		expect(gate.evaluate("powershell", { command: "Remove-Item -Recurse C:\\Windows" }).action).toBe("deny");
+		expect(gate.evaluate("powershell", { command: "Get-ChildItem" }).action).toBe("approve"); // falls through to default
+	});
+
 	describe("adversarial bash deny-rule evasion", () => {
 		const gate = new PermissionGate([{ tool: "bash", pattern: "rm -rf *", action: "deny" }]);
 
@@ -201,6 +207,11 @@ describe("PermissionGate.evaluate", () => {
 		expect(gate.evaluate("read", { path: "src/index.ts" }).action).toBe("allow");
 		expect(gate.evaluate("write", { path: "src/index.ts" }).action).toBe("allow");
 		expect(gate.evaluate("edit", { path: "src/index.ts" }).action).toBe("allow");
+	});
+
+	it("defaults powershell to approve, matching bash", () => {
+		const gate = new PermissionGate([], { cwd: "/repo" });
+		expect(gate.evaluate("powershell", { command: "Get-ChildItem" }).action).toBe("approve");
 	});
 
 	it("defaults to approve for read/edit/write paths outside the project", () => {
@@ -347,6 +358,12 @@ describe("PermissionGate modes", () => {
 			expect(gate.evaluate("write", { path: "/etc/passwd" }).action).toBe("approve");
 			expect(gate.evaluate("write", { path: "src/index.ts" }).action).toBe("allow");
 		});
+
+		it("applies the same danger filter and command-less approval to powershell as bash", () => {
+			expect(gate.evaluate("powershell", { command: "Get-ChildItem" }).action).toBe("allow");
+			expect(gate.evaluate("powershell", { command: "sudo make install" }).action).toBe("approve");
+			expect(gate.evaluate("powershell", {}).action).toBe("approve");
+		});
 	});
 
 	describe("yolo mode", () => {
@@ -367,6 +384,10 @@ describe("PermissionGate modes", () => {
 		it("never relaxes explicit deny rules", () => {
 			expect(gate.evaluate("bash", { command: "rm -rf /" }).action).toBe("deny");
 			expect(gate.evaluate("bash", { command: "echo hi && rm -rf /" }).action).toBe("deny");
+		});
+
+		it("downgrades powershell's default approve to allow, same as bash", () => {
+			expect(gate.evaluate("powershell", { command: "Remove-Item -Recurse C:\\" }).action).toBe("allow");
 		});
 	});
 

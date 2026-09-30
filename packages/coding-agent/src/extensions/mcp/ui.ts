@@ -7,6 +7,7 @@ import {
 	type Component,
 	Container,
 	type Focusable,
+	hyperlink,
 	Input,
 	type SelectItem,
 	SelectList,
@@ -175,10 +176,12 @@ export class McpManagerView implements McpUi, Component, Focusable {
 			}
 			signal.addEventListener("abort", onAbort, { once: true });
 			const input = new Input();
+			const clickHint = process.platform === "darwin" ? "Cmd+click to open" : "Ctrl+click to open";
 			const body: Component[] = [
 				new Spacer(1),
 				new Text(this.theme.fg("muted", "Approve access in your browser. If it did not open, visit:"), 1, 0),
-				new Text(this.theme.fg("accent", authorizationUrl), 1, 0),
+				new Text(this.theme.fg("accent", hyperlink(authorizationUrl, authorizationUrl)), 1, 0),
+				new Text(this.theme.fg("dim", hyperlink(clickHint, authorizationUrl)), 1, 0),
 				new Spacer(1),
 				new Text(
 					this.theme.fg("muted", "If the browser runs on another machine, paste the URL it was redirected to:"),

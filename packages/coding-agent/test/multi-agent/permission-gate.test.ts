@@ -130,6 +130,12 @@ describe("PermissionGate.evaluate", () => {
 			expect(gate.evaluate("bash", { command: "echo $(rm -rf /)" }).action).toBe("deny");
 			expect(gate.evaluate("bash", { command: "$(echo rm -rf /)" }).action).toBe("deny");
 		});
+
+		it("still denies when bash wraps a pwsh/powershell/cmd subshell", () => {
+			expect(gate.evaluate("bash", { command: `bash -c "pwsh -c 'rm -rf ~'"` }).action).toBe("deny");
+			expect(gate.evaluate("bash", { command: `bash -c "powershell -Command 'rm -rf ~'"` }).action).toBe("deny");
+			expect(gate.evaluate("bash", { command: `bash -c "cmd /c 'rm -rf ~'"` }).action).toBe("deny");
+		});
 	});
 
 	it("does not reassemble unrelated path segments across '/' into a false match", () => {
@@ -359,10 +365,30 @@ describe("PermissionGate modes", () => {
 			expect(gate.evaluate("write", { path: "src/index.ts" }).action).toBe("allow");
 		});
 
-		it("applies the same danger filter and command-less approval to powershell as bash", () => {
-			expect(gate.evaluate("powershell", { command: "Get-ChildItem" }).action).toBe("allow");
+		it("does not auto-allow powershell — every unmatched powershell call requires approval, even one that would pass bash's danger filter", () => {
+			expect(gate.evaluate("powershell", { command: "Get-ChildItem" }).action).toBe("approve");
 			expect(gate.evaluate("powershell", { command: "sudo make install" }).action).toBe("approve");
 			expect(gate.evaluate("powershell", {}).action).toBe("approve");
+		});
+
+		it("does not auto-allow destructive powershell commands the bash danger filter never learned about", () => {
+			expect(gate.evaluate("powershell", { command: "Remove-Item -Recurse -Force ~" }).action).toBe("approve");
+		});
+
+		it("applies a bash tool deny rule's pattern to a matching powershell command", () => {
+			const withBashDeny = new PermissionGate([{ tool: "bash", pattern: "*Remove-Item*", action: "deny" }], {
+				cwd: "/repo",
+				mode: "auto",
+			});
+			expect(withBashDeny.evaluate("powershell", { command: "Remove-Item -Recurse -Force ~" }).action).toBe("deny");
+		});
+
+		it("does not apply a bash tool allow rule's pattern to powershell", () => {
+			const withBashAllow = new PermissionGate([{ tool: "bash", pattern: "ls *", action: "allow" }], {
+				cwd: "/repo",
+				mode: "auto",
+			});
+			expect(withBashAllow.evaluate("powershell", { command: "ls *" }).action).toBe("approve");
 		});
 	});
 
@@ -387,7 +413,11 @@ describe("PermissionGate modes", () => {
 		});
 
 		it("downgrades powershell's default approve to allow, same as bash", () => {
-			expect(gate.evaluate("powershell", { command: "Remove-Item -Recurse C:\\" }).action).toBe("allow");
+			expect(gate.evaluate("powershell", { command: "Get-ChildItem" }).action).toBe("allow");
+		});
+
+		it("applies a bash tool deny rule to a matching powershell command — deny is never relaxed, even in yolo", () => {
+			expect(gate.evaluate("powershell", { command: "rm -rf /" }).action).toBe("deny");
 		});
 	});
 

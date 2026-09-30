@@ -59,10 +59,13 @@ export type PermissionAction = "deny" | "allow" | "approve";
  * Session-level permission mode. Modes only relax the gate's *default*
  * decisions — explicit rules from `permissions.yml` always win first:
  *
- * - `default`: rules as authored; unmatched bash requires approval.
+ * - `default`: rules as authored; unmatched bash/powershell requires approval.
  * - `auto`: unmatched bash is auto-allowed unless it trips the built-in
  *   danger filter (`DANGEROUS_COMMAND_PATTERNS`), in which case it still
- *   requires approval. Explicit `deny`/`approve` rules behave as authored.
+ *   requires approval. `powershell` is excluded from this auto-allow — the
+ *   danger filter is bash-shaped and has no powershell-specific coverage, so
+ *   unmatched powershell calls always require approval, even in auto mode.
+ *   Explicit `deny`/`approve` rules behave as authored.
  * - `yolo`: every `approve` (rule-based or default) is downgraded to
  *   `allow`. Explicit `deny` rules still block — yolo is "stop asking",
  *   not "disable the gate".
@@ -269,6 +272,13 @@ const PASSTHROUGH_PREFIXES = new Set([
 /** Shells whose `-c <command>` argument is itself a full command line to unwrap and re-check. */
 const SHELL_C_WRAPPERS = new Set(["bash", "sh", "zsh", "ksh", "dash"]);
 
+/**
+ * Non-POSIX shells whose command-line argument is itself a full command line
+ * to unwrap and re-check. Catches bash wrapping another shell, e.g.
+ * `bash -c "pwsh -c 'rm -rf ~'"`.
+ */
+const OTHER_SHELL_WRAPPERS = new Set(["pwsh", "powershell", "powershell.exe", "cmd", "cmd.exe"]);
+
 /** Constructs that make a command dynamic/opaque enough that allow/approve patterns must never match it. */
 const DANGEROUS_CONSTRUCT_RE = /\$\(|`|<|>/;
 
@@ -383,6 +393,22 @@ function extractShellDashC(text: string): string | undefined {
 	return match[3];
 }
 
+/**
+ * Extracts the inner command line from a `pwsh -c "..."` / `powershell
+ * -Command "..."` / `cmd /c "..."` style wrapper, if present. Accepts `-c`,
+ * `-Command`, and `/c` case-insensitively rather than the exact flag each
+ * shell prefers — for danger detection, over-matching is the safe direction.
+ */
+function extractOtherShellWrapperArg(text: string): string | undefined {
+	const trimmed = text.trim();
+	const match = trimmed.match(/^(\S+)(?:\s+-\S+)*\s+(?:-c|-command|\/c)\s+(['"])([\s\S]*)\2\s*$/i);
+	if (!match) return undefined;
+	const token = match[1];
+	const basename = token.includes("/") ? token.slice(token.lastIndexOf("/") + 1) : token;
+	if (!OTHER_SHELL_WRAPPERS.has(basename.toLowerCase())) return undefined;
+	return match[3];
+}
+
 /** Extracts the inner command line from an `eval "..."` / `eval '...'` wrapper, if present. */
 function extractEvalArg(text: string): string | undefined {
 	const match = text.trim().match(/^eval\s+(['"])([\s\S]*)\1\s*$/i);
@@ -472,6 +498,9 @@ function collectDenyCandidates(command: string): string[] {
 
 			const shellC = extractShellDashC(working) ?? extractShellDashC(basenameResolved);
 			if (shellC !== undefined) enqueue(shellC);
+
+			const otherShellArg = extractOtherShellWrapperArg(working) ?? extractOtherShellWrapperArg(basenameResolved);
+			if (otherShellArg !== undefined) enqueue(otherShellArg);
 
 			const evalArg = extractEvalArg(working) ?? extractEvalArg(basenameResolved);
 			if (evalArg !== undefined) enqueue(evalArg);
@@ -641,8 +670,23 @@ function describeMatch(rule: PermissionRule): string {
 	return `matched rule (${parts.join(", ")}) -> ${rule.action}`;
 }
 
+/**
+ * A `tool: bash` rule's `pattern` is authored against bash command shapes, so
+ * only its `deny` half is safe to reuse for `powershell` calls: a bash `deny`
+ * over-matching onto a powershell command is the fail-safe direction, while a
+ * bash `allow`/`approve` pattern (e.g. `ls *`) under-matching real
+ * powershell syntax would otherwise create the illusion of coverage without
+ * actually vetting powershell-specific danger. `tool: powershell` rules
+ * (and `tool: "*"`) are unaffected and keep matching normally.
+ */
+function bashDenyRuleAppliesToPowershell(rule: PermissionRule, toolName: string): boolean {
+	return toolName === "powershell" && rule.tool.toLowerCase() === "bash" && rule.action === "deny";
+}
+
 function ruleMatches(rule: PermissionRule, toolName: string, args: Record<string, unknown>, cwd: string): boolean {
-	if (rule.tool !== "*" && rule.tool.toLowerCase() !== toolName) return false;
+	const toolMatches =
+		rule.tool === "*" || rule.tool.toLowerCase() === toolName || bashDenyRuleAppliesToPowershell(rule, toolName);
+	if (!toolMatches) return false;
 
 	if (rule.pattern !== undefined) {
 		const command = getCommandArg(args);
@@ -710,13 +754,13 @@ export class PermissionGate {
 			return { action: "allow", reason: `no rule matched; "${toolName}" is allowed by default` };
 		}
 
-		if (toolName === "bash" || toolName === "powershell") {
+		if (toolName === "bash") {
 			if (this.mode === "auto") {
 				const command = getCommandArg(args);
 				if (command === undefined) {
 					return {
 						action: "approve",
-						reason: `auto mode: ${toolName} call without a command string requires approval`,
+						reason: "auto mode: bash call without a command string requires approval",
 					};
 				}
 				const dangerous = findDangerousPattern(command);
@@ -728,7 +772,15 @@ export class PermissionGate {
 				}
 				return { action: "allow", reason: "auto mode: no rule matched and command passed the danger filter" };
 			}
-			return { action: "approve", reason: `no rule matched; ${toolName} commands require approval by default` };
+			return { action: "approve", reason: "no rule matched; bash commands require approval by default" };
+		}
+
+		if (toolName === "powershell") {
+			// Unlike bash, powershell has no danger filter tuned for its own
+			// syntax (DANGEROUS_COMMAND_PATTERNS is bash-shaped), so auto mode
+			// cannot safely auto-allow it — every unmatched powershell call
+			// requires approval regardless of mode.
+			return { action: "approve", reason: "no rule matched; powershell commands always require approval" };
 		}
 
 		if (PATH_SCOPED_TOOLS.has(toolName)) {

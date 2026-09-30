@@ -300,6 +300,13 @@ const VECTORS: Row[] = [
 		unreachable: true,
 		note: "Registered but not active by default; same as grep.",
 	},
+	{
+		tool: "powershell",
+		approve: null,
+		allow: null,
+		unreachable: true,
+		note: "Registered but not active by default; same as grep. Also relevant for permission-gate parity: the gate treats bash and powershell as separate tool identities (see permission-gate.ts), so this row existing at all is what keeps a future powershell activation from silently skipping the completeness check.",
+	},
 ];
 
 // ─── Harness ───────────────────────────────────────────────────────────────────────────────────
@@ -667,6 +674,7 @@ test("every tool the running binary reports has a literal vector row", async () 
 		"grep",
 		"hello",
 		"ls",
+		"powershell",
 		"read",
 		"subagent",
 		"write",

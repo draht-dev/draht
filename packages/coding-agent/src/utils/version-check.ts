@@ -13,7 +13,6 @@ const DEFAULT_VERSION_CHECK_TIMEOUT_MS = 10000;
 export interface LatestPiRelease {
 	version: string;
 	packageName?: string;
-	note?: string;
 }
 
 /** Include useful errno details hidden behind Node's generic "fetch failed" error. */

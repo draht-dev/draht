@@ -18,7 +18,7 @@ import {
 	renderToolSample,
 	toCodemodeIdentifier,
 } from "@draht/codemode";
-import { getCodemodeWorkerUrl, getQuickJSWasmPath } from "../../config.ts";
+import { getCodemodeWorkerSpecifier, getQuickJSWasmPath } from "../../config.ts";
 import type { ExtensionToolContext } from "../../core/extensions/types.ts";
 import type { SessionEntry } from "../../core/session-manager.ts";
 import { combineUsage } from "../../core/usage-totals.ts";
@@ -277,7 +277,7 @@ export async function executeCodemode(
 		timeoutMs: sourceOptions.timeoutMs ?? Number.POSITIVE_INFINITY,
 		memoryLimitBytes: CODEMODE_MEMORY_LIMIT_BYTES,
 		wasm: loadQuickJSWasm(getQuickJSWasmPath()),
-		workerUrl: getCodemodeWorkerUrl(),
+		workerUrl: getCodemodeWorkerSpecifier(),
 	});
 
 	let result: CodemodeResult;

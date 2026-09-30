@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import { CodemodeSandbox, type CodemodeTool } from "../src/index.ts";
@@ -559,6 +560,13 @@ describe("limits and lifetime", () => {
 			try { dive(); } catch (error) { return [error.name, depth > 1000]; }
 		`);
 		expect(result).toMatchObject({ ok: true, value: ["RangeError", true] });
+	});
+
+	it("accepts a worker path string", async () => {
+		const workerPath = fileURLToPath(new URL("../src/runtime/worker.ts", import.meta.url));
+		const sandbox = new CodemodeSandbox({ workerUrl: workerPath });
+		sandboxes.push(sandbox);
+		expect(await sandbox.execute("return 1")).toMatchObject({ ok: true, value: 1 });
 	});
 
 	it("reports a missing worker file as a sandbox error", async () => {

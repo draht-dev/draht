@@ -228,7 +228,7 @@ const imageResizeWorkerOutput = resolve(dirname(bedrockLoaderOutput), "image-res
 if (dirname(imageResizeOutput) !== dirname(imageResizeWorkerOutput)) {
 	throw new Error("Image resize implementation and worker were emitted into different directories");
 }
-// getCodemodeWorkerUrl() in config.ts resolves the worker next to its own chunk.
+// getCodemodeWorkerSpecifier() in config.ts resolves the worker next to its own chunk.
 if (dirname(configOutput) !== dirname(bedrockLoaderOutput)) {
 	throw new Error("config.ts and the codemode worker were emitted into different directories");
 }

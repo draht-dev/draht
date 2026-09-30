@@ -81,7 +81,7 @@ export class ThinkingSelectorComponent extends Container implements Focusable {
 		this.addChild(new Spacer(1));
 
 		this.searchInput = new Input();
-		this.searchInput.onSubmit = () => this.selectList.handleInput("\r");
+		this.searchInput.onSubmit = () => this.selectList.confirmSelection();
 		this.addChild(this.searchInput);
 		this.addChild(new Spacer(1));
 

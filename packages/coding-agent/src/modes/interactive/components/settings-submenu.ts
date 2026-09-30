@@ -70,7 +70,7 @@ export class SelectSubmenu extends Container {
 			this.addChild(new Spacer(1));
 			this.searchInput = new Input();
 			this.searchInput.onSubmit = () => {
-				this.selectList.handleInput("\r");
+				this.selectList.confirmSelection();
 			};
 			this.addChild(this.searchInput);
 		}

@@ -160,16 +160,27 @@ export class SelectList implements Component {
 		}
 		// Enter
 		else if (kb.matches(keyData, "tui.select.confirm")) {
-			const selectedItem = this.filteredItems[this.selectedIndex];
-			if (selectedItem && this.onSelect) {
-				this.onSelect(selectedItem);
-			}
+			this.confirmSelection();
 		}
 		// Escape or Ctrl+C
 		else if (kb.matches(keyData, "tui.select.cancel")) {
 			if (this.onCancel) {
 				this.onCancel();
 			}
+		}
+	}
+
+	/**
+	 * Confirm the current selection directly, bypassing keybinding matching.
+	 * Use this for callers (e.g. a search input's submit) that trigger a
+	 * confirm as a side effect of a different, independently rebindable key,
+	 * where synthesizing a "tui.select.confirm" key event would silently
+	 * no-op if the user rebound that keybinding away from the synthesized key.
+	 */
+	confirmSelection(): void {
+		const selectedItem = this.filteredItems[this.selectedIndex];
+		if (selectedItem && this.onSelect) {
+			this.onSelect(selectedItem);
 		}
 	}
 

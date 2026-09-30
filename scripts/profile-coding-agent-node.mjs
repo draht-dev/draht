@@ -305,6 +305,12 @@ async function runBuild(bundle) {
 				"packages/ai",
 				"--workspace",
 				"packages/agent",
+				"--workspace",
+				"packages/router",
+				"--workspace",
+				"packages/knowledge",
+				"--workspace",
+				"packages/rlm",
 			],
 		},
 		{

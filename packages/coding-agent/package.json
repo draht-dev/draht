@@ -115,6 +115,6 @@
 		"directory": "packages/coding-agent"
 	},
 	"engines": {
-		"node": ">=20.6.0"
+		"node": ">=22.19.0"
 	}
 }

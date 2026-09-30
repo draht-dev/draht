@@ -71,6 +71,11 @@ export interface McpOAuthConfig {
 	callbackUrl?: string;
 	/** Scopes to request, separated by spaces. Default: the scopes the server advertises. */
 	scope?: string;
+	/**
+	 * `client_name` sent with dynamic client registration, for servers that only accept known clients.
+	 * Default: `pi`.
+	 */
+	clientName?: string;
 }
 
 const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
@@ -123,6 +128,9 @@ function validateOAuth(value: unknown): string | undefined {
 		}
 	}
 	if (value.scope !== undefined && typeof value.scope !== "string") return "oauth.scope must be a string";
+	if (value.clientName !== undefined && (typeof value.clientName !== "string" || !value.clientName.trim())) {
+		return "oauth.clientName must be a non-empty string";
+	}
 	return undefined;
 }
 

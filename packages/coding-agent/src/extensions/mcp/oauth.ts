@@ -53,6 +53,8 @@ export interface McpOAuthSettings {
 	callbackUrl?: string;
 	/** Scopes to request, separated by spaces. */
 	scope?: string;
+	/** `client_name` for dynamic client registration. Default: `APP_NAME`. */
+	clientName?: string;
 }
 
 /** Where the loopback callback server listens and the redirect URI it serves. */
@@ -199,7 +201,7 @@ function createProvider(
 	return new McpOAuthProvider({
 		serverUrl,
 		redirectUrl,
-		clientMetadata: { client_name: APP_NAME },
+		clientMetadata: { client_name: settings.clientName ?? APP_NAME },
 		clientId: settings.clientId,
 		clientSecret: settings.clientSecret,
 		store,

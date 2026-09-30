@@ -234,6 +234,7 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
 			callbackPort: oauth.callbackPort,
 			callbackUrl: oauth.callbackUrl,
 			scope: oauth.scope,
+			clientName: oauth.clientName,
 		};
 	}
 

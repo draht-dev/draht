@@ -63,6 +63,8 @@ Options for add:
                           OAuth client secret (may be \${NAME} or !command)
   --oauth-callback-port <port>
                           Fixed OAuth callback port
+  --oauth-client-name <name>
+                          Client name sent when registering with the OAuth server
   --exposure <mode>       codemode (default), deferred, direct, or hidden
   --description <text>    What the server offers, shown to the model with its tools
 
@@ -290,6 +292,7 @@ function add(
 			"oauth-client-id": "value",
 			"oauth-client-secret": "value",
 			"oauth-callback-port": "value",
+			"oauth-client-name": "value",
 			exposure: "value",
 			description: "value",
 		},
@@ -309,7 +312,14 @@ function add(
 		return typeof found === "string" ? found : undefined;
 	};
 	const exposure = value("exposure");
-	const httpOnly = ["header", "bearer-token-env-var", "oauth-client-id", "oauth-client-secret", "oauth-callback-port"];
+	const httpOnly = [
+		"header",
+		"bearer-token-env-var",
+		"oauth-client-id",
+		"oauth-client-secret",
+		"oauth-callback-port",
+		"oauth-client-name",
+	];
 	const stdioOnly = ["env", "cwd"];
 	const misplaced = (url === undefined ? httpOnly : stdioOnly).find(
 		(option) => values.has(option) || lists.has(option),
@@ -330,6 +340,7 @@ function add(
 			...(value("oauth-client-id") === undefined ? {} : { clientId: value("oauth-client-id") }),
 			...(value("oauth-client-secret") === undefined ? {} : { clientSecret: value("oauth-client-secret") }),
 			...(port === undefined ? {} : { callbackPort: Number(port) }),
+			...(value("oauth-client-name") === undefined ? {} : { clientName: value("oauth-client-name") }),
 		};
 		config = {
 			url,

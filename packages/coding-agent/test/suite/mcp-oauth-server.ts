@@ -15,6 +15,7 @@ function json(response: ServerResponse, status: number, body: unknown, headers: 
 /** MCP server protected by OAuth, with its own authorization server (discovery, DCR, PKCE, refresh). */
 export async function startOAuthMcpServer() {
 	const log: string[] = [];
+	const registrations: Record<string, unknown>[] = [];
 	const validTokens = new Set<string>();
 	const refreshTokens = new Set<string>();
 	const challenges = new Map<string, string>();
@@ -87,6 +88,7 @@ export async function startOAuthMcpServer() {
 			case "/register": {
 				const metadata = JSON.parse(await readBody(request)) as Record<string, unknown>;
 				log.push("register");
+				registrations.push(metadata);
 				return json(response, 201, { ...metadata, client_id: "client-1" });
 			}
 			case "/authorize": {
@@ -132,6 +134,8 @@ export async function startOAuthMcpServer() {
 	return {
 		url: `${origin}/mcp`,
 		log,
+		/** Client metadata of dynamic client registrations. */
+		registrations,
 		/** Simulates access token expiry. */
 		expireAccessTokens: () => validTokens.clear(),
 		close: () =>

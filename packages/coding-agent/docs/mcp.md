@@ -135,6 +135,18 @@ The redirect URI must match the registered URI. `callbackPort` uses `http://127.
 
 Set `scope` to a space-separated list for servers that do not advertise their required scopes. Otherwise, draht requests the advertised scopes. Later scope requests are added to the configured value.
 
+draht registers as `draht`. Some servers only accept registrations from known clients. Set `clientName` to send another name:
+
+```json
+{
+  "mcpServers": {
+    "figma": { "url": "https://mcp.figma.com/mcp", "oauth": { "clientName": "Claude Code" } }
+  }
+}
+```
+
+The name is only sent when draht registers a client. To register again under a new name, sign out first.
+
 ## Control tool exposure
 
 Each server tool is registered as `mcp__<server>__<tool>`. The server's `exposure` determines how the model reaches it:

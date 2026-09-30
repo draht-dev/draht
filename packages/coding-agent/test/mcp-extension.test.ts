@@ -114,7 +114,7 @@ describe("MCP config", () => {
 		expect(trusted.errors).toContainEqual(expect.stringContaining("autoEnableCodemode must be a boolean"));
 	});
 
-	it("validates the OAuth callback URL and scope", () => {
+	it("validates the OAuth callback URL, scope, and client name", () => {
 		const paths = setup(
 			{
 				mcpServers: {
@@ -127,16 +127,19 @@ describe("MCP config", () => {
 					remote: { url: "https://a.example/mcp", oauth: { callbackUrl: "https://example.com/callback" } },
 					both: { url: "https://a.example/mcp", oauth: { callbackUrl: "http://127.0.0.1:1/cb", callbackPort: 2 } },
 					scope: { url: "https://a.example/mcp", oauth: { scope: ["a"] } },
+					named: { url: "https://a.example/mcp", oauth: { clientName: "Claude Code" } },
+					unnamed: { url: "https://a.example/mcp", oauth: { clientName: " " } },
 				},
 			},
 			{},
 		);
 		const { servers, errors } = loadMcpConfig({ ...paths, projectTrusted: false });
-		expect(servers.map((server) => server.name)).toEqual(["ok", "ipv6", "same"]);
+		expect(servers.map((server) => server.name)).toEqual(["ok", "ipv6", "same", "named"]);
 		expect(errors).toEqual([
 			expect.stringContaining('server "remote": oauth.callbackUrl must be an http URI on localhost'),
 			expect.stringContaining('server "both": oauth.callbackUrl and oauth.callbackPort name different ports'),
 			expect.stringContaining('server "scope": oauth.scope must be a string'),
+			expect.stringContaining('server "unnamed": oauth.clientName must be a non-empty string'),
 		]);
 	});
 

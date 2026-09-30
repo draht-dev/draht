@@ -44,13 +44,13 @@ On first run, pi detects your terminal background and defaults to `dark` or `lig
 Start an interactive run with a theme without changing the saved setting:
 
 ```bash
-pi --use-theme light
+draht --use-theme light
 ```
 
 To follow terminal appearance, use `lightTheme/darkTheme` syntax:
 
 ```bash
-pi --use-theme light/dark
+draht --use-theme light/dark
 ```
 
 The CLI value is the initial theme for that run. Choosing another theme later in `/settings` applies it immediately

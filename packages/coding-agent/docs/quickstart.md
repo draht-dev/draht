@@ -136,10 +136,10 @@ Use `/model` or Ctrl+L to choose a model for the current session. Press Ctrl+S i
 Sessions are saved automatically:
 
 ```bash
-pi -c                  # Continue most recent session
-pi -r                  # Browse previous sessions
-pi --name "my task"    # Set session display name at startup
-pi --session <path|id> # Open a specific session
+draht -c                  # Continue most recent session
+draht -r                  # Browse previous sessions
+draht --name "my task"    # Set session display name at startup
+draht --session <path|id> # Open a specific session
 ```
 
 Inside pi, use `/resume`, `/new`, `/tree`, `/fork`, and `/clone` to manage sessions.
@@ -149,9 +149,9 @@ Inside pi, use `/resume`, `/new`, `/tree`, `/fork`, and `/clone` to manage sessi
 For one-shot prompts:
 
 ```bash
-pi -p "Summarize this codebase"
-cat README.md | pi -p "Summarize this text"
-pi -p @screenshot.png "What's in this image?"
+draht -p "Summarize this codebase"
+cat README.md | draht -p "Summarize this text"
+draht -p @screenshot.png "What's in this image?"
 ```
 
 Use `--mode json` for JSON event output or `--mode rpc` for process integration.

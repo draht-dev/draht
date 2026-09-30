@@ -78,6 +78,14 @@ describe("MCP config", () => {
 		expect(untrusted.servers.find((server) => server.name === "shared")?.config).toEqual({ command: "global-cmd" });
 	});
 
+	// Regression: #10239.
+	it("rejects server names that differ only in - and _", () => {
+		const paths = setup({ mcpServers: { "work-files": { command: "a" }, work_files: { command: "b" } } }, {});
+		const { servers, errors } = loadMcpConfig({ ...paths, projectTrusted: false });
+		expect(servers.map((server) => server.name)).toEqual(["work-files"]);
+		expect(errors).toEqual([expect.stringContaining('server "work_files" conflicts with "work-files"')]);
+	});
+
 	it("validates exposure and reads autoEnableCodemode with project precedence", () => {
 		const paths = setup(
 			{
@@ -176,14 +184,14 @@ describe("MCP config", () => {
 describe("MCP tools", () => {
 	it("creates provider-safe tool names", () => {
 		expect(createMcpToolName("docs", "search")).toBe("mcp__docs__search");
-		expect(createMcpToolName("my-server", "get.item/v2")).toBe("mcp__my-server__get_item_v2");
+		expect(createMcpToolName("my-server", "get.item/v2")).toBe("mcp__my_server__get_item_v2");
 		const long = createMcpToolName("server", "x".repeat(100));
 		expect(long).toHaveLength(64);
 		expect(long).toMatch(/^mcp__server__x+_[0-9a-f]{8}$/);
 		expect(createMcpToolName("server", `${"x".repeat(100)}y`)).not.toBe(long);
 		// Names that sanitize to one already taken by another tool get a hash suffix.
 		const taken = createMcpToolName("s", "a_b");
-		const second = createMcpToolName("s", "a.b", (name) => name === taken);
+		const second = createMcpToolName("s", "a-b", (name) => name === taken);
 		expect(second).toMatch(/^mcp__s__a_b_[0-9a-f]{8}$/);
 	});
 

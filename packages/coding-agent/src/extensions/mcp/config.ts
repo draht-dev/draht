@@ -25,7 +25,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { CONFIG_DIR_NAME } from "../../config.ts";
-import { type McpExposure, type McpServerConfig, validateMcpServerConfig } from "../../core/mcp-servers.ts";
+import {
+	type McpExposure,
+	type McpServerConfig,
+	mcpNamespace,
+	validateMcpServerConfig,
+} from "../../core/mcp-servers.ts";
 
 export type {
 	McpExposure,
@@ -85,6 +90,12 @@ function readConfigFile(path: string, scope: "global" | "project", state: McpCon
 		const config = validateMcpServerConfig(name, value);
 		if (typeof config === "string") {
 			errors.push(`${path}: ${config}`);
+			continue;
+		}
+		// Names that differ only in `-` and `_` would share a namespace.
+		const clash = [...servers.keys()].find((other) => other !== name && mcpNamespace(other) === mcpNamespace(name));
+		if (clash) {
+			errors.push(`${path}: server "${name}" conflicts with "${clash}"`);
 			continue;
 		}
 		servers.set(name, { name, config, source: path, scope });

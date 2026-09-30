@@ -64,7 +64,7 @@ Keep personal servers and servers with credentials in the user-level file. Use t
 
 ### Configuration rules
 
-- Server names may contain only letters, digits, `_`, and `-`. Tools are named `mcp__<server>__<tool>`.
+- Server names may contain only letters, digits, `_`, and `-`. Tools are named `mcp__<server>__<tool>`, with every character other than letters, digits, and `_` replaced by `_`; tools of a server whose names then collide all get a hash suffix. Server names that differ only in `-` and `_` count as the same server: a second one is rejected, and a `mcp.json` server overrides a registered one.
 - `type` is optional. A `command` selects stdio and a `url` selects streamable HTTP. When present, `type` must be `stdio`, `http`, or `streamable-http`.
 - `sse` is rejected. Servers that document an SSE endpoint often also provide streamable HTTP, commonly at `/mcp` instead of `/sse`.
 - `command` is one executable and `args` contains its arguments. It is not a shell command string.

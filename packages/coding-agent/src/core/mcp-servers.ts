@@ -99,6 +99,11 @@ export type McpServerConfig = McpStdioServerConfig | McpHttpServerConfig;
 
 const SERVER_NAME = /^[A-Za-z0-9_-]+$/;
 
+/** Namespace of a server's tools: `mcp__<server>` with `-` replaced by `_`, like the tool names. */
+export function mcpNamespace(server: string): string {
+	return `mcp__${server.replace(/-/g, "_")}`;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

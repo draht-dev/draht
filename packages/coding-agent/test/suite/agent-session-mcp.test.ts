@@ -283,6 +283,25 @@ describe("AgentSession MCP integration", () => {
 		expect(nestedToolNames(harness)).toContain(searchName);
 	});
 
+	// Regression: #10239.
+	it.each([false, true])("routes tools whose names differ only in - and _ (reverse: %s)", async (reverse) => {
+		const tools = [
+			{ name: "read-file", description: "dashed", inputSchema: { type: "object", properties: {} } },
+			{ name: "read_file", description: "underscored", inputSchema: { type: "object", properties: {} } },
+		];
+		if (reverse) tools.reverse();
+		const { harness, calls } = await setup("codemode", () => [...tools, ...SERVER_TOOLS]);
+		const code = `for (const query of ["dashed", "underscored"]) await tools[(await searchTools(query))[0].name]({});`;
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("codemode", { code })], { stopReason: "toolUse" }),
+			fauxAssistantMessage("done"),
+		]);
+
+		await harness.session.prompt("go");
+
+		expect(calls).toEqual(["read-file:{}", "read_file:{}"]);
+	});
+
 	it("rejects direct model calls to codemode-only MCP tools", async () => {
 		const { harness, calls } = await setup("codemode");
 		harness.setResponses([
@@ -696,7 +715,7 @@ return { docs, sameForAliases: aliases.every((alias) => JSON.stringify(alias) ==
 		await harness.session.prompt("go");
 
 		expect(toolResult(harness, "codemode").isError).toBe(false);
-		expect(getMessageText(toolResult(harness, "codemode")).split("\n").at(-1)).toBe("mcp__slow-docs");
+		expect(getMessageText(toolResult(harness, "codemode")).split("\n").at(-1)).toBe("mcp__slow_docs");
 		expect(calls).toEqual(['search:{"query":"q"}']);
 	});
 
@@ -913,11 +932,16 @@ describe("AgentSession MCP servers registered by extensions", () => {
 		await vi.waitFor(() => expect(harness.session.getCallableToolNames()).not.toContain("mcp__late__search"));
 	});
 
-	it("prefers the mcp.json server over a registered server of the same name", async () => {
-		const configured: McpServerEntry = { name: "docs", config: { url: "http://config.invalid" }, source: "mcp.json" };
+	// "my_docs" shares the namespace of "my-docs" (#10239).
+	it.each(["my-docs", "my_docs"])("prefers the mcp.json server over a registered %s", async (name) => {
+		const configured: McpServerEntry = {
+			name: "my-docs",
+			config: { url: "http://config.invalid" },
+			source: "mcp.json",
+		};
 		const { connected } = await setup(
 			(pi) => {
-				pi.registerMcpServer("docs", { url: "http://plugin.invalid" });
+				pi.registerMcpServer(name, { url: "http://plugin.invalid" });
 			},
 			[configured],
 		);
@@ -927,22 +951,29 @@ describe("AgentSession MCP servers registered by extensions", () => {
 	});
 
 	it("rejects names another extension registered", async () => {
-		let error: unknown;
+		const errors: string[] = [];
 		await setup([
 			(pi) => {
 				pi.registerMcpServer("taken", { url: "http://x.invalid" });
 				// Registering again replaces the extension's own registration.
 				pi.registerMcpServer("taken", { url: "http://y.invalid" });
+				pi.registerMcpServer("my-server", { url: "http://x.invalid" });
 			},
 			(pi) => {
-				try {
-					pi.registerMcpServer("taken", { url: "http://z.invalid" });
-				} catch (caught) {
-					error = caught;
+				for (const name of ["taken", "my_server"]) {
+					try {
+						pi.registerMcpServer(name, { url: "http://z.invalid" });
+					} catch (caught) {
+						errors.push(String(caught));
+					}
 				}
 			},
 		]);
-		expect(String(error)).toMatch(/MCP server "taken" is already registered by extension/);
+		expect(errors).toEqual([
+			expect.stringMatching(/MCP server "taken" is already registered by extension/),
+			// Names that differ only in - and _ share a namespace (#10239).
+			'Error: MCP server "my_server" conflicts with registered server "my-server"',
+		]);
 	});
 
 	it("reports registered servers when no extension connects them", async () => {

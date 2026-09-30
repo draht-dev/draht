@@ -9,6 +9,8 @@
 ### Added
 
 - `tui.select.confirmAsDefault` keybinding (default `ctrl+s`) to confirm a `SelectList` selection and mark it as the default
+- `SelectList.confirmSelection()`: confirms the current selection directly, bypassing keybinding matching, for callers (e.g. a search input's submit) that trigger a confirm as a side effect of a different, independently rebindable key
+- terminal capability overrides via `DRAHT_HYPERLINKS`, `DRAHT_IMAGE_PROTOCOL`, and `DRAHT_TRUE_COLOR` environment variables
 
 ## [2026.7.30] - 2026-07-30
 

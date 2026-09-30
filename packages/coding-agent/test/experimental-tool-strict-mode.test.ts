@@ -18,17 +18,17 @@ function createBuiltInTools() {
 }
 
 describe("experimental strict built-in tools", () => {
-	const originalPiExperimental = process.env.PI_EXPERIMENTAL;
+	const originalPiExperimental = process.env.DRAHT_EXPERIMENTAL;
 
 	afterEach(() => {
-		if (originalPiExperimental === undefined) delete process.env.PI_EXPERIMENTAL;
-		else process.env.PI_EXPERIMENTAL = originalPiExperimental;
+		if (originalPiExperimental === undefined) delete process.env.DRAHT_EXPERIMENTAL;
+		else process.env.DRAHT_EXPERIMENTAL = originalPiExperimental;
 	});
 
 	it("only enables strict-prefer sampling in experimental mode", () => {
-		delete process.env.PI_EXPERIMENTAL;
+		delete process.env.DRAHT_EXPERIMENTAL;
 		const normalTools = createBuiltInTools();
-		process.env.PI_EXPERIMENTAL = "1";
+		process.env.DRAHT_EXPERIMENTAL = "1";
 		const experimentalTools = createBuiltInTools();
 
 		for (const [index, tool] of experimentalTools.entries()) {

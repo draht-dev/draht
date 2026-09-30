@@ -5,6 +5,14 @@
 ### Breaking Changes
 
 - `pi.setModel`/`pi.setThinkingLevel` extension API and the SDK's `setModel`/`setThinkingLevel`: the `{ persistDefault?: boolean }` option (default `true`, updating the user's global default) is now `{ persist?: boolean }` (default `false`, session-scoped). Extensions relying on the old "persists by default" behavior must now pass `{ persist: true }` explicitly
+- renamed `PI_EXPERIMENTAL` to `DRAHT_EXPERIMENTAL`, `PI_SESSION_FILE`/`PI_CODING_AGENT`/`PI_CODING_AGENT_DIR`/`PI_TELEMETRY`/`PI_AGENT_DIR` (test-only env vars/utilities) to their `DRAHT_*`/`DRAHT_AGENT_DIR` equivalents
+- version checks now query the npm registry for `@draht/coding-agent` instead of `https://pi.dev/api/latest-version`, since draht has no equivalent release service; `LatestPiRelease.note` is no longer populated
+- removed the install/update telemetry ping to `https://pi.dev/api/report-install` (draht has no such service); `enableInstallTelemetry` now only controls OpenRouter/NVIDIA NIM/Cloudflare provider attribution headers
+- managed self-updates no longer default to `https://pi.dev/api/installer/releases`; `DRAHT_INSTALLER_API_BASE` must be set explicitly or the update fails with a clear error. The managed-install marker `kind` changed from `pi-managed-install` to `draht-managed-install`
+- `/share` no longer uploads to pi's Radius artifact gateway; sharing always creates a private GitHub gist. `getShareViewerUrl()` returns `undefined` unless `DRAHT_SHARE_VIEWER_URL` is set (previously defaulted to `https://pi.dev/session/`), and the gist URL is shown directly when unset
+- the remote model catalog overlay no longer defaults to `https://pi.dev`; it is disabled unless `DRAHT_MODEL_CATALOG_BASE_URL` is set
+- provider attribution headers sent to OpenRouter/NVIDIA NIM/Cloudflare/OpenCode now identify as `draht` instead of `pi`/`Pi` (`HTTP-Referer`, `X-OpenRouter-Title`, `X-BILLING-INVOKE-ORIGIN`, `User-Agent`, `x-opencode-client`)
+- the draht/OpenAI Codex User-Agent and `originator` header now read `draht` instead of `pi`
 
 ### Added
 

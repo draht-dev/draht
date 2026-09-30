@@ -334,7 +334,7 @@ export function getSelfUpdateUnavailableInstruction(
 	const method = detectInstallMethod();
 	const target = normalizeSelfUpdatePackageTarget(updatePackageTarget);
 	if (method === "bun-binary") {
-		return `Download from: https://github.com/earendil-works/pi-mono/releases/latest`;
+		return `Download from: https://github.com/draht-dev/draht/releases/latest`;
 	}
 	const command = getSelfUpdateCommandForMethod(method, packageName, target, npmCommand);
 	if (command) {
@@ -544,11 +544,14 @@ export function expandTildePath(path: string): string {
 	return normalizePath(path);
 }
 
-const DEFAULT_SHARE_VIEWER_URL = "https://pi.dev/session/";
-
-/** Get the share viewer URL for a gist ID. */
-export function getShareViewerUrl(gistId: string): string {
-	const baseUrl = process.env.DRAHT_SHARE_VIEWER_URL || DEFAULT_SHARE_VIEWER_URL;
+/**
+ * draht has no pi.dev-equivalent share viewer. Returns undefined unless
+ * DRAHT_SHARE_VIEWER_URL is set, in which case callers should present the
+ * gist URL directly instead.
+ */
+export function getShareViewerUrl(gistId: string): string | undefined {
+	const baseUrl = process.env.DRAHT_SHARE_VIEWER_URL?.trim();
+	if (!baseUrl) return undefined;
 	return `${baseUrl}#${gistId}`;
 }
 

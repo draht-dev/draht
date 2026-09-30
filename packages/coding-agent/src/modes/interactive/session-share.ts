@@ -3,9 +3,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { DEFAULT_RADIUS_GATEWAY } from "@draht/ai/providers/radius-config";
 import { type Container, type EditorComponent, hyperlink, type TUI } from "@draht/tui";
-import { getAuthCredential } from "../../cli/auth-command.ts";
 import { getShareViewerUrl } from "../../config.ts";
 import type { AgentSession } from "../../core/agent-session.ts";
 import { exportSessionToJsonl } from "../../core/session-export.ts";
@@ -42,20 +40,16 @@ export function exportSessionForShare(filePath: string, session: AgentSession): 
 	]);
 }
 
-/** Share the current session through Radius, falling back to a private gist. */
+/**
+ * Share the current session as a private GitHub gist.
+ *
+ * draht has no equivalent of pi's Radius gateway, so sharing always goes
+ * through gist export rather than attempting an artifact upload first.
+ */
 export async function shareSession(context: SessionShareContext): Promise<void> {
-	const jsonlFile = path.join(os.tmpdir(), "session.jsonl");
 	let htmlFile: string | null = null;
 
 	try {
-		try {
-			exportSessionForShare(jsonlFile, context.session);
-		} catch (error: unknown) {
-			context.showError(`Failed to export session: ${error instanceof Error ? error.message : "Unknown error"}`);
-			return;
-		}
-		if (await tryShareViaRadius(jsonlFile, context)) return;
-
 		try {
 			const authResult = spawnSync("gh", ["auth", "status"], { encoding: "utf-8" });
 			if (authResult.status !== 0) {
@@ -76,76 +70,13 @@ export async function shareSession(context: SessionShareContext): Promise<void> 
 		}
 		await shareViaGist(htmlFile, context);
 	} finally {
-		for (const tmpFile of [jsonlFile, htmlFile]) {
+		if (htmlFile !== null) {
 			try {
-				if (tmpFile !== null) {
-					fs.unlinkSync(tmpFile);
-				}
+				fs.unlinkSync(htmlFile);
 			} catch {
 				// Ignore cleanup errors
 			}
 		}
-	}
-}
-
-async function tryShareViaRadius(tmpFile: string, context: SessionShareContext): Promise<boolean> {
-	const provider = context.session.modelRuntime.getProvider("radius");
-	if (!provider) return false;
-
-	const token = getAuthCredential(
-		await context.session.modelRuntime.getAuth("radius", { minOAuthValidityMs: 5 * 60_000 }),
-	);
-	if (!token) return false;
-
-	const loader = new BorderedLoader(context.ui, theme, "Uploading to Radius...");
-	context.editorContainer.clear();
-	context.editorContainer.addChild(loader);
-	context.ui.setFocus(loader);
-	context.ui.requestRender();
-	loader.onAbort = () => {
-		restoreEditor(loader, context);
-		context.showStatus("Share cancelled");
-	};
-
-	try {
-		const body = fs.readFileSync(tmpFile);
-		const url = new URL("/v1/artifacts", DEFAULT_RADIUS_GATEWAY);
-		url.searchParams.set("visibility", "organization");
-		url.searchParams.set("title", "Pi session");
-		const response = await fetch(url, {
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${token}`,
-				"Content-Type": "application/x-ndjson",
-				"Content-Length": String(body.byteLength),
-			},
-			body,
-			signal: loader.signal,
-		});
-		if (loader.signal.aborted) return true;
-		const json = (await response.json().catch(() => null)) as {
-			artifact?: { canonical_url: string };
-			error?: string;
-		} | null;
-		if (loader.signal.aborted) return true;
-		restoreEditor(loader, context);
-		if (!response.ok || !json?.artifact) {
-			context.showError(
-				`Failed to upload Radius artifact: ${json?.error || response.statusText || response.status}`,
-			);
-			return true;
-		}
-		const shareUrl = json.artifact.canonical_url;
-		context.showStatus(`Share URL: ${hyperlink(shareUrl, shareUrl)}`);
-		return true;
-	} catch (error: unknown) {
-		if (!loader.signal.aborted) {
-			restoreEditor(loader, context);
-			context.showError(
-				`Failed to upload Radius artifact: ${error instanceof Error ? error.message : "Unknown error"}`,
-			);
-		}
-		return true;
 	}
 }
 
@@ -193,7 +124,11 @@ async function shareViaGist(tmpFile: string, context: SessionShareContext): Prom
 		}
 
 		const previewUrl = getShareViewerUrl(gistId);
-		context.showStatus(`Share URL: ${hyperlink(previewUrl, previewUrl)}\nGist: ${hyperlink(gistUrl, gistUrl)}`);
+		context.showStatus(
+			previewUrl
+				? `Share URL: ${hyperlink(previewUrl, previewUrl)}\nGist: ${hyperlink(gistUrl, gistUrl)}`
+				: `Share URL: ${hyperlink(gistUrl, gistUrl)}`,
+		);
 	} catch (error: unknown) {
 		if (!loader.signal.aborted) {
 			restoreEditor(loader, context);

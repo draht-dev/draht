@@ -779,7 +779,8 @@ export class PermissionGate {
 			// Unlike bash, powershell has no danger filter tuned for its own
 			// syntax (DANGEROUS_COMMAND_PATTERNS is bash-shaped), so auto mode
 			// cannot safely auto-allow it — every unmatched powershell call
-			// requires approval regardless of mode.
+			// requires approval in default and auto mode (yolo's applyMode still
+			// turns this approve into allow, as for every tool).
 			return { action: "approve", reason: "no rule matched; powershell commands always require approval" };
 		}
 

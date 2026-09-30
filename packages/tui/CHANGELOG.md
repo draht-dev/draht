@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- renamed `PI_HARDWARE_CURSOR` to `DRAHT_HARDWARE_CURSOR` (unifying it with `settings-manager`'s existing `DRAHT_HARDWARE_CURSOR`), `PI_CLEAR_ON_SHRINK` to `DRAHT_CLEAR_ON_SHRINK`, `PI_DEBUG_REDRAW` to `DRAHT_DEBUG_REDRAW`, `PI_TUI_DEBUG` to `DRAHT_TUI_DEBUG`, `PI_TUI_WRITE_LOG` to `DRAHT_TUI_WRITE_LOG`, and `PI_TUI_WIN32_TOOLCHAIN` to `DRAHT_TUI_WIN32_TOOLCHAIN`
+
 ### Added
 
 - `tui.select.confirmAsDefault` keybinding (default `ctrl+s`) to confirm a `SelectList` selection and mark it as the default

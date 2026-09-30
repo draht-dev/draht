@@ -38,6 +38,7 @@ import type {
 	ToolDefinition,
 } from "../../core/extensions/types.ts";
 import { mcpNamespace } from "../../core/mcp-servers.ts";
+import type { ModelRegistry } from "../../core/model-registry.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
 import { CODEMODE_TOOL_NAME, isCodemodeTool } from "../codemode/tool.ts";
 import { isToolSearchTool, TOOL_SEARCH_TOOL_NAME } from "../tool-search/tool.ts";
@@ -287,6 +288,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 		/** Working directory of the session, for stdio servers. */
 		let sessionCwd = process.cwd();
 		let credentials = options.credentials;
+		/** The session's model registry, which resolves `auth.provider` tokens. */
+		let modelRegistry: ModelRegistry | undefined;
 		let serverLog: McpServerLog | undefined;
 		const openUrl = options.openUrl ?? openBrowser;
 		const updateConfig =
@@ -507,6 +510,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 				cwd: sessionCwd,
 				createTransport: options.createTransport ?? runtime.createDefaultTransport,
 				credentials: getCredentials(runtime),
+				providerToken: async (provider) => modelRegistry?.getApiKeyForProvider(provider),
 				log: getServerLog(runtime),
 				onTools: registerTools,
 				onChange: onConnectionChange,
@@ -945,6 +949,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			warnedUnreachable = false;
 			waitedForStartup = false;
 			sessionCwd = ctx.cwd;
+			modelRegistry = ctx.modelRegistry;
 			const current = ++generation;
 			sessionActive = true;
 			configuredEntries = loaded.servers;

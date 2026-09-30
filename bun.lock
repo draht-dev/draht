@@ -128,7 +128,6 @@
         "@types/node": "^24.3.0",
         "@types/proper-lockfile": "^4.1.4",
         "@types/semver": "^7.7.1",
-        "openai": "6.26.0",
         "shx": "^0.4.0",
         "typescript": "7.0.2",
         "vitest": "^3.2.4",
@@ -2829,8 +2828,6 @@
     "@draht/ci/@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.39.0", "", { "dependencies": { "@types/node": "^18.11.18", "@types/node-fetch": "^2.6.4", "abort-controller": "^3.0.0", "agentkeepalive": "^4.2.1", "form-data-encoder": "1.7.2", "formdata-node": "^4.3.2", "node-fetch": "^2.6.7" } }, "sha512-eMyDIPRZbt1CCLErRCi3exlAvNkBtRe+kW5vvJyef93PmNr/clstYgHhtvmkxN82nlKgzyGPCyGxrm0JQ1ZIdg=="],
 
     "@draht/coding-agent/@types/node": ["@types/node@24.11.0", "", { "dependencies": { "undici-types": "~7.16.0" } }, "sha512-fPxQqz4VTgPI/IQ+lj9r0h+fDR66bzoeMGHp8ASee+32OSGIkeASsoZuJixsQoVef1QJbeubcPBxKk22QVoWdw=="],
-
-    "@draht/coding-agent/openai": ["openai@6.26.0", "", { "peerDependencies": { "ws": "^8.18.0", "zod": "^3.25 || ^4.0" }, "optionalPeers": ["ws", "zod"], "bin": { "openai": "bin/cli" } }, "sha512-zd23dbWTjiJ6sSAX6s0HrCZi41JwTA1bQVs0wLQPZ2/5o2gxOJA5wh7yOAUgwYybfhDXyhwlpeQf7Mlgx8EOCA=="],
 
     "@draht/mom/@anthropic-ai/sandbox-runtime": ["@anthropic-ai/sandbox-runtime@0.0.16", "", { "dependencies": { "@pondwader/socks5-server": "^1.0.10", "@types/lodash-es": "^4.17.12", "commander": "^12.1.0", "lodash-es": "^4.17.21", "shell-quote": "^1.8.3", "zod": "^3.24.1" }, "bin": { "srt": "dist/cli.js" } }, "sha512-I2Us7dRvwCJkqcImrqP7NWrV5kHmKX7AumFDnznCjMd0hB5ZUzg9Is9SlxrMzHiUY2RndEaRLXCOJrUt8JnE4w=="],
 

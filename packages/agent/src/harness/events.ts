@@ -55,26 +55,6 @@ export class HarnessEventBus implements Events {
 		return this.installWatcher(snapshot, filter, resnapshot);
 	}
 
-	async watchFromSnapshot<T>(
-		capture: (context: Context) => Promise<T>,
-		filter: (event: HarnessEvent) => boolean,
-		context: Context,
-	): Promise<WatchHandle<T>> {
-		if (this.closedError !== undefined) throw this.closedError;
-		const watcher = this.installWatcher<T>(undefined, filter, async (captureContext, markBoundary) => {
-			const snapshot = await capture(captureContext);
-			markBoundary();
-			return snapshot;
-		});
-		try {
-			watcher.setSnapshot(await capture(context));
-			return watcher;
-		} catch (error) {
-			watcher.unsubscribe();
-			throw error;
-		}
-	}
-
 	close(error: Error): void {
 		this.closedError ??= error;
 		void this.deliveryTail.finally(() => {

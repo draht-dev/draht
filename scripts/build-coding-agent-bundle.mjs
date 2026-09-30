@@ -17,27 +17,24 @@ const banner = {
 };
 const allowedExternalPackages = new Set([
 	"@silvia-odwyer/photon-node",
-	// Optional native clipboard addon; callers fall back to platform tools when absent.
-	"@mariozechner/clipboard",
-	// Loaded through the jiti/static -> jiti external rewrite below.
-	"jiti",
+	// Loaded through the @mariozechner/jiti external rewrite below.
+	"@mariozechner/jiti",
 	// Optional native accelerators. Their callers fall back to JavaScript when absent.
 	"bufferutil",
 	"utf-8-validate",
 	// Optional debug output coloring.
 	"supports-color",
-	// Native sqlite addon pulled in transitively through @draht/knowledge; its
-	// dynamic `require()` loader cannot be bundled.
-	"better-sqlite3",
-	"bindings",
+	// @draht/rlm resolves its prompts/python/sandbox assets relative to its own
+	// module location (import.meta.url); bundling it would break those lookups.
+	"@draht/rlm",
 ]);
 
 const lazyJitiPlugin = {
 	name: "lazy-jiti-transform",
 	setup(build) {
-		build.onResolve({ filter: /^jiti\/static$/ }, () => ({
+		build.onResolve({ filter: /^@mariozechner\/jiti$/ }, () => ({
 			namespace: "lazy-jiti",
-			path: "jiti/static",
+			path: "@mariozechner/jiti",
 		}));
 		build.onLoad({ filter: /.*/, namespace: "lazy-jiti" }, () => ({
 			contents: `
@@ -47,7 +44,7 @@ const require = createRequire(import.meta.url);
 let createJitiImpl;
 
 export function createJiti(...args) {
-	createJitiImpl ??= require("jiti").createJiti;
+	createJitiImpl ??= require("@mariozechner/jiti").createJiti;
 	return createJitiImpl(...args);
 }
 `,
@@ -74,7 +71,9 @@ const httpsProxyAgentNamedExportPlugin = {
 			() => ({
 				contents: 'export { HttpsProxyAgent } from "https-proxy-agent";',
 				loader: "js",
-				resolveDir: repoRoot,
+				// https-proxy-agent is a dependency of @draht/ai, not hoisted to the
+				// repo root under bun's isolated node_modules layout.
+				resolveDir: join(repoRoot, "packages", "ai"),
 			}),
 		);
 	},
@@ -86,7 +85,7 @@ function commonBuildOptions() {
 		banner,
 		bundle: true,
 		define: { DRAHT_BUNDLED_NODE: "true" },
-		external: ["@silvia-odwyer/photon-node", "@mariozechner/clipboard", "better-sqlite3", "bindings"],
+		external: ["@silvia-odwyer/photon-node", "@draht/rlm"],
 		format: "esm",
 		legalComments: "none",
 		logLevel: "warning",

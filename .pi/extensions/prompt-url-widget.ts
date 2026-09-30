@@ -1,5 +1,5 @@
 import { DynamicBorder, type ExtensionAPI, type ExtensionContext } from "@draht/coding-agent";
-import { Container, Text } from "@draht/tui";
+import { Container, hyperlink, Text } from "@draht/tui";
 
 const PR_PROMPT_PATTERN = /^\s*You are given one or more GitHub PR URLs:\s*(\S+)/im;
 const ISSUE_PROMPT_PATTERN = /^\s*Analyze GitHub issue\(s\):\s*(\S+)/im;
@@ -61,9 +61,9 @@ function formatAuthor(author?: GhMetadata["author"]): string | undefined {
 export default function promptUrlWidgetExtension(pi: ExtensionAPI) {
 	const setWidget = (ctx: ExtensionContext, match: PromptMatch, title?: string, authorText?: string) => {
 		ctx.ui.setWidget("prompt-url", (_tui, thm) => {
-			const titleText = title ? thm.fg("accent", title) : thm.fg("accent", match.url);
+			const titleText = title ? thm.fg("accent", title) : hyperlink(thm.fg("accent", match.url), match.url);
 			const authorLine = authorText ? thm.fg("muted", authorText) : undefined;
-			const urlLine = thm.fg("dim", match.url);
+			const urlLine = hyperlink(thm.fg("dim", match.url), match.url);
 
 			const lines = [titleText];
 			if (authorLine) lines.push(authorLine);

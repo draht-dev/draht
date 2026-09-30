@@ -3,6 +3,7 @@
 	"compilerOptions": {
 		"outDir": "./dist",
 		"paths": {
+			"@draht/telemetry": ["../telemetry/dist/index.d.ts"],
 			"@draht/ai": ["../ai/dist/index.d.ts"],
 			"@draht/ai/*": ["../ai/dist/*.d.ts", "../ai/dist/providers/*.d.ts"]
 		},

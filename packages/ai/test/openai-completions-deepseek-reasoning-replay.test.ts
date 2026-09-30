@@ -20,6 +20,7 @@ const deepseekCompat: Omit<Required<OpenAICompletionsCompat>, "deferredToolsMode
 	supportsDeveloperRole: false,
 	supportsReasoningEffort: true,
 	supportsUsageInStreaming: true,
+	supportsFinishReason: true,
 	maxTokensField: "max_completion_tokens",
 	requiresToolResultName: false,
 	requiresAssistantAfterToolResult: false,
@@ -28,6 +29,7 @@ const deepseekCompat: Omit<Required<OpenAICompletionsCompat>, "deferredToolsMode
 	openRouterRouting: {},
 	vercelGatewayRouting: {},
 	zaiToolStream: false,
+	supportsThinkingTokenBudget: false,
 	supportsOpenAIGrammarTools: false,
 	supportsStrictMode: true,
 	requiresReasoningContentOnAssistantMessages: false,
@@ -35,6 +37,7 @@ const deepseekCompat: Omit<Required<OpenAICompletionsCompat>, "deferredToolsMode
 	sendSessionAffinityHeaders: false,
 	supportsLongCacheRetention: false,
 	chatTemplateKwargs: {},
+	chatTemplateArgs: {},
 	sessionAffinityFormat: "openai",
 };
 

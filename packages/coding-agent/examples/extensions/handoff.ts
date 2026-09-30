@@ -13,8 +13,7 @@
  */
 
 import type { AgentMessage } from "@draht/agent-core";
-import { uuidv7 } from "@draht/ai";
-import { complete, type Message } from "@draht/ai/compat";
+import { type Message, uuidv7 } from "@draht/ai";
 import type { ExtensionAPI, SessionEntry } from "@draht/coding-agent";
 import { BorderedLoader, convertToLlm, serializeConversation } from "@draht/coding-agent";
 
@@ -118,11 +117,6 @@ export default function (pi: ExtensionAPI) {
 				loader.onAbort = () => done(null);
 
 				const doGenerate = async () => {
-					const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model!);
-					if (!auth.ok || !auth.apiKey) {
-						throw new Error(auth.ok ? `No API key for ${ctx.model!.provider}` : auth.error);
-					}
-
 					const userMessage: Message = {
 						role: "user",
 						content: [
@@ -134,13 +128,10 @@ export default function (pi: ExtensionAPI) {
 						timestamp: Date.now(),
 					};
 
-					const response = await complete(
+					const response = await ctx.modelRegistry.complete(
 						ctx.model!,
 						{ systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
 						{
-							apiKey: auth.apiKey,
-							headers: auth.headers,
-							env: auth.env,
 							signal: loader.signal,
 							cacheRetention: "none",
 							sessionId: uuidv7(),

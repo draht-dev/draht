@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
+const telemetrySrcIndex = fileURLToPath(new URL("../telemetry/src/index.ts", import.meta.url));
 const aiSrcIndex = fileURLToPath(new URL("../ai/src/index.ts", import.meta.url));
 const aiSrcCompat = fileURLToPath(new URL("../ai/src/compat.ts", import.meta.url));
 const aiSrcOAuth = fileURLToPath(new URL("../ai/src/oauth.ts", import.meta.url));
@@ -31,6 +32,7 @@ export default defineConfig({
 		// `@draht/ai/compat` would not be the ones the runtime reads, and `vi.mock` of a
 		// transitive dep (e.g. "openai") would not intercept the dist copy's imports.
 		alias: [
+			{ find: /^@draht\/telemetry$/, replacement: telemetrySrcIndex },
 			{ find: /^@draht\/ai$/, replacement: aiSrcIndex },
 			{ find: /^@draht\/ai\/compat$/, replacement: aiSrcCompat },
 			{ find: /^@draht\/ai\/oauth$/, replacement: aiSrcOAuth },

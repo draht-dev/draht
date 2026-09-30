@@ -7,7 +7,7 @@
  */
 
 import type { Server } from "node:http";
-import type { AuthInteraction, OAuthAuth, OAuthCredential } from "../types.ts";
+import type { OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "../types.ts";
 import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.ts";
 import { generatePKCE } from "./pkce.ts";
 
@@ -187,6 +187,7 @@ function isVpcScAffectedUser(payload: unknown): boolean {
 async function pollOperation(
 	operationName: string,
 	headers: Record<string, string>,
+	signal: AbortSignal,
 	onProgress?: (message: string) => void,
 ): Promise<LongRunningOperationResponse> {
 	let attempt = 0;
@@ -199,6 +200,7 @@ async function pollOperation(
 		const response = await fetch(`${CODE_ASSIST_ENDPOINT}/v1internal/${operationName}`, {
 			method: "GET",
 			headers,
+			signal,
 		});
 
 		if (!response.ok) {
@@ -217,7 +219,11 @@ async function pollOperation(
 /**
  * Discover or provision a Google Cloud project for the user
  */
-async function discoverProject(accessToken: string, onProgress?: (message: string) => void): Promise<string> {
+async function discoverProject(
+	accessToken: string,
+	signal: AbortSignal,
+	onProgress?: (message: string) => void,
+): Promise<string> {
 	// Check for user-provided project ID via environment variable
 	const envProjectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT_ID;
 
@@ -242,6 +248,7 @@ async function discoverProject(accessToken: string, onProgress?: (message: strin
 				duetProject: envProjectId,
 			},
 		}),
+		signal,
 	});
 
 	let data: LoadCodeAssistPayload;
@@ -313,6 +320,7 @@ async function discoverProject(accessToken: string, onProgress?: (message: strin
 		method: "POST",
 		headers,
 		body: JSON.stringify(onboardBody),
+		signal,
 	});
 
 	if (!onboardResponse.ok) {
@@ -324,7 +332,7 @@ async function discoverProject(accessToken: string, onProgress?: (message: strin
 
 	// If the operation isn't done yet, poll until completion
 	if (!lroData.done && lroData.name) {
-		lroData = await pollOperation(lroData.name, headers, onProgress);
+		lroData = await pollOperation(lroData.name, headers, signal, onProgress);
 	}
 
 	// Try to get project ID from the response
@@ -348,12 +356,13 @@ async function discoverProject(accessToken: string, onProgress?: (message: strin
 /**
  * Get user email from the access token
  */
-async function getUserEmail(accessToken: string): Promise<string | undefined> {
+async function getUserEmail(accessToken: string, signal: AbortSignal): Promise<string | undefined> {
 	try {
 		const response = await fetch("https://www.googleapis.com/oauth2/v1/userinfo?alt=json", {
 			headers: {
 				Authorization: `Bearer ${accessToken}`,
 			},
+			signal,
 		});
 
 		if (response.ok) {
@@ -361,7 +370,8 @@ async function getUserEmail(accessToken: string): Promise<string | undefined> {
 			return data.email;
 		}
 	} catch {
-		// Ignore errors, email is optional
+		// Email is optional, but a cancelled login must not continue
+		if (signal.aborted) throw signal.reason;
 	}
 	return undefined;
 }
@@ -369,7 +379,11 @@ async function getUserEmail(accessToken: string): Promise<string | undefined> {
 /**
  * Refresh Google Cloud Code Assist token
  */
-export async function refreshGoogleCloudToken(refreshToken: string, projectId: string): Promise<OAuthCredential> {
+export async function refreshGoogleCloudToken(
+	refreshToken: string,
+	projectId: string,
+	signal: AbortSignal,
+): Promise<OAuthCredential> {
 	const response = await fetch(TOKEN_URL, {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -379,6 +393,7 @@ export async function refreshGoogleCloudToken(refreshToken: string, projectId: s
 			refresh_token: refreshToken,
 			grant_type: "refresh_token",
 		}),
+		signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
 	});
 
 	if (!response.ok) {
@@ -407,7 +422,7 @@ export async function refreshGoogleCloudToken(refreshToken: string, projectId: s
  * The pasted-redirect-URL prompt races the local browser callback — whichever
  * completes first wins.
  */
-export async function loginGeminiCli(interaction: AuthInteraction): Promise<OAuthCredential> {
+export async function loginGeminiCli(interaction: ProviderAuthInteraction): Promise<OAuthCredential> {
 	const onProgress = (message: string) => interaction.notify({ type: "progress", message });
 	const { verifier, challenge } = await generatePKCE();
 
@@ -521,6 +536,7 @@ export async function loginGeminiCli(interaction: AuthInteraction): Promise<OAut
 				redirect_uri: REDIRECT_URI,
 				code_verifier: verifier,
 			}),
+			signal: interaction.signal,
 		});
 
 		if (!tokenResponse.ok) {
@@ -540,10 +556,10 @@ export async function loginGeminiCli(interaction: AuthInteraction): Promise<OAut
 
 		// Get user email
 		onProgress("Getting user info...");
-		const email = await getUserEmail(tokenData.access_token);
+		const email = await getUserEmail(tokenData.access_token, interaction.signal);
 
 		// Discover project
-		const projectId = await discoverProject(tokenData.access_token, onProgress);
+		const projectId = await discoverProject(tokenData.access_token, interaction.signal, onProgress);
 
 		// Calculate expiry time (current time + expires_in seconds - 5 min buffer)
 		const expiresAt = Date.now() + tokenData.expires_in * 1000 - 5 * 60 * 1000;
@@ -576,7 +592,7 @@ export const geminiCliOAuth: OAuthAuth = {
 	name: "Google Cloud Code Assist (Gemini CLI)",
 	loginLabel: "Sign in with Google (Gemini CLI)",
 	login: loginGeminiCli,
-	refresh: (credential) => refreshGoogleCloudToken(credential.refresh, geminiCliProjectId(credential)),
+	refresh: (credential, signal) => refreshGoogleCloudToken(credential.refresh, geminiCliProjectId(credential), signal),
 
 	/**
 	 * Cloud Code Assist requests need both the access token and the discovered

@@ -104,7 +104,7 @@ function isCanonicallyContained(child: string, root: string): boolean {
  * resource rather than a project one and stays exempt.
  */
 function loadContextFileFromDir(dir: string, canonicalRoot?: string): { path: string; content: string } | null {
-	const candidates = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
+	const candidates = ["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
 	for (const filename of candidates) {
 		const filePath = join(dir, filename);
 		// lstat, never stat: a symlink must be refused, not resolved. Its failure is the
@@ -147,7 +147,7 @@ function loadContextFileFromDir(dir: string, canonicalRoot?: string): { path: st
 
 /**
  * The main repo's context file that a nested linked worktree's own copy shadows: both
- * are the same tracked AGENTS.md/CLAUDE.md, so loading both loads it twice. Returns
+ * occupy the same logical repository scope, so loading both applies that context twice. Returns
  * undefined when nothing is shadowed, leaving normal ancestor inheritance alone.
  *
  * Returned canonicalized (realpath), because `git worktree add` writes the `.git`

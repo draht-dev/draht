@@ -7,7 +7,7 @@ import type { ExtensionUIContext } from "../../../src/core/extensions/index.ts";
 import { createHarness, getMessageText } from "../harness.ts";
 
 vi.mock("@draht/coding-agent", () => ({
-	CONFIG_DIR_NAME: ".pi",
+	CONFIG_DIR_NAME: ".draht",
 	getAgentDir: () => "/missing-user-agent-dir",
 	getMarkdownTheme: () => ({}),
 	parseFrontmatter: (content: string) => ({
@@ -27,7 +27,7 @@ async function runProjectAgent(options: RunOptions): Promise<{ confirmCalls: num
 	const confirm = vi.fn(async () => options.confirmResult ?? false);
 
 	try {
-		const agentsDir = join(harness.tempDir, ".pi", "agents");
+		const agentsDir = join(harness.tempDir, ".draht", "agents");
 		mkdirSync(agentsDir, { recursive: true });
 		writeFileSync(
 			join(agentsDir, "project-agent.md"),

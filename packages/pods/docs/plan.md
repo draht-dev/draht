@@ -8,7 +8,7 @@ Pods are treated as ephemeral - spin up when needed, tear down when done. To avo
 
 ### Pods
 ```bash
-pi pods setup dc1 "ssh root@1.2.3.4" --mount "mount -t nfs..."  # Setup pod (requires HF_TOKEN, PI_API_KEY env vars)
+pi pods setup dc1 "ssh root@1.2.3.4" --mount "mount -t nfs..."  # Setup pod (requires HF_TOKEN, DRAHT_API_KEY env vars)
 pi pods                              # List all pods (* = active)
 pi pods active dc2                   # Switch active pod
 pi pods remove dc1                   # Remove pod
@@ -58,7 +58,7 @@ This copies and executes `pod_setup.sh` which:
 
 Required environment variables:
 - `HF_TOKEN`: HuggingFace token for model downloads
-- `PI_API_KEY`: API key for securing vLLM endpoints
+- `DRAHT_API_KEY`: API key for securing vLLM endpoints
 
 ### Model caching
 
@@ -112,7 +112,7 @@ The pi CLI maintains all state locally in `~/.pi/pods.json`:
 }
 ```
 
-The location of the pi config dir can also be specified via the `PI_CONFIG_DIR` env var, e.g. for testing.
+The location of the draht config dir can also be specified via the `DRAHT_CONFIG_DIR` env var, e.g. for testing.
 
 Pods are assumed to be fully managed by pi - no other processes compete for ports or GPUs.
 
@@ -124,7 +124,7 @@ When user runs `pi start Qwen/Qwen2.5-72B --name qwen`:
    - Sets `HF_HUB_ENABLE_HF_TRANSFER=1` for fast downloads
    - Runs via SSH with output piped to local terminal
    - Ctrl+C cancels download and returns control
-4. Builds vLLM command with appropriate args and PI_API_KEY
+4. Builds vLLM command with appropriate args and DRAHT_API_KEY
 5. Executes via SSH: `ssh pod "nohup vllm serve ... > ~/.vllm_logs/qwen.log 2>&1 & echo $!"`
 6. Waits for vLLM to be ready (checks health endpoint)
 7. On success: stores port, GPU, PID in local state

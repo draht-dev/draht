@@ -417,7 +417,7 @@ describe("codemode options and store", () => {
 		const harness = await setup();
 		const result = await run(
 			harness,
-			'// @options: {"max_output_tokens": 10}\nfor (let i = 0; i < 100; i++) text("row " + i);\nimage("data:image/png;base64,AAAA");',
+			`// @options: {"max_output_tokens": 10}\nfor (let i = 0; i < 100; i++) text("row " + i);\nimage("data:image/png;base64,${TINY_PNG_BASE64}");`,
 		);
 		const details = result.details as unknown as CodemodeToolDetails;
 		const path = details.fullOutputPath;
@@ -431,7 +431,7 @@ describe("codemode options and store", () => {
 			expect(text).not.toContain("row 50\n");
 			expect(text).toContain(`[Full output: ${path} (read with offset/limit)]`);
 			// Images follow the truncated text.
-			expect(result.content.at(-1)).toEqual({ type: "image", data: "AAAA", mimeType: "image/png" });
+			expect(result.content.at(-1)).toEqual({ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" });
 			expect(readFileSync(path, "utf8")).toBe(Array.from({ length: 100 }, (_, i) => `row ${i}`).join("\n"));
 		} finally {
 			rmSync(path, { force: true });

@@ -218,9 +218,17 @@ export const PRELUDE_SOURCE: string = `(function (bridge, toolsJson, globalsJson
 		}
 		if (typeof value.data !== "string" || value.data === "") throw new TypeErrorCtor("image expected MCP image data");
 		if (value.data.toLowerCase().startsWith("data:")) return value.data;
-		const mimeType = typeof value.mimeType === "string" && value.mimeType ? value.mimeType : "application/octet-stream";
-		return "data:" + mimeType + ";base64," + value.data;
+		return "data:;base64," + value.data;
 	}
+
+	// Base64 of the signatures of the formats providers accept inline (PNG, JPEG except
+	// JPEG-LS, GIF, "RIFF....WEBP"). Signatures start at byte 0, so their encodings are prefixes.
+	const IMAGE_SIGNATURES = [
+		["image/png", /^iVBORw0KGg/],
+		["image/jpeg", /^[/]9j[/](?!9)/],
+		["image/gif", /^R0lGOD[dl]h/],
+		["image/webp", /^UklG.{8}RUJQ/],
+	];
 
 	function image(value) {
 		const url = imageUrl(value);
@@ -235,7 +243,19 @@ export const PRELUDE_SOURCE: string = `(function (bridge, toolsJson, globalsJson
 		if (scheme !== "data" || comma === -1 || header.slice(1).every((part) => part.toLowerCase() !== "base64")) {
 			throw new TypeErrorCtor("invalid image output. Pass a base64 data URI instead");
 		}
-		if (!finished) bridge("output", "image", url.slice(comma + 1), header[0] || "application/octet-stream");
+		// Providers reject the whole request on a bad image, and a persisted image block would be
+		// resent on every later turn. Line breaks from wrapped base64 are dropped. The declared type
+		// is ignored in favor of the detected one, as providers also reject mismatches.
+		const data = url.slice(comma + 1).replace(/\\s+/g, "");
+		if (data.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) {
+			throw new TypeErrorCtor("invalid image output. The image data is not valid base64 (truncated or corrupted?)");
+		}
+		const head = data.slice(0, 16);
+		const signature = IMAGE_SIGNATURES.find(([, pattern]) => pattern.test(head));
+		if (!signature) {
+			throw new TypeErrorCtor("invalid image output. The image data is not a PNG, JPEG, GIF, or WebP image");
+		}
+		if (!finished) bridge("output", "image", data, signature[0]);
 	}
 
 	function exit() {

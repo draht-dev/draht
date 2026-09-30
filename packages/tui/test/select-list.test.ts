@@ -1,6 +1,7 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
 import { SelectList } from "../src/components/select-list.ts";
+import { getKeybindings, KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "../src/keybindings.ts";
 import { visibleWidth } from "../src/utils.ts";
 
 const testTheme = {
@@ -112,5 +113,49 @@ describe("SelectList", () => {
 
 		assert.ok(rendered[0].includes("…"));
 		assert.equal(visibleIndexOf(rendered[0], "first"), visibleIndexOf(rendered[1], "second"));
+	});
+
+	describe("confirmSelection", () => {
+		it("fires onSelect for the current item regardless of the tui.select.confirm binding", () => {
+			const originalKeybindings = getKeybindings();
+			setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, { "tui.select.confirm": "tab" }));
+			try {
+				const items = [
+					{ value: "a", label: "a" },
+					{ value: "b", label: "b" },
+				];
+				const list = new SelectList(items, 5, testTheme);
+				list.handleInput("\x1b[B"); // down, select "b"
+				let selected: string | undefined;
+				list.onSelect = (item) => {
+					selected = item.value as string;
+				};
+
+				list.confirmSelection();
+
+				assert.equal(selected, "b");
+			} finally {
+				setKeybindings(originalKeybindings);
+			}
+		});
+
+		it('handleInput("\\r") alone does not confirm once tui.select.confirm is rebound away from enter', () => {
+			const originalKeybindings = getKeybindings();
+			setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, { "tui.select.confirm": "tab" }));
+			try {
+				const items = [{ value: "a", label: "a" }];
+				const list = new SelectList(items, 5, testTheme);
+				let selected: string | undefined;
+				list.onSelect = (item) => {
+					selected = item.value as string;
+				};
+
+				list.handleInput("\r");
+
+				assert.equal(selected, undefined);
+			} finally {
+				setKeybindings(originalKeybindings);
+			}
+		});
 	});
 });

@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- renamed `PI_CACHE_RETENTION` to `DRAHT_CACHE_RETENTION` and `PI_OAUTH_CALLBACK_HOST` to `DRAHT_OAUTH_CALLBACK_HOST`
+- the shared `getPiUserAgent`/`pi-user-agent.ts` helper is now `getDrahtUserAgent`/`draht-user-agent.ts` and produces a `draht (...)` User-Agent instead of `pi (...)`
+- the OpenAI Codex adapter's `originator` request header now sends `draht` instead of `pi`
+
+### Added
+
+- `deepseek-v4-flash-vision-exp` and `deepseek-v4-pro-0813` model ids
+
+### Changed
+
+- renamed the `qwen3.8-max-preview` model id to `qwen3.8-max` across the Qwen Token Plan catalogs
+
+### Removed
+
+- xiaomi `mimo-v2-flash`, `mimo-v2-omni`, and `mimo-v2-pro` model ids, superseded by the `mimo-v2.5` family
+
 ## [2026.7.30] - 2026-07-30
 
 ### Added

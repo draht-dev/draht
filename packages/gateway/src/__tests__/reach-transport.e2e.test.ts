@@ -6,7 +6,9 @@
  * reproduces the `tailscale serve` topology. Class 3, and the word is used
  * literally here: three real processes, none of them imported.
  *
- *   • `packages/coding-agent/dist/cli.js` — the file `bin.draht` points at, run
+ *   • `packages/coding-agent/dist/cli.js` — the tsc-emitted entry point gateway
+ *     spawn-primitive.ts resolves (`bin.draht` now points at the bundled
+ *     `dist/bundle/cli.js`, but this file is still what both are built from), run
  *     `--attachable --mode rpc` against the in-repo keyless stub provider, so it
  *     publishes a real `<id>.sock` + `.lock` and answers real prompts;
  *   • `packages/gateway/src/cli.ts` — the file `bin.draht-gateway` points at,

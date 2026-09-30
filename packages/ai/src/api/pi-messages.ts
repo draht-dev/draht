@@ -339,7 +339,7 @@ function resolveCacheRetention(cacheRetention?: CacheRetention, env?: ProviderEn
 		return cacheRetention;
 	}
 	// Backend defaults apply when unset; only the legacy env opt-in is mapped.
-	return getProviderEnvValue("PI_CACHE_RETENTION", env) === "long" ? "long" : undefined;
+	return getProviderEnvValue("DRAHT_CACHE_RETENTION", env) === "long" ? "long" : undefined;
 }
 
 export const stream: StreamFunction<"pi-messages", PiMessagesOptions> = (
@@ -427,7 +427,7 @@ export const streamSimple: StreamFunction<"pi-messages", SimpleStreamOptions> = 
 	return stream(model, context, {
 		...options,
 		reasoning: options?.reasoning,
-		toolChoice: extra?.toolChoice,
+		toolChoice: options?.toolChoice,
 		debug: extra?.debug,
 	});
 };

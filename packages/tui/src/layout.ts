@@ -316,8 +316,16 @@ function paintBox(box: LayoutBox, screen: string[], totalWidth: number): void {
 				const visibleRows = Math.min(imageMetadata.rows, clipBottom - row);
 				if (visibleRows < imageMetadata.rows) line = cropKittyImageLine(line, 0, visibleRows);
 			}
-			if (isImageLine(line) && box.rect.x === 0 && box.rect.width >= totalWidth) screen[row] = line;
-			else screen[row] = compositeTuiLine(screen[row] ?? "", line, box.rect.x, box.rect.width, totalWidth);
+			// Fast path: a full-width box painting onto an untouched row can use the
+			// source line reference directly. Compositing here would rebuild the row
+			// string through ANSI/grapheme segmentation every frame; padding is
+			// unnecessary because rows are written with erase-line and the final
+			// width clamp still truncates over-wide lines.
+			if (box.rect.x === 0 && box.rect.width >= totalWidth && (isImageLine(line) || !screen[row])) {
+				screen[row] = line;
+			} else {
+				screen[row] = compositeTuiLine(screen[row] ?? "", line, box.rect.x, box.rect.width, totalWidth);
+			}
 		}
 	}
 	for (const child of box.children) paintBox(child, screen, totalWidth);
@@ -375,6 +383,19 @@ export function renderLayoutFrame(
 
 function containsPoint(rect: LayoutRect, x: number, y: number): boolean {
 	return x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height;
+}
+
+/** Return the visual hit path from the deepest component to the layout root. */
+export function getLayoutBoxesAt(frame: LayoutFrame, x: number, y: number): LayoutBox[] {
+	const result: Array<{ box: LayoutBox; depth: number }> = [];
+	const visit = (box: LayoutBox, depth: number): void => {
+		if (!containsPoint(box.clip, x, y)) return;
+		result.push({ box, depth });
+		for (const child of box.children) visit(child, depth + 1);
+	};
+	visit(frame.root, 0);
+	result.sort((a, b) => b.box.layer - a.box.layer || b.depth - a.depth);
+	return result.map(({ box }) => box);
 }
 
 export function getScrollViewBox(frame: LayoutFrame, scrollView: ScrollView): LayoutBox | undefined {

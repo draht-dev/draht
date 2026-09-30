@@ -1,4 +1,5 @@
 import { type Static, Type } from "typebox";
+import type { Context } from "../context.ts";
 import type { AgentHarnessTool } from "../types.ts";
 import { getOrThrow } from "../types.ts";
 import { executeShellWithCapture, type ShellCaptureProgress } from "../utils/shell-output.ts";
@@ -7,6 +8,7 @@ import type { ExecutionToolContext } from "./tool-context.ts";
 
 const MAX_TIMEOUT_SECONDS = 2_147_483_647 / 1000;
 const BASH_UPDATE_THROTTLE_MS = 100;
+const BASH_CHECKPOINT_INTERVAL_MS = 2_000;
 
 const bashSchema = Type.Object({
 	command: Type.String({ description: "Bash command to execute" }),
@@ -29,8 +31,8 @@ export interface BashExecution {
 
 export type BashPrepare<TContext extends ExecutionToolContext = ExecutionToolContext> = (
 	execution: BashExecution,
-	context: TContext,
-	signal?: AbortSignal,
+	toolContext: TContext,
+	context: Context,
 ) => void | Promise<void>;
 
 export interface BashToolOptions<TContext extends ExecutionToolContext = ExecutionToolContext> {
@@ -56,33 +58,43 @@ export function createBashTool<TContext extends ExecutionToolContext = Execution
 		label: "bash",
 		description: `Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
 		parameters: bashSchema,
-		async execute(_toolCallId, { command, timeout }, signal, onUpdate, context) {
+		async execute(_toolCallId, { command, timeout }, onUpdate, toolContext, _invocation, context) {
 			validateTimeout(timeout);
-			const { env } = context;
+			const { env } = toolContext;
 			const execution: BashExecution = {
 				command: options?.commandPrefix ? `${options.commandPrefix}\n${command}` : command,
 				cwd: env.cwd,
 				env: {},
 				inheritEnv: true,
 			};
-			await options?.prepare?.(execution, context, signal);
+			await options?.prepare?.(execution, toolContext, context);
 			let getLatestProgress: (() => ShellCaptureProgress) | undefined;
 			let updateTimer: ReturnType<typeof setTimeout> | undefined;
 			let updateDirty = false;
 			let lastUpdateAt = 0;
+			let lastCheckpointAt = Date.now();
+			let lastCheckpoint: string | undefined;
 
 			const emitOutputUpdate = (): void => {
-				if (!onUpdate || !updateDirty || !getLatestProgress) return;
+				if (!updateDirty || !getLatestProgress) return;
 				updateDirty = false;
-				lastUpdateAt = Date.now();
+				const now = Date.now();
+				lastUpdateAt = now;
 				const progress = getLatestProgress();
-				onUpdate({
-					content: [{ type: "text", text: progress.output }],
+				const snapshot = {
+					content: [{ type: "text" as const, text: progress.output }],
 					details: {
 						truncation: progress.truncation.truncated ? progress.truncation : undefined,
 						fullOutputPath: progress.fullOutputPath,
 					},
-				});
+				};
+				const encoded = JSON.stringify(snapshot);
+				const checkpoint = now - lastCheckpointAt >= BASH_CHECKPOINT_INTERVAL_MS && encoded !== lastCheckpoint;
+				onUpdate(snapshot, checkpoint ? { checkpoint: true } : undefined);
+				if (checkpoint) {
+					lastCheckpointAt = now;
+					lastCheckpoint = encoded;
+				}
 			};
 			const clearUpdateTimer = (): void => {
 				if (!updateTimer) return;
@@ -90,7 +102,6 @@ export function createBashTool<TContext extends ExecutionToolContext = Execution
 				updateTimer = undefined;
 			};
 			const scheduleOutputUpdate = (): void => {
-				if (!onUpdate) return;
 				updateDirty = true;
 				const delay = BASH_UPDATE_THROTTLE_MS - (Date.now() - lastUpdateAt);
 				if (delay <= 0) {
@@ -104,21 +115,25 @@ export function createBashTool<TContext extends ExecutionToolContext = Execution
 				}, delay);
 			};
 
-			onUpdate?.({ content: [], details: undefined });
+			onUpdate({ content: [], details: undefined });
 			try {
 				const capture = getOrThrow(
-					await executeShellWithCapture(env, execution.command, {
-						cwd: execution.cwd,
-						env: execution.env,
-						inheritEnv: execution.inheritEnv,
-						timeout,
-						abortSignal: signal,
-						returnExecutionErrors: true,
-						onChunk: (_chunk, getProgress) => {
-							getLatestProgress = getProgress;
-							scheduleOutputUpdate();
+					await executeShellWithCapture(
+						env,
+						execution.command,
+						{
+							cwd: execution.cwd,
+							env: execution.env,
+							inheritEnv: execution.inheritEnv,
+							timeout,
+							returnExecutionErrors: true,
+							onChunk: (_chunk, getProgress) => {
+								getLatestProgress = getProgress;
+								scheduleOutputUpdate();
+							},
 						},
-					}),
+						context,
+					),
 				);
 				clearUpdateTimer();
 				getLatestProgress = () => capture;

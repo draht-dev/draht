@@ -4,6 +4,7 @@ import { basename, dirname, join, resolve, sep, win32 } from "path";
 import { fileURLToPath } from "url";
 import { spawnProcessSync } from "./utils/child-process.ts";
 import { normalizePath } from "./utils/paths.ts";
+import { stripBom } from "./utils/text.ts";
 
 // =============================================================================
 // Package Detection
@@ -333,7 +334,7 @@ export function getSelfUpdateUnavailableInstruction(
 	const method = detectInstallMethod();
 	const target = normalizeSelfUpdatePackageTarget(updatePackageTarget);
 	if (method === "bun-binary") {
-		return `Download from: https://github.com/earendil-works/pi-mono/releases/latest`;
+		return `Download from: https://github.com/draht-dev/draht/releases/latest`;
 	}
 	const command = getSelfUpdateCommandForMethod(method, packageName, target, npmCommand);
 	if (command) {
@@ -361,8 +362,8 @@ export function getUpdateInstruction(packageName: string): string {
 /**
  * Get the base directory for resolving package assets (themes, package.json, README.md, CHANGELOG.md).
  * - For Bun binary: returns the directory containing the executable
- * - For Node.js (dist/): returns __dirname (the dist/ directory)
- * - For tsx (src/): returns parent directory (the package root)
+ * - For Node.js: walks up from `__dirname` to the nearest ancestor with a `package.json`, skipping
+ *   an emitted `dist/` bundle directory so it resolves to the package root even from the bundled CLI
  */
 export function getPackageDir(): string {
 	// Allow override via environment variable (useful for Nix/Guix where store paths tokenize poorly)
@@ -503,7 +504,7 @@ interface PackageJson {
 
 let pkg: PackageJson = {};
 try {
-	pkg = JSON.parse(readFileSync(getPackageJsonPath(), "utf-8")) as PackageJson;
+	pkg = JSON.parse(stripBom(readFileSync(getPackageJsonPath(), "utf-8"))) as PackageJson;
 } catch (e: unknown) {
 	const err = e as NodeJS.ErrnoException;
 	if (err.code !== "ENOENT") throw e;
@@ -543,11 +544,14 @@ export function expandTildePath(path: string): string {
 	return normalizePath(path);
 }
 
-const DEFAULT_SHARE_VIEWER_URL = "https://pi.dev/session/";
-
-/** Get the share viewer URL for a gist ID */
-export function getShareViewerUrl(gistId: string): string {
-	const baseUrl = process.env.DRAHT_SHARE_VIEWER_URL || DEFAULT_SHARE_VIEWER_URL;
+/**
+ * draht has no pi.dev-equivalent share viewer. Returns undefined unless
+ * DRAHT_SHARE_VIEWER_URL is set, in which case callers should present the
+ * gist URL directly instead.
+ */
+export function getShareViewerUrl(gistId: string): string | undefined {
+	const baseUrl = process.env.DRAHT_SHARE_VIEWER_URL?.trim();
+	if (!baseUrl) return undefined;
 	return `${baseUrl}#${gistId}`;
 }
 

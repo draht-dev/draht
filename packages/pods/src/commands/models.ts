@@ -218,7 +218,7 @@ chmod +x /tmp/model_run_${name}.sh`,
 	// Prepare environment
 	const env = [
 		`HF_TOKEN='${process.env.HF_TOKEN}'`,
-		`PI_API_KEY='${process.env.PI_API_KEY}'`,
+		`DRAHT_API_KEY='${process.env.DRAHT_API_KEY}'`,
 		`HF_HUB_ENABLE_HF_TRANSFER=1`,
 		`VLLM_NO_USAGE_STATS=1`,
 		`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`,
@@ -369,12 +369,12 @@ WRAPPER
 		console.log(chalk.cyan("─".repeat(50)));
 		console.log(chalk.white("Base URL:    ") + chalk.yellow(`http://${host}:${port}/v1`));
 		console.log(chalk.white("Model:       ") + chalk.yellow(modelId));
-		console.log(chalk.white("API Key:     ") + chalk.yellow(process.env.PI_API_KEY || "(not set)"));
+		console.log(chalk.white("API Key:     ") + chalk.yellow(process.env.DRAHT_API_KEY || "(not set)"));
 		console.log(chalk.cyan("─".repeat(50)));
 
 		console.log(`\n${chalk.bold("Export for shell:")}`);
 		console.log(chalk.gray(`export OPENAI_BASE_URL="http://${host}:${port}/v1"`));
-		console.log(chalk.gray(`export OPENAI_API_KEY="${process.env.PI_API_KEY || "your-api-key"}"`));
+		console.log(chalk.gray(`export OPENAI_API_KEY="${process.env.DRAHT_API_KEY || "your-api-key"}"`));
 		console.log(chalk.gray(`export OPENAI_MODEL="${modelId}"`));
 
 		console.log(`\n${chalk.bold("Example usage:")}`);

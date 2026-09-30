@@ -3,18 +3,23 @@
 draht uses environment variables in three ways:
 
 - Variables such as `DRAHT_OFFLINE` configure the draht process.
-- draht sets `DRAHT_CODING_AGENT` so child processes can detect that they run inside draht.
-- Commands run by the LLM-callable bash tool receive `DRAHT_*` variables describing the current session.
+- draht sets process markers so child processes can identify draht as the launching agent.
+- Commands run by the LLM-callable shell tools receive `DRAHT_*` variables describing the current session.
 
 Provider API-key variables are documented separately in [Providers](providers.md#environment-variables-or-auth-file).
 
 ## Process Marker
 
-The CLI and RPC entry points set `DRAHT_CODING_AGENT=true`. Child processes inherit it and can use it to detect that they run inside draht. It is not session-specific and is not set automatically when draht is embedded through the SDK.
+The CLI and RPC entry points set two process markers:
 
-## Bash Tool Session Environment
+- `AI_AGENT=draht` is a generic marker that lets tooling identify draht as the agent that launched the process.
+- `DRAHT_CODING_AGENT=true` is draht-specific and lets child processes detect that they run inside draht.
 
-Commands run by the bash tool receive the current draht session state:
+Child processes inherit both markers. They are not session-specific and are not set automatically when draht is embedded through the SDK.
+
+## Shell Tool Session Environment
+
+Commands run by the `bash` and `powershell` tools receive the current draht session state:
 
 | Variable | Description |
 |----------|-------------|
@@ -24,7 +29,7 @@ Commands run by the bash tool receive the current draht session state:
 | `DRAHT_MODEL` | Currently selected model ID |
 | `DRAHT_REASONING_LEVEL` | Current effective reasoning level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` |
 
-The values are resolved when each command starts. Switching models or changing the reasoning level therefore affects the next bash command without restarting draht. `DRAHT_PROVIDER` and `DRAHT_MODEL` identify the selected draht model, not a different upstream model that a router may choose internally.
+The values are resolved when each command starts. Switching models or changing the reasoning level therefore affects the next shell command without restarting draht. `DRAHT_PROVIDER` and `DRAHT_MODEL` identify the selected draht model, not a different upstream model that a router may choose internally.
 
 When asked which model or provider is running, inspect these variables instead of inferring the answer from the system prompt:
 
@@ -41,11 +46,11 @@ if [ -n "$DRAHT_SESSION_FILE" ]; then
 fi
 ```
 
-These variables are injected into the LLM-callable bash tool. They are not injected into user-entered `!` or `!!` commands.
+These variables are injected into the LLM-callable `bash` and `powershell` tools. They are not injected into user-entered `!` or `!!` commands.
 
-### Custom Bash Tools
+### Custom Shell Tools
 
-Bash tools created with `createBashTool()` expose the session environment by default when registered with draht. Injection happens before `spawnHook`, so a hook receives the variables in `ctx.env`:
+Tools created with `createBashTool()` or `createPowerShellTool()` expose the session environment by default when registered with draht. Injection happens before `spawnHook`, so a hook receives the variables in `ctx.env`:
 
 ```typescript
 const bashTool = createBashTool(cwd, {
@@ -59,7 +64,7 @@ const bashTool = createBashTool(cwd, {
 Disable session metadata independently of the spawn hook:
 
 ```typescript
-const bashTool = createBashTool(cwd, {
+const powershellTool = createPowerShellTool(cwd, {
   exposeSessionEnvironment: false,
   spawnHook: (ctx) => ctx,
 });
@@ -79,9 +84,13 @@ These variables are read by draht itself:
 | `DRAHT_OFFLINE` | Disable startup network operations, including update checks, package updates, and install/update telemetry |
 | `DRAHT_SKIP_VERSION_CHECK` | Disable the latest-version request |
 | `DRAHT_TELEMETRY` | Override install/update telemetry and provider attribution headers: `1`/`true`/`yes` or `0`/`false`/`no` |
-| `PI_CACHE_RETENTION` | Set to `long` for extended provider prompt caching where supported |
+| `DRAHT_CACHE_RETENTION` | Set to `long` for extended provider prompt caching where supported |
 | `DRAHT_SHARE_VIEWER_URL` | Override the base URL used by `/share` |
 | `DRAHT_HARDWARE_CURSOR` | Set to `1` to show the hardware cursor; see [Terminal setup](terminal-setup.md) |
+| `DRAHT_HYPERLINKS` | Override OSC 8 hyperlink detection with `1`, `0`, or `auto` |
+| `DRAHT_IMAGE_PROTOCOL` | Override inline image detection with `kitty`, `iterm2`, `none`, or `auto` |
+| `DRAHT_TRUE_COLOR` | Override truecolor detection with `1`, `0`, or `auto` |
+| `DRAHT_TUI_ESC_TIMEOUT` | How long to wait after a lone ESC before treating it as Escape, in milliseconds; defaults to `100` over SSH and `10` otherwise. Increase if Alt-key input is misread as Escape |
 | `VISUAL`, `EDITOR` | External editor fallback when `externalEditor` is unset |
 | `HTTP_PROXY`, `HTTPS_PROXY` | Proxy outbound HTTP requests |
 

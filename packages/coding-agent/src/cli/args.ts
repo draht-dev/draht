@@ -46,6 +46,7 @@ export interface Args {
 	promptTemplates?: string[];
 	noPromptTemplates?: boolean;
 	themes?: string[];
+	useTheme?: string;
 	noThemes?: boolean;
 	noContextFiles?: boolean;
 	/**
@@ -73,6 +74,11 @@ export function isValidThinkingLevel(level: string): level is ThinkingLevel {
 	return VALID_THINKING_LEVELS.includes(level as ThinkingLevel);
 }
 
+export function normalizeSessionName(value: string): string | undefined {
+	const name = value.trim();
+	return name.length > 0 ? name : undefined;
+}
+
 export function parseArgs(args: string[]): Args {
 	const result: Args = {
 		messages: [],
@@ -84,7 +90,16 @@ export function parseArgs(args: string[]): Args {
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
 
-		if (arg === "--help" || arg === "-h") {
+		if (arg === "--") {
+			for (const positionalArg of args.slice(i + 1)) {
+				if (positionalArg.startsWith("@")) {
+					result.fileArgs.push(positionalArg.slice(1));
+				} else {
+					result.messages.push(positionalArg);
+				}
+			}
+			break;
+		} else if (arg === "--help" || arg === "-h") {
 			result.help = true;
 		} else if (arg === "--version" || arg === "-v") {
 			result.version = true;
@@ -191,6 +206,14 @@ export function parseArgs(args: string[]): Args {
 		} else if (arg === "--theme" && i + 1 < args.length) {
 			result.themes = result.themes ?? [];
 			result.themes.push(args[++i]);
+		} else if (arg === "--use-theme") {
+			const themeName = args[i + 1];
+			if (themeName === undefined || themeName.startsWith("-")) {
+				result.diagnostics.push({ type: "error", message: "--use-theme requires a theme name" });
+			} else {
+				result.useTheme = themeName;
+				i++;
+			}
 		} else if (arg === "--no-skills" || arg === "-ns") {
 			result.noSkills = true;
 		} else if (arg === "--no-prompt-templates" || arg === "-np") {
@@ -282,7 +305,7 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
 	console.log(`${chalk.bold(APP_NAME)} - AI coding assistant with read, bash, edit, write tools
 
 ${chalk.bold("Usage:")}
-  ${APP_NAME} [options] [@files...] [messages...]
+  ${APP_NAME} [options] [--] [@files...] [messages...]
 
 ${chalk.bold("Commands:")}
   ${APP_NAME} install <source> [-l]     Install extension source and add to settings
@@ -333,6 +356,7 @@ ${chalk.bold("Options:")}
   --prompt-template <path>       Load a prompt template file or directory (can be used multiple times)
   --no-prompt-templates, -np     Disable prompt template discovery and loading
   --theme <path>                 Load a theme file or directory (can be used multiple times)
+  --use-theme <name[/name]>      Set the initial interactive theme for this run
   --no-themes                    Disable theme discovery and loading
   --no-context-files, -nc        Disable AGENTS.md and CLAUDE.md discovery and loading
   --context-root <path>          Confine AGENTS.md/CLAUDE.md discovery to an absolute project root
@@ -343,6 +367,7 @@ ${chalk.bold("Options:")}
   --approve, -a                  Trust project-local files for this run
   --no-approve, -na              Ignore project-local files for this run
   --offline                      Disable startup network operations (same as DRAHT_OFFLINE=1)
+  --                             End option parsing; treat remaining arguments as messages/files
   --help, -h                     Show this help
   --version, -v                  Show version number
 
@@ -366,6 +391,9 @@ ${chalk.bold("Examples:")}
 
   # Non-interactive mode (process and exit)
   ${APP_NAME} -p "List all .ts files in src/"
+
+  # Prompt beginning with a dash
+  ${APP_NAME} -p -- "- Summarize these points"
 
   # Multiple messages (interactive)
   ${APP_NAME} "Read package.json" "What dependencies do we have?"
@@ -461,16 +489,17 @@ ${chalk.bold("Environment Variables:")}
   ${ENV_SESSION_DIR.padEnd(32)} - Session storage directory (overridden by --session-dir)
   DRAHT_PACKAGE_DIR                   - Override package directory (for Nix/Guix store paths)
   DRAHT_OFFLINE                       - Disable startup network operations when set to 1/true/yes
-  DRAHT_TELEMETRY                     - Override install telemetry when set to 1/true/yes or 0/false/no
-  DRAHT_SHARE_VIEWER_URL              - Base URL for /share command (default: https://pi.dev/session/)
+  DRAHT_TELEMETRY                     - Override provider attribution headers (OpenRouter/NVIDIA NIM/Cloudflare) when set to 1/true/yes or 0/false/no
+  DRAHT_SHARE_VIEWER_URL              - Base URL for /share command (default: none; the gist URL is shown directly)
 
 ${chalk.bold("Built-in Tool Names:")}
-  read   - Read file contents
-  bash   - Execute bash commands
-  edit   - Edit files with find/replace
-  write  - Write files (creates/overwrites)
-  grep   - Search file contents (read-only, off by default)
-  find   - Find files by glob pattern (read-only, off by default)
-  ls     - List directory contents (read-only, off by default)
+  read       - Read file contents
+  bash       - Execute bash commands
+  powershell - Execute PowerShell commands on Windows
+  edit       - Edit files with find/replace
+  write      - Write files (creates/overwrites)
+  grep       - Search file contents (read-only, off by default)
+  find       - Find files by glob pattern (read-only, off by default)
+  ls         - List directory contents (read-only, off by default)
 `);
 }

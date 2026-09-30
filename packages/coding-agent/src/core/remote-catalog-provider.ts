@@ -1,9 +1,15 @@
 import type { Api, Model, ModelsStoreEntry, Provider } from "@draht/ai";
 import { VERSION } from "../config.ts";
+import { getDrahtUserAgent } from "../utils/draht-user-agent.ts";
 import { fetchWithRetry } from "../utils/management-http.ts";
-import { getPiUserAgent } from "../utils/pi-user-agent.ts";
 
-const DEFAULT_CATALOG_BASE_URL = "https://pi.dev";
+/**
+ * draht has no pi.dev-equivalent model catalog service. The remote overlay is
+ * disabled by default; set DRAHT_MODEL_CATALOG_BASE_URL to opt into a
+ * self-hosted catalog endpoint that implements the same wire protocol.
+ */
+const CATALOG_BASE_URL_ENV = "DRAHT_MODEL_CATALOG_BASE_URL";
+const REMOTE_CATALOG_ATTEMPT_TIMEOUT_MS = 4_000;
 export const REMOTE_CATALOG_REFRESH_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
 function mergeModels(baseline: readonly Model<Api>[], dynamic: readonly Model<Api>[]): Model<Api>[] {
@@ -41,10 +47,10 @@ function remoteModels(
 	return entry.models;
 }
 
-/** Add a persisted pi.dev catalog overlay to a static built-in provider. */
+/** Add a persisted remote catalog overlay to a static built-in provider. */
 export function withRemoteCatalog(
 	provider: Provider,
-	catalogBaseUrl: string = DEFAULT_CATALOG_BASE_URL,
+	catalogBaseUrl: string | undefined = process.env[CATALOG_BASE_URL_ENV],
 	localGeneratedAt?: number,
 ): Provider {
 	let dynamicModels: readonly Model<Api>[] = [];
@@ -65,6 +71,7 @@ export function withRemoteCatalog(
 				return;
 			}
 			if (!context.allowNetwork || context.signal.aborted) return;
+			if (!catalogBaseUrl) return;
 			if (
 				!context.force &&
 				stored?.checkedAt !== undefined &&
@@ -78,14 +85,18 @@ export function withRemoteCatalog(
 			// leave the overlay empty.
 			const validator = stored?.models.length ? stored.etag : undefined;
 			const url = new URL(`/api/models/providers/${encodeURIComponent(provider.id)}`, catalogBaseUrl);
-			const response = await fetchWithRetry(url, {
-				headers: {
-					accept: "application/json",
-					"User-Agent": getPiUserAgent(VERSION),
-					...(validator ? { "if-none-match": validator } : {}),
+			const response = await fetchWithRetry(
+				url,
+				{
+					headers: {
+						accept: "application/json",
+						"User-Agent": getDrahtUserAgent(VERSION),
+						...(validator ? { "if-none-match": validator } : {}),
+					},
+					signal: context.signal,
 				},
-				signal: context.signal,
-			});
+				{ attemptTimeoutMs: REMOTE_CATALOG_ATTEMPT_TIMEOUT_MS },
+			);
 			if (context.signal.aborted) return;
 			const checkedAt = Date.now();
 			// Unchanged: dynamicModels already holds the stored overlay, so only the

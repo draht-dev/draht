@@ -1,12 +1,12 @@
 # Keybindings
 
-All keyboard shortcuts can be customized via `~/.pi/agent/keybindings.json`. Each action can be bound to one or more keys.
+All keyboard shortcuts can be customized via `~/.draht/agent/keybindings.json`. Each action can be bound to one or more keys.
 
-The config file uses the same namespaced keybinding ids that pi uses internally and that extension authors use in `keyHint()` and injected `keybindings` managers.
+The config file uses the same namespaced keybinding ids that draht uses internally and that extension authors use in `keyHint()` and injected `keybindings` managers.
 
 Older configs using pre-namespaced ids such as `cursorUp` or `expandTools` are migrated automatically to the namespaced ids on startup.
 
-After editing `keybindings.json`, run `/reload` in pi to apply the changes without restarting the session.
+After editing `keybindings.json`, run `/reload` in draht to apply the changes without restarting the session.
 
 ## Key Format
 
@@ -70,7 +70,7 @@ The dedicated history actions always change history entries, regardless of the c
 |--------|---------|-------------|
 | `tui.editor.yank` | `ctrl+y` | Paste most recently deleted text |
 | `tui.editor.yankPop` | `alt+y` | Cycle through deleted text after yank |
-| `tui.editor.undo` | `ctrl+-` | Undo last edit |
+| `tui.editor.undo` | `ctrl+-` (`ctrl+z` on Windows; `alt+z` on WSL) | Undo last edit |
 
 ### TUI Clipboard and Selection
 
@@ -82,11 +82,12 @@ The dedicated history actions always change history entries, regardless of the c
 | `tui.select.pageUp` | `pageUp` | Page up in list |
 | `tui.select.pageDown` | `pageDown` | Page down in list |
 | `tui.select.confirm` | `enter` | Confirm selection |
+| `tui.select.confirmAsDefault` | `ctrl+s` | Confirm selection and set as default |
 | `tui.select.cancel` | `escape`, `ctrl+c` | Cancel selection |
 
 ### TUI Fullscreen Viewport
 
-These actions apply when interactive mode uses `--tui-mode fullscreen` and target the primary transcript scroll region. Two-finger trackpad and mouse-wheel input scroll the region under the pointer, falling back to the transcript over the fixed editor/status/footer dock. Clicking an OSC 8 hyperlink opens it in the default handler. Dragging with the primary mouse button selects text and copies it to the clipboard; holding at the transcript's top or bottom edge auto-scrolls into off-screen content.
+These actions apply when interactive mode uses `--tui-mode fullscreen` and target the primary transcript scroll region. Two-finger trackpad and mouse-wheel input scroll the region under the pointer, falling back to the transcript over the fixed editor/status/footer dock. Clicking an OSC 8 hyperlink opens it in the default handler. Dragging with the primary mouse button selects text and copies it to the clipboard; holding at the transcript's top or bottom edge auto-scrolls into off-screen content. See [Terminal setup](terminal-setup.md) for terminal-specific mouse and trackpad behavior.
 
 Fullscreen transcript bindings take precedence over editor bindings. The default unmodified navigation keys therefore control the transcript in fullscreen mode, while their `ctrl` variants continue to control the editor. Outside fullscreen mode, both variants control the editor.
 
@@ -97,7 +98,7 @@ Fullscreen transcript bindings take precedence over editor bindings. The default
 | `pageUp`, `pageDown` | Editor | Transcript |
 | `ctrl+pageUp`, `ctrl+pageDown` | Editor | Editor |
 
-This routing remains configurable through the ordinary action bindings. For example, `"tui.altScreen.pageUp": "ctrl+pageUp"` makes `pageUp` control the editor and `ctrl+pageUp` control the transcript in fullscreen mode. Bind `tui.altScreen.halfPageUp` and `tui.altScreen.halfPageDown` for smaller transcript steps while keeping the full-page bindings. Setting `"tui.altScreen.pageUp": []` disables that transcript shortcut entirely. User bindings replace the defaults for that action.
+This routing remains configurable through the ordinary action bindings. For example, `"tui.altScreen.pageUp": "ctrl+pageUp"` makes `pageUp` control the editor and `ctrl+pageUp` control the transcript in fullscreen mode. Bind `tui.altScreen.halfPageUp` and `tui.altScreen.halfPageDown` for half-page steps, or bind `tui.altScreen.lineUp` and `tui.altScreen.lineDown` for single-line steps. Setting `"tui.altScreen.pageUp": []` disables that transcript shortcut entirely. User bindings replace the defaults for that action.
 
 | Keybinding id | Default | Description |
 |--------|---------|-------------|
@@ -105,8 +106,14 @@ This routing remains configurable through the ordinary action bindings. For exam
 | `tui.altScreen.pageDown` | `pageDown` | Scroll the transcript down by one page |
 | `tui.altScreen.halfPageUp` | *(none)* | Scroll the transcript up by half a page |
 | `tui.altScreen.halfPageDown` | *(none)* | Scroll the transcript down by half a page |
-| `tui.altScreen.previousPrompt` | `ctrl+shift+up` | Jump to the previous marked message |
-| `tui.altScreen.nextPrompt` | `ctrl+shift+down` | Jump to the next marked message |
+| `tui.altScreen.lineUp` | *(none)* | Scroll the transcript up by one line |
+| `tui.altScreen.lineDown` | *(none)* | Scroll the transcript down by one line |
+| `tui.altScreen.previousPrompt` | `ctrl+shift+up`, `ctrl+up` (`ctrl+up` only on Windows and WSL) | Jump to the previous marked message |
+| `tui.altScreen.nextPrompt` | `ctrl+shift+down`, `ctrl+down` (`ctrl+down` only on Windows and WSL) | Jump to the next marked message |
+| `tui.altScreen.search` | `ctrl+shift+f` (`ctrl+f` on Windows and WSL) | Search the rendered transcript |
+| `tui.altScreen.searchNext` | `enter`, `ctrl+g` | Select the next search match while searching |
+| `tui.altScreen.searchPrevious` | `shift+enter`, `ctrl+shift+g` | Select the previous search match while searching |
+| `tui.altScreen.searchClose` | `escape` | Close transcript search |
 | `tui.altScreen.top` | `home` | Scroll to the beginning of the transcript |
 | `tui.altScreen.bottom` | `end` | Scroll to the transcript end and follow new output |
 
@@ -119,7 +126,7 @@ This routing remains configurable through the ordinary action bindings. For exam
 | `app.exit` | `ctrl+d` | Exit (when editor empty) |
 | `app.suspend` | `ctrl+z` (none on Windows) | Suspend to background |
 | `app.editor.external` | `ctrl+g` | Open in external editor (`externalEditor`, `$VISUAL`, `$EDITOR`, Notepad on Windows, or `nano` elsewhere) |
-| `app.clipboard.pasteImage` | `ctrl+v` (`alt+v` on Windows) | Paste image or text from clipboard |
+| `app.clipboard.pasteImage` | `ctrl+v` (`alt+v` on Windows and WSL) | Paste image or text from clipboard |
 
 ### Sessions
 
@@ -143,7 +150,7 @@ This routing remains configurable through the ordinary action bindings. For exam
 |--------|---------|-------------|
 | `app.model.select` | `ctrl+l` | Open model selector |
 | `app.model.cycleForward` | `ctrl+p` | Cycle to next model |
-| `app.model.cycleBackward` | `shift+ctrl+p` | Cycle to previous model |
+| `app.model.cycleBackward` | `shift+ctrl+p` (`alt+p` on Windows and WSL) | Cycle to previous model |
 | `app.thinking.cycle` | `shift+tab` | Cycle thinking level |
 | `app.context.cycle` | `ctrl+shift+l` | Cycle supported context-window sizes for the current model |
 | `app.thinking.toggle` | `ctrl+t` | Collapse or expand thinking blocks |
@@ -153,9 +160,9 @@ This routing remains configurable through the ordinary action bindings. For exam
 | Keybinding id | Default | Description |
 |--------|---------|-------------|
 | `app.tools.expand` | `ctrl+o` | Collapse or expand tool output |
-| `app.message.copy` | `ctrl+x` | Copy the last assistant message, or the selected message in `/tree` |
-| `app.message.followUp` | `alt+enter` | Queue follow-up message |
-| `app.message.dequeue` | `alt+up` | Restore queued messages to editor |
+| `app.message.copy` | `ctrl+x` | Copy the selected message in `/tree`; otherwise copy the last assistant message, or the active fullscreen text selection when `fullscreenCopyOnSelect` is disabled |
+| `app.message.followUp` | `alt+enter` (`ctrl+q` on Windows and WSL) | Queue follow-up message |
+| `app.message.dequeue` | `alt+up` (`alt+q` on Windows and WSL) | Restore queued messages to editor |
 
 ### Tree Navigation
 
@@ -188,7 +195,7 @@ Used inside the scoped models selector (opened via `/scoped-models`).
 
 ## Custom Configuration
 
-Create `~/.pi/agent/keybindings.json`:
+Create `~/.draht/agent/keybindings.json`:
 
 ```json
 {
@@ -200,7 +207,7 @@ Create `~/.pi/agent/keybindings.json`:
 
 Each action can have a single key or an array of keys. User config overrides defaults.
 
-On native Windows, `app.suspend` has no default binding because Windows terminals do not support Unix job control. If you bind it manually, pi shows a status message instead of suspending. In WSL, the normal Linux `ctrl+z`/`fg` behavior still applies.
+On native Windows, `app.suspend` has no default binding because Windows terminals do not support Unix job control. If you bind it manually, draht shows a status message instead of suspending. In WSL, the normal Linux `ctrl+z`/`fg` behavior still applies.
 
 ### Emacs Example
 

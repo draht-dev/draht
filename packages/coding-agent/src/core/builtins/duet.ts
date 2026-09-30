@@ -382,14 +382,14 @@ export default function duetBuiltin(pi: ExtensionAPI) {
 		selectingParticipant = true;
 		try {
 			if (!ctx.model || modelKey(ctx.model) !== participant.modelRef) {
-				const selected = await pi.setModel(participant.model, { persistDefault: false });
+				const selected = await pi.setModel(participant.model, { persist: false });
 				if (!selected) {
 					ctx.ui.notify(`No authentication available for ${participant.modelRef}`, "error");
 					return false;
 				}
 			}
 			if (participant.thinkingLevel && ctx.thinkingLevel !== participant.thinkingLevel) {
-				pi.setThinkingLevel(participant.thinkingLevel, { persistDefault: false });
+				pi.setThinkingLevel(participant.thinkingLevel, { persist: false });
 			}
 			return true;
 		} catch (error) {

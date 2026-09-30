@@ -1,7 +1,7 @@
 # JSON Event Stream Mode
 
 ```bash
-pi --mode json "Your prompt"
+draht --mode json "Your prompt"
 ```
 
 Outputs all session events as JSON lines to stdout. Useful for integrating pi into other tools or custom UIs.
@@ -9,24 +9,29 @@ Outputs all session events as JSON lines to stdout. Useful for integrating pi in
 ## Event Types
 
 Wire events use `JsonAgentSessionEvent`. It matches
-[`AgentSessionEvent`](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/src/core/agent-session.ts)
+[`AgentSessionEvent`](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/src/core/agent-session.ts)
 except that streaming message updates omit cumulative snapshots:
 
 ```typescript
 type WithoutPartial<T> = T extends { partial: unknown } ? Omit<T, "partial"> : T;
 
+type JsonAssistantMessageEvent<T> = T extends { type: "toolcall_start"; partial: unknown }
+  ? WithoutPartial<T> & { id: string; toolName: string }
+  : WithoutPartial<T>;
+
 type JsonAgentSessionEvent =
   | Exclude<AgentSessionEvent, { type: "message_update" }>
   | {
       type: "message_update";
-      assistantMessageEvent: WithoutPartial<AssistantMessageEvent>;
+      usage: Usage;
+      assistantMessageEvent: JsonAssistantMessageEvent<AssistantMessageEvent>;
     };
 ```
 
 `queue_update` emits the full pending steering and follow-up queues whenever they change. `compaction_start` and `compaction_end` cover both manual and automatic compaction.
 
 Other base events come from
-[`AgentEvent`](https://github.com/earendil-works/pi-mono/blob/main/packages/agent/src/types.ts):
+[`AgentEvent`](https://github.com/draht-dev/draht/blob/main/packages/agent/src/types.ts):
 
 ```typescript
 type AgentEvent =
@@ -48,12 +53,12 @@ type AgentEvent =
 
 ## Message Types
 
-Base messages from [`packages/ai/src/types.ts`](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/types.ts#L134):
+Base messages from [`packages/ai/src/types.ts`](https://github.com/draht-dev/draht/blob/main/packages/ai/src/types.ts#L134):
 - `UserMessage` (line 134)
 - `AssistantMessage` (line 140)
 - `ToolResultMessage` (line 152)
 
-Extended messages from [`packages/coding-agent/src/core/messages.ts`](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/src/core/messages.ts#L29):
+Extended messages from [`packages/coding-agent/src/core/messages.ts`](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/src/core/messages.ts#L29):
 - `BashExecutionMessage` (line 29)
 - `CustomMessage` (line 46)
 - `BranchSummaryMessage` (line 55)
@@ -73,19 +78,21 @@ Followed by events as they occur:
 {"type":"agent_start"}
 {"type":"turn_start"}
 {"type":"message_start","message":{"role":"assistant","content":[],...}}
-{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Hello"}}
+{"type":"message_update","usage":{...},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Hello"}}
 {"type":"message_end","message":{...}}
 {"type":"turn_end","message":{...},"toolResults":[]}
 {"type":"agent_end","messages":[...]}
 ```
 
 `message_update` records are delta-only. They omit both the cumulative `message` field and
-`assistantMessageEvent.partial` to keep stream size linear. Use `contentIndex` and `delta`
-to assemble live text, thinking, or tool-call arguments if needed. `message_end` contains
-the final authoritative message.
+`assistantMessageEvent.partial` to keep stream size linear. The top-level `usage` field contains
+the latest cumulative provider-reported usage and may remain zero when a provider only reports
+usage at completion. Use `contentIndex` and `delta` to assemble live text, thinking, or tool-call
+arguments if needed. A `toolcall_start` event also includes the constant-sized `id` and `toolName`
+fields. `message_end` contains the final authoritative message.
 
 ## Example
 
 ```bash
-pi --mode json "List files" 2>/dev/null | jq -c 'select(.type == "message_end")'
+draht --mode json "List files" 2>/dev/null | jq -c 'select(.type == "message_end")'
 ```

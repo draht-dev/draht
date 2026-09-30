@@ -1,5 +1,3 @@
-// Core Agent
-
 export { uuidv7 } from "@draht/ai";
 export type {
 	AttributeValue,
@@ -41,7 +39,6 @@ export {
 	NOOP_TELEMETRY_CONTEXT,
 } from "@draht/telemetry";
 export * from "./agent.ts";
-// Loop functions
 export * from "./agent-loop.ts";
 export * from "./harness/agent-harness.ts";
 export {
@@ -73,12 +70,12 @@ export {
 	serializeConversation,
 	shouldCompact,
 } from "./harness/compaction/compaction.ts";
+export * from "./harness/context.ts";
 export * from "./harness/messages.ts";
 export * from "./harness/prompt-templates.ts";
-// Harness
 export * from "./harness/result.ts";
+export { type LaneSnapshotReduction, reduceLaneSnapshot } from "./harness/runtime/reducer.ts";
 export * from "./harness/session/index.ts";
-export * from "./harness/session/search.ts";
 export * from "./harness/skills.ts";
 export * from "./harness/system-prompt.ts";
 export type {
@@ -113,6 +110,9 @@ export {
 	type AgentHarnessStreamOptionsPatch,
 	type AgentHarnessTool,
 	type AgentHarnessToolContextSource,
+	type AgentHarnessToolInvocation,
+	type AgentHarnessToolUpdateCallback,
+	type AgentHarnessToolUpdateOptions,
 	BranchSummaryError,
 	type BranchSummaryErrorCode,
 	CompactionError,
@@ -137,9 +137,8 @@ export {
 } from "./harness/types.ts";
 export * from "./harness/utils/shell-output.ts";
 export * from "./harness/utils/truncate.ts";
-// Proxy utilities
+export * from "./plugins/services/index.ts";
 export * from "./proxy.ts";
-// Stream defaults
+export * from "./search/index.ts";
 export { setDefaultStreamFn } from "./stream-fn.ts";
-// Types
 export * from "./types.ts";

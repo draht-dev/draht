@@ -7,7 +7,7 @@ RPC mode enables headless operation of the coding agent via a JSON protocol over
 ## Starting RPC Mode
 
 ```bash
-pi --mode rpc [options]
+draht --mode rpc [options]
 ```
 
 Common options:
@@ -133,6 +133,29 @@ Response:
 ```json
 {"type": "response", "command": "abort", "success": true}
 ```
+
+#### clear_queue
+
+Remove queued steering and follow-up messages and return their text.
+
+```json
+{"type": "clear_queue"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "clear_queue",
+  "success": true,
+  "data": {
+    "steering": ["Change direction"],
+    "followUp": ["Summarize when finished"]
+  }
+}
+```
+
+To implement interactive Esc behavior, send `clear_queue` before `abort`, then restore the returned text in the client editor. `abort` continues queued messages when they remain in the session.
 
 #### new_session
 
@@ -786,7 +809,7 @@ Response:
 }
 ```
 
-The current session name is available via `get_state` in the `sessionName` field. To set the initial name when starting RPC mode, pass `--name <name>` or `-n <name>` to the `pi --mode rpc` process.
+The current session name is available via `get_state` in the `sessionName` field. To set the initial name when starting RPC mode, pass `--name <name>` or `-n <name>` to the `draht --mode rpc` process.
 
 ### Commands
 
@@ -919,6 +942,14 @@ Emitted during streaming of assistant messages. Contains a delta event without a
 ```json
 {
   "type": "message_update",
+  "usage": {
+    "input": 100,
+    "output": 1,
+    "cacheRead": 0,
+    "cacheWrite": 0,
+    "totalTokens": 101,
+    "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0}
+  },
   "assistantMessageEvent": {
     "type": "text_delta",
     "contentIndex": 0,
@@ -937,23 +968,32 @@ The `assistantMessageEvent` field contains one of these delta types:
 | `thinking_start` | Thinking block started |
 | `thinking_delta` | Thinking content chunk |
 | `thinking_end` | Thinking block ended |
-| `toolcall_start` | Tool call started |
+| `toolcall_start` | Tool call started (includes `id` and `toolName`) |
 | `toolcall_delta` | Tool call arguments chunk |
 | `toolcall_end` | Tool call ended (includes full `toolCall` object) |
 
 Example streaming a text response:
 ```json
-{"type":"message_update","assistantMessageEvent":{"type":"text_start","contentIndex":0}}
-{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Hello"}}
-{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":" world"}}
-{"type":"message_update","assistantMessageEvent":{"type":"text_end","contentIndex":0,"content":"Hello world"}}
+{"type":"message_update","usage":{...},"assistantMessageEvent":{"type":"text_start","contentIndex":0}}
+{"type":"message_update","usage":{...},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Hello"}}
+{"type":"message_update","usage":{...},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":" world"}}
+{"type":"message_update","usage":{...},"assistantMessageEvent":{"type":"text_end","contentIndex":0,"content":"Hello world"}}
+```
+
+The top-level `usage` field contains the latest cumulative provider-reported usage. It may remain
+zero until completion when a provider does not report usage during streaming.
+
+Example starting a tool call:
+```json
+{"type":"message_update","usage":{...},"assistantMessageEvent":{"type":"toolcall_start","contentIndex":1,"id":"call_abc123","toolName":"write"}}
 ```
 
 `message_update` intentionally omits the former cumulative `message` field and
 `assistantMessageEvent.partial`. Clients that need a live partial message must assemble it
 from `message_start` and subsequent events using `contentIndex`. Treat `message_end.message`
-as authoritative. For tool calls, buffer `toolcall_delta.delta`; `toolcall_end.toolCall`
-contains the completed call.
+as authoritative. For tool calls, `toolcall_start` provides the call `id` and `toolName`;
+buffer `toolcall_delta.delta` for arguments. `toolcall_end.toolCall` contains the completed
+call.
 
 ### bash_execution_update
 

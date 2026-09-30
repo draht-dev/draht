@@ -1,6 +1,16 @@
-import { join } from "node:path";
-import { Markdown, type MarkdownTheme } from "@draht/tui";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { join, resolve } from "node:path";
 import chalk from "chalk";
+import lockfile from "proper-lockfile";
 import { selectConfig } from "./cli/config-selector.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
 import {
@@ -23,7 +33,9 @@ import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
 import { DefaultResourceLoader } from "./core/resource-loader.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
-import { spawnProcess } from "./utils/child-process.ts";
+import { spawnProcess, spawnProcessSync, waitForChildProcess } from "./utils/child-process.ts";
+import { getDrahtUserAgent } from "./utils/draht-user-agent.ts";
+import { canonicalizePath, getCwdRelativePath } from "./utils/paths.ts";
 import { formatVersionCheckError, getLatestPiRelease, isNewerPackageVersion } from "./utils/version-check.ts";
 import {
 	cleanupWindowsSelfUpdateQuarantine,
@@ -34,22 +46,182 @@ export type PackageCommand = "install" | "remove" | "update" | "list";
 
 type UpdateTarget = { type: "all" } | { type: "self" } | { type: "extensions"; source?: string } | { type: "models" };
 
-const SELF_UPDATE_NOTE_MARKDOWN_THEME: MarkdownTheme = {
-	heading: (text) => chalk.bold(chalk.yellow(text)),
-	link: (text) => chalk.cyan(text),
-	linkUrl: (text) => chalk.dim(text),
-	code: (text) => chalk.yellow(text),
-	codeBlock: (text) => chalk.dim(text),
-	codeBlockBorder: (text) => chalk.dim(text),
-	quote: (text) => chalk.dim(text),
-	quoteBorder: (text) => chalk.dim(text),
-	hr: (text) => chalk.dim(text),
-	listBullet: (text) => chalk.yellow(text),
-	bold: (text) => chalk.bold(text),
-	italic: (text) => chalk.italic(text),
-	strikethrough: (text) => chalk.strikethrough(text),
-	underline: (text) => chalk.underline(text),
-};
+const MANAGED_INSTALL_MARKER = "managed-install.json";
+const MANAGED_RELEASE_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+function getActiveManagedInstallRoot(): string | undefined {
+	const configuredRoot = process.env.DRAHT_MANAGED_INSTALL_ROOT?.trim();
+	if (!configuredRoot) return undefined;
+
+	const managedRoot = resolve(configuredRoot);
+	const releasesDir = canonicalizePath(join(managedRoot, "releases"));
+	// The launcher environment is inherited by child processes. Do not classify a
+	// source checkout or another draht installation launched from managed draht as managed.
+	if (getCwdRelativePath(canonicalizePath(getPackageDir()), releasesDir) === undefined) return undefined;
+
+	const markerPath = join(managedRoot, MANAGED_INSTALL_MARKER);
+	try {
+		const marker = JSON.parse(readFileSync(markerPath, "utf8")) as {
+			kind?: unknown;
+			layout?: unknown;
+			schemaVersion?: unknown;
+		};
+		if (marker.kind !== "draht-managed-install" || marker.schemaVersion !== 1 || marker.layout !== "releases-v1") {
+			throw new Error();
+		}
+	} catch {
+		throw new Error(`Managed install marker is missing or invalid: ${markerPath}`);
+	}
+
+	return managedRoot;
+}
+
+async function fetchInstallerArtifact(url: string, label: string): Promise<string> {
+	const response = await fetch(url, { headers: { "User-Agent": getDrahtUserAgent(VERSION) } });
+	if (!response.ok) {
+		throw new Error(`Could not download managed installer ${label} from ${url}: HTTP ${response.status}`);
+	}
+	return await response.text();
+}
+
+async function runManagedNpmCi(stageDir: string): Promise<void> {
+	const args = [
+		"ci",
+		"--ignore-scripts",
+		"--min-release-age=0",
+		"--omit=dev",
+		"--include=optional",
+		"--no-fund",
+		"--no-audit",
+		"--loglevel=error",
+		"--progress=false",
+	];
+	const code = await waitForChildProcess(spawnProcess("npm", args, { cwd: stageDir, stdio: "inherit" }));
+	if (code !== 0) throw new Error(`npm ${args.join(" ")} exited with code ${code ?? "unknown"}`);
+}
+
+function verifyManagedRelease(releaseDir: string, expectedVersion: string): void {
+	const binPath = join(
+		releaseDir,
+		"node_modules",
+		".bin",
+		process.platform === "win32" ? `${APP_NAME}.cmd` : APP_NAME,
+	);
+	const result = spawnProcessSync(binPath, ["--version"], {
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	if (result.error || result.status !== 0) {
+		const reason = result.error?.message || result.stderr.trim() || `exit code ${result.status ?? "unknown"}`;
+		throw new Error(`Could not verify managed ${APP_NAME} ${expectedVersion}: ${reason}`);
+	}
+	const installedVersion = result.stdout.trim();
+	if (installedVersion !== expectedVersion) {
+		throw new Error(
+			`Managed ${APP_NAME} smoke test returned version ${installedVersion}; expected ${expectedVersion}.`,
+		);
+	}
+}
+
+function activateManagedRelease(managedRoot: string, version: string): void {
+	const currentPath = join(managedRoot, "current-version");
+	const temporaryPath = join(managedRoot, `current-version.tmp.${process.pid}-${Date.now()}`);
+	try {
+		writeFileSync(temporaryPath, `${version}\n`);
+		renameSync(temporaryPath, currentPath);
+	} finally {
+		rmSync(temporaryPath, { force: true });
+	}
+}
+
+function cleanupManagedStaging(managedRoot: string): void {
+	const stagingRoot = join(managedRoot, "staging");
+	try {
+		for (const entry of readdirSync(stagingRoot)) {
+			if (entry.startsWith("update-")) {
+				rmSync(join(stagingRoot, entry), { force: true, recursive: true });
+			}
+		}
+	} catch {
+		// The staging directory does not exist yet or is not writable.
+	}
+}
+
+export function cleanupManagedInstall(): void {
+	let managedRoot: string | undefined;
+	try {
+		managedRoot = getActiveManagedInstallRoot();
+	} catch {
+		return;
+	}
+	if (!managedRoot) return;
+
+	try {
+		const releaseLock = lockfile.lockSync(join(managedRoot, "update"), { realpath: false });
+		try {
+			cleanupManagedStaging(managedRoot);
+		} finally {
+			releaseLock();
+		}
+	} catch {
+		// A live update owns the staging directory, or cleanup is unavailable.
+	}
+}
+
+async function runManagedSelfUpdate(managedRoot: string, version: string): Promise<void> {
+	if (!MANAGED_RELEASE_VERSION_RE.test(version)) {
+		throw new Error(`Invalid managed release version: ${version}`);
+	}
+
+	let releaseLock: () => Promise<void>;
+	try {
+		releaseLock = await lockfile.lock(join(managedRoot, "update"), { realpath: false });
+	} catch (error: unknown) {
+		if (error instanceof Error && "code" in error && error.code === "ELOCKED") {
+			throw new Error(`Another managed ${APP_NAME} update is already running.`);
+		}
+		throw error;
+	}
+
+	let stageDir: string | undefined;
+	try {
+		cleanupManagedStaging(managedRoot);
+		const configuredInstallerApiBase = process.env.DRAHT_INSTALLER_API_BASE?.trim();
+		if (!configuredInstallerApiBase) {
+			throw new Error(
+				"Managed updates require DRAHT_INSTALLER_API_BASE to be set to a release artifact server; draht has no default.",
+			);
+		}
+		const installerApiBase = configuredInstallerApiBase.replace(/\/+$/, "");
+		const releaseUrl = `${installerApiBase}/${encodeURIComponent(version)}`;
+		const stagingRoot = join(managedRoot, "staging");
+		const releasesRoot = join(managedRoot, "releases");
+		mkdirSync(releasesRoot, { recursive: true });
+		const releaseDir = join(releasesRoot, version);
+		if (existsSync(releaseDir)) {
+			verifyManagedRelease(releaseDir, version);
+			activateManagedRelease(managedRoot, version);
+			return;
+		}
+
+		mkdirSync(stagingRoot, { recursive: true });
+		stageDir = mkdtempSync(join(stagingRoot, "update-"));
+		const [packageJsonContent, packageLockContent] = await Promise.all([
+			fetchInstallerArtifact(`${releaseUrl}/package.json`, "package.json"),
+			fetchInstallerArtifact(`${releaseUrl}/package-lock.json`, "package-lock.json"),
+		]);
+		writeFileSync(join(stageDir, "package.json"), packageJsonContent);
+		writeFileSync(join(stageDir, "package-lock.json"), packageLockContent);
+
+		await runManagedNpmCi(stageDir);
+		verifyManagedRelease(stageDir, version);
+		renameSync(stageDir, releaseDir);
+		activateManagedRelease(managedRoot, version);
+	} finally {
+		if (stageDir) rmSync(stageDir, { force: true, recursive: true });
+		await releaseLock();
+	}
+}
 
 interface PackageCommandOptions {
 	command: PackageCommand;
@@ -432,7 +604,7 @@ function printSelfUpdateUnavailable(
 	const entrypoint = process.argv[1];
 	if (entrypoint) {
 		console.error("");
-		console.error(`Location of pi executable: ${entrypoint}`);
+		console.error(`Location of ${APP_NAME} executable: ${entrypoint}`);
 	}
 }
 
@@ -445,32 +617,11 @@ function printPnpmSelfUpdateMetadataHint(): void {
 	console.error(chalk.yellow(`Run \`pnpm store prune\` and retry \`${APP_NAME} update --self\`.`));
 }
 
-function printSelfUpdateNote(note: string): void {
-	const trimmedNote = note.trim();
-	if (!trimmedNote) {
-		return;
-	}
-
-	console.log();
-	console.log(chalk.bold(chalk.yellow("Update note")));
-	try {
-		const width = Math.max(20, process.stdout.columns ?? 80);
-		const renderedLines = new Markdown(trimmedNote, 0, 0, SELF_UPDATE_NOTE_MARKDOWN_THEME)
-			.render(width)
-			.map((line) => line.trimEnd());
-		console.log(renderedLines.join("\n"));
-	} catch {
-		console.log(trimmedNote);
-	}
-	console.log();
-}
-
 interface SelfUpdatePlan {
 	packageName: string;
 	installSpec: string;
 	version: string;
 	shouldRun: boolean;
-	note?: string;
 }
 
 async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
@@ -493,7 +644,6 @@ async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
 			packageName,
 			installSpec,
 			version: latestRelease.version,
-			...(latestRelease.note ? { note: latestRelease.note } : {}),
 			shouldRun: true,
 		};
 	}
@@ -834,10 +984,34 @@ export async function handlePackageCommand(
 					}
 				}
 				if (updateTargetIncludesSelf(target)) {
+					const managedInstallRoot = getActiveManagedInstallRoot();
+					if (managedInstallRoot && options.force) {
+						console.error(
+							chalk.red(
+								`Managed ${APP_NAME} installations do not support --force; rerun the installer to repair this installation.`,
+							),
+						);
+						process.exitCode = 1;
+						return true;
+					}
 					const selfUpdatePlan = await getSelfUpdatePlan(options.force);
 					if (!selfUpdatePlan.shouldRun) {
 						return true;
 					}
+					if (managedInstallRoot) {
+						try {
+							console.log(chalk.dim(`Updating managed ${APP_NAME} installation...`));
+							await runManagedSelfUpdate(managedInstallRoot, selfUpdatePlan.version);
+						} catch (error: unknown) {
+							const message = error instanceof Error ? error.message : "Unknown managed update error";
+							console.error(chalk.red(`Error: ${message}`));
+							process.exitCode = 1;
+							return true;
+						}
+						console.log(chalk.green(`Updated ${APP_NAME} from ${VERSION} to ${selfUpdatePlan.version}`));
+						return true;
+					}
+
 					const installMethod = detectInstallMethod();
 					if (process.platform === "win32" && installMethod !== "npm" && installMethod !== "pnpm") {
 						console.error(
@@ -856,9 +1030,6 @@ export async function handlePackageCommand(
 						printSelfUpdateUnavailable(selfUpdateNpmCommand, selfUpdateTarget);
 						process.exitCode = 1;
 						return true;
-					}
-					if (selfUpdatePlan.note) {
-						printSelfUpdateNote(selfUpdatePlan.note);
 					}
 					try {
 						if (installMethod === "npm") {

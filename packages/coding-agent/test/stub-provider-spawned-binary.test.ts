@@ -7,8 +7,9 @@
  * needs real streamed assistant text with no API key and no network, so the stub
  * has to be selectable from OUTSIDE the process — by environment variable.
  *
- * These tests therefore drive the emitted binary (dist/cli.js, the file both
- * `bin.draht` and the bun-compiled binary are built from), never an in-process
+ * These tests therefore drive the emitted binary (dist/cli.js, the
+ * tsc-emitted entry point both the bundled `bin.draht` (dist/bundle/cli.js)
+ * and the bun-compiled binary are built from), never an in-process
  * import: an in-process test would pass while the product a child process sees
  * stayed broken.
  */

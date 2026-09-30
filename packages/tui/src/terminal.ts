@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { setKittyProtocolActive } from "./keys.ts";
 import { isNativeModifierPressed } from "./native-modifiers.ts";
+import { getNativeModuleCandidates } from "./native-module-path.ts";
 import { StdinBuffer } from "./stdin-buffer.ts";
 
 const cjsRequire = createRequire(import.meta.url);
@@ -101,6 +101,25 @@ export interface Terminal {
 	setProgress(active: boolean): void;
 }
 
+const DEFAULT_ESCAPE_TIMEOUT_MS = 10;
+const DEFAULT_SSH_ESCAPE_TIMEOUT_MS = 100;
+
+/**
+ * Resolve how long to wait for the rest of an escape sequence before
+ * dispatching a lone ESC as the Escape key. Legacy Alt+key input is ESC plus
+ * another byte, so high-latency transports need a longer reassembly window.
+ */
+export function resolveEscapeTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+	const configured = Number(env.DRAHT_TUI_ESC_TIMEOUT);
+	if (Number.isFinite(configured) && configured > 0) {
+		return configured;
+	}
+	if (env.SSH_CONNECTION || env.SSH_TTY) {
+		return DEFAULT_SSH_ESCAPE_TIMEOUT_MS;
+	}
+	return DEFAULT_ESCAPE_TIMEOUT_MS;
+}
+
 /**
  * Real terminal using process.stdin/stdout
  */
@@ -117,7 +136,7 @@ export class ProcessTerminal implements Terminal {
 	private stdinDataHandler?: (data: string) => void;
 	private progressInterval?: ReturnType<typeof setInterval>;
 	private writeLogPath = (() => {
-		const env = process.env.PI_TUI_WRITE_LOG || "";
+		const env = process.env.DRAHT_TUI_WRITE_LOG || "";
 		if (!env) return "";
 		try {
 			if (fs.statSync(env).isDirectory()) {
@@ -183,7 +202,7 @@ export class ProcessTerminal implements Terminal {
 	 * to handle the case where the response arrives split across multiple events.
 	 */
 	private setupStdinBuffer(): void {
-		this.stdinBuffer = new StdinBuffer({ timeout: 10 });
+		this.stdinBuffer = new StdinBuffer({ escapeTimeout: resolveEscapeTimeoutMs() });
 
 		// Forward individual sequences to the input handler
 		this.stdinBuffer.on("data", (sequence) => {
@@ -351,16 +370,10 @@ export class ProcessTerminal implements Terminal {
 			if (arch !== "x64" && arch !== "arm64") return;
 
 			// Dynamic require so non-Windows and bundled/browser paths never load the
-			// native helper. In the npm package native/ is next to dist/; in compiled
-			// binary archives native/ is copied next to the executable.
-			const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+			// native helper. Installed packages resolve it from pi-tui; standalone
+			// binaries resolve the copy next to the executable.
 			const nativePath = path.join("native", "win32", "prebuilds", `win32-${arch}`, "win32-console-mode.node");
-			const candidates = [
-				path.join(moduleDir, "..", nativePath),
-				path.join(moduleDir, nativePath),
-				path.join(path.dirname(process.execPath), nativePath),
-			];
-			for (const modulePath of candidates) {
+			for (const modulePath of getNativeModuleCandidates(nativePath)) {
 				try {
 					const helper = cjsRequire(modulePath) as { enableVirtualTerminalInput?: () => boolean };
 					helper.enableVirtualTerminalInput?.();

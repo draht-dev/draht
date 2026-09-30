@@ -67,8 +67,8 @@ describe("AgentSession model switching", () => {
 		const { session, sessionManager, settingsManager } = await createSession();
 
 		try {
-			await session.setModel(nonReasoningModel, { persistDefault: false });
-			session.setThinkingLevel("off", { persistDefault: false });
+			await session.setModel(nonReasoningModel, { persist: false });
+			session.setThinkingLevel("off", { persist: false });
 
 			expect(session.model).toBe(nonReasoningModel);
 			expect(session.thinkingLevel).toBe("off");

@@ -129,17 +129,17 @@ The command output is sent to the model. Use `!!command` to run a command withou
 
 ### Switch models
 
-Use `/model` or Ctrl+L to choose a model. Use Shift+Tab to cycle thinking level. Use Ctrl+P / Shift+Ctrl+P to cycle through scoped models.
+Use `/model` or Ctrl+L to choose a model for the current session. Press Ctrl+S in the model picker to save the highlighted model as the startup default. Use `/thinking` to choose a thinking level for the current session, or Ctrl+S in that picker to save the startup default thinking level. Use Shift+Tab to cycle thinking level. Use Ctrl+P / Shift+Ctrl+P to cycle through scoped models.
 
 ### Continue later
 
 Sessions are saved automatically:
 
 ```bash
-pi -c                  # Continue most recent session
-pi -r                  # Browse previous sessions
-pi --name "my task"    # Set session display name at startup
-pi --session <path|id> # Open a specific session
+draht -c                  # Continue most recent session
+draht -r                  # Browse previous sessions
+draht --name "my task"    # Set session display name at startup
+draht --session <path|id> # Open a specific session
 ```
 
 Inside pi, use `/resume`, `/new`, `/tree`, `/fork`, and `/clone` to manage sessions.
@@ -149,9 +149,9 @@ Inside pi, use `/resume`, `/new`, `/tree`, `/fork`, and `/clone` to manage sessi
 For one-shot prompts:
 
 ```bash
-pi -p "Summarize this codebase"
-cat README.md | pi -p "Summarize this text"
-pi -p @screenshot.png "What's in this image?"
+draht -p "Summarize this codebase"
+cat README.md | draht -p "Summarize this text"
+draht -p @screenshot.png "What's in this image?"
 ```
 
 Use `--mode json` for JSON event output or `--mode rpc` for process integration.

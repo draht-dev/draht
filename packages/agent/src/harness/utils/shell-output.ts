@@ -1,3 +1,4 @@
+import type { Context } from "../context.ts";
 import { type ExecutionEnv, ExecutionError, err, ok, type Result, type ShellExecOptions, toError } from "../types.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type TruncationResult, truncateTail } from "./truncate.ts";
 
@@ -9,7 +10,7 @@ export interface ShellCaptureProgress {
 }
 
 export interface ShellCaptureOptions extends Omit<ShellExecOptions, "onStdout" | "onStderr"> {
-	onChunk?: (chunk: string, getProgress: () => ShellCaptureProgress) => void;
+	onChunk?: (chunk: string, getProgress: () => ShellCaptureProgress, context: Context) => void;
 	/** Return shell execution failures with captured output instead of as a failed Result. */
 	returnExecutionErrors?: boolean;
 }
@@ -51,7 +52,8 @@ function trimToLastUtf8Bytes(text: string, maxBytes: number, encoder: { encode(i
 export async function executeShellWithCapture(
 	env: ExecutionEnv,
 	command: string,
-	options?: ShellCaptureOptions,
+	options: ShellCaptureOptions | undefined,
+	context: Context,
 ): Promise<Result<ShellCaptureResult, ExecutionError>> {
 	let tailOutput = "";
 	const maxOutputBytes = DEFAULT_MAX_BYTES * 2;
@@ -72,7 +74,7 @@ export async function executeShellWithCapture(
 		writeChain = writeChain.then(async (previous) => {
 			if (!previous.ok) return previous;
 			if (!fullOutputPath) return err(new ExecutionError("unknown", "Full output path was not created"));
-			const appendResult = await env.appendFile(fullOutputPath, text);
+			const appendResult = await env.appendFile(fullOutputPath, text, context);
 			return appendResult.ok ? ok(undefined) : err(toExecutionError(appendResult.error));
 		});
 	};
@@ -82,10 +84,10 @@ export async function executeShellWithCapture(
 		fullOutputRequested = true;
 		writeChain = writeChain.then(async (previous) => {
 			if (!previous.ok) return previous;
-			const tempFile = await env.createTempFile({ prefix: "bash-", suffix: ".log" });
+			const tempFile = await env.createTempFile({ prefix: "bash-", suffix: ".log" }, context);
 			if (!tempFile.ok) return err(toExecutionError(tempFile.error));
 			fullOutputPath = tempFile.value;
-			const appendResult = await env.appendFile(tempFile.value, initialContent);
+			const appendResult = await env.appendFile(tempFile.value, initialContent, context);
 			return appendResult.ok ? ok(undefined) : err(toExecutionError(appendResult.error));
 		});
 	};
@@ -137,22 +139,25 @@ export async function executeShellWithCapture(
 				appendFullOutput(text);
 			}
 			tailOutput = trimToLastUtf8Bytes(tailOutput, maxOutputBytes, encoder);
-			options?.onChunk?.(text, createProgress);
+			options?.onChunk?.(text, createProgress, context);
 		} catch (error) {
 			captureError = toExecutionError(error);
 		}
 	};
 
 	try {
-		const result = await env.exec(command, {
-			cwd: options?.cwd,
-			env: options?.env,
-			inheritEnv: options?.inheritEnv,
-			timeout: options?.timeout,
-			abortSignal: options?.abortSignal,
-			onStdout: onChunk,
-			onStderr: onChunk,
-		});
+		const result = await env.exec(
+			command,
+			{
+				cwd: options?.cwd,
+				env: options?.env,
+				inheritEnv: options?.inheritEnv,
+				timeout: options?.timeout,
+				onStdout: onChunk,
+				onStderr: onChunk,
+			},
+			context,
+		);
 		acceptingOutput = false;
 		let progress = createProgress();
 		if (progress.truncation.truncated && !fullOutputRequested) ensureFullOutputFile(tailOutput);
@@ -162,7 +167,7 @@ export async function executeShellWithCapture(
 		progress = createProgress();
 
 		if (!result.ok) {
-			if (result.error.code === "aborted" || options?.abortSignal?.aborted) {
+			if (result.error.code === "aborted" || context.abortSignal?.aborted) {
 				return ok({
 					...progress,
 					exitCode: undefined,
@@ -181,7 +186,7 @@ export async function executeShellWithCapture(
 			}
 			return err(result.error);
 		}
-		const cancelled = options?.abortSignal?.aborted ?? false;
+		const cancelled = context.abortSignal?.aborted ?? false;
 		return ok({
 			...progress,
 			exitCode: cancelled ? undefined : result.value.exitCode,

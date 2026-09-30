@@ -25,8 +25,8 @@ interface McpServerConfigBase {
 	/** Default: `codemode`. */
 	exposure?: McpExposure;
 	/**
-	 * What the server offers, in a sentence. The codemode and `tool_search` descriptions show it next to
-	 * the server's namespace, so the model knows what to search for without connecting first.
+	 * What the server offers, in a sentence. The `mcp_servers` system prompt section lists the server
+	 * with it, tool search ranks the server's tools by it, and codemode's `describeNamespace()` returns it.
 	 */
 	description?: string;
 	/**

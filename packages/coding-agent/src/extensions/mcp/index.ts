@@ -3,12 +3,13 @@
  *
  * Connects the servers from `mcp.json` and the servers extensions register with
  * `pi.registerMcpServer()` when a session starts, and servers registered later right away. A server
- * in `mcp.json` takes precedence over a registered server of the same name. Tools are registered as
- * `mcp__<server>__<tool>`. By default (`"exposure": "codemode"`) the tools are only callable from
- * codemode scripts, which keeps MCP tool lists out of the model's tool declarations and the codemode
- * description: the description lists the server's namespace with its configured `description`, and
- * scripts find the tools with `searchTools()` and the server instructions with
- * `describeNamespace()`. The codemode tool is activated for that unless `autoEnableCodemode` is
+ * in `mcp.json` takes precedence over a registered server of the same name. Connections run in the
+ * background: the first prompt waits only for servers with `direct` tools, and codemode scripts,
+ * `tool_search`, and the resource tools wait for the servers they need when they run. Tools are
+ * registered as `mcp__<server>__<tool>`. By default (`"exposure": "codemode"`) the tools are only
+ * callable from codemode scripts, which keeps MCP tools out of the model's tool declarations and
+ * the codemode description: scripts find the tools with `searchTools()` and the server instructions
+ * with `describeNamespace()`. The codemode tool is activated for that unless `autoEnableCodemode` is
  * false. `"deferred"` declares the tools to the model once the `tool_search` tool loads them, and
  * activates `tool_search` instead of codemode.
  * `"exposure": "direct"` declares them to the model right away, and `"hidden"` makes them
@@ -26,6 +27,7 @@
  */
 
 import { join, resolve } from "node:path";
+import { toCodemodeIdentifier } from "@draht/codemode/declarations";
 import type { SelectItem } from "@draht/tui";
 import type { TSchema } from "typebox";
 import { CONFIG_DIR_NAME, getAgentDir } from "../../config.ts";
@@ -49,7 +51,12 @@ import {
 	updateMcpServerConfig,
 } from "./config.ts";
 import type { McpOAuthCredentialStore, McpSignInPrompt } from "./oauth.ts";
-import { createMcpResourceToolDefinitions } from "./resources.ts";
+import {
+	createMcpResourceToolDefinitions,
+	LIST_MCP_RESOURCE_TEMPLATES_TOOL,
+	LIST_MCP_RESOURCES_TOOL,
+	READ_MCP_RESOURCE_TOOL,
+} from "./resources.ts";
 import { loadMcpRuntime } from "./runtime.lazy.ts";
 import type * as McpRuntime from "./runtime.ts";
 import type { McpServerConnection, McpServerLog, McpTransportFactory } from "./runtime.ts";
@@ -72,13 +79,20 @@ export interface McpExtensionOptions {
 	/** Saves `/mcp` changes to the server's config file. Defaults to editing its `mcp.json`. */
 	updateConfig?: (entry: McpServerEntry, patch: McpServerConfigPatch) => void;
 	/**
-	 * How long the first prompt waits for servers that are still connecting at startup, in
-	 * milliseconds. Their tools become available when they connect. Default: 10000.
+	 * How long the first prompt waits for servers with `direct` tools that are still connecting at
+	 * startup, in milliseconds. Their tools become available when they connect. Other servers are
+	 * waited for when a script or search needs them. Default: 10000.
 	 */
 	startupWaitMs?: number;
 }
 
 const DEFAULT_STARTUP_WAIT_MS = 10_000;
+
+const RESOURCE_TOOL_NAMES: ReadonlySet<string> = new Set([
+	LIST_MCP_RESOURCES_TOOL,
+	LIST_MCP_RESOURCE_TEMPLATES_TOOL,
+	READ_MCP_RESOURCE_TOOL,
+]);
 
 /** A configured server. Disabled servers have no connection. */
 interface McpServer {
@@ -88,6 +102,8 @@ interface McpServer {
 	registeredConfig?: string;
 	/** Result of the last `/mcp` action that failed, shown in the manager. */
 	message?: string;
+	/** Settles when the connection started for the server connected or failed. */
+	ready?: Promise<void>;
 }
 
 const EXPOSURE_DESCRIPTIONS: Record<Exclude<McpExposure, "hidden">, string> = {
@@ -104,12 +120,107 @@ function firstLine(text: string): string {
 	return text.split("\n", 1)[0] ?? "";
 }
 
-function isEnabled(server: McpServer): boolean {
+function isEnabled(server: Pick<McpServer, "entry">): boolean {
 	return server.entry.config.enabled !== false;
 }
 
 function exposureOf(entry: McpServerEntry): McpExposure {
 	return entry.config.exposure ?? "codemode";
+}
+
+/** Exposures the server's tools can have, known from its config before it connects. */
+function configuredExposures(entry: McpServerEntry): Set<McpExposure> {
+	return new Set([exposureOf(entry), ...Object.values(entry.config.toolExposure ?? {})]);
+}
+
+/** Whether some of the server's tools are declared to the model, so the first prompt waits for them. */
+function hasDirectTools(entry: McpServerEntry): boolean {
+	return configuredExposures(entry).has("direct");
+}
+
+/** Whether some of the server's tools are reached through codemode or tool_search. */
+function hasIndirectTools(entry: McpServerEntry): boolean {
+	const exposures = configuredExposures(entry);
+	return exposures.has("codemode") || exposures.has("deferred");
+}
+
+function namespaceName(server: string): string {
+	return `mcp__${server}`;
+}
+
+/** Name of the system prompt section that lists the servers whose tools are not declared. */
+export const MCP_SERVERS_SECTION = "mcp_servers";
+/** Characters of a server description in the section, as Codex allows for deferred namespaces. */
+const MAX_SERVER_DESCRIPTION_CHARS = 250;
+/**
+ * Characters of the whole section. Descriptions shrink to fit; when the server lines alone do not
+ * fit, the last servers are left out and counted in a closing line.
+ */
+export const MAX_SERVERS_SECTION_CHARS = 4096;
+
+const SERVERS_SECTION_INTRO =
+	"MCP servers whose tools are not declared to you. Call the tools of `codemode` servers from codemode scripts: find them with `searchTools(query, { namespace })` and read a server's instructions and tool names with `describeNamespace(name)`. Load the tools of `tool_search` servers with `tool_search`.";
+
+function truncate(text: string, max: number): string {
+	if (text.length <= max) return text;
+	return max <= 1 ? "" : `${text.slice(0, max - 1).trimEnd()}…`;
+}
+
+/** What the `mcp_servers` section needs of a server. */
+export interface McpServerListing {
+	entry: McpServerEntry;
+	connection?: { instructions?: string };
+}
+
+/** First line of the configured description, or of the server instructions once connected. */
+function serverSummary(server: McpServerListing): string {
+	const text = server.entry.config.description?.trim() || server.connection?.instructions || "";
+	return (text.split("\n", 1)[0] ?? "").trim();
+}
+
+/**
+ * The `mcp_servers` section: every enabled server with codemode or deferred tools, with how its
+ * tools are reached and a one-line summary. The model learns of the servers from it, since neither
+ * codemode nor tool_search lists them. Undefined when there are no such servers.
+ */
+export function renderServersSection(servers: readonly McpServerListing[]): string | undefined {
+	const listed = servers
+		.filter((server) => isEnabled(server) && hasIndirectTools(server.entry))
+		.sort((a, b) => a.entry.name.localeCompare(b.entry.name));
+	if (listed.length === 0) return undefined;
+	const heads = listed.map((server) => {
+		const exposures = configuredExposures(server.entry);
+		const reach = exposures.has("codemode") ? "codemode" : "tool_search";
+		return `- ${namespaceName(server.entry.name)} (${reach})`;
+	});
+	const omitted = (count: number) =>
+		count > 0 ? [`- … ${count} more server${count === 1 ? "" : "s"}; find their tools with searchTools()`] : [];
+	// Characters of the intro, the first `kept` server lines without descriptions, and the omission line.
+	const size = (kept: number) =>
+		[SERVERS_SECTION_INTRO, ...heads.slice(0, kept), ...omitted(listed.length - kept)].join("\n").length;
+	let kept = listed.length;
+	while (kept > 0 && size(kept) > MAX_SERVERS_SECTION_CHARS) kept--;
+	// Each description also takes a ": " separator.
+	const perServer =
+		kept === 0
+			? 0
+			: Math.min(MAX_SERVER_DESCRIPTION_CHARS, Math.floor((MAX_SERVERS_SECTION_CHARS - size(kept)) / kept) - 2);
+	const lines = listed.slice(0, kept).map((server, index) => {
+		const summary = perServer > 0 ? truncate(serverSummary(server), perServer) : "";
+		return summary ? `${heads[index]}: ${summary}` : heads[index];
+	});
+	return [SERVERS_SECTION_INTRO, ...lines, ...omitted(listed.length - kept)].join("\n");
+}
+
+/**
+ * Whether a codemode script needs the server: it names the server's namespace, as written or as the
+ * script identifier codemode derives from it, or searches, enumerates, or describes tools or
+ * namespaces, which may name the server in other forms.
+ */
+function scriptNeedsServer(code: string, server: string): boolean {
+	if (/\b(searchTools|describeNamespace|describeTool|ALL_TOOLS)\b/.test(code)) return true;
+	const name = namespaceName(server);
+	return code.includes(name) || code.includes(toCodemodeIdentifier(name));
 }
 
 /** Short state for lists and the startup report. `withError` appends the first line of a failure. */
@@ -239,10 +350,9 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 		const registerTools = (connection: McpServerConnection) => {
 			const server = connection.entry.name;
 			const entry = findServer(server)?.entry ?? connection.entry;
-			const namespaceName = `mcp__${server}`;
 			const description = entry.config.description?.trim();
 			const namespace = {
-				name: namespaceName,
+				name: namespaceName(server),
 				...(description ? { description } : {}),
 				...(connection.instructions ? { instructions: connection.instructions } : {}),
 			};
@@ -327,12 +437,11 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 		 * tool_search for `deferred`.
 		 */
 		const ensureDiscoveryActive = (ctx: ExtensionContext) => {
+			// From the config, so the tool is active before the servers connect. Resource tools share
+			// their server's exposure.
 			const exposures = new Set<McpExposure>();
-			for (const { connection, entry } of servers) {
-				if (connection?.state !== "connected") continue;
-				// Resource tools share the server's exposure.
-				if (connection.hasResources) exposures.add(exposureOf(entry));
-				for (const tool of connection.tools) exposures.add(getMcpToolExposure(entry.config, tool.name));
+			for (const server of servers) {
+				if (isEnabled(server)) for (const exposure of configuredExposures(server.entry)) exposures.add(exposure);
 			}
 			const needsCodemode = exposures.has("codemode");
 			const needsToolSearch = exposures.has("deferred");
@@ -400,6 +509,42 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			server.connection = connection;
 			emitChange();
 			return connection;
+		};
+
+		/**
+		 * Connect the server in the background. `server.ready` settles when it connected or failed;
+		 * failures show in its state. It starts after `after`; `isCurrent` stops it when the session ended
+		 * meanwhile. The returned promise rejects when the MCP runtime cannot be loaded.
+		 */
+		const startConnection = (
+			server: McpServer,
+			isCurrent: () => boolean,
+			after?: Promise<unknown>,
+		): Promise<void> => {
+			const ready = (async () => {
+				await after;
+				if (!isCurrent()) return;
+				const connection = await createConnection(server);
+				if (!isCurrent()) return;
+				await connection.getClient().catch(() => undefined);
+			})();
+			server.ready = ready.catch(() => undefined);
+			return ready;
+		};
+
+		/** Wait for servers still connecting, until they settle or `signal` aborts. */
+		const waitForServers = async (waiting: readonly McpServer[], signal: AbortSignal | undefined) => {
+			const ready = waiting.flatMap((server) => (server.ready ? [server.ready] : []));
+			if (ready.length === 0 || signal?.aborted) return;
+			let onAbort: (() => void) | undefined;
+			await Promise.race([
+				Promise.all(ready),
+				new Promise<void>((resolve) => {
+					onAbort = () => resolve();
+					signal?.addEventListener("abort", onAbort, { once: true });
+				}),
+			]);
+			if (onAbort) signal?.removeEventListener("abort", onAbort);
 		};
 
 		/**
@@ -495,8 +640,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 				await connection?.close();
 				return undefined;
 			}
-			const connection = await createConnection(server);
-			await connection.getClient().catch(() => undefined);
+			await startConnection(server, () => true);
 			return undefined;
 		};
 
@@ -803,6 +947,9 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			overridden = registered.overridden;
 			servers = [...loaded.servers.map((entry) => ({ entry })), ...registered.servers];
 			emitChange();
+			// Codemode or tool_search is activated from the config: the first prompt does not wait for
+			// servers whose tools are not declared to the model, and scripts or searches wait for them.
+			ensureDiscoveryActive(ctx);
 			const enabled = servers.filter(isEnabled);
 			if (enabled.length === 0) {
 				reportProblems(ctx);
@@ -810,16 +957,11 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			}
 			// The MCP client loads only now, so sessions without servers never pay for it. Waiting one
 			// event loop turn lets the first render happen before loading and connecting.
-			pending = new Promise((resolve) => setImmediate(resolve))
-				.then(() => loadMcpRuntime())
-				.then(async () => {
-					if (current !== generation) return;
-					const started = await Promise.all(enabled.map((server) => createConnection(server)));
-					if (current !== generation) return;
-					await Promise.allSettled(started.map((connection) => connection.getClient()));
-					if (current !== generation) return;
-					ensureDiscoveryActive(ctx);
-					reportProblems(ctx);
+			const runtime = new Promise((resolve) => setImmediate(resolve)).then(() => loadMcpRuntime());
+			const isCurrent = () => current === generation;
+			pending = Promise.all(enabled.map((server) => startConnection(server, isCurrent, runtime)))
+				.then(() => {
+					if (isCurrent()) reportProblems(ctx);
 				})
 				.catch((error: unknown) => {
 					// The session may have been disposed meanwhile, which makes ctx stale.
@@ -829,15 +971,19 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 				});
 		});
 
-		// The first prompt waits for startup connections so their tools are available to it, but not
-		// indefinitely: a slow or hanging server must not hold up the prompt.
-		pi.on("before_agent_start", async (_event, ctx) => {
-			const startup = pending;
-			if (!startup || waitedForStartup) return;
+		// The first prompt waits for servers whose tools are declared to the model, so they are declared
+		// in its first request, but not indefinitely: a slow or hanging server must not hold up the
+		// prompt. Other servers are waited for when a script or search needs them (below).
+		const waitForDirectServers = async (ctx: ExtensionContext) => {
+			if (waitedForStartup) return;
 			waitedForStartup = true;
+			const ready = servers.flatMap((server) =>
+				isEnabled(server) && hasDirectTools(server.entry) && server.ready ? [server.ready] : [],
+			);
+			if (ready.length === 0) return;
 			let timer: NodeJS.Timeout | undefined;
 			const finished = await Promise.race([
-				startup.then(() => true),
+				Promise.all(ready).then(() => true),
 				new Promise<boolean>((resolve) => {
 					timer = setTimeout(() => resolve(false), startupWaitMs);
 				}),
@@ -846,6 +992,37 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			if (!finished) {
 				ctx.ui.notify("MCP servers are still connecting; their tools become available once connected.", "info");
 			}
+		};
+
+		// Every prompt lists the servers in the `mcp_servers` section as they are when it starts. draht
+		// appends the section to the conversation when it changed, for example after a server connected.
+		pi.on("before_agent_start", async (event, ctx) => {
+			await waitForDirectServers(ctx);
+			const { sections } = event.systemPromptOptions;
+			const section = renderServersSection(servers);
+			if (section) sections[MCP_SERVERS_SECTION] = section;
+			else delete sections[MCP_SERVERS_SECTION];
+		});
+
+		// A codemode script waits for the servers it names, or for every server when it searches or
+		// enumerates tools, so their tools are registered before the script runs. tool_search and the
+		// resource tools reach every server, so they wait for all of them.
+		pi.on("tool_call", async (event, ctx) => {
+			const tool = pi.getAllTools().find((candidate) => candidate.name === event.toolName);
+			if (!tool) return;
+			const pendingServers = servers.filter(
+				(server) => isEnabled(server) && server.connection?.state !== "connected" && server.ready,
+			);
+			if (pendingServers.length === 0) return;
+			let waiting: McpServer[] = [];
+			if (isCodemodeTool(tool)) {
+				const { code } = event.input as { code?: unknown };
+				const source = typeof code === "string" ? code : "";
+				waiting = pendingServers.filter((server) => scriptNeedsServer(source, server.entry.name));
+			} else if (isToolSearchTool(tool) || RESOURCE_TOOL_NAMES.has(tool.name)) {
+				waiting = pendingServers;
+			}
+			await waitForServers(waiting, ctx.signal);
 		});
 
 		// Pick up sign-ins done outside the session, such as `draht mcp login` run by the agent.
@@ -871,22 +1048,21 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			const added = registered.servers.filter((server) => !findServer(server.entry.name));
 			servers.push(...added);
 			emitChange();
+			ensureDiscoveryActive(ctx);
 			await Promise.all(removed.map((server) => server.connection?.close()));
 			const connecting = added.filter(isEnabled);
 			if (current !== generation || connecting.length === 0) return;
 			try {
-				const started = await Promise.all(connecting.map((server) => createConnection(server)));
+				await Promise.all(connecting.map((server) => startConnection(server, () => current === generation)));
 				if (current !== generation) {
-					await Promise.all(started.map((connection) => connection.close()));
+					await Promise.all(connecting.map((server) => server.connection?.close()));
 					return;
 				}
-				await Promise.allSettled(started.map((connection) => connection.getClient()));
 			} catch (error) {
 				ctx.ui.notify(`MCP failed to load: ${errorMessage(error)}`, "error");
 				return;
 			}
 			if (current !== generation) return;
-			ensureDiscoveryActive(ctx);
 			reportProblems(ctx, connecting);
 		});
 

@@ -229,8 +229,8 @@ describe("ProcessTerminal Kitty keyboard protocol negotiation", () => {
 			assert.equal(harness.getInput(), undefined);
 
 			// StdinBuffer flushes at 50ms, then the Kitty negotiation buffer waits
-			// another 150ms before replaying, so wait comfortably past both.
-			await wait(200);
+			// another 150ms before replaying; real timers need margin past both.
+			await wait(300);
 
 			assert.equal(harness.getInput(), "\x1b[");
 		} finally {

@@ -1,9 +1,15 @@
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { OAuthIssuerMismatchError } from "@draht/mcp/oauth";
 import { afterEach, describe, expect, it } from "vitest";
 import { InMemoryAuthStorageBackend } from "../src/core/auth-storage.ts";
-import { createMcpAuthProvider, McpOAuthCredentialStore, signInMcpServer } from "../src/extensions/mcp/oauth.ts";
+import {
+	createMcpAuthProvider,
+	McpOAuthCredentialStore,
+	type McpOAuthSettings,
+	signInMcpServer,
+} from "../src/extensions/mcp/oauth.ts";
 import { startOAuthMcpServer } from "./suite/mcp-oauth-server.ts";
 
 describe("MCP OAuth refresh", () => {
@@ -80,5 +86,35 @@ describe("MCP OAuth refresh", () => {
 		await provider.settled();
 		expect((await store.load())?.tokens?.access_token).toBe("access-2");
 		await refresh;
+	});
+});
+
+describe("MCP OAuth sign-in", () => {
+	async function signIn(options: { iss?: string }, settings: (serverUrl: string) => McpOAuthSettings = () => ({})) {
+		const server = await startOAuthMcpServer(options);
+		try {
+			await signInMcpServer({
+				serverUrl: server.url,
+				store: new McpOAuthCredentialStore(new InMemoryAuthStorageBackend()).forServer(server.url),
+				settings: settings(server.url),
+				prompt: {
+					showAuthorizationUrl: (url) => void fetch(url),
+					promptForRedirectUrl: (signal) =>
+						new Promise((resolve) => signal.addEventListener("abort", () => resolve(undefined), { once: true })),
+				},
+			});
+		} finally {
+			await server.close();
+		}
+	}
+
+	it("rejects an authorization response from another issuer", async () => {
+		await expect(signIn({ iss: "https://attacker.example" })).rejects.toBeInstanceOf(OAuthIssuerMismatchError);
+	});
+
+	// badlogic/pi-mono#10172
+	it("uses the configured authorization server metadata URL", async () => {
+		const settings = (serverUrl: string) => ({ authServerMetadataUrl: new URL("/missing", serverUrl) });
+		await expect(signIn({}, settings)).rejects.toThrow("HTTP 404 loading authorization server metadata");
 	});
 });

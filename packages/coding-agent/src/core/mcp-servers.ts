@@ -76,6 +76,12 @@ export interface McpOAuthConfig {
 	 * Default: `APP_NAME` (`draht`).
 	 */
 	clientName?: string;
+	/**
+	 * Authorization server metadata document (RFC 8414 or OpenID Connect discovery) to use instead of
+	 * discovery through the server, for servers that advertise a wrong authorization server or none.
+	 * The document is trusted as configured. Must use https, except on loopback hosts.
+	 */
+	authServerMetadataUrl?: string;
 }
 
 const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
@@ -140,6 +146,13 @@ function validateOAuth(value: unknown): string | undefined {
 	if (value.scope !== undefined && typeof value.scope !== "string") return "oauth.scope must be a string";
 	if (value.clientName !== undefined && (typeof value.clientName !== "string" || !value.clientName.trim())) {
 		return "oauth.clientName must be a non-empty string";
+	}
+	const metadataUrl = value.authServerMetadataUrl;
+	if (metadataUrl !== undefined) {
+		const url = typeof metadataUrl === "string" && URL.canParse(metadataUrl) ? new URL(metadataUrl) : undefined;
+		if (!url || !(url.protocol === "https:" || (url.protocol === "http:" && LOOPBACK_HOSTS.includes(url.hostname)))) {
+			return "oauth.authServerMetadataUrl must be an https URL, or http on localhost, 127.0.0.1, or [::1]";
+		}
 	}
 	return undefined;
 }

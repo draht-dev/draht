@@ -24,6 +24,8 @@ export interface AuthorizationServerMetadata {
 	token_endpoint_auth_methods_supported?: string[];
 	code_challenge_methods_supported?: string[];
 	client_id_metadata_document_supported?: boolean;
+	/** Whether authorization responses carry an `iss` parameter (RFC 9207). */
+	authorization_response_iss_parameter_supported?: boolean;
 	[key: string]: unknown;
 }
 
@@ -158,6 +160,10 @@ export function parseAuthorizationServerMetadata(value: unknown): AuthorizationS
 		client_id_metadata_document_supported:
 			typeof input.client_id_metadata_document_supported === "boolean"
 				? input.client_id_metadata_document_supported
+				: undefined,
+		authorization_response_iss_parameter_supported:
+			typeof input.authorization_response_iss_parameter_supported === "boolean"
+				? input.authorization_response_iss_parameter_supported
 				: undefined,
 	});
 }

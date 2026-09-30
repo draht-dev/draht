@@ -16,6 +16,7 @@ import {
 	McpOAuthAuthorizationRequiredError,
 	OAuthError,
 	OAuthInsecureEndpointError,
+	OAuthIssuerMismatchError,
 	OAuthRegistrationError,
 } from "./errors.ts";
 import {
@@ -58,8 +59,15 @@ export interface OAuthClientProvider {
 export interface OAuthFlowOptions {
 	serverUrl: string | URL;
 	authorizationCode?: string;
+	/** `iss` parameter of the authorization response that delivered `authorizationCode` (RFC 9207). */
+	iss?: string;
 	scope?: string;
 	resourceMetadataUrl?: URL;
+	/**
+	 * Authorization server metadata document to use instead of discovery, for servers that advertise a
+	 * wrong authorization server or none. It is trusted as configured. Must use https, except on loopback.
+	 */
+	authorizationServerMetadataUrl?: URL;
 	fetch?: McpFetch;
 	skipIssuerValidation?: boolean;
 	/**
@@ -256,7 +264,9 @@ export async function refreshAuthorization(
 }
 
 async function runFlow(provider: OAuthClientProvider, options: OAuthFlowOptions): Promise<OAuthFlowResult> {
-	const cached = await provider.discoveryState?.();
+	const metadataUrl = options.authorizationServerMetadataUrl && secureEndpoint(options.authorizationServerMetadataUrl);
+	// With a configured metadata URL, discovery is not cached, so changing the URL applies at once.
+	const cached = metadataUrl ? undefined : await provider.discoveryState?.();
 	const discovered = cached?.authorizationServerUrl
 		? {
 				authorizationServerUrl: cached.authorizationServerUrl,
@@ -270,13 +280,16 @@ async function runFlow(provider: OAuthClientProvider, options: OAuthFlowOptions)
 			}
 		: await discoverOAuthServerInfo(options.serverUrl, {
 				resourceMetadataUrl: options.resourceMetadataUrl,
+				authorizationServerMetadataUrl: metadataUrl,
 				fetch: options.fetch,
 				skipIssuerValidation: options.skipIssuerValidation,
 			});
-	await provider.saveDiscoveryState?.({
-		...discovered,
-		...(options.resourceMetadataUrl ? { resourceMetadataUrl: options.resourceMetadataUrl.href } : {}),
-	});
+	if (!metadataUrl) {
+		await provider.saveDiscoveryState?.({
+			...discovered,
+			...(options.resourceMetadataUrl ? { resourceMetadataUrl: options.resourceMetadataUrl.href } : {}),
+		});
+	}
 	const metadata = discovered.authorizationServerMetadata;
 	const resource = selectResource(options.serverUrl, discovered.resourceMetadata);
 	const scope =
@@ -308,6 +321,11 @@ async function runFlow(provider: OAuthClientProvider, options: OAuthFlowOptions)
 		fetch: options.fetch,
 	};
 	if (options.authorizationCode) {
+		// RFC 9207: never send a code from another authorization server to this one.
+		const iss = options.iss;
+		if (metadata && (iss !== undefined || metadata.authorization_response_iss_parameter_supported)) {
+			if (iss !== metadata.issuer) throw new OAuthIssuerMismatchError(metadata.issuer, iss);
+		}
 		const tokens = await exchangeAuthorizationCode(discovered.authorizationServerUrl, {
 			...tokenOptions,
 			code: options.authorizationCode,

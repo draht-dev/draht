@@ -140,17 +140,23 @@ describe("MCP config", () => {
 					scope: { url: "https://a.example/mcp", oauth: { scope: ["a"] } },
 					named: { url: "https://a.example/mcp", oauth: { clientName: "Claude Code" } },
 					unnamed: { url: "https://a.example/mcp", oauth: { clientName: " " } },
+					metadata: { url: "https://a.example/mcp", oauth: { authServerMetadataUrl: "https://idp.example/m" } },
+					plainMetadata: {
+						url: "https://a.example/mcp",
+						oauth: { authServerMetadataUrl: "http://idp.example/m" },
+					},
 				},
 			},
 			{},
 		);
 		const { servers, errors } = loadMcpConfig({ ...paths, projectTrusted: false });
-		expect(servers.map((server) => server.name)).toEqual(["ok", "ipv6", "same", "named"]);
+		expect(servers.map((server) => server.name)).toEqual(["ok", "ipv6", "same", "named", "metadata"]);
 		expect(errors).toEqual([
 			expect.stringContaining('server "remote": oauth.callbackUrl must be an http URI on localhost'),
 			expect.stringContaining('server "both": oauth.callbackUrl and oauth.callbackPort name different ports'),
 			expect.stringContaining('server "scope": oauth.scope must be a string'),
 			expect.stringContaining('server "unnamed": oauth.clientName must be a non-empty string'),
+			expect.stringContaining('server "plainMetadata": oauth.authServerMetadataUrl must be an https URL'),
 		]);
 	});
 

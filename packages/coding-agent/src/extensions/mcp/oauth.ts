@@ -20,6 +20,7 @@ import {
 	McpOAuthProvider,
 	type McpOAuthState,
 	type McpOAuthStateStore,
+	type OAuthCallback,
 	type OAuthCallbackPage,
 	OAuthCallbackServer,
 	type OAuthChallenge,
@@ -55,6 +56,8 @@ export interface McpOAuthSettings {
 	scope?: string;
 	/** `client_name` for dynamic client registration. Default: `APP_NAME`. */
 	clientName?: string;
+	/** See `McpOAuthConfig.authServerMetadataUrl`. */
+	authServerMetadataUrl?: URL;
 }
 
 /** Where the loopback callback server listens and the redirect URI it serves. */
@@ -253,6 +256,7 @@ export function createMcpAuthProvider(options: {
 				const result = await authorizeMcp(provider, {
 					serverUrl,
 					resourceMetadataUrl: challenge?.resourceMetadataUrl,
+					authorizationServerMetadataUrl: settings.authServerMetadataUrl,
 					scope: challenge?.scope,
 					fetch: (input, init) =>
 						fetch(input, { ...init, signal: AbortSignal.timeout(REFRESH_REQUEST_TIMEOUT_MS) }),
@@ -307,7 +311,9 @@ export class McpSignInCancelledError extends Error {
 	}
 }
 
-function codeFromRedirectUrl(input: string, state: string): string {
+type AuthorizationResponse = Pick<OAuthCallback, "code" | "iss">;
+
+function responseFromRedirectUrl(input: string, state: string): AuthorizationResponse {
 	let url: URL;
 	try {
 		url = new URL(input.trim());
@@ -319,20 +325,20 @@ function codeFromRedirectUrl(input: string, state: string): string {
 	if (url.searchParams.get("state") !== state) throw new Error("The redirect URL belongs to a different sign-in");
 	const code = url.searchParams.get("code");
 	if (!code) throw new Error("The redirect URL does not contain an authorization code");
-	return code;
+	return { code, iss: url.searchParams.get("iss") ?? undefined };
 }
 
 /** Wait for the browser callback or a pasted redirect URL, whichever comes first. */
-async function waitForAuthorizationCode(
+async function waitForAuthorizationResponse(
 	callback: OAuthCallbackServer,
 	state: string,
 	prompt: McpSignInPrompt,
-): Promise<string> {
+): Promise<AuthorizationResponse> {
 	const controller = new AbortController();
-	const fromBrowser = callback.waitForCallback(state).then((result) => result.code);
+	const fromBrowser = callback.waitForCallback(state);
 	const fromUser = prompt.promptForRedirectUrl(controller.signal).then((input) => {
 		if (!input?.trim()) throw new McpSignInCancelledError();
-		return codeFromRedirectUrl(input, state);
+		return responseFromRedirectUrl(input, state);
 	});
 	try {
 		return await Promise.race([fromBrowser, fromUser]);
@@ -408,6 +414,7 @@ export async function signInMcpServer(options: {
 		const flow = {
 			serverUrl,
 			resourceMetadataUrl: options.challenge?.resourceMetadataUrl,
+			authorizationServerMetadataUrl: settings.authServerMetadataUrl,
 			// A server asking for more scope gets it on top of the configured scope.
 			scope: mergeScopes(settings.scope, options.challenge?.scope),
 		};
@@ -418,8 +425,8 @@ export async function signInMcpServer(options: {
 
 		const state = await provider.state();
 		options.prompt.showAuthorizationUrl(authorizationUrl);
-		const code = await waitForAuthorizationCode(callback, state, options.prompt);
-		await authorizeMcp(provider, { ...flow, authorizationCode: code });
+		const { code, iss } = await waitForAuthorizationResponse(callback, state, options.prompt);
+		await authorizeMcp(provider, { ...flow, authorizationCode: code, iss });
 	} finally {
 		await callback.close();
 	}

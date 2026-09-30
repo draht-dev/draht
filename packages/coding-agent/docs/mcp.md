@@ -147,6 +147,21 @@ draht registers as `draht`. Some servers only accept registrations from known cl
 
 The name is only sent when draht registers a client. To register again under a new name, sign out first.
 
+draht finds the authorization server through the server's protected resource metadata (RFC 9728) and checks that the authorization server's metadata names the expected issuer (RFC 8414). Some servers advertise the wrong authorization server or none, so sign-in opens a page that does not exist. Set `authServerMetadataUrl` to the metadata document of the right authorization server:
+
+```json
+{
+  "mcpServers": {
+    "example": {
+      "url": "https://mcp.example.com/mcp",
+      "oauth": { "authServerMetadataUrl": "https://example.okta.com/.well-known/openid-configuration" }
+    }
+  }
+}
+```
+
+draht uses that document instead of discovery and trusts it as configured, so only point it at a document you trust. The URL must use HTTPS, except on `localhost`, `127.0.0.1`, or `[::1]`.
+
 ## Control tool exposure
 
 Each server tool is registered as `mcp__<server>__<tool>`. The server's `exposure` determines how the model reaches it:

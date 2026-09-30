@@ -12,8 +12,11 @@ function json(response: ServerResponse, status: number, body: unknown, headers: 
 	response.writeHead(status, { "content-type": "application/json", ...headers }).end(JSON.stringify(body));
 }
 
-/** MCP server protected by OAuth, with its own authorization server (discovery, DCR, PKCE, refresh). */
-export async function startOAuthMcpServer() {
+/**
+ * MCP server protected by OAuth, with its own authorization server (discovery, DCR, PKCE, refresh).
+ * `iss` is sent as the `iss` parameter of authorization responses (RFC 9207).
+ */
+export async function startOAuthMcpServer(options: { iss?: string } = {}) {
 	const log: string[] = [];
 	const registrations: Record<string, unknown>[] = [];
 	const validTokens = new Set<string>();
@@ -97,6 +100,7 @@ export async function startOAuthMcpServer() {
 				const redirect = new URL(url.searchParams.get("redirect_uri") ?? "");
 				redirect.searchParams.set("code", code);
 				redirect.searchParams.set("state", url.searchParams.get("state") ?? "");
+				if (options.iss) redirect.searchParams.set("iss", options.iss);
 				response.writeHead(302, { location: redirect.href }).end();
 				return;
 			}

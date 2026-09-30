@@ -13,6 +13,7 @@ import {
 	type OAuthClientInformationMixed,
 	type OAuthClientProvider,
 	type OAuthDiscoveryState,
+	OAuthInsecureEndpointError,
 	OAuthIssuerMismatchError,
 	type OAuthTokens,
 } from "../src/oauth/index.ts";
@@ -398,6 +399,77 @@ describe("MCP OAuth", () => {
 			response.end();
 		});
 		await expect(discoverAuthorizationServerMetadata(origin)).rejects.toBeInstanceOf(OAuthIssuerMismatchError);
+	});
+
+	// badlogic/pi-mono#10172
+	it("uses a configured authorization server metadata document as is", async () => {
+		const origin = await listen(async (request, response, serverOrigin) => {
+			const url = new URL(request.url ?? "/", serverOrigin);
+			response.setHeader("content-type", "application/json");
+			if (url.pathname === "/.well-known/oauth-protected-resource/mcp") {
+				// Names the MCP server itself, which serves no authorization server metadata.
+				response.end(JSON.stringify({ resource: `${serverOrigin}/mcp`, authorization_servers: [serverOrigin] }));
+			} else if (url.pathname === "/idp/metadata.json") {
+				response.end(
+					JSON.stringify({
+						// Not derivable from the document URL; a configured document is not checked.
+						issuer: "https://idp.example",
+						authorization_endpoint: `${serverOrigin}/idp/authorize`,
+						token_endpoint: `${serverOrigin}/idp/token`,
+						response_types_supported: ["code"],
+					}),
+				);
+			} else {
+				response.statusCode = 404;
+				response.end();
+			}
+		});
+		const provider = new TestOAuthProvider("http://127.0.0.1/callback");
+		provider.client = { client_id: "client" };
+		const options = {
+			serverUrl: `${origin}/mcp`,
+			authorizationServerMetadataUrl: new URL(`${origin}/idp/metadata.json`),
+		};
+		expect(await authorizeMcp(provider, options)).toBe("REDIRECT");
+		const authorizationUrl = provider.authorizationUrl as URL;
+		expect(`${authorizationUrl.origin}${authorizationUrl.pathname}`).toBe(`${origin}/idp/authorize`);
+		expect(authorizationUrl.searchParams.get("resource")).toBe(`${origin}/mcp`);
+
+		const insecure = { ...options, authorizationServerMetadataUrl: new URL("http://idp.example/metadata.json") };
+		await expect(authorizeMcp(provider, insecure)).rejects.toBeInstanceOf(OAuthInsecureEndpointError);
+	});
+
+	it("exchanges a code only when its iss parameter names the authorization server", async () => {
+		const codes: string[] = [];
+		const origin = await listen(async (request, response) => {
+			codes.push(new URLSearchParams(await readBody(request)).get("code") ?? "");
+			response.setHeader("content-type", "application/json");
+			response.end(JSON.stringify({ access_token: "token", token_type: "Bearer" }));
+		});
+		const exchange = (code: string, iss: string | undefined, issParameterSupported: boolean) => {
+			const provider = new TestOAuthProvider("http://127.0.0.1/callback");
+			provider.client = { client_id: "client" };
+			provider.verifier = "verifier";
+			provider.discovery = {
+				authorizationServerUrl: origin,
+				authorizationServerMetadata: {
+					issuer: origin,
+					authorization_endpoint: `${origin}/authorize`,
+					token_endpoint: `${origin}/token`,
+					response_types_supported: ["code"],
+					authorization_response_iss_parameter_supported: issParameterSupported,
+				},
+			};
+			return authorizeMcp(provider, { serverUrl: `${origin}/mcp`, authorizationCode: code, iss });
+		};
+		await expect(exchange("other", "https://attacker.example", false)).rejects.toBeInstanceOf(
+			OAuthIssuerMismatchError,
+		);
+		await expect(exchange("missing", undefined, true)).rejects.toBeInstanceOf(OAuthIssuerMismatchError);
+		expect(await exchange("matching", origin, true)).toBe("AUTHORIZED");
+		// Servers that do not promise the parameter may omit it.
+		expect(await exchange("omitted", undefined, false)).toBe("AUTHORIZED");
+		expect(codes).toEqual(["matching", "omitted"]);
 	});
 });
 

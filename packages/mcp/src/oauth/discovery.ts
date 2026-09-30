@@ -126,6 +126,8 @@ export async function discoverOAuthServerInfo(
 	serverUrl: string | URL,
 	options: {
 		resourceMetadataUrl?: URL;
+		/** Metadata document to use instead of discovery. It is trusted as configured, so its issuer is not checked. */
+		authorizationServerMetadataUrl?: URL;
 		fetch?: McpFetch;
 		skipIssuerValidation?: boolean;
 	} = {},
@@ -138,6 +140,16 @@ export async function discoverOAuthServerInfo(
 		});
 	} catch (error) {
 		if (error instanceof TypeError) throw error;
+	}
+	if (options.authorizationServerMetadataUrl) {
+		const url = options.authorizationServerMetadataUrl;
+		const response = await fetchMetadata(url, options.fetch ?? globalThis.fetch, LATEST_PROTOCOL_VERSION);
+		if (!response.ok) {
+			discard(response);
+			throw new Error(`HTTP ${response.status} loading authorization server metadata from ${url}`);
+		}
+		const metadata = parseAuthorizationServerMetadata(await response.json());
+		return { authorizationServerUrl: metadata.issuer, authorizationServerMetadata: metadata, resourceMetadata };
 	}
 	const authorizationServerUrl = resourceMetadata?.authorization_servers?.[0] ?? String(new URL("/", serverUrl));
 	return {

@@ -133,7 +133,7 @@ Paths are relative to the package root. Arrays support glob patterns and `!exclu
 
 ### Gallery Metadata
 
-The [package gallery](https://pi.dev/packages) displays packages tagged with `pi-package`. Add `video` or `image` fields to show a preview:
+draht has no package gallery of its own yet. The `video` and `image` fields below are reserved for a future gallery and are otherwise unused:
 
 ```json
 {

@@ -297,7 +297,7 @@ export class JsonlStorage implements Storage {
 			...prepared.result,
 			firstSeq: prepared.result.firstSeq + 1,
 			seqs: prepared.result.seqs.slice(1),
-			stats: this.withImportedUsage(stats),
+			stats,
 		};
 	}
 

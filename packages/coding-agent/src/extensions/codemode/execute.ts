@@ -19,7 +19,7 @@ import {
 	toCodemodeIdentifier,
 } from "@draht/codemode";
 import { getCodemodeWorkerSpecifier, getQuickJSWasmPath } from "../../config.ts";
-import type { ExtensionToolContext } from "../../core/extensions/types.ts";
+import type { ExtensionToolContext, ToolNamespace } from "../../core/extensions/types.ts";
 import type { SessionEntry } from "../../core/session-manager.ts";
 import { combineUsage } from "../../core/usage-totals.ts";
 import { Bm25Ranker, createToolSearchDocument, DEFAULT_TOOL_SEARCH_LIMIT } from "../tool-search/tool.ts";
@@ -319,7 +319,10 @@ export async function executeCodemode(
 	};
 }
 
-/** `searchTools()` and `describeTool()`: ranked search and lookup over the script's nested tools. */
+/**
+ * `searchTools()`, `describeTool()`, and `describeNamespace()`: ranked search and lookup over the
+ * script's nested tools and their namespaces.
+ */
 function createDiscoveryGlobals(
 	tools: readonly AgentTool<any>[],
 	samples: ReadonlyMap<string, string>,
@@ -360,6 +363,29 @@ function createDiscoveryGlobals(
 					(candidate) => candidate.name === name || toCodemodeIdentifier(candidate.name) === name,
 				);
 				return tool ? samples.get(tool.name) : undefined;
+			},
+		},
+		{
+			name: "describeNamespace",
+			spread: true,
+			execute: (args) => {
+				const [name] = args as unknown[];
+				if (typeof name !== "string") throw new Error("describeNamespace() expects a namespace name");
+				let namespace: ToolNamespace | undefined;
+				const names: string[] = [];
+				for (const tool of tools) {
+					const toolNamespace = options.getToolNamespace?.(tool.name);
+					if (toolNamespace?.name !== name) continue;
+					namespace ??= toolNamespace;
+					names.push(toCodemodeIdentifier(tool.name));
+				}
+				if (!namespace) return undefined;
+				return {
+					name,
+					...(namespace.description ? { description: namespace.description } : {}),
+					...(namespace.instructions ? { instructions: namespace.instructions } : {}),
+					tools: names,
+				};
 			},
 		},
 	];

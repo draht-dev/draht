@@ -5,10 +5,12 @@
  * `pi.registerMcpServer()` when a session starts, and servers registered later right away. A server
  * in `mcp.json` takes precedence over a registered server of the same name. Tools are registered as
  * `mcp__<server>__<tool>`. By default (`"exposure": "codemode"`) the tools are only callable from
- * codemode scripts, which keeps large MCP tool lists out of the model's tool declarations; the
- * codemode tool is activated for that unless `autoEnableCodemode` is false. `"codemode-deferred"`
- * leaves them out of the codemode description as well. `"deferred"` declares them to the model once
- * the `tool_search` tool loads them, and activates `tool_search` instead of codemode.
+ * codemode scripts, which keeps MCP tool lists out of the model's tool declarations and the codemode
+ * description: the description lists the server's namespace with its configured `description`, and
+ * scripts find the tools with `searchTools()` and the server instructions with
+ * `describeNamespace()`. The codemode tool is activated for that unless `autoEnableCodemode` is
+ * false. `"deferred"` declares the tools to the model once the `tool_search` tool loads them, and
+ * activates `tool_search` instead of codemode.
  * `"exposure": "direct"` declares them to the model right away, and `"hidden"` makes them
  * unreachable. `toolExposure` overrides the exposure of single tools. Servers with resources are
  * reached through Codex's `list_mcp_resources`, `list_mcp_resource_templates`, and
@@ -89,8 +91,7 @@ interface McpServer {
 }
 
 const EXPOSURE_DESCRIPTIONS: Record<Exclude<McpExposure, "hidden">, string> = {
-	codemode: "called from codemode scripts, listed in the codemode description",
-	"codemode-deferred": "called from codemode scripts, not listed; scripts find them with searchTools()",
+	codemode: "called from codemode scripts, which find them with searchTools()",
 	deferred: "not declared until tool_search loads them, then called directly; no codemode needed",
 	direct: "declared to the model like built-in tools",
 };
@@ -239,9 +240,11 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			const server = connection.entry.name;
 			const entry = findServer(server)?.entry ?? connection.entry;
 			const namespaceName = `mcp__${server}`;
+			const description = entry.config.description?.trim();
 			const namespace = {
 				name: namespaceName,
-				description: connection.instructions ?? `Tools in the ${namespaceName} namespace.`,
+				...(description ? { description } : {}),
+				...(connection.instructions ? { instructions: connection.instructions } : {}),
 			};
 			const previous = serverTools.get(server) ?? new Set<string>();
 			const current = new Set<string>();
@@ -304,9 +307,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 		 */
 		const syncResourceTools = () => {
 			const exposures = new Set(serversWithResources().map((server) => exposureOf(server.entry)));
-			const exposure = (["direct", "codemode", "codemode-deferred", "deferred"] as const).find((candidate) =>
-				exposures.has(candidate),
-			);
+			const exposure = (["direct", "codemode", "deferred"] as const).find((candidate) => exposures.has(candidate));
 			const next = exposure ?? "hidden";
 			if (next === resourceToolsExposure || (resourceToolsExposure === undefined && next === "hidden")) return;
 			const wasDirect = resourceToolsExposure === "direct";
@@ -322,8 +323,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 		/**
 		 * Tools that are not declared to the model are reached through the codemode tool (scripts call
 		 * them) or the tool_search tool (it declares them). Either reaches every such tool. Activate the
-		 * one the tools' exposure asks for: codemode for `codemode` and `codemode-deferred` unless
-		 * `autoEnableCodemode` is false, tool_search for `deferred`.
+		 * one the tools' exposure asks for: codemode for `codemode` unless `autoEnableCodemode` is false,
+		 * tool_search for `deferred`.
 		 */
 		const ensureDiscoveryActive = (ctx: ExtensionContext) => {
 			const exposures = new Set<McpExposure>();
@@ -333,7 +334,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 				if (connection.hasResources) exposures.add(exposureOf(entry));
 				for (const tool of connection.tools) exposures.add(getMcpToolExposure(entry.config, tool.name));
 			}
-			const needsCodemode = exposures.has("codemode") || exposures.has("codemode-deferred");
+			const needsCodemode = exposures.has("codemode");
 			const needsToolSearch = exposures.has("deferred");
 			if (!needsCodemode && !needsToolSearch) return;
 			// Other extensions' tools of the same names cannot reach MCP tools, so never activate them.

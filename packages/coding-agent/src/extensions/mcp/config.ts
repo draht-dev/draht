@@ -19,7 +19,7 @@
  * HTTP servers without an `Authorization` header use OAuth when they answer 401 (sign in with `/mcp`).
  *
  * The top-level `autoEnableCodemode` (default true) activates the codemode tool when a server
- * with `codemode` or `codemode-deferred` exposure connects. A project value overrides the global one.
+ * with `codemode` exposure connects. A project value overrides the global one.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -50,7 +50,7 @@ export interface McpServerEntry {
 
 export interface LoadedMcpConfig {
 	servers: McpServerEntry[];
-	/** Activate the codemode tool when `codemode` or `codemode-deferred` servers connect. Default: true. */
+	/** Activate the codemode tool when `codemode` servers connect. Default: true. */
 	autoEnableCodemode?: boolean;
 	errors: string[];
 }

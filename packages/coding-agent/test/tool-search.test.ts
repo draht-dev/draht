@@ -92,41 +92,58 @@ describe("codemode description catalog", () => {
 
 	it("lists everything without a budget", () => {
 		const description = createCodemodeDescription(all, { namespaces });
-		expect(description).toContain("Nested tools: COMPLETE list (6 tools).");
-		expect(description).toContain("## mcp__github (3 tools)\nGitHub server");
-		expect(description).toContain("## mcp__docs (2 tools)\n\n### `mcp__docs");
+		expect(description).toContain("Nested tools: COMPLETE list.");
+		expect(description).toContain("## mcp__github\nGitHub server");
+		expect(description).toContain("## mcp__docs\n\n### `mcp__docs");
 		expect(description).not.toContain("Some deferred nested tools");
 	});
 
 	it("fills the budget round-robin, cheapest first, and says what is missing", () => {
 		// Each small section costs about 42 tokens: one tool per group, then one more.
 		const description = createCodemodeDescription(all, { namespaces, inlineBudget: 170 });
-		expect(description).toContain("Nested tools: PARTIAL - 4 of 6 shown.");
+		expect(description).toContain("Nested tools: PARTIAL list.");
 		expect(description).toContain("### `read_notes`");
-		expect(description).toContain("## mcp__docs (2 tools, 1 shown)");
+		expect(description).toContain("## mcp__docs (some tools not listed)");
 		expect(description).toContain("### `mcp__docs__search`");
 		expect(description).not.toContain("### `mcp__docs__long`");
-		expect(description).toContain("## mcp__github (3 tools, 2 shown)");
+		expect(description).toContain("## mcp__github (some tools not listed)");
 		expect(description).toContain("To find one, call `await searchTools(query)`");
 		// Deterministic: the same input gives the same description.
 		expect(createCodemodeDescription(all, { namespaces, inlineBudget: 170 })).toBe(description);
 	});
 
-	it("never lists deferred tools and still counts them", () => {
-		const description = createCodemodeDescription(all, {
-			namespaces,
-			deferred: new Set(github.map((entry) => entry.name)),
-		});
-		expect(description).toContain("Nested tools: PARTIAL - 3 of 6 shown.");
-		expect(description).toContain("## mcp__github (3 tools, none shown)\nGitHub server");
+	it("never lists deferred tools or counts them", () => {
+		const deferred = new Set(github.map((entry) => entry.name));
+		const description = createCodemodeDescription(all, { namespaces, deferred });
+		expect(description).toContain("Nested tools: PARTIAL list.");
+		expect(description).toContain("## mcp__github (tools not listed)\nGitHub server");
 		expect(description).not.toContain("### `mcp__github__a`");
 		expect(description).toContain("Some deferred nested tools may be omitted from this description.");
+		// A server adding a deferred tool does not change the description.
+		const added = tool("mcp__github__d", "GitHub d.");
+		const withAdded = new Map([...namespaces, [added.name, { name: "mcp__github", description: "GitHub server" }]]);
+		expect(
+			createCodemodeDescription([...all, added], {
+				namespaces: withAdded,
+				deferred: new Set([...deferred, added.name]),
+			}),
+		).toBe(description);
+	});
+
+	it("leaves namespace instructions out", () => {
+		const description = createCodemodeDescription(github, {
+			namespaces: new Map(
+				github.map((entry) => [entry.name, { name: "mcp__github", instructions: "Long usage guide." }] as const),
+			),
+		});
+		expect(description).toContain("## mcp__github\n\n### `mcp__github__a`");
+		expect(description).not.toContain("Long usage guide.");
 	});
 
 	it("lists only namespaces with a zero budget", () => {
 		const description = createCodemodeDescription(all, { namespaces, inlineBudget: 0 });
-		expect(description).toContain("Nested tools: PARTIAL - 0 of 6 shown.");
-		expect(description).toContain("## mcp__docs (2 tools, none shown)");
+		expect(description).toContain("Nested tools: PARTIAL list.");
+		expect(description).toContain("## mcp__docs (tools not listed)");
 		expect(description).not.toContain("codemode tool declaration:");
 	});
 });

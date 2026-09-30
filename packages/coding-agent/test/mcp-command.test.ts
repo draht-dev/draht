@@ -108,6 +108,8 @@ describe("draht mcp", () => {
 				"X-Team=core",
 				"--exposure",
 				"direct",
+				"--description",
+				"Product docs",
 			],
 			{ fixture: servers.fixture },
 		);
@@ -121,6 +123,7 @@ describe("draht mcp", () => {
 					// biome-ignore lint/suspicious/noTemplateCurlyInString: literal config value reference
 					headers: { "X-Team": "core", Authorization: "Bearer ${DOCS_TOKEN}" },
 					exposure: "direct",
+					description: "Product docs",
 				},
 			},
 		});

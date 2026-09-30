@@ -102,7 +102,8 @@ function schemaText(schema: unknown, parts: string[]): void {
 
 /**
  * Search text of a tool: the name, the name with `_`
- * as spaces, the description, schema descriptions and property names, and the namespace.
+ * as spaces, the description, schema descriptions and property names, and the namespace with its
+ * description and instructions.
  */
 export function createToolSearchDocument(
 	tool: Pick<ToolInfo, "name" | "description" | "parameters">,
@@ -110,7 +111,7 @@ export function createToolSearchDocument(
 ): ToolSearchDocument {
 	const parts = [tool.name, tool.name.replaceAll("_", " "), tool.description];
 	schemaText(tool.parameters, parts);
-	if (namespace) parts.push(namespace.name, namespace.description ?? "");
+	if (namespace) parts.push(namespace.name, namespace.description ?? "", namespace.instructions ?? "");
 	return { name: tool.name, text: parts.filter((part) => part.trim()).join(" ") };
 }
 

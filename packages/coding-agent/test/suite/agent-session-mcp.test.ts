@@ -43,7 +43,12 @@ const SERVER_TOOLS = [
 ];
 
 /** Minimal MCP server over an in-memory transport. Records the tool calls it receives. */
-function createFakeServer(calls: string[], listTools: () => unknown[] = () => SERVER_TOOLS, resources = false) {
+function createFakeServer(
+	calls: string[],
+	listTools: () => unknown[] = () => SERVER_TOOLS,
+	resources = false,
+	instructions?: string,
+) {
 	const pair = createInMemoryTransportPair();
 	const respond = (request: JsonRpcRequest): unknown => {
 		switch (request.method) {
@@ -52,6 +57,7 @@ function createFakeServer(calls: string[], listTools: () => unknown[] = () => SE
 					protocolVersion: LATEST_PROTOCOL_VERSION,
 					capabilities: { tools: {}, ...(resources ? { resources: {} } : {}) },
 					serverInfo: { name: "docs", version: "1.0.0" },
+					...(instructions ? { instructions } : {}),
 				};
 			case "tools/list":
 				return { tools: listTools() };
@@ -117,6 +123,8 @@ describe("AgentSession MCP integration", () => {
 			toolExposure?: Record<string, McpExposure>;
 			resources?: boolean;
 			withoutToolSearch?: boolean;
+			description?: string;
+			instructions?: string;
 		} = {},
 	) {
 		const {
@@ -125,6 +133,8 @@ describe("AgentSession MCP integration", () => {
 			toolExposure,
 			resources,
 			withoutToolSearch,
+			description,
+			instructions,
 			...configOptions
 		} = options;
 		const calls: string[] = [];
@@ -132,7 +142,12 @@ describe("AgentSession MCP integration", () => {
 		const servers: ReturnType<typeof createFakeServer>["server"][] = [];
 		const entry: McpServerEntry = {
 			name: "docs",
-			config: { url: "http://unused.invalid", exposure, ...(toolExposure ? { toolExposure } : {}) },
+			config: {
+				url: "http://unused.invalid",
+				exposure,
+				...(toolExposure ? { toolExposure } : {}),
+				...(description ? { description } : {}),
+			},
 			source: "test",
 		};
 		// `builtInTools` are the built-in tools active at the start. The MCP extension activates codemode
@@ -146,7 +161,7 @@ describe("AgentSession MCP integration", () => {
 				createMcpExtension({
 					loadConfig: () => ({ servers: [entry], errors: [], ...configOptions }),
 					createTransport: () => {
-						const pair = createFakeServer(calls, listTools, resources);
+						const pair = createFakeServer(calls, listTools, resources, instructions);
 						servers.push(pair.server);
 						void pair.server.start();
 						return pair.client;
@@ -207,9 +222,11 @@ describe("AgentSession MCP integration", () => {
 		expect(harness.session.getActiveToolNames()).toEqual(["codemode"]);
 		expect(declaredToolNames(harness)).toEqual(["codemode"]);
 		expect(nestedToolNames(harness)).toEqual([searchName, "mcp__docs__fail", "mcp__docs__shot"]);
+		// The description lists the server, not its tools.
 		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "codemode");
 		expect(codemode?.description).toContain("Shared MCP Types:");
-		expect(codemode?.description).toContain("### `mcp__docs__search`");
+		expect(codemode?.description).toContain("## mcp__docs (tools not listed)");
+		expect(codemode?.description).not.toContain(searchName);
 
 		const result = toolResult(harness, "codemode");
 		expect(result.isError).toBe(false);
@@ -243,7 +260,7 @@ describe("AgentSession MCP integration", () => {
 		expect(harness.session.getActiveToolNames()).toEqual(["codemode"]);
 		expect(nestedToolNames(harness)).toContain(searchName);
 		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "codemode");
-		expect(codemode?.description).toContain(`${searchName}(args: {`);
+		expect(codemode?.description).toContain("## mcp__docs (tools not listed)");
 	});
 
 	it("rejects direct model calls to codemode-only MCP tools", async () => {
@@ -388,36 +405,45 @@ return { uris: listed.resources.map((r) => r.uri), text: read.contents[0].text }
 		expect(declaredToolNames(harness)).toEqual(["mcp__docs__search", "codemode"]);
 		expect(nestedToolNames(harness)).toEqual(["mcp__docs__search", "mcp__docs__shot"]);
 		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "codemode");
-		expect(codemode?.description).toContain("### `mcp__docs__shot`");
+		expect(codemode?.description).toContain("## mcp__docs (tools not listed)");
+		expect(codemode?.description).not.toContain("mcp__docs__shot");
 		expect(codemode?.description).not.toContain("mcp__docs__fail");
 	});
 
-	it("keeps codemode-deferred MCP tools callable from codemode but out of its description", async () => {
-		const { harness, calls } = await setup("codemode-deferred");
-		const searchName = createMcpToolName("docs", "search");
+	it("describes the server with its configured description and returns its instructions to scripts", async () => {
+		const { harness } = await setup("codemode", undefined, {
+			description: "Search the product docs",
+			instructions: "Always search before reading.",
+			builtInTools: ["tool_search"],
+		});
 		harness.setResponses([
 			fauxAssistantMessage(
 				[
 					fauxToolCall("codemode", {
-						code: `return (await tools.${searchName}({ query: "d" })).structuredContent;`,
+						code: `return { docs: await describeNamespace("mcp__docs"), none: await describeNamespace("mcp__nope") };`,
 					}),
 				],
-				{
-					stopReason: "toolUse",
-				},
+				{ stopReason: "toolUse" },
 			),
 			fauxAssistantMessage("done"),
 		]);
 
 		await harness.session.prompt("go");
 
-		expect(harness.session.getActiveToolNames()).toEqual(["codemode"]);
-		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "codemode");
-		expect(codemode?.description).not.toContain(searchName);
-		const result = toolResult(harness, "codemode");
-		expect(result.isError).toBe(false);
-		expect(JSON.parse((result.content[1] as { text: string }).text)).toEqual({ hits: ["d guide", "d faq"] });
-		expect(calls).toEqual(['search:{"query":"d"}']);
+		// The instructions stay out of every tool description.
+		const description = (name: string) =>
+			harness.session.agent.state.tools.find((tool) => tool.name === name)?.description ?? "";
+		expect(description("codemode")).toContain("## mcp__docs (tools not listed)\nSearch the product docs");
+		expect(description("tool_search")).toContain("- mcp__docs: Search the product docs");
+		for (const name of ["codemode", "tool_search"]) expect(description(name)).not.toContain("Always search");
+		expect(JSON.parse(getMessageText(toolResult(harness, "codemode")).split("\n").at(-1) ?? "")).toEqual({
+			docs: {
+				name: "mcp__docs",
+				description: "Search the product docs",
+				instructions: "Always search before reading.",
+				tools: ["mcp__docs__search", "mcp__docs__fail", "mcp__docs__shot"],
+			},
+		});
 	});
 
 	it("does not activate codemode when autoEnableCodemode is false", async () => {
@@ -532,7 +558,7 @@ return { uris: listed.resources.map((r) => r.uri), text: read.contents[0].text }
 	});
 
 	it("finds tools from scripts with searchTools() and describeTool()", async () => {
-		const { harness, calls } = await setup("codemode-deferred");
+		const { harness, calls } = await setup("codemode");
 		harness.setResponses([
 			fauxAssistantMessage(
 				[

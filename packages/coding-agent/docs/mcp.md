@@ -43,7 +43,7 @@ The format matches other MCP clients:
     "docs": {
       "url": "https://example.com/mcp",
       "headers": { "Authorization": "Bearer ${DOCS_TOKEN}" },
-      "exposure": "direct"
+      "description": "Search and read the product documentation"
     }
   }
 }
@@ -58,6 +58,7 @@ Both server types support:
 - `timeout`: per-request timeout in seconds (default 60). Progress notifications reset it.
 - `enabled: false`: keep the entry without connecting to it.
 - `exposure` and `toolExposure`: control how tools reach the model (see [Control tool exposure](#control-tool-exposure)).
+- `description`: what the server offers, in a sentence. The `codemode` and `tool_search` descriptions show it next to the server, so the model knows what to search for.
 
 Keep personal servers and servers with credentials in the user-level file. Use the project file only for servers the project requires, and only in trusted projects.
 
@@ -140,13 +141,14 @@ Each server tool is registered as `mcp__<server>__<tool>`. The server's `exposur
 
 | Exposure | Behavior | Typical use |
 |---|---|---|
-| `codemode` (default) | Callable from [`codemode`](cli.md#tools) scripts and listed in its description, but not declared directly to the model. | General MCP servers, especially when scripts should combine or filter calls. |
-| `codemode-deferred` | Callable from codemode, but omitted from its inline tool declarations. Scripts find tools with `searchTools()`, `describeTool()`, or `ALL_TOOLS`. | Large, infrequently used servers. |
+| `codemode` (default) | Callable from [`codemode`](cli.md#tools) scripts, but neither declared to the model nor listed one by one. The codemode description lists the server with its `description`; scripts find tools with `searchTools()`, `describeTool()`, or `ALL_TOOLS`. | General MCP servers, especially when scripts should combine or filter calls. |
 | `deferred` | Not declared until [`tool_search`](cli.md#tools) loads a match for the next model call. | Large servers whose tools should be called directly after discovery. |
 | `direct` | Declared to the model like a built-in tool and also callable from codemode. | Small, frequently used tool sets. |
 | `hidden` | Registered but unreachable. | Servers or tools that should remain unavailable. |
 
-draht activates `codemode` when a server with `codemode` or `codemode-deferred` exposure connects. It activates `tool_search` for a server with `deferred` exposure. Codemode declarations share the token budget configured by `codemode.inlineBudget`; scripts can find omitted tools with `searchTools()` or `describeTool()`.
+`codemode-deferred` is accepted as an alias for `codemode`.
+
+draht activates `codemode` when a server with `codemode` exposure connects. It activates `tool_search` for a server with `deferred` exposure. To make the model see a tool without searching, give it `direct` exposure with `toolExposure`.
 
 `toolExposure` overrides the server exposure for individual tools. Keys are exact server tool names or patterns where `*` matches any characters. Exact names win over patterns; among patterns, the first match wins. A server with `hidden` exposure can expose only selected tools:
 
@@ -168,13 +170,13 @@ draht activates `codemode` when a server with `codemode` or `codemode-deferred` 
 
 `draht mcp list` marks tools whose exposure differs from their server. The Tools view in `/mcp` also shows the effective exposure.
 
-Tools with `codemode`, `codemode-deferred`, or `deferred` exposure can be reached through either indirect mechanism: codemode scripts can call them, and `tool_search` can load them. Codemode calls do not depend on the active tool set, so they remain available after `/tree`, resume, and fork. Tools loaded by `tool_search` are recorded in the transcript and remain declared on that branch.
+Tools with `codemode` or `deferred` exposure can be reached through either indirect mechanism: codemode scripts can call them, and `tool_search` can load them. Codemode calls do not depend on the active tool set, so they remain available after `/tree`, resume, and fork. Tools loaded by `tool_search` are recorded in the transcript and remain declared on that branch.
 
 To keep `codemode` active without MCP servers, add `"defaultTools": ["+codemode"]` to [settings](settings.md#tools). To prevent automatic codemode activation, set `"autoEnableCodemode": false` beside `mcpServers`. A project value overrides the user-level value. draht warns once when neither `codemode` nor `tool_search` is active and non-direct tools cannot be called.
 
 Text results over 20 KB reach the model with their middle removed around a `…N chars truncated…` marker. The full text is saved to a temporary file named in the result. Codemode scripts receive the complete result and can reduce it before returning output to the model.
 
-Codemode scripts receive the complete MCP `CallToolResult`, including `content`, `structuredContent`, and `isError`. A result with `isError` resolves inside scripts but is reported as an error for direct calls. `image(result.content[0])` forwards an image block. Server instructions are included in the codemode description.
+Codemode scripts receive the complete MCP `CallToolResult`, including `content`, `structuredContent`, and `isError`. A result with `isError` resolves inside scripts but is reported as an error for direct calls. `image(result.content[0])` forwards an image block. Server instructions are not part of any tool description; scripts read them with `describeNamespace("mcp__<server>")`, which also returns the server's tool names.
 
 ## Use resources
 
@@ -184,7 +186,7 @@ When a connected server offers [resources](https://modelcontextprotocol.io/speci
 - `list_mcp_resource_templates` lists URI templates for resources the servers do not list directly.
 - `read_mcp_resource` reads a resource by `server` and `uri`. Text reaches the model as text and images as images. Other binary resources are saved to temporary files, and the model receives the path. Scripts receive `{ server, uri, contents }`.
 
-These tools reach every enabled, non-hidden server with resources. Their exposure is the widest exposure among those servers: `direct`, then `codemode`, `codemode-deferred`, or `deferred`. Resource links in tool results identify `read_mcp_resource` and the server.
+These tools reach every enabled, non-hidden server with resources. Their exposure is the widest exposure among those servers: `direct`, then `codemode` or `deferred`. Resource links in tool results identify `read_mcp_resource` and the server.
 
 Resources for MCP Apps, identified by `ui://` URIs or `text/html;profile=mcp-app`, are omitted because draht does not render them. Resource icons are also omitted.
 
@@ -212,4 +214,4 @@ An extension that registers `codemode` or `tool_search` similarly replaces the b
 
 ### Use MCP from the SDK
 
-SDK sessions do not load built-in extensions. Add the MCP extension, the codemode extension for `codemode` and `codemode-deferred` servers, and the tool-search extension for `deferred` servers to the resource loader. See [Codemode and MCP](sdk.md#codemode-mcp).
+SDK sessions do not load built-in extensions. Add the MCP extension, the codemode extension for `codemode` servers, and the tool-search extension for `deferred` servers to the resource loader. See [Codemode and MCP](sdk.md#codemode-mcp).

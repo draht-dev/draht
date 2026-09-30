@@ -638,8 +638,13 @@ export interface ToolAnnotations {
 export interface ToolNamespace {
 	/** For example `mcp__docs`. */
 	name: string;
-	/** Shown once above the group's tools. */
+	/** Short summary shown once with the group in model-facing tool listings. */
 	description?: string;
+	/**
+	 * Longer usage guidance, such as MCP server instructions. Not part of tool listings; tools that
+	 * describe the namespace on request (codemode's `describeNamespace()`) return it.
+	 */
+	instructions?: string;
 }
 
 /** The tools of a session as {@link ToolDefinition.prepareLoadout} sees them. */

@@ -63,8 +63,8 @@ Options for add:
                           OAuth client secret (may be \${NAME} or !command)
   --oauth-callback-port <port>
                           Fixed OAuth callback port
-  --exposure <mode>       codemode (default), codemode-deferred, deferred, direct,
-                          or hidden
+  --exposure <mode>       codemode (default), deferred, direct, or hidden
+  --description <text>    What the server offers, shown to the model with its tools
 
 Other options:
   --json                  Print the list as JSON
@@ -291,6 +291,7 @@ function add(
 			"oauth-client-secret": "value",
 			"oauth-callback-port": "value",
 			exposure: "value",
+			description: "value",
 		},
 		error,
 		2,
@@ -347,6 +348,8 @@ function add(
 		};
 	}
 	if (exposure !== undefined) config.exposure = exposure;
+	const description = value("description");
+	if (description !== undefined) config.description = description;
 	const validated = validateMcpServerConfig(name, config);
 	if (typeof validated === "string") {
 		error(validated);

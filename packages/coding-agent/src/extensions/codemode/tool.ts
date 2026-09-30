@@ -152,6 +152,7 @@ const DESCRIPTION_INTRO = `Run JavaScript code to orchestrate/compose tool calls
 - \`ALL_TOOLS\`: metadata for the enabled nested tools as \`{ name, description }\` entries.
 - \`searchTools(query: string, options?: { limit?: number; namespace?: string })\`: resolves to the nested tools that best match the query (BM25, default limit 8), as \`{ name, description }\` entries like \`ALL_TOOLS\`.
 - \`describeTool(name: string)\`: resolves to the description and declaration of a nested tool, or \`undefined\`.
+- \`describeNamespace(name: string)\`: resolves to \`{ name, description?, instructions?, tools }\` for a namespace of nested tools, such as an MCP server: its usage instructions and the names of its tools, or \`undefined\`.
 - \`console.log(...)\` and the other \`console\` methods append a text item like \`text()\`.
 - \`return value\` at the top level appends the value like \`text()\`.`;
 
@@ -217,7 +218,7 @@ export const MODEL_GLOBAL_DECLARATIONS: readonly Omit<CodemodeTool, "execute">[]
 ];
 
 const DEFERRED_TOOLS_GUIDANCE = `Some deferred nested tools may be omitted from this description. They are still available on the global \`tools\` object and listed in \`ALL_TOOLS\`.
-To find one, call \`await searchTools(query)\`, or filter \`ALL_TOOLS\` by \`name\` and \`description\`.`;
+To find one, call \`await searchTools(query)\` (pass \`{ namespace }\` to search one namespace), or filter \`ALL_TOOLS\` by \`name\` and \`description\`. \`await describeNamespace(name)\` returns a namespace's usage instructions and the names of its tools.`;
 
 /** Default for {@link CodemodeDescriptionOptions.inlineBudget}, in estimated tokens. */
 export const DEFAULT_CODEMODE_INLINE_BUDGET = 3000;
@@ -301,8 +302,9 @@ function selectCatalog(groups: readonly CatalogGroup[], budget: number | undefin
 /**
  * Model-facing description: the helper list, guidance for omitted tools, the shared MCP types when
  * MCP tools are callable, the `models` API, and one section per tool, grouped by namespace. Tool
- * sections are limited to `inlineBudget`; every namespace is listed with its tool count either
- * way, and the listing states whether it is complete.
+ * sections are limited to `inlineBudget`; every namespace is listed with its description either
+ * way, and the listing states whether it is complete. It carries no tool counts or namespace
+ * instructions, so it stays the same when a server's tool list changes.
  */
 export function createCodemodeDescription(
 	tools: readonly AgentTool<any>[],
@@ -345,21 +347,20 @@ export function createCodemodeDescription(
 
 	const toolSections = [
 		complete
-			? `Nested tools: COMPLETE list (${declarations.length} tool${declarations.length === 1 ? "" : "s"}).`
-			: `Nested tools: PARTIAL - ${shown.size} of ${declarations.length} shown.`,
+			? "Nested tools: COMPLETE list."
+			: "Nested tools: PARTIAL list. Find the tools that are not listed with `searchTools()`.",
 	];
 	for (const { namespace, entries } of ordered) {
 		const visible = entries.filter((entry) => shown.has(entry.name));
 		if (namespace) {
-			const count = `${entries.length} tool${entries.length === 1 ? "" : "s"}`;
-			const suffix =
+			const listing =
 				visible.length === entries.length
 					? ""
 					: visible.length === 0
-						? ", none shown"
-						: `, ${visible.length} shown`;
+						? " (tools not listed)"
+						: " (some tools not listed)";
 			const description = namespace.description?.trim();
-			toolSections.push(`## ${namespace.name} (${count}${suffix})${description ? `\n${description}` : ""}`);
+			toolSections.push(`## ${namespace.name}${listing}${description ? `\n${description}` : ""}`);
 		}
 		for (const entry of visible) toolSections.push(entry.section);
 	}

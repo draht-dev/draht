@@ -32,11 +32,11 @@ import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts"
 import type { McpExposure } from "./config.ts";
 
 /**
- * Tool exposure of an MCP exposure. Both deferred exposures leave tools out of the codemode
+ * Tool exposure of an MCP exposure. `codemode` and `deferred` both leave tools out of the codemode
  * description; they differ only in which tool the MCP extension activates to reach them.
  */
 export function toToolExposure(exposure: McpExposure): ToolExposure {
-	return exposure === "codemode-deferred" ? "deferred" : exposure;
+	return exposure === "codemode" ? "deferred" : exposure;
 }
 
 /** Provider tool names are limited to 64 characters of `[A-Za-z0-9_-]`. */

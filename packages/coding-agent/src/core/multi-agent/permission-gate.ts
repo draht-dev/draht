@@ -272,6 +272,9 @@ const PASSTHROUGH_PREFIXES = new Set([
 	// it was given (`busybox rm -rf /` behaves exactly like `rm -rf /`), so it
 	// is a pure passthrough for deny-scan purposes.
 	"busybox",
+	// wsl/wsl.exe runs its arguments as a command inside the Linux subsystem,
+	// same shape as sudo/env.
+	"wsl",
 ]);
 
 /** Shells whose `-c <command>` argument is itself a full command line to unwrap and re-check. */
@@ -280,9 +283,15 @@ const SHELL_C_WRAPPERS = new Set(["bash", "sh", "zsh", "ksh", "dash", "fish"]);
 /**
  * Non-POSIX shells whose command-line argument is itself a full command line
  * to unwrap and re-check. Catches bash wrapping another shell, e.g.
- * `bash -c "pwsh -c 'rm -rf ~'"`.
+ * `bash -c "pwsh -c 'rm -rf ~'"`. Matched by regex rather than a fixed Set so
+ * variants like `pwsh-preview`, `powershell_ise`, and `.exe`/path-prefixed
+ * spellings (normalized by `basenameOfHeadToken`) are all covered.
  */
-const OTHER_SHELL_WRAPPERS = new Set(["pwsh", "powershell", "powershell.exe", "cmd", "cmd.exe"]);
+const OTHER_SHELL_WRAPPER_RE = /^(pwsh|powershell|powershell_ise|cmd)([-_].*)?$/;
+
+function isOtherShellWrapperName(basename: string): boolean {
+	return OTHER_SHELL_WRAPPER_RE.test(basename);
+}
 
 /** Constructs that make a command dynamic/opaque enough that allow/approve patterns must never match it. */
 const DANGEROUS_CONSTRUCT_RE = /\$\(|`|<|>/;
@@ -507,11 +516,10 @@ function stripPassthroughPrefix(text: string): { stripped: string; changed: bool
 	const trimmed = text.replace(/^\s+/, "");
 	const match = trimmed.match(/^(\S+)((?:\s+-\S+)*)\s+/);
 	if (!match) return { stripped: text, changed: false };
-	const token = match[1];
-	const basename = token.includes("/") ? token.slice(token.lastIndexOf("/") + 1) : token;
-	if (!PASSTHROUGH_PREFIXES.has(basename.toLowerCase())) return { stripped: text, changed: false };
+	const basename = basenameOfHeadToken(match[1]);
+	if (!PASSTHROUGH_PREFIXES.has(basename)) return { stripped: text, changed: false };
 	let rest = trimmed.slice(match[0].length);
-	if (basename.toLowerCase() === "timeout") {
+	if (basename === "timeout") {
 		const duration = rest.match(/^(\S+)\s+/);
 		if (duration) rest = rest.slice(duration[0].length);
 	}
@@ -581,10 +589,16 @@ function tokenizeShellWords(text: string): string[] {
 	return tokens;
 }
 
-/** Lowercased basename of a (possibly quoted/escaped, already-tokenized) command-head token, split on `/` and `\`. */
+/**
+ * Lowercased basename of a (possibly quoted/escaped, already-tokenized)
+ * command-head token: split on both `/` and `\` (Windows paths), lowercased,
+ * with a trailing `.exe` stripped — so `C:\Windows\System32\cmd.EXE`,
+ * `./cmd`, and `cmd` all normalize to `cmd` for wrapper/interpreter lookup.
+ */
 function basenameOfHeadToken(token: string): string {
 	const parts = token.split(/[/\\]/);
-	return (parts[parts.length - 1] ?? token).toLowerCase();
+	const base = (parts[parts.length - 1] ?? token).toLowerCase();
+	return base.endsWith(".exe") ? base.slice(0, -4) : base;
 }
 
 /** Wrapper flags that consume the following token as their own argument, not as part of the command. */
@@ -666,23 +680,33 @@ function commandFeedsBareShellWithoutDashC(command: string): boolean {
 /**
  * Extracts the inner command line from a `pwsh -c "..."` / `powershell
  * -Command "..."` / `cmd /c "..."` style wrapper, if present. Accepts `-c`,
- * `-Command`, and `/c` case-insensitively rather than the exact flag each
- * shell prefers — for danger detection, over-matching is the safe direction.
+ * `-Command`, and `/c` case-insensitively, anywhere among the wrapper's
+ * tokens, rather than the exact flag each shell prefers — for danger
+ * detection, over-matching is the safe direction.
  */
 function extractOtherShellWrapperArg(text: string): string | undefined {
 	const trimmed = text.trim();
-	const match = trimmed.match(/^(\S+)(?:\s+-\S+)*\s+(?:-c|-command|\/c)\s+(['"])([\s\S]*)\2\s*$/i);
-	if (!match) return undefined;
-	const token = match[1];
-	const basename = token.includes("/") ? token.slice(token.lastIndexOf("/") + 1) : token;
-	if (!OTHER_SHELL_WRAPPERS.has(basename.toLowerCase())) return undefined;
-	return match[3];
+	if (!headIsOtherShellWrapper(trimmed)) return undefined;
+	const tokens = tokenizeShellWords(trimmed);
+	for (let i = 1; i < tokens.length - 1; i++) {
+		const token = tokens[i].toLowerCase();
+		if (token === "-c" || token === "-command" || token === "/c") return tokens[i + 1];
+	}
+	return undefined;
 }
 
-/** Extracts the inner command line from an `eval "..."` / `eval '...'` wrapper, if present. */
+/**
+ * Extracts the inner command line from an `eval "..."` / `eval '...'` /
+ * `eval <unquoted words...>` wrapper, if present — bash's `eval` joins all of
+ * its arguments with spaces and evaluates the result as a command, whether or
+ * not they were quoted.
+ */
 function extractEvalArg(text: string): string | undefined {
-	const match = text.trim().match(/^eval\s+(['"])([\s\S]*)\1\s*$/i);
-	return match ? match[2] : undefined;
+	const trimmed = text.trim();
+	const quoted = trimmed.match(/^eval\s+(['"])([\s\S]*)\1\s*$/i);
+	if (quoted) return quoted[2];
+	const unquoted = trimmed.match(/^eval\s+(\S[\s\S]*)$/i);
+	return unquoted ? unquoted[1] : undefined;
 }
 
 /** Extracts the contents of every `$(...)` and `` `...` `` command substitution found anywhere in `text`. */
@@ -818,6 +842,9 @@ function scanDenyCandidates(command: string): DenyScanResult {
 			const evalArg = extractEvalArg(working) ?? extractEvalArg(basenameResolved);
 			if (evalArg !== undefined) enqueue(evalArg);
 
+			const findExecArg = extractFindExecArg(working) ?? extractFindExecArg(basenameResolved);
+			if (findExecArg !== undefined) enqueue(findExecArg);
+
 			for (const sub of extractSubstitutions(piece)) {
 				enqueue(sub);
 				const echoOutput = extractSimpleEchoOutput(sub);
@@ -845,10 +872,32 @@ function commandDenyScanTruncated(command: string): boolean {
 	return scanDenyCandidates(command).truncated;
 }
 
-/** Bare first-token command name of a candidate (lowercased, path-stripped), for interpreter checks. */
-function firstTokenCommandName(text: string): string {
-	const token = text.trimStart().match(/^\S+/)?.[0] ?? "";
-	return (token.includes("/") ? token.slice(token.lastIndexOf("/") + 1) : token).toLowerCase();
+/**
+ * Raw first whitespace-delimited token of `text`, with at most one matching
+ * pair of surrounding quotes stripped — deliberately *not* run through
+ * `tokenizeShellWords`'s backslash-escape collapsing, so a literal Windows
+ * path separator (`C:\Windows\System32\cmd.exe`) survives for
+ * `basenameOfHeadToken` to split on, instead of being eaten as a POSIX
+ * shell escape character.
+ */
+function rawFirstToken(text: string): string | undefined {
+	const token = text.trimStart().match(/^\S+/)?.[0];
+	if (token === undefined) return undefined;
+	const quoted = token.match(/^(['"])([\s\S]*)\1$/);
+	return quoted ? quoted[2] : token;
+}
+
+/**
+ * `true` when `basename(head(text))` is a recognized `pwsh`/`powershell`/
+ * `cmd` spelling, checking both the POSIX-escape-aware token (`p\wsh` ->
+ * `pwsh`) and the raw token (`C:\Windows\...\cmd.exe` -> `cmd`), since the
+ * two normalizations disagree on what a bare `\` means.
+ */
+function headIsOtherShellWrapper(text: string): boolean {
+	const dequotedHead = tokenizeShellWords(text.trimStart())[0];
+	if (dequotedHead !== undefined && isOtherShellWrapperName(basenameOfHeadToken(dequotedHead))) return true;
+	const raw = rawFirstToken(text);
+	return raw !== undefined && isOtherShellWrapperName(basenameOfHeadToken(raw));
 }
 
 /**
@@ -861,9 +910,45 @@ function firstTokenCommandName(text: string): string {
  * of them must not get a free pass auto mode never meant to give it.
  */
 function commandInvokesOtherShell(command: string): boolean {
-	return collectDenyCandidates(command).some((candidate) =>
-		OTHER_SHELL_WRAPPERS.has(firstTokenCommandName(candidate)),
-	);
+	return collectDenyCandidates(command).some((candidate) => headIsOtherShellWrapper(candidate));
+}
+
+/** A shell variable/parameter expansion, command substitution, or backtick substitution in command position. */
+function isDynamicCommandHead(token: string): boolean {
+	return /^(\$\(|\$\{|\$[A-Za-z_]|`)/.test(token);
+}
+
+/**
+ * `true` when any chain segment's command position (after stripping leading
+ * `VAR=val` assignments) is a variable/expansion rather than a literal
+ * command name (`$p`, `${HOME:+pwsh}`, `$(...)`, a backtick substitution).
+ * What actually runs then depends on the environment, so no pattern — deny,
+ * danger filter, or interpreter check — can reason about it; auto mode must
+ * require approval instead of silently resolving to whatever the variable
+ * happens to hold.
+ */
+function commandHeadIsDynamic(command: string): boolean {
+	return splitChain(command).some((seg) => {
+		const working = stripEnvAssignments(stripLeadingBackslashEscape(seg.text));
+		const head = tokenizeShellWords(working.trim())[0];
+		return head !== undefined && isDynamicCommandHead(head);
+	});
+}
+
+/** Extracts the `<cmd>` from `find ... -exec <cmd> ... ;`/`+`/`-execdir <cmd> ... ;`, if present. */
+function extractFindExecArg(text: string): string | undefined {
+	const tokens = tokenizeShellWords(text.trim());
+	const head = tokens[0];
+	if (head === undefined || basenameOfHeadToken(head) !== "find") return undefined;
+	const execIndex = tokens.findIndex((token) => token === "-exec" || token === "-execdir");
+	if (execIndex === -1) return undefined;
+	const cmdTokens: string[] = [];
+	for (let i = execIndex + 1; i < tokens.length; i++) {
+		const token = tokens[i];
+		if (token === ";" || token === "+") break;
+		cmdTokens.push(token);
+	}
+	return cmdTokens.length > 0 ? cmdTokens.join(" ") : undefined;
 }
 
 function globToRegExp(pattern: string): RegExp {
@@ -1144,6 +1229,13 @@ export class PermissionGate {
 					return {
 						action: "approve",
 						reason: `auto mode: command matched dangerous pattern ${JSON.stringify(dangerous)}, requires approval`,
+					};
+				}
+				if (commandHeadIsDynamic(command)) {
+					return {
+						action: "approve",
+						reason:
+							"auto mode: command position is a variable/parameter expansion, command substitution, or backtick substitution, which can resolve to anything; requires approval",
 					};
 				}
 				if (commandInvokesOtherShell(command)) {

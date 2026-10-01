@@ -281,6 +281,59 @@ describe("PermissionGate.evaluate", () => {
 		});
 	});
 
+	describe("normalized command-head lookup for shell/interpreter detection", () => {
+		const gate = new PermissionGate([], { cwd: "/repo", mode: "auto" });
+
+		it("recognizes pwsh/powershell/cmd variants regardless of case, .exe suffix, or path style", () => {
+			for (const cmd of [
+				`pwsh.exe -c "Remove-Item -Recurse ~"`,
+				`pwsh.EXE -c x`,
+				`pwsh-preview -c x`,
+				`powershell_ise.exe -c x`,
+				`C:\\Windows\\System32\\cmd.exe /c del /s /q C:\\`,
+			]) {
+				expect(gate.evaluate("bash", { command: cmd }).action).toBe("approve");
+			}
+		});
+
+		it("strips quotes and backslashes from the command head before matching", () => {
+			for (const cmd of [`"pwsh" -c x`, `'pwsh' -c x`, `p\\wsh -c x`, `pw''sh -c x`]) {
+				expect(gate.evaluate("bash", { command: cmd }).action).toBe("approve");
+			}
+		});
+
+		it("requires approval when the command position is a variable or expansion", () => {
+			expect(gate.evaluate("bash", { command: "p=pwsh; $p -c x" }).action).toBe("approve");
+			expect(gate.evaluate("bash", { command: `\${HOME:+pwsh} -c x` }).action).toBe("approve");
+		});
+
+		it("passes through wsl/wsl.exe to its wrapped command", () => {
+			const denyGate = new PermissionGate([{ tool: "bash", pattern: "rm -rf *", action: "deny" }]);
+			expect(denyGate.evaluate("bash", { command: "wsl.exe rm -rf ~" }).action).toBe("deny");
+		});
+
+		it("evaluates eval's joined arguments even without quotes", () => {
+			expect(gate.evaluate("bash", { command: "eval pwsh -c x" }).action).toBe("approve");
+		});
+
+		it("evaluates the command passed to find -exec and xargs", () => {
+			expect(gate.evaluate("bash", { command: "find . -exec pwsh -c x \\;" }).action).toBe("approve");
+			expect(gate.evaluate("bash", { command: "echo /tmp/x | xargs -n1 pwsh -c x" }).action).toBe("approve");
+		});
+
+		it("still requires approval for a bare pwsh/powershell/cmd invocation (non-regression)", () => {
+			expect(gate.evaluate("bash", { command: `pwsh -c "Remove-Item -Recurse -Force ~"` }).action).toBe("approve");
+			expect(gate.evaluate("bash", { command: `bash -c "pwsh -c 'Remove-Item -Recurse ~'"` }).action).toBe(
+				"approve",
+			);
+		});
+
+		it("still auto-allows an everyday bash command (non-regression)", () => {
+			expect(gate.evaluate("bash", { command: "npm test" }).action).toBe("allow");
+			expect(gate.evaluate("bash", { command: "git status" }).action).toBe("allow");
+		});
+	});
+
 	it("does not reassemble unrelated path segments across '/' into a false match", () => {
 		// A previous implementation stripped every "/" from both command and pattern before matching,
 		// which could reassemble unrelated path segments into a spurious match (e.g. "/et/cpasswd"

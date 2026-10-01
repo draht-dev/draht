@@ -1,8 +1,8 @@
 /**
  * The `codemode` tool: the model writes JavaScript that calls other tools. Scripts use `tools`,
  * `ALL_TOOLS`, `text()`, `image()`, `exit()`, `store()`/`load()`, `console.*`, and `return <value>`,
- * may start with a `// @options:` line, and reach the model catalog and classifiers through
- * `models.*`. Results start with a "Script completed" or "Script failed" header.
+ * may start with a `// @options:` line, and reach the model catalog, classifiers, and image models
+ * through `models.*`. Results start with a "Script completed" or "Script failed" header.
  *
  * Scripts can call the agent loop's nested tools: active `direct` tools and every `codemode` or
  * `deferred` tool. Nested calls run through the agent loop's tool pipeline (`ctx.executeTool`), so
@@ -58,7 +58,7 @@ export interface CodemodeStoreEntryData {
 /** The part of the model registry that scripts reach through `models`. */
 export type CodemodeModelRuntime = Pick<
 	ModelRegistry,
-	"getModelsOfType" | "getAvailableOfType" | "getModelOfType" | "classify"
+	"getModelsOfType" | "getAvailableOfType" | "getModelOfType" | "classify" | "generateImages"
 >;
 
 export interface CodemodeToolOptions {
@@ -180,13 +180,32 @@ interface ClassifierContext {
   state: Record<string, unknown>;
   questions: Record<string, ClassifierQuestion>;
 }
+/** Token counts reported by the service. Cost is in USD. */
+type ModelUsage = { input: number; output: number; totalTokens: number; cost: { total: number } };
 interface ClassifierResult {
   api: string;
   provider: string;
   model: string;
   answers: Record<string, ClassifierAnswer>;
-  /** Set when the service reports token counts. Cost is in USD. */
-  usage?: { input: number; output: number; totalTokens: number; cost: { total: number } };
+  usage?: ModelUsage;
+  stopReason: "stop" | "error" | "aborted";
+  errorMessage?: string;
+  timestamp: number;
+}
+type ModelTextBlock = { type: "text"; text: string };
+/** \`data\` is base64. Show it with \`image(block)\`; never print \`data\` with \`text()\`, \`console\`, or \`return\`. */
+type ModelImageBlock = { type: "image"; data: string; mimeType: string };
+interface ImagesContext {
+  /** The prompt as text blocks, plus image blocks to edit or use as references. */
+  input: (ModelTextBlock | ModelImageBlock)[];
+}
+interface ImagesResult {
+  api: string;
+  provider: string;
+  model: string;
+  /** Generated images, and text blocks for models that also return text. */
+  output: (ModelTextBlock | ModelImageBlock)[];
+  usage?: ModelUsage;
   stopReason: "stop" | "error" | "aborted";
   errorMessage?: string;
   timestamp: number;
@@ -214,6 +233,12 @@ export const MODEL_GLOBAL_DECLARATIONS: readonly Omit<CodemodeTool, "execute">[]
 		description:
 			"Run a classifier model on one state. Only `provider` and `id` of `model` are used. Provider errors do not throw: check `stopReason` and `errorMessage`.",
 		signature: "(model: ModelInfo, context: ClassifierContext): Promise<ClassifierResult>",
+	},
+	{
+		name: "models.generateImages",
+		description:
+			'Generate images with an image model. Only `provider` and `id` of `model` are used. Provider errors do not throw: check `stopReason` and `errorMessage`. Generation can take minutes, so do not set a short `timeout_ms`. Show results with `for (const block of result.output) if (block.type === "image") image(block);`.',
+		signature: "(model: ModelInfo, context: ImagesContext): Promise<ImagesResult>",
 	},
 ];
 

@@ -174,7 +174,7 @@ This keeps `read`, `bash`, `edit`, and `write` and adds `codemode`. For one invo
 draht --tools read,bash,edit,write,codemode
 ```
 
-Codemode is useful without MCP: scripts can run several tool calls in parallel, filter large output before it reaches the model, and call classifier models such as TypeSafe's Jev through `models.classify()` (see [Classifier models](models.md#use-classifier-models)).
+Codemode is useful without MCP: scripts can run several tool calls in parallel, filter large output before it reaches the model, call classifier models such as TypeSafe's Jev through `models.classify()` (see [Classifier models](models.md#use-classifier-models)), and generate images through `models.generateImages()` (see [Image models](models.md#use-image-models)).
 
 ### How codemode works
 
@@ -188,7 +188,7 @@ The `codemode` description lists the callable tools with their TypeScript declar
 
 Tools with an output schema resolve to structured values: `bash` to `{ output, truncated, full_output_path?, exit_code, wall_time_seconds }`, also for non-zero exit codes, and MCP tools to their `CallToolResult`. Other tools resolve to their text output. The `output` of `bash` is not limited to the 2000 lines or 50KB the model sees: it holds up to 1 MiB, and longer output keeps its first and last 512 KiB around an omission marker, with `truncated` set and the full output in `full_output_path`.
 
-`store(key, value)` and `load(key)` keep JSON values across `codemode` calls: each successful script that stores values appends a `codemode-store` custom entry to the session, so resumed sessions keep the values and each branch sees only the values written on its path. Scripts can also use `models`: `getModelsOfType`, `getAvailableOfType`, and `getModelOfType` list the model catalog, and `classify(model, context)` runs a classifier model with the session's credentials, at most four at a time per script.
+`store(key, value)` and `load(key)` keep JSON values across `codemode` calls: each successful script that stores values appends a `codemode-store` custom entry to the session, so resumed sessions keep the values and each branch sees only the values written on its path. Scripts can also use `models`: `getModelsOfType`, `getAvailableOfType`, and `getModelOfType` list the model catalog, `classify(model, context)` runs a classifier model, and `generateImages(model, context)` runs an image model. Both use the session's credentials, with at most four such calls in flight per script.
 
 ### Tool search
 

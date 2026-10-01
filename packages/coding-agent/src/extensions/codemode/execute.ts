@@ -8,7 +8,16 @@ import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool, AgentToolCallOutcome, AgentToolResult } from "@draht/agent-core";
-import type { AnyModel, ClassifierContext, ImageContent, ModelType, TextContent, Usage } from "@draht/ai";
+import type {
+	AnyModel,
+	ClassifierContext,
+	ImageContent,
+	ImagesContext,
+	ModelType,
+	ModelTypeMap,
+	TextContent,
+	Usage,
+} from "@draht/ai";
 import {
 	type CodemodeResult,
 	CodemodeSandbox,
@@ -38,7 +47,7 @@ import {
 
 const ARGS_PREVIEW_CHARS = 200;
 const ERROR_PREVIEW_CHARS = 500;
-/** Classifier calls one script may have in flight; `Promise.all` over many items queues the rest. */
+/** `models.classify()` and `models.generateImages()` calls one script may have in flight; `Promise.all` over many items queues the rest. */
 const MAX_CONCURRENT_MODEL_CALLS = 4;
 /**
  * Heap limit for the QuickJS VM. The worker shares pi's process, so without a limit a runaway
@@ -84,6 +93,13 @@ function toModelInfo(model: AnyModel): Record<string, unknown> {
 	const info: Record<string, unknown> = { ...model };
 	delete info.headers;
 	return info;
+}
+
+/** The fields of `ClassifierResult` and `AssistantImages` that a nested call row reports. */
+interface ModelCallResult {
+	stopReason: "stop" | "error" | "aborted";
+	errorMessage?: string;
+	usage?: Usage;
 }
 
 /** Runs at most `limit` calls at once, in call order. */
@@ -404,8 +420,8 @@ function createDiscoveryGlobals(
 
 /**
  * `models.*` for scripts: the model registry methods declared in {@link MODEL_GLOBAL_DECLARATIONS}.
- * Classifier calls appear as nested call rows so the renderer shows them, and their usage goes to
- * `addUsage`.
+ * Classifier and image calls appear as nested call rows so the renderer shows them, and their usage
+ * goes to `addUsage`. Rows show only the model, never prompts or image data.
  */
 function createModelGlobals(
 	models: CodemodeModelRuntime,
@@ -415,7 +431,45 @@ function createModelGlobals(
 	addUsage: (usage: Usage) => void,
 ): CodemodeTool[] {
 	const limit = createLimiter(MAX_CONCURRENT_MODEL_CALLS);
-	let classifyCount = 0;
+	let callCount = 0;
+
+	/**
+	 * Resolve the script's model by provider and id only, then run the call as a nested call row. A
+	 * script-supplied baseUrl or headers must never receive the credentials.
+	 */
+	const runModelCall = async <TType extends "classifier" | "image", TResult extends ModelCallResult>(
+		name: string,
+		type: TType,
+		model: unknown,
+		run: (resolved: ModelTypeMap[TType]) => Promise<TResult>,
+	): Promise<TResult> => {
+		const ref = model as { provider?: unknown; id?: unknown } | null;
+		if (typeof ref !== "object" || ref === null || typeof ref.provider !== "string" || typeof ref.id !== "string") {
+			throw new Error(`${name}() expects a model from models.getModelOfType() or models.getAvailableOfType()`);
+		}
+		const resolved = models.getModelOfType(type, ref.provider, ref.id);
+		if (!resolved) throw new Error(`Unknown ${type} model "${ref.provider}/${ref.id}"`);
+
+		const record: CodemodeNestedCall = {
+			id: `${toolCallId}/${name}/${++callCount}`,
+			name,
+			args: `${resolved.provider}/${resolved.id}`,
+			status: "running",
+		};
+		calls.push(record);
+		publish();
+		const startedAt = performance.now();
+		const result = await limit(() => run(resolved));
+		record.durationMs = performance.now() - startedAt;
+		record.status = result.stopReason === "stop" ? "ok" : result.stopReason === "aborted" ? "cancelled" : "error";
+		if (result.errorMessage) record.error = truncateText(result.errorMessage, ERROR_PREVIEW_CHARS);
+		if (result.usage) {
+			record.cost = result.usage.cost.total;
+			addUsage(result.usage);
+		}
+		publish();
+		return result;
+	};
 	const implementations: Record<string, CodemodeTool["execute"]> = {
 		"models.getModelsOfType": (args) => {
 			const [type, provider] = args as unknown[];
@@ -434,42 +488,17 @@ function createModelGlobals(
 			const model = models.getModelOfType(toModelType(type), provider, id);
 			return model === undefined ? undefined : toModelInfo(model);
 		},
-		"models.classify": async (args, { signal }) => {
+		"models.classify": (args, { signal }) => {
 			const [model, context] = args as unknown[];
-			const ref = model as { provider?: unknown; id?: unknown } | null;
-			if (
-				typeof ref !== "object" ||
-				ref === null ||
-				typeof ref.provider !== "string" ||
-				typeof ref.id !== "string"
-			) {
-				throw new Error(
-					"models.classify() expects a model from models.getModelOfType() or models.getAvailableOfType()",
-				);
-			}
-			// Only provider and id count. A script-supplied baseUrl or headers must never receive the credentials.
-			const resolved = models.getModelOfType("classifier", ref.provider, ref.id);
-			if (!resolved) throw new Error(`Unknown classifier model "${ref.provider}/${ref.id}"`);
-
-			const record: CodemodeNestedCall = {
-				id: `${toolCallId}/models.classify/${++classifyCount}`,
-				name: "models.classify",
-				args: `${resolved.provider}/${resolved.id}`,
-				status: "running",
-			};
-			calls.push(record);
-			publish();
-			const startedAt = performance.now();
-			const result = await limit(() => models.classify(resolved, context as ClassifierContext, { signal }));
-			record.durationMs = performance.now() - startedAt;
-			record.status = result.stopReason === "stop" ? "ok" : result.stopReason === "aborted" ? "cancelled" : "error";
-			if (result.errorMessage) record.error = truncateText(result.errorMessage, ERROR_PREVIEW_CHARS);
-			if (result.usage) {
-				record.cost = result.usage.cost.total;
-				addUsage(result.usage);
-			}
-			publish();
-			return result;
+			return runModelCall("models.classify", "classifier", model, (resolved) =>
+				models.classify(resolved, context as ClassifierContext, { signal }),
+			);
+		},
+		"models.generateImages": (args, { signal }) => {
+			const [model, context] = args as unknown[];
+			return runModelCall("models.generateImages", "image", model, (resolved) =>
+				models.generateImages(resolved, context as ImagesContext, { signal }),
+			);
 		},
 	};
 	return MODEL_GLOBAL_DECLARATIONS.map((declaration) => ({

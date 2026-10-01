@@ -517,8 +517,7 @@ function parsePackageCommand(args: string[]): PackageCommandOptions | undefined 
 			}
 			updateTarget = { type: "extensions", source: extensionFlagSource };
 		} else if (source) {
-			// "pi" is the upstream self-update target name, still accepted as an alias.
-			const sourceIsSelf = source === "self" || source === APP_NAME || source === "pi";
+			const sourceIsSelf = source === "self" || source === APP_NAME;
 			if (sourceIsSelf) {
 				updateTarget = extensionsFlag ? { type: "all" } : { type: "self" };
 			} else {

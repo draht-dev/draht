@@ -12,6 +12,7 @@
 - the remote model catalog overlay no longer defaults to `https://pi.dev`; it is disabled unless `DRAHT_MODEL_CATALOG_BASE_URL` is set
 - provider attribution headers sent to OpenRouter/NVIDIA NIM/Cloudflare/OpenCode now identify as `draht` instead of `pi`/`Pi` (`HTTP-Referer`, `X-OpenRouter-Title`, `X-BILLING-INVOKE-ORIGIN`, `User-Agent`, `x-opencode-client`)
 - Node bundle distribution: the npm package now ships a bundled `dist/bundle/cli.js` alongside the existing entry point, raising the minimum Node version to `>=22.19.0`
+- `draht update pi` no longer works as a self-update alias; use `draht update self` or `draht update draht`
 
 ### Added
 

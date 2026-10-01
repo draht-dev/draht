@@ -1,4 +1,5 @@
 import type { AssistantMessage, StopReason, Usage } from "@draht/ai";
+import type { JsonValue } from "@draht/chord";
 import type { AgentMessage, QueueMode, ThinkingLevel } from "../../types.ts";
 import type { BranchPreparation } from "../compaction/branch-summarization.ts";
 import type { CompactionPreparation, CompactionSettings } from "../compaction/compaction.ts";
@@ -6,7 +7,7 @@ import type { Context } from "../context.ts";
 import type { AgentHarnessStreamOptions } from "../types.ts";
 import type { ListElement, ListReadOptions, ListWrite, StoredValue, Value, ValueList, ValueWrite } from "./values.ts";
 
-export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+export type { JsonValue } from "@draht/chord";
 
 export type SettledAssistantMessage = AssistantMessage & {
 	stopReason: Exclude<StopReason, "pending">;
@@ -135,6 +136,7 @@ export interface InboxItem {
 export interface NormalizedRetryPolicy {
 	maxAttempts: number;
 	baseDelayMs: number;
+	maxAgentDelayMs: number;
 }
 
 export interface GenerationContext {
@@ -560,12 +562,13 @@ export interface SessionCreateOptions {
 export type ForkOptions =
 	| {
 			/**
-			 * Copy one path into destination Branch main. A configured source AgentLane
-			 * copies its configuration plus fresh idle state; a data-only Branch remains
-			 * data-only. Operation/pending/result/usage state is excluded.
+			 * Copy one path from a complete configured source AgentLane under the same
+			 * Branch name, with copied configuration and fresh idle lane state.
 			 */
-			scope?: "branch";
-			/** Entry to fork from. Defaults to the source main Branch's current tip. */
+			scope: "branch";
+			/** Source Branch to copy. */
+			branch: string;
+			/** Entry on the source Branch's current tip ancestry. Defaults to the current tip. */
 			entryId?: string;
 			/**
 			 * Whether the fork includes the selected entry or stops at its parent.

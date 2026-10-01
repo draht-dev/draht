@@ -1,6 +1,6 @@
 import { BACKGROUND_CONTEXT } from "../../../context.ts";
 import type { SessionMetadata, SessionRepo } from "../../types.ts";
-import { branchTip, setValue } from "../../values.ts";
+import { branchTip, laneConfig, laneState, setValue } from "../../values.ts";
 import { STORAGE_BENCHMARK_DATASETS, type StorageBenchmarkDataset } from "./datasets.ts";
 import { generateStorageBenchmarkSeedTransactions } from "./storage.ts";
 
@@ -142,7 +142,19 @@ export async function seedSessionRepoForkBenchmark(
 		await session.mutate((mutator) => mutator.commit(transaction, BACKGROUND_CONTEXT), BACKGROUND_CONTEXT);
 	}
 	await session.mutate(
-		(mutator) => mutator.commit([setValue(branchTip("main"), dataset.tipId)], BACKGROUND_CONTEXT),
+		(mutator) =>
+			mutator.commit(
+				[
+					setValue(branchTip("main"), dataset.tipId),
+					setValue(laneConfig("main"), {
+						model: { provider: "benchmark", modelId: "benchmark" },
+						thinkingLevel: "off",
+						activeToolNames: [],
+					}),
+					setValue(laneState("main"), { currentOperationId: null, lastOperationId: null, inbox: [] }),
+				],
+				BACKGROUND_CONTEXT,
+			),
 		BACKGROUND_CONTEXT,
 	);
 	return session.metadata;
@@ -156,7 +168,11 @@ export const SESSION_REPO_FORK_WRITE_BENCHMARK_SCENARIOS: readonly SessionRepoFo
 			return dataset.entryCount;
 		},
 		async run(repo, source, dataset) {
-			const fork = await repo.fork(source, { id: FORK_DESTINATION_SESSION_ID }, BACKGROUND_CONTEXT);
+			const fork = await repo.fork(
+				source,
+				{ id: FORK_DESTINATION_SESSION_ID, scope: "branch", branch: "main" },
+				BACKGROUND_CONTEXT,
+			);
 			return fork.metadata.id === FORK_DESTINATION_SESSION_ID && fork.metadata.parentSessionId === source.id
 				? dataset.entryCount
 				: 0;

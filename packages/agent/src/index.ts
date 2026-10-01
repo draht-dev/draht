@@ -132,12 +132,20 @@ export {
 	type PromptTemplate,
 	type Shell,
 	type ShellExecOptions,
+	type ShellExecResult,
+	type ShellOutputCaptureOptions,
+	type ShellOutputLimits,
+	type ShellOutputMetadata,
+	type ShellOutputRetention,
+	type ShellOutputTruncation,
+	type ShellOutputUpdate,
+	type ShellOutputView,
 	type Skill,
 	toError,
 } from "./harness/types.ts";
+export { applyShellOutputUpdate } from "./harness/utils/output-capture.ts";
 export * from "./harness/utils/shell-output.ts";
 export * from "./harness/utils/truncate.ts";
-export * from "./plugins/services/index.ts";
 export * from "./proxy.ts";
 export * from "./search/index.ts";
 export { setDefaultStreamFn } from "./stream-fn.ts";

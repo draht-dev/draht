@@ -8,6 +8,7 @@
 		"clean": "shx rm -rf dist",
 		"build": "tsc -p tsconfig.build.json",
 		"build:native:darwin": "native/darwin/build.sh",
+		"build:native:linux": "native/linux/build.sh",
 		"build:native:win32": "node native/win32/build.mjs",
 		"dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
 		"test": "bun test test/*.test.ts",
@@ -15,12 +16,17 @@
 	},
 	"files": [
 		"dist/**/*",
+		"native/napi.h",
+		"native/clipboard.h",
 		"native/win32/prebuilds/**/*.node",
 		"native/win32/src/**/*.c",
 		"native/win32/build.mjs",
 		"native/darwin/prebuilds/**/*.node",
-		"native/darwin/src/**/*.c",
+		"native/darwin/src/**/*.m",
 		"native/darwin/build.sh",
+		"native/linux/prebuilds/**/*.node",
+		"native/linux/src/**/*.{c,h}",
+		"native/linux/build.sh",
 		"README.md"
 	],
 	"keywords": [
@@ -49,7 +55,7 @@
 	"dependencies": {
 		"@types/mime-types": "^2.1.4",
 		"chalk": "^5.5.0",
-		"get-east-asian-width": "^1.3.0",
+		"get-east-asian-width": "^1.6.0",
 		"marked": "^15.0.12",
 		"mime-types": "^3.0.1"
 	},

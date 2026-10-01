@@ -14,23 +14,22 @@ This audit covers the durable AgentHarness and its directly coupled Session back
 - `packages/coding-agent/src/experimental` and its focused tests where they host that path;
 - telemetry plumbing in `packages/telemetry`, `packages/ai`, and `packages/agent`.
 
-The inventory was checked against current source, tests, package READMEs, the complete `harness.md`, WP00–WP06 status, explicit stubs/TODOs/skips, and the shipped package boundaries. Historical handoffs are not treated as backlog when current source and the completed WP05 contract supersede them.
+The inventory was checked against current source, tests, package READMEs, the complete `harness.md`, completed WP00–WP07 status, the actionable WP08 handoff, explicit stubs/TODOs/skips, and the shipped package boundaries. Historical handoffs are not treated as backlog when current source and the completed WP05 contract supersede them.
 
 ## Executive result
 
-WP05 is complete through M10. M11 is its only recorded follow-up. The current Harness execution graph has no unfinished runtime path: `watchSession()` is the sole `SliceNotImplemented` Harness method.
+WP05 is complete through M10. Its remaining assistant-output work is owned by the [mobile assistant-output handoff](mobile-handoff/01-harness/05-assistant-output/message-update.md) and its numbered prerequisites. The current Harness execution graph has no unfinished runtime path: `watchSession()` is the sole `SliceNotImplemented` Harness method.
 
-That does **not** mean the surrounding durable system is complete. The audit found:
+That does **not** mean the surrounding durable system is complete. The remaining audit findings are:
 
-1. two SQLite ownership races that can violate single-writer fencing or delete an actively claimed Session;
-2. normative JSONL snapshot-compaction behavior with no implementation;
-3. one required Harness method stub (`watchSession`);
-4. a deliberate removal of raw `RemoteSession` that conflicts with later normative WP06/`harness.md` text;
-5. a public search type skeleton that conflicts with the newer search design and has no implementation;
-6. a full telemetry vocabulary whose only production span is the tool-hook span;
-7. smaller repository, client-watch, query-bound, documentation, and end-to-end-test gaps.
+1. normative JSONL snapshot-compaction behavior with no implementation;
+2. one required Harness method stub (`watchSession`);
+3. a deliberate removal of raw `RemoteSession` that conflicts with later normative WP06/`harness.md` text;
+4. a public search type skeleton that conflicts with the newer search design and has no implementation;
+5. a full telemetry vocabulary whose only production span is the tool-hook span;
+6. smaller repository, client-watch, query-bound, documentation, and end-to-end-test gaps.
 
-The immediate package is therefore SQLite ownership fencing, not a combined “cleanup” package. Its handoff is [`work-packages/07-sqlite-ownership-fencing.md`](work-packages/07-sqlite-ownership-fencing.md).
+WP07 completed SQLite host-ownership alignment and live-source fork support after the audit baseline; its historical handoff is [`work-packages/07-sqlite-host-ownership-live-forks.md`](work-packages/07-sqlite-host-ownership-live-forks.md). WP08 now owns the separate named-branch, tree-state, and bounded-memory fork redesign; its actionable handoff is [`work-packages/08-named-branch-streaming-forks.md`](work-packages/08-named-branch-streaming-forks.md).
 
 ## Required missing functionality and contract contradictions
 
@@ -49,7 +48,7 @@ Define one coherent capture and fold for dynamic lane inventory and fault state.
 
 **Dependency**
 
-Independent of M11 and SQLite internals. It should precede any revisioned Transcript service or remote session-wide observation built on it.
+Independent of the mobile assistant-output handoff and SQLite internals. It should precede any revisioned Transcript service or remote session-wide observation built on it.
 
 ### JSONL snapshot compaction
 
@@ -59,11 +58,11 @@ Independent of M11 and SQLite internals. It should precede any revisioned Transc
 
 **Consequence**
 
-Superseded `pi.op.state`, deleted pending payloads, deleted tool checkpoints, and deleted assistant-frame lists remain physical bytes indefinitely. Generic compaction and M11 are distinct mechanisms but their recorded scopes overlap: WP05 M11 also cites dead post-settlement JSONL frame history, while `harness.md` tracks generic reclamation separately. Compaction reclaims all dead write history after the fact; frame-specific bounding limits peak logical/physical progress while an effect is pending.
+Superseded `pi.op.state`, deleted pending payloads, deleted tool checkpoints, and deleted assistant-frame lists remain physical bytes indefinitely. Generic compaction and the [mobile assistant-output handoff](mobile-handoff/01-harness/05-assistant-output/message-update.md) are complementary. Compaction reclaims dead session-scoped write history after the fact; the handoff moves pending assistant/tool output into ephemeral scopes so it never becomes main-log history, and replaces full/per-frame replication with Chord op batches.
 
 **Dependency**
 
-Memory/SQLite M11 measurement and mechanism design may proceed in parallel. Implement and measure JSONL snapshot compaction before setting M11's final JSONL post-settlement budget, so M11 distinguishes pending-effect volume from already-dead physical history and does not invent a second reclamation mechanism.
+The assistant-output handoff does not depend on J1: scoped storage is the intended lifetime mechanism for pending output, while J1 remains the reclamation mechanism for superseded session-scoped state. Measure both independently so their effects are not conflated.
 
 ### Remote Session contract contradiction — decision required
 
@@ -112,32 +111,25 @@ Before implementation, replace or reconcile the draft public interface and decid
 
 ### R11 — Schema migrations, activation-gated
 
-No current format-4 migration is required. Memory is current-only; JSONL and SQLite reject unsupported storage versions; SQLite runs only idempotent `001_initial.sql`. R11 becomes required immediately before the first incompatible durable storage version/address/state change after format 4 is stabilized. It is not prerequisite work for M11 or current WIP format replacement.
+No current format-4 migration is required. Memory is current-only; JSONL and SQLite reject unsupported storage versions; SQLite runs only idempotent `001_initial.sql`. R11 becomes required immediately before the first incompatible durable storage version/address/state change after format 4 is stabilized. It is not prerequisite work for the mobile assistant-output handoff or current WIP format replacement.
 
 When activated, it must provide ordered transactional migrate-on-open under exclusive ownership, version-specific JSONL decoding plus post-migration compaction, and total mappings for every reachable open operation leaf and surviving value/list.
 
 ## Correctness and data-safety debt
 
-### SQLite ownership and deletion — immediate
+### SQLite host ownership and live-source forks — completed by WP07
 
-1. `SqliteStorage.applyCommit()` renews the writer lease in a separate transaction before the data transaction. A replacement writer can claim an expired lease in that gap; the stale owner’s data transaction never checks `(owner_id, fence)`.
-2. `SqliteSessionRepo.delete()` checks the lease, closes that connection, then deletes through another connection or unlinks the file. Another process can claim between check and deletion.
+The authoritative product rule is in `plugins.md`: exactly one host-assigned process owns writable Session authority; normally it is the Session worker, while the server may temporarily own a newly created or forked destination before closing it and handing it off. Storage backends do not implement writer ownership. The server closes a worker before destructive repository administration.
 
-These violate the documented single-writer guarantee and can corrupt or remove active Session data. WP07 owns them.
+SQLite now follows that rule: the writer-lease schema/module, claims, renewal timer, lease-loss path, and pre-commit callback are gone, with no replacement lock or ownership primitive. Create/open/fork/delete retain repository-local ID reservation. Metadata open and deletion use a true no-create read-write mode; listing and external fork sources use no-create read-only connections.
 
-### SQLite repository identity and path safety
+Same-repository forks retain the source `commitQueue` ordering seam. A source owned elsewhere, including a live worker, is read from its exact canonical container through one independent read-only deferred WAL transaction. Focused per-file and shared-container tests commit a complete later source transaction after the reader establishes its snapshot and before it closes: the first fork excludes the transaction wholly and a later fork includes it wholly.
 
-- `databasePath` creation makes `options.directory`, not the actual custom path’s parent.
-- Per-session filenames interpolate arbitrary explicit IDs without encoding; separators can escape `directory`.
-- Active fork lookup is keyed only by Session ID, so caller-supplied metadata for the same ID at another path can select the wrong open source.
-- `repo.close()` uses fail-fast `Promise.all`, so it can reject before other Session closes settle and release their claims.
-- Equal-`createdAt` list ordering has no deterministic tie-break.
-
-Path/identity/close items that share writer ownership belong in WP07. Deterministic listing is a later behavior-preserving cleanup.
+WP07 also completed canonical `(containerPath, sessionId)` active identity, safe explicit-ID filenames, custom `databasePath` parent creation, Session-scoped shared deletion, WAL/SHM cleanup, and all-settled SQLite repository close. Writable open/delete reject foreign metadata; foreign fork sources are read only from their exact path. Equal-`createdAt` list ordering still has no deterministic tie-break and remains a later behavior-preserving cleanup.
 
 ### Repository close ownership is unspecified
 
-`JsonlSessionRepo.close()` contains the only active Agent source TODO and closes no open Session handles. Memory and SQLite repositories do close owned resources, but both currently use fail-fast `Promise.all`; `SessionRepo` itself declares no `close()` method and shared conformance does not define repository-to-handle ownership. Resolve ownership and all-settled cleanup in one repository-lifecycle package; WP07 may harden SQLite's claim release locally, but do not patch JSONL alone without deciding the common contract.
+`JsonlSessionRepo.close()` contains the only active Agent source TODO and closes no open Session handles. Memory still uses fail-fast `Promise.all`; SQLite now performs backend-local all-settled cleanup of currently open handles, but an already-admitted create/open/fork can still register a handle after repository close captured that set. `SessionRepo` itself declares no `close()` method and shared conformance does not define repository-to-handle ownership or draining of admitted repository operations. Resolve ownership and common cleanup in one repository-lifecycle package; do not patch one backend further without deciding the common contract.
 
 ### Client watch staleness after disconnect
 
@@ -148,7 +140,7 @@ Path/identity/close items that share writer ownership belong in WP07. Determinis
 - SQLite `getEntries(ids)` emits one placeholder per requested ID and can exceed the engine’s variable limit.
 - Entry, usage, and branch limits use ad hoc `Math.max(0, limit)` behavior. Memory and SQLite diverge for `NaN`, infinities, fractions, and extreme values; unlike list reads, there is no shared normalization contract.
 
-Define cross-backend query-limit semantics in agent conformance, then chunk SQLite ID lookups. This is a storage-contract hardening package, not part of lease fencing.
+Define cross-backend query-limit semantics in agent conformance, then chunk SQLite ID lookups. This is a storage-contract hardening package, not part of WP07.
 
 ### Harness contract and conformance closure
 
@@ -157,7 +149,7 @@ Define cross-backend query-limit semantics in agent conformance, then chunk SQLi
 - The production gate-close contract permits only `HarnessClosed | HarnessFault`, but the private source primitive accepts any `Error` and isolated tests use that wider type. Narrow the source declaration and fixtures or explicitly retain the private widening.
 - Part 9 of `harness.md` is the required conformance matrix. Existing focused tests cover the graph extensively, including cancellation reconciliation over all 13 leaves, but there is no audited one-to-one proof that every close/reopen leaf case and every race row has both deterministic orders. Audit the matrix and add only the missing cases rather than claiming blanket completion.
 
-Keep this package separate from telemetry, RemoteSession, and M11; it is local contract/test closure.
+Keep this package separate from telemetry, RemoteSession, and the mobile assistant-output handoff; it is local contract/test closure.
 
 ### Disabled real worker persistence regression
 
@@ -165,7 +157,7 @@ Keep this package separate from telemetry, RemoteSession, and M11; it is local c
 
 ## Performance debt
 
-### M11 — durable assistant-frame volume
+### Mobile assistant-output handoff — durable and replication amplification
 
 The user-supplied motivating mini Session outside the repository is 303,920 bytes across 569 physical lines. These external measurements are evidence, not a reproducible checked-in fixture:
 
@@ -173,19 +165,17 @@ The user-supplied motivating mini Session outside the repository is 303,920 byte
 - 12 frame-list deletes; physical lines mentioning the frame namespace total 148,214 bytes;
 - about 51,568 bytes of superseded `pi.op.state` writes and 26,192 bytes of one structural preparation, showing why generic JSONL compaction and frame-specific bounding are distinct.
 
-M11 must first add a deterministic repository fixture and measurement script that reproduces or replaces these figures.
+The authoritative design is the [mobile assistant-output handoff](mobile-handoff/01-harness/05-assistant-output/message-update.md), following the numbered `01-harness` prerequisites in [`mobile-handoff/README.md`](mobile-handoff/README.md). Chord delta tracking has landed; scoped storage, tool-output integration, and assistant-output integration have not.
 
-M11 must measure Memory logical elements, SQLite rows/pages/WAL, JSONL peak bytes during an effect, JSONL post-settlement bytes, and JSONL reopen/replay time. It must then bound persisted progress without weakening unknown-outcome recovery, invocation fencing, non-blocking provider streaming, or settlement cleanup. Live event fidelity need not imply one durable write per provider event.
-
-Candidate mechanisms remain design inputs, not approved architecture: coalesced durable checkpoints, a bounded full snapshot plus short delta tail, or logarithmic snapshot points. The exit condition needs numerical budgets derived from fixtures, not only “smaller than before.”
+Implementation must add a deterministic repository fixture and measurement script that reproduces or replaces these figures, then measure Memory logical elements, SQLite rows/pages/WAL, JSONL peak sidecar/main-log bytes, and reopen/replay time. The handoff must preserve unknown-outcome recovery, invocation fencing, non-blocking provider streaming, and settlement retirement while eliminating per-frame durable writes and quadratic `message_update` replication. Numerical budgets belong in its implementation handoff/tests, not in a competing standalone design.
 
 ### SQLite branch divergence
 
 `createDivergentBranchForEntry()` copies every row after the newest compaction; with no compaction it copies root-through-parent. A first divergence from a long uncompacted transcript is therefore O(history) writes. This exposes an internal contradiction in `harness.md` §2.6: its opening bounded-prefix promise conflicts with its own compaction-based copy algorithm, which the implementation follows. Change both the specification and segment representation so a divergence can reference a covering segment at the parent boundary. Preserve shared-container support and add large uncompacted divergence plus chain-soundness tests/benchmarks.
 
-### SQLite fork cost
+### Fork contract and materialization — WP08 actionable
 
-Active and closed forks load every scalar value, including application values that are later excluded, and `createForkSnapshot()` repeatedly searches those arrays for branch/config/label state. Select only fork-relevant built-in namespaces, index once, and fetch labels only for copied entries. Measure large application-state forks before/after.
+All current backends materialize source-sized fork snapshots. Branch scope defaults to `main` without named-Branch ancestry validation; tree scope omits application values/lists; JSONL closed-source fork replay may repair its source. WP08 replaces that contract with required named-branch or tree scope, one closed built-in-state policy, complete current application state for tree forks, and backend-specific bounded-memory copy procedures. It preserves WP07's host ownership, physical identity, same-repository ordering, and independent live-source WAL boundary.
 
 ### SQLite catalog, statements, stats, and reclamation
 
@@ -211,19 +201,20 @@ Completed by this audit:
 
 Remaining cleanup:
 
+- **Harness-owned DTO boundary:** the durable Harness still imports legacy agent-loop DTOs from `src/types.ts`: `AgentMessage`, `AgentToolResult`, `AgentToolCall`, `AgentTool`, `QueueMode`, and `ThinkingLevel`. Make a later one-shot cut to independent `HarnessMessage`, `CustomHarnessMessages`, `HarnessToolResult`, `HarnessToolCall`, `HarnessQueueMode`, and `HarnessThinkingLevel` definitions; keep `AgentHarnessTool` as the executable Harness configuration type. Update Harness internals, root exports, declaration-merging tests, documentation, and experimental coding-agent consumers together. Do not alias the new message/tool DTOs back to legacy types, because that preserves the coupling this work is intended to remove.
 - Preserve shared-container support; do not remove it incidentally.
 - Remove or use unused `insertEntryRow()` and `insertUsageLedgerRow()`.
 - Consolidate duplicated SQLite branch payload/structure scan plumbing only after correctness tests pin both paths.
 - Decide whether unused `sessions.metadata` and unmeasured indexes have a future owner before schema removal; do not change schema casually.
 - Consolidate `startAiSpan()`/`startHarnessSpan()` implementation only if the telemetry surface is retained.
-- Mark historical durability documents as delivered where they still read as implementation queues. WP00–WP06, `runtime-simplification.md`, `values.md`’s old consumer deferrals, and external-finalization designs are not active runtime backlog.
+- Mark historical durability documents as delivered where they still read as implementation queues. WP00–WP07, `runtime-simplification.md`, `values.md`’s old consumer deferrals, and external-finalization designs are not active runtime backlog.
 
 ## Optional or deferred product capabilities
 
 These are not blockers for the durable Harness:
 
 - standalone S3 search after its API decisions;
-- Accounts removal, revisioned Transcript production, and Chat steer/follow-up/next-run/cancel/resume/compact/navigate service adapters;
+- Accounts removal and revisioned Transcript production;
 - authenticated workspace/client authorization for the experimental local server;
 - private returned references, service flow control, multi-pane presentation, plugin kernel/reload completion, and version-skew negotiation;
 - administrative precise rewrite tooling;
@@ -237,15 +228,15 @@ These are not blockers for the durable Harness:
 
 The order is by data safety first, then dependencies. Independent tracks may proceed in parallel only when they do not edit the same contracts.
 
-1. **WP07 — SQLite ownership fencing.** Atomic lease assertion with commits, exclusive deletion, path/source identity, close draining, and documentation correction.
-2. **Harness contract/conformance closure.** Resolve `OperationStatus.running`, abort signal/event binding order, gate-close typing, and the Part 9 coverage matrix.
-3. **Remote Session decision (decision only).** Resolve the false normative boundary early. If process-local wins, repair the docs. If raw RemoteSession wins, later create a dedicated protocol/client/server/worker package; do not fold it into telemetry or R12.
-4. **Client watch/subscription staleness** and **repository lifecycle contract.** Small independent correctness packages; complete them before expanding server/worker lifecycle semantics. The lifecycle package must also address Memory's fail-fast repository close.
-5. **JSONL snapshot compaction.** Implement the already-normative physical reclamation path and metrics.
-6. **M11 durable frame volume.** Memory/SQLite measurement can start earlier; set final JSONL budgets only with compaction measured, and preserve all recovery boundaries.
-7. **R12 session-wide watch.** Complete the only Harness method stub before building revisioned Transcript/session-wide remote observation.
-8. **Telemetry, if retained:** reconcile schemas, then local instrumentation, then RPC propagation, then an optional exporter. RPC propagation follows the Remote Session/product-boundary decision.
-9. **SQLite branch/fork/query performance hardening.** Keep separate from lease correctness and require benchmarks.
+1. **Harness contract/conformance closure.** Resolve `OperationStatus.running`, abort signal/event binding order, gate-close typing, and the Part 9 coverage matrix.
+2. **Remote Session decision (decision only).** Resolve the false normative boundary early. If process-local wins, repair the docs. If raw RemoteSession wins, later create a dedicated protocol/client/server/worker package; do not fold it into telemetry or R12.
+3. **Client watch/subscription staleness** and **repository lifecycle contract.** Small independent correctness packages; complete them before expanding server/worker lifecycle semantics. The lifecycle package must also address Memory's fail-fast repository close.
+4. **[Mobile Harness handoff](mobile-handoff/README.md).** Follow its numbered prerequisites through scoped storage, tool output, and assistant output; preserve all recovery boundaries and land deterministic amplification measurements.
+5. **JSONL snapshot compaction.** Implement the already-normative physical reclamation path and metrics for remaining session-scoped history.
+6. **R12 session-wide watch.** Complete the only Harness method stub before building revisioned Transcript/session-wide remote observation.
+7. **Telemetry, if retained:** reconcile schemas, then local instrumentation, then RPC propagation, then an optional exporter. RPC propagation follows the Remote Session/product-boundary decision.
+8. **WP08 — named-branch and streaming forks.** Implement the actionable handoff without reopening WP07 ownership or lifecycle decisions.
+9. **SQLite branch/query performance hardening.** Keep separate from completed WP07 ownership alignment and WP08 fork semantics; require benchmarks.
 10. **S3 search.** Resolve its API/filter/cursor decisions, then implement catch-up and the standalone FTS projection.
 11. **R11 migrations.** Activate immediately before the first incompatible stabilized durable schema change, not earlier.
 
@@ -258,4 +249,6 @@ This inventory must be updated when any of these facts changes:
 - JSONL snapshot compaction lands;
 - telemetry schemas are implemented or removed;
 - S3’s public API is reconciled;
-- a durable format change activates R11.
+- a durable format change activates R11;
+- WP08 lands or its fork contract changes;
+- the host-authority contract changes.

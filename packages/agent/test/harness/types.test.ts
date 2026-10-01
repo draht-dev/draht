@@ -33,6 +33,7 @@ import type {
 	LaneConfiguration,
 	LaneExecutionInfo,
 	LaneSnapshot,
+	LaneSnapshotTool,
 	NewEntry,
 	OperationAdmissionResult,
 	OperationAt,
@@ -74,7 +75,7 @@ const configuration = {
 	activeToolNames: ["read"],
 } satisfies LaneConfiguration;
 
-const retryPolicy = { maxAttempts: 3, baseDelayMs: 100 } as const;
+const retryPolicy = { maxAttempts: 3, baseDelayMs: 100, maxAgentDelayMs: 30_000 } as const;
 const generationContext = {
 	stepId: "step",
 	triggerEntryId: "trigger",
@@ -443,6 +444,7 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 		systemPrompt: string;
 	}>();
 	expectTypeOf<LaneSnapshot["operation"]>().not.toEqualTypeOf<SessionSnapshot>();
+	expectTypeOf<LaneSnapshotTool["status"]>().toEqualTypeOf<"running" | "settled">();
 	expectTypeOf<AgentLane["getResult"]>().returns.toEqualTypeOf<Promise<OperationResultRecord | undefined>>();
 	expectTypeOf<SuspendedRun>().toEqualTypeOf<{
 		operationId: string;

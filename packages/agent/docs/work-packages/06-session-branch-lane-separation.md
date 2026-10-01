@@ -552,7 +552,7 @@ Public drive remains disabled. Complete this package before resuming WP05 M4.
 - all runtime drive modules already present (`checkpoint`, `generation`, `recovery`, `terminal`, `progress`) only where names/signatures change.
 - `src/harness/compaction/branch-summarization.ts`.
 - `packages/protocol/src/harness.ts`.
-- `packages/coding-agent/src/experimental/services/chat-provider.ts`.
+- `packages/coding-agent/src/experimental/services/agent-controller-provider.ts`.
 - `packages/coding-agent/src/experimental/services/models-provider.ts`.
 - `packages/coding-agent/src/experimental/session-worker.ts`.
 - experimental harness wire/session worker tests.

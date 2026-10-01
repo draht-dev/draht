@@ -180,6 +180,16 @@ export function finalizeToolCall<TContext extends object | undefined>(
 	};
 }
 
+/** Reconstruct the canonical tool result represented by a staged transcript message. */
+export function toolResultFromMessage(message: ToolResultMessage, terminate: boolean): AgentToolResult {
+	return {
+		content: message.content,
+		details: message.details,
+		...(message.usage === undefined ? {} : { usage: message.usage }),
+		...(terminate ? { terminate: true } : {}),
+	};
+}
+
 /** Convert finalized tool output to the provider-facing transcript message. */
 export function createToolResultMessage(call: FinalizedToolCall): ToolResultMessage {
 	return {
@@ -187,9 +197,8 @@ export function createToolResultMessage(call: FinalizedToolCall): ToolResultMess
 		toolCallId: call.toolCall.id,
 		toolName: call.toolCall.name,
 		content: call.result.content ?? [],
-		...(call.result.details === undefined ? {} : { details: call.result.details }),
+		...(call.result.details === undefined ? {} : { details: call.result.details as JsonValue }),
 		...(call.result.usage === undefined ? {} : { usage: call.result.usage }),
-		...(call.result.addedToolNames?.length ? { addedToolNames: call.result.addedToolNames } : {}),
 		isError: call.isError,
 		timestamp: Date.now(),
 	};

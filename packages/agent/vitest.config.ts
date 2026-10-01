@@ -21,6 +21,7 @@ export default defineConfig({
 		// giving tests a second copy of module state — the provider registry the harness
 		// tests mutate via `createModels()` / `models.setProvider()` would not be the one the
 		// agent runtime reads. See packages/coding-agent/vitest.config.ts for the same fix.
+		conditions: ["source"],
 		alias: [
 			{ find: /^@draht\/telemetry$/, replacement: telemetrySrcIndex },
 			{ find: /^@draht\/agent-core$/, replacement: agentSrcIndex },
@@ -29,4 +30,5 @@ export default defineConfig({
 			{ find: /^@draht\/ai\/providers\/(.+)$/, replacement: `${aiSrcProviders}/$1.ts` },
 		],
 	},
+	ssr: { resolve: { conditions: ["source"] } },
 });

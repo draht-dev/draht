@@ -3,6 +3,16 @@
 	"compilerOptions": {
 		"outDir": "./dist",
 		"paths": {
+			"@draht/chord": ["../chord/dist/index.d.ts"],
+			"@draht/chord/bundler": ["../chord/dist/bundler.d.ts"],
+			"@draht/chord/node": ["../chord/dist/node.d.ts"],
+			"@draht/codemode": ["../codemode/dist/index.d.ts"],
+			"@draht/codemode/declarations": ["../codemode/dist/declarations.d.ts"],
+			"@draht/codemode/source": ["../codemode/dist/source.d.ts"],
+			"@draht/codemode/worker": ["../codemode/dist/runtime/worker.d.ts"],
+			"@draht/mcp": ["../mcp/dist/index.d.ts"],
+			"@draht/mcp/oauth": ["../mcp/dist/oauth/index.d.ts"],
+			"@draht/mcp/testing": ["../mcp/dist/testing/index.d.ts"],
 			"@draht/agent-core": ["../agent/dist/index.d.ts"],
 			"@draht/agent-core/*": ["../agent/dist/*.d.ts"],
 			"@draht/ai": ["../ai/dist/index.d.ts"],

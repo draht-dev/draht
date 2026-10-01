@@ -12,6 +12,7 @@ import type {
 	ToolResultMessage,
 	Usage,
 } from "@draht/ai";
+import type { JsonRepresentation } from "@draht/chord";
 import type { AgentMessage, AgentToolResult, QueueMode, ThinkingLevel } from "../types.ts";
 import type { BranchPreparation, BranchSummaryResult } from "./compaction/branch-summarization.ts";
 import type { CompactionPreparation, CompactionSettings, CompactResult } from "./compaction/compaction.ts";
@@ -190,6 +191,23 @@ export interface LaneInfo {
 	operation: CurrentOperationInfo | null;
 }
 
+export type LaneSnapshotTool =
+	| {
+			status: "running";
+			toolCallId: string;
+			toolName: string;
+			args: unknown;
+			result?: AgentToolResult<unknown>;
+	  }
+	| {
+			status: "settled";
+			toolCallId: string;
+			toolName: string;
+			args: unknown;
+			result: AgentToolResult<unknown>;
+			isError: boolean;
+	  };
+
 export interface OpenOperation {
 	lane: string;
 	operationId: string;
@@ -223,12 +241,7 @@ export interface LaneSnapshot {
 		retry?: { attempt: number; maxAttempts: number; nextAttemptAt: number };
 		deferred?: { handle: DeferredHandle; poll: number };
 		streamingMessage?: AssistantMessage;
-		runningTools: {
-			toolCallId: string;
-			toolName: string;
-			args: unknown;
-			partialResult?: AgentToolResult<unknown>;
-		}[];
+		runningTools: LaneSnapshotTool[];
 	};
 	queues: LaneQueuedItem[];
 	faulted: boolean;
@@ -382,6 +395,20 @@ export type HarnessEvent =
 	| (Extract<HarnessEventPayload, { type: "usage" }> & { recovery?: never })
 	| (GlobalConfigEventPayload & { lane?: never; recovery?: never })
 	| (HandlerErrorPayload & ({ lane: string; recovery?: true } | { lane?: never; recovery?: never }));
+
+type LaneWatchSourceEvent =
+	| Exclude<
+			HarnessEvent,
+			| { type: "handler_error" | "turn_start" | "turn_end" | "value_update" | "lane_created" | "message_update" }
+			| ({ type: "config_update" } & { property: string })
+	  >
+	| Extract<HarnessEvent, { type: "config_update"; property: "model" | "thinkingLevel" | "activeTools" }>
+	| Omit<Extract<HarnessEvent, { type: "message_update" }>, "event">;
+
+/** Strict-JSON snapshot representation published to remote transcript consumers. */
+export type LaneTranscriptSnapshot = JsonRepresentation<LaneSnapshot>;
+/** Reducer-relevant strict-JSON Harness events published to remote transcript consumers. */
+export type LaneWatchEvent = JsonRepresentation<LaneWatchSourceEvent>;
 
 export type HarnessEventType = HarnessEvent["type"];
 export type EventListener<TEvent extends HarnessEvent = HarnessEvent> = (

@@ -19,24 +19,31 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Workspace package name -> its source root, so cross-package imports are followed. */
 const WORKSPACE = {
+	"@draht/chord": "packages/chord/src",
 	"@draht/ai": "packages/ai/src",
 	"@draht/agent-core": "packages/agent/src",
+	"@draht/codemode": "packages/codemode/src",
 	"@draht/telemetry": "packages/telemetry/src",
+	"@draht/mcp": "packages/mcp/src",
 	"@draht/tui": "packages/tui/src",
 };
 
 /**
- * Budgets are deliberate. `.` and `./node` are batteries-included entries and stay unbounded; every
- * narrow entry states the graph it is allowed to reach.
+ * Budgets are deliberate. Entries with no budget remain unbounded; each listed entry states the
+ * graph it is allowed to reach.
  */
 const BUDGETS = {
 	"packages/ai": {
+		"./models": {
+			maxFiles: 15,
+			forbid: ["providers/", "models.generated.ts", "index.ts", "utils/validation.ts", "utils/typebox-helpers.ts"],
+		},
 		"./utils/*": { maxFiles: 3, forbid: ["providers/", "api/", "index.ts"] },
 	},
 	"packages/agent": {
 		"./harness/runtime/reducer": { maxFiles: 1 },
 		"./harness/context": { maxFiles: 6, forbid: ["harness/runtime/", "harness/execution/", "packages/ai/"] },
-		"./harness/env/nodejs": { maxFiles: 3, forbid: ["packages/ai/", "harness/runtime/"] },
+		"./harness/env/nodejs": { maxFiles: 5, forbid: ["packages/ai/", "harness/runtime/"] },
 		"./harness/session": { maxFiles: 25, forbid: ["harness/runtime/", "harness/execution/", "packages/ai/src/index.ts"] },
 	},
 };

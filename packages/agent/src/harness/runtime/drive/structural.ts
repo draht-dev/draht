@@ -3,6 +3,7 @@ import {
 	type AssistantMessage,
 	isRetryableAssistantError,
 	type Model,
+	retryDelayMs,
 	type SimpleStreamOptions,
 } from "@draht/ai";
 import type { HarnessEvent } from "../../agent-harness.ts";
@@ -10,7 +11,7 @@ import type { BranchPreparation, BranchSummaryResult } from "../../compaction/br
 import { generateBranchSummaryWithRequest } from "../../compaction/branch-summarization.ts";
 import type { CompactionPreparation, CompactResult, SummaryRequest } from "../../compaction/compaction.ts";
 import { compactWithRequest, prepareCompaction, shouldCompact } from "../../compaction/compaction.ts";
-import { type Context, withAbortSignal } from "../../context.ts";
+import { type Context, getTelemetryContext, withAbortSignal } from "../../context.ts";
 import { AbortRequested } from "../../execution/effect-gate.ts";
 import { applyStreamOptionsPatch } from "../../hooks.ts";
 import { insertEntry, insertUsage } from "../../session/commit.ts";
@@ -53,7 +54,7 @@ import {
 	normalizedRetryPolicy,
 	planBoundaryInbox,
 } from "./boundary.ts";
-import { retryDelay, retryNotBefore, waitUntil } from "./retry.ts";
+import { retryNotBefore, waitUntil } from "./retry.ts";
 import { operationCleanupWrites, operationResultRecord } from "./terminal.ts";
 
 class StructuralCancelled extends Error {
@@ -688,7 +689,7 @@ function retryWaitFromEffect(effect: SummaryEffectPendingOperation, errorMessage
 		task: effect.task,
 		summaryContext: effect.summaryContext,
 		nextAttempt: effect.attempt + 1,
-		notBefore: retryNotBefore(effect.summaryContext.retryPolicy.baseDelayMs, effect.attempt),
+		notBefore: retryNotBefore(effect.summaryContext.retryPolicy, effect.attempt),
 		errorMessage,
 	};
 }
@@ -787,7 +788,7 @@ function requestStreamOptions(
 		cacheRetention: "none",
 		deferred: false,
 		signal: context.abortSignal,
-		telemetryContext: context.telemetryContext,
+		telemetryContext: getTelemetryContext(context),
 		onPayload,
 	};
 }
@@ -992,7 +993,7 @@ async function publishAttemptResult<TContext extends object | undefined>(
 						step: effect.task.taskId,
 						attempt: retryWait.nextAttempt,
 						maxAttempts: effect.summaryContext.retryPolicy.maxAttempts,
-						delayMs: retryDelay(effect.summaryContext.retryPolicy.baseDelayMs, effect.attempt),
+						delayMs: retryDelayMs(effect.summaryContext.retryPolicy, effect.attempt),
 						notBefore: retryWait.notBefore,
 						errorMessage: result.error.message,
 					},
@@ -1101,7 +1102,7 @@ export async function recoverStructuralGeneration<TContext extends object | unde
 					step: effect.task.taskId,
 					attempt: retryWait.nextAttempt,
 					maxAttempts: effect.summaryContext.retryPolicy.maxAttempts,
-					delayMs: retryDelay(effect.summaryContext.retryPolicy.baseDelayMs, effect.attempt),
+					delayMs: retryDelayMs(effect.summaryContext.retryPolicy, effect.attempt),
 					notBefore: retryWait.notBefore,
 					errorMessage: error.message,
 					recovery: true,

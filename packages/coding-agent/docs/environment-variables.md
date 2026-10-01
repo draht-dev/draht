@@ -6,7 +6,7 @@ draht uses environment variables in three ways:
 - draht sets process markers so child processes can identify draht as the launching agent.
 - Commands run by the LLM-callable shell tools receive `DRAHT_*` variables describing the current session.
 
-Provider API-key variables are documented separately in [Providers](providers.md#environment-variables-or-auth-file).
+Provider API-key variables are documented separately in [Provider Authentication](providers.md#use-an-api-key-from-the-environment).
 
 ## Process Marker
 
@@ -81,11 +81,14 @@ These variables are read by draht itself:
 | `DRAHT_CODING_AGENT_DIR` | Override the config directory; default is `~/.draht/agent` |
 | `DRAHT_CODING_AGENT_SESSION_DIR` | Override session storage; overridden by `--session-dir` |
 | `DRAHT_PACKAGE_DIR` | Override the package directory, useful for Nix/Guix store paths |
-| `DRAHT_OFFLINE` | Disable startup network operations, including update checks, package updates, and install/update telemetry |
-| `DRAHT_SKIP_VERSION_CHECK` | Disable the latest-version request |
-| `DRAHT_TELEMETRY` | Override install/update telemetry and provider attribution headers: `1`/`true`/`yes` or `0`/`false`/`no` |
+| `DRAHT_OFFLINE` | Disable automatic network activity, including version checks, package updates, and model catalog refreshes |
+| `DRAHT_SKIP_VERSION_CHECK` | Disable the latest-version request to the npm registry entry for `@draht/coding-agent` |
+| `DRAHT_MODEL_CATALOG_BASE_URL` | Enable the remote model catalog overlay from a self-hosted endpoint; the overlay is off when unset |
+| `DRAHT_TELEMETRY` | Override provider attribution headers (OpenRouter, NVIDIA NIM, Cloudflare): `1`/`true`/`yes` or `0`/`false`/`no` |
 | `DRAHT_CACHE_RETENTION` | Set to `long` for extended provider prompt caching where supported |
-| `DRAHT_SHARE_VIEWER_URL` | Override the base URL used by `/share` |
+| `DRAHT_SHARE_VIEWER_URL` | Base URL of a share viewer for `/share`; when unset, `/share` prints the gist URL |
+| `DRAHT_RADIUS_GATEWAY` | Radius gateway origin for `/bug` uploads and Radius relay connections; when unset, `/bug` can only export the report zip |
+| `DRAHT_NO_ATTACHABLE` | Set to `1`/`true`/`yes` to stop sessions from registering an attach socket; overridden by `--attachable` |
 | `DRAHT_HARDWARE_CURSOR` | Set to `1` to show the hardware cursor; see [Terminal setup](terminal-setup.md) |
 | `DRAHT_HYPERLINKS` | Override OSC 8 hyperlink detection with `1`, `0`, or `auto` |
 | `DRAHT_IMAGE_PROTOCOL` | Override inline image detection with `kitty`, `iterm2`, `none`, or `auto` |
@@ -94,4 +97,4 @@ These variables are read by draht itself:
 | `VISUAL`, `EDITOR` | External editor fallback when `externalEditor` is unset |
 | `HTTP_PROXY`, `HTTPS_PROXY` | Proxy outbound HTTP requests |
 
-Provider credentials such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and cloud-provider configuration are listed in [Providers](providers.md#environment-variables-or-auth-file).
+Provider credentials such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and cloud-provider configuration are listed in [Provider Authentication](providers.md#use-an-api-key-from-the-environment).

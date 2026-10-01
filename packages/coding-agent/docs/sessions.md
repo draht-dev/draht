@@ -1,148 +1,68 @@
-# Sessions
+# Sessions and Context
 
-Pi saves conversations as sessions so you can continue work, branch from earlier turns, and revisit previous paths.
+draht saves a conversation as a session. The active branch of that session supplies conversation history for the next model request. Use session commands to continue work, explore another branch, or reduce the amount of history sent to the model.
 
-## Session Storage
+## Continue or switch sessions
 
-Sessions auto-save to `~/.pi/agent/sessions/`, organized by working directory. Each session is a JSONL file with a tree structure.
-
-```bash
-draht -c                  # Continue most recent session
-draht -r                  # Browse and select from past sessions
-draht --no-session        # Ephemeral mode; do not save
-draht --name "my task"    # Set session display name at startup
-draht --session <path|id> # Use a specific session file or partial session ID
-draht --fork <path|id>    # Fork a session file or partial session ID into a new session
-```
-
-Use `/session` in interactive mode to see the current session file, session ID, message count, tokens, and cost.
-
-For the JSONL file format and SessionManager API, see [Session Format](session-format.md).
-
-To expose a running session on a Unix socket and watch or drive it from another terminal, see
-[Attachable Sessions](attachable-sessions.md) (`--attachable`, `--attach`, `--list-sessions`).
-
-## Session Commands
-
-| Command | Description |
-|---------|-------------|
-| `/resume` | Browse and select previous sessions |
-| `/new` | Start a new session |
-| `/name <name>` | Set the current session display name |
-| `/session` | Show session info |
-| `/tree` | Navigate the current session tree |
-| `/fork` | Create a new session from a previous user message |
-| `/clone` | Duplicate the current active branch into a new session |
-| `/compact [prompt]` | Summarize older context; see [Compaction](compaction.md) |
-| `/export [file]` | Export session to HTML |
-| `/share` | Upload as private GitHub gist with shareable HTML link |
-
-## Resuming and Deleting Sessions
-
-`/resume` opens an interactive session picker for the current project. `draht -r` opens the same picker at startup.
-
-In the picker you can:
-
-- search by typing
-- toggle path display with Ctrl+P
-- toggle sort mode with Ctrl+S
-- filter to named sessions with Ctrl+N
-- rename with Ctrl+R
-- delete with Ctrl+D, then confirm
-
-When available, pi uses the `trash` CLI for deletion instead of permanently removing files.
-
-## Naming Sessions
-
-Use `/name <name>` to set a human-readable session name:
-
-```text
-/name Refactor auth module
-```
-
-Set the name at startup with `--name` or `-n`:
+draht saves sessions automatically unless you start it with `--no-session`.
 
 ```bash
-draht --name "Refactor auth module"
-draht --name "CI audit" -p "Review this build failure"
+draht --continue
+draht --resume
 ```
 
-Named sessions are easier to find in `/resume` and `draht -r`.
+`--continue` opens the most recent session for the current working directory. `--resume` opens the session picker. In interactive mode, `/resume` opens the same picker and `/new` starts a new session.
 
-## Branching with `/tree`
+Use `/name` or `--name` to assign a recognizable session name. Run `/session` to verify the current session file, ID, message count, token usage, and cost.
 
-Sessions are stored as trees. Every entry has an `id` and `parentId`, and the current position is the active leaf. `/tree` lets you jump to any previous point and continue from there without creating a new file.
+The session picker lets you search, rename, and delete sessions. It can also show paths, change sorting, and limit results to named sessions. See [Keybindings](keybindings.md#sessions) for its shortcuts.
 
-<p align="center"><img src="images/tree-view.png" alt="Tree View" width="600"></p>
+To expose a running session on a Unix socket and watch or drive it from another terminal, see [Attachable Sessions](attachable-sessions.md) (`--attachable`, `--attach`, `--list-sessions`).
 
-Example shape:
+## Choose how to branch
 
-```text
-├─ user: "Hello, can you help..."
-│  └─ assistant: "Of course! I can..."
-│     ├─ user: "Let's try approach A..."
-│     │  └─ assistant: "For approach A..."
-│     │     └─ user: "That worked..."  ← active
-│     └─ user: "Actually, approach B..."
-│        └─ assistant: "For approach B..."
-```
+draht stores entries as a tree, so returning to an earlier point does not erase the branch you leave.
 
-### Tree Controls
+| Action | Result | Use it when |
+|---|---|---|
+| `/tree` | Moves within the current session file | Related alternatives should stay together |
+| `/fork` | Creates a new session from an earlier user message | The alternative should become separate work |
+| `/clone` | Copies the active branch into a new session | You want a separate copy of the current state |
 
-| Key | Action |
-|-----|--------|
-| ↑/↓ | Navigate visible entries |
-| ←/→ | Page up/down |
-| Ctrl+←/Ctrl+→ or Alt+←/Alt+→ | Fold/unfold or jump between branch segments |
-| Shift+L | Set or clear a label on the selected entry |
-| Shift+T | Toggle label timestamps |
-| Enter | Select entry |
-| Escape/Ctrl+C | Cancel |
-| Ctrl+O | Cycle filter mode |
+In `/tree`, select a user message to put its text back in the editor. Edit and submit it to create another branch. Selecting an assistant response or another entry continues after that entry with an empty editor.
 
-Filter modes are: default, no-tools, user-only, labeled-only, and all. Configure the default with `treeFilterMode` in [Settings](settings.md).
+When you leave a branch, draht can summarize it and attach that summary to the branch you enter. This preserves relevant work from the abandoned path without including every message from it.
 
-### Selection Behavior
+For the persisted tree and entry types, see [Session Format](session-format.md).
 
-Selecting a user or custom message:
+## Manage conversation context
 
-1. Moves the leaf to the selected message's parent.
-2. Places the selected message text in the editor.
-3. Lets you edit and resubmit, creating a new branch.
+The model receives the active branch, not every branch in the session file. draht combines that history with the system prompt, discovered context files, available tools, and loaded skill descriptions. [How draht Works](how-pi-works.md#context) describes how those inputs are assembled.
 
-Selecting an assistant, tool, compaction, or other non-user entry:
+The footer shows current context usage. When the active context approaches the model's limit, draht normally compacts older history automatically. Compaction adds a summary and keeps recent messages. It does not delete the original session entries.
 
-1. Moves the leaf to that entry.
-2. Leaves the editor empty.
-3. Lets you continue from that point.
+Run `/compact` to compact manually. You can add instructions when the summary should preserve a particular topic or decision. Configure automatic compaction and retained history through [Settings](settings.md#compaction).
 
-Selecting the root user message resets the leaf to an empty conversation and places the original prompt in the editor.
+Compaction can fail if the provider is unavailable or cannot accept the summarization request. Correct the provider problem and run `/compact` again. Disabling automatic compaction does not disable the manual command.
 
-## `/tree`, `/fork`, and `/clone`
+See [Compaction Reference](compaction.md) for thresholds, retained boundaries, branch-summary behavior, and extension hooks.
 
-| Feature | `/tree` | `/fork` | `/clone` |
-|---------|---------|---------|----------|
-| Output | Same session file | New session file | New session file |
-| View | Full tree | User-message selector | Current active branch |
-| Typical use | Explore alternatives in place | Start a new session from an earlier prompt | Duplicate current work before continuing |
-| Summary | Optional branch summary | None | None |
+## Control session storage
 
-Use `/tree` when you want to keep alternatives together. Use `/fork` or `/clone` when you want a separate session file.
+By default, draht stores sessions under `~/.draht/agent/sessions/`, grouped by working directory. Use `--session-dir`, `DRAHT_CODING_AGENT_SESSION_DIR`, or the `sessionDir` setting to choose another location. The CLI option has highest precedence.
 
-## Branch Summaries
+Use `--no-session` for an ephemeral run. An ephemeral session cannot be resumed after draht exits.
 
-When `/tree` switches away from one branch to another, pi can summarize the abandoned branch and attach that summary at the new position. This preserves important context from the path you left without replaying the whole branch.
+Use `--session` when you already know the session path or ID. Use `--fork` to create a new session from an existing session before interactive mode starts.
 
-When prompted, choose one of:
+## Export or share a session
 
-1. no summary
-2. summarize with the default prompt
-3. summarize with custom focus instructions
+Use `/export` to write the current session as HTML or JSONL. Use `/share` to upload it as a private GitHub gist through the `gh` CLI. draht shows the gist URL. If `DRAHT_SHARE_VIEWER_URL` is set, draht also shows a viewer link built from that base URL.
 
-See [Compaction](compaction.md) for branch summarization internals and extension hooks.
+Review exported or shared sessions first. They can contain prompts, model responses, tool arguments, command output, file contents, and extension messages.
 
-## Session Format
+## Report a bug
 
-Session files are JSONL and contain message entries, model changes, thinking-level changes, labels, compactions, branch summaries, and extension entries.
+Run `/bug [description]` to prepare a private bug report. You can include the session transcript, omit it, or ask the current model to summarize the problem. Review any transcript or generated summary because it can contain sensitive conversation data.
 
-For parsers, extensions, SDK usage, and the full SessionManager API, see [Session Format](session-format.md).
+The report includes environment and provider configuration without credential values, plus recorded error diagnostics. Export the report as a zip to inspect and share yourself. draht has no default bug report service: uploading is offered only when `DRAHT_RADIUS_GATEWAY` points at a Radius gateway. Uploads do not require a login; Radius authentication attributes the report to your account. If an upload fails, draht offers to export the zip.

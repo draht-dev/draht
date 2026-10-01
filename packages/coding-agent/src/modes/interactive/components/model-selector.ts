@@ -126,14 +126,11 @@ export class ModelSelectorComponent extends Container implements Focusable {
 
 		// Hint
 		if (this.onSelectAsDefaultCallback) {
-			const confirmKey = keyDisplayText("tui.select.confirm");
-			const confirmAsDefaultKey = keyDisplayText("tui.select.confirmAsDefault");
-			const cancelKey = keyDisplayText("tui.select.cancel");
 			this.addChild(
 				new Text(
 					theme.fg(
 						"dim",
-						`  ${confirmKey} to select \u00b7 ${confirmAsDefaultKey} to set as default \u00b7 ${cancelKey} to cancel`,
+						`  ${keyDisplayText("tui.select.confirm")} to select · ${keyDisplayText("app.models.save")} to set as default · ${keyDisplayText("tui.select.cancel")} to cancel`,
 					),
 					0,
 					0,
@@ -316,19 +313,11 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			const isDefault = this.isDefaultModel(item.model);
 			const defaultBadge = isDefault ? theme.fg("muted", " · default") : "";
 
-			let line = "";
-			if (isSelected) {
-				const prefix = theme.fg("accent", "→ ");
-				const modelText = `${item.id}`;
-				const providerBadge = theme.fg("muted", `[${item.provider}]`);
-				const checkmark = isCurrent ? theme.fg("success", " ✓") : "";
-				line = `${prefix + theme.fg("accent", modelText)} ${providerBadge}${defaultBadge}${checkmark}`;
-			} else {
-				const modelText = `  ${item.id}`;
-				const providerBadge = theme.fg("muted", `[${item.provider}]`);
-				const checkmark = isCurrent ? theme.fg("success", " ✓") : "";
-				line = `${modelText} ${providerBadge}${defaultBadge}${checkmark}`;
-			}
+			const cursor = isSelected ? theme.fg("accent", "→ ") : "  ";
+			const currentMarker = isCurrent ? theme.fg("accent", "✓ ") : "  ";
+			const modelText = isSelected ? theme.fg("accent", item.id) : item.id;
+			const providerBadge = theme.fg("muted", `[${item.provider}]`);
+			const line = `${cursor}${currentMarker}${modelText} ${providerBadge}${defaultBadge}`;
 
 			this.listContainer.addChild(new Text(line, 0, 0));
 		}
@@ -398,7 +387,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			this.onCancelCallback();
 		}
 		// Select and save as default
-		else if (kb.matches(keyData, "tui.select.confirmAsDefault") && this.onSelectAsDefaultCallback) {
+		else if (kb.matches(keyData, "app.models.save") && this.onSelectAsDefaultCallback) {
 			const selectedModel = this.filteredModels[this.selectedIndex];
 			if (selectedModel) {
 				this.dispose();

@@ -1,5 +1,5 @@
 import type { Api, DeferredHandle, Model } from "@draht/ai";
-import { type Context, withAbortSignal } from "../../context.ts";
+import { type Context, getTelemetryContext, withAbortSignal } from "../../context.ts";
 import { consumeAssistantStream } from "../../execution/assistant.ts";
 import { applyStreamOptionsPatch } from "../../hooks.ts";
 import { SessionInvariantError } from "../../session/session.ts";
@@ -196,7 +196,7 @@ async function performDeferredPoll<TContext extends object | undefined>(
 		lane.models.streamDeferred(prepared.model, prepared.source, {
 			wait: 0,
 			signal: admitted.abortSignal,
-			telemetryContext: admitted.telemetryContext,
+			telemetryContext: getTelemetryContext(admitted),
 			timeoutMs: prepared.streamOptions.timeoutMs,
 			maxRetries: prepared.streamOptions.maxRetries,
 			maxRetryDelayMs: prepared.streamOptions.maxRetryDelayMs,

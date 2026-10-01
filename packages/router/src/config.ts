@@ -11,8 +11,11 @@ export { BUILT_IN_ROLES };
  * Contains all validation issues found.
  */
 export class ConfigValidationError extends Error {
-	constructor(public readonly errors: string[]) {
+	public readonly errors: string[];
+
+	constructor(errors: string[]) {
 		super(`Config validation failed:\n${errors.map((e) => `  - ${e}`).join("\n")}`);
+		this.errors = errors;
 		this.name = "ConfigValidationError";
 	}
 }

@@ -1,4 +1,11 @@
-import type { Api, Model, ModelsStoreEntry, Provider } from "@draht/ai";
+import {
+	type AnyModel,
+	getModelType,
+	isModelType,
+	type ModelsStoreEntry,
+	type ModelType,
+	type Provider,
+} from "@draht/ai";
 import { VERSION } from "../config.ts";
 import { getDrahtUserAgent } from "../utils/draht-user-agent.ts";
 import { fetchWithRetry } from "../utils/management-http.ts";
@@ -11,18 +18,28 @@ import { fetchWithRetry } from "../utils/management-http.ts";
 const CATALOG_BASE_URL_ENV = "DRAHT_MODEL_CATALOG_BASE_URL";
 const REMOTE_CATALOG_ATTEMPT_TIMEOUT_MS = 4_000;
 export const REMOTE_CATALOG_REFRESH_INTERVAL_MS = 4 * 60 * 60 * 1000;
+/**
+ * Model types this client can consume. Sent as `?types=` so the catalog server
+ * returns the full-type shard instead of the chat-only one served to clients
+ * that predate model types. A server that ignores the parameter still returns
+ * the chat-only shard, which this client handles unchanged.
+ */
+export const REMOTE_CATALOG_MODEL_TYPES: readonly ModelType[] = ["chat", "image", "classifier"];
 
-function mergeModels(baseline: readonly Model<Api>[], dynamic: readonly Model<Api>[]): Model<Api>[] {
-	const merged = [...baseline];
-	for (const model of dynamic) {
-		const index = merged.findIndex((entry) => entry.id === model.id);
-		if (index >= 0) merged[index] = model;
-		else merged.push(model);
-	}
-	return merged;
+function isSupportedModelType(model: { type?: unknown }): boolean {
+	return (
+		model.type === undefined ||
+		(typeof model.type === "string" && REMOTE_CATALOG_MODEL_TYPES.includes(model.type as ModelType))
+	);
 }
 
-function parseCatalog(providerId: string, value: unknown): Model<Api>[] {
+function mergeModels<TModel extends AnyModel>(baseline: readonly TModel[], dynamic: readonly TModel[]): TModel[] {
+	const merged = new Map<string, TModel>();
+	for (const model of [...baseline, ...dynamic]) merged.set(`${getModelType(model)}\0${model.id}`, model);
+	return [...merged.values()];
+}
+
+function parseCatalog(providerId: string, value: unknown): AnyModel[] {
 	const entries = Array.isArray(value)
 		? value
 		: typeof value === "object" && value !== null && "models" in value && Array.isArray(value.models)
@@ -32,14 +49,12 @@ function parseCatalog(providerId: string, value: unknown): Model<Api>[] {
 				: undefined;
 	if (!entries) throw new Error(`Invalid model catalog for provider "${providerId}"`);
 	return entries
-		.filter((entry): entry is Model<Api> => typeof entry === "object" && entry !== null && "id" in entry)
-		.map((model) => ({ ...model, provider: providerId }));
+		.filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null && "id" in entry)
+		.filter(isSupportedModelType)
+		.map((model) => ({ ...model, provider: providerId }) as AnyModel);
 }
 
-function remoteModels(
-	entry: ModelsStoreEntry | undefined,
-	localGeneratedAt: number | undefined,
-): readonly Model<Api>[] {
+function remoteModels(entry: ModelsStoreEntry | undefined, localGeneratedAt: number | undefined): readonly AnyModel[] {
 	if (!entry) return [];
 	if (localGeneratedAt !== undefined && (entry.lastModified === undefined || entry.lastModified <= localGeneratedAt)) {
 		return [];
@@ -53,11 +68,16 @@ export function withRemoteCatalog(
 	catalogBaseUrl: string | undefined = process.env[CATALOG_BASE_URL_ENV],
 	localGeneratedAt?: number,
 ): Provider {
-	let dynamicModels: readonly Model<Api>[] = [];
+	let dynamicModels: readonly AnyModel[] = [];
 
 	return {
 		...provider,
-		getModels: () => mergeModels(provider.getModels(), dynamicModels),
+		getModels: () =>
+			mergeModels(
+				provider.getModels(),
+				dynamicModels.filter((model) => isModelType(model, "chat")),
+			),
+		getAllModels: () => mergeModels(provider.getAllModels?.() ?? provider.getModels(), dynamicModels),
 		refreshModels: async (context) => {
 			const stored = context.stored;
 			const restored = remoteModels(stored, localGeneratedAt).filter((model) => model.provider === provider.id);
@@ -83,8 +103,9 @@ export function withRemoteCatalog(
 
 			// Only revalidate when a cached body backs the validator, so a 304 can never
 			// leave the overlay empty.
-			const validator = stored?.models.length ? stored.etag : undefined;
+			const validator = stored && stored.models.length > 0 ? stored.etag : undefined;
 			const url = new URL(`/api/models/providers/${encodeURIComponent(provider.id)}`, catalogBaseUrl);
+			url.searchParams.set("types", REMOTE_CATALOG_MODEL_TYPES.join(","));
 			const response = await fetchWithRetry(
 				url,
 				{
@@ -125,7 +146,7 @@ export function withRemoteCatalog(
 			const refreshed = parseCatalog(provider.id, await response.json());
 			const lastModified = Date.parse(response.headers.get("last-modified") ?? "");
 			if (context.signal.aborted) return;
-			const entry = {
+			const entry: ModelsStoreEntry = {
 				models: refreshed,
 				checkedAt,
 				lastModified: Number.isNaN(lastModified) ? 0 : lastModified,

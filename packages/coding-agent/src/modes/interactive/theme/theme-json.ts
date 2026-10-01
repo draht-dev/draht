@@ -11,16 +11,18 @@ import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 
 const ColorValueSchema = Type.Union([
-	Type.String(), // hex "#ff0000", var ref "primary", or empty ""
+	Type.String(), // hex, OKLCH, OKHSL, var ref "primary", or empty ""
 	Type.Integer({ minimum: 0, maximum: 255 }), // 256-color index
 ]);
 
 const ThemeJsonSchema = Type.Object({
 	$schema: Type.Optional(Type.String()),
 	name: Type.String(),
+	// Background the theme is designed for. Detected from the theme colors when omitted.
+	appearance: Type.Optional(Type.Union([Type.Literal("dark"), Type.Literal("light")])),
 	vars: Type.Optional(Type.Record(Type.String(), ColorValueSchema)),
 	colors: Type.Object({
-		// Core UI (10 colors)
+		// Core UI (11 colors)
 		accent: ColorValueSchema,
 		border: ColorValueSchema,
 		borderAccent: ColorValueSchema,
@@ -32,9 +34,11 @@ const ThemeJsonSchema = Type.Object({
 		dim: ColorValueSchema,
 		text: ColorValueSchema,
 		thinkingText: ColorValueSchema,
-		// Backgrounds & Content Text (11 required, 3 optional)
-		selectedBg: ColorValueSchema,
+		// Scrollbar (2 optional colors)
+		scrollbarTrack: Type.Optional(ColorValueSchema),
 		scrollbarThumb: Type.Optional(ColorValueSchema),
+		// Backgrounds & Content Text (11 required, 2 optional)
+		selectedBg: ColorValueSchema,
 		searchMatchBg: Type.Optional(ColorValueSchema),
 		searchMatchText: Type.Optional(ColorValueSchema),
 		userMessageBg: ColorValueSchema,

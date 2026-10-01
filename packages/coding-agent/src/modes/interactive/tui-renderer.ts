@@ -1,7 +1,8 @@
-import type { Terminal } from "@draht/tui";
+import type { Terminal, WheelScrollLines } from "@draht/tui";
 import { ProcessTerminal, type TUI, TuiAltScreen, TuiMainScreen } from "@draht/tui";
 import { copyToClipboard } from "../../utils/clipboard.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
+import { keyDisplayText } from "./components/keybinding-hints.ts";
 import { theme } from "./theme/theme.ts";
 
 export interface InteractiveTuiOptions {
@@ -11,6 +12,7 @@ export interface InteractiveTuiOptions {
 	readonly terminal?: Terminal;
 	readonly onRightClickPaste?: () => void;
 	readonly fullscreenCopyOnSelect?: boolean;
+	readonly fullscreenWheelScrollLines?: WheelScrollLines;
 }
 
 /** Composition root shared by coding-agent presentations. */
@@ -24,15 +26,22 @@ export function createInteractiveTui(options: InteractiveTuiOptions): TuiMainScr
 		return new TuiAltScreen(terminal, options.showHardwareCursor, options.logDirectory, {
 			searchMatchStyle: (text) => theme.underline(styleSearchMatch(text)),
 			searchCurrentMatchStyle: (text) => theme.bold(theme.inverse(styleSearchMatch(text))),
+			searchNavigationButtonStyle: (text, hovered) => (hovered ? theme.underline(text) : text),
+			scrollToEndIndicator: () => {
+				const shortcut = keyDisplayText("tui.altScreen.bottom");
+				const label = ` ↓ Jump to latest message${shortcut ? ` · ${shortcut}` : ""} `;
+				return theme.bg("selectedBg", theme.fg("text", label));
+			},
 			openUrl: openBrowser,
 			onRightClickPaste: options.onRightClickPaste,
 			copyOnSelect: options.fullscreenCopyOnSelect,
+			wheelScrollLines: options.fullscreenWheelScrollLines ?? "auto",
 			copySelection: async (text) => {
 				try {
 					await copyToClipboard(text);
 					return true;
-				} catch {
-					return false;
+				} catch (error) {
+					return error instanceof Error ? error.message : String(error);
 				}
 			},
 		});

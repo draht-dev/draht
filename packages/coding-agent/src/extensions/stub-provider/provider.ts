@@ -15,7 +15,7 @@
  */
 
 import { writeFileSync } from "node:fs";
-import type { Provider } from "@draht/ai";
+import { getCurrentSystemPrompt, type JsonObject, type JsonValue, type Provider } from "@draht/ai";
 import {
 	type FauxContentBlock,
 	type FauxResponseFactory,
@@ -98,15 +98,15 @@ export function stubReplyFor(prompt: string): string {
 
 /** One provider turn of the scripted stub: tool calls, plus optional leading text. */
 export interface StubTurnScript {
-	toolCalls: { id: string; name: string; arguments: Record<string, unknown> }[];
+	toolCalls: { id: string; name: string; arguments: JsonObject }[];
 	text?: string;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
+function isPlainObject(value: JsonValue | undefined): value is JsonObject {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parseTurnScript(raw: unknown): StubTurnScript | undefined {
+function parseTurnScript(raw: JsonValue): StubTurnScript | undefined {
 	if (!isPlainObject(raw)) return undefined;
 	if (raw.text !== undefined && typeof raw.text !== "string") return undefined;
 	const toolCalls = raw.toolCalls ?? [];
@@ -119,7 +119,7 @@ function parseTurnScript(raw: unknown): StubTurnScript | undefined {
 		if (!isPlainObject(arguments_)) return undefined;
 		parsed.push({ id: entry.id, name: entry.name, arguments: arguments_ });
 	}
-	return { toolCalls: parsed, text: raw.text as string | undefined };
+	return { toolCalls: parsed, text: raw.text };
 }
 
 /**
@@ -131,7 +131,7 @@ function parseTurnScript(raw: unknown): StubTurnScript | undefined {
 export function parseStubToolCallScripts(env: NodeJS.ProcessEnv = process.env): StubTurnScript[] | undefined {
 	const raw = env[STUB_PROVIDER_TOOL_CALLS_ENV];
 	if (raw === undefined || raw.trim() === "") return undefined;
-	let decoded: unknown;
+	let decoded: JsonValue;
 	try {
 		decoded = JSON.parse(raw);
 	} catch (error) {
@@ -185,7 +185,7 @@ export function createStubProvider(env: NodeJS.ProcessEnv = process.env): Provid
 			// recorder that overwrites the first request's evidence with a later one.
 			recorded = true;
 			try {
-				writeFileSync(recordContextPath, context.systemPrompt ?? "", "utf-8");
+				writeFileSync(recordContextPath, getCurrentSystemPrompt(context.messages), "utf-8");
 			} catch {
 				// Never throw out of the response factory: a broken recorder must not change
 				// what the provider answers, or the test it exists to serve stops being about

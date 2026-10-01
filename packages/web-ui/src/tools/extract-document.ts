@@ -22,12 +22,12 @@ const extractDocumentSchema = Type.Object({
 
 export type ExtractDocumentParams = Static<typeof extractDocumentSchema>;
 
-export interface ExtractDocumentResult {
+export type ExtractDocumentResult = {
 	extractedText: string;
 	format: string;
 	fileName: string;
 	size: number;
-}
+};
 
 // ============================================================================
 // TOOL

@@ -32,10 +32,10 @@ export interface ToolRenderers {
 	) => Component;
 }
 
-import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.js";
-import { convertToPng } from "../../../utils/image-convert.js";
-import { theme } from "../theme/theme.js";
-import { keyHint } from "./keybinding-hints.js";
+import { formatToolCallWithArgs, getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
+import { convertToPng } from "../../../utils/image-convert.ts";
+import { theme } from "../theme/theme.ts";
+import { keyHint } from "./keybinding-hints.ts";
 
 const FALLBACK_PREVIEW_LINES = 10;
 
@@ -72,7 +72,10 @@ export class ToolExecutionComponent extends Container {
 		isError: boolean;
 		details?: any;
 	};
-	private convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
+	private convertedImages: Map<
+		number,
+		{ sourceData: string; sourceMimeType: string; data: string; mimeType: string }
+	> = new Map();
 	private hideComponent = false;
 
 	constructor(
@@ -150,7 +153,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private createCallFallback(): Component {
-		return new Text(theme.fg("toolTitle", theme.bold(this.toolName)), 0, 0);
+		return new Text(formatToolCallWithArgs(this.toolName, this.args, theme, this.expanded), 0, 0);
 	}
 
 	private createResultFallback(): Component | undefined {
@@ -217,16 +220,23 @@ export class ToolExecutionComponent extends Container {
 		for (let i = 0; i < imageBlocks.length; i++) {
 			const img = imageBlocks[i];
 			if (!img.data || !img.mimeType) continue;
-			if (img.mimeType === "image/png") continue;
-			if (this.convertedImages.has(i)) continue;
+			const sourceData = img.data;
+			const sourceMimeType = img.mimeType;
+			if (sourceMimeType === "image/png") continue;
+			const cached = this.convertedImages.get(i);
+			if (cached?.sourceData === sourceData && cached.sourceMimeType === sourceMimeType) continue;
 
 			const index = i;
-			convertToPng(img.data, img.mimeType).then((converted) => {
-				if (converted) {
-					this.convertedImages.set(index, converted);
-					this.updateDisplay();
-					this.ui.requestRender();
-				}
+			convertToPng(sourceData, sourceMimeType).then((converted) => {
+				const currentImage = this.result?.content.filter((content) => content.type === "image")[index];
+				if (!converted || currentImage?.data !== sourceData || currentImage.mimeType !== sourceMimeType) return;
+				this.convertedImages.set(index, {
+					sourceData,
+					sourceMimeType,
+					...converted,
+				});
+				this.updateDisplay();
+				this.ui.requestRender();
 			});
 		}
 	}
@@ -377,7 +387,9 @@ export class ToolExecutionComponent extends Container {
 			for (let i = 0; i < imageBlocks.length; i++) {
 				const img = imageBlocks[i];
 				if (caps.images && this.showImages && img.data && img.mimeType) {
-					const converted = this.convertedImages.get(i);
+					const cached = this.convertedImages.get(i);
+					const converted =
+						cached?.sourceData === img.data && cached.sourceMimeType === img.mimeType ? cached : undefined;
 					const imageData = converted?.data ?? img.data;
 					const imageMimeType = converted?.mimeType ?? img.mimeType;
 					if (caps.images === "kitty" && imageMimeType !== "image/png") continue;

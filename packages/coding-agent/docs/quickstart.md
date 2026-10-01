@@ -1,167 +1,112 @@
 # Quickstart
 
-This page gets you from install to a useful first pi session.
+draht runs in your terminal and works with files on your machine. To use it, you need access to a model through a supported provider. This can be a subscription, an API key, or a local model.
 
-## Install
+For native Windows setup, read [Windows Setup](windows.md). For Android, read [Termux Setup](termux.md).
 
-Pi is distributed as an npm package:
+## 1. Install draht
+
+Install draht from npm. This requires Node.js 22.19 or newer:
 
 ```bash
 npm install -g --ignore-scripts @draht/coding-agent
 ```
 
-`--ignore-scripts` disables dependency lifecycle scripts during install. Pi does not require install scripts for normal npm installs.
+draht does not require dependency lifecycle scripts for a normal npm installation.
 
-### Uninstall
-
-Use the package manager that installed pi. The curl installer uses npm globally, so curl and npm installs are removed with npm:
+Verify the installation:
 
 ```bash
-# curl installer or npm install -g
-npm uninstall -g @draht/coding-agent
-
-# pnpm
-pnpm remove -g @draht/coding-agent
-
-# Yarn
-yarn global remove @draht/coding-agent
-
-# Bun
-bun uninstall -g @draht/coding-agent
+draht --version
 ```
 
-Uninstalling pi leaves settings, credentials, sessions, and installed pi packages in `~/.pi/agent/`.
+## 2. Start draht
 
-Then start pi in the project directory you want it to work on:
+Change to the folder you want draht to work with, then start it:
 
 ```bash
-cd /path/to/project
-pi
+cd /path/to/folder
+draht
 ```
 
-## Authenticate
+The working folder helps draht discover relevant files, instructions, and configuration. draht also uses it to group saved sessions.
 
-Pi can use subscription providers through `/login`, or API-key providers through environment variables or the auth file.
+<p align="center"><img src="images/interactive-mode.png" alt="draht running in a terminal with a conversation, input editor, and status footer" width="750"></p>
 
-### Option 1: subscription login
+The interface shows your conversation, an editor for prompts and commands, and a footer with the current folder, model, and session status. See [Use draht in the terminal](usage.md) to learn how to add files, run commands, direct ongoing work, and manage results.
 
-Start pi and run:
+## 3. Choose a model
+
+A **model** generates draht's responses. A **provider** is the service or account draht uses to access that model.
+
+In draht, run:
 
 ```text
 /login
 ```
 
-Then select a provider. Built-in subscription logins include Claude Pro/Max, ChatGPT Plus/Pro (Codex), and GitHub Copilot.
+Choose a provider, then follow the prompts to use a subscription or store an API key. Run `/model` afterward if you want to select a different available model.
 
-### Option 2: API key
+See [Choose a model and provider](models.md) for supported providers, environment-variable authentication, local models, and custom endpoints.
 
-Set an API key before launching pi:
+## 4. Give draht a task
 
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-pi
-```
+draht shows each file read, search, command, and edit it performs. It does not ask before every tool call.
 
-You can also run `/login` and select an API-key provider to store the key in `~/.pi/agent/auth.json`.
-
-See [Providers](providers.md) for all supported providers, environment variables, and cloud-provider setup.
-
-## First session
-
-Once pi starts, type a request and press Enter:
+Enter a task that matches your work, for example:
 
 ```text
-Summarize this repository and tell me how to run its checks.
+Summarize @meeting-notes.md and save the action items to action-items.md.
 ```
-
-By default, pi gives the model four tools:
-
-- `read` - read files
-- `write` - create or overwrite files
-- `edit` - patch files
-- `bash` - run shell commands
-
-Additional built-in read-only tools (`grep`, `find`, `ls`) are available through tool options. Pi runs in your current working directory and can modify files there. Use git or another checkpointing workflow if you want easy rollback.
-
-## Give pi project instructions
-
-Pi loads context files at startup. Add an `AGENTS.md` file to tell it how to work in a project:
-
-```markdown
-# Project Instructions
-
-- Run `npm run check` after code changes.
-- Do not run production migrations locally.
-- Keep responses concise.
-```
-
-Pi loads:
-
-- `~/.pi/agent/AGENTS.md` for global instructions
-- `AGENTS.md` or `CLAUDE.md` from parent directories and the current directory
-
-If a directory contains `AGENTS.override.md`, Pi loads it instead of `AGENTS.md` or `CLAUDE.md` from that directory.
-
-Restart pi, or run `/reload`, after changing context files.
-
-## Common things to try
-
-### Reference files
-
-Type `@` in the editor to fuzzy-search files, or pass files on the command line:
-
-```bash
-pi @README.md "Summarize this"
-pi @src/app.ts @src/app.test.ts "Review these together"
-```
-
-Images or text can be pasted with Ctrl+V (Alt+V on Windows); images can also be dragged into supported terminals.
-
-### Run shell commands
-
-In interactive mode:
 
 ```text
-!npm run lint
+Explain how this repository is structured and how to run its checks.
 ```
 
-The command output is sent to the model. Use `!!command` to run a command without adding its output to the model context.
+```text
+Compare @previous.csv with @current.csv and summarize the important changes.
+```
 
-### Switch models
+Type `@` in the editor to search for a file instead of entering its full path. When draht finishes, review its response and any changed files. Use version control or backups for important work. For untrusted or unattended work, use a container or another sandbox. See [Security](security.md).
 
-Use `/model` or Ctrl+L to choose a model for the current session. Press Ctrl+S in the model picker to save the highlighted model as the startup default. Use `/thinking` to choose a thinking level for the current session, or Ctrl+S in that picker to save the startup default thinking level. Use Shift+Tab to cycle thinking level. Use Ctrl+P / Shift+Ctrl+P to cycle through scoped models.
+## Continue later
 
-### Continue later
-
-Sessions are saved automatically:
+draht saves sessions automatically. Exit draht, then resume the most recent session for the same working folder with:
 
 ```bash
-draht -c                  # Continue most recent session
-draht -r                  # Browse previous sessions
-draht --name "my task"    # Set session display name at startup
-draht --session <path|id> # Open a specific session
+draht --continue
 ```
 
-Inside pi, use `/resume`, `/new`, `/tree`, `/fork`, and `/clone` to manage sessions.
-
-### Non-interactive mode
-
-For one-shot prompts:
-
-```bash
-draht -p "Summarize this codebase"
-cat README.md | draht -p "Summarize this text"
-draht -p @screenshot.png "What's in this image?"
-```
-
-Use `--mode json` for JSON event output or `--mode rpc` for process integration.
+Use `/resume` to choose another saved session. See [Continue or branch a session](sessions.md) for session naming, branching, compaction, export, and sharing.
 
 ## Next steps
 
-- [Using Pi](usage.md) - interactive mode, slash commands, sessions, context files, and CLI reference.
-- [Providers](providers.md) - authentication and model setup.
-- [Settings](settings.md) - global and project configuration.
-- [Keybindings](keybindings.md) - shortcuts and customization.
-- [Pi Packages](packages.md) - install shared extensions, skills, prompts, and themes.
+- [Use draht interactively](usage.md) to learn input, commands, shortcuts, and queued messages.
+- [Add instructions](configuration.md#context-files) that draht should follow whenever it works in a folder.
+- [Choose a model and provider](models.md).
 
-Platform notes: [Windows](windows.md), [Termux](termux.md), [tmux](tmux.md), [Terminal setup](terminal-setup.md), [Shell aliases](shell-aliases.md).
+### Choose how to customize draht
+
+Start with the least powerful mechanism that meets your need:
+
+| Need | Start with |
+|---|---|
+| Give draht persistent instructions for a folder | [`AGENTS.md`](configuration.md#context-files) |
+| Reuse a prompt from the `/` menu | [Prompt template](prompt-templates.md) |
+| Add task-specific instructions and supporting files | [Skill](skills.md) |
+| Add executable tools, commands, or event handlers | [Extension](extensions.md) |
+| Build a custom terminal component | [Terminal UI](tui.md) |
+| Connect an unsupported model service | [Custom provider](custom-provider.md) |
+| Install or distribute several resources | [draht package](packages.md) |
+
+## Uninstall draht
+
+Use the package manager that installed draht. For npm, run:
+
+```bash
+npm uninstall -g @draht/coding-agent
+```
+
+For pnpm, Yarn, or Bun installs, use the matching global remove command: `pnpm remove -g @draht/coding-agent`, `yarn global remove @draht/coding-agent`, or `bun uninstall -g @draht/coding-agent`.
+
+Uninstalling does not remove configuration, credentials, sessions, or installed draht packages from `~/.draht/agent/`.

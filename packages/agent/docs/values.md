@@ -560,7 +560,7 @@ ORDER BY seq DESC LIMIT ?;
 DELETE FROM list_values WHERE namespace = ? AND key = ?;
 ```
 
-For a missing cursor, omit the sequence predicate. Every write participates in the existing `BEGIN IMMEDIATE` transaction under the writer lease. Assert with `EXPLAIN QUERY PLAN` that paging uses the primary key and no temporary sort.
+For a missing cursor, omit the sequence predicate. Every write participates in the existing `BEGIN IMMEDIATE` transaction; writable Session ownership belongs to the host lifecycle, not SQLite storage. Assert with `EXPLAIN QUERY PLAN` that paging uses the primary key and no temporary sort.
 
 ## JSONL backend
 

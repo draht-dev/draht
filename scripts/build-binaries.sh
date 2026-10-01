@@ -94,35 +94,6 @@ else
     PLATFORMS=(darwin-arm64 darwin-x64 linux-x64 linux-arm64 windows-x64)
 fi
 
-set_clipboard_target() {
-    case "$1" in
-        darwin-arm64)
-            clipboard_native_package="clipboard-darwin-arm64"
-            clipboard_native_file="clipboard.darwin-arm64.node"
-            ;;
-        darwin-x64)
-            clipboard_native_package="clipboard-darwin-x64"
-            clipboard_native_file="clipboard.darwin-x64.node"
-            ;;
-        linux-x64)
-            clipboard_native_package="clipboard-linux-x64-gnu"
-            clipboard_native_file="clipboard.linux-x64-gnu.node"
-            ;;
-        linux-arm64)
-            clipboard_native_package="clipboard-linux-arm64-gnu"
-            clipboard_native_file="clipboard.linux-arm64-gnu.node"
-            ;;
-        windows-x64)
-            clipboard_native_package="clipboard-win32-x64-msvc"
-            clipboard_native_file="clipboard.win32-x64-msvc.node"
-            ;;
-        windows-arm64)
-            clipboard_native_package="clipboard-win32-arm64-msvc"
-            clipboard_native_file="clipboard.win32-arm64-msvc.node"
-            ;;
-    esac
-}
-
 for platform in "${PLATFORMS[@]}"; do
     echo "Building for $platform..."
     bun_target="bun-$platform"
@@ -136,15 +107,16 @@ for platform in "${PLATFORMS[@]}"; do
     # appropriate .node file alongside the binary below.
     #
     # Bun compiled executables only embed worker scripts when they are passed as
-    # explicit build entrypoints. The runtime can still use new URL(...), but the
-    # worker must be present in the compiled executable.
+    # explicit build entrypoints. Bun places them at their path relative to the
+    # common directory of all entrypoints, so the main entry must stay in dist/
+    # for the worker specifiers in the runtime to resolve.
     #
     # Disable cwd bunfig.toml autoload so project preload scripts cannot crash the
     # standalone binary before draht starts (see #7684).
     if [[ "$platform" == "windows-x64" ]]; then
-        bun build --compile --external koffi --no-compile-autoload-bunfig --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile binaries/$platform/draht.exe
+        bun build --compile --external koffi --no-compile-autoload-bunfig --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile binaries/$platform/draht.exe
     else
-        bun build --compile --external koffi --no-compile-autoload-bunfig --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile binaries/$platform/draht
+        bun build --compile --external koffi --no-compile-autoload-bunfig --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile binaries/$platform/draht
     fi
 done
 
@@ -165,26 +137,11 @@ for platform in "${PLATFORMS[@]}"; do
     mkdir -p binaries/$platform/examples
     (cd examples && tar --exclude='node_modules' -cf - .) | (cd binaries/$platform/examples && tar -xf -)
 
-    set_clipboard_target "$platform"
-    mkdir -p "binaries/$platform/node_modules/@mariozechner"
-    cp -r ../../node_modules/@mariozechner/clipboard "binaries/$platform/node_modules/@mariozechner/"
-    cp "../../node_modules/@mariozechner/$clipboard_native_package/$clipboard_native_file" \
-        "binaries/$platform/node_modules/@mariozechner/clipboard/"
-
-    # Copy terminal input native helpers next to compiled binaries.
-    if [[ "$platform" == darwin-* ]]; then
-        mkdir -p "binaries/$platform/native/darwin/prebuilds/$platform"
-        cp ../tui/native/darwin/prebuilds/$platform/darwin-modifiers.node "binaries/$platform/native/darwin/prebuilds/$platform/"
-    fi
-    if [[ "$platform" == windows-* ]]; then
-        if [[ "$platform" == "windows-arm64" ]]; then
-            win32_arch_dir="win32-arm64"
-        else
-            win32_arch_dir="win32-x64"
-        fi
-        mkdir -p "binaries/$platform/native/win32/prebuilds/$win32_arch_dir"
-        cp ../tui/native/win32/prebuilds/$win32_arch_dir/win32-console-mode.node "binaries/$platform/native/win32/prebuilds/$win32_arch_dir/"
-    fi
+    # Copy the selected architecture's native platform helpers next to the executable.
+    native_platform="${platform/windows-/win32-}"
+    native_path="native/${native_platform%-*}/prebuilds"
+    mkdir -p "binaries/$platform/$native_path"
+    cp -R "../tui/$native_path/$native_platform" "binaries/$platform/$native_path/"
 done
 
 # Create archives

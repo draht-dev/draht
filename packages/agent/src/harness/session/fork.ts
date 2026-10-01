@@ -1,15 +1,6 @@
-import type { CommittedWrite } from "./commit.ts";
+import { type ForkCurrentStatePlan, projectForkCurrentStateWrite, selectBranchFork } from "./fork-policy.ts";
 import type { Entry, ForkOptions } from "./types.ts";
-import {
-	branchTip,
-	entryLabel,
-	laneConfig,
-	laneState,
-	type StoredValue,
-	sessionName,
-	type Value,
-	value,
-} from "./values.ts";
+import { branchTip, laneConfig, laneState, type StoredValue, type Value, value } from "./values.ts";
 
 export interface ForkSourceSnapshot {
 	entries: Entry[];
@@ -40,92 +31,55 @@ export function createForkSnapshot(source: ForkSourceSnapshot, options: ForkOpti
 	const sourceTips = storedValuesInNamespace(source.scalarValues, branchTip(""));
 	validateForkSourceSnapshot(source, sourceEntries, sourceTips, options);
 
-	const { entryIds, sourceToDestinationTip } = selectForkContents(sourceEntries, sourceTips, options);
+	const { entryIds, plan } = selectForkContents(sourceEntries, sourceTips, options);
 	const entries = new Map<string, Entry>();
 	for (const id of entryIds) entries.set(id, sourceEntries.get(id)!);
 
 	const scalarValues: StoredValue<unknown>[] = [];
 	let nextSeq = Math.max(0, ...[...entries.values()].map((entry) => entry.seq)) + 1;
-	const store = <T>(address: Value<T>, storedValue: T): void => {
-		scalarValues.push({
-			address: value<unknown>(address.namespace, address.key),
-			value: storedValue,
-			seq: nextSeq++,
-		});
-	};
-	for (const [sourceName, destination] of sourceToDestinationTip) {
-		const configuration = findStoredValue(source.scalarValues, laneConfig(sourceName));
-		store(branchTip(destination.name), destination.tipId);
-		if (configuration !== undefined) {
-			store(laneConfig(destination.name), configuration.value);
-			store(laneState(destination.name), { currentOperationId: null, lastOperationId: null, inbox: [] });
+	for (const stored of source.scalarValues) {
+		const projected = projectForkCurrentStateWrite(
+			{
+				kind: "value",
+				op: "set",
+				seq: stored.seq,
+				namespace: stored.address.namespace,
+				key: stored.address.key,
+				value: stored.value,
+			},
+			plan,
+			(entryId) => entryIds.has(entryId),
+		);
+		if (projected !== undefined) {
+			scalarValues.push({
+				address: value<unknown>(projected.namespace, projected.key),
+				value: projected.value,
+				seq: nextSeq++,
+			});
 		}
-	}
-	const name = findStoredValue(source.scalarValues, sessionName);
-	if (name !== undefined) store(sessionName, name.value);
-	for (const entryId of entryIds) {
-		const label = findStoredValue(source.scalarValues, entryLabel(entryId));
-		if (label !== undefined) store(entryLabel(entryId), label.value);
 	}
 
 	return { entries, scalarValues, nextSeq };
-}
-
-export function forkSnapshotWrites(snapshot: ForkDestinationSnapshot): CommittedWrite[] {
-	const writes: CommittedWrite[] = [];
-	for (const entry of snapshot.entries.values()) writes.push({ kind: "entry", ...entry });
-	for (const stored of snapshot.scalarValues) {
-		writes.push({
-			kind: "value",
-			op: "set",
-			seq: stored.seq,
-			namespace: stored.address.namespace,
-			key: stored.address.key,
-			value: stored.value,
-		});
-	}
-	return writes.sort((left, right) => left.seq - right.seq);
 }
 
 function selectForkContents(
 	sourceEntries: Map<string, Entry>,
 	sourceTips: StoredValue<string | null>[],
 	options: ForkOptions,
-): {
-	entryIds: Set<string>;
-	sourceToDestinationTip: Map<string, { name: string; tipId: string | null }>;
-} {
+): { entryIds: Set<string>; plan: ForkCurrentStatePlan } {
 	const entryIds = new Set<string>();
-	const sourceToDestinationTip = new Map<string, { name: string; tipId: string | null }>();
 	if (options.scope === "tree") {
 		for (const id of sourceEntries.keys()) entryIds.add(id);
-		for (const stored of sourceTips) {
-			sourceToDestinationTip.set(stored.address.key, {
-				name: stored.address.key,
-				tipId: stored.value,
-			});
-		}
-	} else {
-		const mainTip = sourceTips.find((stored) => stored.address.key === "main");
-		if (mainTip === undefined) throw new Error("Source session is missing main branch");
-		const requested = options.entryId ?? mainTip.value;
-		let tipId = requested;
-		if (requested !== null) {
-			const target = sourceEntries.get(requested);
-			if (target === undefined) throw new Error(`Unknown fork entry: ${requested}`);
-			if (options.position === "before") tipId = target.parentId;
-		}
-
-		let entryId = tipId;
-		while (entryId !== null) {
-			const entry = sourceEntries.get(entryId);
-			if (entry === undefined) throw new Error(`Corrupt source branch: missing parent ${entryId}`);
-			entryIds.add(entryId);
-			entryId = entry.parentId;
-		}
-		sourceToDestinationTip.set("main", { name: "main", tipId });
+		return { entryIds, plan: { scope: "tree" } };
 	}
-	return { entryIds, sourceToDestinationTip };
+
+	const sourceTip = sourceTips.find((stored) => stored.address.key === options.branch);
+	const plan = selectBranchFork(options, {
+		tip: sourceTip?.value,
+		getParent: (entryId) => sourceEntries.get(entryId)?.parentId,
+		selectEntry: (entryId) => entryIds.add(entryId),
+	});
+	return { entryIds, plan };
 }
 
 function validateForkSourceSnapshot(
@@ -136,9 +90,6 @@ function validateForkSourceSnapshot(
 ): void {
 	const sourceTipKeys = new Set(sourceTips.map((stored) => stored.address.key));
 
-	if (options.scope !== "tree" && !sourceTipKeys.has("main")) {
-		throw new Error("Source session is missing main branch");
-	}
 	for (const stored of source.scalarValues) {
 		if (
 			(stored.address.namespace === laneConfig("").namespace ||
@@ -153,6 +104,9 @@ function validateForkSourceSnapshot(
 		const state = findStoredValue(source.scalarValues, laneState(tip.address.key));
 		if ((configuration === undefined) !== (state === undefined)) {
 			throw new Error(`Source session branch ${JSON.stringify(tip.address.key)} has incomplete lane state`);
+		}
+		if (options.scope === "branch" && tip.address.key === options.branch && configuration === undefined) {
+			throw new Error(`Source branch ${JSON.stringify(options.branch)} is not a configured AgentLane`);
 		}
 		if (
 			(source.entriesComplete !== false || options.scope === "tree") &&

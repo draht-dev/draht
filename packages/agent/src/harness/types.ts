@@ -3,6 +3,7 @@ import type { Static, TSchema } from "typebox";
 import type { AgentTool, AgentToolResult } from "../types.ts";
 import type { Context } from "./context.ts";
 import type { JsonValue } from "./session/types.ts";
+import type { TruncationResult } from "./utils/truncate.ts";
 
 /** Result of a fallible operation. Expected failures are returned as `ok: false` instead of thrown. */
 export type Result<TValue, TError> = { ok: true; value: TValue } | { ok: false; error: TError };
@@ -248,6 +249,20 @@ export interface FileInfo {
 	mtimeMs: number;
 }
 
+/** One UTF-8 line read from a text file. */
+export interface TextLine {
+	text: string;
+	/** Whether the line ended with `\n`; callers use this to discard a torn final record. */
+	terminated: boolean;
+}
+
+/** Pull-based UTF-8 line reader that preserves final-line termination. */
+export interface TextLineReader {
+	readLine(context: Context): Promise<Result<TextLine | undefined, FileError>>;
+	/** Release the open file. Must be best-effort and must not throw or reject. */
+	close(context: Context): Promise<void>;
+}
+
 /**
  * Filesystem capability used by the harness.
  *
@@ -267,6 +282,8 @@ export interface FileSystem {
 	joinPath(parts: string[], context: Context): Promise<Result<string, FileError>>;
 	/** Read a UTF-8 text file. */
 	readTextFile(path: string, context: Context): Promise<Result<string, FileError>>;
+	/** Open a UTF-8 text file for pull-based line reading. */
+	openTextLineReader(path: string, context: Context): Promise<Result<TextLineReader, FileError>>;
 	/** Read UTF-8 text lines. Implementations should stop once `maxLines` lines have been read. */
 	readTextLines(
 		path: string,
@@ -313,6 +330,51 @@ export interface FileSystem {
 	cleanup(context: Context): Promise<void>;
 }
 
+/** Which portion of bounded output survives after the limit is crossed. */
+export type ShellOutputRetention = "head" | "tail";
+
+/** Source-side limits for one combined shell output view. */
+export interface ShellOutputLimits {
+	maxBytes: number;
+	maxLines: number;
+	/** Defaults to `"tail"`. */
+	retain?: ShellOutputRetention;
+}
+
+/** Bounded shell capture requested by the caller. */
+export interface ShellOutputCaptureOptions {
+	limits: ShellOutputLimits;
+	/** Preserve complete output in an execution-environment-local file after the limits are crossed. */
+	spill?: boolean;
+}
+
+/** Truncation metadata without a duplicate copy of the retained text. */
+export type ShellOutputTruncation = Omit<TruncationResult, "content">;
+
+/** Metadata accompanying a bounded shell output view. */
+export interface ShellOutputMetadata {
+	truncation: ShellOutputTruncation;
+	spillPath?: string;
+	lastLineBytes?: number;
+}
+
+/** Complete bounded shell output view. */
+export interface ShellOutputView extends ShellOutputMetadata {
+	text: string;
+}
+
+/** Incremental source-side change to one bounded shell output view. */
+export type ShellOutputUpdate =
+	| { kind: "replace"; output: ShellOutputView }
+	| { kind: "append"; text: string; metadata: ShellOutputMetadata }
+	| { kind: "slide"; drop: number; text: string; metadata: ShellOutputMetadata }
+	| { kind: "metadata"; metadata: ShellOutputMetadata };
+
+/** Bounded shell completion. Output text is delivered through {@link ShellExecOptions.onUpdate}. */
+export interface ShellExecResult extends ShellOutputMetadata {
+	exitCode: number;
+}
+
 /** Options for {@link Shell.exec}. */
 export interface ShellExecOptions {
 	/** Working directory for the command. Relative paths are resolved against {@link ExecutionEnv.cwd}. Defaults to {@link ExecutionEnv.cwd}. */
@@ -323,10 +385,10 @@ export interface ShellExecOptions {
 	inheritEnv?: boolean;
 	/** Timeout in seconds. Implementations should return a timeout error when the command exceeds this duration. Defaults to no timeout. */
 	timeout?: number;
-	/** Called with stdout chunks as they are produced. */
-	onStdout?: (chunk: string, context: Context) => void;
-	/** Called with stderr chunks as they are produced. */
-	onStderr?: (chunk: string, context: Context) => void;
+	/** Source-side bounded capture. Output is discarded when this and `onUpdate` are both absent. */
+	capture?: ShellOutputCaptureOptions;
+	/** Called with bounded output changes. */
+	onUpdate?: (update: ShellOutputUpdate, context: Context) => void;
 }
 
 /** Shell execution capability used by the harness. */
@@ -336,7 +398,7 @@ export interface Shell {
 		command: string,
 		options: ShellExecOptions | undefined,
 		context: Context,
-	): Promise<Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>>;
+	): Promise<Result<ShellExecResult, ExecutionError>>;
 	/** Release shell resources. Must be best-effort and must not throw or reject. */
 	cleanup(context: Context): Promise<void>;
 }

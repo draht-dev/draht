@@ -1,12 +1,13 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { constants, createReadStream } from "node:fs";
+import { constants, createWriteStream, type WriteStream } from "node:fs";
 import {
 	access,
 	appendFile,
 	lstat,
 	mkdir,
 	mkdtemp,
+	open as openFile,
 	readdir,
 	readFile,
 	realpath,
@@ -14,9 +15,8 @@ import {
 	rm,
 	writeFile,
 } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { homedir, constants as osConstants, tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
-import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import type { Context } from "../context.ts";
 import {
@@ -29,12 +29,19 @@ import {
 	ok,
 	type Result,
 	type ShellExecOptions,
+	type ShellExecResult,
+	type TextLine,
+	type TextLineReader,
 	toError,
 } from "../types.ts";
+import { OutputCapture } from "../utils/output-capture.ts";
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
 const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
 const EXIT_STDIO_GRACE_MS = 100;
+const SPILL_HIGH_WATER_MARK = 8 * 1024 * 1024;
+
+type SpillChunk = string | Uint8Array;
 
 function resolveTimeoutMs(timeout: number | undefined): Result<number | undefined, ExecutionError> {
 	if (timeout === undefined) return ok(undefined);
@@ -282,11 +289,15 @@ function killProcessTree(pid: number): void {
 	}
 }
 
-function waitForChildProcess(child: ChildProcess): Promise<number | null> {
+function waitForChildProcess(
+	child: ChildProcess,
+	spillIsDraining: () => boolean,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
 	return new Promise((resolvePromise, reject) => {
 		let settled = false;
 		let exited = false;
 		let exitCode: number | null = null;
+		let exitSignal: NodeJS.Signals | null = null;
 		let postExitTimer: ReturnType<typeof setTimeout> | undefined;
 		let stdoutEnded = child.stdout === null;
 		let stderrEnded = child.stderr === null;
@@ -301,20 +312,23 @@ function waitForChildProcess(child: ChildProcess): Promise<number | null> {
 			child.stdout?.removeListener("data", onData);
 			child.stderr?.removeListener("data", onData);
 		};
-		const finalize = (code: number | null): void => {
+		const finalize = (): void => {
 			if (settled) return;
 			settled = true;
 			cleanup();
 			child.stdout?.destroy();
 			child.stderr?.destroy();
-			resolvePromise(code);
+			resolvePromise({ code: exitCode, signal: exitSignal });
 		};
 		const maybeFinalizeAfterExit = (): void => {
-			if (exited && stdoutEnded && stderrEnded) finalize(exitCode);
+			if (exited && stdoutEnded && stderrEnded) finalize();
 		};
 		const armIdleTimer = (): void => {
 			if (postExitTimer) clearTimeout(postExitTimer);
-			postExitTimer = setTimeout(() => finalize(exitCode), EXIT_STDIO_GRACE_MS);
+			postExitTimer = setTimeout(() => {
+				if (spillIsDraining()) armIdleTimer();
+				else finalize();
+			}, EXIT_STDIO_GRACE_MS);
 		};
 		const onData = (): void => {
 			if (exited && !settled) armIdleTimer();
@@ -333,13 +347,18 @@ function waitForChildProcess(child: ChildProcess): Promise<number | null> {
 			cleanup();
 			reject(error);
 		};
-		const onExit = (code: number | null): void => {
+		const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
 			exited = true;
 			exitCode = code;
+			exitSignal = signal;
 			maybeFinalizeAfterExit();
 			if (!settled) armIdleTimer();
 		};
-		const onClose = (code: number | null): void => finalize(code);
+		const onClose = (code: number | null, signal: NodeJS.Signals | null): void => {
+			exitCode = code;
+			exitSignal = signal;
+			finalize();
+		};
 
 		child.stdout?.once("end", onStdoutEnd);
 		child.stderr?.once("end", onStderrEnd);
@@ -349,6 +368,71 @@ function waitForChildProcess(child: ChildProcess): Promise<number | null> {
 		child.once("exit", onExit);
 		child.once("close", onClose);
 	});
+}
+
+/** Strict LF reader; Node readline does not report whether its final line was newline-terminated. */
+class NodeTextLineReader implements TextLineReader {
+	private readonly file: Awaited<ReturnType<typeof openFile>>;
+	private readonly path: string;
+	private readonly decoder = new TextDecoder();
+	private readonly chunk = new Uint8Array(64 * 1024);
+	private byteOffset = 0;
+	private buffered = "";
+	private ended = false;
+	private closed = false;
+
+	constructor(file: Awaited<ReturnType<typeof openFile>>, path: string) {
+		this.file = file;
+		this.path = path;
+	}
+
+	async readLine(context: Context): Promise<Result<TextLine | undefined, FileError>> {
+		const aborted = abortResult<TextLine | undefined>(context.abortSignal, this.path);
+		if (aborted) return aborted;
+		if (this.closed) return err(new FileError("invalid", "Text line reader is closed", this.path));
+
+		try {
+			while (true) {
+				const newline = this.buffered.indexOf("\n");
+				if (newline !== -1) {
+					const text = this.buffered.slice(0, newline);
+					this.buffered = this.buffered.slice(newline + 1);
+					return ok({ text, terminated: true });
+				}
+				if (this.ended) {
+					if (this.buffered.length === 0) return ok(undefined);
+					const text = this.buffered;
+					this.buffered = "";
+					return ok({ text, terminated: false });
+				}
+
+				// Explicit positions allow an aborted read to be retried without skipping bytes.
+				const { bytesRead } = await this.file.read(this.chunk, 0, this.chunk.length, this.byteOffset);
+				const afterReadAbort = abortResult<TextLine | undefined>(context.abortSignal, this.path);
+				if (afterReadAbort) return afterReadAbort;
+				this.byteOffset += bytesRead;
+				if (bytesRead === 0) {
+					this.buffered += this.decoder.decode();
+					this.ended = true;
+				} else {
+					this.buffered += this.decoder.decode(this.chunk.subarray(0, bytesRead), { stream: true });
+				}
+			}
+		} catch (error) {
+			return err(toFileError(error, this.path));
+		}
+	}
+
+	async close(_context: Context): Promise<void> {
+		if (this.closed) return;
+		this.closed = true;
+		this.buffered = "";
+		try {
+			await this.file.close();
+		} catch {
+			// Closing is best-effort, including after cancellation or an earlier I/O failure.
+		}
+	}
 }
 
 export class NodeExecutionEnv implements ExecutionEnv {
@@ -375,7 +459,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
 		command: string,
 		options: ShellExecOptions | undefined,
 		context: Context,
-	): Promise<Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>> {
+	): Promise<Result<ShellExecResult, ExecutionError>> {
 		const signal = context.abortSignal;
 		if (signal?.aborted) return err(new ExecutionError("aborted", "aborted"));
 		const timeoutMsResult = resolveTimeoutMs(options?.timeout);
@@ -399,27 +483,109 @@ export class NodeExecutionEnv implements ExecutionEnv {
 		}
 
 		return await new Promise((resolvePromise) => {
-			let stdout = "";
-			let stderr = "";
 			let settled = false;
 			let timedOut = false;
 			let callbackError: ExecutionError | undefined;
+			let spillError: ExecutionError | undefined;
 			let child: ReturnType<typeof spawn> | undefined;
 			let timeoutId: ReturnType<typeof setTimeout> | undefined;
+			const spillPrefix: SpillChunk[] = [];
+			let spillPath: string | undefined;
+			const spillQueue: SpillChunk[] = [];
+			let spillStart: Promise<void> | undefined;
+			let spillStream: WriteStream | undefined;
+			let spillBackpressured = false;
 
 			const onAbort = () => {
-				if (child?.pid) {
-					killProcessTree(child.pid);
-				}
+				if (child?.pid) killProcessTree(child.pid);
 			};
+			const failCallback = (error: unknown) => {
+				if (callbackError !== undefined) return;
+				const cause = toError(error);
+				callbackError = new ExecutionError("callback_error", cause.message, cause);
+				onAbort();
+			};
+			let capture: OutputCapture;
+			try {
+				capture = new OutputCapture(options?.capture, context, {
+					onUpdate: options?.onUpdate,
+					onError: failCallback,
+				});
+			} catch (error) {
+				const cause = toError(error);
+				resolvePromise(err(new ExecutionError("unknown", cause.message, cause)));
+				return;
+			}
 
-			const settle = (result: Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>) => {
+			const settle = (result: Result<ShellExecResult, ExecutionError>) => {
+				if (settled) return;
+				settled = true;
 				if (timeoutId) clearTimeout(timeoutId);
 				if (signal) signal.removeEventListener("abort", onAbort);
 				if (child?.pid) this.activeChildPids.delete(child.pid);
-				if (settled) return;
-				settled = true;
+				capture.dispose();
 				resolvePromise(result);
+			};
+			const pauseOutput = () => {
+				child?.stdout?.pause();
+				child?.stderr?.pause();
+			};
+			const resumeOutput = () => {
+				if (callbackError || spillError || timedOut || signal?.aborted || spillBackpressured) return;
+				child?.stdout?.resume();
+				child?.stderr?.resume();
+			};
+			const failSpill = (error: unknown) => {
+				if (spillError !== undefined) return;
+				const cause = toError(error);
+				spillError = new ExecutionError(
+					"unknown",
+					`Failed to preserve complete shell output: ${cause.message}`,
+					cause,
+				);
+				spillBackpressured = false;
+				onAbort();
+			};
+			const writeSpill = (chunk: SpillChunk): void => {
+				if (spillStream === undefined || chunk.length === 0) return;
+				if (spillStream.write(chunk) || spillBackpressured) return;
+				spillBackpressured = true;
+				pauseOutput();
+				spillStream.once("drain", () => {
+					spillBackpressured = false;
+					resumeOutput();
+				});
+			};
+			const startSpill = (chunk: SpillChunk): void => {
+				if (spillStream !== undefined) {
+					writeSpill(chunk);
+					return;
+				}
+				spillQueue.push(chunk);
+				if (spillStart !== undefined) return;
+				pauseOutput();
+				spillStart = (async () => {
+					const created = await this.createTempFile({ prefix: "draht-output-", suffix: ".log" }, context);
+					if (!created.ok) throw created.error;
+					spillPath = created.value;
+					capture.setSpillPath(spillPath);
+					spillStream = createWriteStream(spillPath, { flags: "a", highWaterMark: SPILL_HIGH_WATER_MARK });
+					spillStream.on("error", failSpill);
+					for (const queued of spillQueue) writeSpill(queued);
+					spillQueue.length = 0;
+				})()
+					.catch(failSpill)
+					.finally(resumeOutput);
+			};
+			const finishSpill = async (): Promise<void> => {
+				await spillStart;
+				const stream = spillStream;
+				if (stream === undefined || spillError !== undefined || stream.destroyed) return;
+				await new Promise<void>((resolveFinish) => {
+					stream.once("error", () => resolveFinish());
+					stream.once("finish", resolveFinish);
+					stream.end();
+				});
 			};
 
 			try {
@@ -447,48 +613,54 @@ export class NodeExecutionEnv implements ExecutionEnv {
 			}
 
 			timeoutId =
-				timeoutMs !== undefined
-					? setTimeout(() => {
+				timeoutMs === undefined
+					? undefined
+					: setTimeout(() => {
 							timedOut = true;
-							if (child?.pid) {
-								killProcessTree(child.pid);
-							}
-						}, timeoutMs)
-					: undefined;
+							onAbort();
+						}, timeoutMs);
 
 			if (signal) {
-				if (signal.aborted) {
-					onAbort();
-				} else {
-					signal.addEventListener("abort", onAbort, { once: true });
-				}
+				if (signal.aborted) onAbort();
+				else signal.addEventListener("abort", onAbort, { once: true });
 			}
 
-			child.stdout?.setEncoding("utf8");
-			child.stderr?.setEncoding("utf8");
-			child.stdout?.on("data", (chunk: string) => {
-				stdout += chunk;
+			const feed = (chunk: Uint8Array) => {
 				try {
-					options?.onStdout?.(chunk, context);
+					const wasTruncated = capture.truncated;
+					capture.push(chunk);
+					if (!options?.capture?.spill || chunk.length === 0) return;
+					if (spillPath !== undefined || wasTruncated) {
+						startSpill(chunk);
+					} else if (capture.truncated) {
+						for (const prefix of spillPrefix) startSpill(prefix);
+						spillPrefix.length = 0;
+						startSpill(chunk);
+					} else {
+						spillPrefix.push(chunk);
+					}
 				} catch (error) {
-					const cause = toError(error);
-					callbackError = new ExecutionError("callback_error", cause.message, cause);
-					onAbort();
+					failCallback(error);
 				}
-			});
-			child.stderr?.on("data", (chunk: string) => {
-				stderr += chunk;
-				try {
-					options?.onStderr?.(chunk, context);
-				} catch (error) {
-					const cause = toError(error);
-					callbackError = new ExecutionError("callback_error", cause.message, cause);
-					onAbort();
-				}
-			});
+			};
+			child.stdout?.on("data", feed);
+			child.stderr?.on("data", feed);
 
-			void waitForChildProcess(child).then(
-				(code) => {
+			void waitForChildProcess(
+				child,
+				() =>
+					spillError === undefined &&
+					spillStart !== undefined &&
+					(spillStream === undefined || spillBackpressured),
+			).then(
+				async ({ code, signal: exitSignal }) => {
+					await finishSpill();
+					try {
+						capture.finish();
+						capture.flush();
+					} catch (error) {
+						failCallback(error);
+					}
 					if (callbackError) {
 						settle(err(callbackError));
 						return;
@@ -501,11 +673,44 @@ export class NodeExecutionEnv implements ExecutionEnv {
 						settle(err(new ExecutionError("aborted", "aborted")));
 						return;
 					}
-					settle(ok({ stdout, stderr, exitCode: code ?? 0 }));
+					if (spillError) {
+						settle(err(spillError));
+						return;
+					}
+					const output = capture.snapshot();
+					// A process killed by a signal (e.g. OOM killer) has no exit code; map it
+					// to the conventional 128 + signal number so callers do not mistake it
+					// for a successful exit.
+					const exitCode = code ?? (exitSignal ? 128 + (osConstants.signals[exitSignal] ?? 0) : 1);
+					settle(
+						ok({
+							exitCode,
+							truncation: output.truncation,
+							...(output.spillPath === undefined ? {} : { spillPath: output.spillPath }),
+							...(output.lastLineBytes === undefined ? {} : { lastLineBytes: output.lastLineBytes }),
+						}),
+					);
 				},
 				(error: Error) => settle(err(new ExecutionError("spawn_error", error.message, error))),
 			);
 		});
+	}
+
+	async openTextLineReader(path: string, context: Context): Promise<Result<TextLineReader, FileError>> {
+		const resolved = resolvePath(this.cwd, path);
+		const aborted = abortResult<TextLineReader>(context.abortSignal, resolved);
+		if (aborted) return aborted;
+		try {
+			const file = await openFile(resolved, "r");
+			const afterOpenAbort = abortResult<TextLineReader>(context.abortSignal, resolved);
+			if (afterOpenAbort) {
+				await file.close().catch(() => undefined);
+				return afterOpenAbort;
+			}
+			return ok(new NodeTextLineReader(file, resolved));
+		} catch (error) {
+			return err(toFileError(error, resolved));
+		}
 	}
 
 	async readTextFile(path: string, context: Context): Promise<Result<string, FileError>> {
@@ -525,31 +730,20 @@ export class NodeExecutionEnv implements ExecutionEnv {
 		options: { maxLines?: number } | undefined,
 		context: Context,
 	): Promise<Result<string[], FileError>> {
-		const resolved = resolvePath(this.cwd, path);
-		const signal = context.abortSignal;
-		const aborted = abortResult<string[]>(signal, resolved);
-		if (aborted) return aborted;
 		if (options?.maxLines !== undefined && options.maxLines <= 0) return ok([]);
-		let stream: ReturnType<typeof createReadStream> | undefined;
-		let lineReader: ReturnType<typeof createInterface> | undefined;
+		const opened = await this.openTextLineReader(path, context);
+		if (!opened.ok) return opened;
+		const lines: string[] = [];
 		try {
-			stream = createReadStream(resolved, { encoding: "utf8", signal });
-			lineReader = createInterface({ input: stream, crlfDelay: Infinity });
-			const lines: string[] = [];
-			for await (const line of lineReader) {
-				const loopAbort = abortResult<string[]>(signal, resolved);
-				if (loopAbort) return loopAbort;
-				lines.push(line);
-				if (options?.maxLines !== undefined && lines.length >= options.maxLines) break;
+			while (options?.maxLines === undefined || lines.length < options.maxLines) {
+				const line = await opened.value.readLine(context);
+				if (!line.ok) return line;
+				if (line.value === undefined) break;
+				lines.push(line.value.text);
 			}
-			const afterReadAbort = abortResult<string[]>(signal, resolved);
-			if (afterReadAbort) return afterReadAbort;
 			return ok(lines);
-		} catch (error) {
-			return err(toFileError(error, resolved));
 		} finally {
-			lineReader?.close();
-			stream?.destroy();
+			await opened.value.close(context);
 		}
 	}
 

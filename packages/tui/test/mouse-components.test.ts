@@ -59,6 +59,29 @@ class InputOverlay extends Container {
 	}
 }
 
+/** A settings submenu that routes keys to its nested list, like the coding agent's theme submenu. */
+class SubmenuHost extends Container {
+	readonly list = new SelectList(
+		[
+			{ value: "first", label: "First" },
+			{ value: "second", label: "Second" },
+		],
+		5,
+		selectTheme,
+	);
+
+	constructor(done: (value?: string) => void) {
+		super();
+		this.list.onSelect = (item) => done(item.value);
+		this.list.onCancel = () => done();
+		this.addChild(this.list);
+	}
+
+	handleInput(data: string): void {
+		this.list.handleInput(data);
+	}
+}
+
 describe("mouse-aware components", () => {
 	it("positions a single-line input cursor on press", () => {
 		const input = new Input();
@@ -113,6 +136,76 @@ describe("mouse-aware components", () => {
 		assert.deepStrictEqual(changes, [{ id: "third", value: "high" }]);
 	});
 
+	for (const row of [0, 4]) {
+		it(`ignores hover and clicks visible select-list row ${row} after scrolling`, () => {
+			const list = new SelectList(
+				Array.from({ length: 12 }, (_, i) => ({ value: `item-${i}`, label: `Item ${i}` })),
+				5,
+				selectTheme,
+			);
+			const changes: string[] = [];
+			let selected: string | undefined;
+			list.onSelectionChange = (item) => changes.push(item.value);
+			list.onSelect = (item) => {
+				selected = item.value;
+			};
+			list.setSelectedIndex(5);
+			list.handleMouse({ ...mouse("wheel", 1, row), wheelDelta: 1 });
+			assert.strictEqual(list.getSelectedItem()?.value, "item-6");
+			assert.deepStrictEqual(changes, ["item-6"]);
+			const before = list.render(80);
+			assert.match(before[row], new RegExp(`Item ${4 + row}$`));
+
+			for (const y of [0, 1, 2, 3, 4, row]) {
+				assert.strictEqual(list.handleMouse({ ...mouse("move", 1, y), button: "none" }), undefined);
+				assert.deepStrictEqual(list.render(80), before);
+			}
+			assert.strictEqual(list.getSelectedItem()?.value, "item-6");
+			assert.deepStrictEqual(changes, ["item-6"]);
+			assert.strictEqual(selected, undefined);
+
+			list.handleMouse(mouse("press", 1, row));
+			list.render(80);
+			list.handleMouse(mouse("click", 1, row));
+			assert.strictEqual(selected, `item-${4 + row}`);
+			assert.deepStrictEqual(changes, ["item-6", `item-${4 + row}`]);
+		});
+
+		it(`ignores hover and clicks visible settings row ${row} after scrolling`, () => {
+			const changes: Array<{ id: string; value: string }> = [];
+			const list = new SettingsList(
+				Array.from({ length: 12 }, (_, i) => ({
+					id: `item-${i}`,
+					label: `Item ${i}`,
+					description: `Description ${i}`,
+					currentValue: "off",
+					values: ["off", "on"],
+				})),
+				5,
+				settingsTheme,
+				(id, value) => changes.push({ id, value }),
+				() => {},
+				{ enableSearch: true },
+			);
+			list.selectItem("item-5");
+			list.handleMouse({ ...mouse("wheel", 1, row + 2), wheelDelta: 1 });
+			const before = list.render(80);
+			assert.match(before[4], /^> Item 6/);
+			assert.match(before[row + 2], new RegExp(`Item ${4 + row} `));
+
+			for (const y of [0, 1, 2, 3, 4, row]) {
+				assert.strictEqual(list.handleMouse({ ...mouse("move", 1, y + 2), button: "none" }), undefined);
+				assert.deepStrictEqual(list.render(80), before);
+			}
+			assert.deepStrictEqual(changes, []);
+
+			list.handleMouse(mouse("press", 1, row + 2));
+			list.render(80);
+			list.handleMouse(mouse("click", 1, row + 2));
+			assert.deepStrictEqual(changes, [{ id: `item-${4 + row}`, value: "on" }]);
+		});
+	}
+
 	it("keeps a delegating overlay focused when its nested input is clicked", async () => {
 		const terminal = new VirtualTerminal(20, 4);
 		const tui = new TuiAltScreen(terminal);
@@ -129,6 +222,45 @@ describe("mouse-aware components", () => {
 
 		assert.strictEqual(overlay.input.getValue(), "hi!");
 		assert.strictEqual(tui.getFocusedComponent(), overlay);
+		tui.stop();
+	});
+
+	it("keeps a settings list focused when a click in its submenu closes the submenu", async () => {
+		const terminal = new VirtualTerminal(30, 6);
+		const tui = new TuiAltScreen(terminal);
+		const changes: Array<{ id: string; value: string }> = [];
+		const list = new SettingsList(
+			[
+				{ id: "theme", label: "Theme", currentValue: "first", submenu: (_value, done) => new SubmenuHost(done) },
+				{ id: "other", label: "Other", currentValue: "off", values: ["off", "on"] },
+			],
+			5,
+			settingsTheme,
+			(id, value) => changes.push({ id, value }),
+			() => {},
+		);
+		tui.addChild(list);
+		tui.setFocus(list);
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\r");
+		await terminal.waitForRender();
+		// Press and release on the submenu's second row selects it and closes the submenu.
+		terminal.sendInput("\x1b[<0;3;2M");
+		terminal.sendInput("\x1b[<0;3;2m");
+		await terminal.waitForRender();
+		assert.deepStrictEqual(changes, [{ id: "theme", value: "second" }]);
+		assert.strictEqual(tui.getFocusedComponent(), list);
+
+		// Keys reach the visible list again instead of the closed submenu.
+		terminal.sendInput("\x1b[B");
+		terminal.sendInput("\r");
+		await terminal.waitForRender();
+		assert.deepStrictEqual(changes, [
+			{ id: "theme", value: "second" },
+			{ id: "other", value: "on" },
+		]);
 		tui.stop();
 	});
 

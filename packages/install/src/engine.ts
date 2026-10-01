@@ -82,7 +82,11 @@ export interface StatusComponent {
  * live behind the kind-keyed adapter table.
  */
 export class Engine {
-	constructor(private readonly deps: EngineDeps) {}
+	private readonly deps: EngineDeps;
+
+	constructor(deps: EngineDeps) {
+		this.deps = deps;
+	}
 
 	private adapterContext(): AdapterContext {
 		return {

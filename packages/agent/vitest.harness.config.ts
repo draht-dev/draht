@@ -22,6 +22,7 @@ export default defineConfig({
 		},
 	},
 	resolve: {
+		conditions: ["source"],
 		alias: [
 			{ find: /^@draht\/telemetry$/, replacement: telemetrySrcIndex },
 			{ find: /^@draht\/agent-core$/, replacement: agentSrcIndex },
@@ -29,4 +30,5 @@ export default defineConfig({
 			{ find: /^@draht\/ai\/compat$/, replacement: aiSrcCompat },
 		],
 	},
+	ssr: { resolve: { conditions: ["source"] } },
 });

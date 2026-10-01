@@ -1,22 +1,54 @@
-# Custom Models
+# Choose a Model
 
-Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.pi/agent/models.json`.
+For a built-in provider, start with `/login`, then choose a model with `/model`. Use custom model configuration only when draht does not already include the provider or endpoint you need.
 
-## Table of Contents
+## Choose a connection
 
-- [Minimal Example](#minimal-example)
-- [Full Example](#full-example)
-- [Supported APIs](#supported-apis)
-- [Provider Configuration](#provider-configuration)
-- [Model Configuration](#model-configuration)
-- [Overriding Built-in Providers](#overriding-built-in-providers)
-- [Per-model Overrides](#per-model-overrides)
-- [Anthropic Messages Compatibility](#anthropic-messages-compatibility)
-- [OpenAI Compatibility](#openai-compatibility)
+| What you have | Recommended setup |
+|---|---|
+| A supported subscription | Sign in through `/login` |
+| A provider API key | Store it through `/login` or set its environment variable |
+| A local GGUF model | Connect draht to the llama.cpp router |
+| An OpenAI-, Anthropic-, or Google-compatible endpoint | Add it to `models.json` |
+| A provider with a custom protocol or authentication flow | Build or install a provider extension |
 
-## Minimal Example
+Run `draht --list-models [search]` to list available providers and model IDs. draht starts with its bundled catalog. A remote catalog overlay is off by default; set `DRAHT_MODEL_CATALOG_BASE_URL` to a self-hosted catalog endpoint to enable it. Cached catalog data remains available offline; with an overlay configured, run `draht update --models` to force a refresh.
 
-For local models (Ollama, LM Studio, vLLM), only `id` is required per model:
+## Authenticate
+
+Run `/login` and select a provider. draht stores credentials in [`auth.json`](configuration.md#agent-directory). Run `/logout` to remove stored credentials for a provider.
+
+You can instead provide an API key through the provider's environment variable. This is useful in CI and other environments where draht should not write credentials. [Provider Authentication](providers.md) lists the variables and cloud-provider setup.
+
+When several credential sources are configured, draht uses a runtime `--api-key` first, then a stored `auth.json` credential, an `apiKey` from `models.json`, and finally the provider's environment variables or ambient cloud credentials. Provider extensions can define their own authentication behavior.
+
+Keep `auth.json` and any credential commands private. Project settings and extensions can execute inside the draht process after you trust a project. Review [Security](security.md) before loading configuration from an untrusted directory.
+
+## Select a model
+
+Run `/model` to search available models. The picker shows models whose providers have usable authentication. Press `Ctrl+S` on a model to save it as the default for new sessions.
+
+Run `/thinking` to select the thinking level for the current model. Press `Ctrl+S` there to save the startup level. draht limits the choices to levels supported by the selected model.
+
+`Ctrl+P` cycles through available models. Use `/scoped-models` to control that cycle and save the selection, or configure model patterns through [Settings](settings.md#model-cycling).
+
+A session records model and thinking-level changes. Resuming the session restores them without changing defaults for new sessions.
+
+In interactive mode, direct OpenAI GPT-5.4, GPT-5.5, and GPT-5.6 Sol/Terra/Luna can switch between their 272K standard and 1.05M extended windows without editing `models.json`. OpenAI Codex GPT-5.6 Sol/Terra/Luna can switch between the 372K catalog default and 1.05M. Press `Ctrl+Shift+L` by default, or customize the `app.context.cycle` action in [`keybindings.json`](keybindings.md).
+
+The selected window is stored in the session. Switching to a smaller window prompts for compaction when the current context would not fit. Long-context pricing metadata remains active, and the interactive status message shows the input threshold where higher pricing begins.
+
+## Connect local models
+
+draht integrates directly with the llama.cpp router. The router discovers GGUF files and loads models on demand. draht's `/llama` command manages the router, while `/model` selects one of its loaded models.
+
+Follow [Local Models with llama.cpp](llama-cpp.md) for server startup, model layout, downloads, and connection troubleshooting.
+
+For Ollama, LM Studio, vLLM, SGLang, and other compatible servers, [configure a compatible endpoint](#configure-a-compatible-endpoint) in `models.json`.
+
+## Configure a compatible endpoint
+
+Use [`models.json`](configuration.md#agent-directory) when an endpoint speaks an API draht already supports. This includes most Ollama, LM Studio, vLLM, SGLang, and proxy deployments.
 
 ```json
 {
@@ -26,7 +58,6 @@ For local models (Ollama, LM Studio, vLLM), only `id` is required per model:
       "api": "openai-completions",
       "apiKey": "ollama",
       "models": [
-        { "id": "llama3.1:8b" },
         { "id": "qwen2.5-coder:7b" }
       ]
     }
@@ -34,541 +65,98 @@ For local models (Ollama, LM Studio, vLLM), only `id` is required per model:
 }
 ```
 
-The `apiKey` is required but Ollama ignores it, so any value works.
+The dummy key makes the model available to draht; Ollama ignores it. For an authenticated endpoint, `apiKey` and header values can use `$NAME` or `${NAME}` environment interpolation, a literal value, or a leading `!command`. Commands in `models.json` run at request time and are not cached by draht.
 
-Some OpenAI-compatible servers do not understand the `developer` role used for reasoning-capable models. For those providers, set `compat.supportsDeveloperRole` to `false` so pi sends the system prompt as a `system` message instead. If the server also does not support `reasoning_effort`, set `compat.supportsReasoningEffort` to `false` too.
+Opening `/model` reloads the file. A `models` entry adds or replaces a model with the same ID on that provider. Use `modelOverrides` to change metadata for an existing built-in or extension-provided model without replacing the provider's model list. Unknown override IDs are ignored.
 
-You can set `compat` at the provider level to apply to all models, or at the model level to override a specific model. This commonly applies to Ollama, vLLM, SGLang, and similar OpenAI-compatible servers.
+### Describe model input and caching
 
-```json
-{
-  "providers": {
-    "ollama": {
-      "baseUrl": "http://localhost:11434/v1",
-      "api": "openai-completions",
-      "apiKey": "ollama",
-      "compat": {
-        "supportsDeveloperRole": false,
-        "supportsReasoningEffort": false
-      },
-      "models": [
-        {
-          "id": "gpt-oss:20b",
-          "reasoning": true
-        }
-      ]
-    }
-  }
-}
-```
-
-## Full Example
-
-Override defaults when you need specific values:
+Use `inputLimits.images.resize` to control how draht encodes new image attachments, `read` results, and tool-result images before storing them in conversation history:
 
 ```json
 {
-  "providers": {
-    "ollama": {
-      "baseUrl": "http://localhost:11434/v1",
-      "api": "openai-completions",
-      "apiKey": "ollama",
-      "models": [
-        {
-          "id": "llama3.1:8b",
-          "name": "Llama 3.1 8B (Local)",
-          "reasoning": false,
-          "input": ["text"],
-          "contextWindow": 128000,
-          "maxTokens": 32000,
-          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
-        }
-      ]
-    }
-  }
-}
-```
-
-The file reloads each time you open `/model`. Edit during session; no restart needed.
-
-## Google AI Studio Example
-
-Use `google-generative-ai` with a `baseUrl` to add models from Google AI Studio, including custom Gemma 4 entries:
-
-```json
-{
-  "providers": {
-    "my-google": {
-      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
-      "api": "google-generative-ai",
-      "apiKey": "$GEMINI_API_KEY",
-      "models": [
-        {
-          "id": "gemma-4-31b-it",
-          "name": "Gemma 4 31B",
-          "input": ["text", "image"],
-          "contextWindow": 262144,
-          "reasoning": true
-        }
-      ]
-    }
-  }
-}
-```
-
-The `baseUrl` is required when adding custom models to the `google-generative-ai` API type.
-
-## Supported APIs
-
-| API | Description |
-|-----|-------------|
-| `openai-completions` | OpenAI Chat Completions (most compatible) |
-| `openai-responses` | OpenAI Responses API |
-| `anthropic-messages` | Anthropic Messages API |
-| `google-generative-ai` | Google Generative AI |
-
-Set `api` at provider level (default for all models) or model level (override per model).
-
-## Provider Configuration
-
-| Field | Description |
-|-------|-------------|
-| `baseUrl` | API endpoint URL |
-| `api` | API type (see above) |
-| `apiKey` | API key (see value resolution below) |
-| `headers` | Custom headers (see value resolution below) |
-| `authHeader` | Set `true` to add `Authorization: Bearer <apiKey>` automatically |
-| `models` | Array of model configurations |
-| `modelOverrides` | Per-model overrides for built-in or extension-registered models on this provider |
-
-### Value Resolution
-
-The `apiKey` and `headers` fields support command execution, environment interpolation, and literals:
-
-- **Shell command:** `"!command"` at the start executes the whole value as a command and uses stdout
-  ```json
-  "apiKey": "!security find-generic-password -ws 'anthropic'"
-  "apiKey": "!op read 'op://vault/item/credential'"
-  ```
-- **Environment interpolation:** `"$ENV_VAR"` or `"${ENV_VAR}"` uses the value of the named variable. Interpolation works inside larger literals.
-  ```json
-  "apiKey": "$MY_API_KEY"
-  "apiKey": "${KEY_PREFIX}_${KEY_SUFFIX}"
-  ```
-  `$FOO_BAR` is the variable `FOO_BAR`; use `${FOO}_BAR` when `BAR` is literal text. Missing environment variables make the value unresolved.
-- **Escapes:** `"$$"` emits a literal `"$"`; `"$!"` emits a literal `"!"` without triggering command execution.
-  ```json
-  "apiKey": "$$literal-dollar-prefix"
-  "apiKey": "$!literal-bang-prefix"
-  ```
-- **Literal value:** Used directly
-  ```json
-  "apiKey": "sk-..."
-  ```
-
-Legacy uppercase env-var-like values such as `MY_API_KEY` are migrated to `$MY_API_KEY` on startup.
-
-For `models.json`, shell commands are resolved at request time. pi intentionally does not apply built-in TTL, stale reuse, or recovery logic for arbitrary commands. Different commands need different caching and failure strategies, and pi cannot infer the right one.
-
-If your command is slow, expensive, rate-limited, or should keep using a previous value on transient failures, wrap it in your own script or command that implements the caching or TTL behavior you want.
-
-`/model` availability checks use configured auth presence and do not execute shell commands.
-
-### Custom Headers
-
-```json
-{
-  "providers": {
-    "custom-proxy": {
-      "baseUrl": "https://proxy.example.com/v1",
-      "apiKey": "$MY_API_KEY",
-      "api": "anthropic-messages",
-      "headers": {
-        "x-portkey-api-key": "$PORTKEY_API_KEY",
-        "x-secret": "!op read 'op://vault/item/secret'"
-      },
-      "models": [...]
-    }
-  }
-}
-```
-
-## Model Configuration
-
-| Field | Required | Default | Description |
-|-------|----------|---------|-------------|
-| `id` | Yes | — | Model identifier (passed to the API) |
-| `name` | No | `id` | Human-readable model label. Used for matching (`--model` patterns) and shown as secondary model detail text. |
-| `api` | No | provider's `api` | Override provider's API for this model |
-| `reasoning` | No | `false` | Supports extended thinking |
-| `thinkingLevelMap` | No | omitted | Maps pi thinking levels to provider values and marks unsupported levels (see below) |
-| `input` | No | `["text"]` | Input types: `["text"]` or `["text", "image"]` |
-| `contextWindow` | No | `128000` | Context window size in tokens |
-| `maxTokens` | No | `16384` | Maximum output tokens |
-| `samplingParams` | No | omitted | Sampling parameters merged verbatim into every request body (see below) |
-| `cost` | No | all zeros | Per-million-token rates with optional request-wide input pricing tiers |
-| `compat` | No | provider `compat` | Provider compatibility overrides. Merged with provider-level `compat` when both are set. |
-
-A cost tier supplies a complete alternate rate set and applies to the full request when total input usage (`input + cacheRead + cacheWrite`) exceeds `inputTokensAbove`. When multiple tiers match, the highest threshold wins.
-
-```json
-{
-  "cost": {
-    "input": 5,
-    "output": 30,
-    "cacheRead": 0.5,
-    "cacheWrite": 6.25,
-    "tiers": [
-      {
-        "inputTokensAbove": 272000,
-        "input": 10,
-        "output": 45,
-        "cacheRead": 1,
-        "cacheWrite": 12.5
-      }
-    ]
-  }
-}
-```
-
-Current behavior:
-- `/model`, `--list-models`, and the interactive footer display entries by model `id`.
-- The configured `name` is used for model matching and secondary model detail text. It does not replace the footer/status-bar model id.
-
-### Sampling Parameters
-
-`samplingParams` is a free-form object merged verbatim into every request body for the model, after the fields pi sets itself, so its keys win. Use it to send sampling parameters pi does not model — including server-specific ones like llama.cpp's `min_p` or vLLM's `top_k`:
-
-```json
-{
-  "id": "deepseek-v4-flash",
-  "samplingParams": {
-    "temperature": 1.0,
-    "top_p": 0.95,
-    "top_k": 0,
-    "min_p": 0.0
-  }
-}
-```
-
-Only OpenAI-compatible APIs apply it (`openai-completions`, `openai-responses`, `azure-openai-responses`); other APIs ignore it. Keys override pi's named request fields (for example a `temperature` key here beats the request-level temperature), so prefer it as the single source of sampling truth for a model. In `modelOverrides`, `samplingParams` merges per key with the base model's value.
-
-A constant thinking-token cap can go here too, but it will not follow `thinkingBudgets` or leave room for the answer. Prefer `compat.thinkingTokenBudgetField` (or the `supportsThinkingTokenBudget` alias) for that.
-
-### Thinking Level Map
-
-Use `thinkingLevelMap` on a model to describe model-specific thinking controls. Keys are pi thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Maps may contain holes; for example, a model can expose `high` and `max` without exposing `xhigh`.
-
-Values are tristate:
-
-| Value | Meaning |
-|-------|---------|
-| omitted | Standard levels through `high` use the provider's default mapping; extended `xhigh` and `max` levels are unsupported |
-| string | Level is supported and this value is sent to the provider |
-| `null` | Level is unsupported and hidden/skipped/clamped away |
-
-Example for a model that only supports off, high, and max reasoning:
-
-```json
-{
-  "id": "deepseek-v4-pro",
-  "reasoning": true,
-  "thinkingLevelMap": {
-    "minimal": null,
-    "low": null,
-    "medium": null,
-    "high": "high",
-    "xhigh": null,
-    "max": "max"
-  }
-}
-```
-
-Example for a model where thinking cannot be disabled:
-
-```json
-{
-  "id": "always-thinking-model",
-  "reasoning": true,
-  "thinkingLevelMap": {
-    "off": null
-  }
-}
-```
-
-Migration: older configs that used `compat.reasoningEffortMap` should move that mapping to model-level `thinkingLevelMap`. Use `null` for levels that should not appear in the UI.
-
-## Overriding Built-in Providers
-
-Route a built-in provider through a proxy without redefining models:
-
-```json
-{
-  "providers": {
-    "anthropic": {
-      "baseUrl": "https://my-proxy.example.com/v1"
-    }
-  }
-}
-```
-
-All built-in Anthropic models remain available. Existing OAuth or API key auth continues to work.
-
-To merge custom models into a built-in provider, include the `models` array:
-
-```json
-{
-  "providers": {
-    "anthropic": {
-      "baseUrl": "https://my-proxy.example.com/v1",
-      "apiKey": "$ANTHROPIC_API_KEY",
-      "api": "anthropic-messages",
-      "models": [...]
-    }
-  }
-}
-```
-
-Merge semantics:
-- Built-in models are kept.
-- Custom models are upserted by `id` within the provider.
-- If a custom model `id` matches a built-in model `id`, the custom model replaces that built-in model.
-- If a custom model `id` is new, it is added alongside built-in models.
-
-## Per-model Overrides
-
-Use `modelOverrides` to customize built-in models and matching extension-registered models without replacing the provider's full model list.
-
-```json
-{
-  "providers": {
-    "openrouter": {
-      "modelOverrides": {
-        "anthropic/claude-sonnet-4": {
-          "name": "Claude Sonnet 4 (Bedrock Route)",
-          "compat": {
-            "openRouterRouting": {
-              "only": ["amazon-bedrock"]
-            }
-          }
-        }
+  "id": "vision-model",
+  "input": ["text", "image"],
+  "inputLimits": {
+    "images": {
+      "resize": {
+        "maxWidth": 1568,
+        "maxHeight": 1568,
+        "maxBytes": 524288,
+        "jpegQuality": 75
       }
     }
   }
 }
 ```
 
-`modelOverrides` supports these fields per model: `name`, `reasoning`, `thinkingLevelMap`, `input`, `cost` (partial), `contextWindow`, `maxTokens`, `samplingParams` (merged per key), `headers`, `compat`.
+`maxBytes` limits the base64-encoded payload. Omitted resize fields use conservative defaults of 2000 by 2000 pixels, 4.5 MiB encoded, and JPEG quality 80. Images are encoded once; changing models does not rewrite historical images. The catalog can also describe hard request limits with `inputLimits.maxRequestBytes`, `images.maxPerMessage`, and `images.maxPerRequest`, but draht does not yet rewrite or reject history based on them.
 
-Direct OpenAI GPT-5.6 Sol, Terra, and Luna default to a `272000` context window so requests remain within OpenAI's short-context pricing tier. To opt into OpenAI's 1.05M context window, increase it for each model you use:
+<a id="prompt-cache-lifetimes"></a>
 
-```json
-{
-  "providers": {
-    "openai": {
-      "modelOverrides": {
-        "gpt-5.6-sol": {
-          "contextWindow": 1050000
-        }
-      }
-    }
-  }
-}
-```
-
-The override preserves the built-in pricing metadata. Requests with more than 272K total input tokens use GPT-5.6's long-context rates for the entire request. Apply the same override to `gpt-5.6-terra` or `gpt-5.6-luna` when needed.
-
-In interactive mode, direct OpenAI GPT-5.4, GPT-5.5, and GPT-5.6 Sol/Terra/Luna can switch between their 272K standard and 1.05M extended windows without editing `models.json`. OpenAI Codex GPT-5.6 Sol/Terra/Luna can switch between the 372K catalog default and 1.05M. Press Ctrl+Shift+L by default, or customize the `app.context.cycle` action in `~/.draht/agent/keybindings.json`.
-
-The selected window is stored in the session. Switching to a smaller window prompts for compaction when the current context would not fit. Long-context pricing metadata remains active, and the interactive status message shows the input threshold where higher pricing begins.
-
-Behavior notes:
-- `modelOverrides` are applied to built-in provider models and matching extension-registered provider models.
-- Unknown model IDs are ignored.
-- You can combine provider-level `baseUrl`/`headers` with `modelOverrides`.
-- Overriding `name` changes model matching and secondary detail text only; the footer and primary model lists continue to show the model `id`.
-- If `models` is also defined for a provider, custom models are merged after built-in overrides. A custom model with the same `id` replaces the overridden built-in model entry.
-
-## Anthropic Messages Compatibility
-
-For providers or proxies using `api: "anthropic-messages"`, use `compat` to control Anthropic-specific request compatibility.
-
-By default pi sends per-tool `eager_input_streaming: true`. If a proxy or Anthropic-compatible backend rejects that field, set `supportsEagerToolInputStreaming` to `false`. Pi will omit `tools[].eager_input_streaming` and send the legacy `fine-grained-tool-streaming-2025-05-14` beta header for tool-enabled requests instead.
-
-Some Anthropic models require adaptive thinking (`thinking.type: "adaptive"` plus `output_config.effort`) instead of the legacy budget-based thinking payload. Built-in models set this automatically. For custom providers or aliases that route to those models, set `forceAdaptiveThinking` to `true`.
-
-Some Anthropic-compatible providers emit thinking blocks with empty signatures and still expect them on replay. Set `allowEmptySignature` to `true` only for those providers; real Anthropic rejects empty thinking signatures.
-
-Built-in Anthropic models enable `supportsStrictTools` in their model metadata. Custom Anthropic-compatible models must set it to `true` when their endpoint accepts strict JSON-schema tool definitions.
+Use `promptCache` to declare the provider's best-effort cache lifetime in seconds for the `short` or `long` retention tier:
 
 ```json
-{
-  "providers": {
-    "anthropic-proxy": {
-      "baseUrl": "https://proxy.example.com",
-      "api": "anthropic-messages",
-      "apiKey": "$ANTHROPIC_PROXY_KEY",
-      "compat": {
-        "supportsEagerToolInputStreaming": false,
-        "supportsLongCacheRetention": true,
-        "forceAdaptiveThinking": true,
-        "allowEmptySignature": true
-      },
-      "models": [
-        {
-          "id": "claude-opus-4-7",
-          "reasoning": true,
-          "input": ["text", "image"]
-        }
-      ]
-    }
-  }
-}
+{ "id": "claude-sonnet-5", "promptCache": { "short": 300, "long": 3600 } }
 ```
 
-| Field | Description |
-|-------|-------------|
-| `supportsEagerToolInputStreaming` | Whether the provider accepts per-tool `eager_input_streaming`. Default: `true`. Set to `false` to omit that field and use the legacy fine-grained tool streaming beta header on tool-enabled requests. |
-| `supportsLongCacheRetention` | Whether the provider accepts Anthropic long cache retention (`cache_control.ttl: "1h"`) when cache retention is `long`. Default: `true`. |
-| `sendSessionAffinityHeaders` | Whether to send `x-session-affinity` from the session id when caching is enabled. Default: auto-detected for known providers. |
-| `supportsCacheControlOnTools` | Whether the provider accepts Anthropic-style `cache_control` markers on tool definitions. Default: `true`. |
-| `forceAdaptiveThinking` | Whether to send adaptive thinking (`thinking.type: "adaptive"` plus `output_config.effort`) for this model. Built-in adaptive models set this automatically. Default: `false`. |
-| `allowEmptySignature` | Whether to replay empty thinking signatures as `signature: ""` instead of converting thinking to text. Default: `false`. |
-| `supportsStrictTools` | Whether the provider accepts strict JSON-schema tool definitions. Default: `false`; built-in Anthropic models enable it in generated metadata. |
+Choose the conservative end of any published range. A model without a lifetime for the active tier is not eligible for cache warming. A `modelOverrides` entry can set `inputLimits` or `promptCache` for a built-in or extension model, including a model accessed through a validated proxy. See [`cacheWarming`](settings.md#model-and-thinking).
 
-## OpenAI Compatibility
+Compatibility settings should describe verified differences in the endpoint's request or response behavior. Do not enable them based only on an endpoint advertising OpenAI or Anthropic compatibility.
 
-For providers with partial OpenAI compatibility, use the `compat` field.
+## Use classifier models
 
-- Provider-level `compat` applies defaults to all models under that provider.
-- Model-level `compat` overrides provider-level values for that model.
+Classifier models do not chat. They answer typed questions about JSON state: pick one of several choices, answer yes or no, or give a score, each with probabilities. draht includes TypeSafe's Jev model from these providers:
 
-```json
-{
-  "providers": {
-    "local-llm": {
-      "baseUrl": "http://localhost:8080/v1",
-      "api": "openai-completions",
-      "compat": {
-        "supportsUsageInStreaming": false,
-        "maxTokensField": "max_tokens"
-      },
-      "models": [...]
-    }
-  }
-}
+| Provider | Model IDs | Authentication |
+|---|---|---|
+| `typesafe` | `jev-latest` | `TYPESAFE_API_KEY` |
+| `openrouter` | `typesafe/jev-1.13`, `~typesafe/jev-latest` | `OPENROUTER_API_KEY` or `/login` |
+| `cloudflare-workers-ai` | `typesafe/jev` | `CLOUDFLARE_API_KEY` and `CLOUDFLARE_ACCOUNT_ID` |
+| `vercel-ai-gateway` | `typesafe-ai/jev` | `AI_GATEWAY_API_KEY` |
+| `opencode` | `jev-1.13`, `jev-1.13-free` | `OPENCODE_API_KEY` |
+
+Chat models on a [llama.cpp router](llama-cpp.md#classification) are also listed as classifier models.
+
+Classifier models do not appear in `/model`. The model reaches them through the [`codemode`](cli.md#enable-codemode) tool, which is off unless an MCP server turned it on. Enable it with `"defaultTools": ["+codemode"]` in [settings](settings.md#tools). Scripts then list classifier models with `models.getAvailableOfType("classifier")` and call `models.classify(model, { state, questions })`:
+
+```js
+const jev = await models.getModelOfType("classifier", "typesafe", "jev-latest");
+const result = await models.classify(jev, {
+  state: { message: "The change works, thanks." },
+  questions: {
+    approved: {
+      type: "bool",
+      instructions: "Does the user approve of the result?",
+      criteria: { true: "Approval", false: "No approval" },
+    },
+  },
+});
+return result.answers;
 ```
 
-| Field | Description |
-|-------|-------------|
-| `supportsStore` | Provider supports `store` field |
-| `supportsDeveloperRole` | Use `developer` vs `system` role |
-| `supportsReasoningEffort` | Support for `reasoning_effort` parameter |
-| `supportsUsageInStreaming` | Supports `stream_options: { include_usage: true }` (default: `true`) |
-| `supportsFinishReason` | Whether streamed responses include `finish_reason`. When `false`, pi infers `stop` or `toolUse` when the stream ends. Default: `true`. |
-| `maxTokensField` | Use `max_completion_tokens` or `max_tokens` |
-| `requiresToolResultName` | Include `name` on tool result messages |
-| `requiresAssistantAfterToolResult` | Insert an assistant message before a user message after tool results |
-| `requiresThinkingAsText` | Convert thinking blocks to plain text |
-| `requiresReasoningContentOnAssistantMessages` | Include empty `reasoning_content` on all replayed assistant messages when reasoning is enabled |
-| `thinkingFormat` | Use `reasoning_effort`, `openrouter`, `deepseek`, `together`, `baseten`, `zai`, `qwen`, `chat-template`, or `qwen-chat-template` thinking parameters |
-| `chatTemplateKwargs` | `chat_template_kwargs` values for `thinkingFormat: "chat-template"`; use `{ "$var": "thinking.enabled" }`, `{ "$var": "thinking.effort" }`, or `{ "$var": "thinking.budget" }` for pi-controlled thinking values |
-| `chatTemplateArgs` | `chat_template_args` values for `thinkingFormat: "baseten"`; use `{ "$var": "thinking.enabled" }`, `{ "$var": "thinking.effort" }`, or `{ "$var": "thinking.budget" }` for pi-controlled thinking values |
-| `thinkingTokenBudgetField` | Top-level request field used to cap reasoning tokens from `thinkingBudgets`, clamped so at least 1024 tokens remain for the answer. `"thinking_token_budget"` (vLLM), `"thinking_budget"` (Qwen/DashScope/SGLang), `"thinking_budget_tokens"` (llama.cpp). Off by default; not set on the generated catalog. |
-| `supportsThinkingTokenBudget` | Alias for `thinkingTokenBudgetField: "thinking_token_budget"` (vLLM). Prefer `thinkingTokenBudgetField`. Default: `false`. |
-| `cacheControlFormat` | Use Anthropic-style `cache_control` markers on the system prompt, last tool definition, and last user, assistant, or tool-result text content. Currently only `anthropic` is supported. |
-| `sendSessionAffinityHeaders` | For `openai-completions`, send session-affinity headers from the session id when caching is enabled. Default: `false`. |
-| `sessionAffinityFormat` | For `openai-completions` and `openai-responses`, the session-affinity header format: `openai` sends `session_id`/`x-client-request-id` (completions also `x-session-affinity`), `openai-nosession` omits the underscore-containing `session_id` header, `openrouter` sends `x-session-id`. Does not affect the `prompt_cache_key` body param. Default: auto-detected. |
-| `supportsStrictMode` | Whether the provider accepts strict JSON-schema function tool definitions. Defaults depend on the API; built-in OpenAI models carry explicit capability metadata. |
-| `supportsOpenAIGrammarTools` | Whether OpenAI-compatible APIs emit custom Lark/regex grammar tools. When `false`, grammar-constrained tools fall back to normal function tools. Default: `false`; the built-in model catalog enables it for GPT-5+ models on OpenAI, OpenAI Codex, Azure OpenAI, GitHub Copilot, opencode, and Cloudflare AI Gateway. |
-| `deferredToolsMode` | Use provider-specific deferred tool serialization. Currently only `"kimi"` is supported for Kimi's OpenAI-compatible Chat Completions format. |
-| `supportsLongCacheRetention` | Whether the provider accepts long cache retention when cache retention is `long`: `prompt_cache_retention: "24h"` for OpenAI prompt caching, or `cache_control.ttl: "1h"` when `cacheControlFormat` is `anthropic`. Default: `true`. |
-| `openRouterRouting` | OpenRouter provider routing preferences. This object is sent as-is in the `provider` field of the [OpenRouter API request](https://openrouter.ai/docs/guides/routing/provider-selection). |
-| `vercelGatewayRouting` | Vercel AI Gateway routing config for provider selection (`only`, `order`) |
+When the service reports token counts, as all System One services do, `result.usage` carries them with their cost. draht adds the usage of a script's classifier calls to the `codemode` tool result, so it counts toward the session cost in the footer and `/session`. The cost uses the model's catalog price; models without one, such as TypeSafe's direct `jev-latest`, report tokens at no cost.
 
-`openrouter` uses `reasoning: { effort }`. `together` uses `reasoning: { enabled }` and also `reasoning_effort` when `supportsReasoningEffort` is enabled. `qwen` uses top-level `enable_thinking`. Use `qwen-chat-template` for local Qwen-compatible servers that require `chat_template_kwargs.enable_thinking` and `preserve_thinking`. Use `chat-template` for vLLM/Hugging Face chat templates that need configurable `chat_template_kwargs`, such as `chatTemplateKwargs: { "thinking": { "$var": "thinking.enabled" } }` for DeepSeek V3.x templates. Use `thinkingFormat: "baseten"` with `chatTemplateArgs` for providers that expose toggle controls through `chat_template_args` and optionally support top-level `reasoning_effort`.
+Extensions call classifiers through `ctx.modelRegistry.classify()`, without codemode. [Virtual models](virtual-models.md#route-requests) can use them to route requests; see the `jev-router.ts` example.
 
-`thinkingTokenBudgetField` is independent of `thinkingFormat`. Do not enable it on the generated Qwen catalog: those models already send `reasoning_effort`, and DashScope rejects `thinking_budget` together with `reasoning_effort`.
+## Add a custom provider
 
-`cacheControlFormat: "anthropic"` is for OpenAI-compatible providers that expose Anthropic-style prompt caching through `cache_control` markers on text content and tool definitions.
+Use an extension when the provider needs custom streaming, model discovery, or authentication behavior. See [Custom Providers](custom-provider.md) for the extension workflow.
 
-Example:
+## Troubleshooting
 
-```json
-{
-  "providers": {
-    "openrouter": {
-      "baseUrl": "https://openrouter.ai/api/v1",
-      "apiKey": "$OPENROUTER_API_KEY",
-      "api": "openai-completions",
-      "models": [
-        {
-          "id": "openrouter/anthropic/claude-3.5-sonnet",
-          "name": "OpenRouter Claude 3.5 Sonnet",
-          "compat": {
-            "openRouterRouting": {
-              "allow_fallbacks": true,
-              "require_parameters": false,
-              "data_collection": "deny",
-              "zdr": true,
-              "enforce_distillable_text": false,
-              "order": ["anthropic", "amazon-bedrock", "google-vertex"],
-              "only": ["anthropic", "amazon-bedrock"],
-              "ignore": ["gmicloud", "friendli"],
-              "quantizations": ["fp16", "bf16"],
-              "sort": {
-                "by": "price",
-                "partition": "model"
-              },
-              "max_price": {
-                "prompt": 10,
-                "completion": 20
-              },
-              "preferred_min_throughput": {
-                "p50": 100,
-                "p90": 50
-              },
-              "preferred_max_latency": {
-                "p50": 1,
-                "p90": 3,
-                "p99": 5
-              }
-            }
-          }
-        }
-      ]
-    }
-  }
-}
-```
+### A model does not appear
 
-Vercel AI Gateway example:
+Confirm that its provider has usable authentication. Custom models can load from `models.json` but remain unavailable in `/model` until draht can resolve credentials. For llama.cpp, only models currently loaded by the router appear.
 
-```json
-{
-  "providers": {
-    "vercel-ai-gateway": {
-      "baseUrl": "https://ai-gateway.vercel.sh/v1",
-      "apiKey": "$AI_GATEWAY_API_KEY",
-      "api": "openai-completions",
-      "models": [
-        {
-          "id": "moonshotai/kimi-k2.5",
-          "name": "Kimi K2.5 (Fireworks via Vercel)",
-          "reasoning": true,
-          "input": ["text", "image"],
-          "cost": { "input": 0.6, "output": 3, "cacheRead": 0, "cacheWrite": 0 },
-          "contextWindow": 262144,
-          "maxTokens": 262144,
-          "compat": {
-            "vercelGatewayRouting": {
-              "only": ["fireworks", "novita"],
-              "order": ["fireworks", "novita"]
-            }
-          }
-        }
-      ]
-    }
-  }
-}
-```
+### Authentication works in one shell only
+
+Check whether the key came from an environment variable rather than `auth.json`. Environment variables must be present in the process that starts draht.
+
+### Sign-in opens a browser on a remote machine
+
+Complete the provider's headless authentication flow when available. Some providers let you paste the final redirect URL or authorization code back into draht. See [Authenticate interactively](providers.md#authenticate-interactively).
+
+### A compatible endpoint rejects requests
+
+Check its API type and compatibility settings in `models.json`. The upstream server must support the corresponding request fields and behavior.

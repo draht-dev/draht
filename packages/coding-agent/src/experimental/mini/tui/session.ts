@@ -67,12 +67,10 @@ export async function connect(transport: Transport, sessionId: string | null, cw
 
 	const fold = (event: HarnessEvent): void => {
 		if (!snapshot) return;
-		const folded = reduceLaneSnapshot(snapshot.lane, event);
-		if ("rebase" in folded) {
+		if (reduceLaneSnapshot(snapshot.lane, event) === "rebase") {
 			void resubscribe();
 			return;
 		}
-		snapshot = { ...snapshot, lane: folded };
 		publish();
 	};
 

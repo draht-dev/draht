@@ -48,10 +48,12 @@ export class EventsWatcher {
 	private watcher: FSWatcher | null = null;
 	private knownFiles: Set<string> = new Set();
 
-	constructor(
-		private eventsDir: string,
-		private slack: SlackBot,
-	) {
+	private eventsDir: string;
+	private slack: SlackBot;
+
+	constructor(eventsDir: string, slack: SlackBot) {
+		this.eventsDir = eventsDir;
+		this.slack = slack;
 		this.startTime = Date.now();
 	}
 

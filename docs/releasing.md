@@ -6,9 +6,13 @@
 
 ## Steps
 
-1. **Update CHANGELOGs**: Ensure all changes since the last release are documented in the `[Unreleased]` section of each affected package's CHANGELOG.md (conventional-commit collection in the script assists, but the `[Unreleased]` sections are the source of truth).
+1. **Verify the release evidence contract**: Read [`.planning/RELEASE-EVIDENCE.md`](../.planning/RELEASE-EVIDENCE.md), declare the exact release scope, and record the required evidence level for every included release-critical capability. Every such capability must hold E2 or stronger evidence; E0/E1 fixture or unit evidence is never operational. Active-deployment, soak, hardware, and privacy claims require separate E3/E4 records. The release is blocked if any included capability is below its declared threshold.
 
-2. **Run the release script**:
+2. **Verify the immutable release gate**: Before creating a commit or tag, require a clean pinned install, build, complete `check`, canonical tests, publication-readiness checks, artifact inputs, and successful required CI bound to the exact release commit. `.github/workflows/scheduled-release.yml` runs `npm run check` itself before invoking the release script, so scheduled runs satisfy this step. A local `scripts/release.mjs` run does not run `npm run check` as part of the script; an operator running it manually must run `npm run check` separately and must not treat a successful dry run or script exit as satisfying this step on its own.
+
+3. **Update CHANGELOGs**: Ensure all changes since the last release are documented in the `[Unreleased]` section of each affected package's CHANGELOG.md (conventional-commit collection in the script assists, but the `[Unreleased]` sections are the source of truth).
+
+4. **Run the release script**:
    ```bash
    npm run release        # or: npm run release:dry to preview
    ```

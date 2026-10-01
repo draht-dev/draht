@@ -138,6 +138,15 @@ function loadMomSkills(channelDir: string, workspacePath: string): Skill[] {
 	return Array.from(skillMap.values());
 }
 
+/**
+ * Directory the executor runs bash commands in: the container root for Docker
+ * (docker exec), the mom process directory on the host. The prompt text and the
+ * session cwd (rendered as <cwd>) both use it so they never disagree.
+ */
+function getBashWorkingDirectory(sandboxConfig: SandboxConfig): string {
+	return sandboxConfig.type === "docker" ? "/" : process.cwd();
+}
+
 function buildSystemPrompt(
 	workspacePath: string,
 	channelId: string,
@@ -160,11 +169,11 @@ function buildSystemPrompt(
 
 	const envDescription = isDocker
 		? `You are running inside a Docker container (Alpine Linux).
-- Bash working directory: / (use cd or absolute paths)
+- Bash working directory: ${getBashWorkingDirectory(sandboxConfig)} (use cd or absolute paths)
 - Install tools with: apk add <package>
 - Your changes persist across sessions`
 		: `You are running directly on the host machine.
-- Bash working directory: ${process.cwd()}
+- Bash working directory: ${getBashWorkingDirectory(sandboxConfig)}
 - Be careful with system modifications`;
 
 	return `You are mom, a Slack bot assistant. Be concise. No emojis.
@@ -483,7 +492,7 @@ async function createRunner(sandboxConfig: SandboxConfig, channelId: string, cha
 		agent,
 		sessionManager,
 		settingsManager,
-		cwd: process.cwd(),
+		cwd: getBashWorkingDirectory(sandboxConfig),
 		modelRuntime,
 		resourceLoader,
 		baseToolsOverride,

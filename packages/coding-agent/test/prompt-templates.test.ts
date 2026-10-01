@@ -639,7 +639,9 @@ describe("loadPromptTemplates - diagnostics", () => {
 				includeDefaults: false,
 			});
 
-			expect(templates.map((template) => template.name)).toEqual(["valid"]);
+			// draht always loads its shipped GSD templates; assert only on the user-supplied ones.
+			const userTemplates = templates.filter((template) => template.sourceInfo.source !== "builtin");
+			expect(userTemplates.map((template) => template.name)).toEqual(["valid"]);
 			expect(diagnostics).toEqual([
 				expect.objectContaining({
 					type: "warning",

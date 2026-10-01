@@ -243,13 +243,15 @@ describe("defaultTools setting", () => {
 			model: getModel("anthropic", "claude-sonnet-4-5")!,
 		});
 
+		// draht wires the subagent core builtin into service-based sessions.
 		expect(
 			session
 				.getAllTools()
 				.map((tool) => tool.name)
 				.sort(),
-		).toEqual(["bash", "edit", "find", "grep", "ls", "powershell", "read", "write"]);
-		expect(session.getActiveToolNames()).toEqual(["ls"]);
+		).toEqual(["bash", "edit", "find", "grep", "ls", "powershell", "read", "subagent", "write"]);
+		// The subagent core builtin is an extension tool, so defaultTools does not deactivate it.
+		expect(session.getActiveToolNames()).toEqual(["ls", "subagent"]);
 		session.dispose();
 	});
 });

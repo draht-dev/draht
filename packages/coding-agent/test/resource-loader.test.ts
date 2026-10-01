@@ -179,7 +179,9 @@ Prompt content.`,
 			await loader.reload();
 
 			const { prompts, diagnostics } = loader.getPrompts();
-			expect(prompts.map((prompt) => prompt.name)).toEqual(["valid"]);
+			// draht always loads its shipped GSD templates; assert only on the user-supplied ones.
+			const userPrompts = prompts.filter((prompt) => prompt.sourceInfo.source !== "builtin");
+			expect(userPrompts.map((prompt) => prompt.name)).toEqual(["valid"]);
 			expect(diagnostics).toEqual([
 				expect.objectContaining({
 					type: "warning",

@@ -1,7 +1,7 @@
 {
 	"name": "@draht/mom",
 	"version": "2026.9.5-1",
-	"description": "Slack bot that delegates messages to the pi coding agent",
+	"description": "Slack bot that delegates messages to the Draht coding agent",
 	"type": "module",
 	"bin": {
 		"mom": "dist/main.js"

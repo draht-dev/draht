@@ -26,8 +26,7 @@ concurrency:
   group: scheduled-release
   cancel-in-progress: false
 
-permissions:
-  contents: read
+permissions: {}
 
 env:
   BUN_PACKAGE_VERSION: 1.4.2
@@ -37,6 +36,8 @@ jobs:
   promote:
     if: github.event_name == 'workflow_dispatch' || vars.DRAHT_RELEASES_ENABLED == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     timeout-minutes: 90
     steps:
       - name: Require release credentials

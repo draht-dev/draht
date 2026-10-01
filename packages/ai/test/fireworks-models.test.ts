@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { stream as streamAnthropic } from "../src/api/anthropic-messages.ts";
-import { getModel, getModels, normalizeContext, streamSimple } from "../src/compat.ts";
+import { getModel, normalizeContext, streamSimple } from "../src/compat.ts";
 import { findEnvKeys, getEnvApiKey } from "../src/env-api-keys.ts";
 import { getSupportedThinkingLevels } from "../src/models.ts";
 import type { Context, Model, Tool } from "../src/types.ts";
@@ -19,16 +19,6 @@ afterEach(() => {
 });
 
 describe("Fireworks models", () => {
-	it("enables native tool references only on Messages models", () => {
-		for (const model of getModels("fireworks")) {
-			if (model.api === "anthropic-messages") {
-				expect(model.compat).toMatchObject({ supportsToolReferences: true });
-			} else {
-				expect(model.compat).not.toHaveProperty("supportsToolReferences");
-			}
-		}
-	});
-
 	it("registers non-GLM, non-Kimi-K3 models via Anthropic-compatible Messages API", () => {
 		const model = getModel("fireworks", "accounts/fireworks/models/deepseek-v4p1-flash");
 

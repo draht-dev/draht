@@ -1,5 +1,10 @@
 # Product
 
+> **Scope:** this file guides the internal draht.dev surface. Public package
+> support and release inclusion are governed by the
+> [product support map](../../.planning/PRODUCT-MAP.md). The site must not promote
+> private examples or internal workspaces as shipped products.
+
 ## Register
 
 brand
@@ -14,7 +19,7 @@ Two audiences arrive at this page:
 
 ## Product purpose
 
-draht is a GSD workflow engine for coding agents. It routes each task to a capable model based on cost, writes the failing test before implementation, reads the domain model before editing code, and logs each model call for audits or freelancer invoices. It runs as a Claude Code plugin or standalone CLI. The code is MIT-licensed and sends no telemetry. Users can install it themselves, book a fixed-scope setup sprint, or hire Oskar to run a team rollout.
+draht is a local GSD workflow engine and coding-agent stack. It routes each task to a capable model based on cost, writes the failing test before implementation, reads the domain model before editing code, and keeps provenance records through supported local packages and CLIs. It runs as a Claude Code plugin or standalone CLI. The code is MIT-licensed and designed for local operation. Telemetry, audit, invoice, compliance, hosted-service or managed-deployment claims need separate evidence and are not implied by private examples in this repository.
 
 ## Brand personality
 

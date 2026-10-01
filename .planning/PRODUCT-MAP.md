@@ -1,6 +1,6 @@
 # Draht Product and Package Support Map
 
-**Status:** proposed scope decision, pending stakeholder approval  
+**Status:** approved scope decision (owner, 2026-10-02)  
 **Decision date:** 2026-08-28  
 **Evidence contract:** [`RELEASE-EVIDENCE.md`](RELEASE-EVIDENCE.md)
 

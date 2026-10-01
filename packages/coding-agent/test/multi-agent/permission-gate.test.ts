@@ -156,6 +156,47 @@ describe("PermissionGate.evaluate", () => {
 		});
 	});
 
+	describe("flag-set matching for rm-shaped deny patterns", () => {
+		it("still denies a plain -rf cluster, reordered, double-spaced, and mixed-case, via the deny rule", () => {
+			const gate = new PermissionGate([{ tool: "bash", pattern: "rm -rf *", action: "deny" }]);
+			expect(gate.evaluate("bash", { command: "rm -rf /tmp/foo" }).action).toBe("deny");
+			expect(gate.evaluate("bash", { command: "rm -fr /tmp/foo" }).action).toBe("deny");
+			expect(gate.evaluate("bash", { command: "rm  -rf  /tmp/foo" }).action).toBe("deny");
+			expect(gate.evaluate("bash", { command: "RM -RF /" }).action).toBe("deny");
+			expect(gate.evaluate("bash", { command: "rm -Rf /" }).action).toBe("deny");
+			expect(gate.evaluate("bash", { command: "rm -fR /" }).action).toBe("deny");
+		});
+
+		it("denies when the flags are reordered, repositioned, split, or carry extras", () => {
+			const gate = new PermissionGate([{ tool: "bash", pattern: "rm -rf *", action: "deny" }]);
+			expect(gate.evaluate("bash", { command: "rm -Rd ~" }).action).toBe("approve"); // lacks -f, falls through
+			expect(gate.evaluate("bash", { command: "rm ~ -rf" }).action).toBe("deny"); // position
+			expect(gate.evaluate("bash", { command: "rm -r -f ~" }).action).toBe("deny"); // separate flags
+			expect(gate.evaluate("bash", { command: "rm -rfv ~" }).action).toBe("deny"); // extra flag
+			expect(gate.evaluate("bash", { command: "rm --recursive --force ~" }).action).toBe("deny"); // long forms
+			expect(gate.evaluate("bash", { command: "rm -r --force ~" }).action).toBe("deny"); // mixed forms
+		});
+
+		it("still denies -Rd/-dR/-Ri style reordered clusters against the rm -r* danger pattern and deny rule", () => {
+			for (const mode of ["auto", "yolo"] as const) {
+				const gate = new PermissionGate([{ tool: "bash", pattern: "rm -r*", action: "deny" }], {
+					cwd: "/repo",
+					mode,
+				});
+				for (const cmd of ["rm -Rd ~", "rm -dR ~", "rm -Ri ~"]) {
+					expect(gate.evaluate("bash", { command: cmd }).action).toBe("deny");
+					expect(findDangerousPattern(cmd)).toBeDefined();
+				}
+			}
+		});
+
+		it("does not deny unrelated rm invocations lacking the required flags", () => {
+			const gate = new PermissionGate([{ tool: "bash", pattern: "rm -rf *", action: "deny" }]);
+			expect(gate.evaluate("bash", { command: "rm build/output.js" }).action).toBe("approve");
+			expect(gate.evaluate("bash", { command: "rm -v build/output.js" }).action).toBe("approve");
+		});
+	});
+
 	it("does not reassemble unrelated path segments across '/' into a false match", () => {
 		// A previous implementation stripped every "/" from both command and pattern before matching,
 		// which could reassemble unrelated path segments into a spurious match (e.g. "/et/cpasswd"

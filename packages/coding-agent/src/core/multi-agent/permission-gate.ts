@@ -363,6 +363,113 @@ function normalizeForMatch(text: string): string {
 	return normalizeFlagClusters(collapseWhitespace(text));
 }
 
+function tokenize(text: string): string[] {
+	const trimmed = text.trim();
+	return trimmed.length === 0 ? [] : trimmed.split(/\s+/);
+}
+
+/** A combined short-flag cluster token (`-rf`, `-R`), optionally glob-suffixed (`-r*`) by a danger-pattern author. */
+function parseShortFlagClusterToken(token: string): string | undefined {
+	return token.match(/^-([A-Za-z]+)\*?$/)?.[1];
+}
+
+function parseLongFlagToken(token: string): string | undefined {
+	return token.match(/^--([A-Za-z][A-Za-z-]*)$/)?.[1]?.toLowerCase();
+}
+
+interface FlagSet {
+	shortFlags: Set<string>;
+	longFlags: Set<string>;
+}
+
+/** Collects every short/long flag found anywhere in `tokens`, regardless of order, clustering, or position. */
+function extractFlagSet(tokens: string[]): FlagSet {
+	const shortFlags = new Set<string>();
+	const longFlags = new Set<string>();
+	for (const token of tokens) {
+		const letters = parseShortFlagClusterToken(token);
+		if (letters !== undefined) {
+			for (const ch of letters) shortFlags.add(ch.toLowerCase());
+			continue;
+		}
+		const long = parseLongFlagToken(token);
+		if (long !== undefined) longFlags.add(long);
+	}
+	return { shortFlags, longFlags };
+}
+
+interface FlagClusterDenyPattern {
+	command: string;
+	requiredShortFlags: Set<string>;
+	requiredLongFlags: Set<string>;
+}
+
+/**
+ * Parses a deny `pattern` of the shape `<command> <flags...> [*]` (e.g.
+ * `rm -rf *`, `rm -r*`, `chmod -R *`) into a required flag set, for matching
+ * by `flagClusterPatternMatchesCandidate` below. Returns `undefined` for any
+ * pattern that doesn't have this exact "bare command name plus only
+ * flags/wildcard" shape, so those patterns keep using the generic glob
+ * matcher unchanged.
+ */
+function parseFlagClusterPattern(pattern: string): FlagClusterDenyPattern | undefined {
+	const [command, ...rest] = tokenize(pattern);
+	if (command === undefined || /[*?]/.test(command)) return undefined;
+
+	const requiredShortFlags = new Set<string>();
+	const requiredLongFlags = new Set<string>();
+	let sawFlag = false;
+	for (const token of rest) {
+		if (token === "*") continue;
+		const letters = parseShortFlagClusterToken(token);
+		if (letters !== undefined) {
+			sawFlag = true;
+			for (const ch of letters) requiredShortFlags.add(ch.toLowerCase());
+			continue;
+		}
+		const long = parseLongFlagToken(token);
+		if (long !== undefined) {
+			sawFlag = true;
+			requiredLongFlags.add(long);
+			continue;
+		}
+		return undefined;
+	}
+	if (!sawFlag) return undefined;
+	return { command: command.toLowerCase(), requiredShortFlags, requiredLongFlags };
+}
+
+/** `rm`'s two spellings of "recursive"/"force" that are interchangeable for flag-set matching purposes. */
+const SHORT_LONG_FLAG_EQUIVALENTS: ReadonlyMap<string, string> = new Map([
+	["r", "recursive"],
+	["f", "force"],
+]);
+
+function flagClusterPatternMatchesCandidate(flagPattern: FlagClusterDenyPattern, candidateText: string): boolean {
+	const tokens = tokenize(candidateText);
+	const commandToken = tokens[0];
+	if (commandToken === undefined) return false;
+	const commandName = (
+		commandToken.includes("/") ? commandToken.slice(commandToken.lastIndexOf("/") + 1) : commandToken
+	).toLowerCase();
+	if (commandName !== flagPattern.command) return false;
+
+	const { shortFlags, longFlags } = extractFlagSet(tokens.slice(1));
+	const hasShort = (flag: string) =>
+		shortFlags.has(flag) || longFlags.has(SHORT_LONG_FLAG_EQUIVALENTS.get(flag) ?? "");
+	const hasLong = (flag: string) => {
+		if (longFlags.has(flag)) return true;
+		for (const [short, long] of SHORT_LONG_FLAG_EQUIVALENTS) {
+			if (long === flag && shortFlags.has(short)) return true;
+		}
+		return false;
+	};
+
+	for (const flag of flagPattern.requiredShortFlags) if (!hasShort(flag)) return false;
+	for (const flag of flagPattern.requiredLongFlags) if (!hasLong(flag)) return false;
+	return true;
+}
+
 /** Resolves a leading `/some/path/cmd` (or `./cmd`, `../cmd`) first token down to its bare basename. */
 function resolveBasenameOfFirstToken(text: string): string {
 	const leadingWs = text.slice(0, text.length - text.trimStart().length);
@@ -620,8 +727,16 @@ function globToRegExp(pattern: string): RegExp {
 }
 
 function matchDenyPattern(command: string, pattern: string): boolean {
+	const candidates = collectDenyCandidates(command);
+	const flagPattern = parseFlagClusterPattern(pattern);
+	if (
+		flagPattern !== undefined &&
+		candidates.some((candidate) => flagClusterPatternMatchesCandidate(flagPattern, candidate))
+	) {
+		return true;
+	}
 	const regex = globToRegExp(normalizeForMatch(pattern));
-	return collectDenyCandidates(command).some((candidate) => regex.test(normalizeForMatch(candidate)));
+	return candidates.some((candidate) => regex.test(normalizeForMatch(candidate)));
 }
 
 /**

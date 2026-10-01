@@ -5,6 +5,7 @@ const telemetrySrcIndex = fileURLToPath(new URL("../telemetry/src/index.ts", imp
 const aiSrcIndex = fileURLToPath(new URL("../ai/src/index.ts", import.meta.url));
 const aiSrcCompat = fileURLToPath(new URL("../ai/src/compat.ts", import.meta.url));
 const aiSrcOAuth = fileURLToPath(new URL("../ai/src/oauth.ts", import.meta.url));
+const aiSrcApi = fileURLToPath(new URL("../ai/src/api", import.meta.url));
 const aiSrcProviders = fileURLToPath(new URL("../ai/src/providers", import.meta.url));
 const aiSrcUtils = fileURLToPath(new URL("../ai/src/utils", import.meta.url));
 const agentSrcIndex = fileURLToPath(new URL("../agent/src/index.ts", import.meta.url));
@@ -15,6 +16,10 @@ const tuiSrcIndex = fileURLToPath(new URL("../tui/src/index.ts", import.meta.url
 const mcpSrcIndex = fileURLToPath(new URL("../mcp/src/index.ts", import.meta.url));
 const mcpSrcOAuth = fileURLToPath(new URL("../mcp/src/oauth/index.ts", import.meta.url));
 const mcpSrcTesting = fileURLToPath(new URL("../mcp/src/testing/index.ts", import.meta.url));
+const rlmSrcIndex = fileURLToPath(new URL("../rlm/src/index.ts", import.meta.url));
+const routerSrcIndex = fileURLToPath(new URL("../router/src/index.ts", import.meta.url));
+const knowledgeSrcIndex = fileURLToPath(new URL("../knowledge/src/index.ts", import.meta.url));
+const codemodeSrcIndex = fileURLToPath(new URL("../codemode/src/index.ts", import.meta.url));
 const codemodeSrcDeclarations = fileURLToPath(new URL("../codemode/src/declarations.ts", import.meta.url));
 const codemodeSrcSource = fileURLToPath(new URL("../codemode/src/source.ts", import.meta.url));
 
@@ -49,6 +54,7 @@ export default defineConfig({
 			{ find: /^@draht\/ai$/, replacement: aiSrcIndex },
 			{ find: /^@draht\/ai\/compat$/, replacement: aiSrcCompat },
 			{ find: /^@draht\/ai\/oauth$/, replacement: aiSrcOAuth },
+			{ find: /^@draht\/ai\/api\/(.+)$/, replacement: `${aiSrcApi}/$1.ts` },
 			{ find: /^@draht\/ai\/providers\/(.+)$/, replacement: `${aiSrcProviders}/$1.ts` },
 			{ find: /^@draht\/ai\/utils\/(.+)$/, replacement: `${aiSrcUtils}/$1.ts` },
 			{ find: /^@draht\/agent-core$/, replacement: agentSrcIndex },
@@ -59,6 +65,10 @@ export default defineConfig({
 			{ find: /^@draht\/mcp$/, replacement: mcpSrcIndex },
 			{ find: /^@draht\/mcp\/oauth$/, replacement: mcpSrcOAuth },
 			{ find: /^@draht\/mcp\/testing$/, replacement: mcpSrcTesting },
+			{ find: /^@draht\/rlm$/, replacement: rlmSrcIndex },
+			{ find: /^@draht\/router$/, replacement: routerSrcIndex },
+			{ find: /^@draht\/knowledge$/, replacement: knowledgeSrcIndex },
+			{ find: /^@draht\/codemode$/, replacement: codemodeSrcIndex },
 			{ find: /^@draht\/codemode\/declarations$/, replacement: codemodeSrcDeclarations },
 			{ find: /^@draht\/codemode\/source$/, replacement: codemodeSrcSource },
 		],

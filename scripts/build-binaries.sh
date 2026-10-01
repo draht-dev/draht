@@ -4,9 +4,10 @@
 # Mirrors .github/workflows/build-binaries.yml
 #
 # Usage:
-#   ./scripts/build-binaries.sh [--platform <platform>]
+#   ./scripts/build-binaries.sh [--skip-deps] [--platform <platform>]
 #
 # Options:
+#   --skip-deps         Skip installing cross-platform dependencies
 #   --platform <name>   Build only for specified platform (darwin-arm64, darwin-x64, linux-x64, linux-arm64, windows-x64)
 #
 # Output:
@@ -28,10 +29,15 @@ if [[ "$ACTUAL_BUN_REVISION" != "$EXPECTED_BUN_REVISION" ]]; then
     exit 1
 fi
 
+SKIP_DEPS=false
 PLATFORM=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --skip-deps)
+            SKIP_DEPS=true
+            shift
+            ;;
         --platform)
             PLATFORM="$2"
             shift 2
@@ -61,6 +67,15 @@ echo "==> Installing dependencies..."
 # Request that layout explicitly instead of depending on Bun's evolving default
 # workspace linker, and fail closed if the reproducible install cannot finish.
 bun install --frozen-lockfile --linker hoisted
+
+if [[ "$SKIP_DEPS" == "false" ]]; then
+    echo "==> Installing cross-platform native bindings..."
+    # Materialize every locked optional native binding without rewriting package
+    # metadata or resolving ad-hoc versions during a release build.
+    bun install --frozen-lockfile --linker hoisted --os='*' --cpu='*'
+else
+    echo "==> Skipping cross-platform native bindings (--skip-deps)"
+fi
 
 echo "==> Building all packages..."
 bun run build
@@ -97,7 +112,7 @@ for platform in "${PLATFORMS[@]}"; do
     # for the worker specifiers in the runtime to resolve.
     #
     # Disable cwd bunfig.toml autoload so project preload scripts cannot crash the
-    # standalone binary before draht starts (see #7684).
+    # standalone binary before draht starts (see upstream #7684).
     if [[ "$platform" == "windows-x64" ]]; then
         bun build --compile --external koffi --no-compile-autoload-bunfig --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile binaries/$platform/draht.exe
     else

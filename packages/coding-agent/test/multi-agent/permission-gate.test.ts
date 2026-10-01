@@ -360,6 +360,26 @@ describe("PermissionGate modes", () => {
 			expect(gate.evaluate("bash", {}).action).toBe("approve");
 		});
 
+		it("fails closed when a chain has more pieces than the deny scan can cover", () => {
+			const manyPieces = `${Array.from({ length: 60 }, () => "true").join("; ")}; rm -rf ~`;
+			expect(gate.evaluate("bash", { command: manyPieces }).action).toBe("approve");
+
+			const noRuleGate = new PermissionGate([], { cwd: "/repo", mode: "auto" });
+			expect(noRuleGate.evaluate("bash", { command: manyPieces }).action).toBe("approve");
+		});
+
+		it("fails closed when wrapper nesting exceeds the deny scan's depth limit", () => {
+			const noRuleGate = new PermissionGate([], { cwd: "/repo", mode: "auto" });
+
+			let shallow = "echo safe-marker";
+			for (let i = 0; i < 2; i++) shallow = `bash -c "${shallow}"`;
+			expect(noRuleGate.evaluate("bash", { command: shallow }).action).toBe("allow");
+
+			let deep = "echo safe-marker";
+			for (let i = 0; i < 6; i++) deep = `bash -c "${deep}"`;
+			expect(noRuleGate.evaluate("bash", { command: deep }).action).toBe("approve");
+		});
+
 		it("leaves non-bash defaults untouched", () => {
 			expect(gate.evaluate("write", { path: "/etc/passwd" }).action).toBe("approve");
 			expect(gate.evaluate("write", { path: "src/index.ts" }).action).toBe("allow");

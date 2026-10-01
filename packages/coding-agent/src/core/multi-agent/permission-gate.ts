@@ -454,29 +454,55 @@ function extractSimpleEchoOutput(text: string): string | undefined {
 const MAX_DENY_CANDIDATES = 50;
 const MAX_DENY_DEPTH = 4;
 
+interface DenyScanResult {
+	candidates: string[];
+	/**
+	 * `true` when the candidate/depth cap cut the scan short before every
+	 * piece of `command` could be enumerated. Callers MUST treat a truncated
+	 * scan as "unknown, not denied" rather than "not denied" — see
+	 * `commandDenyScanTruncated` below.
+	 */
+	truncated: boolean;
+}
+
 /**
  * Paranoidly enumerates every independently-executed "piece" of `command` a
  * `deny` rule should be checked against: the raw command, each chained
  * segment, prefix/wrapper-stripped variants of each segment, and the bodies
  * of any `bash -c` / `eval` / `$(...)` / backtick constructs — recursively,
  * bounded so adversarial input can't cause unbounded work.
+ *
+ * The bound is itself a fail-safe surface: a command with more pieces or
+ * wrapper layers than the cap allows must not be treated as "scanned clean".
+ * `truncated` on the result flags exactly that case.
  */
-function collectDenyCandidates(command: string): string[] {
+function scanDenyCandidates(command: string): DenyScanResult {
 	const seen = new Set<string>();
 	const queue: Array<{ text: string; depth: number }> = [{ text: command, depth: 0 }];
+	let truncated = false;
 
-	while (queue.length > 0 && seen.size < MAX_DENY_CANDIDATES) {
+	while (queue.length > 0) {
+		if (seen.size >= MAX_DENY_CANDIDATES) {
+			truncated = true;
+			break;
+		}
 		const next = queue.shift();
 		if (!next) break;
 		const { text, depth } = next;
 		if (seen.has(text)) continue;
 		seen.add(text);
-		if (depth >= MAX_DENY_DEPTH) continue;
+		if (depth >= MAX_DENY_DEPTH) {
+			truncated = true;
+			continue;
+		}
 
 		const enqueue = (candidate: string) => {
-			if (!seen.has(candidate) && seen.size + queue.length < MAX_DENY_CANDIDATES) {
-				queue.push({ text: candidate, depth: depth + 1 });
+			if (seen.has(candidate)) return;
+			if (seen.size + queue.length >= MAX_DENY_CANDIDATES) {
+				truncated = true;
+				return;
 			}
+			queue.push({ text: candidate, depth: depth + 1 });
 		};
 
 		const segments = splitChain(text).map((s) => s.text);
@@ -513,7 +539,23 @@ function collectDenyCandidates(command: string): string[] {
 		}
 	}
 
-	return [...seen];
+	return { candidates: [...seen], truncated };
+}
+
+/** Candidate list only, for callers that don't need the truncation flag. */
+function collectDenyCandidates(command: string): string[] {
+	return scanDenyCandidates(command).candidates;
+}
+
+/**
+ * `true` when `command` has more chained pieces or wrapper layers than
+ * `scanDenyCandidates` could fully enumerate. A truncated scan can never be
+ * trusted to say "no deny/danger match" — the unscanned remainder might hide
+ * one — so callers must fail closed (deny or require approval) rather than
+ * fall through to an auto-allow default.
+ */
+function commandDenyScanTruncated(command: string): boolean {
+	return scanDenyCandidates(command).truncated;
 }
 
 function globToRegExp(pattern: string): RegExp {
@@ -768,6 +810,13 @@ export class PermissionGate {
 					return {
 						action: "approve",
 						reason: `auto mode: command matched dangerous pattern ${JSON.stringify(dangerous)}, requires approval`,
+					};
+				}
+				if (commandDenyScanTruncated(command)) {
+					return {
+						action: "approve",
+						reason:
+							"auto mode: command has more chained/wrapped pieces than the deny scan can fully cover, requires approval",
 					};
 				}
 				return { action: "allow", reason: "auto mode: no rule matched and command passed the danger filter" };

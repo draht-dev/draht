@@ -53,6 +53,7 @@
 - `--attachable` help text no longer implies other people can attach: the socket is owner-only
 - permission gate: `tool: bash` deny rules never applied to `powershell` calls; they now also block the matching `powershell` command, as a best-effort text match (bash `allow`/`approve` rules are deliberately not extended to `powershell`). `powershell` is not given bash's auto-mode auto-allow, because the built-in danger filter is bash-shaped: unmatched `powershell` calls require approval in default and auto mode (yolo mode still approves them, as for every tool). Deny detection now also unwraps quoted `pwsh`/`powershell`/`cmd` `-c`/`-Command`/`/c` invocations, so `bash -c "pwsh -c 'rm -rf ~'"` is caught
 - extensions: `registerEntryRenderer` required an active runtime again, blocking registration from extensions whose session had already been replaced; restored so it always registers regardless of runtime state, as fixed previously
+- permission gate: the deny-rule candidate scan capped itself at 50 pieces/depth 4 and then fell through as if the command were clean, so a chain with more pieces than the cap (or wrapper nesting deeper than the cap) could carry a denied command past both explicit `deny` rules and auto mode's danger filter. The scan now reports when it was cut short, and auto mode requires approval instead of auto-allowing whenever a command couldn't be fully scanned
 
 ### Changed
 

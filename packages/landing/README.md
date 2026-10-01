@@ -14,8 +14,11 @@ bun run build    # Build static site
 bun run preview  # Preview production build
 ```
 
-## Deployment
+## Deployment target
 
-Deployed to AWS (S3 + CloudFront) via SST. See `sst.config.ts`.
+The internal site is configured for AWS (S3 + CloudFront) through SST; see
+`sst.config.ts`. Source configuration is not evidence that a production site is
+active. Deployment ownership and active-state evidence are tracked through the
+[product support map](../../.planning/PRODUCT-MAP.md).
 
 Do not run `sst deploy` manually. CI/CD manages deployments.

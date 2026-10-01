@@ -334,6 +334,45 @@ describe("PermissionGate.evaluate", () => {
 		});
 	});
 
+	describe("wrapper flags that take a separate argument", () => {
+		const gate = new PermissionGate([{ tool: "bash", pattern: "rm -rf *", action: "deny" }], {
+			cwd: "/repo",
+			mode: "auto",
+		});
+
+		it("consumes timeout's -s/-k/--signal/--kill-after argument before the wrapped command", () => {
+			expect(gate.evaluate("bash", { command: "timeout -s KILL 5 rm -rf ~" }).action).toBe("deny");
+			expect(gate.evaluate("bash", { command: "timeout --signal KILL 5 rm -rf ~" }).action).toBe("deny");
+			expect(gate.evaluate("bash", { command: "timeout -k 1 5 rm -rf ~" }).action).toBe("deny");
+		});
+
+		it("consumes nice's -n argument", () => {
+			expect(gate.evaluate("bash", { command: "nice -n 10 rm -rf ~" }).action).toBe("deny");
+		});
+
+		it("consumes ionice's -c/-n/-p arguments", () => {
+			expect(gate.evaluate("bash", { command: "ionice -c 3 rm -rf ~" }).action).toBe("deny");
+		});
+
+		it("consumes stdbuf's -i/-o/-e arguments", () => {
+			expect(gate.evaluate("bash", { command: "stdbuf -o L rm -rf ~" }).action).toBe("deny");
+		});
+
+		it("consumes env's -u argument", () => {
+			expect(gate.evaluate("bash", { command: "env -u FOO rm -rf ~" }).action).toBe("deny");
+		});
+
+		it("parses env -S's argument as a command", () => {
+			expect(gate.evaluate("bash", { command: "env -S 'rm -rf ~'" }).action).toBe("deny");
+		});
+
+		it("still unwraps wrappers with no separate-arg flags (non-regression)", () => {
+			expect(gate.evaluate("bash", { command: "sudo rm -rf /" }).action).toBe("deny");
+			expect(gate.evaluate("bash", { command: "timeout 5 rm -rf /" }).action).toBe("deny");
+			expect(gate.evaluate("bash", { command: "busybox sh -c 'rm -rf ~'" }).action).toBe("deny");
+		});
+	});
+
 	it("does not reassemble unrelated path segments across '/' into a false match", () => {
 		// A previous implementation stripped every "/" from both command and pattern before matching,
 		// which could reassemble unrelated path segments into a spurious match (e.g. "/et/cpasswd"

@@ -504,26 +504,61 @@ function stripEnvAssignments(text: string): string {
 }
 
 /**
+ * Flags that consume a separate following argument (rather than being a
+ * standalone `-flag` token) for each passthrough wrapper, so
+ * `stripPassthroughPrefix` doesn't mistake that argument for the start of
+ * the wrapped command.
+ */
+const WRAPPER_FLAGS_WITH_ARG: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+	["timeout", new Set(["-s", "-k", "--signal", "--kill-after"])],
+	["nice", new Set(["-n"])],
+	["ionice", new Set(["-c", "-n", "-p"])],
+	// policy flags (-b/-f/-i/-o/-r) take a priority; -p takes a target pid.
+	["chrt", new Set(["-b", "-f", "-i", "-o", "-r", "-p"])],
+	["stdbuf", new Set(["-i", "-o", "-e"])],
+	["env", new Set(["-u", "-C", "-S", "--split-string"])],
+	["sudo", new Set(["-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", "-U"])],
+]);
+
+/**
  * Strips one leading passthrough-wrapper command (e.g. `sudo`, `env FOO=1`)
- * and its own flags, if present. `timeout DURATION cmd...` additionally
- * skips the required duration positional, which isn't a `-flag` token, so
- * `timeout 5 rm -rf /` unwraps down to `rm -rf /` instead of leaving the
- * bogus `5 rm -rf /` behind. (A `timeout -s KILL 30 cmd`-style separate-arg
- * flag is a known gap shared with every other wrapper here: only combined
- * `-flag` tokens are recognized, not flags with a separate argument.)
+ * and its own flags, if present, consuming each flag's own separate argument
+ * (`WRAPPER_FLAGS_WITH_ARG`) rather than mistaking it for the wrapped
+ * command. `timeout DURATION cmd...` additionally skips the required
+ * duration positional, which isn't a `-flag` token, so `timeout 5 rm -rf /`
+ * unwraps down to `rm -rf /` instead of leaving the bogus `5 rm -rf /`
+ * behind.
  */
 function stripPassthroughPrefix(text: string): { stripped: string; changed: boolean } {
 	const trimmed = text.replace(/^\s+/, "");
-	const match = trimmed.match(/^(\S+)((?:\s+-\S+)*)\s+/);
-	if (!match) return { stripped: text, changed: false };
-	const basename = basenameOfHeadToken(match[1]);
+	const tokens = tokenizeShellWords(trimmed);
+	const head = tokens[0];
+	if (head === undefined) return { stripped: text, changed: false };
+	const basename = basenameOfHeadToken(head);
 	if (!PASSTHROUGH_PREFIXES.has(basename)) return { stripped: text, changed: false };
-	let rest = trimmed.slice(match[0].length);
-	if (basename === "timeout") {
-		const duration = rest.match(/^(\S+)\s+/);
-		if (duration) rest = rest.slice(duration[0].length);
+
+	const argFlags = WRAPPER_FLAGS_WITH_ARG.get(basename);
+	let i = 1;
+	while (i < tokens.length) {
+		const token = tokens[i];
+		if (argFlags?.has(token)) {
+			i += 2;
+			continue;
+		}
+		if (/^-/.test(token)) {
+			i++;
+			continue;
+		}
+		break;
 	}
-	return { stripped: rest, changed: true };
+	if (basename === "timeout" && i < tokens.length) i++;
+
+	return { stripped: tokens.slice(i).map(requoteTokenIfNeeded).join(" "), changed: true };
+}
+
+/** Re-wraps a dequoted token in single quotes if it contains whitespace, so rejoining tokens with `" "` doesn't silently merge what was one quoted argument into several unquoted words. */
+function requoteTokenIfNeeded(token: string): string {
+	return /\s/.test(token) ? `'${token.replace(/'/g, `'\\''`)}'` : token;
 }
 
 /**
@@ -818,6 +853,7 @@ function scanDenyCandidates(command: string): DenyScanResult {
 		for (const piece of pieces) {
 			let working = stripLeadingBackslashEscape(piece);
 			working = stripEnvAssignments(working);
+			const beforeWrapperStrip = working;
 			for (let guard = 0; guard < 5; guard++) {
 				const { stripped, changed } = stripPassthroughPrefix(working);
 				if (!changed) break;
@@ -844,6 +880,9 @@ function scanDenyCandidates(command: string): DenyScanResult {
 
 			const findExecArg = extractFindExecArg(working) ?? extractFindExecArg(basenameResolved);
 			if (findExecArg !== undefined) enqueue(findExecArg);
+
+			const envSplitStringArg = extractEnvSplitStringArg(beforeWrapperStrip);
+			if (envSplitStringArg !== undefined) enqueue(envSplitStringArg);
 
 			for (const sub of extractSubstitutions(piece)) {
 				enqueue(sub);
@@ -949,6 +988,17 @@ function extractFindExecArg(text: string): string | undefined {
 		cmdTokens.push(token);
 	}
 	return cmdTokens.length > 0 ? cmdTokens.join(" ") : undefined;
+}
+
+/** Extracts `env -S '<cmd>'` / `env --split-string '<cmd>'`'s argument, which `env` itself parses as a command line. */
+function extractEnvSplitStringArg(text: string): string | undefined {
+	const tokens = tokenizeShellWords(text.trim());
+	const head = tokens[0];
+	if (head === undefined || basenameOfHeadToken(head) !== "env") return undefined;
+	for (let i = 1; i < tokens.length; i++) {
+		if (tokens[i] === "-S" || tokens[i] === "--split-string") return tokens[i + 1];
+	}
+	return undefined;
 }
 
 function globToRegExp(pattern: string): RegExp {

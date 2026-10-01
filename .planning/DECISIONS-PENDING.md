@@ -12,6 +12,9 @@
 > before wave 2 and lived only inside `phases/36-spawn/PLAN.md`, where nobody would find them. None
 > blocks waves 1-3, which are all evidence class 2; **36.1 and 36.3 must be answered before wave 5's
 > class-3 acceptance can mean anything**, because that suite asserts the posture they decide.
+>
+> **Status 2026-10-01:** Phase 42 batching is **DECIDED** (see below) — batched writes, default chunk
+> size 200, invalid sizes rejected before anything is mutated.
 
 ## Phase 34 — which seam relays a permission ask to the phone (RESOLVED 2026-08-21, see below)
 
@@ -103,7 +106,14 @@ the seam is settled.
 
 ---
 
-## Phase 42 — batching vs. per-path callback
+## Phase 42 — batching vs. per-path callback (DECIDED 2026-10-01, see below)
+
+> **DECIDED — batched, chunk size 200, invalid sizes rejected.** Writes go through
+> `git checkout-index --stdin -z` in chunks of `writeChunkSize` (default
+> `DEFAULT_RESTORE_WRITE_CHUNK_SIZE = 200`), deletes stay per-path in-process. The callback is renamed
+> `onPathsRestored(paths: readonly string[])`, firing once per batch and once per delete. `writeChunkSize`
+> is validated once, at `restore()`'s entry point, before anything is mutated; an invalid size (not a
+> positive safe integer) fails the whole call with `status: "failed"` and no snapshot taken.
 
 **Confidence:** high
 

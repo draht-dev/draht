@@ -2033,7 +2033,8 @@ export interface ExtensionCheckpointsAPI {
 	/**
 	 * Restore the working tree to an entry's checkpoint, taking a pre-rewind
 	 * safety snapshot first and rolling back to it on failure. Never throws:
-	 * the outcome is on the returned status.
+	 * the outcome is on the returned status. Writes are NUL-safe batches;
+	 * `onPathsRestored` reports each completed batch and each individual delete.
 	 */
 	restore(options: CheckpointRestoreOptions): Promise<CheckpointRestoreResult>;
 

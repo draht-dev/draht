@@ -13,6 +13,7 @@
 - provider attribution headers sent to OpenRouter/NVIDIA NIM/Cloudflare/OpenCode now identify as `draht` instead of `pi`/`Pi` (`HTTP-Referer`, `X-OpenRouter-Title`, `X-BILLING-INVOKE-ORIGIN`, `User-Agent`, `x-opencode-client`)
 - Node bundle distribution: the npm package now ships a bundled `dist/bundle/cli.js` alongside the existing entry point, raising the minimum Node version to `>=22.19.0`
 - `draht update pi` no longer works as a self-update alias; use `draht update self` or `draht update draht`
+- extension-facing `CheckpointRestoreOptions.onPathRestored(path: string)` is renamed `onPathsRestored(paths: readonly string[])`; it now fires once per completed write batch (and once per individual delete) instead of once per path
 
 ### Added
 
@@ -38,6 +39,7 @@
 - without a `theme` setting, draht again defaults to the detected dark/light built-in theme (draht's `copper` border) instead of `system`; `system` remains available as an explicit choice
 - builds target ES2024 instead of an older ECMAScript baseline
 - regenerated the bundled model catalog to pick up the newest provider/model data
+- checkpoint restore writes paths in chunks through `git checkout-index --stdin -z` (default 200 paths per process) instead of spawning one git process per path, fixing restores that previously timed out on large diffs; `CheckpointRestoreOptions.writeChunkSize` overrides the chunk size and is validated once, before the restore starts
 
 ### Fixed
 

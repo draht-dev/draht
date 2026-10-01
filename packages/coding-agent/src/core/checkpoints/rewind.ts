@@ -130,8 +130,10 @@ export interface PerformRewindOptions {
 	manager?: CheckpointManager;
 	/** Moves the conversation leaf. Never called for `files-only`. */
 	navigate: () => void | Promise<void>;
-	/** Per-path progress seam, forwarded to the restore. */
-	onPathRestored?: (path: string) => void | Promise<void>;
+	/** Per-write-chunk and per-delete progress seam, forwarded to the restore. */
+	onPathsRestored?: (paths: readonly string[]) => void | Promise<void>;
+	/** Test and integration override for the number of paths written by one git process. */
+	writeChunkSize?: number;
 	/**
 	 * Dispatches the cancelable `session_before_rewind` event before anything
 	 * is captured, restored, or navigated. Omit it to skip the event entirely.
@@ -255,7 +257,7 @@ export async function performRewind(options: PerformRewindOptions): Promise<Perf
 }
 
 async function runRewind(options: PerformRewindOptions): Promise<PerformRewindResult> {
-	const { scope, manager, navigate, targetEntryId, currentEntryId, onPathRestored, runner } = options;
+	const { scope, manager, navigate, targetEntryId, currentEntryId, onPathsRestored, writeChunkSize, runner } = options;
 
 	if (runner?.hasHandlers("session_before_rewind")) {
 		const result = await runner.emit({ type: "session_before_rewind", targetEntryId, currentEntryId, scope });
@@ -279,7 +281,7 @@ async function runRewind(options: PerformRewindOptions): Promise<PerformRewindRe
 		if (!manager) {
 			return { scope, ok: false, navigated: false, message: "Files not restored (checkpoints unavailable)" };
 		}
-		const restore = await manager.restore({ targetEntryId, currentEntryId, onPathRestored });
+		const restore = await manager.restore({ targetEntryId, currentEntryId, onPathsRestored, writeChunkSize });
 		const ok = restore.status === "restored" || restore.status === "unchanged";
 		return {
 			scope,
@@ -307,7 +309,8 @@ async function runRewind(options: PerformRewindOptions): Promise<PerformRewindRe
 	const { restore, navigated, navigateReason } = await manager.rewind({
 		targetEntryId,
 		currentEntryId,
-		onPathRestored,
+		onPathsRestored,
+		writeChunkSize,
 		navigate,
 	});
 

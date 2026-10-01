@@ -98,8 +98,8 @@ export interface WarningSettings {
 
 /**
  * How the codemode tool presents tools while it is active.
- * - `on`: declared tools that scripts can call get their codemode declaration appended to their
- *   description; the codemode description lists only the tools without `direct` exposure.
+ * - `on`: declared tools that scripts can call get a note on calling them from scripts appended to
+ *   their description; the codemode description lists only the tools without `direct` exposure.
  * - `only`: the codemode description lists every tool scripts can call, and active `direct` tools are
  *   not declared to the model.
  */

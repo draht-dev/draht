@@ -135,6 +135,8 @@ const result = await models.classify(jev, {
 return result.answers;
 ```
 
+[Codemode](codemode.md#classify) describes the question and answer types.
+
 When the service reports token counts, as all System One services do, `result.usage` carries them with their cost. draht adds the usage of a script's classifier calls to the `codemode` tool result, so it counts toward the session cost in the footer and `/session`. The cost uses the model's catalog price; models without one, such as TypeSafe's direct `jev-latest`, report tokens at no cost.
 
 Extensions call classifiers through `ctx.modelRegistry.classify()`, without codemode. [Virtual models](virtual-models.md#route-requests) can use them to route requests; see the `jev-router.ts` example.
@@ -154,7 +156,7 @@ if (result.stopReason !== "stop") return result.errorMessage;
 for (const block of result.output) if (block.type === "image") image(block);
 ```
 
-`input` can also contain `{ type: "image", data, mimeType }` blocks to edit or use as references. draht adds the usage of a script's image calls to the `codemode` tool result, like classifier calls. Generated images are not saved to disk.
+`input` can also contain `{ type: "image", data, mimeType }` blocks to edit or use as references. draht adds the usage of a script's image calls to the `codemode` tool result, like classifier calls. Generated images are not saved to disk. [Codemode](codemode.md#generate-images) describes the full API.
 
 Extensions generate images through `ctx.modelRegistry.generateImages()`, without codemode.
 

@@ -21,6 +21,7 @@ import { createToolDefinitionFromAgentTool } from "../../src/core/tools/tool-def
 import { readCodemodeStore } from "../../src/extensions/codemode/execute.ts";
 import { createCodemodeExtension } from "../../src/extensions/codemode/index.ts";
 import {
+	CODEMODE_DOCS_PATH,
 	CODEMODE_STORE_ENTRY_TYPE,
 	type CodemodeToolDetails,
 	createCodemodeTool,
@@ -126,9 +127,10 @@ describe("AgentSession codemode tool", () => {
 			return fauxAssistantMessage("ok");
 		};
 
-		// on: declared tools carry their codemode declaration and are not listed again in codemode.
+		// on: declared tools say how scripts call them and are not listed again in codemode.
 		harness.session.setActiveToolsByName(["read", "echo", "codemode"]);
-		expect(description("echo")).toContain("codemode tool declaration:");
+		expect(description("echo")).toContain("Codemode: `tools.echo(args)` resolves to");
+		expect(description("echo")).not.toContain("codemode tool declaration:");
 		expect(description("codemode")).not.toContain("### `echo`");
 		harness.setResponses([record]);
 		await harness.session.prompt("on");
@@ -138,7 +140,7 @@ describe("AgentSession codemode tool", () => {
 		// only: codemode lists echo, which stays active but is left out of requests.
 		harness.settingsManager.applyOverrides({ codemode: { mode: "only" } });
 		harness.session.setActiveToolsByName(["read", "echo", "codemode"]);
-		expect(description("echo")).not.toContain("codemode tool declaration:");
+		expect(description("echo")).not.toContain("Codemode: `tools.echo");
 		expect(description("codemode")).toContain("### `echo`");
 		expect(description("codemode")).not.toContain("### `stats`");
 		harness.setResponses([record]);
@@ -660,20 +662,14 @@ describe("codemode models", () => {
 	it("declares models only for the session's own codemode tool", async () => {
 		const { harness } = await setup();
 		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "codemode");
-		expect(codemode?.description).toContain("declare const models: {");
-		expect(codemode?.description).toContain(
-			"classify(model: ModelInfo, context: ClassifierContext): Promise<ClassifierResult>;",
-		);
-		expect(codemode?.description).toContain("interface ClassifierResult {");
-		expect(codemode?.description).toContain(
-			"generateImages(model: ModelInfo, context: ImagesContext): Promise<ImagesResult>;",
-		);
-		expect(codemode?.description).toContain("interface ImagesResult {");
+		// The description names the models globals and points to the docs for the API.
+		expect(codemode?.description).toContain("`models`: classifiers and image generation");
+		expect(codemode?.description).toContain(CODEMODE_DOCS_PATH);
 
 		const overridden = await createHarness({ tools: [createCodemodeTool() as AgentTool] });
 		harnesses.push(overridden);
 		const plain = overridden.session.agent.state.tools.find((tool) => tool.name === "codemode");
-		expect(plain?.description).not.toContain("declare const models");
+		expect(plain?.description).not.toContain("`models`");
 	});
 
 	it("lists models and classifies with catalog auth, ignoring script-supplied fields", async () => {
@@ -758,7 +754,8 @@ describe("codemode models", () => {
 			id: "painter",
 			stopReason: "stop",
 			failed: ["error", "painter exploded"],
-			wrongType: 'Unknown image model "scorer/judge"',
+			wrongType:
+				'"scorer/judge" is a classifier model, not an image model. List the image models you can use with models.getAvailableOfType("image").',
 		});
 		expect(result.content[2]).toEqual({ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" });
 		expect(imageRequests.map((request) => [request.baseUrl, request.apiKey])).toEqual([
@@ -778,6 +775,22 @@ describe("codemode models", () => {
 		expect(harness.session.getSessionStats().cost).toBeCloseTo(0.04, 10);
 	});
 
+	it("notes generated images that the script did not show", async () => {
+		const { harness } = await setup();
+		const result = await run(
+			harness,
+			`
+			const [model] = await models.getAvailableOfType("image", "scorer");
+			const generated = await models.generateImages(model, { input: [{ type: "text", text: "a fox" }] });
+			return generated.stopReason;
+		`,
+		);
+		expect(result.isError).toBe(false);
+		expect(resultText(result)).toBe(
+			"stop\nNote: models.generateImages() returned 1 image that the script did not show. Show each image block of result.output with image(block).",
+		);
+	});
+
 	it("reports provider errors as results and invalid arguments as exceptions", async () => {
 		const { harness } = await setup();
 		const result = await run(
@@ -791,6 +804,13 @@ describe("codemode models", () => {
 				badType: await attempt(() => models.getModelsOfType("video")),
 				unknown: await attempt(() => models.classify({ provider: "scorer", id: "nope" }, {})),
 				noModel: await attempt(() => models.classify("judge", {})),
+				undefinedModel: await attempt(() => models.classify(undefined, {})),
+				noState: await attempt(() => models.classify(model, { questions: ${questions} })),
+				badQuestion: await attempt(() =>
+					models.classify(model, { state: {}, questions: { kind: { type: "choice", instructions: "Kind?", criteria: ["a", "b"] } } }),
+				),
+				badImage: await attempt(() => models.generateImages({ provider: "scorer", id: "painter" }, { prompt: "a fox" })),
+				badSplit: await attempt(() => models.getModelOfType("classifier", "scorer/judge")),
 			};
 		`,
 		);
@@ -798,8 +818,24 @@ describe("codemode models", () => {
 		const value = JSON.parse(resultText(result));
 		expect(value.failed).toEqual(["error", "classifier exploded"]);
 		expect(value.badType).toContain('Unknown model type "video"');
-		expect(value.unknown).toBe('Unknown classifier model "scorer/nope"');
-		expect(value.noModel).toContain("expects a model");
+		expect(value.unknown).toBe(
+			'Unknown classifier model "scorer/nope". List the classifier models you can use with models.getAvailableOfType("classifier").',
+		);
+		expect(value.noModel).toContain(
+			"models.classify() expects a classifier model as its first argument, got a string.",
+		);
+		expect(value.undefinedModel).toContain(
+			"models.getModelOfType() returns undefined for an unknown provider or id.",
+		);
+		expect(value.noState).toContain("models.classify() context.state must be an object, got undefined.");
+		expect(value.noState).toContain("codemode.md");
+		expect(value.badQuestion).toContain(
+			'context.questions.kind is a "choice" question, so criteria must map each label to its meaning.',
+		);
+		expect(value.badImage).toContain(
+			"models.generateImages() context.input must be a non-empty array of blocks, got undefined.",
+		);
+		expect(value.badSplit).toContain("The provider and the id are separate arguments");
 		const details = result.details as unknown as CodemodeToolDetails;
 		expect(details.calls.map((call) => [call.name, call.status, call.error])).toEqual([
 			["models.classify", "error", "classifier exploded"],

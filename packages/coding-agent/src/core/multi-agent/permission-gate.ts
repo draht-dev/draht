@@ -636,8 +636,8 @@ function basenameOfHeadToken(token: string): string {
 	return base.endsWith(".exe") ? base.slice(0, -4) : base;
 }
 
-/** Wrapper flags that consume the following token as their own argument, not as part of the command. */
-const SHELL_DASH_O_FLAGS = new Set(["-o", "-O"]);
+/** Shell options that consume the following token as their own argument, not as part of the command. */
+const SHELL_DASH_O_FLAGS = new Set(["-o", "-O", "+o", "+O", "--rcfile", "--init-file"]);
 
 /**
  * Extracts the command-body token following a `-c` flag from an
@@ -664,6 +664,9 @@ function extractShellBodyAfterDashC(text: string, wrapperSet: ReadonlySet<string
 			if (token.includes("c")) sawDashC = true;
 			continue;
 		}
+		// Long (`--norc`, `--login`) and `+` options (`+x`) are flags too; skip them
+		// so a later `-c` is still found.
+		if (/^(?:--|\+)[A-Za-z][\w-]*$/.test(token)) continue;
 		return sawDashC ? token : undefined;
 	}
 	return undefined;

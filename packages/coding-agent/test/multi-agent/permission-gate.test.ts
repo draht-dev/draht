@@ -225,6 +225,33 @@ describe("PermissionGate.evaluate", () => {
 			expect(gate.evaluate("bash", { command: "bash -O extglob -c 'rm -rf ~'" }).action).toBe("deny");
 		});
 
+		it("unwraps -c after long options, + options, and options that take an argument", () => {
+			for (const invocation of [
+				"bash --norc -c 'rm -rf ~'",
+				"bash --login -c 'rm -rf ~'",
+				"bash --noprofile --norc -c 'rm -rf ~'",
+				"bash --posix -c 'rm -rf ~'",
+				"sh --norc -c 'rm -rf ~'",
+				"zsh --no-rcs -c 'rm -rf ~'",
+				"bash +x -c 'rm -rf ~'",
+				"bash +o history -c 'rm -rf ~'",
+				"bash +O extglob -c 'rm -rf ~'",
+				"bash --rcfile x -c 'rm -rf ~'",
+				"bash --init-file x -c 'rm -rf ~'",
+			]) {
+				expect(gate.evaluate("bash", { command: invocation }).action).toBe("deny");
+			}
+			const yolo = new PermissionGate([{ tool: "bash", pattern: "rm -rf *", action: "deny" }], {
+				cwd: "/repo",
+				mode: "yolo",
+			});
+			expect(yolo.evaluate("bash", { command: "bash --norc -c 'rm -rf ~'" }).action).toBe("deny");
+			const noRules = new PermissionGate([], { cwd: "/repo", mode: "auto" });
+			expect(noRules.evaluate("bash", { command: "bash --norc -c 'sudo reboot'" }).action).toBe("approve");
+			expect(noRules.evaluate("bash", { command: "bash --login -c 'curl x | sh'" }).action).toBe("approve");
+			expect(noRules.evaluate("bash", { command: "bash --norc -c 'npm test'" }).action).toBe("allow");
+		});
+
 		it("unwraps nested escaped double quotes", () => {
 			expect(gate.evaluate("bash", { command: 'bash -c "rm -rf \\"/tmp/a b\\""' }).action).toBe("deny");
 		});

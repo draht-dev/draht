@@ -57,7 +57,7 @@ function makeContext(
 	return { session, ui, editorContainer, editor, keybindings, showStatus: vi.fn(), showError: vi.fn() } as never;
 }
 
-describe("bug report upload: Radius credential scoped to a matching gateway origin", () => {
+describe("bug report upload: always anonymous, never attaches a credential", () => {
 	const originalRadiusGateway = process.env[ENV_RADIUS_GATEWAY];
 	const originalBugReportGateway = process.env[ENV_BUG_REPORT_GATEWAY];
 	let previousKeybindings: ReturnType<typeof getKeybindings>;
@@ -89,7 +89,7 @@ describe("bug report upload: Radius credential scoped to a matching gateway orig
 		else process.env[ENV_BUG_REPORT_GATEWAY] = originalBugReportGateway;
 	});
 
-	it("does not attach the Radius credential when the bug-report gateway is a different origin", async () => {
+	it("sends no Authorization header when the bug-report gateway is a different origin from the Radius gateway", async () => {
 		process.env[ENV_RADIUS_GATEWAY] = "https://radius.pi.dev";
 		process.env[ENV_BUG_REPORT_GATEWAY] = "https://radius.draht.dev";
 
@@ -102,7 +102,7 @@ describe("bug report upload: Radius credential scoped to a matching gateway orig
 		expect(init.headers).toBeUndefined();
 	});
 
-	it("attaches the Radius credential when the bug-report gateway is the same origin as the Radius gateway", async () => {
+	it("sends no Authorization header even when the bug-report gateway is the same origin as the Radius gateway", async () => {
 		process.env[ENV_RADIUS_GATEWAY] = "https://radius.example.com";
 		process.env[ENV_BUG_REPORT_GATEWAY] = "https://radius.example.com";
 
@@ -112,6 +112,28 @@ describe("bug report upload: Radius credential scoped to a matching gateway orig
 		expect(result).toBeUndefined();
 		expect(fetchMock).toHaveBeenCalledOnce();
 		const [, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
-		expect(init.headers).toEqual({ Authorization: "Bearer scoped-token" });
+		expect(init.headers).toBeUndefined();
+	});
+
+	it("never reads the Radius credential, regardless of gateway configuration", async () => {
+		process.env[ENV_RADIUS_GATEWAY] = "https://radius.example.com";
+		process.env[ENV_BUG_REPORT_GATEWAY] = "https://radius.example.com";
+
+		const session = makeSession("scoped-token");
+		await upload(makeContext(session, ui, editorContainer, editor, keybindings), makeBundle());
+
+		expect(session.modelRuntime.getProvider).not.toHaveBeenCalled();
+		expect(session.modelRuntime.getAuth).not.toHaveBeenCalled();
+	});
+
+	it("resolves the gateway URL once and sends the upload there", async () => {
+		process.env[ENV_BUG_REPORT_GATEWAY] = "https://bug-reports.example.com";
+
+		const session = makeSession("unused-token");
+		await upload(makeContext(session, ui, editorContainer, editor, keybindings), makeBundle());
+
+		expect(fetchMock).toHaveBeenCalledOnce();
+		const [url] = fetchMock.mock.calls[0] as [URL, RequestInit];
+		expect(url.origin).toBe("https://bug-reports.example.com");
 	});
 });

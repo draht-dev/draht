@@ -1,26 +1,22 @@
 import type { BugReportBundle } from "./bug-report.ts";
 import { bugReportFiles } from "./bug-report.ts";
-import { getBugReportGatewayUrl } from "./radius.ts";
 
 interface UploadBugReportOptions {
-	token?: string;
 	signal?: AbortSignal;
-	gatewayUrl?: string;
+	gatewayUrl: string;
 }
 
-/** Upload a report as multipart form data, anonymously or attributed to a Radius account. */
+/** Upload a report as multipart form data, anonymously — no credential is ever read or sent. */
 export async function uploadBugReport(
 	bundle: BugReportBundle,
-	options: UploadBugReportOptions = {},
+	options: UploadBugReportOptions,
 ): Promise<{ id: string }> {
 	const body = new FormData();
 	for (const file of bugReportFiles(bundle)) {
 		body.append(file.name, new Blob([file.data], { type: file.contentType }), file.name);
 	}
-	const gatewayUrl = options.gatewayUrl ?? getBugReportGatewayUrl();
-	const response = await fetch(new URL("/v1/bug-reports", gatewayUrl), {
+	const response = await fetch(new URL("/v1/bug-reports", options.gatewayUrl), {
 		method: "POST",
-		headers: options.token ? { Authorization: `Bearer ${options.token}` } : undefined,
 		body,
 		signal: options.signal,
 	});

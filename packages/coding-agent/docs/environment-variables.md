@@ -87,7 +87,7 @@ These variables are read by draht itself:
 | `DRAHT_TELEMETRY` | Override provider attribution headers (OpenRouter, NVIDIA NIM, Cloudflare): `1`/`true`/`yes` or `0`/`false`/`no` |
 | `DRAHT_CACHE_RETENTION` | Set to `long` for extended provider prompt caching where supported |
 | `DRAHT_SHARE_VIEWER_URL` | Base URL of a share viewer for `/share`; when unset, `/share` prints the gist URL |
-| `DRAHT_RADIUS_GATEWAY` | Radius gateway origin for Radius relay connections |
+| `DRAHT_RADIUS_GATEWAY` | Not consulted by the builtin Radius model provider (which always uses `https://radius.pi.dev`, or a per-provider `baseUrl` from provider config) or by `/bug`; currently has no effect on behavior |
 | `DRAHT_BUG_REPORT_GATEWAY` | Override the `/bug` upload destination; default is `https://radius.draht.dev` |
 | `DRAHT_NO_ATTACHABLE` | Set to `1`/`true`/`yes` to stop sessions from registering an attach socket; overridden by `--attachable` |
 | `DRAHT_HARDWARE_CURSOR` | Set to `1` to show the hardware cursor; see [Terminal setup](terminal-setup.md) |

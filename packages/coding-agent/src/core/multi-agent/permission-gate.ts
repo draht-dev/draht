@@ -268,10 +268,14 @@ const PASSTHROUGH_PREFIXES = new Set([
 	"setsid",
 	"xargs",
 	"timeout",
+	// busybox dispatches to its builtin applet by the same name and arguments
+	// it was given (`busybox rm -rf /` behaves exactly like `rm -rf /`), so it
+	// is a pure passthrough for deny-scan purposes.
+	"busybox",
 ]);
 
 /** Shells whose `-c <command>` argument is itself a full command line to unwrap and re-check. */
-const SHELL_C_WRAPPERS = new Set(["bash", "sh", "zsh", "ksh", "dash"]);
+const SHELL_C_WRAPPERS = new Set(["bash", "sh", "zsh", "ksh", "dash", "fish"]);
 
 /**
  * Non-POSIX shells whose command-line argument is itself a full command line
@@ -515,19 +519,148 @@ function stripPassthroughPrefix(text: string): { stripped: string; changed: bool
 }
 
 /**
- * Extracts the inner command line from a `bash -c "..."` / `sh -c '...'`
- * style wrapper, if present. The final flag token before the quoted argument
- * may be a combined short-flag cluster ending in `c` (e.g. `bash -lc '...'`
- * for `-l -c`), not just a bare `-c`.
+ * Minimal POSIX-ish shell word tokenizer: splits `text` on unquoted
+ * whitespace, honoring single quotes (fully literal, no escapes), double
+ * quotes (backslash escapes the next character), and a bare backslash
+ * outside quotes (escapes the next character). This is only used to locate
+ * wrapper flags and the command-body token that follows them, not to
+ * implement real shell grammar (no variable expansion, globbing, etc.).
  */
-function extractShellDashC(text: string): string | undefined {
+function tokenizeShellWords(text: string): string[] {
+	const tokens: string[] = [];
+	let current = "";
+	let hasCurrent = false;
+	let i = 0;
+	while (i < text.length) {
+		const ch = text[i];
+		if (/\s/.test(ch)) {
+			if (hasCurrent) {
+				tokens.push(current);
+				current = "";
+				hasCurrent = false;
+			}
+			i++;
+			continue;
+		}
+		if (ch === "'") {
+			hasCurrent = true;
+			i++;
+			while (i < text.length && text[i] !== "'") {
+				current += text[i];
+				i++;
+			}
+			i++;
+			continue;
+		}
+		if (ch === '"') {
+			hasCurrent = true;
+			i++;
+			while (i < text.length && text[i] !== '"') {
+				if (text[i] === "\\" && i + 1 < text.length) {
+					current += text[i + 1];
+					i += 2;
+				} else {
+					current += text[i];
+					i++;
+				}
+			}
+			i++;
+			continue;
+		}
+		if (ch === "\\" && i + 1 < text.length) {
+			hasCurrent = true;
+			current += text[i + 1];
+			i += 2;
+			continue;
+		}
+		hasCurrent = true;
+		current += ch;
+		i++;
+	}
+	if (hasCurrent) tokens.push(current);
+	return tokens;
+}
+
+/** Lowercased basename of a (possibly quoted/escaped, already-tokenized) command-head token, split on `/` and `\`. */
+function basenameOfHeadToken(token: string): string {
+	const parts = token.split(/[/\\]/);
+	return (parts[parts.length - 1] ?? token).toLowerCase();
+}
+
+/** Wrapper flags that consume the following token as their own argument, not as part of the command. */
+const SHELL_DASH_O_FLAGS = new Set(["-o", "-O"]);
+
+/**
+ * Extracts the command-body token following a `-c` flag from an
+ * already-tokenized shell invocation, if `text`'s head is in `wrapperSet` and
+ * a `-c` flag (bare or clustered with other short flags, e.g. `-lc`, `-cx`,
+ * `-ce`) appears anywhere before the first non-flag token — including after
+ * `-o pipefail`, `-O extglob`, `--`, or `-l`. Trailing positional arguments
+ * after the body (e.g. `$0` in `bash -c '...' x`) are ignored.
+ */
+function extractShellBodyAfterDashC(text: string, wrapperSet: ReadonlySet<string>): string | undefined {
+	const tokens = tokenizeShellWords(text.trim());
+	const head = tokens[0];
+	if (head === undefined || !wrapperSet.has(basenameOfHeadToken(head))) return undefined;
+
+	let sawDashC = false;
+	for (let i = 1; i < tokens.length; i++) {
+		const token = tokens[i];
+		if (token === "--") continue;
+		if (SHELL_DASH_O_FLAGS.has(token)) {
+			i++;
+			continue;
+		}
+		if (/^-[A-Za-z]+$/.test(token)) {
+			if (token.includes("c")) sawDashC = true;
+			continue;
+		}
+		return sawDashC ? token : undefined;
+	}
+	return undefined;
+}
+
+/** Extracts the payload of a `<<< '...'` here-string or a `<<DELIM ... DELIM` heredoc, if present anywhere in `text`. */
+function extractHereStringOrHeredocPayload(text: string): string | undefined {
+	const hereString = text.match(/<<<\s*(['"]?)([\s\S]*?)\1\s*$/);
+	if (hereString) return hereString[2];
+	const heredoc = text.match(/<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1[^\n]*\n([\s\S]*?)\n[ \t]*\2\s*$/);
+	return heredoc ? heredoc[3] : undefined;
+}
+
+/** `true` when `text` invokes a known shell with no `-c`, but feeds it a here-string or heredoc body. */
+function feedsBareShellViaHereDocOrString(text: string): boolean {
 	const trimmed = text.trim();
-	const match = trimmed.match(/^(\S+)(?:\s+-\S+)*?\s+-[A-Za-z]*c\s+(['"])([\s\S]*)\2\s*$/);
-	if (!match) return undefined;
-	const token = match[1];
-	const basename = token.includes("/") ? token.slice(token.lastIndexOf("/") + 1) : token;
-	if (!SHELL_C_WRAPPERS.has(basename.toLowerCase())) return undefined;
-	return match[3];
+	const tokens = tokenizeShellWords(trimmed);
+	const head = tokens[0];
+	if (head === undefined || !SHELL_C_WRAPPERS.has(basenameOfHeadToken(head))) return false;
+	if (extractShellBodyAfterDashC(trimmed, SHELL_C_WRAPPERS) !== undefined) return false;
+	return /<<<|<</.test(trimmed);
+}
+
+/** `true` when any `|`-joined segment pipes into a known shell with no `-c` (`echo ... | bash`). */
+function pipedIntoBareShell(segments: ChainSegment[]): boolean {
+	return segments.some((seg) => {
+		if (seg.operator !== "|") return false;
+		const trimmed = seg.text.trim();
+		const tokens = tokenizeShellWords(trimmed);
+		const head = tokens[0];
+		if (head === undefined || !SHELL_C_WRAPPERS.has(basenameOfHeadToken(head))) return false;
+		return extractShellBodyAfterDashC(trimmed, SHELL_C_WRAPPERS) === undefined;
+	});
+}
+
+/**
+ * `true` when `command` feeds a bare shell interpreter (`bash`, `sh`, `zsh`,
+ * `dash`, `ksh`, `fish`) via a pipe, here-string, or heredoc, with no `-c`
+ * flag. The deny scan can extract and check the piped/here-doc text (see
+ * `scanDenyCandidates`), but can't prove the absence of danger the way a
+ * plain unwrapped command can — so auto mode must never silently allow it.
+ */
+function commandFeedsBareShellWithoutDashC(command: string): boolean {
+	const segments = splitChain(command);
+	if (pipedIntoBareShell(segments)) return true;
+	return segments.some((seg) => feedsBareShellViaHereDocOrString(seg.text));
 }
 
 /**
@@ -585,7 +718,10 @@ function extractSubstitutions(text: string): string[] {
  */
 function extractSimpleEchoOutput(text: string): string | undefined {
 	const match = text.match(/^\s*echo\s+([^$`]+?)\s*$/i);
-	return match?.[1];
+	if (!match) return undefined;
+	const captured = match[1];
+	const quoted = captured.match(/^(['"])([\s\S]*)\1$/);
+	return quoted ? quoted[2] : captured;
 }
 
 const MAX_DENY_CANDIDATES = 50;
@@ -642,9 +778,18 @@ function scanDenyCandidates(command: string): DenyScanResult {
 			queue.push({ text: candidate, depth: depth + 1 });
 		};
 
-		const segments = splitChain(text).map((s) => s.text);
+		const segmentObjs = splitChain(text);
+		const segments = segmentObjs.map((s) => s.text);
 		const pieces = segments.length > 1 ? segments : [text];
 		for (const seg of segments) enqueue(seg);
+
+		for (let i = 0; i < segmentObjs.length; i++) {
+			if (segmentObjs[i].operator !== "|") continue;
+			const prevText = segmentObjs[i - 1]?.text;
+			if (prevText === undefined) continue;
+			const echoOutput = extractSimpleEchoOutput(prevText);
+			if (echoOutput !== undefined) enqueue(echoOutput);
+		}
 
 		for (const piece of pieces) {
 			let working = stripLeadingBackslashEscape(piece);
@@ -659,8 +804,13 @@ function scanDenyCandidates(command: string): DenyScanResult {
 			const basenameResolved = resolveBasenameOfFirstToken(working);
 			enqueue(basenameResolved);
 
-			const shellC = extractShellDashC(working) ?? extractShellDashC(basenameResolved);
+			const shellC =
+				extractShellBodyAfterDashC(working, SHELL_C_WRAPPERS) ??
+				extractShellBodyAfterDashC(basenameResolved, SHELL_C_WRAPPERS);
 			if (shellC !== undefined) enqueue(shellC);
+
+			const hereRedirect = extractHereStringOrHeredocPayload(piece);
+			if (hereRedirect !== undefined) enqueue(hereRedirect);
 
 			const otherShellArg = extractOtherShellWrapperArg(working) ?? extractOtherShellWrapperArg(basenameResolved);
 			if (otherShellArg !== undefined) enqueue(otherShellArg);
@@ -1008,6 +1158,13 @@ export class PermissionGate {
 						action: "approve",
 						reason:
 							"auto mode: command has more chained/wrapped pieces than the deny scan can fully cover, requires approval",
+					};
+				}
+				if (commandFeedsBareShellWithoutDashC(command)) {
+					return {
+						action: "approve",
+						reason:
+							"auto mode: command feeds a bare shell interpreter via pipe/here-string/heredoc with no -c, which the deny scan can't fully vet; requires approval",
 					};
 				}
 				return { action: "allow", reason: "auto mode: no rule matched and command passed the danger filter" };

@@ -11,6 +11,11 @@ import {
 	parseRules,
 } from "../../src/core/multi-agent/permission-gate.ts";
 
+/** Backslash-escapes `"` and `\` for embedding `inner` inside another `"..."`-quoted shell -c wrapper. */
+function escapeForDoubleQuotedWrap(inner: string): string {
+	return inner.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 describe("parseRules", () => {
 	it("parses YAML rules from a string", () => {
 		const yaml = `
@@ -194,6 +199,85 @@ describe("PermissionGate.evaluate", () => {
 			const gate = new PermissionGate([{ tool: "bash", pattern: "rm -rf *", action: "deny" }]);
 			expect(gate.evaluate("bash", { command: "rm build/output.js" }).action).toBe("approve");
 			expect(gate.evaluate("bash", { command: "rm -v build/output.js" }).action).toBe("approve");
+		});
+	});
+
+	describe("shell -c unwrapping with the quote/backslash-aware tokenizer", () => {
+		const gate = new PermissionGate([{ tool: "bash", pattern: "rm -rf *", action: "deny" }], {
+			cwd: "/repo",
+			mode: "auto",
+		});
+
+		it("unwraps bash -c with a trailing positional ($0) argument", () => {
+			expect(gate.evaluate("bash", { command: "bash -c 'rm -rf ~' x" }).action).toBe("deny");
+		});
+
+		it("unwraps combined flag clusters containing c in any position", () => {
+			for (const invocation of ["bash -cl 'rm -rf ~'", "bash -cx 'rm -rf ~'", "bash -ce 'rm -rf ~'"]) {
+				expect(gate.evaluate("bash", { command: invocation }).action).toBe("deny");
+			}
+		});
+
+		it("unwraps -c after --, -l, -o pipefail, and -O extglob", () => {
+			expect(gate.evaluate("bash", { command: "bash -c -- 'rm -rf ~'" }).action).toBe("deny");
+			expect(gate.evaluate("bash", { command: "bash -c -l 'rm -rf ~'" }).action).toBe("deny");
+			expect(gate.evaluate("bash", { command: "bash -o pipefail -c 'rm -rf ~'" }).action).toBe("deny");
+			expect(gate.evaluate("bash", { command: "bash -O extglob -c 'rm -rf ~'" }).action).toBe("deny");
+		});
+
+		it("unwraps nested escaped double quotes", () => {
+			expect(gate.evaluate("bash", { command: 'bash -c "rm -rf \\"/tmp/a b\\""' }).action).toBe("deny");
+		});
+
+		it("unwraps a backslash-escaped (unquoted) command body", () => {
+			expect(gate.evaluate("bash", { command: "bash -c rm\\ -rf\\ ~" }).action).toBe("deny");
+		});
+
+		it("unwraps busybox applets and busybox sh -c", () => {
+			expect(gate.evaluate("bash", { command: "busybox rm -rf ~" }).action).toBe("deny");
+			expect(gate.evaluate("bash", { command: "busybox sh -c 'rm -rf ~'" }).action).toBe("deny");
+		});
+
+		it("unwraps fish -c", () => {
+			expect(gate.evaluate("bash", { command: "fish -c 'rm -rf ~'" }).action).toBe("deny");
+		});
+
+		it("does not unwrap (and does not crash) a clustered flag with no following body", () => {
+			expect(() => gate.evaluate("bash", { command: "bash -cl" })).not.toThrow();
+		});
+
+		it("still denies the plain unwrapped forms (non-regression)", () => {
+			expect(gate.evaluate("bash", { command: 'bash -c "rm -rf /"' }).action).toBe("deny");
+			expect(gate.evaluate("bash", { command: 'bash -lc "rm -rf /"' }).action).toBe("deny");
+			expect(gate.evaluate("bash", { command: "rm -rf /tmp/foo" }).action).toBe("deny");
+		});
+
+		it("still auto-allows an everyday bash -c invocation (non-regression)", () => {
+			expect(gate.evaluate("bash", { command: "bash -c 'npm test'" }).action).toBe("allow");
+		});
+	});
+
+	describe("a bare shell fed by a pipe, here-string, or heredoc with no -c", () => {
+		it("denies when a deny rule matches the piped/here-doc text", () => {
+			const gate = new PermissionGate([{ tool: "bash", pattern: "rm -rf *", action: "deny" }], {
+				cwd: "/repo",
+				mode: "auto",
+			});
+			expect(gate.evaluate("bash", { command: "echo 'rm -rf ~' | bash" }).action).toBe("deny");
+			expect(gate.evaluate("bash", { command: "bash <<< 'rm -rf ~'" }).action).toBe("deny");
+			expect(gate.evaluate("bash", { command: "bash <<EOF\nrm -rf ~\nEOF" }).action).toBe("deny");
+		});
+
+		it("requires approval (never auto-allows) when no deny rule matches", () => {
+			const gate = new PermissionGate([], { cwd: "/repo", mode: "auto" });
+			expect(gate.evaluate("bash", { command: "echo 'npm test' | bash" }).action).toBe("approve");
+			expect(gate.evaluate("bash", { command: "bash <<< 'npm test'" }).action).toBe("approve");
+			expect(gate.evaluate("bash", { command: "bash <<EOF\nnpm test\nEOF" }).action).toBe("approve");
+		});
+
+		it("still auto-allows a bash -c piped from a non-shell producer (non-regression)", () => {
+			const gate = new PermissionGate([], { cwd: "/repo", mode: "auto" });
+			expect(gate.evaluate("bash", { command: "npm test | cat" }).action).toBe("allow");
 		});
 	});
 
@@ -432,11 +516,11 @@ describe("PermissionGate modes", () => {
 			const noRuleGate = new PermissionGate([], { cwd: "/repo", mode: "auto" });
 
 			let shallow = "echo safe-marker";
-			for (let i = 0; i < 2; i++) shallow = `bash -c "${shallow}"`;
+			for (let i = 0; i < 2; i++) shallow = `bash -c "${escapeForDoubleQuotedWrap(shallow)}"`;
 			expect(noRuleGate.evaluate("bash", { command: shallow }).action).toBe("allow");
 
 			let deep = "echo safe-marker";
-			for (let i = 0; i < 6; i++) deep = `bash -c "${deep}"`;
+			for (let i = 0; i < 6; i++) deep = `bash -c "${escapeForDoubleQuotedWrap(deep)}"`;
 			expect(noRuleGate.evaluate("bash", { command: deep }).action).toBe("approve");
 		});
 
@@ -469,7 +553,7 @@ describe("PermissionGate modes", () => {
 
 		it("denies a truncated deny scan from excessive nesting depth when a deny rule applies", () => {
 			let deep = "rm -rf ~";
-			for (let i = 0; i < 5; i++) deep = `bash -c "${deep}"`;
+			for (let i = 0; i < 5; i++) deep = `bash -c "${escapeForDoubleQuotedWrap(deep)}"`;
 			expect(gate.evaluate("bash", { command: deep }).action).toBe("deny");
 		});
 

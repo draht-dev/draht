@@ -85,7 +85,7 @@ class FailingSpillExecutionEnv extends NodeExecutionEnv {
 		options: Parameters<NodeExecutionEnv["createTempFile"]>[0],
 		context: Parameters<NodeExecutionEnv["createTempFile"]>[1],
 	) {
-		if (options?.prefix === "pi-output-") {
+		if (options?.prefix === "draht-output-") {
 			return { ok: true as const, value: join(this.cwd, "missing", "spill.log") };
 		}
 		return super.createTempFile(options, context);

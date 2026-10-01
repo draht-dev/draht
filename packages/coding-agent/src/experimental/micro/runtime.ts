@@ -23,6 +23,7 @@ import {
 	type Usage,
 } from "@draht/ai";
 import { BACKGROUND_CONTEXT } from "@draht/chord/context";
+import { APP_NAME } from "../../config.ts";
 import { findInitialModel } from "../../core/model-resolver.ts";
 import { ModelRuntime } from "../../core/model-runtime.ts";
 import { SettingsManager } from "../../core/settings-manager.ts";
@@ -336,7 +337,7 @@ export async function openMicro(options: OpenMicroOptions = {}): Promise<OpenMic
 					);
 					if (!account) throw new Error(`Unknown login method: ${providerId}/${authType}`);
 					if (!account.interactive)
-						throw new Error(`${account.methodName ?? "Authentication"} is configured outside pi`);
+						throw new Error(`${account.methodName ?? "Authentication"} is configured outside ${APP_NAME}`);
 					loginController = new AbortController();
 					update({
 						auth: { providerId, providerName: account.name, authType, notices: [] },

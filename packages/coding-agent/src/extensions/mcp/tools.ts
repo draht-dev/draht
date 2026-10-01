@@ -63,7 +63,7 @@ export interface McpToolDetails {
 export type McpOutputSaver = (data: string | Uint8Array, extension: string) => Promise<string>;
 
 export async function saveToTempFile(data: string | Uint8Array, extension: string): Promise<string> {
-	const path = join(tmpdir(), `pi-mcp-${randomBytes(8).toString("hex")}${extension}`);
+	const path = join(tmpdir(), `draht-mcp-${randomBytes(8).toString("hex")}${extension}`);
 	// Results can carry private data, so only the user may read the file.
 	await writeFile(path, data, { mode: 0o600 });
 	return path;

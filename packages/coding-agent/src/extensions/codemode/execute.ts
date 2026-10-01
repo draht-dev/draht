@@ -157,7 +157,7 @@ function formatError(result: Extract<CodemodeResult, { ok: false }>, calls: read
 
 /** Write the full text output to a temp file, like bash does for truncated output. */
 async function spillOutput(text: string): Promise<{ path: string } | { error: string }> {
-	const path = join(tmpdir(), `pi-codemode-${randomBytes(8).toString("hex")}.txt`);
+	const path = join(tmpdir(), `draht-codemode-${randomBytes(8).toString("hex")}.txt`);
 	try {
 		await writeFile(path, text);
 		return { path };

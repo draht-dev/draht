@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- mom's Anthropic credentials now live at `~/.draht/mom/auth.json` instead of `~/.pi/mom/auth.json`, matching draht's config directory everywhere else. There is no migration: relink `/login` or move the file yourself
+
 ## [2026.7.30] - 2026-07-30
 
 ### Changed

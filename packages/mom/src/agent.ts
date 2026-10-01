@@ -3,6 +3,7 @@ import { getModel, type ImageContent, streamSimple } from "@draht/ai/compat";
 import {
 	AgentSession,
 	AuthStorage,
+	CONFIG_DIR_NAME,
 	convertToLlm,
 	createExtensionRuntime,
 	formatSkillsForPrompt,
@@ -48,7 +49,7 @@ async function getAnthropicApiKey(modelRuntime: ModelRuntime): Promise<string> {
 		throw new Error(
 			"No API key found for anthropic.\n\n" +
 				"Set an API key environment variable, or use /login with Anthropic and link to auth.json from " +
-				join(homedir(), ".pi", "mom", "auth.json"),
+				join(homedir(), CONFIG_DIR_NAME, "mom", "auth.json"),
 		);
 	}
 	return key;
@@ -448,7 +449,7 @@ async function createRunner(sandboxConfig: SandboxConfig, channelId: string, cha
 
 	// Create AuthStorage and ModelRuntime
 	// Auth stored outside workspace so agent can't access it
-	const authStorage = AuthStorage.create(join(homedir(), ".pi", "mom", "auth.json"));
+	const authStorage = AuthStorage.create(join(homedir(), CONFIG_DIR_NAME, "mom", "auth.json"));
 	const modelRuntime = await ModelRuntime.create({ credentials: authStorage });
 
 	// Create agent

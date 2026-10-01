@@ -1,0 +1,40 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const read = (path) => readFileSync(join(ROOT, path), "utf8");
+
+const manifest = JSON.parse(read("package.json"));
+const setupAction = read(".github/actions/setup/action.yml");
+const binaryRelease = read(".github/workflows/build-binaries.yml");
+
+const CANONICAL_INSTALL = "bun install --frozen-lockfile --ignore-scripts --linker hoisted";
+
+test("the shared setup action installs and asserts the exact Bun pinned by the manifest", () => {
+	assert.match(manifest.packageManager, /^bun@\d+\.\d+\.\d+$/);
+	assert.match(manifest.drahtReleaseBunRevision, /^\d+\.\d+\.\d+\+[0-9a-f]+$/);
+	assert.match(setupAction, /require\('\.\/package\.json'\)\.packageManager/);
+	assert.match(setupAction, /require\('\.\/package\.json'\)\.drahtReleaseBunRevision/);
+	assert.match(setupAction, /npm install --global "bun@\$\{BUN_PACKAGE_VERSION\}"/);
+	assert.match(setupAction, /bun --revision/);
+	assert.match(setupAction, /test "\$\{ACTUAL_BUN_REVISION\}" = "\$\{EXPECTED_BUN_REVISION\}"/);
+	assert.doesNotMatch(setupAction, /bun-version: latest/);
+	assert.doesNotMatch(setupAction, /oven-sh\/setup-bun/);
+});
+
+test("the shared setup action uses the frozen hoisted install contract", () => {
+	assert.match(setupAction, new RegExp(CANONICAL_INSTALL.replaceAll(".", "\\.")));
+});
+
+test("binary release pins the same manifest Bun version and revision, not a different one", () => {
+	const packageManagerVersion = manifest.packageManager.replace(/^bun@/, "");
+	assert.match(binaryRelease, new RegExp(`BUN_PACKAGE_VERSION: ${packageManagerVersion.replaceAll(".", "\\.")}`));
+	assert.match(
+		binaryRelease,
+		new RegExp(`BUN_REVISION: ${manifest.drahtReleaseBunRevision.replaceAll(".", "\\.").replaceAll("+", "\\+")}`),
+	);
+	assert.doesNotMatch(binaryRelease, /bun-version: latest/);
+});

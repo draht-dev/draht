@@ -23,15 +23,19 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Setup Bun
-      uses: oven-sh/setup-bun@v2
-      with:
-        bun-version: latest
-
     - name: Setup Node.js
-      uses: actions/setup-node@v7
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
       with:
         node-version: ${{ inputs.node-version }}
+
+    - name: Install and verify the manifest-pinned Bun
+      shell: bash
+      run: |
+        BUN_PACKAGE_VERSION="$(node -p "require('./package.json').packageManager.replace(/^bun@/, '')")"
+        EXPECTED_BUN_REVISION="$(node -p "require('./package.json').drahtReleaseBunRevision")"
+        npm install --global "bun@${BUN_PACKAGE_VERSION}"
+        ACTUAL_BUN_REVISION="$(bun --revision)"
+        test "${ACTUAL_BUN_REVISION}" = "${EXPECTED_BUN_REVISION}"
 
     - name: Install system dependencies
       if: inputs.system-deps == 'true'
@@ -44,4 +48,4 @@ runs:
     - name: Install dependencies
       if: inputs.install == 'true'
       shell: bash
-      run: bun install
+      run: bun install --frozen-lockfile --ignore-scripts --linker hoisted

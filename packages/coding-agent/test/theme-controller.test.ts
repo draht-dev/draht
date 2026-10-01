@@ -58,6 +58,14 @@ afterEach(() => {
 });
 
 describe("InteractiveThemeController", () => {
+	it("defaults to the detected dark/light theme without a theme setting", async () => {
+		const { ui } = createUi();
+		const controller = createController(ui, () => SettingsManager.inMemory());
+
+		expect(theme.name).toBe("dark");
+		expect(controller.getThemeSelection()).toBe("dark");
+	});
+
 	it("uses the initial theme without persisting it", async () => {
 		const { ui, queryTerminalColors } = createUi();
 		const manager = SettingsManager.inMemory({ theme: "dark" });
@@ -83,7 +91,7 @@ describe("InteractiveThemeController", () => {
 				answer = resolve;
 			}),
 		);
-		const controller = createController(ui, () => SettingsManager.inMemory());
+		const controller = createController(ui, () => SettingsManager.inMemory({ theme: "system" }));
 		controller.applyFromSettings();
 
 		// Grayscale until the terminal answers.
@@ -102,7 +110,7 @@ describe("InteractiveThemeController", () => {
 			lateReply = options.onLateReply!;
 			return {};
 		});
-		const controller = createController(ui, () => SettingsManager.inMemory());
+		const controller = createController(ui, () => SettingsManager.inMemory({ theme: "system" }));
 		controller.applyFromSettings();
 		await flush();
 		expect(theme.getFgAnsi("error")).toBe("\x1b[38;5;1m");
@@ -130,7 +138,7 @@ describe("InteractiveThemeController", () => {
 	it("uses the reported scheme for the system theme when the terminal reports no colors", async () => {
 		vi.stubEnv("COLORFGBG", "");
 		const { ui, emitTerminalColorScheme } = createUi();
-		const controller = createController(ui, () => SettingsManager.inMemory());
+		const controller = createController(ui, () => SettingsManager.inMemory({ theme: "system" }));
 		controller.applyFromSettings();
 		await flush();
 		expect(theme.appearance).toBe("dark");

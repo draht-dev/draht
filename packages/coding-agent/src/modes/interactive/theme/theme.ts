@@ -754,7 +754,7 @@ export function setRegisteredThemes(themes: Theme[]): void {
 }
 
 export function initTheme(themeName?: string, enableWatcher: boolean = false): void {
-	const name = themeName ?? SYSTEM_THEME_NAME;
+	const name = themeName ?? getTerminalTheme();
 	currentThemeName = name;
 	try {
 		setGlobalTheme(loadTheme(name));
@@ -762,9 +762,10 @@ export function initTheme(themeName?: string, enableWatcher: boolean = false): v
 			startThemeWatcher();
 		}
 	} catch (_error) {
-		// Theme is invalid - fall back to the system theme silently
-		currentThemeName = SYSTEM_THEME_NAME;
-		setGlobalTheme(loadTheme(SYSTEM_THEME_NAME));
+		// Theme is invalid - fall back to the detected dark/light theme silently
+		const fallback = getTerminalTheme();
+		currentThemeName = fallback;
+		setGlobalTheme(loadTheme(fallback));
 		// Don't start watcher for fallback theme
 	}
 }
@@ -781,9 +782,10 @@ export function setTheme(name: string, enableWatcher: boolean = false): { succes
 		}
 		return { success: true };
 	} catch (error) {
-		// Theme is invalid - fall back to the system theme
-		currentThemeName = SYSTEM_THEME_NAME;
-		setGlobalTheme(loadTheme(SYSTEM_THEME_NAME));
+		// Theme is invalid - fall back to the detected dark/light theme
+		const fallback = getTerminalTheme();
+		currentThemeName = fallback;
+		setGlobalTheme(loadTheme(fallback));
 		// Don't start watcher for fallback theme
 		return {
 			success: false,

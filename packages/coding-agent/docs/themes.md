@@ -1,10 +1,10 @@
 # Customize draht with themes
 
-Themes control the colors draht uses in interactive mode and HTML exports. draht includes the `system`, `dark`, and `light` themes. You can select one theme, follow your terminal's light or dark appearance, or create your own palette.
+Themes control the colors draht uses in interactive mode and HTML exports. draht includes the `system`, `dark`, and `light` themes. Without a `theme` setting, draht detects whether the terminal is light or dark and uses the matching built-in theme. You can select one theme, follow your terminal's light or dark appearance, or create your own palette.
 
 ## Use your terminal's colors
 
-The `system` theme is the default. It builds draht's colors from your terminal's theme, so draht matches the terminal instead of bringing its own palette:
+The `system` theme builds draht's colors from your terminal's theme, so draht matches the terminal instead of bringing its own palette. It is available as an explicit choice but is not the default:
 
 - draht queries the terminal's default foreground and background colors and its 16 ANSI colors.
 - Each draht color takes its hue from one ANSI color, for example errors from red and links from blue.
@@ -35,7 +35,7 @@ The selection is saved as the `theme` [setting](settings.md#terminal-and-display
 }
 ```
 
-Without a `theme` setting, draht uses `system`.
+Without a `theme` setting, draht detects the terminal's light/dark appearance and uses the matching built-in `light` or `dark` theme.
 
 Automatic mode stores the light theme first and the dark theme second:
 

@@ -99,7 +99,7 @@ Checkpoints back `/rewind`. See [Checkpoint commands](cli.md#checkpoint-commands
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `theme` | string | `"system"` | Built-in or custom theme name. `system` derives colors from the terminal theme. |
+| `theme` | string | detected `dark`/`light` | Built-in or custom theme name. Unset detects the terminal's dark/light appearance; `system` derives colors from the terminal theme instead and must be set explicitly. |
 | `quietStartup` | boolean | `false` | Hide the startup header. |
 | `tuiMode` | `"regular" \| "fullscreen"` | `"regular"` | Interactive terminal UI mode. |
 | `fullscreenExitOutput` | `"transcript" \| "resume-hint"` | `"transcript"` | Output printed when fullscreen mode exits. |

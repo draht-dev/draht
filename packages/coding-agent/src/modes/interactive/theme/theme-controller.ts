@@ -170,17 +170,17 @@ export class InteractiveThemeController {
 		return this.currentThemeSetting ?? this.getSettingsManager().getThemeSetting();
 	}
 
-	/** The theme for the current setting and terminal appearance. Without a setting, draht uses the system theme. */
+	/** The theme for the current setting and terminal appearance. Without a setting, draht uses the detected dark/light theme. */
 	private resolveThemeName(): string {
-		return resolveThemeSetting(this.getThemeSetting(), getTerminalTheme()) ?? SYSTEM_THEME_NAME;
+		return resolveThemeSetting(this.getThemeSetting(), getTerminalTheme()) ?? getTerminalTheme();
 	}
 
 	private applyThemeName(themeName: string, showError = false): ThemeResult {
 		const result = setTheme(themeName, true);
-		this.activeThemeName = result.success ? themeName : SYSTEM_THEME_NAME;
+		this.activeThemeName = result.success ? themeName : getTerminalTheme();
 		this.notifyChanged();
 		if (!result.success && showError) {
-			this.showError(`Failed to load theme "${themeName}": ${result.error}\nFell back to the system theme.`);
+			this.showError(`Failed to load theme "${themeName}": ${result.error}\nFell back to the detected theme.`);
 		}
 		return result;
 	}

@@ -31,6 +31,7 @@ export {
 	refreshAuthorization,
 	registerClient,
 	startAuthorization,
+	stepUpScope,
 	type TokenRequestOptions,
 } from "./flow.ts";
 export {

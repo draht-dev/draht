@@ -26,6 +26,7 @@ import {
 	type OAuthChallenge,
 	type OAuthClientInformationMixed,
 	parseWwwAuthenticate,
+	stepUpScope,
 } from "@draht/mcp/oauth";
 import lockfile from "proper-lockfile";
 import { APP_NAME, getAgentDir } from "../../config.ts";
@@ -386,6 +387,7 @@ export async function signInMcpServer(options: {
 }): Promise<void> {
 	const { serverUrl, store, settings } = options;
 	const stored = await store.load();
+	const stepUp = options.challenge?.error === "insufficient_scope";
 	const callbackOptions = callbackSettings(settings);
 	// Reuse the port of the registered redirect URI so the registered client stays valid.
 	const registered = registeredRedirectUrls(stored?.clientInformation)[0];
@@ -415,11 +417,15 @@ export async function signInMcpServer(options: {
 			serverUrl,
 			resourceMetadataUrl: options.challenge?.resourceMetadataUrl,
 			authorizationServerMetadataUrl: settings.authServerMetadataUrl,
-			// A server asking for more scope gets it on top of the configured scope.
-			scope: mergeScopes(settings.scope, options.challenge?.scope),
+			// A server asking for more scope gets it on top of the configured scope and, since the challenge
+			// may list only the missing scopes, on top of the scope granted so far.
+			scope: mergeScopes(
+				settings.scope,
+				stepUp ? stepUpScope(stored?.tokens?.scope, options.challenge?.scope) : options.challenge?.scope,
+			),
 		};
 		// A refresh keeps the granted scope; a server asking for more needs the browser flow.
-		const skipRefresh = options.challenge?.error === "insufficient_scope";
+		const skipRefresh = stepUp;
 		if ((await authorizeMcp(provider, { ...flow, skipRefresh })) === "AUTHORIZED") return;
 		if (!authorizationUrl) throw new Error("OAuth flow did not produce an authorization URL");
 

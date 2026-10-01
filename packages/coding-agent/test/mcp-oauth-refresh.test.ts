@@ -1,7 +1,7 @@
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { OAuthIssuerMismatchError } from "@draht/mcp/oauth";
+import { type OAuthChallenge, OAuthIssuerMismatchError } from "@draht/mcp/oauth";
 import { afterEach, describe, expect, it } from "vitest";
 import { InMemoryAuthStorageBackend } from "../src/core/auth-storage.ts";
 import {
@@ -110,6 +110,45 @@ describe("MCP OAuth sign-in", () => {
 
 	it("rejects an authorization response from another issuer", async () => {
 		await expect(signIn({ iss: "https://attacker.example" })).rejects.toBeInstanceOf(OAuthIssuerMismatchError);
+	});
+
+	it("keeps the granted scope when the server asks for more", async () => {
+		const server = await startOAuthMcpServer();
+		try {
+			const store = new McpOAuthCredentialStore(new InMemoryAuthStorageBackend()).forServer(server.url);
+			const opened: URL[] = [];
+			const signInWith = (challenge: OAuthChallenge) =>
+				signInMcpServer({
+					serverUrl: server.url,
+					store,
+					settings: {},
+					challenge,
+					prompt: {
+						showAuthorizationUrl: (url) => {
+							opened.push(url);
+							void fetch(url);
+						},
+						promptForRedirectUrl: (signal) =>
+							new Promise((resolve) =>
+								signal.addEventListener("abort", () => resolve(undefined), { once: true }),
+							),
+					},
+				});
+
+			await signInWith({ scope: "issues:read" });
+			// The token response names no scope, so the grant has the requested one.
+			expect((await store.load())?.tokens?.scope).toBe("issues:read");
+			// The step-up challenge lists only the missing scope. Requesting just that would lose
+			// issues:read, so the next request would ask for sign-in again.
+			await signInWith({ error: "insufficient_scope", scope: "issues:write" });
+			expect(opened.map((url) => url.searchParams.get("scope"))).toEqual([
+				"issues:read",
+				"issues:read issues:write",
+			]);
+			expect((await store.load())?.tokens?.scope).toBe("issues:read issues:write");
+		} finally {
+			await server.close();
+		}
 	});
 
 	// badlogic/pi-mono#10172

@@ -37,7 +37,8 @@
 - `powershell` tool, alongside `bash`, for shell execution on Windows
 - `/thinking` command to change the reasoning effort level mid-session
 - `--` end-of-options marker for CLI argument parsing
-- `tui.select.confirmAsDefault` keybinding (default `ctrl+s`) to confirm a selection and set it as the default
+- `app.models.save` keybinding (default `ctrl+s`) to save the selected model to settings from the model selector
+- `app.thinking.save` keybinding (default `ctrl+s`) to save the selected thinking level as the default from the thinking selector
 - experimental mini agent, a three-process coding agent variant on the durable harness (not CLI-wired)
 
 ### Fixed

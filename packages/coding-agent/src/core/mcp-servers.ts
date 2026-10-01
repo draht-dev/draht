@@ -73,7 +73,7 @@ export interface McpOAuthConfig {
 	scope?: string;
 	/**
 	 * `client_name` sent with dynamic client registration, for servers that only accept known clients.
-	 * Default: `pi`.
+	 * Default: `APP_NAME` (`draht`).
 	 */
 	clientName?: string;
 }

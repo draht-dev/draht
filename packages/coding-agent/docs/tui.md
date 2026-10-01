@@ -45,7 +45,7 @@ Prefer these components over rebuilding selection, scrolling, text editing, or w
 
 Use `matchesKey()` and `Key` for terminal keyboard input. The parser accounts for supported terminal protocols and key modifiers. Extension components should use the injected `KeybindingsManager` for configurable application actions.
 
-A component that displays a text cursor should implement `Focusable` and place `CURSOR_MARKER` immediately before its visual cursor. The TUI uses that marker to position the hardware cursor for input method editors. Some terminals only place IME candidate windows next to a visible hardware cursor; set `DRAHT_HARDWARE_CURSOR=1` to show it.
+A component that displays a text cursor should implement `Focusable` and place `CURSOR_MARKER` immediately before its visual cursor. The TUI uses that marker to position the hardware cursor for input method editors. Some terminals only place IME candidate windows next to a visible hardware cursor; set `DRAHT_HARDWARE_CURSOR=1` (or the `showHardwareCursor` setting) to show it. The coding agent reads `DRAHT_HARDWARE_CURSOR` and `DRAHT_CLEAR_ON_SHRINK` and passes them to the TUI; `@draht/tui` itself does not read environment variables.
 
 Containers that wrap an `Input` or `Editor` must propagate their `focused` state to that child. Without propagation, Chinese, Japanese, Korean, and other IME candidate windows can appear at the wrong screen position.
 

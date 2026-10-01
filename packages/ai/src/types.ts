@@ -111,7 +111,7 @@ export type CacheRetention = "none" | "short" | "long";
 
 /**
  * Best-effort prompt cache lifetime in seconds for each retention tier a request can ask for.
- * A missing tier means the lifetime is unknown; pi does not warm such caches.
+ * A missing tier means the lifetime is unknown; draht does not warm such caches.
  */
 export type ModelPromptCache = Partial<Record<Exclude<CacheRetention, "none">, number>>;
 

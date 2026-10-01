@@ -991,7 +991,7 @@ export interface ContextEvent {
 }
 
 /**
- * Fired before each LLM call, after every `context` handler has run and Pi has restored
+ * Fired before each LLM call, after every `context` handler has run and draht has restored
  * the prompt and tool state. `messages` is the full transcript including system messages,
  * and the result is sent as returned: the handler owns the prompt and tool declarations.
  */

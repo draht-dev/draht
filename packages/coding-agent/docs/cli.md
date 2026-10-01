@@ -171,7 +171,7 @@ To turn on `codemode` for every session, add it to the default tools in `~/.drah
 This keeps `read`, `bash`, `edit`, and `write` and adds `codemode`. For one invocation, list every tool, since `--tools` replaces the selection:
 
 ```sh
-pi --tools read,bash,edit,write,codemode
+draht --tools read,bash,edit,write,codemode
 ```
 
 Codemode is useful without MCP: scripts can run several tool calls in parallel, filter large output before it reaches the model, and call classifier models such as TypeSafe's Jev through `models.classify()` (see [Classifier models](models.md#use-classifier-models)).

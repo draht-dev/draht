@@ -67,7 +67,7 @@ export interface CreateAgentSessionOptions {
 	/**
 	 * Optional allowlist of tool names.
 	 *
-	 * When omitted, pi uses the resolved `defaultTools` setting for the initial
+	 * When omitted, draht uses the resolved `defaultTools` setting for the initial
 	 * selection when configured. Otherwise it enables the default built-in tools
 	 * (read, bash, edit, write). Extension/custom tools remain enabled unless
 	 * `noTools` changes that default. When provided, only the listed tool names are

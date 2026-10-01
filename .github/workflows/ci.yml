@@ -260,3 +260,22 @@ jobs:
         env:
           CGO_ENABLED: "1"
         run: go test -count=1 -short -race ./...
+
+  mcp-conformance:
+    name: MCP client conformance
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup
+        uses: ./.github/actions/setup
+        with:
+          system-deps: "false"
+
+      # Run the MCP client from source against the pinned official conformance baseline.
+      - name: MCP client conformance
+        run: bun run test:mcp-conformance

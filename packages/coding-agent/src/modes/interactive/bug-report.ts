@@ -53,7 +53,7 @@ export async function reportBug(context: BugReportContext, initialHint?: string)
 		context.showStatus("Bug report cancelled");
 		return;
 	}
-	if (options.delivery === "upload" && process.env.PI_OFFLINE) {
+	if (options.delivery === "upload" && process.env.DRAHT_OFFLINE) {
 		context.showError("Uploading bug reports requires online mode. Use Export as Zip instead.");
 		return;
 	}

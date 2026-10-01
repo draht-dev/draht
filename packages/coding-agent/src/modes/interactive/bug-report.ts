@@ -15,7 +15,7 @@ import {
 import { uploadBugReport } from "../../core/bug-report-upload.ts";
 import { clearCrashLog, readCrashLog } from "../../core/crash-log.ts";
 import type { KeybindingsManager } from "../../core/keybindings.ts";
-import { getBugReportGatewayUrl, RADIUS_PROVIDER_ID } from "../../core/radius.ts";
+import { getBugReportGatewayUrl, getRadiusGatewayUrl, RADIUS_PROVIDER_ID } from "../../core/radius.ts";
 import { serializeSessionBranch } from "../../core/session-export.ts";
 import { BorderedLoader } from "./components/bordered-loader.ts";
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
@@ -176,10 +176,15 @@ function buildBundle(session: AgentSession, options: BugReportOptions, summary: 
 	};
 }
 
-async function upload(context: BugReportContext, bundle: BugReportBundle): Promise<string | undefined> {
+/** Exported for tests; not part of the module's public surface. */
+export async function upload(context: BugReportContext, bundle: BugReportBundle): Promise<string | undefined> {
 	const loader = showLoader(context, "Uploading bug report...");
 	try {
-		const provider = context.session.modelRuntime.getProvider(RADIUS_PROVIDER_ID);
+		// The Radius credential is scoped to the Radius model provider's gateway.
+		// Only attach it here when the bug-report gateway is that same origin —
+		// otherwise it would leak a Radius OAuth token/API key to a third party.
+		const sameGateway = new URL(getBugReportGatewayUrl()).origin === new URL(getRadiusGatewayUrl()).origin;
+		const provider = sameGateway ? context.session.modelRuntime.getProvider(RADIUS_PROVIDER_ID) : undefined;
 		const token = provider
 			? getAuthCredential(
 					await context.session.modelRuntime.getAuth(RADIUS_PROVIDER_ID, { minOAuthValidityMs: 5 * 60_000 }),

@@ -73,6 +73,7 @@
 ### Removed
 
 - legacy `/build`, `/plan`, `/verify` shipped prompt templates (`prompts/agents/`) — carried the dead `draht commit-task N P T` commit convention and were referenced nowhere; the build agent's Competence Mimics table now lives in the `implementer` builtin agent
+- upstream's experimental CLI orphans: `src/cli/experimental/` (the standalone `experimentalCli`/session-worker/server/client surface) and `src/experimental/services/transcript-provider.ts` plus its now-unused `transcript.ts`, never wired into the shipped CLI; `src/experimental/mini` and `src/experimental/micro` are unaffected
 
 ## [2026.7.30] - 2026-07-30
 

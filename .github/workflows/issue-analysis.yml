@@ -41,9 +41,7 @@ on:
   issue_comment:
     types: [created]
 
-permissions:
-  contents: read
-  issues: write
+permissions: {}
 
 concurrency:
   group: issue-analysis-${{ github.event.issue.number }}
@@ -52,6 +50,8 @@ concurrency:
 jobs:
   authorize:
     runs-on: ubuntu-latest
+    permissions:
+      issues: write
     outputs:
       should_run: ${{ steps.verify.outputs.should_run }}
       extra_instructions: ${{ steps.verify.outputs.extra_instructions }}
@@ -61,7 +61,7 @@ jobs:
     steps:
       - name: Verify sender permission
         id: verify
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         env:
           ORG_READ_TOKEN: ${{ secrets.DRAHT_ORG_READ_TOKEN }}
         with:
@@ -243,6 +243,9 @@ jobs:
     needs: authorize
     if: needs.authorize.outputs.should_run == 'true'
     runs-on: ${{ fromJSON(needs.authorize.outputs.runs_on) }}
+    permissions:
+      contents: read
+      issues: write
     environment: draht-analyze
     timeout-minutes: 45
     concurrency:
@@ -254,19 +257,19 @@ jobs:
     steps:
       - name: Create high-entropy working directory name
         id: workdir
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const crypto = require('crypto');
             core.setOutput('name', `draht-ci-${crypto.randomBytes(16).toString('hex')}`);
 
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: ${{ steps.workdir.outputs.name }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
@@ -319,7 +322,7 @@ jobs:
 
       - name: Write auth.json
         id: write_auth
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         env:
           DRAHT_AUTH_JSON: ${{ secrets.DRAHT_AUTH_JSON }}
         with:
@@ -341,7 +344,7 @@ jobs:
             }
 
       - name: Run draht /is
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         env:
           DRAHT_CODING_AGENT_DIR: ${{ runner.temp }}/draht-agent
           GH_TOKEN: ${{ github.token }}
@@ -404,7 +407,7 @@ jobs:
 
       - name: Persist refreshed auth.json
         if: always() && steps.write_auth.outcome == 'success'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         env:
           GH_TOKEN: ${{ secrets.DRAHT_AUTH_UPDATE_TOKEN }}
           DRAHT_CODING_AGENT_DIR: ${{ runner.temp }}/draht-agent
@@ -457,7 +460,7 @@ jobs:
       - name: Export session files
         id: export_session_files
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         env:
           DRAHT_CODING_AGENT_DIR: ${{ runner.temp }}/draht-agent
           WORKDIR: ${{ steps.workdir.outputs.name }}
@@ -509,7 +512,7 @@ jobs:
       - name: Upload session gist
         id: gist
         if: always() && steps.export_session_files.outcome == 'success'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         env:
           DRAHT_GIST_TOKEN: ${{ secrets.DRAHT_GIST_TOKEN }}
         with:
@@ -540,7 +543,7 @@ jobs:
 
       - name: Comment with session import instructions
         if: always() && steps.gist.outcome == 'success'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         env:
           GIST_URL: ${{ steps.gist.outputs.url }}
           GIST_ID: ${{ steps.gist.outputs.id }}
@@ -619,7 +622,7 @@ jobs:
 
       - name: Remove trigger label
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             try {

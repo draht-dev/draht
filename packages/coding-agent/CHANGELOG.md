@@ -67,6 +67,7 @@
 - permission gate (auto mode): a `pwsh`/`powershell`/`cmd` interpreter invoked through the `bash` tool (e.g. `pwsh -c "Remove-Item -Recurse ~"`) now requires approval instead of auto-allowing, matching the `powershell` tool's own unmatched-call behavior — the bash-shaped danger filter has no coverage for these interpreters' syntax
 - permission gate: deny/danger `pattern` matching canonicalized combined short flags (`-rf`/`-fr`) with a case-sensitive sort, so a mixed-case variant like `-Rf` could land in a different letter order than `-rf` and dodge a match despite case-insensitive matching elsewhere; the sort is now case-insensitive
 - permission gate: deny-candidate unwrapping now also recognizes `timeout DURATION cmd` (skipping the duration positional) and the combined `bash -lc '...'` form (`-l` and `-c` as one flag cluster), closing two gaps where a wrapped command wasn't being unwrapped for deny matching
+- `build:binary` compiled `dist/cli.js`, the non-bun entry, so the compiled binary never ran the `src/bun/cli.ts` startup path that embeds the quickjs wasm codemode needs; it now compiles `dist/bun/cli.js`, matching `scripts/build-binaries.sh`
 
 ### Changed
 

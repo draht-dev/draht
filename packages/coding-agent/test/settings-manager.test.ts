@@ -115,7 +115,7 @@ describe("SettingsManager", () => {
 		it("creates one global device ID and reuses it in later processes", async () => {
 			const settingsPath = join(agentDir, "settings.json");
 			writeFileSync(settingsPath, JSON.stringify({ theme: "dark" }));
-			writeFileSync(join(projectDir, ".pi", "settings.json"), JSON.stringify({ deviceId: "project-device" }));
+			writeFileSync(join(projectDir, ".draht", "settings.json"), JSON.stringify({ deviceId: "project-device" }));
 			const first = SettingsManager.create(projectDir, agentDir);
 
 			const deviceId = first.getOrCreateDeviceId();
@@ -414,7 +414,7 @@ describe("SettingsManager", () => {
 		it("defaults to streaming and ignores project settings", () => {
 			expect(SettingsManager.create(projectDir, agentDir).getCacheWarmingMode()).toBe("streaming");
 
-			writeFileSync(join(projectDir, ".pi", "settings.json"), JSON.stringify({ cacheWarming: "idle" }));
+			writeFileSync(join(projectDir, ".draht", "settings.json"), JSON.stringify({ cacheWarming: "idle" }));
 			expect(SettingsManager.create(projectDir, agentDir).getCacheWarmingMode()).toBe("streaming");
 
 			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ cacheWarming: "idle" }));
@@ -637,7 +637,7 @@ describe("SettingsManager", () => {
 
 			expect(SettingsManager.create(projectDir, agentDir).getDefaultTools()).toEqual(["read", "bash"]);
 
-			writeFileSync(join(projectDir, ".pi", "settings.json"), JSON.stringify({ defaultTools: ["grep"] }));
+			writeFileSync(join(projectDir, ".draht", "settings.json"), JSON.stringify({ defaultTools: ["grep"] }));
 
 			expect(SettingsManager.create(projectDir, agentDir).getDefaultTools()).toEqual(["grep"]);
 		});
@@ -666,7 +666,7 @@ describe("SettingsManager", () => {
 				JSON.stringify({ defaultTools: ["read", "bash", "+codemode"] }),
 			);
 			writeFileSync(
-				join(projectDir, ".pi", "settings.json"),
+				join(projectDir, ".draht", "settings.json"),
 				JSON.stringify({ defaultTools: ["-codemode", "+tool_search"] }),
 			);
 
@@ -678,7 +678,7 @@ describe("SettingsManager", () => {
 		});
 
 		it("applies project modifiers to the built-in defaults without a global setting", () => {
-			writeFileSync(join(projectDir, ".pi", "settings.json"), JSON.stringify({ defaultTools: ["+codemode"] }));
+			writeFileSync(join(projectDir, ".draht", "settings.json"), JSON.stringify({ defaultTools: ["+codemode"] }));
 
 			expect(SettingsManager.create(projectDir, agentDir).getDefaultTools()).toEqual([
 				"read",

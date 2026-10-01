@@ -48,7 +48,7 @@ describe("buildSystemPrompt", () => {
 				skills: [],
 			});
 
-			expect(defaultPrompt.startsWith("You are an expert coding assistant operating inside pi")).toBe(true);
+			expect(defaultPrompt.startsWith("You are an expert coding assistant operating inside draht")).toBe(true);
 			expect(customPrompt.startsWith("You are Exact.\n\n<cwd>")).toBe(true);
 		});
 

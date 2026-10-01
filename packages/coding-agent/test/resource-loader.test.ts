@@ -1123,9 +1123,9 @@ export default function(pi: ExtensionAPI) {
 			const userExtDir = join(agentDir, "extensions");
 			mkdirSync(userExtDir, { recursive: true });
 			writeFileSync(join(userExtDir, "user.ts"), "export default function() {}");
-			mkdirSync(join(cwd, ".pi"), { recursive: true });
+			mkdirSync(join(cwd, ".draht"), { recursive: true });
 			// A project override gives the built-in project scope, which must not move it ahead.
-			writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({ extensions: ["+builtin:mcp"] }));
+			writeFileSync(join(cwd, ".draht", "settings.json"), JSON.stringify({ extensions: ["+builtin:mcp"] }));
 			const loader = new DefaultResourceLoader({
 				cwd,
 				agentDir,
@@ -1162,9 +1162,9 @@ export default function(pi: ExtensionAPI) {
 
 		it("should apply project built-in extension overrides after trust resolves", async () => {
 			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ extensions: ["-builtin:mcp"] }));
-			mkdirSync(join(cwd, ".pi"), { recursive: true });
+			mkdirSync(join(cwd, ".draht"), { recursive: true });
 			writeFileSync(
-				join(cwd, ".pi", "settings.json"),
+				join(cwd, ".draht", "settings.json"),
 				JSON.stringify({ extensions: ["+builtin:mcp", "-builtin:llama"] }),
 			);
 			const loaded: string[] = [];

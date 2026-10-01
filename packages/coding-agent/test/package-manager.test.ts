@@ -2423,7 +2423,7 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 		});
 
 		it("should skip npm updates when the installed version is newer than the registry version", async () => {
-			const installedPath = join(tempDir, ".pi", "npm", "node_modules", "example");
+			const installedPath = join(tempDir, ".draht", "npm", "node_modules", "example");
 			mkdirSync(installedPath, { recursive: true });
 			writeFileSync(join(installedPath, "package.json"), JSON.stringify({ name: "example", version: "2.0.0" }));
 			settingsManager.setProjectPackages(["npm:example"]);
@@ -2731,7 +2731,7 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 		});
 
 		it("should not report npm updates when the installed version is newer than the registry version", async () => {
-			const installedPath = join(tempDir, ".pi", "npm", "node_modules", "example");
+			const installedPath = join(tempDir, ".draht", "npm", "node_modules", "example");
 			mkdirSync(installedPath, { recursive: true });
 			writeFileSync(join(installedPath, "package.json"), JSON.stringify({ name: "example", version: "2.0.0" }));
 			settingsManager.setProjectPackages(["npm:example"]);

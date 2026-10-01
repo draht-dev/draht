@@ -590,12 +590,18 @@ describe("the emitted binary records the socket seams (R35-ALWAYS.11)", () => {
 		const sessionId = "01a02700-0000-7000-8000-00000000d0e5";
 		// Paced output, so the second prompt lands while the first turn is still streaming. Without
 		// the pacing knob the stub answers faster than a socket round trip and nothing is ever queued.
+		// The stub echoes the prompt, so a long first prompt at 5 tokens/s streams for well over ten
+		// seconds: enough that a loaded machine cannot finish the turn before the second prompt lands.
 		const { child, socketPath } = await startRpcSession(sandbox, sessionId, {
-			DRAHT_STUB_PROVIDER_TOKENS_PER_SECOND: "25",
+			DRAHT_STUB_PROVIDER_TOKENS_PER_SECOND: "5",
 		});
 		try {
 			const client = await TestClient.attach(socketPath, "t9-writer");
-			const first = "the first prompt is deliberately long so that it is still streaming when the second lands";
+			const first = Array.from(
+				{ length: 6 },
+				(_, i) =>
+					`clause ${i + 1}: the first prompt is deliberately long so that it is still streaming when the second lands`,
+			).join("; ");
 			client.send({ type: "input", data: first, clientId: "t9-writer" });
 			await client.waitFor((frame) => frame.type === "output", "the first reply to start streaming");
 

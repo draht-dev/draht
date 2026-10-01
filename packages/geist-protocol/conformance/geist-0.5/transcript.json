@@ -1,0 +1,940 @@
+{
+	"protocol": "geist/0.x",
+	"version": "0.5",
+	"recordedFrom": "scripts/geist-conformance/reference-daemon.mjs over ws://127.0.0.1/attach, relaying a real draht SocketServer behind a real device-credential exchange",
+	"normalizedFields": {
+		"pid": 1,
+		"startedAt": "1970-01-01T00:00:00.000Z",
+		"createdAt": "1970-01-01T00:00:00.000Z",
+		"credential": "<normalized-credential>",
+		"issuedAt": "1970-01-01T00:00:00.000Z",
+		"expiresAt": "1970-01-08T00:00:00.000Z"
+	},
+	"transcript": [
+		{
+			"seq": 0,
+			"direction": "client-to-server",
+			"client": "client-a",
+			"frame": {
+				"type": "hello",
+				"protocol": "geist/0.x",
+				"version": "0.5",
+				"client": {
+					"name": "geist-conformance-recorder",
+					"version": "0.1.0"
+				}
+			}
+		},
+		{
+			"seq": 1,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "server_hello",
+				"protocol": "geist/0.x",
+				"version": "0.5",
+				"server": {
+					"name": "geist-reference-daemon",
+					"version": "0.1.0"
+				},
+				"limits": {
+					"maxFrameBytes": 65536,
+					"maxOutboundFrames": 1024,
+					"maxBufferedOutputBytes": 4194304
+				},
+				"capabilities": [
+					"fleet-delta",
+					"fleet-resync",
+					"session-resume",
+					"session-spawn",
+					"registry"
+				]
+			}
+		},
+		{
+			"seq": 2,
+			"direction": "client-to-server",
+			"client": "client-a",
+			"frame": {
+				"type": "pair_device",
+				"bootstrapToken": "conformance-bootstrap-a",
+				"device": {
+					"name": "conformance-a",
+					"platform": "linux"
+				}
+			}
+		},
+		{
+			"seq": 3,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "device_credential",
+				"deviceId": "device-conformance-a",
+				"credential": "<normalized-credential>",
+				"issuedAt": "1970-01-01T00:00:00.000Z",
+				"expiresAt": "1970-01-08T00:00:00.000Z"
+			}
+		},
+		{
+			"seq": 4,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "fleet",
+				"sessions": [
+					{
+						"id": "conformance",
+						"cwd": "/geist/conformance",
+						"pid": 1,
+						"startedAt": "1970-01-01T00:00:00.000Z",
+						"origin": "socket",
+						"attachable": true,
+						"resumable": false,
+						"status": "unknown",
+						"statusAt": null
+					},
+					{
+						"id": "conformance-history",
+						"cwd": "/geist/conformance/archived",
+						"startedAt": "1970-01-01T00:00:00.000Z",
+						"origin": "history",
+						"attachable": false,
+						"resumable": true,
+						"status": "no_repo",
+						"statusAt": "1970-01-01T00:00:00.000Z"
+					}
+				],
+				"epoch": "conformance-epoch",
+				"seq": 0
+			}
+		},
+		{
+			"seq": 5,
+			"direction": "client-to-server",
+			"client": "client-a",
+			"frame": {
+				"type": "attach",
+				"sessionId": "conformance",
+				"clientId": "client-a",
+				"mode": "read-write"
+			}
+		},
+		{
+			"seq": 6,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "session_metadata",
+				"sessionId": "conformance",
+				"cwd": "/geist/conformance",
+				"createdAt": "1970-01-01T00:00:00.000Z"
+			}
+		},
+		{
+			"seq": 7,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "output",
+				"data": "geist conformance corpus\n",
+				"stream": "stdout"
+			}
+		},
+		{
+			"seq": 8,
+			"direction": "client-to-server",
+			"client": "client-b",
+			"frame": {
+				"type": "hello",
+				"protocol": "geist/0.x",
+				"version": "0.5",
+				"client": {
+					"name": "geist-conformance-recorder",
+					"version": "0.1.0"
+				}
+			}
+		},
+		{
+			"seq": 9,
+			"direction": "server-to-client",
+			"client": "client-b",
+			"frame": {
+				"type": "server_hello",
+				"protocol": "geist/0.x",
+				"version": "0.5",
+				"server": {
+					"name": "geist-reference-daemon",
+					"version": "0.1.0"
+				},
+				"limits": {
+					"maxFrameBytes": 65536,
+					"maxOutboundFrames": 1024,
+					"maxBufferedOutputBytes": 4194304
+				},
+				"capabilities": [
+					"fleet-delta",
+					"fleet-resync",
+					"session-resume",
+					"session-spawn",
+					"registry"
+				]
+			}
+		},
+		{
+			"seq": 10,
+			"direction": "client-to-server",
+			"client": "client-b",
+			"frame": {
+				"type": "pair_device",
+				"bootstrapToken": "conformance-bootstrap-b",
+				"device": {
+					"name": "conformance-b",
+					"platform": "ios"
+				}
+			}
+		},
+		{
+			"seq": 11,
+			"direction": "server-to-client",
+			"client": "client-b",
+			"frame": {
+				"type": "device_credential",
+				"deviceId": "device-conformance-b",
+				"credential": "<normalized-credential>",
+				"issuedAt": "1970-01-01T00:00:00.000Z",
+				"expiresAt": "1970-01-08T00:00:00.000Z"
+			}
+		},
+		{
+			"seq": 12,
+			"direction": "server-to-client",
+			"client": "client-b",
+			"frame": {
+				"type": "fleet",
+				"sessions": [
+					{
+						"id": "conformance",
+						"cwd": "/geist/conformance",
+						"pid": 1,
+						"startedAt": "1970-01-01T00:00:00.000Z",
+						"origin": "socket",
+						"attachable": true,
+						"resumable": false,
+						"status": "unknown",
+						"statusAt": null
+					},
+					{
+						"id": "conformance-history",
+						"cwd": "/geist/conformance/archived",
+						"startedAt": "1970-01-01T00:00:00.000Z",
+						"origin": "history",
+						"attachable": false,
+						"resumable": true,
+						"status": "no_repo",
+						"statusAt": "1970-01-01T00:00:00.000Z"
+					}
+				],
+				"epoch": "conformance-epoch",
+				"seq": 1
+			}
+		},
+		{
+			"seq": 13,
+			"direction": "client-to-server",
+			"client": "client-b",
+			"frame": {
+				"type": "attach",
+				"sessionId": "conformance",
+				"clientId": "client-b",
+				"mode": "read-write"
+			}
+		},
+		{
+			"seq": 14,
+			"direction": "server-to-client",
+			"client": "client-b",
+			"frame": {
+				"type": "session_metadata",
+				"sessionId": "conformance",
+				"cwd": "/geist/conformance",
+				"createdAt": "1970-01-01T00:00:00.000Z"
+			}
+		},
+		{
+			"seq": 15,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "client_joined",
+				"clientId": "client-b",
+				"mode": "read-write"
+			}
+		},
+		{
+			"seq": 16,
+			"direction": "client-to-server",
+			"client": "client-b",
+			"frame": {
+				"type": "input",
+				"data": "ship it\n",
+				"clientId": "client-b"
+			}
+		},
+		{
+			"seq": 17,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "input_echo",
+				"data": "ship it\n",
+				"clientId": "client-b"
+			}
+		},
+		{
+			"seq": 18,
+			"direction": "client-to-server",
+			"client": "client-c",
+			"frame": {
+				"type": "hello",
+				"protocol": "geist/0.x",
+				"version": "0.5",
+				"client": {
+					"name": "geist-conformance-recorder",
+					"version": "0.1.0"
+				}
+			}
+		},
+		{
+			"seq": 19,
+			"direction": "server-to-client",
+			"client": "client-c",
+			"frame": {
+				"type": "server_hello",
+				"protocol": "geist/0.x",
+				"version": "0.5",
+				"server": {
+					"name": "geist-reference-daemon",
+					"version": "0.1.0"
+				},
+				"limits": {
+					"maxFrameBytes": 65536,
+					"maxOutboundFrames": 1024,
+					"maxBufferedOutputBytes": 4194304
+				},
+				"capabilities": [
+					"fleet-delta",
+					"fleet-resync",
+					"session-resume",
+					"session-spawn",
+					"registry"
+				]
+			}
+		},
+		{
+			"seq": 20,
+			"direction": "client-to-server",
+			"client": "client-c",
+			"frame": {
+				"type": "pair_device",
+				"bootstrapToken": "conformance-bootstrap-c",
+				"device": {
+					"name": "conformance-c",
+					"platform": "android"
+				}
+			}
+		},
+		{
+			"seq": 21,
+			"direction": "server-to-client",
+			"client": "client-c",
+			"frame": {
+				"type": "device_credential",
+				"deviceId": "device-conformance-c",
+				"credential": "<normalized-credential>",
+				"issuedAt": "1970-01-01T00:00:00.000Z",
+				"expiresAt": "1970-01-08T00:00:00.000Z"
+			}
+		},
+		{
+			"seq": 22,
+			"direction": "server-to-client",
+			"client": "client-c",
+			"frame": {
+				"type": "fleet",
+				"sessions": [
+					{
+						"id": "conformance",
+						"cwd": "/geist/conformance",
+						"pid": 1,
+						"startedAt": "1970-01-01T00:00:00.000Z",
+						"origin": "socket",
+						"attachable": true,
+						"resumable": false,
+						"status": "unknown",
+						"statusAt": null
+					},
+					{
+						"id": "conformance-history",
+						"cwd": "/geist/conformance/archived",
+						"startedAt": "1970-01-01T00:00:00.000Z",
+						"origin": "history",
+						"attachable": false,
+						"resumable": true,
+						"status": "no_repo",
+						"statusAt": "1970-01-01T00:00:00.000Z"
+					}
+				],
+				"epoch": "conformance-epoch",
+				"seq": 2
+			}
+		},
+		{
+			"seq": 23,
+			"direction": "client-to-server",
+			"client": "client-c",
+			"frame": {
+				"type": "attach",
+				"sessionId": "conformance",
+				"clientId": "client-c",
+				"mode": "read-only"
+			}
+		},
+		{
+			"seq": 24,
+			"direction": "server-to-client",
+			"client": "client-c",
+			"frame": {
+				"type": "session_metadata",
+				"sessionId": "conformance",
+				"cwd": "/geist/conformance",
+				"createdAt": "1970-01-01T00:00:00.000Z"
+			}
+		},
+		{
+			"seq": 25,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "client_joined",
+				"clientId": "client-c",
+				"mode": "read-only"
+			}
+		},
+		{
+			"seq": 26,
+			"direction": "client-to-server",
+			"client": "client-c",
+			"frame": {
+				"type": "input",
+				"data": "let me in\n",
+				"clientId": "client-c"
+			}
+		},
+		{
+			"seq": 27,
+			"direction": "server-to-client",
+			"client": "client-c",
+			"frame": {
+				"type": "error",
+				"message": "Read-only clients cannot send input"
+			}
+		},
+		{
+			"seq": 28,
+			"direction": "client-to-server",
+			"client": "client-b",
+			"frame": {
+				"type": "detach",
+				"clientId": "client-b"
+			}
+		},
+		{
+			"seq": 29,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "client_left",
+				"clientId": "client-b"
+			}
+		},
+		{
+			"seq": 30,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "permission_request",
+				"requestId": "conformance-permission-1",
+				"method": "confirm",
+				"toolCallId": "conformance-tool-call-1",
+				"toolName": "bash",
+				"cwd": "/geist/conformance",
+				"title": "Run a shell command?",
+				"message": "bash wants to run a command in /geist/conformance",
+				"command": "echo geist conformance corpus",
+				"truncated": false,
+				"options": [
+					{
+						"id": "approve",
+						"label": "Approve"
+					},
+					{
+						"id": "deny",
+						"label": "Deny"
+					}
+				],
+				"requestedAt": "1970-01-01T00:00:00.000Z",
+				"deadline": null
+			}
+		},
+		{
+			"seq": 31,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "permission_request",
+				"requestId": "conformance-permission-2",
+				"method": "select",
+				"toolCallId": "conformance-tool-call-2",
+				"toolName": "bash",
+				"cwd": "/geist/conformance",
+				"title": "Which branch should the command run against?",
+				"message": "git wants to know which branch to switch to before running",
+				"command": "git switch <branch>",
+				"truncated": false,
+				"options": [
+					{
+						"id": "opt-main",
+						"label": "main"
+					},
+					{
+						"id": "opt-next",
+						"label": "next"
+					}
+				],
+				"requestedAt": "1970-01-01T00:00:00.000Z",
+				"deadline": null
+			}
+		},
+		{
+			"seq": 32,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "permission_resolved",
+				"requestId": "conformance-permission-2",
+				"decision": "answered",
+				"chosenOptionId": "opt-next",
+				"surface": "tui",
+				"clientId": null
+			}
+		},
+		{
+			"seq": 33,
+			"direction": "client-to-server",
+			"client": "client-a",
+			"frame": {
+				"type": "permission_response",
+				"clientId": "client-a",
+				"requestId": "conformance-permission-1",
+				"optionId": "approve"
+			}
+		},
+		{
+			"seq": 34,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "permission_resolved",
+				"requestId": "conformance-permission-1",
+				"decision": "approved",
+				"chosenOptionId": "approve",
+				"surface": "conformance",
+				"clientId": "client-a"
+			}
+		},
+		{
+			"seq": 35,
+			"direction": "client-to-server",
+			"client": "client-a-reconnect",
+			"frame": {
+				"type": "hello",
+				"protocol": "geist/0.x",
+				"version": "0.5",
+				"client": {
+					"name": "geist-conformance-recorder",
+					"version": "0.1.0"
+				}
+			}
+		},
+		{
+			"seq": 36,
+			"direction": "server-to-client",
+			"client": "client-a-reconnect",
+			"frame": {
+				"type": "server_hello",
+				"protocol": "geist/0.x",
+				"version": "0.5",
+				"server": {
+					"name": "geist-reference-daemon",
+					"version": "0.1.0"
+				},
+				"limits": {
+					"maxFrameBytes": 65536,
+					"maxOutboundFrames": 1024,
+					"maxBufferedOutputBytes": 4194304
+				},
+				"capabilities": [
+					"fleet-delta",
+					"fleet-resync",
+					"session-resume",
+					"session-spawn",
+					"registry"
+				]
+			}
+		},
+		{
+			"seq": 37,
+			"direction": "client-to-server",
+			"client": "client-a-reconnect",
+			"frame": {
+				"type": "authenticate",
+				"deviceId": "device-conformance-a",
+				"credential": "<normalized-credential>"
+			}
+		},
+		{
+			"seq": 38,
+			"direction": "server-to-client",
+			"client": "client-a-reconnect",
+			"frame": {
+				"type": "device_credential",
+				"deviceId": "device-conformance-a",
+				"credential": "<normalized-credential>",
+				"issuedAt": "1970-01-01T00:00:00.000Z",
+				"expiresAt": "1970-01-08T00:00:00.000Z"
+			}
+		},
+		{
+			"seq": 39,
+			"direction": "server-to-client",
+			"client": "client-a-reconnect",
+			"frame": {
+				"type": "fleet",
+				"sessions": [
+					{
+						"id": "conformance",
+						"cwd": "/geist/conformance",
+						"pid": 1,
+						"startedAt": "1970-01-01T00:00:00.000Z",
+						"origin": "socket",
+						"attachable": true,
+						"resumable": false,
+						"status": "unknown",
+						"statusAt": null
+					},
+					{
+						"id": "conformance-history",
+						"cwd": "/geist/conformance/archived",
+						"startedAt": "1970-01-01T00:00:00.000Z",
+						"origin": "history",
+						"attachable": false,
+						"resumable": true,
+						"status": "no_repo",
+						"statusAt": "1970-01-01T00:00:00.000Z"
+					}
+				],
+				"epoch": "conformance-epoch",
+				"seq": 3
+			}
+		},
+		{
+			"seq": 40,
+			"direction": "client-to-server",
+			"client": "client-d",
+			"frame": {
+				"type": "hello",
+				"protocol": "geist/0.x",
+				"version": "0.5",
+				"client": {
+					"name": "geist-conformance-recorder",
+					"version": "0.1.0"
+				}
+			}
+		},
+		{
+			"seq": 41,
+			"direction": "server-to-client",
+			"client": "client-d",
+			"frame": {
+				"type": "server_hello",
+				"protocol": "geist/0.x",
+				"version": "0.5",
+				"server": {
+					"name": "geist-reference-daemon",
+					"version": "0.1.0"
+				},
+				"limits": {
+					"maxFrameBytes": 65536,
+					"maxOutboundFrames": 1024,
+					"maxBufferedOutputBytes": 4194304
+				},
+				"capabilities": [
+					"fleet-delta",
+					"fleet-resync",
+					"session-resume",
+					"session-spawn",
+					"registry"
+				]
+			}
+		},
+		{
+			"seq": 42,
+			"direction": "server-to-client",
+			"client": "client-d",
+			"frame": {
+				"type": "protocol_error",
+				"code": "frame_too_large",
+				"message": "frame is 65584 bytes, cap is 65536"
+			}
+		},
+		{
+			"seq": 43,
+			"direction": "client-to-server",
+			"client": "client-a",
+			"frame": {
+				"type": "fleet_resync"
+			}
+		},
+		{
+			"seq": 44,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "fleet",
+				"sessions": [
+					{
+						"id": "conformance",
+						"cwd": "/geist/conformance",
+						"pid": 1,
+						"startedAt": "1970-01-01T00:00:00.000Z",
+						"origin": "socket",
+						"attachable": true,
+						"resumable": false,
+						"status": "unknown",
+						"statusAt": null
+					},
+					{
+						"id": "conformance-history",
+						"cwd": "/geist/conformance/archived",
+						"startedAt": "1970-01-01T00:00:00.000Z",
+						"origin": "history",
+						"attachable": false,
+						"resumable": true,
+						"status": "no_repo",
+						"statusAt": "1970-01-01T00:00:00.000Z"
+					}
+				],
+				"epoch": "conformance-epoch",
+				"seq": 4
+			}
+		},
+		{
+			"seq": 45,
+			"direction": "client-to-server",
+			"client": "client-a",
+			"frame": {
+				"type": "session_resume",
+				"sessionId": "conformance-history"
+			}
+		},
+		{
+			"seq": 46,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "session_resumed",
+				"sessionId": "conformance-history",
+				"ok": false,
+				"code": "refused",
+				"message": "the reference daemon has no spawn surface by design; the shipped daemon starts the process"
+			}
+		},
+		{
+			"seq": 47,
+			"direction": "client-to-server",
+			"client": "client-a",
+			"frame": {
+				"type": "session_resume",
+				"sessionId": "no-such-session"
+			}
+		},
+		{
+			"seq": 48,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "session_resumed",
+				"sessionId": "no-such-session",
+				"ok": false,
+				"code": "not_found",
+				"message": "no session with that id is known to this daemon"
+			}
+		},
+		{
+			"seq": 49,
+			"direction": "client-to-server",
+			"client": "client-a",
+			"frame": {
+				"type": "session_resume",
+				"sessionId": "conformance"
+			}
+		},
+		{
+			"seq": 50,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "session_resumed",
+				"sessionId": "conformance",
+				"ok": false,
+				"code": "already_live",
+				"message": "that session is already listening on a socket — attach to it instead of resuming it"
+			}
+		},
+		{
+			"seq": 51,
+			"direction": "client-to-server",
+			"client": "client-a",
+			"frame": {
+				"type": "registry_resync"
+			}
+		},
+		{
+			"seq": 52,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "registry",
+				"harnesses": [
+					{
+						"id": "draht",
+						"isDefault": true
+					}
+				],
+				"projects": [
+					{
+						"id": "conformance",
+						"name": "conformance",
+						"root": "/geist/conformance"
+					}
+				]
+			}
+		},
+		{
+			"seq": 53,
+			"direction": "client-to-server",
+			"client": "client-a",
+			"frame": {
+				"type": "session_spawn",
+				"harnessId": "draht",
+				"projectId": "no-such-project"
+			}
+		},
+		{
+			"seq": 54,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "session_spawned",
+				"ok": false,
+				"code": "unknown_project",
+				"message": "no project with that id is registered on this daemon"
+			}
+		},
+		{
+			"seq": 55,
+			"direction": "client-to-server",
+			"client": "client-a",
+			"frame": {
+				"type": "session_spawn",
+				"harnessId": "no-such-harness",
+				"projectId": "conformance"
+			}
+		},
+		{
+			"seq": 56,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "session_spawned",
+				"ok": false,
+				"code": "unknown_harness",
+				"message": "no harness with that id is registered on this daemon"
+			}
+		},
+		{
+			"seq": 57,
+			"direction": "client-to-server",
+			"client": "client-a",
+			"frame": {
+				"type": "session_spawn",
+				"harnessId": "draht",
+				"projectId": "conformance"
+			}
+		},
+		{
+			"seq": 58,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "session_spawned",
+				"ok": false,
+				"code": "refused",
+				"message": "the reference daemon has no spawn surface by design; the shipped daemon starts the process"
+			}
+		},
+		{
+			"seq": 59,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "fleet_delta",
+				"epoch": "conformance-epoch",
+				"seq": 5,
+				"changes": [
+					{
+						"kind": "appeared",
+						"session": {
+							"id": "conformance-transient",
+							"cwd": "/geist/conformance",
+							"pid": 1,
+							"startedAt": "1970-01-01T00:00:00.000Z",
+							"origin": "socket",
+							"attachable": true,
+							"resumable": false,
+							"status": "unknown",
+							"statusAt": null
+						}
+					}
+				]
+			}
+		},
+		{
+			"seq": 60,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "fleet_delta",
+				"epoch": "conformance-epoch",
+				"seq": 6,
+				"changes": [
+					{
+						"kind": "disappeared",
+						"id": "conformance-transient"
+					}
+				]
+			}
+		}
+	]
+}

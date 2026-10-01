@@ -8,7 +8,8 @@ import type { ResourceDiagnostic } from "./diagnostics.ts";
 
 export type { ResourceCollision, ResourceDiagnostic } from "./diagnostics.ts";
 
-import { canonicalizePath, isLocalPath, resolvePath } from "../utils/paths.ts";
+import { comparablePath, realPathStrict } from "../utils/canonical-path.ts";
+import { isLocalPath, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
 import { createEventBus, type EventBus } from "./event-bus.ts";
 import {
@@ -209,9 +210,9 @@ function isCanonicallyContained(child: string, root: string): boolean {
  *  2. REGULAR FILE ONLY. A fifo, device, socket or directory named `AGENTS.md` is skipped
  *     (a fifo would otherwise block `readFileSync` forever).
  *  3. CONTAINMENT. When `canonicalRoot` is set, the realpath of the file must be inside it,
- *     with a separator boundary. This is belt-and-braces against a hardlink or a race that
- *     survives (1): the no-follow check is what makes it cheap, the containment check is
- *     what makes it sound.
+ *     with a separator boundary. Not redundant with the walk break in `loadProjectContextFiles`:
+ *     that one resolves the *directory* and stops the walk; this one resolves the file
+ *     itself and fails CLOSED on any realpath error. Do not "simplify" it away.
  *
  * `canonicalRoot` undefined means "no constraint", which is exactly today's behaviour for
  * every discovered session, and for the agent-dir global context file, which is a USER
@@ -271,8 +272,8 @@ function loadContextFileFromDir(dir: string, canonicalRoot?: string): { path: st
 function findShadowedContextFile(cwd: string): string | undefined {
 	const gitPaths = findGitPaths(cwd);
 	if (!gitPaths) return undefined;
-	const commonGitDir = canonicalizePath(gitPaths.commonGitDir);
-	const worktreeRoot = canonicalizePath(gitPaths.repoDir);
+	const commonGitDir = comparablePath(gitPaths.commonGitDir);
+	const worktreeRoot = comparablePath(gitPaths.repoDir);
 	const mainRepoRoot = dirname(commonGitDir);
 	// False for an ordinary repo, where the two are the same dir, and for a sibling
 	// worktree (`git worktree add ../feat`), whose main repo is not an ancestor.
@@ -281,7 +282,7 @@ function findShadowedContextFile(cwd: string): string | undefined {
 	// itself checked out from the same repo. In a bare layout (`proj/.bare` +
 	// `proj/main`) it is just the directory holding `.bare`, which tracks nothing; a
 	// submodule's gitdir has no `commondir`, so it lands under `.git/modules`.
-	if (canonicalizePath(join(mainRepoRoot, ".git")) !== commonGitDir) return undefined;
+	if (comparablePath(join(mainRepoRoot, ".git")) !== commonGitDir) return undefined;
 	const worktreeContextFile = loadContextFileFromDir(worktreeRoot);
 	return worktreeContextFile ? join(mainRepoRoot, basename(worktreeContextFile.path)) : undefined;
 }
@@ -302,10 +303,14 @@ export function loadProjectContextFiles(options: {
 	 */
 	contextRoot?: string;
 }): Array<{ path: string; content: string }> {
-	const resolvedCwd = resolvePath(options.cwd);
+	// The gate's own chain, from the spelling itself: `resolvePath` would collapse `..` before
+	// any link is followed and walk ancestors the gate never saw. Unresolvable contributes none.
+	const realCwd = realPathStrict(options.cwd);
 	const resolvedAgentDir = resolvePath(options.agentDir);
 	const canonicalRoot =
-		options.contextRoot === undefined ? undefined : canonicalizePath(resolvePath(options.contextRoot));
+		options.contextRoot === undefined ? undefined : realPathStrict(resolvePath(options.contextRoot));
+	// A root that will not resolve contains nothing; `undefined` would mean "no constraint".
+	const contextRootUnresolvable = options.contextRoot !== undefined && canonicalRoot === undefined;
 
 	const contextFiles: Array<{ path: string; content: string }> = [];
 	const seenPaths = new Set<string>();
@@ -318,18 +323,23 @@ export function loadProjectContextFiles(options: {
 
 	const ancestorContextFiles: Array<{ path: string; content: string }> = [];
 
-	const shadowedContextFile = findShadowedContextFile(resolvedCwd);
-	let currentDir = resolvedCwd;
+	const shadowedContextFile = realCwd === undefined ? undefined : findShadowedContextFile(realCwd);
+	let currentDir = realCwd;
 
-	while (true) {
-		// Stops the walk at the context root: one step above it containment fails, which is
-		// also what refuses a cwd that lies outside the root entirely.
-		if (canonicalRoot !== undefined && !isCanonicallyContained(canonicalizePath(currentDir), canonicalRoot)) {
-			break;
+	while (currentDir !== undefined && !contextRootUnresolvable) {
+		// Stops the walk at the context root, and refuses a cwd outside it entirely. A
+		// directory whose real path is unknown is not known to be contained either.
+		if (canonicalRoot !== undefined) {
+			const realCurrentDir = realPathStrict(currentDir);
+			if (realCurrentDir === undefined || !isCanonicallyContained(realCurrentDir, canonicalRoot)) {
+				break;
+			}
 		}
 		const contextFile = loadContextFileFromDir(currentDir, canonicalRoot);
 		const isShadowed =
-			shadowedContextFile !== undefined && canonicalizePath(contextFile?.path ?? "") === shadowedContextFile;
+			shadowedContextFile !== undefined &&
+			contextFile !== null &&
+			comparablePath(contextFile.path) === shadowedContextFile;
 		if (contextFile && !isShadowed && !seenPaths.has(contextFile.path)) {
 			ancestorContextFiles.unshift(contextFile);
 			seenPaths.add(contextFile.path);
@@ -347,6 +357,11 @@ export function loadProjectContextFiles(options: {
 
 export interface DefaultResourceLoaderOptions {
 	cwd: string;
+	/**
+	 * `cwd` before `path.resolve` collapsed any `..`, for callers that resolve first.
+	 * The ancestor skill walk needs the uncollapsed spelling to resolve it physically.
+	 */
+	cwdSpelling?: string;
 	agentDir: string;
 	settingsManager?: SettingsManager;
 	eventBus?: EventBus;
@@ -386,6 +401,7 @@ export interface DefaultResourceLoaderOptions {
 
 export class DefaultResourceLoader implements ResourceLoader {
 	private cwd: string;
+	private cwdSpelling: string;
 	private agentDir: string;
 	private settingsManager: SettingsManager;
 	private eventBus: EventBus;
@@ -446,6 +462,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 	constructor(options: DefaultResourceLoaderOptions) {
 		this.cwd = resolvePath(options.cwd);
+		this.cwdSpelling = options.cwdSpelling ?? options.cwd;
 		this.agentDir = resolvePath(options.agentDir);
 		this.settingsManager = options.settingsManager ?? SettingsManager.create(this.cwd, this.agentDir);
 		this.eventBus = options.eventBus ?? createEventBus();
@@ -454,6 +471,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.builtinExtensions = new Map(factories.filter(isBuiltinExtension).map((input) => [input.name, input]));
 		this.packageManager = new DefaultPackageManager({
 			cwd: this.cwd,
+			cwdSpelling: this.cwdSpelling,
 			agentDir: this.agentDir,
 			settingsManager: this.settingsManager,
 			builtinExtensions: [...this.builtinExtensions.keys()],
@@ -715,7 +733,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 			agentsFiles: this.noContextFiles
 				? []
 				: loadProjectContextFiles({
-						cwd: this.cwd,
+						cwd: this.cwdSpelling,
 						agentDir: this.agentDir,
 						contextRoot: this.contextRoot,
 					}),
@@ -1097,7 +1115,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 		for (const p of [...primary, ...additional]) {
 			const resolved = this.resolveResourcePath(p);
-			const canonicalPath = canonicalizePath(resolved);
+			const canonicalPath = comparablePath(resolved);
 			if (seen.has(canonicalPath)) continue;
 			seen.add(canonicalPath);
 			merged.push(resolved);

@@ -4,14 +4,14 @@ No ESP. Signups from `draht.dev/uni` double-opt-in via a confirmation mail,
 then land in Google Contacts under the label **draht uni waitlist**. The
 newsletter goes out from plain Gmail addressed to that label.
 
-## Setup (~10 min, once)
+## Setup (about 10 minutes)
 
-1. Open [script.new](https://script.new) **while logged into the Google
-   account whose Contacts/Gmail will hold the list** and paste `Code.gs`.
-2. In the left sidebar: **Services → +** → add **People API** (identifier
-   must be `People`).
-3. **Deploy → New deployment → Web app** — *Execute as: Me*, *Who has
-   access: Anyone*. Authorize when asked (contacts + mail scopes).
+1. Log in to the Google account that will own the Contacts list and send the
+   email. Open [script.new](https://script.new), then paste `Code.gs`.
+2. In the left sidebar, select **Services → +**, then add **People API**. Its
+   identifier must be `People`.
+3. Select **Deploy → New deployment → Web app**. Set *Execute as* to *Me*
+   and *Who has access* to *Anyone*. Authorize the contacts and mail scopes.
 4. Copy the `…/exec` URL and paste it into `WAITLIST_ENDPOINT` in
    `src/pages/uni.astro`.
 5. Test end to end: submit your own address on `/uni`, open the link in the
@@ -24,21 +24,24 @@ newsletter goes out from plain Gmail addressed to that label.
 Gmail → Compose → put **draht uni waitlist** in **BCC** (Gmail expands the
 contact label to all members).
 
-**Unsubscribe / erasure (both steps, DSGVO):** when someone replies
-"unsubscribe", (1) delete the contact from the group, **and** (2) delete the
-`confirmed:<their email>` key in the script's **Project Settings → Script
-Properties**. Step 2 is what lets them re-subscribe later and completes an
-Art.-17 deletion.
+When someone replies "unsubscribe," complete both DSGVO erasure steps:
+
+1. Delete the contact from the group.
+2. Delete the `confirmed:<their email>` key under **Project Settings → Script
+   Properties**.
+
+The second step lets the address subscribe again and completes the Art. 17
+deletion.
 
 ## Notes
 
-- Consumer Gmail sends ~100 mails/day, Workspace ~1,500 — fine at waitlist
-  scale; batch send if the list outgrows it.
+- Consumer Gmail sends about 100 emails per day; Workspace sends about 1,500.
+  Send in batches if the list exceeds that limit.
 - After editing `Code.gs`, redeploy: **Deploy → Manage deployments → ✎ →
   Version: New**. The `/exec` URL stays the same.
-- The double-opt-in timestamp is stored in each contact's notes field —
-  that's the DSGVO paper trail.
+- Each contact's notes field stores the double-opt-in timestamp for the DSGVO
+  record.
 - Confirm links expire after 48h; unconfirmed signups purge themselves.
-- Abuse guard: max `DAILY_SEND_CAP` (30) confirmation mails per day, one per
-  address per 10 minutes — raise the cap in `Code.gs` if a launch spike ever
-  hits it.
+- The abuse guard allows at most `DAILY_SEND_CAP` (30) confirmation emails per
+  day and one per address every 10 minutes. Raise the cap in `Code.gs` if a
+  launch reaches it.

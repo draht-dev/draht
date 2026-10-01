@@ -3,7 +3,7 @@ import { getCollection } from "astro:content";
 import AtelierPage from "../../layouts/AtelierPage.astro";
 
 const title = "Episodes — Draht";
-const description = "The university's build, one episode a week — filtered from the Draht blog. Start at Episode 1: the first brick.";
+const description = "Follow the university's build one episode per week, starting with an empty repository in Episode 1.";
 
 const episodes = (await getCollection("blog", ({ data }) => !data.draft && data.category === "episode"))
 	.sort((a, b) => new Date(a.data.date).getTime() - new Date(b.data.date).getTime());
@@ -17,7 +17,7 @@ const startHref = episodes.length > 0 ? `/blog/${episodes[0].id}` : "#episode-1"
 			<div class="page-kicker">uni.draht.dev · building in public</div>
 			<h1 class="page-title">Episodes<span class="ampersand">.</span></h1>
 			<p class="page-lede">
-				A university built in public, one episode a week — live repo, no theory.
+				Follow the university's repository from its first commit, one episode per week.
 			</p>
 			<div class="ep-actions">
 				<a class="btn" href={startHref}>Start at Episode 1 &nbsp;→</a>
@@ -32,7 +32,7 @@ const startHref = episodes.length > 0 ? `/blog/${episodes[0].id}` : "#episode-1"
 					<span class="ep-status">Live now</span>
 					<h2 class="ep-title">Episode 1 — the first brick</h2>
 					<p class="ep-desc">
-						Episode 1 is live — watch it, then join the waitlist for the next one.
+						Watch Episode 1, then join the waitlist for the next release.
 					</p>
 				</div>
 				<!-- Points at the @freyedev X profile until we have the exact Episode 1 post/video permalink.
@@ -67,7 +67,7 @@ const startHref = episodes.length > 0 ? `/blog/${episodes[0].id}` : "#episode-1"
 		)}
 
 		<p class="episodes-outro">
-			A filtered lens over the Draht blog — same posts, numbered. Every article lives at <a href="/blog">/blog</a>.
+			Episodes are numbered posts from the <a href="/blog">Draht blog</a>.
 		</p>
 	</main>
 </AtelierPage>

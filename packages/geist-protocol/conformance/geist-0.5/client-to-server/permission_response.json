@@ -1,0 +1,14 @@
+{
+	"protocol": "geist/0.x",
+	"version": "0.5",
+	"direction": "client-to-server",
+	"type": "permission_response",
+	"recordedFrom": "scripts/geist-conformance/reference-daemon.mjs over ws://127.0.0.1/attach, relaying a real draht SocketServer behind a real device-credential exchange",
+	"normalizedFields": [],
+	"frame": {
+		"type": "permission_response",
+		"clientId": "client-a",
+		"requestId": "conformance-permission-1",
+		"optionId": "approve"
+	}
+}

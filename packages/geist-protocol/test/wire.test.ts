@@ -83,16 +83,17 @@ describe("frame unions", () => {
 		// Phase 33's device-exchange frames are deliberately NOT here — they
 		// terminate at the daemon (R33-REACH.5) — and Phase 34's permission frames
 		// are relayed but arrived later, so both sets are asserted separately below
-		// rather than being quietly folded into this list. Phase 35's four are
-		// subtracted for the same reason and for one more: none of them is relayed
-		// either, so adding one to the frozen list below would claim a mirror row
-		// that does not exist.
+		// rather than being quietly folded into this list. Phase 35's and Phase 36's
+		// frames are subtracted for one more reason: none is relayed, so listing one
+		// below would claim a mirror row that does not exist.
 		const laterServerFrames = new Set([
 			"device_credential",
 			"permission_request",
 			"permission_resolved",
 			"fleet_delta",
 			"session_resumed",
+			"session_spawned",
+			"registry",
 		]);
 		const laterClientFrames = new Set([
 			"pair_device",
@@ -100,6 +101,8 @@ describe("frame unions", () => {
 			"permission_response",
 			"fleet_resync",
 			"session_resume",
+			"session_spawn",
+			"registry_resync",
 		]);
 		expect([...SERVER_FRAME_TYPES].filter((t) => !laterServerFrames.has(t)).sort()).toEqual(
 			[

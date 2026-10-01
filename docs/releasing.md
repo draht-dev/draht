@@ -22,6 +22,19 @@ partial or failed binary workflow therefore leaves no new npm version pointing
 at unavailable native assets. `--dry-run` prints this choreography but performs
 none of its commits, tags, pushes, polling, or publication.
 
+## Scheduled releases
+
+`.github/workflows/scheduled-release.yml` checks for unreleased commits every night at 03:17 UTC. It skips a run when the only commit after the latest tag is the release script's `chore: add [Unreleased] section for next cycle` commit. A manual run can force a release candidate.
+
+Scheduled runs are disabled until the repository variable `DRAHT_RELEASES_ENABLED` is set to `true`. They also require two Actions secrets:
+
+- `DRAHT_RELEASE_TOKEN`: a dedicated GitHub PAT with repository contents write access. The workflow uses this token for checkout and release pushes. Do not replace it with `GITHUB_TOKEN`: GitHub suppresses tag-triggered workflows for tags pushed with the default workflow token, so `build-binaries.yml` would never run.
+- `NPM_TOKEN`: an npm automation or granular access token that can publish every public package in the `@draht` scope and the unscoped Draht packages.
+
+The scheduled job installs the pinned release toolchain, builds, runs `npm run check`, and confirms that its checkout still matches `origin/main`. It then calls the same `npm run release` command used locally. `release.mjs` runs the isolated test suite before it creates a commit or tag, waits for the tag-triggered binary release, verifies every asset and attestation, and only then publishes to npm.
+
+Manual workflow runs ignore `DRAHT_RELEASES_ENABLED`, but still require both secrets. This keeps the schedule dormant during initial setup without creating a second release path.
+
 ## Binaries
 
 `scripts/release.mjs` pushes a `v<version>` tag, which fires

@@ -193,6 +193,7 @@ function createTypeScriptErrorSourceFile(): TempRepoFile {
 function createFailingTypeScriptScript(): string {
 	return [
 		"#!/usr/bin/env node",
+		'console.log("npm notice run npx");',
 		'console.error(\'src/broken.ts(1,7): error TS2322: Type "string" is not assignable to type "number".\');',
 		"process.exit(1);",
 	].join("\n");

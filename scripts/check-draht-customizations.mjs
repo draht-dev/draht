@@ -61,6 +61,7 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadWorkspaces, topologicallySortPublicPackages } from "./publish-workspaces.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "..");
@@ -479,6 +480,24 @@ for (const pkgPath of workspacePkgPaths) {
 	);
 }
 
+// ── 3e. No published package depends on a private workspace ─────────
+//
+// publish-workspaces.mjs refuses this at publish time, which during a release
+// is after the version commit and tag are already public. Catch it here, at
+// commit time, with the same resolver the publisher uses.
+
+console.log("\nPublished packages depend only on published workspaces");
+
+{
+	let publishGraphError = null;
+	try {
+		topologicallySortPublicPackages(loadWorkspaces(root));
+	} catch (error) {
+		publishGraphError = error instanceof Error ? error.message : String(error);
+	}
+	check(publishGraphError === null, `the public workspace graph is publishable${publishGraphError ? ` — ${publishGraphError}` : ""}`);
+}
+
 // ── 4. Draht-only scripts exist on disk ─────────────────────────────
 
 console.log("\nDraht-only scripts");
@@ -513,12 +532,14 @@ check(
 console.log("\n.planning/ integrity");
 
 try {
-	const diffOutput = execSync("git diff main -- .planning/", {
-		cwd: root,
-		encoding: "utf-8",
-		stdio: ["pipe", "pipe", "pipe"],
-	});
-	check(diffOutput.trim() === "", `.planning/ unchanged vs main`);
+	const run = (cmd) => execSync(cmd, { cwd: root, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+	// `git diff main` reads the WORKING TREE, so on the branch that authors planning
+	// docs this fires on every edit and the pre-commit hook can never commit one.
+	if (run("git rev-parse --abbrev-ref HEAD") === "main" || run("git rev-parse HEAD") === run("git rev-parse main")) {
+		pass(`.planning/ check skipped (authoring branch)`);
+	} else {
+		check(run("git diff main -- .planning/") === "", `.planning/ unchanged vs main`);
+	}
 } catch {
 	// If not on a branch or main doesn't exist, skip
 	pass(`.planning/ check skipped (no main ref)`);
@@ -1341,7 +1362,13 @@ function walkDir(dir, visit) {
 				entry.name === "node_modules" ||
 				entry.name === ".git" ||
 				entry.name === "dist" ||
-				entry.name === ".next"
+				entry.name === ".next" ||
+				// `.claude/worktrees/<name>` holds FULL checkouts of other branches
+				// (`git worktree list` shows them), and `.gitignore` excludes `.claude/*`.
+				// Walking in audits some other branch's tree as if it were this one:
+				// six `pi-extension-*` packages renamed on main still fail from a
+				// worktree pinned before the rename, and no edit here can green it.
+				entry.name === ".claude"
 			)
 				continue;
 			walkDir(fullPath, visit);

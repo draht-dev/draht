@@ -23,6 +23,7 @@ const servers: Server[] = [];
 
 /** A pid that is certainly not running: the kernel refuses to allocate it. */
 const DEAD_PID = 0x7ffffffe;
+const PROCESS_STARTED_AT_MS = Math.round(Date.now() - process.uptime() * 1000);
 
 beforeEach(() => {
 	// Short prefix on purpose: a Unix socket path over ~104 bytes fails to bind
@@ -56,7 +57,7 @@ function writeLock(
 ): void {
 	const contents =
 		lock.raw ??
-		`${lock.pid ?? process.pid}\n${lock.cwd ?? "/work/repo"}\n${lock.startedAt ?? "2026-08-18T10:00:00.000Z"}`;
+		`${lock.pid ?? process.pid}\n${lock.cwd ?? "/work/repo"}\n${lock.startedAt ?? "2026-08-18T10:00:00.000Z"}\n${PROCESS_STARTED_AT_MS}`;
 	writeFileSync(join(socketDir, `${id}.lock`), contents, { mode: 0o600 });
 }
 
@@ -80,7 +81,17 @@ describe("listAttachableSessions", () => {
 		await makeSession("alpha", { cwd: "/work/alpha", startedAt: "2026-08-18T09:00:00.000Z" });
 
 		expect(listAttachableSessions(socketDir)).toEqual([
-			{ id: "alpha", cwd: "/work/alpha", pid: process.pid, startedAt: "2026-08-18T09:00:00.000Z" },
+			{
+				id: "alpha",
+				cwd: "/work/alpha",
+				pid: process.pid,
+				startedAt: "2026-08-18T09:00:00.000Z",
+				origin: "socket",
+				attachable: true,
+				resumable: false,
+				status: "unknown",
+				statusAt: null,
+			},
 		]);
 	});
 

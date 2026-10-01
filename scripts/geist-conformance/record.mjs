@@ -300,6 +300,30 @@ export const REJECTED_FRAMES = [
 		expect: "not_authenticated",
 	},
 	{
+		// The reason `session_spawn` carries two registry ids and nothing else. Here
+		// it names them AND has not authenticated, and the argv-shaped field it tried
+		// to smuggle is dropped by the decoder before the auth gate is even reached.
+		name: "session-spawn-before-auth",
+		handshake: true,
+		raw: JSON.stringify({
+			type: "session_spawn",
+			harnessId: "draht",
+			projectId: "fr3n",
+			command: ["/bin/sh", "-c", "touch $CANARY"],
+		}),
+		expect: "not_authenticated",
+	},
+	{
+		// `registry_resync` is post-authentication for the same reason: the registry names every harness and
+		// project the operator declared, and an unauthenticated connection has earned none of that list. The
+		// filter smuggled here is dropped by the decoder — the frame declares no fields at all — so what the
+		// daemon answers is the auth gate and not a validation accident.
+		name: "registry-resync-before-auth",
+		handshake: true,
+		raw: JSON.stringify({ type: "registry_resync", harnessId: "draht" }),
+		expect: "not_authenticated",
+	},
+	{
 		// A perfectly valid `attach` that has simply not earned one: the device
 		// exchange never happened on this connection (R33-REACH.5). The frame
 		// decodes, so this is the auth gate refusing it, not the decoder.
@@ -633,6 +657,47 @@ export async function recordCorpus() {
 		const liveResume = await a.expect("session_resumed");
 		if (liveResume.ok !== false || liveResume.code !== "already_live" || liveResume.sessionId !== SESSION_ID) {
 			throw new Error(`resume of a LIVE session was not refused already_live: ${JSON.stringify(liveResume)}`);
+		}
+
+		// 9b-ii. `registry_resync` and `session_spawn`, the geist/0.5 pair. The
+		//     reference daemon has no spawn surface, so what is frozen here is the
+		//     SHAPE of both answers and the daemon's honest refusal: a harness row
+		//     carries no `cmd`, and a `session_spawned` that started nothing names no
+		//     `sessionId`.
+		a.send({ type: "registry_resync" });
+		const registry = await a.expect("registry");
+		if (registry.harnesses.length === 0 || registry.projects.length === 0) {
+			throw new Error(`the registry answer named nothing to spawn: ${JSON.stringify(registry)}`);
+		}
+		// The reference registry's harness row DOES carry a `cmd`; the encoder is what
+		// drops it. This reads the bytes off the socket, before any decode, so it
+		// fails the moment the daemon stops encoding through the schema.
+		if (registry.harnesses.some((harness) => "cmd" in harness)) {
+			throw new Error(`a registry harness row carried an executable path: ${JSON.stringify(registry)}`);
+		}
+		a.send({ type: "session_spawn", harnessId: registry.harnesses[0].id, projectId: "no-such-project" });
+		const unknownProject = await a.expect("session_spawned");
+		if (unknownProject.ok !== false || unknownProject.code !== "unknown_project") {
+			throw new Error(`spawn of an unknown project was not refused honestly: ${JSON.stringify(unknownProject)}`);
+		}
+		if ("sessionId" in unknownProject) {
+			throw new Error(`a refused spawn named a session id it never minted: ${JSON.stringify(unknownProject)}`);
+		}
+		a.send({ type: "session_spawn", harnessId: "no-such-harness", projectId: registry.projects[0].id });
+		const unknownHarness = await a.expect("session_spawned");
+		if (unknownHarness.ok !== false || unknownHarness.code !== "unknown_harness") {
+			throw new Error(`spawn of an unknown harness was not refused honestly: ${JSON.stringify(unknownHarness)}`);
+		}
+		// …and the pair that RESOLVES. It is the only verdict here reached with both ids found, so it is the
+		// only one that would have a minted id to leak if this daemon minted any, and the only branch where
+		// `ok` could be true without anything having been started.
+		a.send({ type: "session_spawn", harnessId: registry.harnesses[0].id, projectId: registry.projects[0].id });
+		const refusedSpawn = await a.expect("session_spawned");
+		if (refusedSpawn.ok !== false || refusedSpawn.code !== "refused") {
+			throw new Error(`spawn of a REGISTERED pair was not refused honestly: ${JSON.stringify(refusedSpawn)}`);
+		}
+		if ("sessionId" in refusedSpawn) {
+			throw new Error(`a refused spawn named a session id it never minted: ${JSON.stringify(refusedSpawn)}`);
 		}
 
 		// 9c. `fleet_delta`, and it is a REAL diff. A second draht session is really

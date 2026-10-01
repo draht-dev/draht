@@ -55,8 +55,11 @@ describe("config security", () => {
 			// Valid path should work
 			saveConfig(DEFAULT_CONFIG, "project", testDir);
 
-			// Path traversal should fail
-			expect(() => saveConfig(DEFAULT_CONFIG, "project", join(testDir, "../../evil"))).toThrow();
+			// Path traversal should fail. Climb all the way out so the target lands in a
+			// system directory no matter how deep the temp dir sits (test.sh nests it
+			// two levels under /tmp, where "../../evil" would still count as temp).
+			const climb = "../".repeat(testDir.split("/").length);
+			expect(() => saveConfig(DEFAULT_CONFIG, "project", join(testDir, climb, "usr/evil"))).toThrow();
 		} finally {
 			rmSync(testDir, { recursive: true, force: true });
 		}

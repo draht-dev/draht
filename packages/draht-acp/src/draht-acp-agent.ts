@@ -40,6 +40,10 @@ import {
 	createEditToolDefinition,
 	createReadToolDefinition,
 	createWriteToolDefinition,
+	getAgentDir,
+	hasTrustRequiringProjectResources,
+	ProjectTrustStore,
+	SettingsManager,
 	type ToolDefinition,
 } from "@draht/coding-agent";
 import packageMetadata from "../package.json" with { type: "json" };
@@ -223,6 +227,31 @@ function buildGatedCodingTools(cwd: string, handle: SessionHandle): AnyToolDefin
 	return bases.map((base) => gateToolDefinition(base, handle));
 }
 
+// Project trust for a cwd the CLIENT named. `createAgentSession` builds its own SettingsManager
+// and that one defaults to TRUSTED, which on any client-named directory evaluates
+// `<cwd>/.draht/extensions/*.js` in this process. ACP has no trust prompt to fall back on -
+// request_permission gates tool calls, not resource loading - so only a recorded decision counts.
+// A caller-supplied manager is stamped, not skipped: that seam picks the settings STORAGE (the
+// keyless e2e fixture hands in an in-memory one), never the trust that storage defaults to. On
+// it the stamp only REVOKES, because `sessionOptions` may hand every session the same manager
+// and granting there would let a trusted cwd re-trust an earlier untrusted session on reload.
+function applyClientCwdTrust(
+	cwd: string,
+	agentDir: string | undefined,
+	supplied: SettingsManager | undefined,
+): SettingsManager {
+	const resolvedAgentDir = agentDir ?? getAgentDir();
+	const projectTrusted =
+		!hasTrustRequiringProjectResources(cwd) || new ProjectTrustStore(resolvedAgentDir).get(cwd) === true;
+	if (supplied === undefined) {
+		return SettingsManager.create(cwd, resolvedAgentDir, { projectTrusted });
+	}
+	if (!projectTrusted) {
+		supplied.setProjectTrusted(false);
+	}
+	return supplied;
+}
+
 /**
  * Builds the ACP agent app. Register-only; call `.connect(stream)` (or use
  * {@link runDrahtAcpAgentStdio}) to serve a client.
@@ -258,6 +287,7 @@ export function buildDrahtAcpAgent(config: DrahtAcpAgentConfig): AgentApp {
 			const { session } = await createAgentSession({
 				...options,
 				cwd: params.cwd,
+				settingsManager: applyClientCwdTrust(params.cwd, options.agentDir, options.settingsManager),
 				customTools: [...gatedTools, ...(options.customTools ?? [])],
 				noTools: "builtin",
 			});

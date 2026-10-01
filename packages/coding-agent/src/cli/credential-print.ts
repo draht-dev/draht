@@ -1,4 +1,5 @@
 import type { Api, CredentialInfo, Model } from "@draht/ai";
+import { APP_NAME } from "../config.ts";
 import { resolveCliModel } from "../core/model-resolver.ts";
 import type { ModelRuntime } from "../core/model-runtime.ts";
 import type { Args } from "./args.ts";
@@ -7,6 +8,74 @@ import { AuthCommandError, type AuthCommandKind, getAuthCredential, validateAuth
 const DEFAULT_BEARER_TOKEN_MIN_EXPIRY_MS = 30 * 60_000;
 
 type CredentialPrintKind = Exclude<AuthCommandKind, "check">;
+
+export interface CredentialPrintCommand {
+	kind: CredentialPrintKind;
+	args: string[];
+	minExpiryMs?: number;
+}
+
+export class CredentialPrintError extends Error {}
+
+export function isCredentialPrintHelp(args: string[]): boolean {
+	return (
+		args[0] === "auth" && (args[1] === undefined || args[1] === "help" || args[1] === "--help" || args[1] === "-h")
+	);
+}
+
+export function printCredentialPrintHelp(): void {
+	console.log(`Usage:
+  ${APP_NAME} auth print-api-key --model <model> [--provider <provider>]
+  ${APP_NAME} auth print-bearer-token --model <model> [--provider <provider>] [--min-expiry <duration>]
+
+Prints the configured credential alone on stdout. Provider inference uses configured credentials; specify --provider to select explicitly. Bearer tokens have a 30-minute minimum expiry by default. --min-expiry accepts ms, s, m, or h (for example, 30m).`);
+}
+
+/** Parse the small, extensible `auth` command surface before normal startup. */
+export function parseCredentialPrintCommand(args: string[]): CredentialPrintCommand | undefined {
+	if (args[0] !== "auth") return undefined;
+
+	const kind = args[1] === "print-api-key" ? "api_key" : args[1] === "print-bearer-token" ? "bearer_token" : undefined;
+	if (!kind) {
+		throw new CredentialPrintError(
+			`Unknown auth command "${args[1] ?? ""}". Use "${APP_NAME} auth print-api-key" or "${APP_NAME} auth print-bearer-token".`,
+		);
+	}
+
+	const commandArgs: string[] = [];
+	let minExpiryMs: number | undefined;
+	for (let index = 2; index < args.length; index++) {
+		if (args[index] !== "--min-expiry") {
+			commandArgs.push(args[index]);
+			continue;
+		}
+		if (kind !== "bearer_token") {
+			throw new CredentialPrintError("--min-expiry is only supported by print-bearer-token");
+		}
+		const value = args[++index];
+		const match = value ? /^(\d+)(ms|s|m|h)$/iu.exec(value) : undefined;
+		if (!match) {
+			throw new CredentialPrintError("--min-expiry must use a duration such as 30m or 1h");
+		}
+		const amount = Number(match[1]);
+		const unit = match[2];
+		minExpiryMs = amount * (unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : 3_600_000);
+	}
+
+	return minExpiryMs === undefined ? { kind, args: commandArgs } : { kind, args: commandArgs, minExpiryMs };
+}
+
+export function validateCredentialPrintArgs(args: Args): void {
+	if (!args.model?.trim()) {
+		throw new CredentialPrintError("Credential printing requires --model <model>");
+	}
+	if (args.apiKey !== undefined) {
+		throw new CredentialPrintError("Credential printing reads configured credentials; --api-key is not supported");
+	}
+	if (args.messages.length > 0 || args.fileArgs.length > 0 || args.unknownFlags.size > 0) {
+		throw new CredentialPrintError("Credential printing only accepts --provider and --model");
+	}
+}
 
 /**
  * Resolve one configured provider credential.

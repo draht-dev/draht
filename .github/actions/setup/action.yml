@@ -1,0 +1,47 @@
+name: Setup workspace
+description: Bun, Node, native build deps and a workspace install — shared by every JS job.
+
+# The test phase runs as several parallel jobs and each one starts from a bare
+# runner, so this setup is repeated per job rather than shared through a
+# filesystem. Keeping it here means the Node version, the Bun version and the
+# apt list are declared once: bumping them in five copies is how they drift.
+
+inputs:
+  node-version:
+    description: Node major to install.
+    default: "22"
+  system-deps:
+    description: >-
+      Install the native libraries the canvas-backed packages build against,
+      plus the fd/ripgrep binaries the tools suites shell out to. Set false for
+      jobs that only read the repo.
+    default: "true"
+  install:
+    description: Run `bun install`. Set false for jobs that need no dependencies.
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: latest
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v7
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Install system dependencies
+      if: inputs.system-deps == 'true'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
+        sudo ln -s $(which fdfind) /usr/local/bin/fd
+
+    - name: Install dependencies
+      if: inputs.install == 'true'
+      shell: bash
+      run: bun install

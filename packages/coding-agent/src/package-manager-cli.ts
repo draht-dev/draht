@@ -33,9 +33,10 @@ import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
 import { DefaultResourceLoader, isBuiltinExtension } from "./core/resource-loader.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
+import { realPathStrict } from "./utils/canonical-path.ts";
 import { spawnProcess, spawnProcessSync, waitForChildProcess } from "./utils/child-process.ts";
 import { getDrahtUserAgent } from "./utils/draht-user-agent.ts";
-import { canonicalizePath, getCwdRelativePath } from "./utils/paths.ts";
+import { getCwdRelativePath } from "./utils/paths.ts";
 import { formatVersionCheckError, getLatestPiRelease, isNewerPackageVersion } from "./utils/version-check.ts";
 import {
 	cleanupWindowsSelfUpdateQuarantine,
@@ -54,10 +55,12 @@ function getActiveManagedInstallRoot(): string | undefined {
 	if (!configuredRoot) return undefined;
 
 	const managedRoot = resolve(configuredRoot);
-	const releasesDir = canonicalizePath(join(managedRoot, "releases"));
+	const releasesDir = realPathStrict(join(managedRoot, "releases"));
+	const packageDir = realPathStrict(getPackageDir());
+	if (releasesDir === undefined || packageDir === undefined) return undefined;
 	// The launcher environment is inherited by child processes. Do not classify a
 	// source checkout or another draht installation launched from managed draht as managed.
-	if (getCwdRelativePath(canonicalizePath(getPackageDir()), releasesDir) === undefined) return undefined;
+	if (getCwdRelativePath(packageDir, releasesDir) === undefined) return undefined;
 
 	const markerPath = join(managedRoot, MANAGED_INSTALL_MARKER);
 	try {

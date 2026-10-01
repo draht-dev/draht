@@ -18,6 +18,73 @@ Adding a member:
 Older members' directories stay committed. They are the record of what the wire
 actually was, not scaffolding.
 
+## geist/0.5
+
+Start work from the phone (R36-SPAWN.1, R36-SPAWN.3). Four added message types,
+none changed, none removed:
+
+- client → server: `session_spawn` (`harnessId`, `projectId`, and nothing else)
+  and `registry_resync` (no fields)
+- server → client: `session_spawned` (`sessionId?`, `ok`, `code`, `message`) and
+  `registry` (`harnesses[]` of `{id, isDefault}`, `projects[]` of
+  `{id, name, root}`)
+
+`session_spawn` CARRIES TWO OPAQUE REGISTRY IDS AND NOTHING ELSE, for the same
+reason `session_resume` carries one id: the daemon resolves both against its own
+user-owned registry and constructs the argv itself, so the worst a caller can
+name is an entry that exists or one that does not. There is no `path`, no `cwd`,
+no `argv` and no `env` on this frame, and the decoder drops any that are sent —
+recorded as `session-spawn-before-auth` in `rejected-frames.json`.
+
+`session_spawned.sessionId` IS OPTIONAL, and it is the one shape difference from
+`session_resumed`, whose id the client supplied. Here the daemon MINTS the id, so
+a refusal has none to name: it crosses ONLY when a process was started. That
+direction is a producer invariant no schema can state, so the bridge enforces it
+— an id offered alongside a refusing code is dropped, and so is one too long for
+the wire, because reporting a started process as `spawn_failed` is the worse lie.
+`code` is a closed set: `spawned`, `unknown_harness`, `unknown_project`,
+`refused`, `spawn_failed`, `timeout`, and `ok` is true for exactly one of them.
+
+A REGISTRY ROW THE WIRE WOULD REFUSE IS DROPPED, NOT REPAIRED. `geist.yaml`
+declares `projects` and `agents` as maps whose KEYS nothing constrains, while
+`RegistryIdSchema` bounds an id at 64 characters of `[A-Za-z0-9._-]` after a
+leading alphanumeric; the arrays are capped at 64 harnesses and 256 projects. A
+key like `bin/draht` or `draht mono`, or a 257th project, is left out of the
+`registry` frame rather than renamed into one the renderer could not spawn.
+
+A HARNESS ROW CARRIES NO `cmd`. An executable path tells a client what to attack
+and buys a picker nothing — the same reasoning that keeps the socket path off a
+fleet row. A project `root` does cross, because the fleet row already carries
+`cwd` and a picker showing two projects of the same name cannot otherwise tell
+them apart.
+
+None of the four new types is relayed — they are answered by the daemon and never
+cross to a draht session's Unix socket — so none has a row in `MIRRORED_FRAMES`.
+
+**THE CLIFF, STATED PLAINLY.** `ProtocolVersionSchema` is a `z.literal`, so a
+daemon speaking `0.5` refuses a cached `0.4` renderer at `hello` with
+`version_mismatch` and closes 1008. There is no negotiation and no fallback, and
+the console's forget-credential path handles `not_authenticated` only: **the fix
+is a page reload**, which fetches the new bundle. Anyone holding an old tab open
+at the moment of deploy sees a connection that closes immediately until they
+reload.
+
+**What a renderer has to do.**
+
+1. Reload, once. See the cliff above.
+2. Read `server_hello.capabilities` before sending `session_spawn` or
+   `registry_resync`. The strings are `session-spawn` and `registry`, each
+   advertised only when the daemon has the port behind it. An undeclared type is
+   refused `unknown_type` and the connection is CLOSED, so probing for a verb
+   costs the connection.
+3. Do not read `sessionId` off a `session_spawned` without checking it is there.
+   A refusal has no id, and `ok` is what says which happened.
+   An id missing from an `ok: true` answer means the process started and the
+   fleet stream is the only place its id will appear.
+4. Expect the session itself to arrive as a `fleet_delta appeared`, not on this
+   frame: `session_spawned` says a process was started, and the fleet stream is
+   what says it joined.
+
 ## geist/0.4
 
 Default-on, history and honest liveness (R35-ALWAYS.7, R35-ALWAYS.8,

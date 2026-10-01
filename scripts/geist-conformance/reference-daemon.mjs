@@ -74,6 +74,10 @@
  *     `status: "unknown", statusAt: null` — the honest answer for "never
  *     observed", and the one value that is safe to be wrong about, since
  *     `unknown` is never actionable. It must never be `clean`.
+ *   - MODELLED. `session_spawn` and `registry_resync`. The registry is one fixed
+ *     harness and one fixed project, and every spawn is refused: this process has
+ *     no spawn surface, so `unknown_harness` and `unknown_project` are the only
+ *     verdicts it reaches honestly and `refused` is what a registered pair gets.
  *   - MODELLED. `session_resume`. This process has no spawn surface at all, by
  *     design — it imports node builtins and `@draht/geist-protocol` and nothing
  *     else. It resolves the id honestly (`already_live` for a live socket,
@@ -132,7 +136,7 @@ const limits = DEFAULT_TRANSPORT_LIMITS;
  * (geist/0.4). The renderer-side counterpart of `attach.capabilities`: it says a
  * frame will be understood, never that anyone has earned anything.
  */
-const DAEMON_CAPABILITIES = ["fleet-delta", "fleet-resync", "session-resume"];
+const DAEMON_CAPABILITIES = ["fleet-delta", "fleet-resync", "session-resume", "session-spawn", "registry"];
 
 /**
  * This observer run's identity. Fixed, because the corpus compares byte-wise and
@@ -159,6 +163,20 @@ const HISTORY_SESSIONS = [
 		statusAt: "1970-01-01T00:00:00.000Z",
 	},
 ];
+
+/**
+ * The one MODELLED registry — see the header. A fixed pair that exists to freeze
+ * the shape of a `registry` frame.
+ *
+ * THE HARNESS CARRIES A `cmd` ON PURPOSE, and it must never leave this process:
+ * `send` encodes through `ServerFrameSchema`, which has no such field and strips
+ * it. Without a row that tries to leak one, `record.mjs`'s check that no harness
+ * names an executable is a negative with nothing to catch.
+ */
+const REGISTRY = {
+	harnesses: [{ id: "draht", isDefault: true, cmd: "/geist/conformance/bin/draht-acp" }],
+	projects: [{ id: "conformance", name: "conformance", root: "/geist/conformance" }],
+};
 
 /** Monotonic within `FLEET_EPOCH`. Every `fleet` and every `fleet_delta` takes the next one. */
 let fleetSeq = 0;
@@ -360,6 +378,27 @@ function resolveResume(sessionId) {
 	return { ok: false, code: "not_found", message: "no session with that id is known to this daemon" };
 }
 
+/**
+ * Answer one `session_spawn` — MODELLED, for the reason in the header: this
+ * process cannot start anything. The ids are resolved against the fixed registry
+ * above, so `unknown_harness` and `unknown_project` are real verdicts, and an
+ * entry it could otherwise have started is answered `refused`. No `sessionId` is
+ * ever named, because none was ever minted.
+ */
+function resolveSpawn(harnessId, projectId) {
+	if (!REGISTRY.harnesses.some((harness) => harness.id === harnessId)) {
+		return { ok: false, code: "unknown_harness", message: "no harness with that id is registered on this daemon" };
+	}
+	if (!REGISTRY.projects.some((project) => project.id === projectId)) {
+		return { ok: false, code: "unknown_project", message: "no project with that id is registered on this daemon" };
+	}
+	return {
+		ok: false,
+		code: "refused",
+		message: "the reference daemon has no spawn surface by design; the shipped daemon starts the process",
+	};
+}
+
 /** The only way a frame leaves this daemon: validated, then encoded. */
 function send(ws, frame) {
 	if (ws.readyState !== 1) return;
@@ -545,6 +584,25 @@ const server = Bun.serve({
 					// resolved: there is no path, argv or environment here to honour.
 					const outcome = resolveResume(frame.sessionId);
 					send(ws, { type: "session_resumed", sessionId: frame.sessionId, ...outcome });
+					return;
+				}
+				case "session_spawn": {
+					if (!state.deviceId) {
+						refuse(ws, "not_authenticated", "session_spawn before the device exchange");
+						return;
+					}
+					// Two registry ids and nothing else crossed the wire, so two registry
+					// ids and nothing else are resolved: there is no path, argv or
+					// environment here to honour.
+					send(ws, { type: "session_spawned", ...resolveSpawn(frame.harnessId, frame.projectId) });
+					return;
+				}
+				case "registry_resync": {
+					if (!state.deviceId) {
+						refuse(ws, "not_authenticated", "registry_resync before the device exchange");
+						return;
+					}
+					send(ws, { type: "registry", ...REGISTRY });
 					return;
 				}
 				case "input":

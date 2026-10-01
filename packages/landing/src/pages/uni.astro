@@ -3,7 +3,7 @@ import AtelierPage from "../layouts/AtelierPage.astro";
 
 const title = "draht uni — building in public";
 const description =
-	"uni.draht.dev is being built in public, one episode a week. Episode 1: the first brick is live now — join the waitlist for every episode.";
+	"Follow the build of uni.draht.dev, one episode per week. Episode 1 is live; join the waitlist for the next release.";
 
 // Google Apps Script waitlist endpoint (see waitlist/README.md — signups land
 // in Google Contacts under "draht uni waitlist", newsletter goes out via Gmail).
@@ -15,9 +15,9 @@ const WAITLIST_ENDPOINT = "PASTE_APPS_SCRIPT_EXEC_URL";
 	<main class="uni-main">
 		<header class="page-head">
 			<div class="page-kicker">uni.draht.dev · building in public</div>
-			<h1 class="page-title">The university's first course is its own build<span class="ampersand">.</span></h1>
+			<h1 class="page-title">The first course is the university itself<span class="ampersand">.</span></h1>
 			<p class="page-lede">
-				uni.draht.dev is being built in public, one episode a week. Episode 1: the first brick. Watch it happen — or get every episode in your inbox.
+				We are building uni.draht.dev in public, one episode per week. Watch Episode 1 now, or get the next release in your inbox.
 			</p>
 		</header>
 
@@ -38,17 +38,17 @@ const WAITLIST_ENDPOINT = "PASTE_APPS_SCRIPT_EXEC_URL";
 					required
 				/>
 				<input type="text" name="hp_ref" class="waitlist-hp" tabindex="-1" autocomplete="off" aria-hidden="true" />
-				<button type="submit" class="btn">Join the waitlist — Episode 1 is live.</button>
+				<button type="submit" class="btn">Get the next episode</button>
 			</form>
 			<p class="waitlist-note" hidden></p>
-			<p class="waitlist-foot">The waitlist moves with the uni — uni.draht.dev takes over soon.</p>
+			<p class="waitlist-foot">This list will move to uni.draht.dev when the site opens.</p>
 		</section>
 
 		<section class="episode">
 			<div class="episode-kicker">Episode 01 · Live now</div>
 			<h2 class="episode-title">the first brick</h2>
 			<p class="episode-desc">
-				The build starts at zero. Episode 1 lays the first brick — watch it, then get the next one in your inbox.
+				Episode 1 starts with an empty repository and the first implementation decision. Watch it, then get the next episode by email.
 			</p>
 			<!-- Points at the @freyedev X profile until we have the exact Episode 1 post/video permalink;
 			     swap for a direct embed once the writeup lands in src/content/blog with category: "episode". -->
@@ -68,21 +68,21 @@ const WAITLIST_ENDPOINT = "PASTE_APPS_SCRIPT_EXEC_URL";
 		};
 		if (new URLSearchParams(location.search).get("confirmed") === "1") {
 			form.hidden = true;
-			say("Confirmed — you're on the list. Every new episode lands in your inbox.");
+			say("Confirmed. The next episode will land in your inbox.");
 			return;
 		}
 		form.addEventListener("submit", (ev) => {
 			ev.preventDefault();
 			if (form.action.includes("PASTE_")) {
-				say("The waitlist isn't wired up yet — mail oskar@draht.dev and you're in.");
+				say("The waitlist isn't connected yet. Email oskar@draht.dev to join.");
 				return;
 			}
 			fetch(form.action, { method: "POST", mode: "no-cors", body: new URLSearchParams(new FormData(form)) })
 				.then(() => {
 					form.hidden = true;
-					say("Check your inbox — if the address checks out, the confirmation link is on its way.");
+					say("Check your inbox for the confirmation link.");
 				})
-				.catch(() => say("That didn't go through — try again, or mail oskar@draht.dev."));
+				.catch(() => say("That didn't go through. Try again, or email oskar@draht.dev."));
 		});
 	})();
 </script>

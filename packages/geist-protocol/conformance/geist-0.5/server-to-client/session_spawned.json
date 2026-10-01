@@ -1,0 +1,14 @@
+{
+	"protocol": "geist/0.x",
+	"version": "0.5",
+	"direction": "server-to-client",
+	"type": "session_spawned",
+	"recordedFrom": "scripts/geist-conformance/reference-daemon.mjs over ws://127.0.0.1/attach, relaying a real draht SocketServer behind a real device-credential exchange",
+	"normalizedFields": [],
+	"frame": {
+		"type": "session_spawned",
+		"ok": false,
+		"code": "unknown_project",
+		"message": "no project with that id is registered on this daemon"
+	}
+}

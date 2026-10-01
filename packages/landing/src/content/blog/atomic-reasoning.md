@@ -1,14 +1,14 @@
 ---
-title: "Atomic Reasoning Pattern in GSD Workflows"
-description: "How Draht's GSD workflow commands use atomic reasoning to decompose complex problems into verifiable units before execution."
+title: "Atomic reasoning in GSD workflows"
+description: "How Draht splits work into units that can be implemented and checked independently."
 date: "2026-04-09"
 author: "Oskar Freye"
 tags: ["gsd", "reasoning", "workflows", "agents"]
 ---
 
-All GSD workflow commands now incorporate an **Atomic Reasoning** pattern as a prompting technique. This pattern guides the AI agent to decompose complex problems into atomic reasoning units before execution.
+Every GSD workflow command starts by splitting the request into units that can be checked independently. Draht calls this atomic reasoning. The agent names each unit, identifies its dependencies, and defines the check that will prove it correct before execution starts.
 
-## Pattern Structure
+## Pattern structure
 
 Each command's atomic reasoning section follows this structure:
 
@@ -27,26 +27,29 @@ Before [action], decompose this [context] into atomic reasoning units:
 - [Concrete next actions]
 ```
 
-## Core Principles
+## Core principles
 
-### 1. Decomposition First
-Before executing any workflow command, the agent must first break down the problem into atomic units. Each unit represents a single, coherent logical component.
+### 1. Decompose first
 
-### 2. Three-Phase Validation
-Each atomic unit goes through three validation steps:
-- **State** — Clearly articulate what this component is and what it does
-- **Validate** — Confirm it can stand alone or identify its dependencies
-- **Verify** — Define how we know it's correct
+Before a workflow command acts, it breaks the problem into units with one purpose each.
 
-### 3. Synthesis Last
-After analyzing all atomic units, synthesize them into a coherent execution strategy. The synthesis phase produces actionable steps.
+### 2. Check each unit
 
-## Command-Specific Adaptations
+Each unit passes through the same questions:
 
-### Planning Commands
-**Commands:** `/plan-phase`, `/discuss-phase`, `/init-project`, `/new-project`, `/next-milestone`
+- **State.** What is this component, and what does it do?
+- **Validate.** Can it stand alone? If not, what does it depend on?
+- **Verify.** Which check proves it is correct?
 
-**Focus:** Decompose goals and requirements into observable truths and testable outcomes.
+### 3. Synthesize last
+
+Only after those checks does the agent order the units into an execution plan.
+
+## Adaptations by command
+
+### Planning commands
+
+`/plan-phase`, `/discuss-phase`, `/init-project`, `/new-project`, and `/next-milestone` use the pattern to turn goals and requirements into observable outcomes and proving tests.
 
 **Example from `/plan-phase`:**
 ```markdown
@@ -56,10 +59,9 @@ After analyzing all atomic units, synthesize them into a coherent execution stra
 3. **Verify correctness** — What test scenarios prove this observable truth?
 ```
 
-### Execution Commands
-**Commands:** `/execute-phase`, `/quick`, `/fix`
+### Execution commands
 
-**Focus:** Decompose work into independent tasks, identify dependencies, plan verification.
+`/execute-phase`, `/quick`, and `/fix` split work into tasks, identify dependencies, and name the verification for each task.
 
 **Example from `/execute-phase`:**
 ```markdown
@@ -69,10 +71,9 @@ After analyzing all atomic units, synthesize them into a coherent execution stra
 3. **Verify correctness** — What tests will prove this plan works?
 ```
 
-### Verification Commands
-**Commands:** `/verify-work`, `/review`
+### Verification commands
 
-**Focus:** Decompose acceptance criteria, identify test strategies, prioritize findings.
+`/verify-work` and `/review` split acceptance criteria into separate checks, choose a test strategy for each one, and order the findings.
 
 **Example from `/verify-work`:**
 ```markdown
@@ -82,10 +83,9 @@ After analyzing all atomic units, synthesize them into a coherent execution stra
 3. **Verify correctness** — What tests prove it works? What edge cases must pass?
 ```
 
-### Analysis Commands
-**Commands:** `/map-codebase`
+### Analysis commands
 
-**Focus:** Decompose codebase into bounded contexts, extract domain model, identify patterns.
+`/map-codebase` divides a codebase into bounded contexts, extracts the domain model, and records the patterns it finds.
 
 **Example from `/map-codebase`:**
 ```markdown
@@ -95,10 +95,9 @@ After analyzing all atomic units, synthesize them into a coherent execution stra
 3. **Verify correctness** — What domain terms appear? What test infrastructure exists?
 ```
 
-### Meta Commands
-**Commands:** `/progress`, `/pause-work`, `/resume-work`, `/atomic-commit`
+### Meta commands
 
-**Focus:** Decompose session state, understand context, plan transitions.
+`/progress`, `/pause-work`, `/resume-work`, and `/atomic-commit` apply the pattern to session state, handoffs, and commit boundaries.
 
 **Example from `/pause-work`:**
 ```markdown
@@ -107,24 +106,13 @@ After analyzing all atomic units, synthesize them into a coherent execution stra
 3. **Verify correctness** — Is the current state stable? Can work resume cleanly?
 ```
 
-## Benefits
+## What the pattern changes
 
-### 1. Reduced Errors
-By forcing decomposition before execution, the agent catches logical errors and missing dependencies early.
+The independence check exposes work that can run in parallel and work that must stay ordered. Naming the proving check before implementation prevents vague "done" states. For domain work, the decomposition also exposes bounded contexts and team terminology before the agent edits code.
 
-### 2. Better Parallelization
-Independence validation reveals which tasks can run in parallel, enabling efficient subagent delegation.
+The plan records those decisions, so a reviewer can see why tasks were split and what evidence each task must produce.
 
-### 3. Clearer Verification
-Explicit correctness criteria make verification objective and testable.
-
-### 4. Improved Domain Alignment
-Atomic reasoning surfaces domain concepts early, ensuring alignment with ubiquitous language.
-
-### 5. Auditable Reasoning
-The agent's reasoning process is explicit and traceable, making it easier to understand and debug.
-
-## Usage Examples
+## Examples
 
 ### Example 1: `/execute-phase 5`
 
@@ -174,7 +162,7 @@ Atomic Reasoning for Observable Truth: "User can view order history"
 Synthesis: Create plan with 3 tasks (API, UI, Auth) with specific test scenarios
 ```
 
-## Implementation Notes
+## Implementation notes
 
 ### Placement
 The `## Atomic Reasoning` section appears:
@@ -187,14 +175,15 @@ The `## Atomic Reasoning` section appears:
 - Question-based prompts ("What is...", "Can this...", "What proves...")
 - Action-oriented synthesis bullets
 
-### Adaptability
-While the three-phase pattern (State, Validate, Verify) is consistent, the specific prompts adapt to each command's domain:
+### Adaptation
+
+The State, Validate, and Verify questions stay fixed. Their wording changes with the command:
 - Planning commands focus on observable truths and requirements
 - Execution commands focus on tasks and dependencies
 - Verification commands focus on deliverables and tests
 - Analysis commands focus on architectural layers and patterns
 
-## Adding Atomic Reasoning to New Commands
+## Adding atomic reasoning to new commands
 
 When adding new GSD workflow commands:
 
@@ -204,7 +193,7 @@ When adding new GSD workflow commands:
 4. Use domain-specific language (bounded contexts, aggregates, etc. for domain work)
 5. Keep prompts concise and question-based
 
-## Related Concepts
+## Related concepts
 
 - **Goal-Backward Planning** (used in `/plan-phase`) — start with goals, derive observable truths
 - **TDD Red-Green-Refactor** — atomic reasoning applied to test-first development

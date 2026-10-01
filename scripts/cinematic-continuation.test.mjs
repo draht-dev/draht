@@ -34,7 +34,8 @@ test("Claude and Codex package artifacts include the complete cinematic continua
 			encoding: "utf8",
 		});
 		assert.equal(result.status, 0, result.stderr);
-		const [pack] = JSON.parse(result.stdout);
+		const parsed = JSON.parse(result.stdout);
+		const pack = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0];
 		const files = new Set(pack.files.map(({ path }) => path));
 		for (const relative of SKILL_FILES) {
 			assert.equal(files.has(`skills/cinematic-continuation/${relative}`), true, `${packageName} package is missing ${relative}`);

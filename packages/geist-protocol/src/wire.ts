@@ -12,13 +12,13 @@ import { z } from "zod";
  *
  * Two directions, deliberately disjoint by type name:
  *   client → server  `hello` `pair_device` `authenticate` `attach` `input`
- *                    `detach` `permission_response` `fleet_resync`
- *                    `session_resume`
+ *                    `detach` `permission_response` `fleet_resync` `session_resume`
+ *                    `session_spawn` `registry_resync`
  *   server → client  `server_hello` `device_credential` `fleet` `fleet_delta`
  *                    `session_metadata` `output` `input_echo` `client_joined`
  *                    `client_left` `error` `protocol_error`
  *                    `permission_request` `permission_resolved`
- *                    `session_resumed`
+ *                    `session_resumed` `session_spawned` `registry`
  *
  * `pair_device`, `authenticate` and `device_credential` are the device-credential
  * exchange added in `geist/0.2` (R33-REACH.5). They terminate at the daemon:
@@ -46,7 +46,7 @@ export const GEIST_PROTOCOL_FAMILY = "geist/0.x";
  * to `conformance/MIGRATIONS.md`, and regenerating the conformance corpus
  * (R32-FLEET.5). `check:geist-protocol` fails the build otherwise.
  */
-export const GEIST_PROTOCOL_VERSION = "0.4";
+export const GEIST_PROTOCOL_VERSION = "0.5";
 
 const ProtocolFamilySchema = z.literal(GEIST_PROTOCOL_FAMILY);
 const ProtocolVersionSchema = z.literal(GEIST_PROTOCOL_VERSION);
@@ -833,6 +833,73 @@ export const SessionResumedFrameSchema = z.object({
 });
 export type SessionResumedFrame = z.infer<typeof SessionResumedFrameSchema>;
 
+// geist/0.5 — spawn and registry
+
+/** A key into the daemon's OWN registry, constrained so it can never read as a path fragment or prose. */
+export const RegistryIdSchema = z
+	.string()
+	.min(1)
+	.max(64)
+	.regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/);
+
+/**
+ * TWO OPAQUE IDS AND NOTHING ELSE (R36-SPAWN.1): the daemon resolves both against
+ * its own user-owned registry and builds the argv itself. A `path`, `cwd`, `argv`
+ * or `env` here would make the renderer a party to what executes. Not relayed.
+ */
+export const SessionSpawnFrameSchema = z.object({
+	type: z.literal("session_spawn"),
+	harnessId: RegistryIdSchema,
+	projectId: RegistryIdSchema,
+});
+export type SessionSpawnFrame = z.infer<typeof SessionSpawnFrameSchema>;
+
+export const RegistryResyncFrameSchema = z.object({
+	type: z.literal("registry_resync"),
+});
+export type RegistryResyncFrame = z.infer<typeof RegistryResyncFrameSchema>;
+
+export const SessionSpawnCodeSchema = z.enum([
+	"spawned",
+	"unknown_harness",
+	"unknown_project",
+	"refused",
+	"spawn_failed",
+	"timeout",
+]);
+export type SessionSpawnCode = z.infer<typeof SessionSpawnCodeSchema>;
+
+/** `sessionId` is OPTIONAL: the DAEMON mints it, so it crosses ONLY when a process was started. */
+export const SessionSpawnedFrameSchema = z.object({
+	type: z.literal("session_spawned"),
+	sessionId: z.string().min(1).max(128).optional(),
+	ok: z.boolean(),
+	code: SessionSpawnCodeSchema,
+	message: safeText(512),
+});
+export type SessionSpawnedFrame = z.infer<typeof SessionSpawnedFrameSchema>;
+
+/** One harness. IT CARRIES NO `cmd`: an executable path tells a client what to attack and buys a picker nothing. */
+export const RegistryHarnessSchema = z.object({
+	id: RegistryIdSchema,
+	isDefault: z.boolean(),
+});
+export type RegistryHarness = z.infer<typeof RegistryHarnessSchema>;
+
+export const RegistryProjectSchema = z.object({
+	id: RegistryIdSchema,
+	name: safeText(200),
+	root: safeText(1024),
+});
+export type RegistryProject = z.infer<typeof RegistryProjectSchema>;
+
+export const RegistryFrameSchema = z.object({
+	type: z.literal("registry"),
+	harnesses: z.array(RegistryHarnessSchema).max(64),
+	projects: z.array(RegistryProjectSchema).max(256),
+});
+export type RegistryFrame = z.infer<typeof RegistryFrameSchema>;
+
 // ---------------------------------------------------------------------------
 // unions, decoding, encoding
 // ---------------------------------------------------------------------------
@@ -847,6 +914,8 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
 	PermissionResponseFrameSchema,
 	FleetResyncFrameSchema,
 	SessionResumeFrameSchema,
+	SessionSpawnFrameSchema,
+	RegistryResyncFrameSchema,
 ]);
 export type GeistClientFrame = z.infer<typeof ClientFrameSchema>;
 
@@ -865,6 +934,8 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
 	PermissionResolvedFrameSchema,
 	FleetDeltaFrameSchema,
 	SessionResumedFrameSchema,
+	SessionSpawnedFrameSchema,
+	RegistryFrameSchema,
 ]);
 export type GeistServerFrame = z.infer<typeof ServerFrameSchema>;
 

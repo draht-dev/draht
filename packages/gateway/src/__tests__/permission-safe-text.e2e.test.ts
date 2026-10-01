@@ -641,18 +641,17 @@ test("the same rule holds on a second field: a hostile path on a read outside th
 }, 180_000);
 
 test("a Zalgo witness — 512 clusters, dozens of marks each — fits the frame instead of dropping the renderer", async () => {
-	// THE CASE THE BYTE BOUND EXISTS FOR, rebuilt at the size it was first measured at.
+	// THE CASE THE BYTE BOUND EXISTS FOR, kept above the wire cap and below Linux's per-environment-entry ceiling.
 	//
 	// A grapheme budget alone bounds nothing: one cluster admits unboundedly many combining marks.
-	// U+0334 does not compose under NFC, so 512 clusters of 373 marks each stay 512 clusters —
-	// inside every grapheme budget on this wire — while weighing ~383 KB. That frame was accepted
-	// by the schema and then refused by the attach bridge, which closed the renderer's socket with
-	// 1008. The size is deliberate: WITHOUT the byte bound this frame is over the 64 KiB cap, so
-	// the "still connected" assertion below is a real one rather than a number that holds anyway.
-	const cluster = `x${"̴".repeat(373)}`;
+	// U+0334 does not compose under NFC, so 512 clusters of 100 marks each stay 512 clusters —
+	// inside every grapheme budget on this wire — while weighing over 100 KB. That is enough to
+	// exceed the 64 KiB frame cap without making the environment variable that configures the
+	// spawned stub itself unspawnable on Linux.
+	const cluster = `x${"̴".repeat(100)}`;
 	const command = `${cluster.repeat(512)} && echo ${DECISIVE}`;
 	expect(graphemeCount(command)).toBeGreaterThan(500);
-	expect(utf8Bytes(command)).toBeGreaterThan(380_000);
+	expect(utf8Bytes(command)).toBeGreaterThan(100_000);
 
 	const session = await startDrahtSession({ id: "call-3", name: "bash", arguments: { command } });
 	const phone = await attachedTo(session.id, "phone-3");

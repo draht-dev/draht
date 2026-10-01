@@ -75,9 +75,9 @@ try {
 	execSync(tsCmd, { timeout: 60000, encoding: "utf-8", cwd });
 } catch (error) {
 	const output = error.stdout || error.stderr || "";
-	const errorCount = (output.match(/error TS/g) || []).length;
-	if (errorCount > 0) {
-		issues.push({ severity: strict ? "error" : "warning", message: `${errorCount} TypeScript error(s)`, details: output.slice(0, 500) });
+	const errorLines = output.split("\n").filter((line) => /error TS/.test(line));
+	if (errorLines.length > 0) {
+		issues.push({ severity: strict ? "error" : "warning", message: `${errorLines.length} TypeScript error(s)`, details: errorLines.join("\n").slice(0, 500) });
 	}
 }
 

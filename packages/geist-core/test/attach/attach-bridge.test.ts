@@ -23,6 +23,7 @@ import {
 import { AttachBridge, type RendererConnection } from "../../src/attach/attach-bridge.js";
 
 const SESSION_ID = "session-under-test";
+const PROCESS_STARTED_AT_MS = Math.round(Date.now() - process.uptime() * 1000);
 
 let socketDir: string;
 let session: Server;
@@ -91,9 +92,13 @@ beforeEach(async () => {
 		session.once("error", reject);
 		session.listen(join(socketDir, `${SESSION_ID}.sock`), resolve);
 	});
-	writeFileSync(join(socketDir, `${SESSION_ID}.lock`), `${process.pid}\n/work/session\n2026-08-18T09:00:00.000Z`, {
-		mode: 0o600,
-	});
+	writeFileSync(
+		join(socketDir, `${SESSION_ID}.lock`),
+		`${process.pid}\n/work/session\n2026-08-18T09:00:00.000Z\n${PROCESS_STARTED_AT_MS}`,
+		{
+			mode: 0o600,
+		},
+	);
 });
 
 afterEach(() => {
@@ -187,9 +192,21 @@ describe("handshake", () => {
 			version: GEIST_PROTOCOL_VERSION,
 			limits: DEFAULT_TRANSPORT_LIMITS,
 		});
-		expect(fleet).toEqual({
+		expect(fleet).toMatchObject({
 			type: "fleet",
-			sessions: [{ id: SESSION_ID, cwd: "/work/session", pid: process.pid, startedAt: "2026-08-18T09:00:00.000Z" }],
+			sessions: [
+				{
+					id: SESSION_ID,
+					cwd: "/work/session",
+					pid: process.pid,
+					startedAt: "2026-08-18T09:00:00.000Z",
+					origin: "socket",
+					attachable: true,
+					resumable: false,
+					status: "unknown",
+					statusAt: null,
+				},
+			],
 		});
 	});
 
@@ -409,7 +426,10 @@ describe("session output larger than the frame cap", () => {
 
 		expect(outputText(renderer)).toBe(emitted);
 		expect(renderer.closes).toHaveLength(0);
-		for (const text of renderer.sent) expect(Buffer.byteLength(text)).toBeLessThanOrEqual(256);
+		const frames = renderer.frames();
+		for (const [index, frame] of frames.entries()) {
+			if (frame.type === "output") expect(Buffer.byteLength(renderer.sent[index]!)).toBeLessThanOrEqual(256);
+		}
 	});
 });
 

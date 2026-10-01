@@ -2,7 +2,7 @@
 import AtelierPage from "../layouts/AtelierPage.astro";
 
 const title = "404 — Trace Interrupted · Draht";
-const description = "The page you are looking for does not exist on this circuit.";
+const description = "This URL does not match a page on draht.dev.";
 ---
 
 <AtelierPage title={title} description={description}>
@@ -16,7 +16,7 @@ const description = "The page you are looking for does not exist on this circuit
 			<h1 class="error-title">Nicht<br />gefunden<span class="amp">.</span></h1>
 
 			<p class="error-desc">
-				This page was not soldered onto the board. The route went open-circuit somewhere between the URL bar and the file system.
+				This URL does not match a file on draht.dev. Check the address or return to the home page.
 			</p>
 
 			<svg class="error-trace" viewBox="0 0 880 110" aria-hidden="true">
@@ -50,7 +50,7 @@ const description = "The page you are looking for does not exist on this circuit
 			<dl class="error-specs">
 				<div><dt>Endpoint</dt><dd>{Astro.url.pathname}</dd></div>
 				<div><dt>Status</dt><dd class="warn">404 · open</dd></div>
-				<div><dt>Suggestion</dt><dd>retry the bus</dd></div>
+				<div><dt>Suggestion</dt><dd>check the URL</dd></div>
 			</dl>
 		</section>
 	</main>

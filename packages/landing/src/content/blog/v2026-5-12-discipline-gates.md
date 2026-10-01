@@ -1,14 +1,14 @@
 ---
-title: "v2026.5.12 — Discipline Gates for AI Coding Agents"
-description: "Draht's May release adds a STATUS protocol on every subagent, a spec-reviewer that gates code-quality review, a four-phase /fix debugging protocol, and Red Flag stops across the workflow."
+title: "v2026.5.12 — Discipline gates for AI coding agents"
+description: "Draht's May release adds explicit handoff states, spec review before quality review, a four-phase /fix protocol, and workflow stop conditions."
 date: "2026-05-12"
 author: "Oskar Freye"
 tags: ["release", "workflow", "agents", "debugging", "tdd"]
 ---
 
-Draft AI agents are happy to skip ahead. They will propose a fix before understanding the bug, mark a task complete before reading the diff, and claim a test passes without running it. Most of v2026.5.12 is a single answer to that pattern: install **gates** the agent cannot fast-forward past.
+Coding agents often skip the step that would disprove their answer. They propose a fix before tracing the bug, mark work complete before reading the diff, or report a passing test they did not run. v2026.5.12 adds **gates** that stop the workflow at those points.
 
-This release ships four of them — STATUS protocol, spec-reviewer, the four-phase `/fix`, and Red Flag stops — plus a handful of skills that make the discipline transversal.
+The release adds the STATUS protocol, spec review, a four-phase `/fix` command, and Red Flag stops. It also adds skills that apply the same checks outside those commands.
 
 ## STATUS protocol on every subagent
 
@@ -27,14 +27,14 @@ The parent orchestrator reads that line and decides what to do next. The four va
 
 The point is that "agent finished" and "downstream may proceed" are no longer the same event. A `BLOCKED` debugger result halts the fix. A `BLOCKED` spec-reviewer halts the quality review. The orchestrator stops guessing whether to continue.
 
-## spec-reviewer — a new agent between implementer and reviewer
+## spec-reviewer: the gate before quality review
 
 Two reviewers now run per task inside `/execute-phase`, in order:
 
 1. **`spec-reviewer`** — does the diff implement exactly what the task spec asked for? No omissions, no over-builds.
 2. **`reviewer`** — is the code well-written? Names, structure, abstractions, style.
 
-These are deliberately separate jobs. The spec-reviewer's verdict is binary: `✅ COMPLIANT` or `❌ NON-COMPLIANT`. If non-compliant, quality review never runs — there's no point reviewing the prose of code that doesn't do what the plan asked for.
+These are separate jobs. The spec-reviewer's verdict is binary: `✅ COMPLIANT` or `❌ NON-COMPLIANT`. Quality review does not run on a non-compliant diff because code quality cannot compensate for missing or extra behavior.
 
 The Iron Rule the spec-reviewer enforces:
 
@@ -46,7 +46,7 @@ The Iron Rule the spec-reviewer enforces:
 
 The old `/fix` was a single shot at the bug. The new one enforces four phases with hard stops between them.
 
-### The Iron Law
+### The iron law
 
 > **NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST.**
 
@@ -62,7 +62,7 @@ Find working examples in the codebase that do the same thing correctly. Read the
 
 State **one** hypothesis. Design the smallest possible change that would prove it. Apply, observe. If it doesn't fix the issue, form a new hypothesis — do not pile changes on top. **After three failed hypotheses, stop and report to the user. It's an architectural problem, not a hypothesis problem.**
 
-### Phase 4 — Implementation, test-first
+### Phase 4 — Implementation, test first
 
 ```
 red:     reproduce <bug>       # failing test, committed
@@ -84,28 +84,28 @@ Most workflow commands now carry a **Red Flags — STOP** section. These are not
 
 Combined with the verification-gate skill, the agent now has to provide evidence — a passing test run, a typecheck output — before saying "done", "fixed", "passing", or "ready to ship".
 
-## New transversal skills
+## Skills shared across commands
 
-Four skills land that apply across commands, not inside any single one:
+Four skills apply the same checks outside any single command:
 
 - **`atomic-reasoning`** — decompose work into independently-verifiable units before acting. The discipline that opens every workflow command. ([deeper write-up here](/blog/atomic-reasoning))
-- **`debugging-workflow`** — the four-phase protocol from `/fix`, available transversally so the same discipline kicks in whenever the user reports a bug, not only when they type `/fix`.
+- **`debugging-workflow`** — the four-phase protocol from `/fix`, available whenever the user reports a bug, even without the `/fix` command.
 - **`verification-gate`** — evidence before claims. Triggers on "done", "fixed", "should work", "passing", "ready". Forces the agent to run the proving command before asserting positive state.
 - **`brainstorming`** — Socratic ideation gate before any project work begins. Refuses to plan or code on a fuzzy idea until the design has been refined and written to `.planning/specs/`.
 
-These are skills rather than commands so they auto-trigger on language patterns ("broken", "doesn't work", "should I build", "ready to ship") rather than waiting for the user to type a slash command.
+They are skills rather than commands, so phrases such as "broken," "doesn't work," or "ready to ship" can trigger them without a slash command.
 
 ## Smaller but useful
 
 - **`validate-plans`** now flags placeholder text and empty sections in `.planning/` files. Plans full of `<TODO>` or empty `<action>` blocks fail validation before they reach `/execute-phase`.
-- **`configure` subcommand + agent model defaults** — pick which model each subagent runs on (e.g. `architect` on Opus, `verifier` on Haiku) without editing agent files by hand.
+- **`configure` subcommand and agent model defaults** — pick which model each subagent runs on (for example, `architect` on Opus and `verifier` on Haiku) without editing agent files by hand.
 - **`workflow` skill refreshed** with the new subagent roster and the STATUS protocol so the workflow doc matches the agents that actually exist.
 
-## Why all this at once
+## Why these changes ship together
 
-The four big pieces — STATUS, spec-reviewer, four-phase `/fix`, Red Flags — share a single shape: **a checkpoint that the agent cannot silently pass through**. Each one converts a soft expectation ("the agent will probably investigate first", "the agent should run the test") into a hard contract ("the parent waits for `STATUS: DONE`", "the next phase does not run until the reproducing test is committed").
+STATUS, spec review, `/fix`, and Red Flag stops all create a checkpoint that the agent cannot pass silently. They replace expectations such as "investigate first" with contracts the orchestrator can enforce. The parent waits for `STATUS: DONE`; the fix does not proceed until a reproducing test exists.
 
-The next milestone continues in this direction: tighter handoffs between subagents, and a verification corpus the agent has to point at — not just claim — before declaring work complete.
+The next milestone will tighten subagent handoffs and require agents to cite verification output before they declare work complete.
 
 Install or upgrade:
 

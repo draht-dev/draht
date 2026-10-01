@@ -4,6 +4,11 @@ set -euo pipefail
 # Isolate user resources, credentials, temporary files, and tool configuration.
 temp_parent="${TMPDIR:-/tmp}"
 temp_parent="${temp_parent%/}"
+# Unix socket paths are capped at 104 bytes on macOS; the gateway and geist
+# suites cannot bind under a deep $TMPDIR such as /var/folders/.../T.
+if [[ ${#temp_parent} -gt 24 && -d /tmp && -w /tmp ]]; then
+	temp_parent=/tmp
+fi
 test_root="$(mktemp -d "$temp_parent/draht-test.XXXXXX")"
 git_askpass="$(type -P false)"
 readonly temp_parent test_root git_askpass
@@ -61,7 +66,24 @@ test_env=(
 	"NPM_CONFIG_CACHE=$test_root/cache/npm"
 	"DRAHT_NO_LOCAL_LLM=1"
 	"AWS_EC2_METADATA_DISABLED=true"
+	# A single machine runs every workspace back to back; the git-backed
+	# integration suites need fewer workers and more headroom than CI's shards.
+	"VITEST_MAX_FORKS=${VITEST_MAX_FORKS:-6}"
+	"DRAHT_TEST_TIMEOUT_MS=${DRAHT_TEST_TIMEOUT_MS:-120000}"
 )
+
+# playwright-core looks for Chromium under $HOME, which this script isolates;
+# point it at the browsers installed in the real home unless a path is given.
+playwright_browsers="${PLAYWRIGHT_BROWSERS_PATH:-}"
+if [[ -z "$playwright_browsers" ]]; then
+	for candidate in "$HOME/Library/Caches/ms-playwright" "$HOME/.cache/ms-playwright" "${LOCALAPPDATA:-}/ms-playwright"; do
+		if [[ -d "$candidate" ]]; then
+			playwright_browsers="$candidate"
+			break
+		fi
+	done
+fi
+[[ -z "$playwright_browsers" ]] || test_env+=("PLAYWRIGHT_BROWSERS_PATH=$playwright_browsers")
 
 # Native Windows needs these inherited values to launch child processes.
 for name in SystemRoot SYSTEMROOT WINDIR COMSPEC PATHEXT; do

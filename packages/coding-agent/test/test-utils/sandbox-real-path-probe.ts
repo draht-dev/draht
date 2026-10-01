@@ -114,6 +114,44 @@ export function runRealPathProbe(): RealPathProbeResult {
 		// --- '..' below a directory that does not exist has no determinable target
 		record("'..' below a non-existent directory is refused", "REFUSED", resolved(`${project}/nope/../../escape`));
 
+		// --- backslash names, the second measured bun divergence: bun rewrites "\\" to "/"
+		// before the syscall, so an allowlist entry could resolve a path the kernel never
+		// traverses. A real directory named `a\b` must stay itself even though `a/b` exists.
+		mkdirSync(join(project, "a\\b"), { recursive: true });
+		mkdirSync(join(project, "a", "b"), { recursive: true });
+		symlinkSync(outsideSub, join(project, "a", "b", "esc"), "dir");
+		record("a backslash-named directory resolves to itself", "<root>/project/a\\b", relative(`${project}/a\\b`));
+		record(
+			"a backslash spelling does not reach the nested pair's symlink",
+			"<root>/project/a\\b/esc",
+			relative(`${project}/a\\b/esc`),
+		);
+		record("a file under a backslash-named project dir is writable", "true", writable(`${project}/a\\b/ok.txt`));
+		// A failure that is not ENOENT is "we cannot know what this names", which is not the
+		// same as "not there yet": treating it as pending would put the unresolved spelling
+		// back inside the project and widen the allowlist.
+		symlinkSync(join(project, "loop2"), join(project, "loop"));
+		symlinkSync(join(project, "loop"), join(project, "loop2"));
+		record("a path through a symlink loop is refused", "REFUSED", resolved(`${project}/loop/x`));
+		record("a write through a symlink loop is not writable", "false", writable(`${project}/loop/x`));
+		record("a backslash name below a symlink loop is refused", "REFUSED", resolved(`${project}/loop/a\\b`));
+		record(
+			"a write to a backslash name below a symlink loop is not writable",
+			"false",
+			writable(`${project}/loop/a\\b/x`),
+		);
+
+		writeFileSync(join(project, "e\\f"), "");
+		record("a name below a backslash-named regular file is refused", "REFUSED", resolved(`${project}/e\\f/x`));
+
+		symlinkSync(outsideSub, join(project, "c\\d"), "dir");
+		record("a symlink named through a backslash is refused", "REFUSED", resolved(`${project}/c\\d`));
+		record(
+			"a write through a backslash-named symlink is not writable",
+			"false",
+			writable(`${project}/c\\d/evil.txt`),
+		);
+
 		return { runtime: runtimeName(), checks };
 	} finally {
 		rmSync(root, { recursive: true, force: true });

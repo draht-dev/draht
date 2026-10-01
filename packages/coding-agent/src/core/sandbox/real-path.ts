@@ -41,11 +41,15 @@
  * implements, is:
  *
  * > `..` is never passed to the platform's `realpath`. The path is walked one
- * > segment at a time; each ordinary segment is resolved by `realpathSync.native`
- * > against an already fully-resolved prefix (a single name, no `..`, so both
- * > runtimes agree and symlink chasing, `ELOOP` and permission checks stay in the
- * > kernel); each `..` is applied to that resolved prefix, which is where POSIX
- * > says it applies.
+ * > segment at a time by the shared `resolveRealSegment` primitive
+ * > (`src/utils/canonical-path.ts`) against an already fully-resolved prefix (a
+ * > single name, no `..`, so both runtimes agree and symlink chasing, `ELOOP` and
+ * > permission checks stay in the kernel); each `..` is applied to that resolved
+ * > prefix, which is where POSIX says it applies.
+ *
+ * That primitive also carries bun's second divergence — a backslash in a name is
+ * rewritten to `/` before the syscall, so `<dir>/a\b` resolves to a *different* real
+ * directory, one the kernel will never traverse for that spelling.
  *
  * `test/sandbox-real-path-runtime.test.ts` executes the same assertions under
  * **both** node and bun and fails if the two disagree, so this claim is checked
@@ -72,19 +76,8 @@
  * enforcement boundary.
  */
 
-import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, sep } from "node:path";
-
-/**
- * Resolves one already-`..`-free path. Correct on every runtime *for that
- * input*: the runtime divergence documented above is entirely about `..`, which
- * the walk below never hands to it.
- *
- * Were `.native` ever missing, calling it throws a `TypeError` that is caught in
- * `resolveRealPath` and reported as an unresolvable path, so the failure mode is
- * a narrower policy, never a lexically-collapsed one.
- */
-const realpathNative = realpathSync.native;
+import { resolveRealSegment } from "../../utils/canonical-path.ts";
 
 export interface ResolveRealPathOptions {
 	/** Absolute directory that relative inputs resolve against (normally the project cwd). */
@@ -163,18 +156,15 @@ export function resolveRealPath(input: string, options: ResolveRealPathOptions):
 			continue;
 		}
 
-		try {
-			// One plain name appended to a resolved prefix: no `..`, nothing for a
-			// runtime to collapse, and symlink chasing stays in the kernel.
-			resolved = realpathNative(join(resolved, segment));
-		} catch (err) {
-			const code = (err as NodeJS.ErrnoException).code;
-			if (code !== "ENOENT") {
-				// ELOOP, ENOTDIR, EACCES, ... are all "we cannot know what this names".
-				// Walking past them would answer a different question than the one asked.
-				return { ok: false, input, reason: `cannot resolve ${JSON.stringify(input)}: ${(err as Error).message}` };
-			}
+		// One plain name against a resolved prefix, so nothing is left for a runtime to
+		// collapse. Anything but ENOENT is "we cannot know what this names".
+		const step = resolveRealSegment(resolved, segment);
+		if (step.ok) {
+			resolved = step.path;
+		} else if (step.missing) {
 			pending.push(segment);
+		} else {
+			return { ok: false, input, reason: `cannot resolve ${JSON.stringify(input)}: ${step.reason}` };
 		}
 	}
 

@@ -74,7 +74,8 @@ function readJson(path) {
 	return JSON.parse(readFileSync(path, "utf8"));
 }
 
-function writeJson(path, value, indent = "\t") {
+function writeJson(path, value) {
+	const indent = existsSync(path) && /^ {2}"/m.test(readFileSync(path, "utf8")) ? 2 : "\t";
 	writeFileSync(path, `${JSON.stringify(value, null, indent)}\n`);
 }
 
@@ -91,8 +92,8 @@ export function requiredBunVersion(root) {
 
 export function requiredBunRevision(root) {
 	const value = readJson(join(root, "package.json")).drahtReleaseBunRevision;
-	if (!/^\d+\.\d+\.\d+-canary\.\d+\+[0-9a-f]+$/.test(value ?? "")) {
-		throw new Error("package.json drahtReleaseBunRevision must pin an exact Bun canary revision");
+	if (!/^\d+\.\d+\.\d+(?:-canary\.\d+)?\+[0-9a-f]+$/.test(value ?? "")) {
+		throw new Error("package.json drahtReleaseBunRevision must pin an exact Bun revision (as printed by `bun --revision`)");
 	}
 	return value;
 }
@@ -163,13 +164,13 @@ export function setVersion(root, version) {
 	const rootPackagePath = join(root, "package.json");
 	const rootPackage = readJson(rootPackagePath);
 	rootPackage.version = version;
-	writeJson(rootPackagePath, rootPackage, 2);
+	writeJson(rootPackagePath, rootPackage);
 
 	for (const relativePath of PLUGIN_MANIFESTS) {
 		const manifestPath = join(root, relativePath);
 		const manifest = readJson(manifestPath);
 		manifest.version = version;
-		writeJson(manifestPath, manifest, 2);
+		writeJson(manifestPath, manifest);
 	}
 	const lockPath = join(root, "bun.lock");
 	if (existsSync(lockPath)) {
@@ -262,14 +263,21 @@ function inspectArchive(bytes, archive, { wrapper, binary, expectedFiles, maxExp
 		});
 		const allMembers = listing.split("\n").filter(Boolean);
 		if (new Set(allMembers).size !== allMembers.length) throw new Error("duplicate archive member names");
-		const metadata = execFileSync(zip ? "zipinfo" : "tar", zip ? ["-l", archivePath] : ["-tvzf", archivePath], {
+		const metadata = execFileSync(zip ? "zipinfo" : "tar", zip ? ["-l", archivePath] : ["--numeric-owner", "-tvzf", archivePath], {
 			encoding: "utf8",
 			maxBuffer: MAX_ARCHIVE_LISTING_BYTES,
 		});
-		const expandedBytes = zip
+		const expandedSizes = zip
 			? execFileSync("unzip", ["-l", archivePath], { encoding: "utf8", maxBuffer: MAX_ARCHIVE_LISTING_BYTES })
-				.split("\n").map((line) => /^\s*(\d+)\s+\d{4}-\d{2}-\d{2}\s/.exec(line)?.[1]).filter(Boolean).reduce((sum, value) => sum + Number(value), 0)
-			: metadata.split("\n").map((line) => /^\S+\s+\S+\s+(\d+)\s/.exec(line)?.[1]).filter(Boolean).reduce((sum, value) => sum + Number(value), 0);
+				.split("\n").map((line) => /^\s*(\d+)\s+\d{2,4}-\d{2}-\d{2,4}\s+\d{2}:\d{2}\s/.exec(line)?.[1]).filter(Boolean).map(Number)
+			: metadata.split("\n").filter(Boolean).map((line) => {
+				const fields = line.trim().split(/\s+/);
+				return Number(fields[1]?.includes("/") ? fields[2] : fields[4]);
+			});
+		if (expandedSizes.length !== allMembers.length || expandedSizes.some((size) => !Number.isSafeInteger(size) || size < 0)) {
+			throw new Error("archive member sizes are malformed");
+		}
+		const expandedBytes = expandedSizes.reduce((sum, size) => sum + size, 0);
 		if (!Number.isSafeInteger(expandedBytes) || expandedBytes > maxExpandedBytes) throw new Error(`archive expanded size ${expandedBytes} exceeds decompression limit ${maxExpandedBytes}`);
 		const entryTypes = zip
 			? metadata.split("\n").filter((line) => /^[bcdlps-][rwxStTs-]{9}\s/.test(line)).map((line) => line[0])
@@ -504,6 +512,7 @@ export async function waitForVerifiedRelease({
 	fetchImpl = globalThis.fetch,
 	token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN,
 	verifyAttestation = verifyGithubAttestation,
+	log = (line) => console.log(line),
 }) {
 	let lastError;
 	for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -512,6 +521,7 @@ export async function waitForVerifiedRelease({
 			return await validateReleaseArtifacts({ tag, version, commit, release, fetchImpl, token, verifyAttestation });
 		} catch (error) {
 			lastError = error;
+			log(`  attempt ${attempt}/${attempts}: ${error.message}${token ? "" : " (no GH_TOKEN in the environment)"}`);
 		}
 		if (attempt < attempts) await sleep(intervalMs);
 	}

@@ -53,6 +53,15 @@ test("setting package versions synchronizes plugin manifests and dependency vers
 	assert.doesNotMatch(readFileSync(join(root, "bun.lock"), "utf8"), /0\.9\.0/);
 });
 
+test("setting package versions keeps each file's existing indentation", () => {
+	const root = versionFixture();
+	writeFileSync(join(root, "package.json"), '{\n\t"name": "root",\n\t"version": "1.0.0"\n}\n');
+	writeFileSync(join(root, "packages/a/package.json"), '{\n  "name": "a",\n  "version": "1.0.0"\n}\n');
+	setVersion(root, "2.0.0");
+	assert.equal(readFileSync(join(root, "package.json"), "utf8"), '{\n\t"name": "root",\n\t"version": "2.0.0"\n}\n');
+	assert.equal(readFileSync(join(root, "packages/a/package.json"), "utf8"), '{\n  "name": "a",\n  "version": "2.0.0"\n}\n');
+});
+
 test("repository uses Bun as its single authoritative dependency lock", () => {
 	assert.equal(existsSync(join(process.cwd(), "package-lock.json")), false, "stale npm lockfile must not coexist with bun.lock");
 	assert.equal(existsSync(join(process.cwd(), "bun.lock")), true);
@@ -61,15 +70,27 @@ test("repository uses Bun as its single authoritative dependency lock", () => {
 	assert.match(releaseScript, /bun install --frozen-lockfile --ignore-scripts --linker hoisted/);
 });
 
-test("release toolchain requires the exact pinned Bun canary revision", () => {
-	assert.doesNotThrow(() => assertBunToolchain(process.cwd(), () => "1.3.14-canary.1+ed1c48f2b"));
+test("release toolchain requires the exact pinned Bun revision", () => {
+	assert.doesNotThrow(() => assertBunToolchain(process.cwd(), () => "1.4.2+744846f84"));
 	assert.throws(
 		() => assertBunToolchain(process.cwd(), () => "1.4.0-canary.1+wrong"),
 		/Bun revision.*does not match required/,
 	);
 	const workflow = readFileSync(join(process.cwd(), ".github/workflows/build-binaries.yml"), "utf8");
-	assert.match(workflow, /BUN_PACKAGE_VERSION: 1\.3\.13-canary\.20260425\.1/);
-	assert.match(workflow, /BUN_REVISION: 1\.3\.14-canary\.1\+ed1c48f2b/);
+	assert.match(workflow, /BUN_PACKAGE_VERSION: 1\.4\.2/);
+	assert.match(workflow, /BUN_REVISION: 1\.4\.2\+744846f84/);
+});
+
+test("scheduled releases are opt-in, credentialed, and routed through the release script", () => {
+	const workflow = readFileSync(join(process.cwd(), ".github/workflows/scheduled-release.yml"), "utf8");
+	assert.match(workflow, /cron: '17 3 \* \* \*'/);
+	assert.match(workflow, /vars\.DRAHT_RELEASES_ENABLED == 'true'/);
+	assert.match(workflow, /secrets\.DRAHT_RELEASE_TOKEN/);
+	assert.match(workflow, /secrets\.NPM_TOKEN/);
+	assert.match(workflow, /token: \$\{\{ secrets\.DRAHT_RELEASE_TOKEN \}\}/);
+	assert.match(workflow, /npm run check/);
+	assert.match(workflow, /run: npm run release/);
+	assert.doesNotMatch(workflow, /run: (?:npm|bun) publish/);
 });
 
 test("release asset gate requires every primary and graph runtime archive", () => {

@@ -154,7 +154,7 @@ export class OAuthSelectorComponent extends Container implements Focusable {
 	}
 
 	private formatStatusIndicator(provider: AuthSelectorProvider): string {
-		if (!provider.status) return theme.fg("muted", " • unconfigured");
+		if (!provider.status) return theme.fg("muted", " • not configured");
 		if (provider.status.type !== provider.authType) {
 			const label = provider.status.type === "oauth" ? "subscription configured" : "API key configured";
 			return theme.fg("muted", " • ") + theme.fg("warning", label);

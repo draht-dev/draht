@@ -8,6 +8,9 @@ const aiSrcOAuth = fileURLToPath(new URL("../ai/src/oauth.ts", import.meta.url))
 const aiSrcProviders = fileURLToPath(new URL("../ai/src/providers", import.meta.url));
 const aiSrcUtils = fileURLToPath(new URL("../ai/src/utils", import.meta.url));
 const agentSrcIndex = fileURLToPath(new URL("../agent/src/index.ts", import.meta.url));
+const chordSrcIndex = fileURLToPath(new URL("../chord/src/index.ts", import.meta.url));
+const chordSrcContext = fileURLToPath(new URL("../chord/src/context/index.ts", import.meta.url));
+const chordSrcDelta = fileURLToPath(new URL("../chord/src/delta/index.ts", import.meta.url));
 const tuiSrcIndex = fileURLToPath(new URL("../tui/src/index.ts", import.meta.url));
 const mcpSrcIndex = fileURLToPath(new URL("../mcp/src/index.ts", import.meta.url));
 const mcpSrcOAuth = fileURLToPath(new URL("../mcp/src/oauth/index.ts", import.meta.url));
@@ -49,6 +52,9 @@ export default defineConfig({
 			{ find: /^@draht\/ai\/providers\/(.+)$/, replacement: `${aiSrcProviders}/$1.ts` },
 			{ find: /^@draht\/ai\/utils\/(.+)$/, replacement: `${aiSrcUtils}/$1.ts` },
 			{ find: /^@draht\/agent-core$/, replacement: agentSrcIndex },
+			{ find: /^@draht\/chord$/, replacement: chordSrcIndex },
+			{ find: /^@draht\/chord\/context$/, replacement: chordSrcContext },
+			{ find: /^@draht\/chord\/delta$/, replacement: chordSrcDelta },
 			{ find: /^@draht\/tui$/, replacement: tuiSrcIndex },
 			{ find: /^@draht\/mcp$/, replacement: mcpSrcIndex },
 			{ find: /^@draht\/mcp\/oauth$/, replacement: mcpSrcOAuth },

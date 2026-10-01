@@ -1,4 +1,4 @@
-# Provider Authentication
+# Providers
 
 Most hosted providers support one or both of these authentication methods:
 
@@ -17,8 +17,6 @@ Run `/logout` and select a provider to remove its stored credential. This does n
 
 `auth.json` can contain API keys and OAuth tokens. Keep it private and do not commit it.
 
-Radius authentication uses its gateway catalog and caches refreshed model metadata for later offline startup. A custom Radius gateway configured in `models.json` uses its own catalog rather than inheriting the built-in public Radius catalog.
-
 ## OpenCode Console
 
 Run `/login opencode-go` for Go or `/login opencode` for Zen and choose browser sign-in. Open the displayed authorization URL, confirm the device code, and select your organization. Draht saves the resulting OAuth credential in its normal credential store and refreshes it when it expires.
@@ -36,7 +34,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 draht
 ```
 
-This table covers providers with a single primary API-key variable. Providers that need additional configuration or support ambient credentials are covered under [Cloud providers](#cloud-providers).
+This table covers providers with a single primary API-key variable. Providers that need additional configuration or support ambient credentials are covered under [Provider Specific Config](#provider-specific-config).
 
 | Provider | Environment variable |
 |---|---|
@@ -97,9 +95,9 @@ draht runs the command when the key is first needed and caches its standard outp
 
 The llama.cpp router is a local provider. Run `/login llama.cpp` to store the router connection, `/llama` to load or unload models, and `/model` to select a loaded model. See [Local Models with llama.cpp](llama-cpp.md) for server setup and the environment variables that configure the same connection without `/login`.
 
-## Cloud Providers
+## Provider Specific Config
 
-The providers below need additional settings or can use credentials supplied by their cloud platform.
+The providers below have additional setup, need additional settings, or can use credentials supplied by their platform.
 
 A stored API-key credential can include an `env` object. Its values take priority over the process environment for that provider:
 
@@ -114,6 +112,18 @@ A stored API-key credential can include an `env` object. Its values take priorit
   }
 }
 ```
+
+### Radius
+
+Radius is an AI gateway by Earendil Works. It provides organization-level controls, analytics, and artifacts for sharing work.
+
+To get started, run `/login radius` in draht. This adds Radius as a provider, and its models appear in `/model` like any other provider's.
+
+Radius also has an MCP server, so draht can manage Radius for you.
+
+Radius is currently in early alpha and evolving quickly. See [radius.earendil.com](https://radius.earendil.com) for more.
+
+Radius authentication uses its gateway catalog and caches refreshed model metadata for later offline startup. A custom Radius gateway configured in `models.json` uses its own catalog rather than inheriting the built-in public Radius catalog.
 
 ### Azure OpenAI
 

@@ -6,7 +6,7 @@ draht uses environment variables in three ways:
 - draht sets process markers so child processes can identify draht as the launching agent.
 - Commands run by the LLM-callable shell tools receive `DRAHT_*` variables describing the current session.
 
-Provider API-key variables are documented separately in [Provider Authentication](providers.md#use-an-api-key-from-the-environment).
+Provider API-key variables are documented separately in [Providers](providers.md#use-an-api-key-from-the-environment).
 
 ## Process Marker
 
@@ -111,4 +111,4 @@ These variables are read by draht itself:
 | `VISUAL`, `EDITOR` | External editor fallback when `externalEditor` is unset |
 | `HTTP_PROXY`, `HTTPS_PROXY` | Proxy outbound HTTP requests |
 
-Provider credentials such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and cloud-provider configuration are listed in [Provider Authentication](providers.md#use-an-api-key-from-the-environment).
+Provider credentials such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and provider-specific configuration are listed in [Providers](providers.md#use-an-api-key-from-the-environment).

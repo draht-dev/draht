@@ -66,7 +66,7 @@ draht --model sonnet:high
 See [Choose a Model](models.md) for model selection and [Provider Authentication](providers.md) for credentials.
 
 - `--provider <name>`<br>
-  Restricts `--model` lookup to one provider.
+  Restricts `--model` lookup to one provider. It requires `--model`.
 - `--model <pattern>`<br>
   Selects by exact ID or fuzzy ID/name match. It accepts `provider/id` and an optional `:<thinking>` suffix.
 - `--api-key <key>`<br>

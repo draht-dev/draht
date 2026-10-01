@@ -20,7 +20,8 @@ import { fileURLToPath } from "node:url";
  * sub-scripts as the run budget needs), and fails the moment the two sets
  * disagree — in either direction:
  *
- *   • a `*.test.mjs` under `scripts/` that `npm test` does not reach;
+ *   • a `*.test.{js,mjs,ts}` under `scripts/` that `npm test` does not reach
+ *     exactly once;
  *   • a path the script names that does not exist on disk (a rename or typo,
  *     which `node --test` reports as a *passing* run of zero files);
  *   • a `*.e2e.test.ts` under `packages/gateway` that the workspace fan-out
@@ -71,11 +72,14 @@ function readRootScripts() {
  * shrinking the reachable set and making this whole file vacuous.
  */
 function resolveTestScript(scripts, scriptName = "test", seen = new Set()) {
-	const files = new Set();
+	const files = [];
 	const unresolved = [];
 	let workspaceFanOut = false;
 
-	if (seen.has(scriptName)) return { files, workspaceFanOut, unresolved };
+	if (seen.has(scriptName)) {
+		unresolved.push(`recursive npm script: ${scriptName}`);
+		return { files, workspaceFanOut, unresolved };
+	}
 	seen.add(scriptName);
 
 	const body = scripts[scriptName];
@@ -92,7 +96,7 @@ function resolveTestScript(scripts, scriptName = "test", seen = new Set()) {
 				continue;
 			}
 			const nested = resolveTestScript(scripts, tokens[tokens.indexOf("run") + 1], seen);
-			for (const file of nested.files) files.add(file);
+			files.push(...nested.files);
 			workspaceFanOut ||= nested.workspaceFanOut;
 			unresolved.push(...nested.unresolved);
 			continue;
@@ -109,10 +113,11 @@ function resolveTestScript(scripts, scriptName = "test", seen = new Set()) {
 			if (token.startsWith("-")) continue;
 			if (token === "test") continue;
 			if (!/\.test\.(mjs|ts|js)$/.test(token)) continue;
-			files.add(token.replace(/^\.\//, ""));
+			files.push(token.replace(/^\.\//, ""));
 		}
 	}
 
+	seen.delete(scriptName);
 	return { files, workspaceFanOut, unresolved };
 }
 
@@ -126,23 +131,21 @@ test("the root test script is parseable — every segment is understood", () => 
 		"the root `test` script contains a segment this parity check cannot parse; teach " +
 			"resolveTestScript() about it rather than leaving the reachable set silently short",
 	);
-	assert.ok(files.size > 0, "parsed zero test files out of the root `test` script — the check would be vacuous");
+	assert.ok(files.length > 0, "parsed zero test files out of the root `test` script — the check would be vacuous");
 });
 
-test("every scripts/*.test.mjs file is reachable from the root test script", () => {
+test("every scripts/*.test.{js,mjs,ts} file runs exactly once from the root test script", () => {
 	const { files } = resolveTestScript(readRootScripts());
-	// `.test.ts` too: there are none under scripts/ today, and this is what stops
-	// the next one being added in a language the walk was not looking at.
-	const isTestFile = (name) => name.endsWith(".test.mjs") || name.endsWith(".test.ts");
+	const isTestFile = (name) => /\.test\.(js|mjs|ts)$/.test(name);
 	const onDisk = walk(join(ROOT, "scripts"), isTestFile).map(repoRelative).sort();
-	assert.ok(onDisk.length > 0, "found no *.test.mjs under scripts/ — the walk is broken, not the wiring");
+	assert.ok(onDisk.length > 0, "found no test files under scripts/ — the walk is broken, not the wiring");
 
-	const unwired = onDisk.filter((file) => !files.has(file));
+	const registered = files.filter((file) => file.startsWith("scripts/") && isTestFile(file)).sort();
 	assert.deepEqual(
-		unwired,
-		[],
-		`these test suites exist but \`npm test\` never runs them:\n  ${unwired.join("\n  ")}\n` +
-			"Add them to the root `test` script (or one of the sub-scripts it chains).",
+		registered,
+		onDisk,
+		"the scripts/ test denominator must match the files reached by `npm test` exactly; " +
+			"register every suite once (and only once) in the root `test` script or one of the sub-scripts it chains",
 	);
 });
 

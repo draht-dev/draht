@@ -40,6 +40,14 @@
 - `app.models.save` keybinding (default `ctrl+s`) to save the selected model to settings from the model selector
 - `app.thinking.save` keybinding (default `ctrl+s`) to save the selected thinking level as the default from the thinking selector
 - experimental mini agent, a three-process coding agent variant on the durable harness (not CLI-wired)
+- codemode: write a script against the active tool set instead of making tool calls one at a time, for tasks that benefit from loops/branching over many tool results
+- MCP support: `draht mcp` manages servers configured in `.draht/mcp.json`, with OAuth login for servers that require it
+- virtual models: compose a model id out of a provider and a set of options (e.g. thinking level) addressable as its own catalog entry
+- opt-in system theme (`theme: system`): tracks the terminal's reported light/dark preference instead of a fixed built-in theme
+- prompt cache warming: idle sessions periodically re-send the cached prefix so the next turn doesn't pay a cold-cache penalty; tune retention with `DRAHT_CACHE_RETENTION`
+- `/bug` command: build and upload (or export as a zip) a bug report bundle with environment, settings, and optional transcript/summary
+- Meta provider with Muse subscription OAuth login
+- GPT-6 Astra, GPT-6 Sol, GPT-6 Luna, and GPT-6.1 Sol (now the Codex default) model support; Claude Opus 5.5, Claude Sonnet 5.5, and Fable 5.1; Grok 4.7
 
 ### Fixed
 
@@ -64,6 +72,8 @@
 
 - `/bug` uploads now go to draht's own intake at `https://radius.draht.dev`, independent of the Radius model provider's gateway; "Upload Report" is offered again by default. Override the destination with `DRAHT_BUG_REPORT_GATEWAY`; `DRAHT_RADIUS_GATEWAY` (the Radius provider's own gateway) no longer affects where bug reports are sent
 - without a `theme` setting, draht again defaults to the detected dark/light built-in theme (draht's `copper` border) instead of `system`; `system` remains available as an explicit choice
+- builds target ES2024 instead of an older ECMAScript baseline
+- regenerated the bundled model catalog to pick up the newest provider/model data
 - pruned the boilerplate Atomic Reasoning section from all command prompts; commands keep only command-specific reasoning plus a one-line pointer to the `atomic-reasoning` skill; deleted outright from `/progress`, `/pause-work`, `/resume-work`
 - `/brainstorm`, `/discuss-phase`, `/new-project`, `/init-project` now question in whole-frontier rounds (all settled-prerequisite questions per round, numbered, with recommended answers; accepted-by-number = decided) instead of 1-2 questions at a time
 - `/fix` Phase 1 now gates on a red-capable reproduction loop: ONE named command, already run at least once, invocation and output shown, asserting the exact symptom — built by working down a ladder from failing test to human-in-the-loop steps; no causal theorising until it exists. Phase 3 generates 3-5 ranked falsifiable hypotheses (the user's diagnosis enters as Hypothesis #0) instead of testing a single one, and Phase 4 sweeps tagged `[DEBUG-*]` instrumentation before done. The `debugger` builtin agent carries the same reproduction-first, ranked-hypotheses operating brief

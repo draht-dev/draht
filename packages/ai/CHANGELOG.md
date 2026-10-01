@@ -11,10 +11,14 @@
 ### Added
 
 - `deepseek-v4-flash-vision-exp` and `deepseek-v4-pro-0813` model ids
+- Meta provider with Muse subscription OAuth login
+- GPT-6 Astra, GPT-6 Sol, GPT-6 Luna, GPT-6.1 Sol, Claude Opus 5.5, Claude Sonnet 5.5, Fable 5.1, and Grok 4.7 model ids
 
 ### Changed
 
 - renamed the `qwen3.8-max-preview` model id to `qwen3.8-max` across the Qwen Token Plan catalogs
+- `@google/genai` raised to `^2.21.0` (needed for `FinishReason.TOO_MANY_TOOL_CALLS`, which the Gemini adapter now maps)
+- regenerated the bundled model catalog
 
 ### Removed
 

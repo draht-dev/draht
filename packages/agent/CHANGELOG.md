@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- system prompt text and tool-availability changes mid-conversation now live in the transcript as `SystemMessage` entries instead of being silently re-sent; providers take a normalized `TranscriptContext` built from those entries
+
 ## [2026.7.30] - 2026-07-30
 
 ### Added

@@ -32,7 +32,8 @@ function pathSuffix(pathname: string): string {
 
 function field(header: string, name: string): string | undefined {
 	const match = header.match(new RegExp(String.raw`(?:^|[,\s])${name}=(?:"([^"]*)"|([^\s,]+))`, "i"));
-	return match?.[1] ?? match?.[2];
+	// An empty value (`scope=""`) carries no information, so it counts as absent.
+	return match?.[1] || match?.[2] || undefined;
 }
 
 export function parseWwwAuthenticate(header: string | null): OAuthChallenge {

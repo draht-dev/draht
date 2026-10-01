@@ -292,8 +292,9 @@ async function runFlow(provider: OAuthClientProvider, options: OAuthFlowOptions)
 	}
 	const metadata = discovered.authorizationServerMetadata;
 	const resource = selectResource(options.serverUrl, discovered.resourceMetadata);
+	// `||`, not `??`: an empty scope (for example from `scopes_supported: []`) falls through to the next source.
 	const scope =
-		options.scope ?? discovered.resourceMetadata?.scopes_supported?.join(" ") ?? provider.clientMetadata.scope;
+		options.scope || discovered.resourceMetadata?.scopes_supported?.join(" ") || provider.clientMetadata.scope;
 	let client = await provider.clientInformation();
 	if (!client) {
 		if (options.authorizationCode) throw new Error("OAuth client information is missing during code exchange");

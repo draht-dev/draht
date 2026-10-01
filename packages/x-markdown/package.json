@@ -2,7 +2,7 @@
 	"name": "@draht/x-markdown",
 	"version": "2026.9.5-1",
 	"private": true,
-	"description": "Cloudflare Worker and draht extension for converting X posts into agent-readable Markdown",
+	"description": "Internal worker and extension for converting public X posts to Markdown",
 	"type": "module",
 	"bin": {
 		"x-markdown": "./src/cli.ts"

@@ -2,7 +2,7 @@
 	"name": "@draht/ci",
 	"version": "2026.9.5-1",
 	"private": true,
-	"description": "CI/CD AI Review Pipeline — GitHub Action for Claude-powered PR reviews",
+	"description": "Internal GitHub Action for AI-assisted pull-request review",
 	"type": "module",
 	"main": "./src/action.ts",
 	"scripts": {

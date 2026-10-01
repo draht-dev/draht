@@ -2,7 +2,7 @@
 	"name": "@draht/landing",
 	"version": "2026.9.5-1",
 	"private": true,
-	"description": "Landing page for draht.dev",
+	"description": "Internal product and documentation site for draht.dev",
 	"type": "module",
 	"scripts": {
 		"dev": "astro dev",

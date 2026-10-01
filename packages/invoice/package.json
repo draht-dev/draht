@@ -2,7 +2,7 @@
 	"name": "@draht/invoice",
 	"version": "2026.9.5-1",
 	"private": true,
-	"description": "Invoice generator with Lexoffice API and Toggl time tracking integration",
+	"description": "Private reference implementation for Lexoffice and Toggl invoice workflows",
 	"type": "module",
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",

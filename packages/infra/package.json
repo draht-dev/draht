@@ -2,7 +2,7 @@
 	"name": "@draht/infra",
 	"version": "2026.9.5-1",
 	"private": true,
-	"description": "SST v4 infrastructure for Draht — Lambda, API Gateway, DynamoDB",
+	"description": "SST v4 infrastructure hosting the radius.draht.dev bug-report intake, plus example Lambda, API Gateway, and DynamoDB resources",
 	"type": "module",
 	"scripts": {
 		"dev": "sst dev",

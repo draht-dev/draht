@@ -380,7 +380,8 @@ describe("PermissionGate modes", () => {
 
 		it("fails closed when a chain has more pieces than the deny scan can cover", () => {
 			const manyPieces = `${Array.from({ length: 60 }, () => "true").join("; ")}; rm -rf ~`;
-			expect(gate.evaluate("bash", { command: manyPieces }).action).toBe("approve");
+			// `gate` carries a deny rule for this tool, so an unverifiable (truncated) scan must deny outright.
+			expect(gate.evaluate("bash", { command: manyPieces }).action).toBe("deny");
 
 			const noRuleGate = new PermissionGate([], { cwd: "/repo", mode: "auto" });
 			expect(noRuleGate.evaluate("bash", { command: manyPieces }).action).toBe("approve");
@@ -396,6 +397,48 @@ describe("PermissionGate modes", () => {
 			let deep = "echo safe-marker";
 			for (let i = 0; i < 6; i++) deep = `bash -c "${deep}"`;
 			expect(noRuleGate.evaluate("bash", { command: deep }).action).toBe("approve");
+		});
+
+		it("denies (not approves) a truncated deny scan when a deny rule applies to the tool", () => {
+			const manyPieces = `${Array.from({ length: 60 }, (_, i) => `echo ${i}`).join("; ")}; rm -rf ~`;
+
+			const defaultGate = new PermissionGate([{ tool: "bash", pattern: "rm -rf *", action: "deny" }], {
+				cwd: "/repo",
+				mode: "default",
+			});
+			expect(defaultGate.evaluate("bash", { command: manyPieces }).action).toBe("deny");
+
+			expect(gate.evaluate("bash", { command: manyPieces }).action).toBe("deny");
+
+			const yoloGate = new PermissionGate([{ tool: "bash", pattern: "rm -rf *", action: "deny" }], {
+				cwd: "/repo",
+				mode: "yolo",
+			});
+			expect(yoloGate.evaluate("bash", { command: manyPieces }).action).toBe("deny");
+
+			const mixedGate = new PermissionGate(
+				[
+					{ tool: "bash", pattern: "rm -rf *", action: "deny" },
+					{ tool: "bash", action: "allow" },
+				],
+				{ cwd: "/repo", mode: "auto" },
+			);
+			expect(mixedGate.evaluate("bash", { command: manyPieces }).action).toBe("deny");
+		});
+
+		it("denies a truncated deny scan from excessive nesting depth when a deny rule applies", () => {
+			let deep = "rm -rf ~";
+			for (let i = 0; i < 5; i++) deep = `bash -c "${deep}"`;
+			expect(gate.evaluate("bash", { command: deep }).action).toBe("deny");
+		});
+
+		it("keeps the current approve behavior for a truncated scan when no deny rule applies to the tool", () => {
+			const manyPieces = `${Array.from({ length: 60 }, (_, i) => `echo ${i}`).join("; ")}; rm -rf ~`;
+			const noDenyGate = new PermissionGate([{ tool: "bash", pattern: "git push *", action: "approve" }], {
+				cwd: "/repo",
+				mode: "auto",
+			});
+			expect(noDenyGate.evaluate("bash", { command: manyPieces }).action).toBe("approve");
 		});
 
 		it("leaves non-bash defaults untouched", () => {

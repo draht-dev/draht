@@ -776,10 +776,12 @@ function bashDenyRuleAppliesToPowershell(rule: PermissionRule, toolName: string)
 	return toolName === "powershell" && rule.tool.toLowerCase() === "bash" && rule.action === "deny";
 }
 
+function toolMatchesRule(rule: PermissionRule, toolName: string): boolean {
+	return rule.tool === "*" || rule.tool.toLowerCase() === toolName || bashDenyRuleAppliesToPowershell(rule, toolName);
+}
+
 function ruleMatches(rule: PermissionRule, toolName: string, args: Record<string, unknown>, cwd: string): boolean {
-	const toolMatches =
-		rule.tool === "*" || rule.tool.toLowerCase() === toolName || bashDenyRuleAppliesToPowershell(rule, toolName);
-	if (!toolMatches) return false;
+	if (!toolMatchesRule(rule, toolName)) return false;
 
 	if (rule.pattern !== undefined) {
 		const command = getCommandArg(args);
@@ -821,6 +823,22 @@ export class PermissionGate {
 	/** Evaluate a tool call. `args` should carry `command` for bash, or `path`/`file_path` for read/write/edit. */
 	evaluate(toolName: string, args: Record<string, unknown> = {}): PermissionDecision {
 		const normalizedTool = toolName.toLowerCase();
+
+		if (normalizedTool === "bash" || normalizedTool === "powershell") {
+			const command = getCommandArg(args);
+			if (command !== undefined && commandDenyScanTruncated(command)) {
+				const denyRuleApplies = this.rules.some(
+					(rule) => rule.action === "deny" && toolMatchesRule(rule, normalizedTool),
+				);
+				if (denyRuleApplies) {
+					return {
+						action: "deny",
+						reason:
+							"command has more chained/wrapped pieces than the deny scan can fully cover, and a deny rule applies to this tool; failing closed rather than risk missing a match",
+					};
+				}
+			}
+		}
 
 		for (const rule of this.rules) {
 			if (ruleMatches(rule, normalizedTool, args, this.cwd)) {

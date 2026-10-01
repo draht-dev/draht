@@ -236,7 +236,7 @@ export async function runMcpCommand(args: string[], options: McpCommandOptions):
 				return 1;
 			}
 			if (command === "logout") {
-				const removed = credentials.remove(url);
+				const removed = credentials.remove(name, url);
 				log(removed ? `Signed out of MCP server "${name}".` : `No stored credentials for MCP server "${name}".`);
 				return 0;
 			}
@@ -544,7 +544,7 @@ async function login(
 	try {
 		await signInMcpServer({
 			serverUrl: url,
-			store: credentials.forServer(url),
+			store: credentials.forServer(name, url),
 			settings: connection.oauthSettings(),
 			challenge: connection.challenge,
 			prompt: {

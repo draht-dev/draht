@@ -486,7 +486,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 		const tokensAtSignIn = new Map<McpServerConnection, string>();
 		const storedTokens = (connection: McpServerConnection): string => {
 			const url = connection.oauthUrl;
-			return url && credentials ? JSON.stringify(credentials.tokens(url) ?? null) : "null";
+			return url && credentials ? JSON.stringify(credentials.tokens(connection.name, url) ?? null) : "null";
 		};
 		const onConnectionChange = (connection: McpServerConnection) => {
 			if (connection.state !== "needs-auth") tokensAtSignIn.delete(connection);
@@ -598,7 +598,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			try {
 				await runtime.signInMcpServer({
 					serverUrl: url,
-					store: getCredentials(runtime).forServer(url),
+					store: getCredentials(runtime).forServer(server.entry.name, url),
 					settings: connection.oauthSettings(),
 					challenge: connection.challenge,
 					prompt,
@@ -621,7 +621,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			const connection = server.connection;
 			const url = connection?.oauthUrl;
 			if (!connection || !url) return false;
-			const removed = getCredentials(await loadMcpRuntime()).remove(url);
+			const removed = getCredentials(await loadMcpRuntime()).remove(server.entry.name, url);
 			await connection.signOut();
 			return removed;
 		};

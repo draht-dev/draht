@@ -6,7 +6,7 @@
  * `McpOAuthAuthorizationRequiredError`, and the user signs in through `/mcp`, which runs
  * the authorization code flow (PKCE, dynamic client registration) against a loopback callback.
  *
- * Credentials live in `<agent-dir>/mcp-auth.json`, keyed by server URL.
+ * Credentials live in `<agent-dir>/mcp-auth.json`, keyed by server name and URL.
  */
 
 import { createHash } from "node:crypto";
@@ -31,6 +31,7 @@ import {
 import lockfile from "proper-lockfile";
 import { APP_NAME, getAgentDir } from "../../config.ts";
 import { type AuthStorageBackend, FileAuthStorageBackend } from "../../core/auth-storage.ts";
+import { mcpNamespace } from "../../core/mcp-servers.ts";
 
 const CALLBACK_HOST = "127.0.0.1";
 const CALLBACK_PATH = "/callback";
@@ -108,6 +109,19 @@ function parseStates(content: string | undefined): StoredStates {
 	return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as StoredStates) : {};
 }
 
+function serializeStates(states: StoredStates): string {
+	return `${JSON.stringify(states, null, 2)}\n`;
+}
+
+/**
+ * Keys of a server's state: by name and URL, so servers sharing a URL keep separate accounts, and the
+ * legacy key by URL alone, written by older versions.
+ */
+function storeKeys(name: string, serverUrl: string): { key: string; legacyKey: string } {
+	const legacyKey = String(new URL(serverUrl));
+	return { key: `${mcpNamespace(name)}|${legacyKey}`, legacyKey };
+}
+
 export interface McpOAuthServerStore extends McpOAuthStateStore {
 	/** Run `fn` while no other process refreshes the server's tokens. */
 	withRefreshLock<T>(fn: () => Promise<T>): Promise<T>;
@@ -124,10 +138,18 @@ export class McpOAuthCredentialStore {
 		this.lockDir = backend ? lockDir : getAgentDir();
 	}
 
-	forServer(serverUrl: string): McpOAuthServerStore {
-		const key = String(new URL(serverUrl));
+	forServer(name: string, serverUrl: string): McpOAuthServerStore {
+		const { key, legacyKey } = storeKeys(name, serverUrl);
 		return {
-			load: () => this.read()[key],
+			// The first server to load legacy state takes it over; others with the same URL sign in again.
+			load: () =>
+				this.backend.withLock((current) => {
+					const states = parseStates(current);
+					if (states[key] || !states[legacyKey]) return { result: states[key] };
+					states[key] = states[legacyKey];
+					delete states[legacyKey];
+					return { result: states[key], next: serializeStates(states) };
+				}),
 			save: (state) =>
 				this.write((states) => {
 					states[key] = state;
@@ -163,30 +185,30 @@ export class McpOAuthCredentialStore {
 		}
 	}
 
-	/** The stored tokens of a server, for noticing sign-ins done by another process. */
-	tokens(serverUrl: string): McpOAuthState["tokens"] {
-		return this.read()[String(new URL(serverUrl))]?.tokens;
+	/** The stored tokens of a server, for noticing sign-ins done by another process. Does not take over legacy state. */
+	tokens(name: string, serverUrl: string): McpOAuthState["tokens"] {
+		const { key, legacyKey } = storeKeys(name, serverUrl);
+		const states = this.backend.withLock((current) => ({ result: parseStates(current) }));
+		return (states[key] ?? states[legacyKey])?.tokens;
 	}
 
-	/** Returns whether credentials were stored for the server. */
-	remove(serverUrl: string): boolean {
-		const key = String(new URL(serverUrl));
-		if (!(key in this.read())) return false;
-		this.write((states) => {
-			delete states[key];
+	/** Returns whether credentials were stored for the server. Removes legacy state the server would take over. */
+	remove(name: string, serverUrl: string): boolean {
+		const { key, legacyKey } = storeKeys(name, serverUrl);
+		return this.backend.withLock((current) => {
+			const states = parseStates(current);
+			const stored = key in states ? key : legacyKey in states ? legacyKey : undefined;
+			if (!stored) return { result: false };
+			delete states[stored];
+			return { result: true, next: serializeStates(states) };
 		});
-		return true;
-	}
-
-	private read(): StoredStates {
-		return this.backend.withLock((current) => ({ result: parseStates(current) }));
 	}
 
 	private write(update: (states: StoredStates) => void): void {
 		this.backend.withLock((current) => {
 			const states = parseStates(current);
 			update(states);
-			return { result: undefined, next: `${JSON.stringify(states, null, 2)}\n` };
+			return { result: undefined, next: serializeStates(states) };
 		});
 	}
 }

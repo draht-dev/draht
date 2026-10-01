@@ -112,7 +112,7 @@ Checkpoints back `/rewind`. See [Checkpoint commands](cli.md#checkpoint-commands
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `theme` | string | detected `dark`/`light` | Built-in or custom theme name. Unset detects the terminal's dark/light appearance; `system` derives colors from the terminal theme instead and must be set explicitly. |
-| `quietStartup` | boolean | `false` | Hide the startup header. |
+| `quietStartup` | boolean \| `"header"` | `false` | `true` hides the startup header and loaded-resource listing. `"header"` keeps the header (version and key hints) but hides the model scope line and loaded-resource listing. |
 | `tuiMode` | `"regular" \| "fullscreen"` | `"regular"` | Interactive terminal UI mode. |
 | `fullscreenExitOutput` | `"transcript" \| "resume-hint"` | `"transcript"` | Output printed when fullscreen mode exits. |
 | `fullscreenScrollbar` | `"auto" \| "always" \| "hidden"` | `"auto"` | Fullscreen transcript scrollbar behavior. |

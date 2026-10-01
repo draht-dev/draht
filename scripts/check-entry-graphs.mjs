@@ -40,12 +40,6 @@ const BUDGETS = {
 		},
 		"./utils/*": { maxFiles: 3, forbid: ["providers/", "api/", "index.ts"] },
 	},
-	"packages/agent": {
-		"./harness/runtime/reducer": { maxFiles: 1 },
-		"./harness/context": { maxFiles: 6, forbid: ["harness/runtime/", "harness/execution/", "packages/ai/"] },
-		"./harness/env/nodejs": { maxFiles: 5, forbid: ["packages/ai/", "harness/runtime/"] },
-		"./harness/session": { maxFiles: 25, forbid: ["harness/runtime/", "harness/execution/", "packages/ai/src/index.ts"] },
-	},
 };
 
 const SPEC = /(?:^|\n)\s*(?:import|export)\s+(?!type\s)([^;]*?\sfrom\s*)?["']([^"']+)["']/g;
@@ -86,7 +80,7 @@ function walk(entryFile) {
 	return seen;
 }
 
-/** `./dist/harness/context.js` in the exports map is `src/harness/context.ts` on disk. */
+/** `./dist/models.js` in the exports map is `src/models.ts` on disk. */
 function sourceFor(pkgDir, distPath) {
 	const rel = distPath.replace(/^\.\/dist\//, "").replace(/\.js$/, ".ts");
 	const file = resolve(ROOT, pkgDir, "src", rel);

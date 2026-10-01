@@ -14,7 +14,6 @@
 			"@draht/mcp/oauth": ["../mcp/dist/oauth/index.d.ts"],
 			"@draht/mcp/testing": ["../mcp/dist/testing/index.d.ts"],
 			"@draht/agent-core": ["../agent/dist/index.d.ts"],
-			"@draht/agent-core/*": ["../agent/dist/*.d.ts"],
 			"@draht/ai": ["../ai/dist/index.d.ts"],
 			"@draht/ai/*": ["../ai/dist/*.d.ts", "../ai/dist/providers/*.d.ts"],
 			"@draht/tui": ["../tui/dist/index.d.ts"],

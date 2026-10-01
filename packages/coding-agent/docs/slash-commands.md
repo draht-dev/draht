@@ -38,7 +38,7 @@ Extensions, prompt templates, and skills can add commands. The command menu in d
 | `/copy` | Copy the last assistant message |
 | `/export [path]` | Export the session as HTML or JSONL |
 | `/share` | Upload the session as a secret GitHub gist; shows a viewer link when `DRAHT_SHARE_VIEWER_URL` is set, otherwise the gist URL |
-| `/bug [description]` | Collect a bug report as a zip archive, or upload it when `DRAHT_RADIUS_GATEWAY` is set; see [Sessions](sessions.md#report-a-bug) |
+| `/bug [description]` | Collect a bug report and upload it to radius.draht.dev, or export it as a zip archive; see [Sessions](sessions.md#report-a-bug) |
 
 Review a session before exporting or sharing it. Sessions can contain prompts, tool arguments, command output, file contents, and credentials exposed during the conversation.
 

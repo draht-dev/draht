@@ -1,6 +1,6 @@
 import type { BugReportBundle } from "./bug-report.ts";
 import { bugReportFiles } from "./bug-report.ts";
-import { ENV_RADIUS_GATEWAY, getBugReportGatewayUrl } from "./radius.ts";
+import { getBugReportGatewayUrl } from "./radius.ts";
 
 interface UploadBugReportOptions {
 	token?: string;
@@ -18,7 +18,6 @@ export async function uploadBugReport(
 		body.append(file.name, new Blob([file.data], { type: file.contentType }), file.name);
 	}
 	const gatewayUrl = options.gatewayUrl ?? getBugReportGatewayUrl();
-	if (!gatewayUrl) throw new Error(`Bug report upload is disabled: set ${ENV_RADIUS_GATEWAY} to a Radius gateway`);
 	const response = await fetch(new URL("/v1/bug-reports", gatewayUrl), {
 		method: "POST",
 		headers: options.token ? { Authorization: `Bearer ${options.token}` } : undefined,

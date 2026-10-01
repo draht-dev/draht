@@ -15,7 +15,7 @@ import {
 import { uploadBugReport } from "../../core/bug-report-upload.ts";
 import { clearCrashLog, readCrashLog } from "../../core/crash-log.ts";
 import type { KeybindingsManager } from "../../core/keybindings.ts";
-import { ENV_RADIUS_GATEWAY, getBugReportGatewayUrl, RADIUS_PROVIDER_ID } from "../../core/radius.ts";
+import { getBugReportGatewayUrl, RADIUS_PROVIDER_ID } from "../../core/radius.ts";
 import { serializeSessionBranch } from "../../core/session-export.ts";
 import { BorderedLoader } from "./components/bordered-loader.ts";
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
@@ -42,7 +42,7 @@ interface BugReportOptions {
 
 type Overlay = Container & { dispose?: () => void };
 
-const DISCLAIMER = `The report includes your ${APP_NAME} version, operating system, the current model and provider configuration (without API keys), loaded extensions, settings, and provider error diagnostics from this session.`;
+const DISCLAIMER = `The report includes your ${APP_NAME} version, operating system, the current model and provider configuration (without API keys), loaded extensions, settings, and provider error diagnostics from this session. Uploaded reports go to the draht maintainers at radius.draht.dev.`;
 const TRANSCRIPT_NOTE =
 	"The transcript contains your messages, model output, tool calls and their results, including file contents and command output read during this session.";
 
@@ -132,13 +132,11 @@ async function promptForOptions(
 	}
 	const description = hint.trim();
 	const gatewayUrl = getBugReportGatewayUrl();
-	const deliveryNote = gatewayUrl
-		? `Upload sends the report to ${new URL(gatewayUrl).host}. Export writes a zip archive to the current directory instead.`
-		: `Export writes a zip archive to the current directory. Upload is available when ${ENV_RADIUS_GATEWAY} points at a Radius gateway.`;
+	const deliveryNote = `Upload sends the report to ${new URL(gatewayUrl).host}. Export writes a zip archive to the current directory instead.`;
 	const delivery = await choose(
 		context,
 		"Bug report",
-		gatewayUrl ? ["Upload Report", "Export as Zip", "Cancel"] : ["Export as Zip", "Cancel"],
+		["Upload Report", "Export as Zip", "Cancel"],
 		`Description: ${description || "none"}\nTranscript: ${includeSession ? "included" : "not included"}\nSummary: ${includeSummary ? `written by ${context.session.model?.name ?? "the current model"}` : "none"}\n\n${deliveryNote}`,
 	);
 	if (!delivery || delivery === "Cancel") return undefined;

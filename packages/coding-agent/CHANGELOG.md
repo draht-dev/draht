@@ -56,6 +56,7 @@
 
 ### Changed
 
+- `/bug` uploads now go to draht's own intake at `https://radius.draht.dev`, independent of the Radius model provider's gateway; "Upload Report" is offered again by default. Override the destination with `DRAHT_BUG_REPORT_GATEWAY`; `DRAHT_RADIUS_GATEWAY` (the Radius provider's own gateway) no longer affects where bug reports are sent
 - without a `theme` setting, draht again defaults to the detected dark/light built-in theme (draht's `copper` border) instead of `system`; `system` remains available as an explicit choice
 - pruned the boilerplate Atomic Reasoning section from all command prompts; commands keep only command-specific reasoning plus a one-line pointer to the `atomic-reasoning` skill; deleted outright from `/progress`, `/pause-work`, `/resume-work`
 - `/brainstorm`, `/discuss-phase`, `/new-project`, `/init-project` now question in whole-frontier rounds (all settled-prerequisite questions per round, numbered, with recommended answers; accepted-by-number = decided) instead of 1-2 questions at a time

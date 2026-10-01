@@ -8,13 +8,17 @@ export function getRadiusGatewayUrl(): string {
 	return normalizeRadiusGatewayUrl(process.env[ENV_RADIUS_GATEWAY] ?? DEFAULT_RADIUS_GATEWAY);
 }
 
+/** draht's own bug report intake; independent of the Radius model provider's gateway. */
+export const DEFAULT_BUG_REPORT_GATEWAY = "https://radius.draht.dev";
+export const ENV_BUG_REPORT_GATEWAY = "DRAHT_BUG_REPORT_GATEWAY";
+
 /**
- * Gateway that accepts `/bug` uploads, or `undefined` when none is configured.
+ * Gateway that accepts `/bug` uploads, honoring the `DRAHT_BUG_REPORT_GATEWAY` override.
  *
- * draht has no default bug report service: the upstream default gateway would send draht users'
- * reports to a third party, so uploads require an explicit `DRAHT_RADIUS_GATEWAY`.
+ * Bug reports go to the draht maintainers' own intake, not the Radius model provider's gateway:
+ * configuring a Radius provider must never redirect bug reports to radius.pi.dev.
  */
-export function getBugReportGatewayUrl(): string | undefined {
-	const configured = process.env[ENV_RADIUS_GATEWAY]?.trim();
-	return configured ? normalizeRadiusGatewayUrl(configured) : undefined;
+export function getBugReportGatewayUrl(): string {
+	const configured = process.env[ENV_BUG_REPORT_GATEWAY]?.trim();
+	return normalizeRadiusGatewayUrl(configured || DEFAULT_BUG_REPORT_GATEWAY);
 }

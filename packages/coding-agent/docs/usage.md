@@ -77,7 +77,7 @@ Use `!!` when you want to run a command without sending its output to the model.
 
 ## Copy, export, or share results
 
-Press `Ctrl+X` or run `/copy` to copy the last assistant response. Use `/export` to save the session as HTML or JSONL. Run `/bug` to collect a bug report as a zip archive; see [Report a bug](sessions.md#report-a-bug).
+Press `Ctrl+X` or run `/copy` to copy the last assistant response. Use `/export` to save the session as HTML or JSONL. Run `/bug` to collect a bug report and upload it or export it as a zip archive; see [Report a bug](sessions.md#report-a-bug).
 
 Use `/share` to upload the session as a private GitHub gist through the GitHub CLI. draht shows the gist URL, plus a viewer link when `DRAHT_SHARE_VIEWER_URL` is set. Review the session first because it can contain prompts, tool output, file contents, and credentials exposed during the conversation.
 

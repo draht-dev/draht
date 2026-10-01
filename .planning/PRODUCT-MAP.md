@@ -1,0 +1,45 @@
+# Draht Product and Package Support Map
+
+**Status:** proposed scope decision, pending stakeholder approval  
+**Decision date:** 2026-08-28  
+**Evidence contract:** [`RELEASE-EVIDENCE.md`](RELEASE-EVIDENCE.md)
+
+This map is the authority for whether a workspace is a supported Draht product, an internal tool, an example, or deprecated. A package being present in the monorepo, compiling, or having a completed historical phase does not place it in a public release.
+
+## Classification meanings
+
+- **Supported product:** maintained for external users and eligible for the public release set. Every release-critical capability must satisfy E2 or stronger before publication.
+- **Internal tool:** maintained for Draht's own operation or product delivery, but excluded from the public package release and public compatibility promises.
+- **Example:** reference material or a scaffold. It is excluded from release and operational claims and carries no compatibility promise.
+- **Deprecated:** retained only for migration or archival purposes, with a named replacement or removal release.
+
+`package.json.private: true` is the mechanical npm exclusion. Removing it is an explicit release-scope decision and requires the evidence gate in [`docs/releasing.md`](../docs/releasing.md); it is not routine package maintenance.
+
+## Package decisions
+
+| Package | Classification | Support owner | Public release inclusion | Evidence required | Deprecation or removal rule |
+|---|---|---|---|---|---|
+| `@draht/infra` | **Example** | Platform/release maintainers | **No** (`private`) | Hosts radius.draht.dev bug-report intake (v1); full gateway planned, see specs/2026-10-01-radius-draht-gateway.md. Its sessions, clients, and health handlers remain examples; E0 compile evidence is sufficient only for those example claims, and no deployment or service claim beyond the bug-report intake is permitted. | May be removed without compatibility support when no maintained consumer depends on the example handlers. Promotion of the remaining example handlers requires auth, real owners, deployment/rollback/observability, and E2 readback before `private` is removed. |
+| `@draht/invoice` | **Example** | Business-extension maintainers | **No** (`private`) | E0 deterministic generator and mocked adapter tests; no live Lexoffice/Toggl or legal-correctness claim. | May be removed or replaced without compatibility support. Promotion requires an owner-approved product boundary, credential handling, provider sandboxes, mutation/readback, and E2 evidence. |
+| `@draht/compliance` | **Example** | Security/compliance-extension maintainers | **No** (`private`) | E0 scanner/template tests only. Output is not legal advice or evidence of GDPR/EU AI Act compliance. | May be removed or replaced without compatibility support. Promotion requires a named policy/legal owner, versioned sources, false-positive/negative evaluation, and E2 composition evidence. |
+| `@draht/knowledge` | **Supported product** | Coding-agent extension maintainers | **Yes** | E2 packed-package composition through the supported coding-agent entry point, including persistent-store mutation/readback, namespace isolation, failure behavior, and upgrade compatibility. | Deprecation requires an announced replacement or removal release, migration guidance for persisted stores, and a changelog entry. |
+| `@draht/mom` | **Supported product** | Slack/delivery maintainers | **Yes** | E2 packed CLI run with the real Slack adapter in an isolated test workspace, authentication and authorization failure cases, sandbox boundary evidence, message/readback, and clean shutdown/restart. | Deprecation requires an announced replacement or removal release, workspace/log migration guidance, and a changelog entry. |
+| `@draht/pods` | **Supported product** | Model-deployment maintainers | **Yes** | E2 packed CLI run against a supported GPU-pod/provider target, authenticated endpoint readback, model lifecycle checks, failure cleanup, and uninstall/rollback evidence. Provider-specific operational claims require E3/E4 evidence. | Deprecation requires an announced replacement or removal release, configuration migration guidance, and a changelog entry. |
+| `@draht/ci` | **Internal tool** | Repository automation maintainers | **No** (`private`) | E1 disposable GitHub Action integration before it may gate this repository; E3 is required for claims about the active repository workflow. | May be removed after active workflow references are migrated or deleted and repository maintainers approve the change. No public compatibility period is promised. |
+| `@draht/workflows` | **Example** | Workflow/example maintainers | **No** (`private`) | E0 schema/import validation with placeholders named. Importability does not prove credentials, external mutations, scheduling, or delivery. | Individual templates may be removed when stale, unsafe, or unsupported; removal must update the package README and any referring documentation. |
+| `@draht/landing` | **Internal tool** | Web/product maintainers | **No** (`private`) | E2 built-site acceptance against the production composition and independent content/link readback before release claims are copied to the live site; E3 for active deployment claims. | May be replaced without package compatibility support after redirects, canonical content, and deployment ownership are migrated. |
+| `@draht/x-markdown` | **Internal tool** | Content-ingestion maintainers | **No** (`private`) | E2 authenticated worker/CLI/extension composition with real public-X extraction, denied/private-content controls, parser-drift failure behavior, and independent Markdown readback before service claims. | May be removed after internal consumers and credentials are migrated. Public product promotion requires a separate support decision and release gate. |
+
+No package in this decision set is currently classified as deprecated.
+
+## Infra decision
+
+`@draht/infra` now hosts the `radius.draht.dev` bug-report intake (v1); a full gateway is planned, see [`specs/2026-10-01-radius-draht-gateway.md`](specs/2026-10-01-radius-draht-gateway.md). Its sessions and clients handlers still return placeholders, and health is unconditional. Beyond the bug-report intake, there is no deployment, authentication, observability, rollback, or active-stack evidence. The package therefore remains excluded from the public release and from Draht's broader product narrative.
+
+The historical Phase 2 result remains true at its written boundary: the SST resource scaffold compiled and resources were defined but not deployed. That result is E0 and does not imply a service exists.
+
+## Product narrative boundary
+
+The flagship product is the local Draht agent stack: `@draht/ai`, `@draht/agent-core`, `@draht/coding-agent`, and their supported user-facing libraries and CLIs. Of the satellite set covered here, only `@draht/knowledge`, `@draht/mom`, and `@draht/pods` are public supported products. Their inclusion does not waive the E2 release gate.
+
+Invoice, compliance, and workflow assets are examples. CI, the landing site, and X-Markdown are internal delivery tools. Infra is a scaffold example. None may be used to claim that Draht ships an AWS control plane, hosted client/session service, legally authoritative compliance product, live invoicing service, managed workflow service, hosted X ingestion product, or deployed website merely because its source exists in this repository.

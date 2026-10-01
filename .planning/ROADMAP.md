@@ -1,5 +1,12 @@
 # Roadmap
 
+> **Release evidence contract (2026-08-28):** Status words in this roadmap are
+> scoped to each phase's written acceptance. They do not by themselves establish
+> release or operational readiness. [`RELEASE-EVIDENCE.md`](RELEASE-EVIDENCE.md)
+> defines E0 contract/unit, E1 disposable integration, E2 live candidate, E3
+> active deployment, and E4 soak/hardware/privacy evidence. Unit results are E0;
+> disposable integrations with fixtures cap at E1. Neither is operational.
+
 ## Phase 1: Rebrand — `complete`
 **Goal:** All packages renamed to @draht/ namespace, docs updated, builds pass.
 **Requirements:** R1.1, R1.2, R1.3, R1.4, R1.5, R5.1, R5.2, R5.3

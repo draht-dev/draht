@@ -267,6 +267,7 @@ const PASSTHROUGH_PREFIXES = new Set([
 	"chrt",
 	"setsid",
 	"xargs",
+	"timeout",
 ]);
 
 /** Shells whose `-c <command>` argument is itself a full command line to unwrap and re-check. */
@@ -340,10 +341,21 @@ function collapseWhitespace(text: string): string {
 	return text.trim().replace(/\s+/g, " ");
 }
 
-/** Canonicalizes combined single-dash short-flag clusters (`-rf` / `-fr`) by sorting their letters. */
+/**
+ * Canonicalizes combined single-dash short-flag clusters (`-rf` / `-fr`) by
+ * sorting their letters. The sort is case-insensitive: matching elsewhere is
+ * already case-insensitive (`globToRegExp`'s `i` flag), but a case-sensitive
+ * sort would put uppercase letters before lowercase ones (ASCII order), so a
+ * mixed-case cluster like `-Rf` would canonicalize to `-Rf` while `-rf`
+ * canonicalizes to `-fr` — different letter *order*, which the `i` flag
+ * can't paper over. Sorting case-insensitively (while keeping each letter's
+ * original case) gives `-Rf` and `-rf` the same order (`-fR` / `-fr`), so
+ * `-Rf`/`-fR`/`-RF`/... all canonicalize to match a plain `-rf` pattern.
+ */
 function normalizeFlagClusters(text: string): string {
 	return text.replace(/(^|\s)-([A-Za-z]{2,})(?=\s|$)/g, (_match, pre: string, letters: string) => {
-		return `${pre}-${letters.split("").sort().join("")}`;
+		const sorted = [...letters].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+		return `${pre}-${sorted.join("")}`;
 	});
 }
 
@@ -371,7 +383,15 @@ function stripEnvAssignments(text: string): string {
 	return text.replace(/^\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/, "");
 }
 
-/** Strips one leading passthrough-wrapper command (e.g. `sudo`, `env FOO=1`) and its own flags, if present. */
+/**
+ * Strips one leading passthrough-wrapper command (e.g. `sudo`, `env FOO=1`)
+ * and its own flags, if present. `timeout DURATION cmd...` additionally
+ * skips the required duration positional, which isn't a `-flag` token, so
+ * `timeout 5 rm -rf /` unwraps down to `rm -rf /` instead of leaving the
+ * bogus `5 rm -rf /` behind. (A `timeout -s KILL 30 cmd`-style separate-arg
+ * flag is a known gap shared with every other wrapper here: only combined
+ * `-flag` tokens are recognized, not flags with a separate argument.)
+ */
 function stripPassthroughPrefix(text: string): { stripped: string; changed: boolean } {
 	const trimmed = text.replace(/^\s+/, "");
 	const match = trimmed.match(/^(\S+)((?:\s+-\S+)*)\s+/);
@@ -379,13 +399,23 @@ function stripPassthroughPrefix(text: string): { stripped: string; changed: bool
 	const token = match[1];
 	const basename = token.includes("/") ? token.slice(token.lastIndexOf("/") + 1) : token;
 	if (!PASSTHROUGH_PREFIXES.has(basename.toLowerCase())) return { stripped: text, changed: false };
-	return { stripped: trimmed.slice(match[0].length), changed: true };
+	let rest = trimmed.slice(match[0].length);
+	if (basename.toLowerCase() === "timeout") {
+		const duration = rest.match(/^(\S+)\s+/);
+		if (duration) rest = rest.slice(duration[0].length);
+	}
+	return { stripped: rest, changed: true };
 }
 
-/** Extracts the inner command line from a `bash -c "..."` / `sh -c '...'` style wrapper, if present. */
+/**
+ * Extracts the inner command line from a `bash -c "..."` / `sh -c '...'`
+ * style wrapper, if present. The final flag token before the quoted argument
+ * may be a combined short-flag cluster ending in `c` (e.g. `bash -lc '...'`
+ * for `-l -c`), not just a bare `-c`.
+ */
 function extractShellDashC(text: string): string | undefined {
 	const trimmed = text.trim();
-	const match = trimmed.match(/^(\S+)(?:\s+-\S+)*\s+-c\s+(['"])([\s\S]*)\2\s*$/);
+	const match = trimmed.match(/^(\S+)(?:\s+-\S+)*?\s+-[A-Za-z]*c\s+(['"])([\s\S]*)\2\s*$/);
 	if (!match) return undefined;
 	const token = match[1];
 	const basename = token.includes("/") ? token.slice(token.lastIndexOf("/") + 1) : token;
@@ -556,6 +586,27 @@ function collectDenyCandidates(command: string): string[] {
  */
 function commandDenyScanTruncated(command: string): boolean {
 	return scanDenyCandidates(command).truncated;
+}
+
+/** Bare first-token command name of a candidate (lowercased, path-stripped), for interpreter checks. */
+function firstTokenCommandName(text: string): string {
+	const token = text.trimStart().match(/^\S+/)?.[0] ?? "";
+	return (token.includes("/") ? token.slice(token.lastIndexOf("/") + 1) : token).toLowerCase();
+}
+
+/**
+ * `true` when `command` (bash tool) invokes `pwsh`/`powershell`/`cmd` at any
+ * unwrapped layer, e.g. `pwsh -c "Remove-Item -Recurse ~"` or
+ * `bash -c "cmd /c del ..."`. Auto mode's danger filter
+ * (`DANGEROUS_COMMAND_PATTERNS`) is bash-shaped and has no coverage for these
+ * interpreters' own syntax, the same reason unmatched `powershell` tool calls
+ * always require approval — so a bash-tool call that merely shells out to one
+ * of them must not get a free pass auto mode never meant to give it.
+ */
+function commandInvokesOtherShell(command: string): boolean {
+	return collectDenyCandidates(command).some((candidate) =>
+		OTHER_SHELL_WRAPPERS.has(firstTokenCommandName(candidate)),
+	);
 }
 
 function globToRegExp(pattern: string): RegExp {
@@ -810,6 +861,13 @@ export class PermissionGate {
 					return {
 						action: "approve",
 						reason: `auto mode: command matched dangerous pattern ${JSON.stringify(dangerous)}, requires approval`,
+					};
+				}
+				if (commandInvokesOtherShell(command)) {
+					return {
+						action: "approve",
+						reason:
+							"auto mode: command invokes a pwsh/powershell/cmd interpreter, which the bash-shaped danger filter has no coverage for; requires approval, same as the powershell tool",
 					};
 				}
 				if (commandDenyScanTruncated(command)) {

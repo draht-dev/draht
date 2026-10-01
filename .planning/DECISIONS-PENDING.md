@@ -471,3 +471,42 @@ process group and a group signal would hit the daemon.
 The daemon cannot guarantee TERM→KILL for a session it did not parent and did not record — an orphan
 survives a daemon crash. The lock file's pid and `processStartedAtMs` are what let a restarted daemon
 re-adopt them, so this is bounded, but it is not free.
+
+---
+
+## Phase 36.5 — harden the dormant `geist-acp` launch surface now, or wait for Phase 38?
+
+**Confidence:** high.
+
+**Ask:** `packages/geist-acp/src/acp-harness-session.ts:462` spawns `launchSpec.cmd` by bare PATH lookup
+with no `env` option, so the child inherits the daemon's full environment — including every stored
+provider credential. There is no production caller today, only tests. Recommended: harden it now, ahead
+of Phase 38's composition root making it reachable from a phone.
+
+### Recommendation
+
+Resolve the launch executable to an absolute path and construct the child's environment rather than
+inheriting the daemon's, and add a structural gate that fails if a full-environment or PATH-based spawn
+is reintroduced anywhere on this surface. Do this as bounded work now, not as an emergency rewrite at
+Phase 38's activation gate.
+
+### Rationale
+
+`geist-acp` is dormant but not isolated: Phase 38's `runGeist()` composition root is exactly where this
+call becomes reachable from a phone, at which point a credential-inheritance bug here is a remote
+exposure, not a test-only one. Fixing it before that composition exists removes a latent
+executable-selection and credential-inheritance path while the surface still has no caller to break, and
+keeps Phase 38 from having to carry a security rewrite on its own activation gate.
+
+### Risks carried
+
+A structural gate against full-environment/PATH-based spawn can be satisfied narrowly (e.g. only this one
+call site) and still leave a sibling launch path unguarded if `geist-acp` grows one before Phase 38 lands;
+the gate's scope must be revisited whenever a new launch path is added, not assumed to cover it.
+
+---
+
+**Owner-governance note, 2026-10-01:** the geist/0.5 wire batch (D36-05 in an earlier draft of this
+bundle) was recorded as **DECIDED** by an advisor without Oskar's approval, and has since shipped in
+`8a6e3b293`. Whether to ratify that decision after the fact is an open question for Oskar, not a blocker
+on anything downstream — nothing here is waiting on it.

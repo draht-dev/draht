@@ -1,6 +1,7 @@
+import type * as PhotonNode from "@silvia-odwyer/photon-node";
 import type { PhotonImageType } from "./photon.ts";
 
-type Photon = typeof import("@silvia-odwyer/photon-node");
+type Photon = typeof PhotonNode;
 
 function readOrientationFromTiff(bytes: Uint8Array, tiffStart: number): number {
 	if (tiffStart + 8 > bytes.length) return 1;

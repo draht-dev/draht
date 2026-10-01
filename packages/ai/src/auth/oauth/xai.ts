@@ -11,14 +11,14 @@
  * server. It is only intended for CLI use, not browser environments.
  */
 
-import type { Server } from "node:http";
+import type { createServer, Server } from "node:http";
 import { oauthErrorHtml, oauthSuccessHtml } from "../../utils/oauth-page.ts";
 import { getProviderEnvValue } from "../../utils/provider-env.ts";
 import type { OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "../types.ts";
 import { generatePKCE } from "./pkce.ts";
 
 type NodeApis = {
-	createServer: typeof import("node:http").createServer;
+	createServer: typeof createServer;
 };
 
 let nodeApis: NodeApis | null = null;

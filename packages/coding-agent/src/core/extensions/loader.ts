@@ -26,6 +26,7 @@ import type {
 	EntryRenderer,
 	Extension,
 	ExtensionAPI,
+	ExtensionContext,
 	ExtensionFactory,
 	ExtensionRuntime,
 	ExtensionVirtualModel,
@@ -319,7 +320,7 @@ function createExtensionAPI(
 			shortcut: KeyId,
 			options: {
 				description?: string;
-				handler: (ctx: import("./types.ts").ExtensionContext) => Promise<void> | void;
+				handler: (ctx: ExtensionContext) => Promise<void> | void;
 			},
 		): void {
 			assertActive();

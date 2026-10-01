@@ -5,19 +5,20 @@
  * It is only intended for CLI use, not browser environments.
  */
 
-// NEVER convert to top-level imports - breaks browser/Vite builds
-let _randomBytes: typeof import("node:crypto").randomBytes | null = null;
-if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
-	import("node:crypto").then((m) => {
-		_randomBytes = m.randomBytes;
-	});
-}
-
+import type { randomBytes } from "node:crypto";
 import { getProviderEnvValue } from "../../utils/provider-env.ts";
 import type { OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "../types.ts";
 import { startOAuthCallbackServer, waitForCallbackOrManualInput } from "./callback-server.ts";
 import { pollOAuthDeviceCodeFlow } from "./device-code.ts";
 import { generatePKCE } from "./pkce.ts";
+
+// NEVER convert to a top-level runtime import - breaks browser/Vite builds
+let _randomBytes: typeof randomBytes | null = null;
+if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
+	import("node:crypto").then((m) => {
+		_randomBytes = m.randomBytes;
+	});
+}
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTH_BASE_URL = "https://auth.openai.com";

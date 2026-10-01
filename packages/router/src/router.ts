@@ -1,3 +1,4 @@
+import type { AssistantMessageEvent } from "@draht/ai";
 import {
 	type Api,
 	type Context,
@@ -66,11 +67,7 @@ export class ModelRouter {
 	 * Events are buffered and only yielded after successful completion,
 	 * preventing partial responses from failed providers from leaking through.
 	 */
-	async *stream(
-		role: RouterRole,
-		context: Context,
-		options?: StreamOptions,
-	): AsyncGenerator<import("@draht/ai").AssistantMessageEvent> {
+	async *stream(role: RouterRole, context: Context, options?: StreamOptions): AsyncGenerator<AssistantMessageEvent> {
 		yield* this.streamWithFallback(role, context, options, (provider, model, opts) =>
 			provider.stream(model, normalizeContext(context), opts),
 		);
@@ -87,7 +84,7 @@ export class ModelRouter {
 		role: RouterRole,
 		context: Context,
 		options?: SimpleStreamOptions,
-	): AsyncGenerator<import("@draht/ai").AssistantMessageEvent> {
+	): AsyncGenerator<AssistantMessageEvent> {
 		yield* this.streamWithFallback(role, context, options, (provider, model, opts) =>
 			provider.streamSimple(model, normalizeContext(context), opts as SimpleStreamOptions),
 		);
@@ -105,8 +102,8 @@ export class ModelRouter {
 			provider: NonNullable<ReturnType<typeof getApiProvider>>,
 			model: Model<Api>,
 			options: T | undefined,
-		) => AsyncIterable<import("@draht/ai").AssistantMessageEvent>,
-	): AsyncGenerator<import("@draht/ai").AssistantMessageEvent> {
+		) => AsyncIterable<AssistantMessageEvent>,
+	): AsyncGenerator<AssistantMessageEvent> {
 		const models = this.resolveWithFallbacks(role);
 		let lastError: unknown;
 
@@ -118,7 +115,7 @@ export class ModelRouter {
 			if (!provider) continue;
 
 			// Buffer events to prevent partial responses from leaking on failure
-			const bufferedEvents: import("@draht/ai").AssistantMessageEvent[] = [];
+			const bufferedEvents: AssistantMessageEvent[] = [];
 			let streamError: Error | null = null;
 
 			try {

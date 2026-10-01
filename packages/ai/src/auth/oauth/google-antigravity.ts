@@ -6,12 +6,12 @@
  * It is only intended for CLI use, not browser environments.
  */
 
-import type { Server } from "node:http";
+import type { createServer, Server } from "node:http";
 import { oauthErrorHtml, oauthSuccessHtml } from "../../utils/oauth-page.ts";
 import type { OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "../types.ts";
 import { generatePKCE } from "./pkce.ts";
 
-let _createServer: typeof import("node:http").createServer | null = null;
+let _createServer: typeof createServer | null = null;
 let _httpImportPromise: Promise<void> | null = null;
 if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
 	_httpImportPromise = import("node:http").then((m) => {
@@ -51,7 +51,7 @@ type CallbackServerInfo = {
 /**
  * Start a local HTTP server to receive the OAuth callback
  */
-async function getNodeCreateServer(): Promise<typeof import("node:http").createServer> {
+async function getNodeCreateServer(): Promise<typeof createServer> {
 	if (_createServer) return _createServer;
 	if (_httpImportPromise) {
 		await _httpImportPromise;

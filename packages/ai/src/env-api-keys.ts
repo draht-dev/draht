@@ -1,7 +1,12 @@
-// NEVER convert to top-level imports - breaks browser/Vite builds
-let _existsSync: typeof import("node:fs").existsSync | null = null;
-let _homedir: typeof import("node:os").homedir | null = null;
-let _join: typeof import("node:path").join | null = null;
+// NEVER convert the dynamic imports below to top-level runtime imports - breaks browser/Vite builds.
+// The type-only imports are erased at compile time and are safe in all environments.
+import type { existsSync } from "node:fs";
+import type { homedir } from "node:os";
+import type { join } from "node:path";
+
+let _existsSync: typeof existsSync | null = null;
+let _homedir: typeof homedir | null = null;
+let _join: typeof join | null = null;
 
 type DynamicImport = (specifier: string) => Promise<unknown>;
 
@@ -13,13 +18,13 @@ const NODE_PATH_SPECIFIER = "node:" + "path";
 // Eagerly load in Node.js/Bun environment only
 if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
 	dynamicImport(NODE_FS_SPECIFIER).then((m) => {
-		_existsSync = (m as typeof import("node:fs")).existsSync;
+		_existsSync = (m as { existsSync: typeof existsSync }).existsSync;
 	});
 	dynamicImport(NODE_OS_SPECIFIER).then((m) => {
-		_homedir = (m as typeof import("node:os")).homedir;
+		_homedir = (m as { homedir: typeof homedir }).homedir;
 	});
 	dynamicImport(NODE_PATH_SPECIFIER).then((m) => {
-		_join = (m as typeof import("node:path")).join;
+		_join = (m as { join: typeof join }).join;
 	});
 }
 

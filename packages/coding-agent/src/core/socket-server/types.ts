@@ -5,6 +5,8 @@
  * Inspired by tmux's multi-attach model.
  */
 
+import type { Socket } from "net";
+
 /** Client connection mode */
 export type ClientMode = "read-write" | "read-only";
 
@@ -196,7 +198,7 @@ export interface PermissionResolvedMessage {
 export interface ConnectedClient {
 	id: string;
 	mode: ClientMode;
-	socket: import("net").Socket;
+	socket: Socket;
 	connectedAt: Date;
 	/** Exactly what this client declared on attach. Empty for a client that declared nothing. */
 	capabilities: string[];

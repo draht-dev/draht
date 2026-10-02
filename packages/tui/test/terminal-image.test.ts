@@ -18,6 +18,7 @@ import {
 	getCapabilities,
 	getKittyImageMetadata,
 	getKittyImagePlacement,
+	getKittyImagePlacementRows,
 	hyperlink,
 	imageFallback,
 	isImageLine,
@@ -473,6 +474,11 @@ describe("Kitty image cursor movement", () => {
 		assert.ok(sequence.startsWith("\x1b_Ga=T,f=100,q=2,C=1,c=2,r=2;"));
 	});
 
+	it("reads explicit placement rows without registered metadata", () => {
+		const sequence = encodeKitty("AAAA", { columns: 2, rows: 3, moveCursor: false });
+		assert.strictEqual(getKittyImagePlacementRows(sequence), 3);
+	});
+
 	it("suppresses Kitty replies for delete commands", () => {
 		assert.strictEqual(deleteKittyImage(42), "\x1b_Ga=d,d=I,i=42,q=2\x1b\\");
 		assert.strictEqual(deleteAllKittyImages(), "\x1b_Ga=d,d=A,q=2\x1b\\");
@@ -542,8 +548,10 @@ describe("Kitty image cursor movement", () => {
 		const line = `left ${cropKittyImageLine(transmission, 2, 1)} right`;
 		const placement = getKittyImagePlacement(line);
 		assert.ok(placement);
+		assert.strictEqual(getKittyImagePlacementRows(line), 1);
 		assert.strictEqual(placement.transmissionBytes, line.length - "left ".length - " right".length);
 		assert.strictEqual(placement.estimatedDecodedBytes, 100 * 100 * 4);
+		assert.strictEqual(placement.rows, 1);
 		assert.strictEqual(placement.sequence, "\x1b_Ga=p,q=2,C=1,c=3,i=42,y=66,h=34,r=1\x1b\\");
 		assert.strictEqual(placement.replacementLine, `left ${placement.sequence} right`);
 		assert.ok(!placement.replacementLine.includes("AAAA"));

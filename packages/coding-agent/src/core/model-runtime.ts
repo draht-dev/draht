@@ -189,6 +189,8 @@ export class ModelRuntime implements Models {
 		auth: new Map(),
 	};
 	private availabilityRefreshSeq = 0;
+	/** The most recently queued full availability pass; see {@link queueAvailabilityRefresh}. */
+	private latestAvailabilityRefresh: Promise<void> | undefined;
 	private availabilityErrorSeq = 0;
 	private readonly providerAvailabilitySeq = new Map<string, number>();
 	private availabilityError: string | undefined;
@@ -331,7 +333,8 @@ export class ModelRuntime implements Models {
 		};
 	}
 
-	private async runAvailabilityRefresh(seq: number, errorSeq: number, signal: AbortSignal): Promise<void> {
+	/** Resolves true when this pass wrote the snapshot, false when a newer pass superseded it. */
+	private async runAvailabilityRefresh(seq: number, errorSeq: number, signal: AbortSignal): Promise<boolean> {
 		const providers = this.models.getProviders();
 		const [available, checks, credentials] = await Promise.all([
 			this.models.getAvailable(undefined, { signal }),
@@ -345,7 +348,7 @@ export class ModelRuntime implements Models {
 			),
 			this.credentials.list({ signal }),
 		]);
-		if (seq !== this.availabilityRefreshSeq) return;
+		if (seq !== this.availabilityRefreshSeq) return false;
 		const auth = new Map(checks);
 		const configuredProviders = new Set(
 			checks
@@ -360,6 +363,7 @@ export class ModelRuntime implements Models {
 			auth,
 		};
 		if (errorSeq === this.availabilityErrorSeq) this.availabilityError = undefined;
+		return true;
 	}
 
 	private queueAvailabilityRefresh(signal?: AbortSignal): Promise<void> {
@@ -369,12 +373,25 @@ export class ModelRuntime implements Models {
 		}
 		const errorSeq = ++this.availabilityErrorSeq;
 		const effectiveSignal = operationSignal(signal);
-		return this.runAvailabilityRefresh(seq, errorSeq, effectiveSignal).catch((error) => {
-			if (errorSeq === this.availabilityErrorSeq && !effectiveSignal.aborted) {
-				this.availabilityError = error instanceof Error ? error.message : String(error);
-			}
-			throw error;
-		});
+		const pass: Promise<void> = this.runAvailabilityRefresh(seq, errorSeq, effectiveSignal)
+			.catch((error) => {
+				if (errorSeq === this.availabilityErrorSeq && !effectiveSignal.aborted) {
+					this.availabilityError = error instanceof Error ? error.message : String(error);
+				}
+				throw error;
+			})
+			.then(async (applied) => {
+				if (applied) return;
+				// A newer full pass superseded this one, so this pass wrote nothing. Resolving here
+				// would let `await refresh()` return a snapshot OLDER than the call: an extension's
+				// registerNativeProvider() starts an unawaited refresh, and when that pass is queued
+				// after the caller's own, session restore read a snapshot without the provider and
+				// dropped the session's model. Wait for the pass that won instead.
+				const newer = this.latestAvailabilityRefresh;
+				if (newer !== undefined && newer !== pass) await raceWithAbortSignal(newer, effectiveSignal);
+			});
+		this.latestAvailabilityRefresh = pass;
+		return pass;
 	}
 
 	private async refreshProviderAvailability(providerId: string, signal: AbortSignal): Promise<void> {

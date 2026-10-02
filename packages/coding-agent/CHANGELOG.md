@@ -53,6 +53,7 @@
 - permission gate: deny/danger `pattern` matching canonicalized combined short flags (`-rf`/`-fr`) with a case-sensitive sort, so a mixed-case variant like `-Rf` could land in a different letter order than `-rf` and dodge a match despite case-insensitive matching elsewhere; the sort is now case-insensitive
 - permission gate: deny-candidate unwrapping now also recognizes `timeout DURATION cmd` (skipping the duration positional) and the combined `bash -lc '...'` form (`-l` and `-c` as one flag cluster), closing two gaps where a wrapped command wasn't being unwrapped for deny matching
 - `build:binary` compiled `dist/cli.js`, the non-bun entry, so the compiled binary never ran the `src/bun/cli.ts` startup path that embeds the quickjs wasm codemode needs; it now compiles `dist/bun/cli.js`, matching `scripts/build-binaries.sh`
+- model runtime: `refresh()` could resolve before the snapshot reflected providers registered just before it. When an extension's `registerNativeProvider()` started its unawaited refresh after the awaited one had queued, the awaited availability pass was discarded as stale and still resolved, so restoring a session whose model comes from a keyless extension provider (e.g. a resumed `--attachable` session on the stub provider) could fall back to no model and fail every prompt with "No API key found for the selected model". A superseded pass now waits for the pass that replaced it
 
 ### Removed
 

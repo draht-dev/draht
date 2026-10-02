@@ -18,11 +18,19 @@ test("the shared setup action installs and asserts the exact Bun pinned by the m
 	assert.match(manifest.drahtReleaseBunRevision, /^\d+\.\d+\.\d+\+[0-9a-f]+$/);
 	assert.match(setupAction, /require\('\.\/package\.json'\)\.packageManager/);
 	assert.match(setupAction, /require\('\.\/package\.json'\)\.drahtReleaseBunRevision/);
-	assert.match(setupAction, /npm install --global "bun@\$\{BUN_PACKAGE_VERSION\}"/);
+	assert.match(setupAction, /uses: oven-sh\/setup-bun@[0-9a-f]{40}\b/);
+	assert.match(setupAction, /bun-version: \$\{\{ steps\.bun-pin\.outputs\.version \}\}/);
 	assert.match(setupAction, /bun --revision/);
 	assert.match(setupAction, /test "\$\{ACTUAL_BUN_REVISION\}" = "\$\{EXPECTED_BUN_REVISION\}"/);
 	assert.doesNotMatch(setupAction, /bun-version: latest/);
-	assert.doesNotMatch(setupAction, /oven-sh\/setup-bun/);
+	assert.doesNotMatch(setupAction, /bun-version-file/);
+});
+
+test("the shared setup action does not install Bun under the npm global prefix", () => {
+	// The npm global prefix sits in the runner's /opt toolcache, which is
+	// group- or world-writable; the gateway refuses to exec a runtime there
+	// ("writable by others: /opt"). setup-bun installs into ~/.bun/bin.
+	assert.doesNotMatch(setupAction, /npm install --global "?bun@/);
 });
 
 test("the shared setup action uses the frozen hoisted install contract", () => {

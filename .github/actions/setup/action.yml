@@ -28,12 +28,32 @@ runs:
       with:
         node-version: ${{ inputs.node-version }}
 
-    - name: Install and verify the manifest-pinned Bun
+    # Bun comes from oven-sh/setup-bun, not `npm install --global`: the npm
+    # global prefix lives under the runner's /opt toolcache, and /opt is
+    # group- or world-writable there. The gateway refuses to exec a runtime
+    # under such an ancestor ("writable by others: /opt", spawn-primitive.ts
+    # assertSafeExecutablePath), which failed every gateway spawn test.
+    # setup-bun installs into ~/.bun/bin, owned by the runner user. The
+    # version is still the exact manifest pin, and the revision is asserted.
+    - name: Read the manifest-pinned Bun
+      id: bun-pin
       shell: bash
       run: |
         BUN_PACKAGE_VERSION="$(node -p "require('./package.json').packageManager.replace(/^bun@/, '')")"
         EXPECTED_BUN_REVISION="$(node -p "require('./package.json').drahtReleaseBunRevision")"
-        npm install --global "bun@${BUN_PACKAGE_VERSION}"
+        echo "version=${BUN_PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
+        echo "revision=${EXPECTED_BUN_REVISION}" >> "$GITHUB_OUTPUT"
+
+    - name: Install the manifest-pinned Bun
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      with:
+        bun-version: ${{ steps.bun-pin.outputs.version }}
+
+    - name: Verify the Bun revision
+      shell: bash
+      env:
+        EXPECTED_BUN_REVISION: ${{ steps.bun-pin.outputs.revision }}
+      run: |
         ACTUAL_BUN_REVISION="$(bun --revision)"
         test "${ACTUAL_BUN_REVISION}" = "${EXPECTED_BUN_REVISION}"
 

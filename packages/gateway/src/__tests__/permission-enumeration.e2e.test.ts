@@ -307,6 +307,20 @@ const VECTORS: Row[] = [
 		unreachable: true,
 		note: "Registered but not active by default; same as grep. Also relevant for permission-gate parity: the gate treats bash and powershell as separate tool identities (see permission-gate.ts), so this row existing at all is what keeps a future powershell activation from silently skipping the completeness check.",
 	},
+	{
+		tool: "codemode",
+		approve: null,
+		allow: null,
+		unreachable: true,
+		note: "Registered by the built-in codemode extension (upstream v0.99.2) but not active by default; same as grep. The MCP extension activates it only when a configured MCP server exposes tools through codemode, which this harness never configures — so activating it by default fails the completeness check until a real vector is written.",
+	},
+	{
+		tool: "tool_search",
+		approve: null,
+		allow: null,
+		unreachable: true,
+		note: "Registered by the built-in tool-search extension (upstream v0.99.2) but not active by default; same as grep. Like codemode, only the MCP extension activates it, for deferred MCP tools this harness never configures.",
+	},
 ];
 
 // ─── Harness ───────────────────────────────────────────────────────────────────────────────────
@@ -669,6 +683,7 @@ test("every tool the running binary reports has a literal vector row", async () 
 	// a missing row.
 	expect(reported.all.slice().sort()).toEqual([
 		"bash",
+		"codemode",
 		"edit",
 		"find",
 		"grep",
@@ -677,6 +692,7 @@ test("every tool the running binary reports has a literal vector row", async () 
 		"powershell",
 		"read",
 		"subagent",
+		"tool_search",
 		"write",
 	]);
 

@@ -65,7 +65,7 @@
 			"@draht/x-markdown/*": ["./packages/x-markdown/src/*"]
 		}
 	},
-	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "packages/coding-agent/examples/**/*", "packages/agent/examples/**/*"],
+	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "packages/coding-agent/examples/**/*", "packages/agent/examples/**/*", "packages/infra/sst-env.d.ts"],
 	"exclude": [
 		"packages/web-ui/**/*",
 		"packages/coding-agent/examples/**/*",

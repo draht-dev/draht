@@ -1,0 +1,10 @@
+{
+	"extends": "../tsconfig.json",
+	"compilerOptions": {
+		"jsx": "react-jsx",
+		"jsxImportSource": "react",
+		"types": ["vite/client", "bun"],
+		"allowJs": true
+	},
+	"include": ["src/**/*", "test/**/*", "public/sw-cache.js"]
+}

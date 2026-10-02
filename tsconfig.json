@@ -80,6 +80,7 @@
 		"packages/geist-picker/test/**/*",
 		"packages/geist/**/*",
 		"packages/geist-console/**/*",
+		"packages/reels/**/*",
 		"packages/gateway/**/*",
 		"packages/landing/**/*"
 	]

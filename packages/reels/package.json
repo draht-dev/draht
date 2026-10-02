@@ -1,0 +1,45 @@
+{
+	"name": "@draht/reels",
+	"version": "2026.9.5-1",
+	"private": true,
+	"description": "Non-core example workflow: turns git history into narrated explainer reels (Remotion video, ElevenLabs audio) and a vertical-feed PWA per repo",
+	"type": "module",
+	"main": "./src/index.ts",
+	"types": "./src/index.ts",
+	"bin": {
+		"draht-reels": "./src/cli.ts"
+	},
+	"exports": {
+		".": {
+			"types": "./src/index.ts",
+			"import": "./src/index.ts"
+		},
+		"./contract": {
+			"types": "./src/contract.ts",
+			"import": "./src/contract.ts"
+		}
+	},
+	"scripts": {
+		"build:app": "vite build --config app/vite.config.ts",
+		"dev:app": "vite --config app/vite.config.ts",
+		"check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p app/tsconfig.json",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"@draht/ai": "workspace:*",
+		"@remotion/bundler": "4.0.532",
+		"@remotion/fonts": "4.0.532",
+		"@remotion/renderer": "4.0.532",
+		"mermaid": "^12.1.0",
+		"react": "^19.2.7",
+		"react-dom": "^19.2.7",
+		"remotion": "4.0.532"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"@types/react": "^19.2.17",
+		"@types/react-dom": "^19.2.3",
+		"@vitejs/plugin-react": "^5.2.0",
+		"vite": "^7.1.6"
+	}
+}

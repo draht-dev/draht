@@ -1,0 +1,150 @@
+{
+	"schemaVersion": 1,
+	"repo": {
+		"name": "draht-mono",
+		"url": "https://github.com/draht/draht-mono",
+		"commitUrlTemplate": "https://github.com/draht/draht-mono/commit/{sha}"
+	},
+	"generatedAt": "2026-09-30T14:12:00Z",
+	"reels": [
+		{
+			"id": "full-reel",
+			"commits": ["a1b2c3d"],
+			"title": "Add the reels feed contract",
+			"authors": ["Oskar Freye"],
+			"date": "2026-09-30T14:12:00Z",
+			"durationMs": 24000,
+			"video": "full-reel/video.mp4",
+			"audio": "full-reel/audio.mp3",
+			"poster": "full-reel/poster.jpg",
+			"scenes": [
+				{ "kind": "title", "title": "Add the reels feed contract", "subtitle": "draht-mono", "narration": "Here's what changed in draht-mono." },
+				{
+					"kind": "stats",
+					"files": [
+						{ "path": "packages/reels/src/contract.ts", "status": "added", "additions": 140, "deletions": 0 },
+						{ "path": "packages/reels/package.json", "status": "modified", "additions": 12, "deletions": 1 }
+					],
+					"narration": "One new file and a package manifest update."
+				},
+				{
+					"kind": "code",
+					"path": "packages/reels/src/contract.ts",
+					"language": "ts",
+					"hunkHeader": "@@ -0,0 +1,8 @@",
+					"lines": ["+export interface Feed {", "+\tschemaVersion: number;", "+\trepo: RepoRef;", "+\treels: ReelEntry[];", "+}"],
+					"narration": "The Feed interface anchors the whole contract."
+				},
+				{
+					"kind": "diagram",
+					"mermaid": "graph TD\n  contract[contract.ts] --> app[app/]\n  contract --> pipeline[src/pipeline]",
+					"narration": "The contract sits between the pipeline and the app."
+				},
+				{ "kind": "outro", "narration": "That's the full change." }
+			],
+			"transcript": [
+				{ "sceneIndex": 0, "text": "Here's what changed in draht-mono.", "startMs": 0, "endMs": 4000 },
+				{ "sceneIndex": 1, "text": "One new file and a package manifest update.", "startMs": 4000, "endMs": 9000 },
+				{ "sceneIndex": 2, "text": "The Feed interface anchors the whole contract.", "startMs": 9000, "endMs": 16000 },
+				{ "sceneIndex": 3, "text": "The contract sits between the pipeline and the app.", "startMs": 16000, "endMs": 21000 },
+				{ "sceneIndex": 4, "text": "That's the full change.", "startMs": 21000, "endMs": 24000 }
+			],
+			"stats": { "files": 2, "additions": 152, "deletions": 1 }
+		},
+		{
+			"id": "audio-only-reel",
+			"commits": ["b2c3d4e"],
+			"title": "Narrate the publish step",
+			"authors": ["Oskar Freye"],
+			"date": "2026-09-28T10:03:00Z",
+			"durationMs": 15000,
+			"audio": "audio-only-reel/audio.mp3",
+			"poster": "audio-only-reel/poster.jpg",
+			"scenes": [
+				{ "kind": "title", "title": "Narrate the publish step", "subtitle": "draht-mono", "narration": "The publish step now narrates itself." },
+				{
+					"kind": "code",
+					"path": "packages/reels/src/publish.ts",
+					"language": "ts",
+					"hunkHeader": "@@ -12,0 +13,3 @@",
+					"lines": ["+async function uploadFeed(feed: Feed) {", "+\tawait writeJson(feed);", "+}"],
+					"narration": "A small helper writes the feed to the site."
+				},
+				{ "kind": "outro", "narration": "No video was rendered for this one." }
+			],
+			"transcript": [
+				{ "sceneIndex": 0, "text": "The publish step now narrates itself.", "startMs": 0, "endMs": 5000 },
+				{ "sceneIndex": 1, "text": "A small helper writes the feed to the site.", "startMs": 5000, "endMs": 11000 },
+				{ "sceneIndex": 2, "text": "No video was rendered for this one.", "startMs": 11000, "endMs": 15000 }
+			],
+			"stats": { "files": 1, "additions": 18, "deletions": 0 }
+		},
+		{
+			"id": "silent-reel",
+			"commits": ["c3d4e5f"],
+			"title": "Fix a typo in the README",
+			"authors": ["Oskar Freye"],
+			"date": "2026-09-20T08:45:00Z",
+			"durationMs": 6000,
+			"scenes": [
+				{ "kind": "title", "title": "Fix a typo in the README", "subtitle": "draht-mono", "narration": "A one-line fix." },
+				{
+					"kind": "stats",
+					"files": [{ "path": "README.md", "status": "modified", "additions": 1, "deletions": 1 }],
+					"narration": "Just the README."
+				},
+				{ "kind": "outro", "narration": "Neither video nor audio was rendered for this commit." }
+			],
+			"transcript": [
+				{ "sceneIndex": 0, "text": "A one-line fix.", "startMs": 0, "endMs": 2000 },
+				{ "sceneIndex": 1, "text": "Just the README.", "startMs": 2000, "endMs": 4000 },
+				{ "sceneIndex": 2, "text": "Neither video nor audio was rendered for this commit.", "startMs": 4000, "endMs": 6000 }
+			],
+			"stats": { "files": 1, "additions": 1, "deletions": 1 }
+		},
+		{
+			"id": "merge-reel",
+			"commits": ["d4e5f6a", "e5f6a7b", "f6a7b8c"],
+			"title": "Merge branch 'feat/profile-grid'",
+			"authors": ["Oskar Freye", "A. Contributor"],
+			"date": "2026-09-14T17:30:00Z",
+			"durationMs": 20000,
+			"video": "merge-reel/video.mp4",
+			"poster": "merge-reel/poster.jpg",
+			"scenes": [
+				{ "kind": "title", "title": "Merge branch 'feat/profile-grid'", "subtitle": "draht-mono", "narration": "Three commits landed together." },
+				{
+					"kind": "stats",
+					"files": [
+						{ "path": "app/src/components/Profile.tsx", "status": "added", "additions": 88, "deletions": 0 },
+						{ "path": "app/src/App.tsx", "status": "modified", "additions": 6, "deletions": 2 },
+						{ "path": "app/src/old/Legacy.tsx", "status": "deleted", "additions": 0, "deletions": 40 }
+					],
+					"narration": "A new profile grid replaces the legacy view."
+				},
+				{
+					"kind": "code",
+					"path": "app/src/components/Profile.tsx",
+					"language": "tsx",
+					"hunkHeader": "@@ -0,0 +1,6 @@",
+					"lines": ["+export function Profile() {", "+\treturn <div className=\"grid\" />;", "+}"],
+					"narration": "The grid component itself."
+				},
+				{
+					"kind": "diagram",
+					"mermaid": "graph LR\n  Profile --> Feed\n  Feed --> ReelCard",
+					"narration": "Profile links into the feed."
+				},
+				{ "kind": "outro", "narration": "That wraps up the merge." }
+			],
+			"transcript": [
+				{ "sceneIndex": 0, "text": "Three commits landed together.", "startMs": 0, "endMs": 3500 },
+				{ "sceneIndex": 1, "text": "A new profile grid replaces the legacy view.", "startMs": 3500, "endMs": 9000 },
+				{ "sceneIndex": 2, "text": "The grid component itself.", "startMs": 9000, "endMs": 14000 },
+				{ "sceneIndex": 3, "text": "Profile links into the feed.", "startMs": 14000, "endMs": 18000 },
+				{ "sceneIndex": 4, "text": "That wraps up the merge.", "startMs": 18000, "endMs": 20000 }
+			],
+			"stats": { "files": 3, "additions": 94, "deletions": 42 }
+		}
+	]
+}

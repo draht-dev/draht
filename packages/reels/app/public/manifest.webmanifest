@@ -1,0 +1,15 @@
+{
+	"name": "Draht Reels",
+	"short_name": "Reels",
+	"description": "Scroll through your latest code changes.",
+	"start_url": "./",
+	"scope": "./",
+	"display": "standalone",
+	"orientation": "portrait",
+	"background_color": "#0a0a0c",
+	"theme_color": "#0a0a0c",
+	"icons": [
+		{ "src": "./icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+		{ "src": "./icons/icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+	]
+}

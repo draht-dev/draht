@@ -1,0 +1,24 @@
+{
+	"schemaVersion": 1,
+	"repo": { "name": "geist-console" },
+	"generatedAt": "2026-09-12T09:00:00Z",
+	"reels": [
+		{
+			"id": "only-reel",
+			"commits": ["1122334"],
+			"title": "Ship the console shell",
+			"authors": ["Oskar Freye"],
+			"date": "2026-09-12T09:00:00Z",
+			"durationMs": 8000,
+			"scenes": [
+				{ "kind": "title", "title": "Ship the console shell", "subtitle": "geist-console", "narration": "The console shell is live." },
+				{ "kind": "outro", "narration": "More reels land as the repo grows." }
+			],
+			"transcript": [
+				{ "sceneIndex": 0, "text": "The console shell is live.", "startMs": 0, "endMs": 4000 },
+				{ "sceneIndex": 1, "text": "More reels land as the repo grows.", "startMs": 4000, "endMs": 8000 }
+			],
+			"stats": { "files": 4, "additions": 220, "deletions": 0 }
+		}
+	]
+}

@@ -1,0 +1,329 @@
+# Copy this file into your own repo at .github/workflows/reels.yml.
+# It does NOT run inside draht-mono (kept under examples/ on purpose).
+#
+# @draht/reels is private (not published to npm) and depends on
+# `@draht/ai: workspace:*`, which only resolves inside the draht-mono
+# workspace — you cannot just copy packages/reels/ into another repo and
+# `bun install` it. Instead this workflow checks out the public
+# github.com/draht-dev/draht monorepo at a pinned commit into `.draht/`,
+# installs its workspace there, and runs the CLI from inside it. Bump
+# DRAHT_MONO_REF below deliberately; it is not auto-updated. It currently
+# does NOT contain packages/reels — bump it to a commit that does once this
+# workflow lands on draht-dev/draht; until then the "verify the pin" step
+# below fails fast with a clear error instead of a confusing missing-file
+# error deep in bun install.
+#
+# PRIVACY WARNING: this workflow publishes code diffs verbatim (every reel
+# shows real source lines from your commits) to a public site. GitHub Pages
+# sites are publicly readable on most plans EVEN FOR PRIVATE REPOSITORIES.
+# Do not run this on private code unless you have GitHub Enterprise Cloud
+# with Pages access control restricted to your org, or you deploy the output
+# to storage that is itself access-controlled (not plain GitHub Pages).
+#
+# Builds narrated explainer reels for new commits on push, publishes the
+# feed + PWA to GitHub Pages. The rendered site (feed.json, videos, audio)
+# lives permanently in a `reels-site` branch of THIS repo, not in
+# actions/cache — a cache can be evicted after 7 days of no hits or once the
+# repo's 10 GB cache cap is reached, which would silently drop history.
+# `draht-reels build` also skips change sets already in feed.json and caps a
+# normal run at --limit 10, so even a lost branch only costs a bounded
+# re-bootstrap (newest 10), never a runaway full re-render.
+#
+# Each run force-pushes the entire `reels-site` branch as a single orphan
+# commit (no git history) so `draht-reels prune` can actually retract
+# content — see README.md "Privacy warning" for what that does and does not
+# guarantee (GitHub may keep unreachable objects / CDN caches around for a
+# while, and anyone who already downloaded a page has it regardless).
+#
+# Partial success: if some reels fail to render, `build` still exits
+# non-zero, but every reel that *did* render (and was already paid for via
+# ElevenLabs/an LLM) is still published, committed, and deployed. Only the
+# very last step of the build job fails the run, after publishing.
+#
+# Token separation: only the `push` job (which force-pushes `reels-site`)
+# gets `contents: write`. `build` (bun install, Chrome download, third-party
+# code from .draht) gets `contents: read` only and never persists
+# credentials. `deploy` only gets `pages: write` / `id-token: write`.
+#
+# Required repo secret:
+#   ELEVENLABS_API_KEY   — only exposed to the render step.
+#   ANTHROPIC_API_KEY    — only needed (and only exposed) when the `writer`
+#                           input is "llm"; see the `model`/`writer` inputs.
+#
+# Required repo settings:
+#   Settings -> Pages -> Build and deployment -> Source: GitHub Actions.
+
+name: reels
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      backfill:
+        description: "Render the full history instead of just new commits"
+        type: boolean
+        default: false
+      prune:
+        description: "Run `draht-reels prune` before building, to drop feed entries no longer reachable from HEAD (e.g. after a force-push)"
+        type: boolean
+        default: false
+      writer:
+        description: "Script writer: template (no network) or llm (requires ANTHROPIC_API_KEY and the model input)"
+        type: choice
+        options:
+          - template
+          - llm
+        default: template
+      model:
+        description: "Model for --writer llm, e.g. anthropic/claude-sonnet-5. Ignored when writer is template."
+        type: string
+        default: ""
+
+concurrency:
+  group: reels-pages
+  cancel-in-progress: false
+
+# No token permissions by default; each job grants only what it needs.
+permissions: {}
+
+env:
+  # Pin to a commit on github.com/draht-dev/draht, not a branch: resolve with
+  #   gh api repos/draht-dev/draht/commits/main --jq .sha
+  # Must contain packages/reels/src/cli.ts (it does not yet as of this pin;
+  # see the comment at the top of this file).
+  DRAHT_MONO_REF: ef31b8651778f23b62f935c255a54248ebfd9bfb
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # A timeout cancels the job and skips the upload steps, losing paid-for reels;
+    # backfills are bounded by --limit below so a run finishes well inside this.
+    timeout-minutes: 300
+    permissions:
+      contents: read # no pushes here; the `push` job owns contents: write
+    outputs:
+      exit_code: ${{ steps.render.outputs.exit_code }}
+      site_published: ${{ steps.site_check.outputs.exists }}
+    steps:
+      - name: Checkout this repo's full history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout draht-dev/draht (for the reels pipeline)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: draht-dev/draht
+          ref: ${{ env.DRAHT_MONO_REF }}
+          path: .draht
+          persist-credentials: false
+
+      - name: Verify the pinned draht-mono commit contains packages/reels
+        run: |
+          if [ ! -f .draht/packages/reels/src/cli.ts ]; then
+            echo "::error::DRAHT_MONO_REF=$DRAHT_MONO_REF has no packages/reels/src/cli.ts. Bump DRAHT_MONO_REF to a commit on draht-dev/draht that includes packages/reels (see the comment at the top of this workflow)." >&2
+            exit 1
+          fi
+
+      - name: Check whether the reels-site branch exists
+        id: site_branch
+        env:
+          GH_TOKEN_FOR_LS_REMOTE: ${{ github.token }}
+        run: |
+          # Pass the auth header through git's environment config, not argv,
+          # so it never shows up in the process list.
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraheader
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN_FOR_LS_REMOTE" | base64 -w0)"
+          export GIT_CONFIG_VALUE_0
+          set +e
+          git ls-remote --exit-code --heads origin reels-site >/dev/null 2>&1
+          code=$?
+          set -e
+          if [ "$code" = "0" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          elif [ "$code" = "2" ]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::git ls-remote for reels-site failed with exit code $code" >&2
+            exit "$code"
+          fi
+
+      - name: Checkout previous reels-site branch (read-only, for incremental state)
+        if: steps.site_branch.outputs.exists == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: reels-site
+          path: site
+          persist-credentials: false
+
+      - name: Drop the nested .git from the checked-out site
+        # Otherwise it would get swept into the artifacts below, including
+        # the public Pages one.
+        run: rm -rf "$GITHUB_WORKSPACE/site/.git"
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Install the draht-mono workspace
+        run: bun install --frozen-lockfile
+        working-directory: .draht
+
+      - name: Build the reel site (PWA)
+        run: npm run build:app
+        working-directory: .draht/packages/reels
+
+      - name: Build @draht/ai (only needed for --writer llm)
+        if: ${{ inputs.writer == 'llm' }}
+        working-directory: .draht
+        run: |
+          npm --prefix packages/telemetry run build
+          npm --prefix packages/ai run build
+
+      - name: Prune unreachable reels before building
+        if: ${{ inputs.prune }}
+        run: |
+          bun .draht/packages/reels/src/cli.ts prune \
+            --repo "$GITHUB_WORKSPACE" \
+            --name "$(basename "$GITHUB_REPOSITORY")" \
+            --out "$GITHUB_WORKSPACE/site"
+
+      - name: Render new reels
+        id: render
+        env:
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ inputs.writer == 'llm' && secrets.ANTHROPIC_API_KEY || '' }}
+          BACKFILL: ${{ inputs.backfill }}
+          WRITER: ${{ inputs.writer }}
+          MODEL: ${{ inputs.model }}
+        run: |
+          EXTRA_ARGS=()
+          if [ "$BACKFILL" = "true" ]; then
+            # Bounded so one dispatch finishes inside the job timeout; re-run the
+            # backfill dispatch until it renders nothing new. It drains oldest first.
+            EXTRA_ARGS+=(--all-history --limit 50)
+          else
+            EXTRA_ARGS+=(--limit 10)
+          fi
+          if [ "$WRITER" = "llm" ]; then
+            EXTRA_ARGS+=(--writer llm --model "$MODEL")
+          fi
+
+          set +e
+          bun .draht/packages/reels/src/cli.ts build \
+            --repo "$GITHUB_WORKSPACE" \
+            --name "$(basename "$GITHUB_REPOSITORY")" \
+            --out "$GITHUB_WORKSPACE/site" \
+            --tts elevenlabs \
+            --mode both \
+            "${EXTRA_ARGS[@]}"
+          code=$?
+          set -e
+
+          # Record the exit code before (possibly) failing this step, so
+          # downstream steps/jobs can still publish whatever did render —
+          # partial success must not be discarded. See the top-of-file note.
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit $code
+
+      - name: Publish the PWA into the site
+        if: ${{ !cancelled() }}
+        run: bun .draht/packages/reels/src/cli.ts site --out "$GITHUB_WORKSPACE/site"
+
+      - name: Check whether a site was produced
+        id: site_check
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -d "$GITHUB_WORKSPACE/site" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prepare the Pages artifact (state file excluded, it contains error strings)
+        if: ${{ !cancelled() && steps.site_check.outputs.exists == 'true' }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/pages-artifact"
+          rsync -a --exclude '.reels-state.json' "$GITHUB_WORKSPACE/site/" "$GITHUB_WORKSPACE/pages-artifact/"
+
+      - name: Upload the full site (including state) for the push job
+        if: ${{ !cancelled() && steps.site_check.outputs.exists == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: reels-site
+          path: site
+          # .reels-state.json is a dotfile; upload-artifact >= 4.4 drops hidden files by default.
+          include-hidden-files: true
+          retention-days: 1
+
+      - name: Upload Pages artifact
+        if: ${{ !cancelled() && steps.site_check.outputs.exists == 'true' }}
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+        with:
+          path: pages-artifact
+
+  push:
+    needs: build
+    if: ${{ !cancelled() && needs.build.outputs.site_published == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # the only job that can push; build/deploy do not have this
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: true
+
+      - name: Download the built site
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: reels-site
+          path: incoming-site
+
+      - name: Publish as a single orphan commit (no branch history, so prune can actually retract)
+        run: |
+          git worktree add --orphan -B reels-site reels-site-publish
+          rsync -a --exclude '.git' incoming-site/ reels-site-publish/
+          cd reels-site-publish
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "no changes to publish"
+          else
+            git commit -m "reels: update site for ${{ github.sha }}"
+            git push --force origin HEAD:reels-site
+          fi
+
+  deploy:
+    needs: build
+    if: ${{ !cancelled() && needs.build.outputs.site_published == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+
+  finalize:
+    needs: [build, push, deploy]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail the run if any reel failed to render
+        env:
+          BUILD_EXIT_CODE: ${{ needs.build.outputs.exit_code }}
+        run: |
+          if [ -n "$BUILD_EXIT_CODE" ] && [ "$BUILD_EXIT_CODE" != "0" ]; then
+            echo "::error::draht-reels build failed for one or more reels (exit code $BUILD_EXIT_CODE). Successful reels were still published; see the build job's render step for details." >&2
+            exit 1
+          fi

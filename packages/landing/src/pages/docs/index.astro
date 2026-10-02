@@ -126,7 +126,7 @@ const description = "Install Draht, choose a provider, manage sessions, and exte
 			<p>Add providers via <code>~/.draht/agent/models.json</code> if they speak a supported API (OpenAI, Anthropic, Google). For custom APIs or OAuth, use extensions.</p>
 
 			<h3>Virtual models</h3>
-			<p>Compose a model id out of a provider and a set of options — a thinking level, for example — and it becomes its own addressable catalog entry: <code>sonnet:high</code> selects Claude Sonnet at high reasoning effort without a separate config file.</p>
+			<p>An extension can register a virtual model: a selectable entry that picks a physical model for each request, for example to send quick questions to a small model and hard problems to a large one. It shows up in <code>/model</code>, <code>--model</code>, and settings like any other model; providers only ever receive the physical model.</p>
 
 			<h3>Prompt cache warming</h3>
 			<p>An idle session periodically re-sends its cached prefix so the next turn doesn't pay a cold-cache penalty. Tune retention with <code>DRAHT_CACHE_RETENTION</code>.</p>

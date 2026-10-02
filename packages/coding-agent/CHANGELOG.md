@@ -26,7 +26,7 @@
 - experimental mini agent, a three-process coding agent variant on the durable harness (not CLI-wired)
 - codemode: write a script against the active tool set instead of making tool calls one at a time, for tasks that benefit from loops/branching over many tool results
 - MCP support: `draht mcp` manages servers configured in `.draht/mcp.json`, with OAuth login for servers that require it
-- virtual models: compose a model id out of a provider and a set of options (e.g. thinking level) addressable as its own catalog entry
+- virtual models: extensions can register selectable models that route each request to a physical model (see `docs/virtual-models.md`)
 - opt-in system theme (`theme: system`): tracks the terminal's reported light/dark preference instead of a fixed built-in theme
 - prompt cache warming: idle sessions periodically re-send the cached prefix so the next turn doesn't pay a cold-cache penalty; tune retention with `DRAHT_CACHE_RETENTION`
 - `/bug` command: build and upload (or export as a zip) a bug report bundle with environment, settings, and optional transcript/summary

@@ -59,9 +59,9 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 					</div>
 					<dl class="hero-specs">
 						<div><dt>License</dt><dd>MIT</dd></div>
-						<div><dt>Packages</dt><dd>15</dd></div>
-						<div><dt>Providers</dt><dd>17</dd></div>
-						<div><dt>Telemetry</dt><dd class="zero">0</dd></div>
+						<div><dt>Packages</dt><dd>11</dd></div>
+						<div><dt>Providers</dt><dd>42</dd></div>
+						<div><dt>Install telemetry</dt><dd class="zero">none</dd></div>
 					</dl>
 				</div>
 			</div>
@@ -80,7 +80,7 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 						<code>npx draht-claude install</code>
 						<button type="button" class="copy-btn" data-copy="npx draht-claude install">Copy</button>
 					</div>
-					<p class="install-note">Add routing, TDD, orchestration, and audit logs to Claude Code.</p>
+					<p class="install-note">Add GSD workflow, sub-agents, and TDD discipline to Claude Code. Also ships as a Codex plugin (<code>npx draht-codex install</code>).</p>
 				</div>
 
 				<div class="install-col">
@@ -96,7 +96,7 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 						<code>bun add -g @draht/coding-agent</code>
 						<button type="button" class="copy-btn" data-copy="bun add -g @draht/coding-agent">Copy</button>
 					</div>
-					<p class="install-note">Run the full agent across 17 providers. Claude is not required.</p>
+					<p class="install-note">Run the full agent across 42 providers. Claude is not required.</p>
 				</div>
 			</div>
 		</section>
@@ -125,8 +125,8 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 				<div class="card">
 					<div class="pin"></div>
 					<div class="label">III. Ship</div>
-					<h3>Run, watch, prove.</h3>
-					<p>The orchestrator runs independent work in parallel. CI blocks broken merges. The log records every model call, cost, and source. Use it for GDPR audits or invoice review.</p>
+					<h3>Run, watch, rewind.</h3>
+					<p>Sub-agents run independent work in parallel; dependent work stays ordered. Checkpoints snapshot the repo before risky edits, and <code>/rewind</code> steps back when a turn goes wrong. The session log keeps every model call and its cost on disk.</p>
 				</div>
 			</div>
 		</section>
@@ -136,7 +136,7 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 			<div class="section-head">
 				<div class="section-num">§ 02</div>
 				<div class="section-title">Die Werkbank <em>— the workbench</em></div>
-				<div class="section-kicker">17 providers · 1 router · no lock-in</div>
+				<div class="section-kicker">42 providers · 1 router · no lock-in</div>
 			</div>
 
 			<div class="workbench">
@@ -153,7 +153,7 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 						<div class="fnum">F/01</div>
 						<div>
 							<h4>Routing you can <em>read.</em></h4>
-							<p>Policies are TypeScript. Match on a file glob, task type, context size, or budget. Route to Haiku, Sonnet, Opus, GPT, Gemini, or your own model. Override the policy per repository, branch, or session.</p>
+							<p>A JSON config maps roles — architect, implement, boilerplate, quick, review, docs — to a primary model with ordered fallbacks. Direct API calls, no OpenRouter in the hot path. Override per project or globally.</p>
 						</div>
 					</div>
 					<div class="feat">
@@ -167,14 +167,14 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 						<div class="fnum">F/03</div>
 						<div>
 							<h4>Sub-agents that <em>finish.</em></h4>
-							<p>Seven specialists handle architecture, code, review, debug, verify, security, and git. You set the model for each one. Split work runs in parallel. Ordered work stays ordered. Commits use red:/green:/refactor: discipline.</p>
+							<p>Ten built-in specialists cover advice, architecture, implementation, investigation, review, spec review, security, verification, debugging, and git commits. You set the model for each one. Commits use red:/green:/refactor: discipline.</p>
 						</div>
 					</div>
 					<div class="feat">
 						<div class="fnum">F/04</div>
 						<div>
 							<h4>Four ways to <em>run.</em></h4>
-							<p>Use the REPL, print mode, JSON events, or RPC over stdin/stdout. Run draht in CI, a cron job, or a Slack bot. Embed the SDK in your app.</p>
+							<p>Interactive, print mode (text or JSON), RPC over stdin/stdout, or the SDK. The Slack bot (<code>@draht/mom</code>) runs on the SDK path; embed it the same way in your own app.</p>
 						</div>
 					</div>
 				</div>
@@ -185,100 +185,76 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 		<section class="section" id="packages">
 			<div class="section-head">
 				<div class="section-num">§ 03</div>
-				<div class="section-title">Das Sortiment <em>— fifteen packages, one mono-repo</em></div>
-				<div class="section-kicker">MIT licensed · pnpm workspace</div>
+				<div class="section-title">Das Sortiment <em>— eleven packages, one mono-repo</em></div>
+				<div class="section-kicker">MIT licensed · monorepo workspace</div>
 			</div>
 
 			<div class="pkg-list">
-				<a class="pkg" href="https://github.com/draht-dev/draht">
+				<a class="pkg" href="https://github.com/draht-dev/draht/tree/main/packages/coding-agent">
 					<span class="pkg-idx">№ 01</span>
-					<div class="pkg-name">@draht/router <em>the dispatcher</em></div>
-					<div class="pkg-desc">Scores tasks and routes them to the cheapest model that can do the work. One policy covers Haiku, Sonnet, Opus, GPT, Gemini, and 12 more providers.</div>
+					<div class="pkg-name">@draht/coding-agent <em>the agent</em></div>
+					<div class="pkg-desc">The <code>draht</code> CLI. Read/bash/edit/write tools, session management, sub-agents, checkpoints, and the GSD workflow (/new-project, /plan-phase, /execute-phase).</div>
 					<div class="pkg-tag">CORE</div>
 				</a>
-				<a class="pkg" href="https://github.com/draht-dev/draht">
+				<a class="pkg" href="https://github.com/draht-dev/draht/tree/main/packages/agent">
 					<span class="pkg-idx">№ 02</span>
-					<div class="pkg-name">@draht/orchestrator <em>the conductor</em></div>
-					<div class="pkg-desc">Runs sub-agents in parallel for split work. Merges output, resolves conflicts, and returns one diff.</div>
+					<div class="pkg-name">@draht/agent-core <em>the harness</em></div>
+					<div class="pkg-desc">General-purpose agent with transport abstraction, state management, and attachment support. What <code>draht</code> is built on.</div>
 					<div class="pkg-tag">CORE</div>
 				</a>
-				<a class="pkg" href="https://github.com/draht-dev/draht">
+				<a class="pkg" href="https://github.com/draht-dev/draht/tree/main/packages/ai">
 					<span class="pkg-idx">№ 03</span>
-					<div class="pkg-name">@draht/knowledge <em>the domain</em></div>
-					<div class="pkg-desc">Keeps a DDD map of your codebase: contexts, aggregates, and team words. The agent reads it before it writes.</div>
-					<div class="pkg-tag">CORE</div>
-				</a>
-				<a class="pkg" href="https://github.com/draht-dev/draht">
-					<span class="pkg-idx">№ 04</span>
-					<div class="pkg-name">@draht/tdd <em>the red bar</em></div>
-					<div class="pkg-desc">Enforces red-green-refactor. Code cannot commit until a failing test exists. Works with vitest, bun test, jest, and pytest.</div>
-					<div class="pkg-tag">CORE</div>
-				</a>
-				<a class="pkg" href="https://github.com/draht-dev/draht">
-					<span class="pkg-idx">№ 05</span>
-					<div class="pkg-name">@draht/ci <em>the gate</em></div>
-					<div class="pkg-desc">Runs agent changes through your real pipeline before they land. Fails loud. Retries narrow. Never waves work through.</div>
-					<div class="pkg-tag">OPS</div>
-				</a>
-				<a class="pkg" href="https://github.com/draht-dev/draht">
-					<span class="pkg-idx">№ 06</span>
-					<div class="pkg-name">@draht/deploy-guardian <em>the sentinel</em></div>
-					<div class="pkg-desc">Handles canary rollout, SLO checks, and rollback. The agent can ship to prod. The guardian can pull the cord.</div>
-					<div class="pkg-tag">OPS</div>
-				</a>
-				<a class="pkg" href="https://github.com/draht-dev/draht">
-					<span class="pkg-idx">№ 07</span>
-					<div class="pkg-name">@draht/invoice <em>the ledger</em></div>
-					<div class="pkg-desc">Tracks cost by task and model. Exports invoices with token counts, time logs, and VAT fields.</div>
-					<div class="pkg-tag">BIZ</div>
-				</a>
-				<a class="pkg" href="https://github.com/draht-dev/draht">
-					<span class="pkg-idx">№ 08</span>
-					<div class="pkg-name">@draht/compliance <em>the notary</em></div>
-					<div class="pkg-desc">Records model calls, routes by data region, and signs each record. The audit log stays on disk for client review.</div>
-					<div class="pkg-tag">BIZ</div>
-				</a>
-				<a class="pkg" href="https://github.com/draht-dev/draht">
-					<span class="pkg-idx">№ 09</span>
-					<div class="pkg-name">@draht/templates <em>the patterns</em></div>
-					<div class="pkg-desc">Ships starters for SaaS, API, CLI, and freelance repos. Each includes router policy, tests, and domain scaffold.</div>
+					<div class="pkg-name">@draht/ai <em>the primitives</em></div>
+					<div class="pkg-desc">Unified LLM API across 42 providers, with automatic model discovery and provider configuration.</div>
 					<div class="pkg-tag">LIBRARY</div>
 				</a>
-				<a class="pkg" href="https://github.com/draht-dev/draht">
-					<span class="pkg-idx">№ 10</span>
-					<div class="pkg-name">draht-claude <em>the bridge</em></div>
-					<div class="pkg-desc">Installs draht in Claude Code. Keep your subscription. Add routing, TDD, and orchestration with no config.</div>
+				<a class="pkg" href="https://github.com/draht-dev/draht/tree/main/packages/router">
+					<span class="pkg-idx">№ 04</span>
+					<div class="pkg-name">@draht/router <em>the dispatcher</em></div>
+					<div class="pkg-desc">Role-based model routing with direct API calls, ordered fallback chains, and cost tracking. No OpenRouter in the hot path.</div>
+					<div class="pkg-tag">LIBRARY</div>
+				</a>
+				<a class="pkg" href="https://github.com/draht-dev/draht/tree/main/packages/tui">
+					<span class="pkg-idx">№ 05</span>
+					<div class="pkg-name">@draht/tui <em>the loom</em></div>
+					<div class="pkg-desc">Terminal UI library with differential rendering. Renders the interactive CLI.</div>
+					<div class="pkg-tag">LIBRARY</div>
+				</a>
+				<a class="pkg" href="https://github.com/draht-dev/draht/tree/main/packages/draht-claude">
+					<span class="pkg-idx">№ 06</span>
+					<div class="pkg-name">draht-claude <em>the claude bridge</em></div>
+					<div class="pkg-desc">GSD, multi-agent, TDD, and DDD workflows as a Claude Code plugin. <code>npx draht-claude install</code>.</div>
 					<div class="pkg-tag">PLUGIN</div>
 				</a>
-				<a class="pkg" href="https://github.com/draht-dev/draht">
-					<span class="pkg-idx">№ 11</span>
-					<div class="pkg-name">@draht/cli <em>the standalone</em></div>
-					<div class="pkg-desc">Runs the full agent in your terminal. Use API keys or OAuth. Claude Code is not required.</div>
+				<a class="pkg" href="https://github.com/draht-dev/draht/tree/main/packages/draht-codex">
+					<span class="pkg-idx">№ 07</span>
+					<div class="pkg-name">draht-codex <em>the codex bridge</em></div>
+					<div class="pkg-desc">The same workflows as a Codex plugin. <code>npx draht-codex install</code>.</div>
+					<div class="pkg-tag">PLUGIN</div>
+				</a>
+				<a class="pkg" href="https://github.com/draht-dev/draht/tree/main/packages/draht-tools">
+					<span class="pkg-idx">№ 08</span>
+					<div class="pkg-name">@draht/tools <em>the gsd cli</em></div>
+					<div class="pkg-desc">The Get Shit Done CLI shared by draht-claude and @draht/coding-agent — codebase knowledge graph, skills, and workflow commands.</div>
 					<div class="pkg-tag">CLI</div>
 				</a>
-				<a class="pkg" href="https://github.com/draht-dev/draht">
-					<span class="pkg-idx">№ 12</span>
-					<div class="pkg-name">@draht/ai <em>the primitives</em></div>
-					<div class="pkg-desc">Unifies OpenAI, Anthropic, Google, and 14 other providers. Streams text, tools, thinking levels, and cache control.</div>
-					<div class="pkg-tag">LIBRARY</div>
+				<a class="pkg" href="https://github.com/draht-dev/draht/tree/main/packages/knowledge">
+					<span class="pkg-idx">№ 09</span>
+					<div class="pkg-name">@draht/knowledge <em>the memory</em></div>
+					<div class="pkg-desc">Per-client vector database for knowledge persistence across projects.</div>
+					<div class="pkg-tag">PRODUCT</div>
 				</a>
-				<a class="pkg" href="https://github.com/draht-dev/draht">
-					<span class="pkg-idx">№ 13</span>
-					<div class="pkg-name">@draht/extensions <em>the slots</em></div>
-					<div class="pkg-desc">Hosts skills, prompt packs, custom tools, and UI panels. Each extension is a TypeScript module.</div>
-					<div class="pkg-tag">LIBRARY</div>
+				<a class="pkg" href="https://github.com/draht-dev/draht/tree/main/packages/mom">
+					<span class="pkg-idx">№ 10</span>
+					<div class="pkg-name">@draht/mom <em>the slack bridge</em></div>
+					<div class="pkg-desc">Slack bot that delegates messages to the Draht coding agent.</div>
+					<div class="pkg-tag">PRODUCT</div>
 				</a>
-				<a class="pkg" href="https://github.com/draht-dev/draht">
-					<span class="pkg-idx">№ 14</span>
-					<div class="pkg-name">@draht/tui <em>the loom</em></div>
-					<div class="pkg-desc">Renders the terminal UI with diff-based updates. The standalone CLI uses it.</div>
-					<div class="pkg-tag">LIBRARY</div>
-				</a>
-				<a class="pkg" href="https://github.com/draht-dev/draht">
-					<span class="pkg-idx">№ 15</span>
+				<a class="pkg" href="https://github.com/draht-dev/draht/tree/main/packages/pods">
+					<span class="pkg-idx">№ 11</span>
 					<div class="pkg-name">@draht/pods <em>the foundry</em></div>
 					<div class="pkg-desc">Manages vLLM deployments on GPU pods. Start, rotate, and retire self-hosted models from the command line.</div>
-					<div class="pkg-tag">OPS</div>
+					<div class="pkg-tag">PRODUCT</div>
 				</a>
 			</div>
 		</section>
@@ -318,9 +294,9 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 				</div>
 				<div class="clause">
 					<div class="cnum">v.</div>
-					<div class="neg">— Receipts for everything —</div>
-					<h5>Audit is a feature.</h5>
-					<p>Log every model call, cost, and billable step. The receipt sits on disk for clients, auditors, tax, or your own memory.</p>
+					<div class="neg">— Cost receipts, not audits —</div>
+					<h5>Log what you spend.</h5>
+					<p>Every model call and its cost lands in the session's local JSONL file — your own record, not a compliance artifact. No install telemetry phones home.</p>
 				</div>
 				<div class="clause">
 					<div class="cnum">vi.</div>
@@ -331,70 +307,9 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 			</div>
 		</section>
 
-		<!-- ===================== PRICING ===================== -->
-		<section class="section" id="pricing">
-			<div class="section-head">
-				<div class="section-num">§ 05</div>
-				<div class="section-title">Preise <em>— one tool, three ways to adopt it</em></div>
-				<div class="section-kicker">Self-serve · guided · implemented</div>
-			</div>
-
-			<div class="pricing">
-				<div class="tier">
-					<div class="tier-num">Tier I</div>
-					<div class="tier-name">Open Source</div>
-					<div class="tier-tag">MIT · self-serve</div>
-					<div class="tier-price">€0<em>forever</em></div>
-					<div class="tier-unit">No account · no telemetry</div>
-					<ul>
-						<li>All 15 packages, full source</li>
-						<li>Router, orchestrator, TDD, DDD</li>
-						<li>Claude Code plugin &amp; standalone CLI</li>
-						<li>Community Discord, GitHub issues</li>
-						<li><em>Bring your own API keys</em></li>
-					</ul>
-					<a class="tier-cta" href="https://github.com/draht-dev/draht">Clone the repo →</a>
-				</div>
-
-				<div class="tier featured">
-					<div class="tier-num">Tier II</div>
-					<div class="tier-name">Setup Sprint</div>
-					<div class="tier-tag">Guided · fixed scope</div>
-					<div class="tier-price">€2,500<em>one-time</em></div>
-					<div class="tier-unit">plus VAT · remote · one repository</div>
-					<ul>
-						<li>Structured intake for one real repository</li>
-						<li>Router policy tuned to <em>your</em> workload</li>
-						<li>Domain context &amp; working agreements</li>
-						<li>Cost, invoicing &amp; audit baseline for DE/EU</li>
-						<li>Two working sessions &amp; committed configuration</li>
-						<li>14 days of async support for the configured scope</li>
-					</ul>
-					<a class="tier-cta" href="mailto:oskar@draht.dev?subject=Draht%20setup%20sprint">Book setup sprint →</a>
-				</div>
-
-				<div class="tier">
-					<div class="tier-num">Tier III</div>
-					<div class="tier-name">Team Rollout</div>
-					<div class="tier-tag">Implemented · custom scope</div>
-					<div class="tier-price">€12,000<em>from</em></div>
-					<div class="tier-unit">plus VAT · typical engagement 4–8 weeks</div>
-					<ul>
-						<li>Pilot repository &amp; rollout plan</li>
-						<li>Custom router policies &amp; extensions</li>
-						<li>Governance and audit baseline</li>
-						<li>Team workshop &amp; technical handover</li>
-						<li>On-prem / air-gapped work scoped separately</li>
-					</ul>
-					<p class="tier-note">We bring draht into your organization — the outcome is running tool infrastructure, not a single shipped use case. Many teams start with a <a href="/week">Week</a> and decide on the rollout afterward.</p>
-					<a class="tier-cta" href="mailto:oskar@draht.dev?subject=Draht%20team%20rollout">Scope the rollout →</a>
-				</div>
-			</div>
-		</section>
-
 		<!-- ===================== DOORS ===================== -->
 		<section class="section doors">
-			<div class="doors-kicker">Drei Türen <em>— same build, three ways in</em></div>
+			<div class="doors-kicker">Zwei Türen <em>— same build, two ways in</em></div>
 
 			<div class="doors-grid">
 				<a class="door" href="/docs">
@@ -411,14 +326,6 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 					<div class="door-tag">draht uni — building in public</div>
 					<p>Follow the university's build one episode at a time. Episode 1 is live.</p>
 					<span class="door-cta">Join the waitlist →</span>
-				</a>
-
-				<a class="door" href="/week">
-					<div class="door-num">iii.</div>
-					<div class="door-name">the week<em>.</em></div>
-					<div class="door-tag">Agentic Engineering Week</div>
-					<p>Ship a use case in five days, with your team and our agents.</p>
-					<span class="door-cta">Explore the Week →</span>
 				</a>
 			</div>
 		</section>
@@ -453,7 +360,7 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 				<h6>Lesen</h6>
 				<a href="/#werkstatt">Workflow</a>
 				<a href="/#packages">Packages</a>
-				<a href="/#pricing">Pricing</a>
+				<a href="/#philosophie">Prinzipien</a>
 				<a href="https://freye.tech">Oskar Freye ↗</a>
 			</div>
 		</footer>
@@ -477,7 +384,7 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 			[
 				{ t: "prompt", v: "$ " }, { t: "user", v: "draht" },
 				{ t: "nl" },
-				{ t: "dim", v: "  draht v2026.4.26 · anthropic · claude-sonnet-4-6" },
+				{ t: "dim", v: "  draht v2026.9.5 · anthropic · claude-sonnet-4-6" },
 				{ t: "nl" },
 				{ t: "dim", v: "  ~/projects/checkout-svc  ·  €0.000  ·  0 tok" },
 				{ t: "nl" },
@@ -772,8 +679,7 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 				{ sel: "#werkstatt .section-head",   label: "01 · ROUTE" },
 				{ sel: ".workbench",                 label: "02 · WERKBANK" },
 				{ sel: "#packages .section-head",    label: "03 · PACKAGES" },
-				{ sel: "#philosophie .section-head", label: "04 · DOCTRIN" },
-				{ sel: "#pricing .section-head",     label: "05 · PREISE" }
+				{ sel: "#philosophie .section-head", label: "04 · DOCTRIN" }
 			];
 			sections.forEach((s, i) => {
 				const r = rect(s.sel);
@@ -1710,159 +1616,6 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 			max-width: 44ch;
 		}
 
-		/* ---------- Pricing ---------- */
-		.pricing {
-			display: grid;
-			grid-template-columns: repeat(3, minmax(0, 1fr));
-			gap: 2px;
-			background: var(--rule);
-			border: 1px solid var(--rule);
-		}
-		.tier {
-			background: var(--ink);
-			padding: clamp(28px, 3vw, 40px);
-			display: flex;
-			flex-direction: column;
-			position: relative;
-			min-width: 0;
-		}
-		.tier.featured {
-			background:
-				linear-gradient(180deg, color-mix(in oklab, var(--copper), transparent 92%), transparent 70%),
-				radial-gradient(140% 90% at 50% 0%, color-mix(in oklab, var(--copper), transparent 95%), transparent 60%);
-		}
-		.tier.featured::before {
-			content: "Empfohlen";
-			position: absolute;
-			top: 16px;
-			right: 16px;
-			font-family: var(--f-mono);
-			font-size: 10px;
-			letter-spacing: 0.15em;
-			text-transform: uppercase;
-			color: var(--copper);
-			padding: 4px 8px;
-			border: 1px solid var(--copper);
-		}
-		.tier-num {
-			font-family: var(--f-mono);
-			font-size: 11px;
-			letter-spacing: 0.15em;
-			color: var(--paper-soft);
-			margin-bottom: 12px;
-		}
-		.tier-name {
-			font-family: var(--f-display);
-			font-style: italic;
-			font-weight: 400;
-			font-size: 36px;
-			color: var(--paper);
-			letter-spacing: -0.02em;
-			margin-bottom: 6px;
-		}
-		.tier-tag {
-			font-family: var(--f-mono);
-			font-size: 11px;
-			letter-spacing: 0.08em;
-			text-transform: uppercase;
-			color: var(--paper-soft);
-			margin-bottom: 24px;
-		}
-		.tier-price {
-			font-family: var(--f-display);
-			font-size: 56px;
-			font-weight: 300;
-			color: var(--copper);
-			letter-spacing: -0.04em;
-			line-height: 1;
-			margin-bottom: 4px;
-		}
-		.tier-price em {
-			font-size: 16px;
-			font-style: italic;
-			color: var(--paper-soft);
-			margin-left: 8px;
-			letter-spacing: 0;
-		}
-		.tier-unit {
-			font-family: var(--f-mono);
-			font-size: 10px;
-			letter-spacing: 0.12em;
-			text-transform: uppercase;
-			color: var(--paper-soft);
-			margin-bottom: 28px;
-			padding-bottom: 28px;
-			border-bottom: 1px solid var(--rule);
-		}
-		.tier ul {
-			list-style: none;
-			margin: 0 0 32px;
-			padding: 0;
-			font-family: var(--f-display);
-			font-size: 15px;
-			line-height: 1.5;
-			color: var(--paper-dim);
-			flex: 1;
-		}
-		.tier ul li {
-			padding: 8px 0 8px 20px;
-			position: relative;
-			border-bottom: 1px dashed rgba(239, 231, 216, 0.08);
-		}
-		.tier ul li:last-child { border-bottom: none; }
-		.tier ul li::before {
-			content: "—";
-			position: absolute;
-			left: 0;
-			color: var(--copper);
-		}
-		.tier ul li em {
-			font-style: italic;
-			color: var(--paper-soft);
-		}
-		.tier-cta {
-			display: inline-flex;
-			align-items: center;
-			gap: 12px;
-			padding: 14px 20px;
-			border: 1px solid var(--rule-strong);
-			color: var(--paper);
-			font-family: var(--f-mono);
-			font-size: 11px;
-			letter-spacing: 0.15em;
-			text-transform: uppercase;
-			text-decoration: none;
-			transition: all 0.2s;
-			align-self: flex-start;
-		}
-		.tier-cta:hover {
-			border-color: var(--copper);
-			color: var(--copper);
-		}
-		.tier.featured .tier-cta {
-			background: var(--copper);
-			color: var(--ink);
-			border-color: var(--copper);
-		}
-		.tier.featured .tier-cta:hover {
-			background: transparent;
-			color: var(--copper);
-		}
-		.tier-note {
-			margin: 0 0 24px;
-			font-family: var(--f-ui);
-			font-size: 13px;
-			line-height: 1.55;
-			color: var(--paper-soft);
-		}
-		.tier-note a {
-			color: var(--copper);
-			border-bottom: 1px dotted var(--copper-dim);
-		}
-		.tier-note a:hover {
-			border-bottom-color: var(--copper);
-		}
-
 		/* ---------- Doors ---------- */
 		.doors {
 			padding-top: clamp(56px, 6vw, 96px);
@@ -1886,7 +1639,7 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 		}
 		.doors-grid {
 			display: grid;
-			grid-template-columns: repeat(3, minmax(0, 1fr));
+			grid-template-columns: repeat(2, minmax(0, 1fr));
 			gap: 2px;
 			background: var(--rule);
 			border: 1px solid var(--rule);
@@ -2118,7 +1871,6 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 			.workbench { grid-template-columns: minmax(0, 1fr); }
 			.manifest { grid-template-columns: minmax(0, 1fr); }
 			.install-split { grid-template-columns: minmax(0, 1fr); }
-			.pricing { grid-template-columns: minmax(0, 1fr); }
 			.doors-grid { grid-template-columns: minmax(0, 1fr); }
 			.pkg { grid-template-columns: 30px minmax(0, 1fr); }
 			.pkg-name em { display: block; margin-left: 0; margin-top: 2px; font-size: 0.55em; }

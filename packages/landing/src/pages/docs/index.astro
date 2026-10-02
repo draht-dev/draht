@@ -31,9 +31,6 @@ const description = "Install Draht, choose a provider, manage sessions, and exte
 				<li><a href="#packages">Draht packages</a></li>
 				<li><a href="#sdk">SDK & programmatic usage</a></li>
 				<li><a href="#model-router">Model router</a></li>
-				<li><a href="#invoicing">Invoicing</a></li>
-				<li><a href="#compliance">Compliance</a></li>
-				<li><a href="#deploy-guardian">Deploy Guardian</a></li>
 				<li><a href="#gsd-workflow">GSD workflow & built-in commands</a></li>
 				<li><a href="#cli-reference">CLI reference</a></li>
 			</ol>
@@ -79,7 +76,7 @@ const description = "Install Draht, choose a provider, manage sessions, and exte
 		<!-- 3. Providers & Models -->
 		<section id="providers" class="doc-section">
 			<h2>3. Providers & models</h2>
-			<p>Draht supports 17+ providers via the <code>@draht/ai</code> package. Each provider's model list is updated with every release.</p>
+			<p>Draht supports 42 providers via the <code>@draht/ai</code> package. Each provider's model list is updated with every release.</p>
 
 			<h3>Subscriptions (OAuth)</h3>
 			<ul>
@@ -357,56 +354,20 @@ const description = "Install Draht, choose a provider, manage sessions, and exte
 
 		<!-- 13. Model Router -->
 		<section id="model-router" class="doc-section">
-			<h2 class="wip-title">13. Model router <span class="wip-badge">Under construction</span></h2>
-			<p>Role-based model selection with automatic fallback. Architect tasks use Claude Opus, boilerplate uses DeepSeek. Direct API calls with no OpenRouter latency.</p>
+			<h2>13. Model router</h2>
+			<p>Role-based model selection with ordered fallback chains. Direct API calls — no OpenRouter in the hot path.</p>
 			<div class="code-block">
 				<div class="code-line cmd">draht router show</div>
-				<div class="code-line cmd">draht router set architect anthropic/claude-opus-4-6</div>
-				<div class="code-line cmd">draht router set boilerplate deepseek/deepseek-coder</div>
+				<div class="code-line cmd">draht router set implement anthropic/claude-sonnet-4-6 --fallback openai/gpt-5.2,deepseek/deepseek-v3</div>
+				<div class="code-line cmd">draht router test</div>
+				<div class="code-line cmd">draht router cost</div>
 			</div>
-			<p>The router inspects task characteristics (complexity, domain, cost sensitivity) and routes to the appropriate model. Fallback chains ensure availability.</p>
+			<p>Roles (<code>architect</code>, <code>implement</code>, <code>boilerplate</code>, <code>quick</code>, <code>review</code>, <code>docs</code>) map to a primary model with fallbacks, configured in <code>.draht/router.json</code> (project) or <code>~/.draht/router.json</code> (global).</p>
 		</section>
 
-		<!-- 14. Invoicing -->
-		<section id="invoicing" class="doc-section">
-			<h2 class="wip-title">14. Invoicing <span class="wip-badge">Under construction</span></h2>
-			<p>Lexoffice API integration for German invoicing. Toggl time tracking. Generate invoices from your terminal.</p>
-			<div class="code-block">
-				<div class="code-line cmd">draht invoice create --client "Acme GmbH" --hours 40</div>
-				<div class="code-line cmd">draht invoice send --id INV-2026-042</div>
-				<div class="code-line cmd">draht toggl sync</div>
-			</div>
-			<p>Built for German freelancers: proper VAT handling, Lexoffice sync, and legally compliant invoice templates.</p>
-		</section>
-
-		<!-- 15. Compliance -->
-		<section id="compliance" class="doc-section">
-			<h2 class="wip-title">15. Compliance <span class="wip-badge">Under construction</span></h2>
-			<p>Automated compliance checks for GDPR and EU AI Act requirements.</p>
-			<ul>
-				<li><strong>GDPR PII scanner</strong> — detects personal data in code and config</li>
-				<li><strong>EU AI Act documentation</strong> — checks required documentation for AI systems</li>
-				<li><strong>German legal templates</strong> — Impressum, Datenschutzerklaerung, AGB</li>
-			</ul>
-			<div class="code-block">
-				<div class="code-line cmd">draht compliance scan</div>
-				<div class="code-line cmd">draht compliance report</div>
-			</div>
-		</section>
-
-		<!-- 16. Deploy Guardian -->
-		<section id="deploy-guardian" class="doc-section">
-			<h2 class="wip-title">16. Deploy Guardian <span class="wip-badge">Under construction</span></h2>
-			<p>Pre-deploy validation and rollback automation. Runs checks before deployment and automatically rolls back on failure.</p>
-			<div class="code-block">
-				<div class="code-line cmd">draht deploy check</div>
-				<div class="code-line cmd">draht deploy push --stage production</div>
-			</div>
-		</section>
-
-		<!-- 17. GSD Workflow & Built-in Commands -->
+		<!-- 14. GSD Workflow & Built-in Commands -->
 		<section id="gsd-workflow" class="doc-section">
-			<h2>17. GSD workflow & built-in commands</h2>
+			<h2>14. GSD workflow & built-in commands</h2>
 			<p>Draht includes the <strong>GSD (Get Shit Done)</strong> workflow: slash commands, specialist subagents, and bundled skills for planning and shipping projects with TDD and DDD. The workflow is built in; it needs no separate installation.</p>
 
 			<h3>Project lifecycle</h3>
@@ -543,7 +504,7 @@ const description = "Install Draht, choose a provider, manage sessions, and exte
 
 		<!-- 18. CLI Reference -->
 		<section id="cli-reference" class="doc-section">
-			<h2>18. CLI reference</h2>
+			<h2>15. CLI reference</h2>
 
 			<h3>Basic usage</h3>
 			<div class="code-block">

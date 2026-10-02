@@ -7,20 +7,16 @@ interface Props {
 const { npmPackage = "draht-claude", githubRepo = "draht-dev/draht" } = Astro.props;
 
 const packages: { name: string; tagline: string }[] = [
-	{ name: "@draht/router", tagline: "the dispatcher" },
-	{ name: "@draht/orchestrator", tagline: "the conductor" },
-	{ name: "@draht/knowledge", tagline: "the domain" },
-	{ name: "@draht/tdd", tagline: "the red bar" },
-	{ name: "@draht/ci", tagline: "the gate" },
-	{ name: "@draht/deploy-guardian", tagline: "the sentinel" },
-	{ name: "@draht/invoice", tagline: "the ledger" },
-	{ name: "@draht/compliance", tagline: "the notary" },
-	{ name: "@draht/templates", tagline: "the patterns" },
-	{ name: "draht-claude", tagline: "the bridge" },
-	{ name: "@draht/cli", tagline: "the standalone" },
+	{ name: "@draht/coding-agent", tagline: "the agent" },
+	{ name: "@draht/agent-core", tagline: "the harness" },
 	{ name: "@draht/ai", tagline: "the primitives" },
-	{ name: "@draht/extensions", tagline: "the slots" },
+	{ name: "@draht/router", tagline: "the dispatcher" },
 	{ name: "@draht/tui", tagline: "the loom" },
+	{ name: "draht-claude", tagline: "the claude bridge" },
+	{ name: "draht-codex", tagline: "the codex bridge" },
+	{ name: "@draht/tools", tagline: "the gsd cli" },
+	{ name: "@draht/knowledge", tagline: "the memory" },
+	{ name: "@draht/mom", tagline: "the slack bridge" },
 	{ name: "@draht/pods", tagline: "the foundry" },
 ];
 
@@ -74,11 +70,9 @@ const starsLabel = initialStars === null ? "—" : initialStars.toLocaleString("
 		<a href="/#werkstatt" data-nav-link>Workflow</a>
 		<a href="/#packages" data-nav-link>Packages</a>
 		<a href="/#philosophie" data-nav-link>Prinzipien</a>
-		<a href="/#pricing" data-nav-link>Pricing</a>
 		<a href="/docs" data-nav-link>Docs</a>
 		<a href="/blog" data-nav-link>Blog</a>
 		<a href="/uni" data-nav-link>Uni</a>
-		<a href="/week" data-nav-link>Week</a>
 		<a href={`https://github.com/${githubRepo}`} class="gh-link" data-nav-link>
 			<svg
 				class="gh-star"
@@ -116,7 +110,7 @@ const starsLabel = initialStars === null ? "—" : initialStars.toLocaleString("
 			>v<span data-version>{initialVersion}</span></button>
 			<div class="pkg-menu-pop" id="pkg-menu-list" role="menu" aria-label="Packages">
 				<div class="pkg-menu-head">
-					<span>15 packages</span>
+					<span>11 packages</span>
 					<a
 						class="pkg-menu-current"
 						href={`https://www.npmjs.com/package/${npmPackage}`}
@@ -145,7 +139,7 @@ const starsLabel = initialStars === null ? "—" : initialStars.toLocaleString("
 		</span>
 		· built in Dortmund · MIT
 	</span>
-	<span>N° 001 / MONOREPO · 15 PACKAGES</span>
+	<span>N° 001 / MONOREPO · 11 PACKAGES</span>
 	<span>HANDGEFERTIGT — OSKAR FREYE, MMXXVI</span>
 </div>
 

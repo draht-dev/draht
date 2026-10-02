@@ -1,6 +1,6 @@
 ---
 name: unslop
-description: Cut AI tells from prose deliverables the agent produces — docs, READMEs, reports, summaries, UAT reports, handoff documents, commit bodies, PR descriptions, client-facing text — then add voice back so the result is neither slop nor sterile. Use when writing or substantially editing any prose deliverable, or when the user says "unslop", "de-AI-ify", "sounds like AI", "make it sound human", or asks to clean up slop. Covers German prose by analogy (Füllwörter, Werbesprache, Anglizismen). Never applies to code, code comments, quoted output or evidence, machine-parsed formats (commit subjects, STATUS lines, frontmatter), or draht's own prompt and skill corpus.
+description: Cut AI tells from prose deliverables the agent produces — docs, READMEs, reports, summaries, UAT reports, handoff documents, commit bodies, PR descriptions, client-facing text — then add voice back so the result is neither slop nor sterile. Use when writing or substantially editing any prose deliverable, or when the user says "unslop", "de-AI-ify", "sounds like AI", "make it sound human", asks to clean up slop, or asks for ASD-STE100, Simplified Technical English, or easier-to-follow instructions. Covers German prose by analogy (Füllwörter, Werbesprache, Anglizismen). Never applies to code, code comments, quoted output or evidence, machine-parsed formats (commit subjects, STATUS lines, frontmatter), or draht's own prompt and skill corpus.
 ---
 
 # Unslop
@@ -84,6 +84,24 @@ Removing patterns is half the job — voiceless prose is just as obviously machi
 
 - **Docs and READMEs**: have opinions and react to facts instead of neutrally listing pros and cons; vary rhythm (short sentences, then longer ones that take their time); use "I" when it fits; be specific.
 - **Reports, UAT reports, handoffs, client-facing text**: stay factual and concrete. Specificity is the voice there — name the file, the count, the command. No filler warmth, no manufactured mess.
+
+## Controlled Register (STE-lite)
+
+ASD-STE100 (Simplified Technical English) is a controlled language written for aircraft maintenance manuals. Its full rule set is strict. Going most of the way gives text that a tired or non-native reader can act on without rereading.
+
+Use it for procedures, runbooks, setup and fix steps, warnings, and the "next steps" of a handoff. Also use it when the user asks for "STE", "ASD-STE100", "Simplified Technical English", or "make it easier to follow". Do not use it for docs and READMEs that need voice.
+
+- **Sentence length.** At most 20 words in a procedure, at most 25 in a description.
+- **One instruction per sentence.** Use the imperative: "Run `npm run check`." not "You should run the check."
+- **Numbered steps, one action each.** Put the condition first: "If the check fails, read the first error."
+- **Warnings before the step they protect.** Start with the instruction, then give the reason: "Do not delete `bun.lock`. The install is no longer reproducible."
+- **One word, one meaning.** Pick one term for one thing and keep it. Terms from `.planning/DOMAIN.md` win.
+- **Active voice, present tense** for descriptions.
+- **Keep the articles.** "Open the file", not "Open file". Telegraphic style is not STE.
+- **Paragraphs** have one topic and at most six sentences.
+- **Technical names stay exact.** Commands, identifiers, paths, and error text are quoted verbatim even when they break the rules above.
+
+STE is defined for English. For German text, apply the same limits by analogy: kurze Sätze, Imperativ in Anleitungen, ein Begriff pro Sache, Warnung vor dem Schritt.
 
 ## German Prose
 

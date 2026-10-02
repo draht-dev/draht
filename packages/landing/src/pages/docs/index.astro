@@ -31,6 +31,8 @@ const description = "Install Draht, choose a provider, manage sessions, and exte
 				<li><a href="#packages">Draht packages</a></li>
 				<li><a href="#sdk">SDK & programmatic usage</a></li>
 				<li><a href="#model-router">Model router</a></li>
+				<li><a href="#codemode">Codemode</a></li>
+				<li><a href="#mcp">MCP</a></li>
 				<li><a href="#gsd-workflow">GSD workflow & built-in commands</a></li>
 				<li><a href="#cli-reference">CLI reference</a></li>
 			</ol>
@@ -76,7 +78,7 @@ const description = "Install Draht, choose a provider, manage sessions, and exte
 		<!-- 3. Providers & Models -->
 		<section id="providers" class="doc-section">
 			<h2>3. Providers & models</h2>
-			<p>Draht supports 42 providers via the <code>@draht/ai</code> package. Each provider's model list is updated with every release.</p>
+			<p>Draht supports 42 providers via the <code>@draht/ai</code> package, carrying 1,529 chat models in the regenerated catalog. Each provider's model list is updated with every release.</p>
 
 			<h3>Subscriptions (OAuth)</h3>
 			<ul>
@@ -122,6 +124,12 @@ const description = "Install Draht, choose a provider, manage sessions, and exte
 
 			<h3>Custom providers</h3>
 			<p>Add providers via <code>~/.draht/agent/models.json</code> if they speak a supported API (OpenAI, Anthropic, Google). For custom APIs or OAuth, use extensions.</p>
+
+			<h3>Virtual models</h3>
+			<p>Compose a model id out of a provider and a set of options — a thinking level, for example — and it becomes its own addressable catalog entry: <code>sonnet:high</code> selects Claude Sonnet at high reasoning effort without a separate config file.</p>
+
+			<h3>Prompt cache warming</h3>
+			<p>An idle session periodically re-sends its cached prefix so the next turn doesn't pay a cold-cache penalty. Tune retention with <code>DRAHT_CACHE_RETENTION</code>.</p>
 		</section>
 
 		<!-- 4. Interactive Mode -->
@@ -161,6 +169,8 @@ const description = "Install Draht, choose a provider, manage sessions, and exte
 					<tr><td><code>/copy</code></td><td>Copy last response to clipboard</td></tr>
 					<tr><td><code>/export</code></td><td>Export session to HTML</td></tr>
 					<tr><td><code>/share</code></td><td>Upload as private GitHub gist</td></tr>
+					<tr><td><code>/thinking</code></td><td>Change the reasoning effort level mid-session</td></tr>
+					<tr><td><code>/bug</code></td><td>Build a bug report (version, settings, provider errors, no API keys) and export it as a zip. Upload to the draht maintainers is planned but not live yet.</td></tr>
 				</tbody>
 			</table>
 
@@ -283,8 +293,8 @@ const description = "Install Draht, choose a provider, manage sessions, and exte
 				<li>Status lines, headers, footers</li>
 				<li>Git checkpointing and auto-commit</li>
 				<li>SSH and sandbox execution</li>
-				<li>MCP server integration</li>
 			</ul>
+			<p>MCP and codemode are built in — see <a href="#mcp">§15</a> and <a href="#codemode">§14</a> — not something an extension needs to add.</p>
 			<p>Place in <code>~/.draht/agent/extensions/</code>, <code>.draht/extensions/</code>, or a Draht package.</p>
 		</section>
 
@@ -365,9 +375,30 @@ const description = "Install Draht, choose a provider, manage sessions, and exte
 			<p>Roles (<code>architect</code>, <code>implement</code>, <code>boilerplate</code>, <code>quick</code>, <code>review</code>, <code>docs</code>) map to a primary model with fallbacks, configured in <code>.draht/router.json</code> (project) or <code>~/.draht/router.json</code> (global).</p>
 		</section>
 
-		<!-- 14. GSD Workflow & Built-in Commands -->
+		<!-- 14. Codemode -->
+		<section id="codemode" class="doc-section">
+			<h2>14. Codemode</h2>
+			<p>For tasks that benefit from loops or branching over many tool results, the model can write a script against the active tool set instead of calling tools one at a time. The script runs in a QuickJS sandbox; nested tool calls and their results stay inside the script's execution and never enter the model's context — only the script's own output comes back.</p>
+			<p>Scripts can call every active <code>direct</code>, <code>codemode</code>, or <code>deferred</code> tool, carry state across calls with <code>store()</code>/<code>load()</code>, and reach the model catalog through <code>models.*</code>. See <code>packages/codemode</code> and <code>packages/coding-agent/src/extensions/codemode</code>.</p>
+		</section>
+
+		<!-- 15. MCP -->
+		<section id="mcp" class="doc-section">
+			<h2>15. MCP</h2>
+			<p>A built-in Model Context Protocol client — no extension required. <code>draht mcp</code> configures servers and signs in to OAuth servers outside a session; running sessions pick up new credentials on their next turn.</p>
+			<div class="code-block">
+				<div class="code-line cmd">draht mcp add <em>server</em> --url https://example.com/mcp</div>
+				<div class="code-line cmd">draht mcp add <em>server</em> -- npx -y some-mcp-server</div>
+				<div class="code-line cmd">draht mcp list</div>
+				<div class="code-line cmd">draht mcp login <em>server</em></div>
+				<div class="code-line cmd">draht mcp logout <em>server</em></div>
+			</div>
+			<p>Reads <code>~/.draht/agent/mcp.json</code> (global) and, in trusted projects, <code>.draht/mcp.json</code>. MCP tools are exposed through codemode by default (<code>--exposure</code> also accepts <code>deferred</code>, <code>direct</code>, or <code>hidden</code>).</p>
+		</section>
+
+		<!-- 16. GSD Workflow & Built-in Commands -->
 		<section id="gsd-workflow" class="doc-section">
-			<h2>14. GSD workflow & built-in commands</h2>
+			<h2>16. GSD workflow & built-in commands</h2>
 			<p>Draht includes the <strong>GSD (Get Shit Done)</strong> workflow: slash commands, specialist subagents, and bundled skills for planning and shipping projects with TDD and DDD. The workflow is built in; it needs no separate installation.</p>
 
 			<h3>Project lifecycle</h3>
@@ -502,9 +533,9 @@ const description = "Install Draht, choose a provider, manage sessions, and exte
 			<p>The same workflow ships as a Claude Code plugin via <a href="https://www.npmjs.com/package/draht-claude"><code>draht-claude</code></a>: <code>npx draht-claude install</code>.</p>
 		</section>
 
-		<!-- 18. CLI Reference -->
+		<!-- 17. CLI Reference -->
 		<section id="cli-reference" class="doc-section">
-			<h2>15. CLI reference</h2>
+			<h2>17. CLI reference</h2>
 
 			<h3>Basic usage</h3>
 			<div class="code-block">

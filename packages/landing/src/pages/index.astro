@@ -59,7 +59,7 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 					</div>
 					<dl class="hero-specs">
 						<div><dt>License</dt><dd>MIT</dd></div>
-						<div><dt>Packages</dt><dd>11</dd></div>
+						<div><dt>Packages</dt><dd>14</dd></div>
 						<div><dt>Providers</dt><dd>42</dd></div>
 						<div><dt>Install telemetry</dt><dd class="zero">none</dd></div>
 					</dl>
@@ -177,6 +177,20 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 							<p>Interactive, print mode (text or JSON), RPC over stdin/stdout, or the SDK. The Slack bot (<code>@draht/mom</code>) runs on the SDK path; embed it the same way in your own app.</p>
 						</div>
 					</div>
+					<div class="feat">
+						<div class="fnum">F/05</div>
+						<div>
+							<h4>Scripts, not <em>tool calls.</em></h4>
+							<p>Codemode writes a script against the active tools instead of calling them one at a time, in a QuickJS sandbox. Nested calls and their results stay out of the model's context — only the script's own output comes back.</p>
+						</div>
+					</div>
+					<div class="feat">
+						<div class="fnum">F/06</div>
+						<div>
+							<h4>MCP, <em>built in.</em></h4>
+							<p><code>draht mcp add/list/login</code> configures Model Context Protocol servers in <code>.draht/mcp.json</code>, OAuth included. No extension required, and MCP tools run through codemode by default.</p>
+						</div>
+					</div>
 				</div>
 			</div>
 		</section>
@@ -185,7 +199,7 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 		<section class="section" id="packages">
 			<div class="section-head">
 				<div class="section-num">§ 03</div>
-				<div class="section-title">Das Sortiment <em>— eleven packages, one mono-repo</em></div>
+				<div class="section-title">Das Sortiment <em>— fourteen packages, one mono-repo</em></div>
 				<div class="section-kicker">MIT licensed · monorepo workspace</div>
 			</div>
 
@@ -214,44 +228,62 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 					<div class="pkg-desc">Role-based model routing with direct API calls, ordered fallback chains, and cost tracking. No OpenRouter in the hot path.</div>
 					<div class="pkg-tag">LIBRARY</div>
 				</a>
-				<a class="pkg" href="https://github.com/draht-dev/draht/tree/main/packages/tui">
+				<a class="pkg" href="https://github.com/draht-dev/draht/tree/main/packages/chord">
 					<span class="pkg-idx">№ 05</span>
+					<div class="pkg-name">@draht/chord <em>the composer</em></div>
+					<div class="pkg-desc">Application composition runtime for services, replicated state, RPC, and plugins. Backs the agent harness.</div>
+					<div class="pkg-tag">LIBRARY</div>
+				</a>
+				<a class="pkg" href="https://github.com/draht-dev/draht/tree/main/packages/codemode">
+					<span class="pkg-idx">№ 06</span>
+					<div class="pkg-name">@draht/codemode <em>the sandbox</em></div>
+					<div class="pkg-desc">Sandboxed JavaScript execution where the only capability is calling injected tools. Powers the agent's codemode tool.</div>
+					<div class="pkg-tag">LIBRARY</div>
+				</a>
+				<a class="pkg" href="https://github.com/draht-dev/draht/tree/main/packages/mcp">
+					<span class="pkg-idx">№ 07</span>
+					<div class="pkg-name">@draht/mcp <em>the client</em></div>
+					<div class="pkg-desc">Standalone Model Context Protocol client for draht and other applications.</div>
+					<div class="pkg-tag">LIBRARY</div>
+				</a>
+				<a class="pkg" href="https://github.com/draht-dev/draht/tree/main/packages/tui">
+					<span class="pkg-idx">№ 08</span>
 					<div class="pkg-name">@draht/tui <em>the loom</em></div>
 					<div class="pkg-desc">Terminal UI library with differential rendering. Renders the interactive CLI.</div>
 					<div class="pkg-tag">LIBRARY</div>
 				</a>
 				<a class="pkg" href="https://github.com/draht-dev/draht/tree/main/packages/draht-claude">
-					<span class="pkg-idx">№ 06</span>
+					<span class="pkg-idx">№ 09</span>
 					<div class="pkg-name">draht-claude <em>the claude bridge</em></div>
 					<div class="pkg-desc">GSD, multi-agent, TDD, and DDD workflows as a Claude Code plugin. <code>npx draht-claude install</code>.</div>
 					<div class="pkg-tag">PLUGIN</div>
 				</a>
 				<a class="pkg" href="https://github.com/draht-dev/draht/tree/main/packages/draht-codex">
-					<span class="pkg-idx">№ 07</span>
+					<span class="pkg-idx">№ 10</span>
 					<div class="pkg-name">draht-codex <em>the codex bridge</em></div>
 					<div class="pkg-desc">The same workflows as a Codex plugin. <code>npx draht-codex install</code>.</div>
 					<div class="pkg-tag">PLUGIN</div>
 				</a>
 				<a class="pkg" href="https://github.com/draht-dev/draht/tree/main/packages/draht-tools">
-					<span class="pkg-idx">№ 08</span>
+					<span class="pkg-idx">№ 11</span>
 					<div class="pkg-name">@draht/tools <em>the gsd cli</em></div>
 					<div class="pkg-desc">The Get Shit Done CLI shared by draht-claude and @draht/coding-agent — codebase knowledge graph, skills, and workflow commands.</div>
 					<div class="pkg-tag">CLI</div>
 				</a>
 				<a class="pkg" href="https://github.com/draht-dev/draht/tree/main/packages/knowledge">
-					<span class="pkg-idx">№ 09</span>
+					<span class="pkg-idx">№ 12</span>
 					<div class="pkg-name">@draht/knowledge <em>the memory</em></div>
 					<div class="pkg-desc">Per-client vector database for knowledge persistence across projects.</div>
 					<div class="pkg-tag">PRODUCT</div>
 				</a>
 				<a class="pkg" href="https://github.com/draht-dev/draht/tree/main/packages/mom">
-					<span class="pkg-idx">№ 10</span>
+					<span class="pkg-idx">№ 13</span>
 					<div class="pkg-name">@draht/mom <em>the slack bridge</em></div>
 					<div class="pkg-desc">Slack bot that delegates messages to the Draht coding agent.</div>
 					<div class="pkg-tag">PRODUCT</div>
 				</a>
 				<a class="pkg" href="https://github.com/draht-dev/draht/tree/main/packages/pods">
-					<span class="pkg-idx">№ 11</span>
+					<span class="pkg-idx">№ 14</span>
 					<div class="pkg-name">@draht/pods <em>the foundry</em></div>
 					<div class="pkg-desc">Manages vLLM deployments on GPU pods. Start, rotate, and retire self-hosted models from the command line.</div>
 					<div class="pkg-tag">PRODUCT</div>

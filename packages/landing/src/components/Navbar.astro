@@ -11,6 +11,9 @@ const packages: { name: string; tagline: string }[] = [
 	{ name: "@draht/agent-core", tagline: "the harness" },
 	{ name: "@draht/ai", tagline: "the primitives" },
 	{ name: "@draht/router", tagline: "the dispatcher" },
+	{ name: "@draht/chord", tagline: "the composer" },
+	{ name: "@draht/codemode", tagline: "the sandbox" },
+	{ name: "@draht/mcp", tagline: "the client" },
 	{ name: "@draht/tui", tagline: "the loom" },
 	{ name: "draht-claude", tagline: "the claude bridge" },
 	{ name: "draht-codex", tagline: "the codex bridge" },
@@ -110,7 +113,7 @@ const starsLabel = initialStars === null ? "—" : initialStars.toLocaleString("
 			>v<span data-version>{initialVersion}</span></button>
 			<div class="pkg-menu-pop" id="pkg-menu-list" role="menu" aria-label="Packages">
 				<div class="pkg-menu-head">
-					<span>11 packages</span>
+					<span>14 packages</span>
 					<a
 						class="pkg-menu-current"
 						href={`https://www.npmjs.com/package/${npmPackage}`}
@@ -139,7 +142,7 @@ const starsLabel = initialStars === null ? "—" : initialStars.toLocaleString("
 		</span>
 		· built in Dortmund · MIT
 	</span>
-	<span>N° 001 / MONOREPO · 11 PACKAGES</span>
+	<span>N° 001 / MONOREPO · 14 PACKAGES</span>
 	<span>HANDGEFERTIGT — OSKAR FREYE, MMXXVI</span>
 </div>
 

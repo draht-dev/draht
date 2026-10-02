@@ -11,7 +11,11 @@ const manifest = JSON.parse(read("package.json"));
 const setupAction = read(".github/actions/setup/action.yml");
 const binaryRelease = read(".github/workflows/build-binaries.yml");
 
-const CANONICAL_INSTALL = "bun install --frozen-lockfile --ignore-scripts --linker hoisted";
+// The TEST install, not the release one. Release workflows keep
+// `--ignore-scripts --linker hoisted` (release-helpers.test.mjs); the shared
+// setup action feeds the test jobs, which need trusted lifecycle scripts
+// (better-sqlite3's native binding) and per-workspace node_modules/.bin.
+const TEST_INSTALL = "bun install --frozen-lockfile";
 
 test("the shared setup action installs and asserts the exact Bun pinned by the manifest", () => {
 	assert.match(manifest.packageManager, /^bun@\d+\.\d+\.\d+$/);
@@ -33,8 +37,12 @@ test("the shared setup action does not install Bun under the npm global prefix",
 	assert.doesNotMatch(setupAction, /npm install --global "?bun@/);
 });
 
-test("the shared setup action uses the frozen hoisted install contract", () => {
-	assert.match(setupAction, new RegExp(CANONICAL_INSTALL.replaceAll(".", "\\.")));
+test("the shared setup action uses a frozen install that keeps lifecycle scripts and the default layout", () => {
+	const installLines = setupAction.split("\n").filter((line) => /^\s*run: bun install\b/.test(line));
+	assert.deepEqual(
+		installLines.map((line) => line.trim()),
+		[`run: ${TEST_INSTALL}`],
+	);
 });
 
 test("binary release pins the same manifest Bun version and revision, not a different one", () => {

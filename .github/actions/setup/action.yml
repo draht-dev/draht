@@ -68,4 +68,9 @@ runs:
     - name: Install dependencies
       if: inputs.install == 'true'
       shell: bash
-      run: bun install --frozen-lockfile --ignore-scripts --linker hoisted
+      # Not the release workflows' `--ignore-scripts --linker hoisted`: tests
+      # need the trusted lifecycle scripts (better-sqlite3's native binding)
+      # and the isolated layout a default install produces (per-workspace
+      # node_modules/.bin, e.g. geist-console's vite). Bun still runs only the
+      # scripts of trusted dependencies.
+      run: bun install --frozen-lockfile

@@ -7,6 +7,7 @@
 import { randomUUID } from "node:crypto";
 import { access, copyFile, mkdir, rename, rm } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
+import { elevenLabsKeyFilePath, resolveElevenLabsApiKey } from "./api-key.ts";
 import {
 	assertValidSha,
 	collectChangeSetsForShas,
@@ -220,11 +221,14 @@ async function resolveWriter(args: Pick<BuildArgs, "writer" | "model">): Promise
 
 function resolveTts(args: Pick<BuildArgs, "tts" | "voice" | "ttsModel">): TtsProvider {
 	if (args.tts === "none") return silentProvider;
-	const apiKey = process.env.ELEVENLABS_API_KEY?.trim();
-	if (!apiKey) {
-		fail("--tts elevenlabs requires ELEVENLABS_API_KEY to be set. Use --tts none to skip narration audio.");
+	const resolved = resolveElevenLabsApiKey();
+	if (!resolved) {
+		fail(
+			`--tts elevenlabs needs an ElevenLabs key: set ELEVENLABS_API_KEY or write it to ${elevenLabsKeyFilePath()} (chmod 600). Use --tts none to skip narration audio.`,
+		);
 	}
-	return elevenLabsProvider({ apiKey, voice: args.voice, model: args.ttsModel });
+	if (resolved.warning) console.warn(`draht-reels: ${resolved.warning}`);
+	return elevenLabsProvider({ apiKey: resolved.key, voice: args.voice, model: args.ttsModel });
 }
 
 function repoName(args: Pick<BuildArgs, "name" | "repo">): string {

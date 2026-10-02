@@ -107,8 +107,12 @@ collect (git) -> script (narration + hunk picks) -> tts (ElevenLabs|none)
   (`node_modules/.remotion/`). On NixOS or other non-FHS Linux, Chrome needs
   `libnspr4.so`/`libnss3.so`/`libexpat.so.1` available on `LD_LIBRARY_PATH`
   (e.g. via `nix-shell -p nspr nss expat`).
-- `ELEVENLABS_API_KEY` for narration (`--tts elevenlabs`, the default). Use
-  `--tts none` to render silent reels with estimated scene durations.
+- An ElevenLabs key for narration (`--tts elevenlabs`, the default), from
+  `$ELEVENLABS_API_KEY` or, failing that, `~/.draht/keys/elevenlabs.key` (a
+  file holding only the key, mode 600; the same file the `speak` helper
+  reads). The key file keeps the key out of shell environments and agent
+  transcripts. Use `--tts none` to render silent reels with estimated scene
+  durations.
 - `--writer llm` additionally requires `@draht/ai` to be built (`dist/`,
   not just `src/`) and `--model <provider/id>`; the provider's API key must
   be set in the environment for that provider's auth convention (e.g.

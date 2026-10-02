@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openaiChatGPTOAuth } from "../src/auth/oauth/openai-chatgpt.ts";
 import type { OAuthCredential, ProviderAuthInteraction } from "../src/auth/types.ts";
@@ -115,6 +116,32 @@ describe("OpenAI ChatGPT OAuth", () => {
 			"registration callback did not contain an issued client ID",
 		);
 		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	// badlogic/pi-mono#10265: another listener must not receive this login's callback.
+	it("fails before authorization when the callback port is occupied", async () => {
+		const server = createServer();
+		await new Promise<void>((resolve, reject) => {
+			server.once("error", reject);
+			server.listen(1455, "127.0.0.1", resolve);
+		});
+		try {
+			const fetchMock = stubTokenEndpoint(tokenResponse());
+			const interaction = loginInteraction({ callbackClientId: "oaiapp_issued" });
+			const notify = vi.fn(interaction.notify);
+			const prompt = vi.fn(interaction.prompt);
+
+			await expect(
+				openaiChatGPTOAuth.login({ ...interaction, notify, prompt }, { getDeviceId: () => DEVICE_ID }),
+			).rejects.toThrow("Port 1455 is in use");
+			expect(notify).not.toHaveBeenCalled();
+			expect(prompt).not.toHaveBeenCalled();
+			expect(fetchMock).not.toHaveBeenCalled();
+		} finally {
+			await new Promise<void>((resolve, reject) => {
+				server.close((error) => (error ? reject(error) : resolve()));
+			});
+		}
 	});
 
 	it("rejects a token response that did not grant direct token use", async () => {

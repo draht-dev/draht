@@ -13,6 +13,7 @@ import {
 import { createInMemoryTransportPair, type InMemoryTransport } from "@draht/mcp/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { InMemoryAuthStorageBackend } from "../src/core/auth-storage.ts";
+import { validateMcpServerConfig } from "../src/core/mcp-servers.ts";
 import { truncateMiddle } from "../src/core/tools/truncate.ts";
 import { getMcpToolExposure, loadMcpConfig, type McpServerEntry } from "../src/extensions/mcp/config.ts";
 import { MAX_SERVERS_SECTION_CHARS, renderServersSection } from "../src/extensions/mcp/index.ts";
@@ -145,19 +146,116 @@ describe("MCP config", () => {
 						url: "https://a.example/mcp",
 						oauth: { authServerMetadataUrl: "http://idp.example/m" },
 					},
+					// badlogic/pi-mono#10302
+					cimd: {
+						url: "https://a.example/mcp",
+						oauth: {
+							clientRegistration: "cimd",
+							clientMetadataBaseUrl: "https://client.example/team/oauth/",
+							callbackUrl: "http://localhost/callback",
+						},
+					},
+					badRegistration: { url: "https://a.example/mcp", oauth: { clientRegistration: "auto" } },
+					cimdClient: { url: "https://a.example/mcp", oauth: { clientRegistration: "cimd", clientId: "x" } },
+					cimdPath: {
+						url: "https://a.example/mcp",
+						oauth: { clientRegistration: "cimd", callbackUrl: "http://127.0.0.1/cb" },
+					},
 				},
 			},
 			{},
 		);
 		const { servers, errors } = loadMcpConfig({ ...paths, projectTrusted: false });
-		expect(servers.map((server) => server.name)).toEqual(["ok", "ipv6", "same", "named", "metadata"]);
+		expect(servers.map((server) => server.name)).toEqual(["ok", "ipv6", "same", "named", "metadata", "cimd"]);
 		expect(errors).toEqual([
 			expect.stringContaining('server "remote": oauth.callbackUrl must be an http URI on localhost'),
 			expect.stringContaining('server "both": oauth.callbackUrl and oauth.callbackPort name different ports'),
 			expect.stringContaining('server "scope": oauth.scope must be a string'),
 			expect.stringContaining('server "unnamed": oauth.clientName must be a non-empty string'),
 			expect.stringContaining('server "plainMetadata": oauth.authServerMetadataUrl must be an https URL'),
+			expect.stringContaining('server "badRegistration": oauth.clientRegistration must be "dcr" or "cimd"'),
+			expect.stringContaining('server "cimdClient": oauth.clientRegistration "cimd" cannot be combined'),
+			expect.stringContaining('server "cimdPath": oauth.clientRegistration "cimd" requires oauth.callbackUrl'),
 		]);
+	});
+
+	it.each([
+		undefined,
+		"",
+		42,
+		"/oauth",
+		"http://example.com/oauth",
+		"ftp://example.com/oauth",
+		"https://user@example.com/oauth",
+		"https://user:secret@example.com/oauth",
+		"https://example.com/oauth?x=1",
+		"https://example.com/oauth#x",
+		"https://example.com/oauth?",
+		"https://example.com/oauth#",
+	])("rejects invalid or missing CIMD metadata base %s before creating a connection", (base) => {
+		const config = validateMcpServerConfig("test", {
+			url: "https://mcp.example/mcp",
+			oauth: { clientRegistration: "cimd", clientMetadataBaseUrl: base },
+		});
+		expect(config).toEqual(expect.stringContaining("oauth.clientMetadataBaseUrl is required"));
+	});
+
+	it.each([undefined, "dcr"])("rejects a metadata base outside CIMD mode (%s)", (clientRegistration) => {
+		expect(
+			validateMcpServerConfig("test", {
+				url: "https://mcp.example/mcp",
+				oauth: { clientRegistration, clientMetadataBaseUrl: "https://client.example/oauth/" },
+			}),
+		).toEqual(expect.stringContaining('oauth.clientMetadataBaseUrl requires oauth.clientRegistration "cimd"'));
+	});
+
+	it.each([
+		"https://client.example/team/oauth",
+		"https://client.example/team/oauth/",
+		"https://client.example/team/oauth///",
+	])("normalizes the CIMD base and carries its path prefix into runtime settings (%s)", (base) => {
+		const paths = setup(
+			{
+				mcpServers: {
+					test: {
+						url: "https://mcp.example/mcp",
+						oauth: {
+							clientRegistration: "cimd",
+							clientMetadataBaseUrl: base,
+						},
+					},
+				},
+			},
+			{},
+		);
+		const { servers, errors } = loadMcpConfig({ ...paths, projectTrusted: false });
+		expect(errors).toEqual([]);
+		const connection = new McpServerConnection({
+			entry: servers[0],
+			cwd: paths.cwd,
+			credentials: new McpOAuthCredentialStore(new InMemoryAuthStorageBackend()),
+			createTransport: () => {
+				throw new Error("validation must not connect");
+			},
+			onTools: () => {},
+		});
+		expect(connection.oauthSettings()).toMatchObject({
+			clientRegistration: "cimd",
+			clientMetadataBaseUrl: "https://client.example/team/oauth/",
+		});
+	});
+
+	it("rejects a secret for a CIMD public client", () => {
+		expect(
+			validateMcpServerConfig("test", {
+				url: "https://mcp.example/mcp",
+				oauth: {
+					clientRegistration: "cimd",
+					clientMetadataBaseUrl: "https://client.example/oauth/",
+					clientSecret: "secret",
+				},
+			}),
+		).toEqual(expect.stringContaining("cannot be combined"));
 	});
 
 	it("resolves per-tool exposure from exact names, then patterns in order", () => {

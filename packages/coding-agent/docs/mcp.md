@@ -149,6 +149,33 @@ draht registers as `draht`. Some servers only accept registrations from known cl
 
 The name is only sent when draht registers a client. To register again under a new name, sign out first.
 
+Some authorization servers accept a Client ID Metadata Document URL instead of dynamic registration. To opt in, set `clientRegistration` to `cimd` and supply `clientMetadataBaseUrl`. There is no default metadata service. The following URL is illustrative; replace it with an HTTPS service you operate:
+
+```json
+{
+  "mcpServers": {
+    "example": {
+      "url": "https://mcp.example.com/mcp",
+      "oauth": {
+        "clientRegistration": "cimd",
+        "clientMetadataBaseUrl": "https://example.com/team/oauth/"
+      }
+    }
+  }
+}
+```
+
+The base must be an absolute HTTPS URL without userinfo, query, or fragment. A trailing slash is normalized; the path prefix is preserved. The operator must actually host JSON metadata under that base:
+
+- `client.json`, whose `client_id` is its complete URL and whose `redirect_uris` includes `http://127.0.0.1/callback` (or `http://localhost/callback` when configured).
+- `<id>/client.json`, whose `client_id` is its complete URL and whose `redirect_uris` uses the matching `/callback/<id>` path. The ID is the first 9 bytes of SHA-256 of the normalized MCP server URL with its fragment removed, encoded as unpadded base64url. A service can generate these documents for each requested ID.
+
+The documents must describe a public client (`token_endpoint_auth_method: "none"`) with authorization-code and refresh-token grants and the `code` response type. Authorization servers must accept the dynamically chosen loopback port as specified by RFC 8252, or the documents must list the exact configured port. Each document's identity and redirect paths must match the URLs draht sends; draht does not publish these documents for you.
+
+When the authorization server supports the `iss` parameter (RFC 9207), draht uses `client.json` and checks the returned issuer. Otherwise it uses the server-specific document and callback path to prevent authorization-server mix-ups. Browser callbacks and pasted redirect URLs must match the chosen callback origin and path. The server must advertise metadata-document support and public-client authentication, or sign-in fails. CIMD cannot be combined with `clientId`, `clientName`, or `clientSecret`; `callbackUrl` must use `localhost` or `127.0.0.1` with path `/callback`.
+
+Without `clientRegistration`, or with `"dcr"`, dynamic registration remains the default. `clientMetadataBaseUrl` is rejected outside CIMD mode. Switching between DCR and CIMD or changing the metadata base requires a new sign-in: cached tokens are bound to the issuing client document and are never sent or refreshed under another client. Existing DCR credentials remain valid.
+
 draht finds the authorization server through the server's protected resource metadata (RFC 9728) and checks that the authorization server's metadata names the expected issuer (RFC 8414). Some servers advertise the wrong authorization server or none, so sign-in opens a page that does not exist. Set `authServerMetadataUrl` to the metadata document of the right authorization server:
 
 ```json

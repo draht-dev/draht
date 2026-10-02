@@ -1,9 +1,17 @@
-import type { OAuthClientProvider } from "./flow.ts";
-import type { OAuthClientInformationMixed, OAuthClientMetadata, OAuthDiscoveryState, OAuthTokens } from "./types.ts";
+import type { OAuthClientMetadataDocument, OAuthClientProvider } from "./flow.ts";
+import type {
+	AuthorizationServerMetadata,
+	OAuthClientInformationMixed,
+	OAuthClientMetadata,
+	OAuthDiscoveryState,
+	OAuthTokens,
+} from "./types.ts";
 
 export interface McpOAuthState {
 	serverUrl: string;
 	clientInformation?: OAuthClientInformationMixed;
+	/** Client ID Metadata Document that issued the stored tokens; absent for registered clients. */
+	clientMetadataUrl?: string;
 	tokens?: OAuthTokens;
 	/** When the access token expires, in milliseconds since the epoch, from `expires_in` at the time it was saved. */
 	tokensExpireAt?: number;
@@ -21,6 +29,10 @@ export interface McpOAuthProviderOptions {
 	serverUrl: string | URL;
 	redirectUrl: string | URL;
 	clientMetadata: Omit<OAuthClientMetadata, "redirect_uris"> & { redirect_uris?: string[] };
+	/** See `OAuthClientProvider.clientMetadataDocument`. */
+	clientMetadataDocument?: (
+		metadata: AuthorizationServerMetadata | undefined,
+	) => OAuthClientMetadataDocument | undefined;
 	clientId?: string;
 	clientSecret?: string;
 	store?: McpOAuthStateStore;
@@ -43,11 +55,15 @@ export class MemoryOAuthStateStore implements McpOAuthStateStore {
 export class McpOAuthProvider implements OAuthClientProvider {
 	readonly redirectUrl: string;
 	readonly clientMetadata: OAuthClientMetadata;
+	readonly clientMetadataDocument?: (
+		metadata: AuthorizationServerMetadata | undefined,
+	) => OAuthClientMetadataDocument | undefined;
 	private serverUrl: string;
 	private configuredClient: OAuthClientInformationMixed | undefined;
 	private store: McpOAuthStateStore;
 	private onRedirect: (url: URL) => void | Promise<void>;
 	private writes: Promise<void> = Promise.resolve();
+	private selectedClientMetadata: { url: string | undefined } | undefined;
 
 	constructor(options: McpOAuthProviderOptions) {
 		this.serverUrl = String(new URL(options.serverUrl));
@@ -60,6 +76,14 @@ export class McpOAuthProvider implements OAuthClientProvider {
 			token_endpoint_auth_method:
 				options.clientMetadata.token_endpoint_auth_method ?? (options.clientSecret ? "client_secret_post" : "none"),
 		};
+		if (options.clientMetadataDocument) {
+			const selectDocument = options.clientMetadataDocument;
+			this.clientMetadataDocument = (metadata) => {
+				const document = selectDocument(metadata);
+				this.selectedClientMetadata = { url: document?.url };
+				return document;
+			};
+		}
 		this.configuredClient = options.clientId
 			? { client_id: options.clientId, ...(options.clientSecret ? { client_secret: options.clientSecret } : {}) }
 			: undefined;
@@ -76,7 +100,9 @@ export class McpOAuthProvider implements OAuthClientProvider {
 	}
 
 	async clientInformation(): Promise<OAuthClientInformationMixed | undefined> {
-		return this.configuredClient ?? (await this.load()).clientInformation;
+		const state = await this.load();
+		if (!this.selectCachedClientDocument(state) || this.selectedClientMetadata?.url) return undefined;
+		return this.configuredClient ?? (state.clientMetadataUrl ? undefined : state.clientInformation);
 	}
 
 	async saveClientInformation(information: OAuthClientInformationMixed): Promise<void> {
@@ -85,13 +111,32 @@ export class McpOAuthProvider implements OAuthClientProvider {
 	}
 
 	async tokens(): Promise<OAuthTokens | undefined> {
-		return (await this.load()).tokens;
+		const state = await this.load();
+		if (!this.selectCachedClientDocument(state)) return undefined;
+		// Never refresh a grant with another document or a dynamically registered client.
+		if (state.clientMetadataUrl !== this.selectedClientMetadata?.url) return undefined;
+		return state.tokens;
+	}
+
+	/** Resume through the current selector and validated discovery, never through the stored client URL alone. */
+	private selectCachedClientDocument(state: McpOAuthState): boolean {
+		if (!this.clientMetadataDocument || this.selectedClientMetadata) return true;
+		const metadata = state.discovery?.authorizationServerMetadata;
+		if (!metadata) return false;
+		this.clientMetadataDocument(metadata);
+		return true;
 	}
 
 	async saveTokens(tokens: OAuthTokens): Promise<void> {
 		const expiresAt = tokens.expires_in === undefined ? undefined : Date.now() + tokens.expires_in * 1000;
 		await this.update((value) => {
 			const next: McpOAuthState = { ...value, tokens };
+			if (this.selectedClientMetadata?.url) {
+				next.clientMetadataUrl = this.selectedClientMetadata.url;
+				delete next.clientInformation;
+			} else {
+				delete next.clientMetadataUrl;
+			}
 			if (expiresAt === undefined) delete next.tokensExpireAt;
 			else next.tokensExpireAt = expiresAt;
 			return next;
@@ -119,6 +164,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
 			if (kind === "all" || kind === "tokens") {
 				delete next.tokens;
 				delete next.tokensExpireAt;
+				delete next.clientMetadataUrl;
 			}
 			if (kind === "all" || kind === "verifier") delete next.codeVerifier;
 			if (kind === "all" || kind === "discovery") delete next.discovery;

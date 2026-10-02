@@ -4,7 +4,8 @@
  * Connections never start a browser flow on their own. They send the stored access token and, after
  * a 401, try the stored refresh token. When that is not possible they fail with
  * `McpOAuthAuthorizationRequiredError`, and the user signs in through `/mcp`, which runs
- * the authorization code flow (PKCE, dynamic client registration) against a loopback callback.
+ * the authorization code flow (PKCE, a Client ID Metadata Document or dynamic client registration)
+ * against a loopback callback.
  *
  * Credentials live in `<agent-dir>/mcp-auth.json`, keyed by server name and URL.
  */
@@ -15,6 +16,7 @@ import { join } from "node:path";
 import { oauthErrorHtml, oauthSuccessHtml } from "@draht/ai/utils/oauth-page";
 import type { AuthProvider, McpFetch } from "@draht/mcp";
 import {
+	type AuthorizationServerMetadata,
 	authorizeMcp,
 	McpOAuthAuthorizationRequiredError,
 	McpOAuthProvider,
@@ -25,6 +27,7 @@ import {
 	OAuthCallbackServer,
 	type OAuthChallenge,
 	type OAuthClientInformationMixed,
+	type OAuthClientMetadataDocument,
 	parseWwwAuthenticate,
 	stepUpScope,
 } from "@draht/mcp/oauth";
@@ -58,6 +61,10 @@ export interface McpOAuthSettings {
 	scope?: string;
 	/** `client_name` for dynamic client registration. Default: `APP_NAME`. */
 	clientName?: string;
+	/** See `McpOAuthConfig.clientRegistration`. */
+	clientRegistration?: "dcr" | "cimd";
+	/** Validated by the config boundary, with a trailing slash. Required for `cimd`. */
+	clientMetadataBaseUrl?: string;
 	/** See `McpOAuthConfig.authServerMetadataUrl`. */
 	authServerMetadataUrl?: URL;
 }
@@ -217,6 +224,58 @@ function registeredRedirectUrls(client: OAuthClientInformationMixed | undefined)
 	return client && "redirect_uris" in client ? client.redirect_uris : [];
 }
 
+/** 12 characters identifying an MCP server URL in callback paths, computed like Codex does. */
+function callbackId(serverUrl: string): string {
+	const url = new URL(serverUrl);
+	url.hash = "";
+	return createHash("sha256").update(url.href).digest().subarray(0, 9).toString("base64url");
+}
+
+/**
+ * An operator-hosted Client ID Metadata Document, for `clientRegistration: "cimd"`.
+ * The configuration ensures the default callback path. Without the `iss` parameter in authorization
+ * responses (RFC 9207), the redirect URI and the document are specific to the MCP server, so a response
+ * cannot be mixed up with one from another authorization server (RFC 9700 section 4.4.2.2).
+ */
+function clientMetadataDocument(
+	baseUrl: string,
+	serverUrl: string,
+	redirectUrl: string,
+	metadata: AuthorizationServerMetadata | undefined,
+): OAuthClientMetadataDocument {
+	if (
+		!metadata?.client_id_metadata_document_supported ||
+		!metadata.token_endpoint_auth_methods_supported?.includes("none")
+	) {
+		throw new Error(
+			'The authorization server does not support Client ID Metadata Documents for public clients; remove oauth.clientRegistration "cimd"',
+		);
+	}
+	if (metadata.authorization_response_iss_parameter_supported) {
+		return { url: new URL("client.json", baseUrl).href, redirectUrl };
+	}
+	const id = callbackId(serverUrl);
+	const redirect = new URL(redirectUrl);
+	redirect.pathname = `${CALLBACK_PATH}/${id}`;
+	return { url: new URL(`${id}/client.json`, baseUrl).href, redirectUrl: redirect.href };
+}
+
+function metadataBaseUrl(settings: McpOAuthSettings): string | undefined {
+	if (settings.clientRegistration !== "cimd") return undefined;
+	if (!settings.clientMetadataBaseUrl) throw new Error('oauth.clientMetadataBaseUrl is required for "cimd"');
+	return settings.clientMetadataBaseUrl;
+}
+
+/** A cached token belongs to this registration mode and metadata base, or it needs a new sign-in. */
+function matchesClient(state: McpOAuthState | undefined, serverUrl: string, baseUrl: string | undefined): boolean {
+	if (!state || state.serverUrl !== new URL(serverUrl).href) return false;
+	if (!baseUrl) return state.clientMetadataUrl === undefined;
+	return (
+		state.clientMetadataUrl === new URL("client.json", baseUrl).href ||
+		state.clientMetadataUrl === new URL(`${callbackId(serverUrl)}/client.json`, baseUrl).href
+	);
+}
+
 function createProvider(
 	serverUrl: string,
 	store: McpOAuthStateStore,
@@ -224,10 +283,14 @@ function createProvider(
 	redirectUrl: string,
 	onRedirect: (url: URL) => void,
 ): McpOAuthProvider {
+	const baseUrl = metadataBaseUrl(settings);
 	return new McpOAuthProvider({
 		serverUrl,
 		redirectUrl,
 		clientMetadata: { client_name: settings.clientName ?? APP_NAME },
+		clientMetadataDocument: baseUrl
+			? (metadata) => clientMetadataDocument(baseUrl, serverUrl, redirectUrl, metadata)
+			: undefined,
 		clientId: settings.clientId,
 		clientSecret: settings.clientSecret,
 		store,
@@ -256,6 +319,8 @@ export interface McpAuthProvider extends AuthProvider {
 export function createMcpAuthProvider(options: {
 	serverUrl: string;
 	store: McpOAuthServerStore;
+	/** Validated CIMD base, or undefined for DCR. Separate from settings so token reads do not resolve secrets. */
+	clientMetadataBaseUrl: string | undefined;
 	settings: () => McpOAuthSettings;
 	onChallenge: (challenge: OAuthChallenge) => void;
 }): McpAuthProvider {
@@ -267,6 +332,9 @@ export function createMcpAuthProvider(options: {
 		refreshing ??= store
 			.withRefreshLock(async () => {
 				const state = await store.load();
+				if (!matchesClient(state, serverUrl, options.clientMetadataBaseUrl)) {
+					throw new McpOAuthAuthorizationRequiredError();
+				}
 				if (state?.tokens?.access_token !== staleToken) return;
 				if (!state?.tokens?.refresh_token) throw new McpOAuthAuthorizationRequiredError();
 				const settings = options.settings();
@@ -296,12 +364,16 @@ export function createMcpAuthProvider(options: {
 		token: async () => {
 			await refreshing?.catch(() => undefined);
 			const state = await store.load();
+			if (!matchesClient(state, serverUrl, options.clientMetadataBaseUrl)) return undefined;
 			const token = state?.tokens?.access_token;
 			const expired = state?.tokensExpireAt !== undefined && state.tokensExpireAt - REFRESH_SKEW_MS <= Date.now();
 			if (!expired || !state?.tokens?.refresh_token) return token;
 			// Failures fall through: the request goes out with the old token and a 401 decides what happens.
 			await refresh(token).catch(() => undefined);
-			return (await store.load())?.tokens?.access_token;
+			const refreshed = await store.load();
+			return matchesClient(refreshed, serverUrl, options.clientMetadataBaseUrl)
+				? refreshed?.tokens?.access_token
+				: undefined;
 		},
 		onUnauthorized: async (context) => {
 			const challenge = parseWwwAuthenticate(context.response.headers.get("www-authenticate"));
@@ -336,12 +408,16 @@ export class McpSignInCancelledError extends Error {
 
 type AuthorizationResponse = Pick<OAuthCallback, "code" | "iss">;
 
-function responseFromRedirectUrl(input: string, state: string): AuthorizationResponse {
+function responseFromRedirectUrl(input: string, state: string, redirectUrl: URL): AuthorizationResponse {
 	let url: URL;
 	try {
 		url = new URL(input.trim());
 	} catch {
 		throw new Error("Expected the full redirect URL from the browser address bar");
+	}
+	// A server-specific redirect URI tells authorization servers apart, so it must match exactly.
+	if (url.origin !== redirectUrl.origin || url.pathname !== redirectUrl.pathname) {
+		throw new Error("The redirect URL does not match this sign-in's redirect URI");
 	}
 	const error = url.searchParams.get("error");
 	if (error) throw new Error(url.searchParams.get("error_description") ?? error);
@@ -355,13 +431,14 @@ function responseFromRedirectUrl(input: string, state: string): AuthorizationRes
 async function waitForAuthorizationResponse(
 	callback: OAuthCallbackServer,
 	state: string,
+	redirectUrl: URL,
 	prompt: McpSignInPrompt,
 ): Promise<AuthorizationResponse> {
 	const controller = new AbortController();
-	const fromBrowser = callback.waitForCallback(state);
+	const fromBrowser = callback.waitForCallback(state, redirectUrl.pathname);
 	const fromUser = prompt.promptForRedirectUrl(controller.signal).then((input) => {
 		if (!input?.trim()) throw new McpSignInCancelledError();
-		return responseFromRedirectUrl(input, state);
+		return responseFromRedirectUrl(input, state, redirectUrl);
 	});
 	try {
 		return await Promise.race([fromBrowser, fromUser]);
@@ -376,6 +453,7 @@ async function waitForAuthorizationResponse(
 /** Listen on `port`, or on a free port when it is taken and not `required`. */
 async function listenForCallback(
 	settings: CallbackSettings,
+	extraPaths: string[],
 	port: number | undefined,
 	required: boolean,
 ): Promise<OAuthCallbackServer> {
@@ -383,6 +461,7 @@ async function listenForCallback(
 		host: settings.host,
 		redirectHost: settings.redirectHost,
 		path: settings.path,
+		extraPaths,
 		renderPage: (page: OAuthCallbackPage) =>
 			page.ok
 				? oauthSuccessHtml("Signed in to the MCP server. You may now close this page.")
@@ -408,22 +487,35 @@ export async function signInMcpServer(options: {
 	prompt: McpSignInPrompt;
 }): Promise<void> {
 	const { serverUrl, store, settings } = options;
-	const stored = await store.load();
+	const baseUrl = metadataBaseUrl(settings);
+	const previous = await store.load();
+	const stored = matchesClient(previous, serverUrl, baseUrl) ? previous : undefined;
+	if (previous && !stored) await store.save({ serverUrl });
 	const stepUp = options.challenge?.error === "insufficient_scope";
 	const callbackOptions = callbackSettings(settings);
 	// Reuse the port of the registered redirect URI so the registered client stays valid.
 	const registered = registeredRedirectUrls(stored?.clientInformation)[0];
 	const preferredPort =
 		callbackOptions.port ?? (registered ? Number(new URL(registered).port) || undefined : undefined);
-	const callback = await listenForCallback(callbackOptions, preferredPort, callbackOptions.port !== undefined);
+	const cimd = settings.clientRegistration === "cimd";
+	const callback = await listenForCallback(
+		callbackOptions,
+		// The redirect URI of a server-specific Client ID Metadata Document.
+		cimd ? [`${CALLBACK_PATH}/${callbackId(serverUrl)}`] : [],
+		preferredPort,
+		callbackOptions.port !== undefined,
+	);
 	const redirectUrl = callbackOptions.fixedRedirectUrl ?? callback.redirectUrl;
 	try {
 		if (stored) {
 			const next: McpOAuthState = { ...stored };
 			// Every sign-in gets a fresh `state` parameter.
 			delete next.oauthState;
-			// A registered client cannot use another redirect URI, and its tokens belong to it.
-			if (!settings.clientId && !registeredRedirectUrls(stored.clientInformation).includes(redirectUrl)) {
+			// A registered client cannot use another redirect URI. CIMD tokens were checked against the base above.
+			const keepClient =
+				settings.clientId ||
+				(cimd ? !stored.clientInformation : registeredRedirectUrls(stored.clientInformation).includes(redirectUrl));
+			if (!keepClient) {
 				delete next.clientInformation;
 				delete next.tokens;
 				delete next.tokensExpireAt;
@@ -452,8 +544,15 @@ export async function signInMcpServer(options: {
 		if (!authorizationUrl) throw new Error("OAuth flow did not produce an authorization URL");
 
 		const state = await provider.state();
+		// The flow picks the redirect URI, which may be specific to the MCP server.
+		const authorizationRedirectUrl = new URL(authorizationUrl.searchParams.get("redirect_uri") ?? redirectUrl);
 		options.prompt.showAuthorizationUrl(authorizationUrl);
-		const { code, iss } = await waitForAuthorizationResponse(callback, state, options.prompt);
+		const { code, iss } = await waitForAuthorizationResponse(
+			callback,
+			state,
+			authorizationRedirectUrl,
+			options.prompt,
+		);
 		await authorizeMcp(provider, { ...flow, authorizationCode: code, iss });
 	} finally {
 		await callback.close();

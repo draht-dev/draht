@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { get } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { McpClient, StreamableHttpTransport } from "../src/index.ts";
 import {
@@ -407,6 +408,37 @@ describe("MCP OAuth", () => {
 		expect(await second.tokens()).toBeUndefined();
 	});
 
+	it("binds tokens to the exact client document, including a change of callback branch", async () => {
+		const store = new MemoryOAuthStateStore();
+		const provider = (document: string | undefined) =>
+			new McpOAuthProvider({
+				serverUrl: "https://mcp.example/mcp",
+				redirectUrl: "http://127.0.0.1/callback",
+				clientMetadata: { client_name: "test" },
+				store,
+				onRedirect: () => {},
+				clientMetadataDocument: document
+					? () => ({ url: document, redirectUrl: "http://127.0.0.1/callback" })
+					: undefined,
+			});
+		const first = provider("https://client.example/oauth/client.json");
+		first.clientMetadataDocument?.(undefined);
+		await first.saveTokens({ access_token: "secret", refresh_token: "refresh", token_type: "Bearer" });
+		expect((await first.tokens())?.access_token).toBe("secret");
+		for (const document of [
+			undefined,
+			"https://client.example/oauth/server-id/client.json",
+			"https://other.example/oauth/client.json",
+		]) {
+			const changed = provider(document);
+			changed.clientMetadataDocument?.(undefined);
+			expect(await changed.tokens()).toBeUndefined();
+		}
+		const same = provider("https://client.example/oauth/client.json");
+		same.clientMetadataDocument?.(undefined);
+		expect((await same.tokens())?.refresh_token).toBe("refresh");
+	});
+
 	it("rejects authorization metadata whose issuer does not match discovery", async () => {
 		const origin = await listen(async (request, response, serverOrigin) => {
 			const url = new URL(request.url ?? "/", serverOrigin);
@@ -508,6 +540,54 @@ describe("OAuthCallbackServer pages", () => {
 			const response = await fetch(`${callback.redirectUrl}?code=abc&state=s1`);
 			expect(response.headers.get("content-type")).toBe("text/plain; charset=utf-8");
 			expect(await response.text()).toBe("Authorization complete. You may close this window.");
+			expect((await pending).code).toBe("abc");
+		} finally {
+			await callback.close();
+		}
+	});
+
+	// badlogic/pi-mono#10302
+	it("rejects a response on another path than the expected one", async () => {
+		const callback = await OAuthCallbackServer.listen({ extraPaths: ["/callback/server-id"] });
+		try {
+			const origin = new URL(callback.redirectUrl).origin;
+			const mixedUp = callback.waitForCallback("s1", "/callback/server-id");
+			mixedUp.catch(() => undefined);
+			const wrong = await fetch(`${origin}/callback?code=abc&state=s1`);
+			expect(wrong.status).toBe(400);
+			await expect(mixedUp).rejects.toThrow("arrived on another redirect URI");
+
+			const pending = callback.waitForCallback("s2", "/callback/server-id");
+			const right = await fetch(`${origin}/callback/server-id?code=abc&state=s2`);
+			expect(right.status).toBe(200);
+			expect((await pending).code).toBe("abc");
+		} finally {
+			await callback.close();
+		}
+	});
+
+	it("rejects a browser callback with another Host without consuming its state", async () => {
+		const callback = await OAuthCallbackServer.listen();
+		try {
+			const pending = callback.waitForCallback("origin-test", "/callback");
+			pending.catch(() => undefined);
+			const url = `${callback.redirectUrl}?code=abc&state=origin-test`;
+			// Node fetch rewrites Host; send the exact header through the HTTP client.
+			const wrong = await new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
+				get(url, { headers: { Host: "other.example" } }, (response) => {
+					let body = "";
+					response.setEncoding("utf8");
+					response.on("data", (chunk: string) => {
+						body += chunk;
+					});
+					response.on("end", () => resolve({ status: response.statusCode, body }));
+					response.on("error", reject);
+				}).on("error", reject);
+			});
+			expect(wrong.status).toBe(400);
+			expect(wrong.body).toBe("Unexpected redirect origin");
+			const right = await fetch(url);
+			expect(right.status).toBe(200);
 			expect((await pending).code).toBe("abc");
 		} finally {
 			await callback.close();

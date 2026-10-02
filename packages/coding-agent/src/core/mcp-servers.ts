@@ -77,6 +77,14 @@ export interface McpOAuthConfig {
 	 */
 	clientName?: string;
 	/**
+	 * How draht identifies itself without `clientId`. `dcr` (default): dynamic client registration.
+	 * `cimd`: an operator-hosted Client ID Metadata Document under `clientMetadataBaseUrl`. The server
+	 * must support it for public clients, and the callback must use the default path `/callback`.
+	 */
+	clientRegistration?: "dcr" | "cimd";
+	/** Required for `cimd`: HTTPS metadata service base, without userinfo, query, or fragment. No default. */
+	clientMetadataBaseUrl?: string;
+	/**
 	 * Authorization server metadata document (RFC 8414 or OpenID Connect discovery) to use instead of
 	 * discovery through the server, for servers that advertise a wrong authorization server or none.
 	 * The document is trusted as configured. Must use https, except on loopback hosts.
@@ -123,7 +131,7 @@ function isStringRecord(value: unknown): value is Record<string, string> {
 	return isRecord(value) && Object.values(value).every((entry) => typeof entry === "string");
 }
 
-function validateOAuth(value: unknown): string | undefined {
+function validateOAuth(value: unknown): McpOAuthConfig | string | undefined {
 	if (value === undefined) return undefined;
 	if (!isRecord(value)) return "oauth must be an object";
 	if (value.clientId !== undefined && typeof value.clientId !== "string") return "oauth.clientId must be a string";
@@ -147,6 +155,35 @@ function validateOAuth(value: unknown): string | undefined {
 	if (value.clientName !== undefined && (typeof value.clientName !== "string" || !value.clientName.trim())) {
 		return "oauth.clientName must be a non-empty string";
 	}
+	if (value.clientRegistration !== undefined && value.clientRegistration !== "dcr") {
+		if (value.clientRegistration !== "cimd") return 'oauth.clientRegistration must be "dcr" or "cimd"';
+		if (value.clientId !== undefined || value.clientName !== undefined || value.clientSecret !== undefined) {
+			return 'oauth.clientRegistration "cimd" cannot be combined with oauth.clientId, oauth.clientName, or oauth.clientSecret';
+		}
+		const callback = typeof value.callbackUrl === "string" ? new URL(value.callbackUrl) : undefined;
+		if (callback && (callback.hostname === "[::1]" || callback.pathname !== "/callback")) {
+			return 'oauth.clientRegistration "cimd" requires oauth.callbackUrl on localhost or 127.0.0.1 with path /callback';
+		}
+	}
+	let clientMetadataBaseUrl: string | undefined;
+	if (value.clientRegistration === "cimd") {
+		const base = value.clientMetadataBaseUrl;
+		const url = typeof base === "string" && URL.canParse(base) ? new URL(base) : undefined;
+		if (
+			!url ||
+			url.protocol !== "https:" ||
+			url.username ||
+			url.password ||
+			url.href.includes("?") ||
+			url.href.includes("#")
+		) {
+			return 'oauth.clientMetadataBaseUrl is required for "cimd" and must be an absolute HTTPS URL without userinfo, query, or fragment';
+		}
+		url.pathname = `${url.pathname.replace(/\/+$/, "")}/`;
+		clientMetadataBaseUrl = url.href;
+	} else if (value.clientMetadataBaseUrl !== undefined) {
+		return 'oauth.clientMetadataBaseUrl requires oauth.clientRegistration "cimd"';
+	}
 	const metadataUrl = value.authServerMetadataUrl;
 	if (metadataUrl !== undefined) {
 		const url = typeof metadataUrl === "string" && URL.canParse(metadataUrl) ? new URL(metadataUrl) : undefined;
@@ -154,7 +191,7 @@ function validateOAuth(value: unknown): string | undefined {
 			return "oauth.authServerMetadataUrl must be an https URL, or http on localhost, 127.0.0.1, or [::1]";
 		}
 	}
-	return undefined;
+	return { ...value, ...(clientMetadataBaseUrl ? { clientMetadataBaseUrl } : {}) } as McpOAuthConfig;
 }
 
 function isExposure(value: unknown): value is McpExposure {
@@ -233,8 +270,9 @@ export function validateMcpServerConfig(name: string, raw: unknown): McpServerCo
 		if (value.headers !== undefined && !isStringRecord(value.headers)) {
 			return `server "${name}": headers must map names to strings`;
 		}
-		const oauthError = validateOAuth(value.oauth);
-		if (oauthError) return `server "${name}": ${oauthError}`;
+		const oauth = validateOAuth(value.oauth);
+		if (typeof oauth === "string") return `server "${name}": ${oauth}`;
+		if (oauth !== undefined) value.oauth = oauth;
 		if (value.auth !== undefined) {
 			if (!isRecord(value.auth) || typeof value.auth.provider !== "string" || !value.auth.provider) {
 				return `server "${name}": auth.provider must be a provider name`;

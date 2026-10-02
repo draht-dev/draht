@@ -1,7 +1,7 @@
 import { Agent, type ThinkingLevel } from "@draht/agent-core";
 import type { Model } from "@draht/ai/compat";
 import { getModel, streamSimple } from "@draht/ai/compat";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { ModelRuntime } from "../src/core/model-runtime.js";
@@ -40,6 +40,10 @@ async function createSession({
 		allowModelNetwork: false,
 	});
 	await modelRuntime.setRuntimeApiKey("anthropic", "test-key");
+	// Scoped cycling skips models missing from the runtime's available snapshot (upstream
+	// v0.99.2). The non-reasoning model is a test fixture no catalog ships, so report both
+	// models as available, as a configured provider would.
+	vi.spyOn(modelRuntime, "getAvailableSnapshot").mockReturnValue([reasoningModel, nonReasoningModel]);
 	const session = new AgentSession({
 		agent: new Agent({
 			getApiKey: () => "test-key",

@@ -43,6 +43,7 @@ Any safety fact you can't get to rung 4, say so out loud — don't write it up a
 - **Risks.** Only the real ones. Each names how it breaks, the `file:line`, how likely and how bad, and how to check. Paste the proof for the ones that matter.
 - **Cleared.** What you checked and why it's fine.
 - **Before you merge.** The cheapest test or repro that catches the real bug, including the script you wrote.
+- **Map.** When the risks reach more than two places, add a Mermaid `flowchart LR` from the change to each place it can break, per the `explainers` skill. Build it from `graph-impact` output and the cited `file:line`s; draw unproven paths dashed.
 
 Write it through `unslop`, cite real code, and strip anything private before it goes anywhere public.
 

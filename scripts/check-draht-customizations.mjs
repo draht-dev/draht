@@ -679,6 +679,7 @@ const DUAL_CHANNEL_SKILLS = [
 	"atomic-reasoning",
 	"blast-radius",
 	"epistemics",
+	"explainers",
 	"typescript-discipline",
 	"unslop",
 ];

@@ -135,7 +135,8 @@ Creative:
 - `loop-workflow`
 - `model-tiering`
 - `saga-spawner`
-- `unslop` — cut AI tells from prose deliverables, then add voice back
+- `unslop` — cut AI tells from prose deliverables, then add voice back; includes an STE-lite register for procedures
+- `explainers` — evidence-built Mermaid diagrams and HTML explainers for graph-shaped reports
 - `epistemics` — confidence calibration for investigation findings
 - `typescript-discipline` — make illegal states unrepresentable
 - `blast-radius` — impact analysis beyond the diff on the evidence ladder

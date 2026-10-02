@@ -40,3 +40,7 @@ The Known gap above is closed by "feat(scripts): gate dual-channel skill byte-co
 ## Update (2026-08-21): blast-radius admitted
 
 `blast-radius` is admitted as a runtime-referenced dual-channel discipline: the shipped `prompts/commands/review.md` points at it by name in its refutation step (a Critical finding whose refutation hinges on library or runtime behavior gets a rung-4 script), and the pointer must resolve with nothing installed — the same admission test the prior occupants passed. The section-10b `DUAL_CHANNEL_SKILLS` allowlist is extended in the same change that creates the shipped copy. Dual-channel occupants as of this update: `atomic-reasoning`, `blast-radius`, `epistemics`, `typescript-discipline`, `unslop`.
+
+## Update (2026-10-02): explainers admitted
+
+`explainers` is admitted as a runtime-referenced dual-channel discipline: the shipped `prompts/commands/why.md`, `review.md`, `verify-work.md`, and `plan-phase.md` point at it by name when their output is a graph, and the pointer must resolve with nothing installed — the same admission test the prior occupants passed. The section-10b `DUAL_CHANNEL_SKILLS` allowlist is extended in the same change that creates the shipped copy. Dual-channel occupants as of this update: `atomic-reasoning`, `blast-radius`, `epistemics`, `explainers`, `typescript-discipline`, `unslop`.

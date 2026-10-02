@@ -78,7 +78,8 @@ All usable via Claude Code's `Task` tool (`subagent_type: <name>`):
 - **`verification-gate`** — evidence before claims: run the proving command before saying "done"
 - **`saga-spawner`** — unattended repo advancement as a cloud routine reconciling a saga graph of beats
 - **`cinematic-continuation`** — provider-neutral, time-coded video continuation from bundled distilled style and continuity references
-- **`unslop`** — cut AI tells from prose deliverables, then add voice back so the result is neither slop nor sterile
+- **`unslop`** — cut AI tells from prose deliverables, then add voice back so the result is neither slop nor sterile; includes an STE-lite register (after ASD-STE100) for procedures
+- **`explainers`** — evidence-built Mermaid diagrams and self-contained HTML explainers when a report's content is a graph
 - **`epistemics`** — confidence calibration for investigation findings: five tiers, cite-or-label-as-inference, null results as evidence
 - **`typescript-discipline`** — make illegal states unrepresentable: discriminated unions, branded primitives, boundary parsing, exhaustiveness
 - **`blast-radius`** — impact analysis beyond the diff: reduce the safety argument to one falsifiable fact and prove it on the evidence ladder

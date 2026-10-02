@@ -109,6 +109,10 @@ Exact section order:
 7. **Sources Consulted** — one line per category INCLUDING empties, gaps, and justified skips: `- <Category>: <what was searched>. <found / no relevant results / skipped: reason / unavailable: gap>`
 8. **Confidence Summary** — 1-2 sentences
 
+Report prose follows the `unslop` skill; citations and quoted evidence stay verbatim.
+
+**Diagram**: when the answer is a chain — the commits that built the code, a forcing sequence, a call path — add one Mermaid diagram after What We Can Reasonably Infer, per the `explainers` skill. Solid edges carry [Direct] or [Supported] facts; [Inferred] links are dashed and labelled. **HTML**: when the user asks, also render the report as an HTML explainer per the same skill; the Markdown report stays the source of truth.
+
 **Closing hook**: when the question precedes a change, convert the findings into a Preserve / Change / Avoid / Risk constraint set suitable for `/discuss-phase` or `/plan-phase`.
 
 **Effort valve**: a trivial single-commit target whose PR or commit already answers the question may be handled inline by the lead running the git-history archaeology itself — only after stating why the other available categories would be redundant. The output contract and the coverage map still apply.

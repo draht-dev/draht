@@ -32,6 +32,8 @@
 - `/bug` command: build and upload (or export as a zip) a bug report bundle with environment, settings, and optional transcript/summary
 - Meta provider with Muse subscription OAuth login
 - GPT-6 Astra, GPT-6 Sol, GPT-6 Luna, and GPT-6.1 Sol (now the Codex default) model support; Claude Opus 5.5, Claude Sonnet 5.5, and Fable 5.1; Grok 4.7
+- Built-in `explainers` skill; the shipped `/why`, `/review`, `/plan-phase`, and `/verify-work` prompts now draw evidence-built Mermaid diagrams when their output is a graph, and offer an HTML explainer on request
+- Built-in `unslop` skill gains an STE-lite controlled register (after ASD-STE100) for procedures and handoff next steps
 
 ### Changed
 

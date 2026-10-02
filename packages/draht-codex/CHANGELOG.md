@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- `explainers` discipline skill: evidence-built Mermaid diagrams and self-contained HTML explainers; `why`, `review`, `plan-phase`, `verify-work`, and `blast-radius` use it when their output is a graph
+- `unslop` gains an STE-lite controlled register (after ASD-STE100) for procedures, runbooks, and handoff next steps
+
 ## [2026.9.5-1] - 2026-09-05
 
 ### Added

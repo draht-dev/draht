@@ -43,6 +43,7 @@ Decompose the work into independently verifiable units before acting; the `atomi
 9. Write UAT report: `draht-tools write-uat $1`
    - Order: **verdict first** (phase pass/fail, X/Y deliverables, in the first line), **evidence second** (test health summary with pass/fail/coverage, security audit results, spec compliance summary per plan, domain model status, deliverable results with labels), **risk last** (what was NOT tested and how it could bite). Never bury a failure under passes.
    - Report prose follows the `unslop` skill — plain words, active voice, no filler; quoted command output and the verdict-first ordering stay untouched.
+   - When the user asks, also write an HTML explainer of the UAT report per the `explainers` skill, with the deliverable results and their observed/derived/assumed labels as its data block. The UAT report stays the source of truth.
 10. If all passed: mark phase complete.
    - If more phases remain in the milestone: tell the user to start a new session and run `/discuss-phase N+1`.
    - If ALL phases in the milestone are complete: tell the user to start a new session and run `/next-milestone`.

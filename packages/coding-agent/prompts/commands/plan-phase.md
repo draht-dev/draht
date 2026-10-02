@@ -86,6 +86,7 @@ Decompose the work into independently verifiable units before acting; the `atomi
 
 8. Validate: `draht-tools validate-plans $1` — if it exits non-zero, fix the offending plan before commit.
 9. Commit: `draht-tools commit-docs "create phase $1 plans"`
+10. Show the user the execution order as a Mermaid `flowchart TD` per the `explainers` skill: one `subgraph` per wave, one node per plan, edges for the dependencies the saved plans declare. Draw it from the saved plan files, not from memory. It goes in your reply, not into the plan files.
 
 ## Plan Format
 Plans use XML task format:

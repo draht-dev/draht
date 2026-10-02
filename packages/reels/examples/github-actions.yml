@@ -7,11 +7,9 @@
 # `bun install` it. Instead this workflow checks out the public
 # github.com/draht-dev/draht monorepo at a pinned commit into `.draht/`,
 # installs its workspace there, and runs the CLI from inside it. Bump
-# DRAHT_MONO_REF below deliberately; it is not auto-updated. It currently
-# does NOT contain packages/reels — bump it to a commit that does once this
-# workflow lands on draht-dev/draht; until then the "verify the pin" step
-# below fails fast with a clear error instead of a confusing missing-file
-# error deep in bun install.
+# DRAHT_MONO_REF below deliberately; it is not auto-updated. If a pin ever
+# lacks packages/reels, the "verify the pin" step fails fast with a clear
+# error instead of a confusing missing-file error deep in bun install.
 #
 # PRIVACY WARNING: this workflow publishes code diffs verbatim (every reel
 # shows real source lines from your commits) to a public site. GitHub Pages
@@ -90,9 +88,8 @@ permissions: {}
 env:
   # Pin to a commit on github.com/draht-dev/draht, not a branch: resolve with
   #   gh api repos/draht-dev/draht/commits/main --jq .sha
-  # Must contain packages/reels/src/cli.ts (it does not yet as of this pin;
-  # see the comment at the top of this file).
-  DRAHT_MONO_REF: ef31b8651778f23b62f935c255a54248ebfd9bfb
+  # Must contain packages/reels/src/cli.ts.
+  DRAHT_MONO_REF: a3e67aa30620e40181807f8214b104cb18864050
 
 jobs:
   build:

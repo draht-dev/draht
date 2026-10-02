@@ -635,7 +635,16 @@ describe("selectBuildShas + collectChangeSetsForShas (real git repo, git-order d
 		try {
 			commitAt(dir, 0, "f.txt");
 			const rewrittenAwaySha = git(dir, ["rev-parse", "HEAD"]);
-			git(dir, ["commit", "--amend", "-m", "commit 0 (rewritten)"]);
+			git(dir, [
+				"-c",
+				"user.name=Test",
+				"-c",
+				"user.email=test@example.com",
+				"commit",
+				"--amend",
+				"-m",
+				"commit 0 (rewritten)",
+			]);
 			for (let i = 1; i <= 12; i++) commitAt(dir, i, "f.txt");
 
 			const published = new Set([rewrittenAwaySha]);

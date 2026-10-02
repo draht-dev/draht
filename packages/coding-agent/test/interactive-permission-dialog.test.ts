@@ -265,6 +265,8 @@ type DialogHost = {
 	hideExtensionInput(): void;
 	showExtensionEditor(title: string, prefill?: string): Promise<string | undefined>;
 	hideExtensionEditor(): void;
+	/** Upstream v0.99.2: every extension dialog first disposes the active built-in selector. */
+	disposeActiveSelector(): void;
 };
 
 type DialogPrototype = { [K in keyof DialogHost]: DialogHost[K] };
@@ -311,6 +313,8 @@ function createHost(columns = RENDER_WIDTH): DialogHost {
 		setWorkingIndicator: vi.fn(),
 		activeStatusIndicator: undefined,
 		setHiddenThinkingLabel: vi.fn(),
+		activeSelectorToken: undefined,
+		activeSelectorDispose: undefined,
 	} as unknown as DialogHost;
 
 	// Borrow the real implementations. These are private methods, so they are only reachable this
@@ -327,6 +331,7 @@ function createHost(columns = RENDER_WIDTH): DialogHost {
 		"hideExtensionInput",
 		"showExtensionEditor",
 		"hideExtensionEditor",
+		"disposeActiveSelector",
 	] as const) {
 		(host as unknown as Record<string, unknown>)[name] = (prototype[name] as (...args: unknown[]) => unknown).bind(
 			host,

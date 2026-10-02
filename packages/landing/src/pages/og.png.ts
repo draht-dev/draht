@@ -56,12 +56,19 @@ async function loadGoogleFont(family: string, weight: number): Promise<ArrayBuff
 	const url = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(family)}:wght@${weight}&display=swap`;
 	const cssRes = await fetch(url, {
 		headers: {
+			// satori's opentype.js parser can read TTF/OTF/WOFF but not WOFF2.
+			// Google Fonts picks the response format from the User-Agent, and
+			// only serves WOFF (not WOFF2) to pre-2015 browsers, so an old
+			// Chrome UA is the minimal way to get a format satori can parse.
 			"User-Agent":
-				"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+				"Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/41.0.2272.118 Safari/537.36",
 		},
 	});
 	const css = await cssRes.text();
-	const fontUrlMatch = css.match(/src:\s*url\(([^)]+)\)/);
+	// The response has one @font-face block per unicode subset; take the
+	// "latin" block (U+0000-00FF) so the font covers plain ASCII text.
+	const latinBlock = css.split("@font-face").find((block) => block.includes("U+0000-00FF")) ?? css;
+	const fontUrlMatch = latinBlock.match(/src:\s*url\(([^)]+)\)/);
 	if (!fontUrlMatch) throw new Error(`No font URL found for ${family}`);
 	const fontRes = await fetch(fontUrlMatch[1]);
 	return fontRes.arrayBuffer();

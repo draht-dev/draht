@@ -70,6 +70,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } fr
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { ensureEmittedBuild } from "./emitted-build.ts";
 
 const PKG_ROOT = path.resolve(__dirname, "..");
 const EMITTED_CLI = path.join(PKG_ROOT, "dist", "cli.js");
@@ -363,11 +364,6 @@ function sessionEntries(sandbox: Sandbox): Record<string, unknown>[] {
 		.map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
-async function buildEmittedBinary(): Promise<void> {
-	const result = await runProcess("bun", ["run", "build"], { cwd: PKG_ROOT, env: process.env });
-	if (result.code !== 0) throw new Error(`build failed:\n${result.stdout}\n${result.stderr}`);
-}
-
 /**
  * A startup-benchmark run: the real interactive path — TUI init, theme detection, the whole
  * startup banner — that then stops itself and exits 0 instead of waiting for input. It is the
@@ -376,7 +372,7 @@ async function buildEmittedBinary(): Promise<void> {
 const BENCHMARK_ENV = { DRAHT_STARTUP_BENCHMARK: "1" };
 
 beforeAll(async () => {
-	await buildEmittedBinary();
+	await ensureEmittedBuild();
 	const driverDir = await mkdtemp(path.join("/tmp", "d35-drv-"));
 	tempDirs.push(driverDir);
 	driverPath = path.join(driverDir, "ptydrive.py");

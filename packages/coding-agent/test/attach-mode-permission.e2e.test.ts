@@ -53,6 +53,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { matchPermissionAnswer } from "../src/cli/attach-mode.ts";
+import { ensureEmittedBuild } from "./emitted-build.ts";
 
 const PKG_ROOT = path.resolve(__dirname, "..");
 const EMITTED_CLI = path.join(PKG_ROOT, "dist", "cli.js");
@@ -78,27 +79,8 @@ async function createTempDir(prefix: string): Promise<string> {
 	return dir;
 }
 
-function buildEmittedBinary(): Promise<void> {
-	return new Promise((resolve, reject) => {
-		const child = spawn("bun", ["run", "build"], {
-			cwd: PKG_ROOT,
-			env: process.env,
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-		let out = "";
-		child.stdout.on("data", (chunk) => {
-			out += chunk;
-		});
-		child.stderr.on("data", (chunk) => {
-			out += chunk;
-		});
-		child.on("error", reject);
-		child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`build failed:\n${out}`))));
-	});
-}
-
 beforeAll(async () => {
-	await buildEmittedBinary();
+	await ensureEmittedBuild();
 }, 300_000);
 
 afterAll(async () => {

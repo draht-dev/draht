@@ -19,6 +19,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { ensureEmittedBuild } from "./emitted-build.ts";
 
 const PKG_ROOT = path.resolve(__dirname, "..");
 const EMITTED_CLI = path.join(PKG_ROOT, "dist", "cli.js");
@@ -75,18 +76,8 @@ function childEnv(home: string, agentDir: string, extra: Record<string, string> 
 	};
 }
 
-/**
- * Build exactly what `npm run build` builds — compile plus the asset copy — so
- * the binary under test is the emitted one, not a half-built tree that happens
- * to have a cli.js in it.
- */
-async function buildEmittedBinary(): Promise<void> {
-	const result = await run("npm", ["run", "build"], { cwd: PKG_ROOT, env: process.env });
-	if (result.code !== 0) throw new Error(`build failed:\n${result.stdout}\n${result.stderr}`);
-}
-
 beforeAll(async () => {
-	await buildEmittedBinary();
+	await ensureEmittedBuild();
 }, 180_000);
 
 afterAll(async () => {

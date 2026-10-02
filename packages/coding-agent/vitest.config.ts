@@ -20,6 +20,7 @@ export default defineConfig({
 		env: { DRAHT_OFFLINE: "1" },
 		unstubEnvs: true,
 		setupFiles: ["./test/setup/restore-cwd.ts"],
+		globalSetup: ["./test/setup/emitted-build-run.ts"],
 		reporters: process.env.GITHUB_ACTIONS ? ["dot", "github-actions"] : ["dot"],
 		silent: "passed-only",
 		server: {

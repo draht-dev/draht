@@ -20,6 +20,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { ensureEmittedBuild } from "./emitted-build.ts";
 
 const PKG_ROOT = path.resolve(__dirname, "..");
 const EMITTED_CLI = path.join(PKG_ROOT, "dist", "cli.js");
@@ -127,31 +128,8 @@ function observedToolCalls(events: Record<string, unknown>[]): ObservedToolCall[
 	return calls;
 }
 
-function buildEmittedBinary(): Promise<RunResult> {
-	return new Promise((resolve, reject) => {
-		const child = spawn("bun", ["run", "build"], {
-			cwd: PKG_ROOT,
-			env: process.env,
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-		let stdout = "";
-		let stderr = "";
-		child.stdout.on("data", (chunk) => {
-			stdout += chunk;
-		});
-		child.stderr.on("data", (chunk) => {
-			stderr += chunk;
-		});
-		child.on("error", reject);
-		child.on("close", (code) => {
-			if (code !== 0) reject(new Error(`build failed:\n${stdout}\n${stderr}`));
-			else resolve({ code, stdout, stderr, timedOut: false });
-		});
-	});
-}
-
 beforeAll(async () => {
-	await buildEmittedBinary();
+	await ensureEmittedBuild();
 }, 300_000);
 
 afterAll(async () => {

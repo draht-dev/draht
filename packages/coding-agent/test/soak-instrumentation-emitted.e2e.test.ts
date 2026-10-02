@@ -75,6 +75,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { ensureEmittedBuild } from "./emitted-build.ts";
 
 const PKG_ROOT = path.resolve(__dirname, "..");
 const EMITTED_CLI = path.join(PKG_ROOT, "dist", "cli.js");
@@ -479,13 +480,8 @@ class TestClient {
 	}
 }
 
-async function buildEmittedBinary(): Promise<void> {
-	const result = await runProcess("bun", ["run", "build"], { cwd: PKG_ROOT, env: process.env });
-	if (result.code !== 0) throw new Error(`build failed:\n${result.stdout}\n${result.stderr}`);
-}
-
 beforeAll(async () => {
-	await buildEmittedBinary();
+	await ensureEmittedBuild();
 	const driverDir = await mkdtemp(path.join("/tmp", "t9-drv-"));
 	tempDirs.push(driverDir);
 	driverPath = path.join(driverDir, "ptydrive.py");

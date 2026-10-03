@@ -79,6 +79,7 @@ import type {
 	SessionShutdownEvent,
 	ToolCallEvent,
 	ToolCallEventResult,
+	ToolRenderers,
 	ToolResultEvent,
 	ToolResultEventResult,
 	TurnEndEvent,
@@ -804,6 +805,14 @@ export class ExtensionRunner {
 
 	getMarkdownTransformers(): MarkdownTransformer[] {
 		return this.extensions.flatMap((ext) => (ext.markdownTransformer ? [ext.markdownTransformer] : []));
+	}
+
+	/** Renderers of calls to `toolName`: extension resolvers in load order, then `base`. */
+	resolveToolRenderers(toolName: string, base: () => ToolRenderers | undefined): ToolRenderers | undefined {
+		const resolvers = this.extensions.flatMap((ext) => ext.toolRenderers ?? []);
+		const resolve = (index: number): ToolRenderers | undefined =>
+			index < resolvers.length ? resolvers[index](toolName, () => resolve(index + 1)) : base();
+		return resolve(0);
 	}
 
 	getEntryRenderer(customType: string): EntryRenderer | undefined {

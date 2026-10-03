@@ -37,6 +37,7 @@ import type {
 	ProviderConfig,
 	RegisteredCommand,
 	ToolDefinition,
+	ToolRendererResolver,
 } from "./types.ts";
 
 /** Reason reported by `pi.checkpoints` when the session has no checkpoint storage. */
@@ -367,6 +368,12 @@ function createExtensionAPI(
 		registerEntryRenderer<T>(customType: string, renderer: EntryRenderer<T>): void {
 			extension.entryRenderers ??= new Map();
 			extension.entryRenderers.set(customType, renderer as EntryRenderer);
+		},
+
+		registerToolRenderer(resolver: ToolRendererResolver): void {
+			assertActive();
+			extension.toolRenderers ??= [];
+			extension.toolRenderers.push(resolver);
 		},
 
 		// Flag access - checks extension registered it, reads from runtime

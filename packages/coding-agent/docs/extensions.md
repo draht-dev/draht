@@ -195,6 +195,10 @@ draht snapshots the working tree per session so `/rewind` can restore conversati
 
 `checkpoint_created` fires after every capture. `session_before_rewind` reports the target entry and scope (`conversation-and-files`, `conversation-only`, or `files-only`) and can return `{ cancel: true }`. Retention is configured in [Settings](settings.md).
 
+### Tool rendering
+
+A tool's `renderCall` and `renderResult` draw its calls in the interactive transcript and in HTML exports. `draht.registerToolRenderer((toolName, next) => renderers)` chooses renderers for calls to any tool, including tools that are not registered yet, such as MCP tools in a resumed session before their server connected. `next()` returns what the remaining resolvers (in extension load order), then the registered tool, would use, so `next() ?? mine` only fills in.
+
 ### MCP servers
 
 `pi.registerMcpServer(name, config)` adds an MCP server for the current session. `config` has the shape of an `mcpServers` entry in [`mcp.json`](mcp.md): `command`, `args`, `env`, and `cwd` for stdio servers, `url`, `headers`, and `oauth` for HTTP servers, plus `exposure`, `toolExposure`, `description`, `enabled`, and `timeout`.

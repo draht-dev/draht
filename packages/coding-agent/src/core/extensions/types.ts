@@ -774,6 +774,25 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 type AnyToolDefinition = ToolDefinition<any, any, any>;
 
 /**
+ * Rendering callbacks stored without the tool's parameter schema. Method signatures let the
+ * registry hold schema-specific callbacks; ToolDefinition checks their arguments and state.
+ */
+export interface ToolRenderers {
+	renderShell?: AnyToolDefinition["renderShell"];
+	renderCall?(...args: Parameters<NonNullable<AnyToolDefinition["renderCall"]>>): Component;
+	renderResult?(...args: Parameters<NonNullable<AnyToolDefinition["renderResult"]>>): Component;
+}
+
+/**
+ * Chooses how calls to a tool are drawn, including tools that are not registered. `next()` returns
+ * the renderers the remaining resolvers, then the registered tool, would use.
+ */
+export type ToolRendererResolver = (
+	toolName: string,
+	next: () => ToolRenderers | undefined,
+) => ToolRenderers | undefined;
+
+/**
  * Preserve parameter inference for standalone tool definitions.
  *
  * Use this when assigning a tool to a variable or passing it through arrays such
@@ -1831,6 +1850,9 @@ export interface ExtensionAPI {
 	/** Register a custom renderer for CustomEntry. Custom entries do not participate in LLM context. */
 	registerEntryRenderer<T = unknown>(customType: string, renderer: EntryRenderer<T>): void;
 
+	/** Choose how tool calls are drawn. Resolvers run in extension load order. */
+	registerToolRenderer(resolver: ToolRendererResolver): void;
+
 	// =========================================================================
 	// Actions
 	// =========================================================================
@@ -2450,6 +2472,7 @@ export interface Extension {
 	handlers: Map<string, HandlerFn[]>;
 	tools: Map<string, RegisteredTool>;
 	messageRenderers: Map<string, MessageRenderer>;
+	toolRenderers?: ToolRendererResolver[];
 	markdownTransformer?: MarkdownTransformer;
 	entryRenderers?: Map<string, EntryRenderer>;
 	commands: Map<string, RegisteredCommand>;

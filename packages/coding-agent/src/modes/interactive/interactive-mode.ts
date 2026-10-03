@@ -2202,7 +2202,9 @@ export class InteractiveMode {
 	 * whatever this returns, so they never reach into the tool registry themselves.
 	 */
 	private getRegisteredToolDefinition(toolName: string) {
-		return withBuiltInRenderers(toolName, this.session.getToolDefinition(toolName));
+		return this.session.extensionRunner.resolveToolRenderers(toolName, () =>
+			withBuiltInRenderers(toolName, this.session.getToolDefinition(toolName)),
+		);
 	}
 
 	private getMarkdownTransformers(): MarkdownTransformer[] {

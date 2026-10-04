@@ -128,6 +128,12 @@ jobs:
           git fetch origin main
           test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
 
+      - name: Set the release commit identity
+        if: steps.pending.outputs.should-release == 'true'
+        run: |
+          git config user.name "draht-release[bot]"
+          git config user.email "release@draht.dev"
+
       - name: Release and publish
         if: steps.pending.outputs.should-release == 'true'
         env:

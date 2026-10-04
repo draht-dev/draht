@@ -64,3 +64,11 @@ test("release workflows install the pinned Bun with setup-bun, never under the n
 		assert.match(workflow, /test "\$\(bun --revision\)" = "\$\{BUN_REVISION\}"/, `${name}.yml must verify the revision`);
 	}
 });
+
+test("release workflows give git a committer identity before they commit", () => {
+	for (const name of ["scheduled-release", "promote-daily-release"]) {
+		const workflow = read(`.github/workflows/${name}.yml`);
+		assert.match(workflow, /git config user\.name "draht-release\[bot\]"/, `${name}.yml must set user.name`);
+		assert.match(workflow, /git config user\.email "release@draht\.dev"/, `${name}.yml must set user.email`);
+	}
+});

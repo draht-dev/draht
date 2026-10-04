@@ -70,6 +70,16 @@ test("repository uses Bun as its single authoritative dependency lock", () => {
 	assert.match(releaseScript, /bun install --frozen-lockfile --ignore-scripts --linker hoisted/);
 });
 
+test("release runs the suite on a CI-equivalent install without release credentials, then restores the strict one", () => {
+	const releaseScript = readFileSync(join(process.cwd(), "scripts/release.mjs"), "utf8");
+	const testInstall = releaseScript.indexOf('run("env -u NODE_AUTH_TOKEN -u GH_TOKEN -u GITHUB_TOKEN bun install --frozen-lockfile");');
+	const suite = releaseScript.indexOf('run("./test.sh");');
+	const strictAfter = releaseScript.indexOf('run("bun install --frozen-lockfile --ignore-scripts --linker hoisted");', suite);
+	const build = releaseScript.indexOf('run("bun run build");');
+	assert.ok(testInstall !== -1 && testInstall < suite, "the test install must precede ./test.sh");
+	assert.ok(strictAfter > suite && strictAfter < build, "the strict install must be restored before the build");
+});
+
 test("release toolchain requires the exact pinned Bun revision", () => {
 	assert.doesNotThrow(() => assertBunToolchain(process.cwd(), () => "1.4.2+744846f84"));
 	assert.throws(

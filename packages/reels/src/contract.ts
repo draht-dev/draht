@@ -169,6 +169,9 @@ export interface PullRequestInfo {
 	url: string;
 	title: string;
 	body: string;
+	author: string;
+	mergedAt?: string;
+	labels: string[];
 	reviews: Array<{ author: string; state: string; body: string }>;
 	comments: Array<{ author: string; path?: string; body: string }>;
 }

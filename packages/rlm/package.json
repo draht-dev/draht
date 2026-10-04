@@ -1,6 +1,6 @@
 {
 	"name": "@draht/rlm",
-	"version": "2026.9.5-1",
+	"version": "2026.9.5",
 	"description": "Recursive Language Models — root-LLM-produces-code / REPL-executes / truncated-stdout scaffold",
 	"type": "module",
 	"main": "./dist/index.js",

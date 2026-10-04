@@ -1,6 +1,14 @@
 # Changelog
 
-## [Unreleased]
+## [2026.10.4-1] - 2026-10-04
+
+### Added
+
+- add the explainers discipline skill
+
+### Changed
+
+- feat: build with TypeScript 7 and run sources with plain node
 
 ## [2026.9.5-1] - 2026-09-05
 

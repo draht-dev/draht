@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2026.10.4-1] - 2026-10-04
+
+### Changed
+
+- correct private/example scope in package descriptions
 
 ## [2026.9.5-1] - 2026-09-05
 

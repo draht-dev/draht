@@ -1,6 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [2026.10.4-1] - 2026-10-04
+
+### Changed
+
+- feat(coding-agent): codemode and MCP
+- feat: build with TypeScript 7 and run sources with plain node
 
 ## [2026.7.30] - 2026-07-30
 

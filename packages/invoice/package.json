@@ -1,6 +1,6 @@
 {
 	"name": "@draht/invoice",
-	"version": "2026.9.5-1",
+	"version": "2026.10.4-1",
 	"private": true,
 	"description": "Private reference implementation for Lexoffice and Toggl invoice workflows",
 	"type": "module",

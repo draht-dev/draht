@@ -1,16 +1,118 @@
 # Changelog
 
-## [Unreleased]
-
-### Breaking Changes
-
-- renamed `PI_HARDWARE_CURSOR` to `DRAHT_HARDWARE_CURSOR` (unifying it with `settings-manager`'s existing `DRAHT_HARDWARE_CURSOR`), `PI_CLEAR_ON_SHRINK` to `DRAHT_CLEAR_ON_SHRINK`, `PI_DEBUG_REDRAW` to `DRAHT_DEBUG_REDRAW`, `PI_TUI_DEBUG` to `DRAHT_TUI_DEBUG`, `PI_TUI_WRITE_LOG` to `DRAHT_TUI_WRITE_LOG`, and `PI_TUI_WIN32_TOOLCHAIN` to `DRAHT_TUI_WIN32_TOOLCHAIN`
+## [2026.10.4-1] - 2026-10-04
 
 ### Added
 
-- `SelectList.confirmSelection()`: confirms the current selection directly, bypassing keybinding matching, for callers (e.g. a search input's submit) that trigger a confirm as a side effect of a different, independently rebindable key; used by `coding-agent`'s `app.models.save`/`app.thinking.save` keybindings
-- terminal capability overrides via `DRAHT_HYPERLINKS`, `DRAHT_IMAGE_PROTOCOL`, and `DRAHT_TRUE_COLOR` environment variables
-- native clipboard module, replacing the `@mariozechner/clipboard` dependency
+- configurable fullscreen wheel scrolling with auto acceleration
+- accelerate Alt-modified wheel scrolling (badlogic/pi-mono#9166)
+- alt mode scrollbar but prettier (badlogic/pi-mono#8801)
+- add clickable jump-to-end indicator to fullscreen transcript
+- prettier Working... spinner (badlogic/pi-mono#8799)
+- search improvements (badlogic/pi-mono#8800)
+- add large transcript render benchmark
+- add unbound single-line transcript scrolling actions (badlogic/pi-mono#7903)
+- add fullscreen transcript search (badlogic/pi-mono#7913)
+- add half-page transcript scrolling
+- select words and lines with multi-click (closes badlogic/pi-mono#7725)
+- render LaTeX math in Markdown
+- add configurable prompt history actions
+- add configurable fullscreen scrollbars
+- add fullscreen transcript navigation
+- add draggable transient scrollbars
+- add stacked alt-screen flashes (badlogic/pi-mono#7361)
+- add alternate-screen viewport layouts
+
+### Changed
+
+- changelog coverage for the v0.99.2 upstream sync
+- fix(coding-agent,tui): paste Finder file paths instead of icons (badlogic/pi-mono#10136)
+- feat(coding-agent,tui): System theme (badlogic/pi-mono#10067)
+- feat: build with TypeScript 7 and run sources with plain node
+- feat(tui,coding-agent): add color values and theme styling (badlogic/pi-mono#8398)
+- fix(coding-agent): update runtime dependencies (badlogic/pi-mono#9341)
+- feat(tui): Simplify clipboard handling (badlogic/pi-mono#9163)
+- fix(coding-agent): selector save keybindings (badlogic/pi-mono#9149)
+- fix(tui): remove coding-agent config reads from pi-tui
+- feat(tui): render relational algebra join symbols & fix(coding-agent): type error in test (badlogic/pi-mono#9050)
+- correct Unreleased CHANGELOG classification errors
+- feat(tui): allow disable copy on fullscreen, ctrl + x copies selection (badlogic/pi-mono#8731)
+- feat(tui): add terminal capability overrides closes badlogic/pi-mono#8665
+- feat(coding-agent): bundle Node runtime (badlogic/pi-mono#8474)
+- feat(settings-selector): ctrl + s persists /model
+- fix(coding-agent): keep model and thinking level changes session scoped (badlogic/pi-mono#8356)
+- feat(tui): add reusable mouse interaction support
+- fix(tui): apply PI_TUI_ESC_TIMEOUT only to lone ESC
+- fix(tui): prevent split Alt+Enter from interrupting (badlogic/pi-mono#7899)
+- Clarify TUI test runner and remove stale Vitest  config (badlogic/pi-mono#7732)
+- feat(coding-agent): rename UI mode to TUI mode
+- fix(tui): detect Windows Shift+Enter
+- fix(tui): include Darwin native rebuild sources
+- feat(tui): add Darwin native build recipe
+- feat(coding-agent): switch UI modes at runtime (badlogic/pi-mono#7555)
+- Revert "feat(tui): add switchable terminal renderers (badlogic/pi-mono#7440)" (badlogic/pi-mono#7473)
+- feat(tui): add switchable terminal renderers (badlogic/pi-mono#7440)
+- fix(tui): align grapheme widths with terminal cells (badlogic/pi-mono#6987)
+- feat(tui): add alternate-screen renderer
+
+### Fixed
+
+- use draht names for temp files and TUI logs
+- reduce render cost of theme changes and streaming
+- keep cursor visible when overlays close after stop
+- choose Kitty image dimensions by aspect distortion (badlogic/pi-mono#9957)
+- autocomplete paths after opening wrappers like ( and backticks
+- restore skill prefix autocomplete, closes badlogic/pi-mono#9944
+- prevent jump-to-end label from shifting when scrollbar hides (badlogic/pi-mono#9842)
+- preserve fullscreen images in WezTerm
+- rank skill autocomplete by bare name (badlogic/pi-mono#9120)
+- improve LaTeX compatibility and layouts
+- handle CJK punctuation in file autocomplete (badlogic/pi-mono#9746)
+- reduce fuzzy search latency
+- keep list selection unchanged on mouse hover
+- make fullscreen transcript search scale linearly
+- wrap SIGWINCH self-signal so restricted seccomp policies do not crash startup (badlogic/pi-mono#8898)
+- detect Zed terminal capabilities (badlogic/pi-mono#8828)
+- rename PI_* env vars to DRAHT_* and drop stale upstream refs
+- confirm search-input submit without depending on the confirm keybinding
+- widen the CSI-prefix replay test's real-timer margin
+- make alt screen not segment on - and / (badlogic/pi-mono#8676)
+- chunk large main-screen renders closes badlogic/pi-mono#8028
+- autocomplete orders nested results (badlogic/pi-mono#8669)
+- let drag select text over the editor
+- prevent wrapped table link color leaks (badlogic/pi-mono#8363)
+- nit spacing
+- fit text padding to narrow widths, closes badlogic/pi-mono#8252
+- avoid duplicate VS Code right-click paste
+- route selection copy through the host clipboard (badlogic/pi-mono#8110)
+- handle generic SGR mouse releases
+- give focused fullscreen overlays wheel and viewport keys
+- handle LaTeX control spaces across line endings
+- parse multiline LaTeX arguments
+- avoid repainting idle fullscreen sessions on focus loss (badlogic/pi-mono#7892)
+- stop recompositing full-width rows in the alt-screen painter
+- small correctness leftovers from the sync
+- correct multi-click text selection (badlogic/pi-mono#7733)
+- reduce mouse tracking in terminal multiplexers
+- correct LaTeX whitespace and matrix layouts
+- skip OSC 8 scan for plain prefixes (badlogic/pi-mono#7665)
+- include Windows native rebuild sources
+- avoid throttling keyboard input
+- close truncated OSC 8 links (badlogic/pi-mono#7657)
+- add iterm payload size for xterm.js image addon (badlogic/pi-mono#7612)
+- add editor viewport key aliases (closes badlogic/pi-mono#7574)
+- honor nested stack minimum sizes
+- correct terminal progress clear sequence (badlogic/pi-mono#7581)
+- detect truecolor for Windows consoles
+- handle batched color scheme reports (badlogic/pi-mono#7550)
+- cache recently offscreen Kitty images
+- skip clipped rows during layout painting
+- optimize alternate-screen image and layout redraws
+- normalize source filenames
+- clip Kitty images to layout boundaries
+- preserve spaces in settings searches
+- prevent phantom alt-screen selections
+- reduce default mouse wheel scroll speed
 
 ## [2026.9.5-1] - 2026-09-05
 

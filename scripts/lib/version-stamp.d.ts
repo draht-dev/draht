@@ -19,7 +19,7 @@ export declare function stampPluginManifests(version: string, rootDir: string): 
 
 /**
  * Pure function: compute the next always-suffixed CalVer version
- * (`YYYY.M.D-N`) for `date`, given the existing version strings (no leading
+ * (`YYYY.M.D-N`) for the UTC day of `date`, given the existing version strings (no leading
  * "v") observed so far. See version-stamp.mjs for full semantics, including
  * the legacy bare-version transition rule.
  */

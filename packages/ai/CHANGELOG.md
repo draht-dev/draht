@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- OAuth callback pages now show the draht logo instead of the upstream pi mark
+
 ## [2026.10.4-1] - 2026-10-04
 
 ### Added

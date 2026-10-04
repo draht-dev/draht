@@ -1,6 +1,6 @@
 {
 	"name": "@draht/geist-acp",
-	"version": "2026.10.4-1",
+	"version": "2026.10.4-2",
 	"private": true,
 	"description": "ACP client + HarnessSession implementation — the only code that knows ACP wire shapes (geist spec §6)",
 	"type": "module",

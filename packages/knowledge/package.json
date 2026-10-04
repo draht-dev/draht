@@ -1,6 +1,6 @@
 {
 	"name": "@draht/knowledge",
-	"version": "2026.10.4-1",
+	"version": "2026.10.4-2",
 	"description": "Client knowledge base — per-client vector DB for knowledge persistence across projects",
 	"type": "module",
 	"main": "./dist/index.js",

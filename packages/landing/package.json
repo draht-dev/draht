@@ -1,6 +1,6 @@
 {
 	"name": "@draht/landing",
-	"version": "2026.10.4-1",
+	"version": "2026.10.4-2",
 	"private": true,
 	"description": "Internal product and documentation site for draht.dev",
 	"type": "module",

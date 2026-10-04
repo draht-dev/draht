@@ -1,6 +1,6 @@
 {
 	"name": "@draht/x-markdown",
-	"version": "2026.10.4-1",
+	"version": "2026.10.4-2",
 	"private": true,
 	"description": "Internal worker and extension for converting public X posts to Markdown",
 	"type": "module",

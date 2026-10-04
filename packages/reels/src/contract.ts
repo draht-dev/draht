@@ -50,9 +50,27 @@ export interface Hunk {
 
 export type Scene = TitleScene | StatsScene | CodeScene | DiagramScene | OutroScene;
 
+/**
+ * What the picture points at while one beat is spoken. `lines` are 1-based,
+ * inclusive indices into {@link CodeScene.lines}; `nodes` are Mermaid node
+ * ids declared in {@link DiagramScene.mermaid}.
+ */
+export interface Focus {
+	lines?: [number, number];
+	nodes?: string[];
+}
+
+/** One spoken step of a scene and what the picture should show while it is spoken. */
+export interface Beat {
+	text: string;
+	focus?: Focus;
+}
+
 interface SceneBase {
-	/** Text spoken for this scene and shown as captions / transcript. */
+	/** Text spoken for this scene and shown as captions / transcript. When `beats` is set, this equals the beat texts joined with single spaces. */
 	narration: string;
+	/** Optional split of the narration into steps, each with its own visual focus. */
+	beats?: Beat[];
 }
 
 export interface TitleScene extends SceneBase {
@@ -93,12 +111,23 @@ export interface ReelScript {
 	scenes: Scene[];
 }
 
+/** One spoken word, in milliseconds from the start of the reel. */
+export interface TimedWord {
+	text: string;
+	startMs: number;
+	endMs: number;
+}
+
 /** Narration timing for one scene, in milliseconds from the start of the reel. */
 export interface TranscriptSegment {
 	sceneIndex: number;
 	text: string;
 	startMs: number;
 	endMs: number;
+	/** Word timings for synced captions; estimated when the TTS provider gives no alignment. */
+	words?: TimedWord[];
+	/** Start of each beat of the scene, in reel milliseconds, parallel to the scene's `beats`. */
+	beatStartsMs?: number[];
 }
 
 /** One entry in a repo's feed. Paths are relative to the feed.json that lists them. */

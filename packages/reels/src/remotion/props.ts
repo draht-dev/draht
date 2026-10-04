@@ -24,6 +24,12 @@ export const CAPTION_Y_MIN = 1300;
 export const CAPTION_Y_MAX = SAFE_ZONE_Y_MAX;
 export const CAPTION_HEIGHT = CAPTION_Y_MAX - CAPTION_Y_MIN;
 
+/** Caption box text styling, shared between the component and the chunking character budget (see caption-logic.ts). */
+export const CAPTION_FONT_SIZE = 44;
+export const CAPTION_PADDING_X = 24;
+export const CAPTION_PADDING_Y = 14;
+export const CAPTION_MAX_LINES = 2;
+
 /** Scene content (above the caption, with a small gap before it) fills the rest of the safe zone. */
 export const SCENE_CONTENT_Y_MAX = CAPTION_Y_MIN - 20;
 export const SCENE_CONTENT_HEIGHT = SCENE_CONTENT_Y_MAX - SAFE_ZONE_Y_MIN;

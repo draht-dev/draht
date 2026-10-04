@@ -59,4 +59,13 @@ describe("InteractiveMode bug report hints", () => {
 
 		expect(context.suggestBugReport).toHaveBeenCalledOnce();
 	});
+
+	test("shows the install change warning instead of a bug report hint", () => {
+		const context = { suggestBugReport: vi.fn(), maybeShowInstallChangeWarning: vi.fn(() => true) };
+
+		maybeSuggestBugReport.call(context, errorMessage("Cannot find module './worker.js'"));
+
+		expect(context.maybeShowInstallChangeWarning).toHaveBeenCalledOnce();
+		expect(context.suggestBugReport).not.toHaveBeenCalled();
+	});
 });

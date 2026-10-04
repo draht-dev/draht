@@ -1,6 +1,6 @@
 {
 	"name": "@draht/reels",
-	"version": "2026.10.4-2",
+	"version": "2026.10.4-3",
 	"private": true,
 	"description": "Non-core example workflow: turns git history into narrated explainer reels (Remotion video, ElevenLabs audio) and a vertical-feed PWA per repo",
 	"type": "module",

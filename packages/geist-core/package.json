@@ -1,6 +1,6 @@
 {
 	"name": "@draht/geist-core",
-	"version": "2026.10.4-2",
+	"version": "2026.10.4-3",
 	"private": true,
 	"description": "geist harness-free product logic — sessions, projects, registry, git, variants, composer, ports (imports no @draht/* other than geist-protocol)",
 	"type": "module",

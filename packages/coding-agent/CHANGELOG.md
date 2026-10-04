@@ -1,11 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2026.10.4-3] - 2026-10-04
 
 ### Fixed
 
-- context-window cycling (`ctrl+shift+l`) offered only 272k for the GPT-6 models (gpt-6-astra, gpt-6-luna, gpt-6-sol, gpt-6.1-sol); they now cycle 272k/1.05M on OpenAI and 272k/372k/1.05M on Codex like gpt-5.6
-
+- offer extended context windows for the GPT-6 models
 
 ## [2026.10.4-1] - 2026-10-04
 

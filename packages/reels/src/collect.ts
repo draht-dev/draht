@@ -49,7 +49,7 @@ export interface CollectOptions {
 	git?: GitRunner;
 }
 
-interface RawCommit {
+export interface RawCommit {
 	sha: string;
 	parents: string[];
 	authorName: string;
@@ -119,7 +119,7 @@ export async function listFirstParentMeta(
 }
 
 /** Fetches one commit's metadata with NUL-separated fields (body last), never trusting its content as structure. */
-async function fetchCommitMetadata(git: GitRunner, repo: string, sha: string): Promise<RawCommit> {
+export async function fetchCommitMetadata(git: GitRunner, repo: string, sha: string): Promise<RawCommit> {
 	assertValidSha(sha);
 	// "%x00" is git's pretty-format escape for a literal NUL byte in the
 	// OUTPUT. We must not put a real NUL in the argv string itself (execFile
@@ -406,7 +406,7 @@ export async function collectChangeSets(options: CollectOptions): Promise<Change
 }
 
 /** Fetches one head commit's verbatim diff (patch, numstat, name-status), the three `git show` passes {@link parseUnifiedDiff} needs. */
-async function fetchFileChanges(git: GitRunner, repo: string, sha: string): Promise<FileChange[]> {
+export async function fetchFileChanges(git: GitRunner, repo: string, sha: string): Promise<FileChange[]> {
 	const diff = await git(
 		["show", "--format=", "--patch", "--find-renames", "--diff-merges=first-parent", "-U3", "--end-of-options", sha],
 		repo,
@@ -460,6 +460,68 @@ export interface BuildSelection {
 	cappedSkipped: string[];
 }
 
+export interface SelectFromWindowOptions {
+	/** The scan window, newest first. Ids are opaque: callers may pass commit shas (as `selectBuildShas` does) or any other stable id (e.g. a story id). */
+	windowIds: string[];
+	/** Ignore the floor: select everything unpublished and uncapped in the window, oldest first, bounded by `limit` only when given explicitly. */
+	allHistory?: boolean;
+	limit?: number;
+	/** Bypass the retry cap, so capped ids become candidates again. Published ids are never re-selected. */
+	force?: boolean;
+	publishedIds: ReadonlySet<string>;
+	cappedIds: ReadonlySet<string>;
+}
+
+export interface WindowSelection {
+	/** Selected ids, oldest first, at most `limit` entries. */
+	ids: string[];
+	/** Ids that were in scope but skipped solely because they hit the retry cap. Always empty when `force`. */
+	cappedSkipped: string[];
+}
+
+/**
+ * The floor/bootstrap/drain/all-history selection core shared by
+ * `selectBuildShas` (`--unit commit`) and `stories.ts`'s story selection
+ * (`--unit story`). Pure: no git access, so it works over any window of
+ * already-ordered ids. See `selectBuildShas` for the semantics in detail.
+ */
+export function selectFromWindow(options: SelectFromWindowOptions): WindowSelection {
+	const windowIds = options.windowIds;
+	const limit = options.limit ?? DEFAULT_BUILD_LIMIT;
+	const isPublished = (id: string) => options.publishedIds.has(id);
+	const isCapped = (id: string) => !options.force && options.cappedIds.has(id);
+
+	if (options.allHistory) {
+		const eligible = windowIds.filter((id) => !isPublished(id) && !isCapped(id));
+		const cappedSkipped = windowIds.filter((id) => !isPublished(id) && isCapped(id));
+		// `eligible` is newest first; an explicit limit keeps the OLDEST, so a backfill drains in order.
+		const bounded =
+			options.limit !== undefined ? eligible.slice(Math.max(0, eligible.length - options.limit)) : eligible;
+		return { ids: bounded.reverse(), cappedSkipped };
+	}
+
+	let floorIndex = -1;
+	for (let i = windowIds.length - 1; i >= 0; i--) {
+		const id = windowIds[i];
+		if (id !== undefined && options.publishedIds.has(id)) {
+			floorIndex = i;
+			break;
+		}
+	}
+
+	// In scope: strictly newer than the floor (or, with no floor found, the whole window).
+	const inScope = floorIndex === -1 ? windowIds : windowIds.slice(0, floorIndex);
+	const eligible = inScope.filter((id) => !isPublished(id) && !isCapped(id));
+	const cappedSkipped = inScope.filter((id) => !isPublished(id) && isCapped(id));
+
+	const bounded =
+		floorIndex === -1
+			? eligible.slice(0, limit) // bootstrap: newest `limit` only
+			: eligible.slice(Math.max(0, eligible.length - limit)); // drain: oldest `limit` above the floor
+
+	return { ids: bounded.reverse(), cappedSkipped };
+}
+
 /**
  * Selects which commits a `build` run should render in a single bounded
  * `git rev-list --first-parent` scan (newest first, size `scan`), instead of
@@ -480,7 +542,6 @@ export interface BuildSelection {
  */
 export async function selectBuildShas(options: SelectBuildShasOptions): Promise<BuildSelection> {
 	const git = options.git ?? runGit;
-	const limit = options.limit ?? DEFAULT_BUILD_LIMIT;
 	const windowLimit = options.allHistory ? undefined : (options.scan ?? DEFAULT_SCAN_WINDOW);
 
 	// Newest first.
@@ -491,38 +552,15 @@ export async function selectBuildShas(options: SelectBuildShasOptions): Promise<
 		limit: windowLimit,
 	});
 
-	const isPublished = (sha: string) => options.publishedIds.has(sha);
-	const isCapped = (sha: string) => !options.force && options.cappedIds.has(sha);
-
-	if (options.allHistory) {
-		const eligible = windowShas.filter((sha) => !isPublished(sha) && !isCapped(sha));
-		const cappedSkipped = windowShas.filter((sha) => !isPublished(sha) && isCapped(sha));
-		// `eligible` is newest first; an explicit limit keeps the OLDEST, so a backfill drains in order.
-		const bounded =
-			options.limit !== undefined ? eligible.slice(Math.max(0, eligible.length - options.limit)) : eligible;
-		return { shas: bounded.reverse(), cappedSkipped };
-	}
-
-	let floorIndex = -1;
-	for (let i = windowShas.length - 1; i >= 0; i--) {
-		const sha = windowShas[i];
-		if (sha !== undefined && options.publishedIds.has(sha)) {
-			floorIndex = i;
-			break;
-		}
-	}
-
-	// In scope: strictly newer than the floor (or, with no floor found, the whole window).
-	const inScope = floorIndex === -1 ? windowShas : windowShas.slice(0, floorIndex);
-	const eligible = inScope.filter((sha) => !isPublished(sha) && !isCapped(sha));
-	const cappedSkipped = inScope.filter((sha) => !isPublished(sha) && isCapped(sha));
-
-	const bounded =
-		floorIndex === -1
-			? eligible.slice(0, limit) // bootstrap: newest `limit` only
-			: eligible.slice(Math.max(0, eligible.length - limit)); // drain: oldest `limit` above the floor
-
-	return { shas: bounded.reverse(), cappedSkipped };
+	const { ids, cappedSkipped } = selectFromWindow({
+		windowIds: windowShas,
+		allHistory: options.allHistory,
+		limit: options.limit,
+		force: options.force,
+		publishedIds: options.publishedIds,
+		cappedIds: options.cappedIds,
+	});
+	return { shas: ids, cappedSkipped };
 }
 
 export interface ListReachableShasOptions {

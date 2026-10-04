@@ -54,3 +54,13 @@ test("binary release pins the same manifest Bun version and revision, not a diff
 	);
 	assert.doesNotMatch(binaryRelease, /bun-version: latest/);
 });
+
+test("release workflows install the pinned Bun with setup-bun, never under the npm global prefix", () => {
+	for (const name of ["scheduled-release", "promote-daily-release", "build-binaries"]) {
+		const workflow = read(`.github/workflows/${name}.yml`);
+		assert.doesNotMatch(workflow, /npm install --global "?bun@/, `${name}.yml installs Bun under /opt`);
+		assert.match(workflow, /uses: oven-sh\/setup-bun@[0-9a-f]{40}\b/, `${name}.yml must use a pinned setup-bun`);
+		assert.match(workflow, /bun-version: \$\{\{ env\.BUN_PACKAGE_VERSION \}\}/, `${name}.yml must install the pinned version`);
+		assert.match(workflow, /test "\$\(bun --revision\)" = "\$\{BUN_REVISION\}"/, `${name}.yml must verify the revision`);
+	}
+});

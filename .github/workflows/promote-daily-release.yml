@@ -69,10 +69,16 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Install and verify the pinned Bun
-        run: |
-          npm install --global "bun@${BUN_PACKAGE_VERSION}"
-          test "$(bun --revision)" = "${BUN_REVISION}"
+      # setup-bun installs into ~/.bun/bin. `npm install --global` lands under the
+      # runner's /opt toolcache, which the gateway refuses to exec from ("writable
+      # by others: /opt"), failing the release test suite.
+      - name: Install the pinned Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_PACKAGE_VERSION }}
+
+      - name: Verify the pinned Bun revision
+        run: test "$(bun --revision)" = "${BUN_REVISION}"
 
       - name: Plan
         if: ${{ inputs.dry_run }}

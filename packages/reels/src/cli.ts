@@ -8,16 +8,13 @@ import { randomUUID } from "node:crypto";
 import { access, copyFile, mkdir, rename, rm } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { elevenLabsKeyFilePath, resolveElevenLabsApiKey } from "./api-key.ts";
-import {
-	assertValidSha,
-	collectChangeSetsForShas,
-	type GitRunner,
-	listReachableShas,
-	selectBuildShas,
-} from "./collect.ts";
+import { assertValidSha, collectChangeSetsForShas, type GitRunner, selectBuildShas } from "./collect.ts";
 import type { ChangeSet, ReelEntry, ReelScript } from "./contract.ts";
+import { walkMainline } from "./mainline.ts";
 import { applyContentPolicy, DEFAULT_DENY_GLOBS, redactText } from "./privacy.ts";
 import { pruneFeed, publishFeed, publishSite, readFeed } from "./publish.ts";
+import { DEFAULT_REELS_CONFIG } from "./reels-config.ts";
+import { listReleaseTags } from "./releases.ts";
 import { createBundle, publishAudioForRender, renderReel } from "./render.ts";
 import {
 	type Lang,
@@ -496,7 +493,24 @@ export async function runPrune(argv: string[], overrides: { git?: GitRunner } = 
 	const outDir = resolve(args.out);
 
 	const reachable = await collectOrFail(
-		() => listReachableShas({ repo: args.repo, ref: args.ref, git: overrides.git }),
+		async () => {
+			const units = await walkMainline({
+				repo: args.repo,
+				ref: args.ref,
+				allHistory: true,
+				tagPattern: DEFAULT_REELS_CONFIG.tagPattern,
+				config: DEFAULT_REELS_CONFIG,
+				git: overrides.git,
+			});
+			const shas = new Set<string>();
+			for (const unit of units) {
+				shas.add(unit.sha);
+				for (const branchSha of unit.branchShas ?? []) shas.add(branchSha);
+			}
+			const allTags = await listReleaseTags(args.repo, DEFAULT_REELS_CONFIG.tagPattern, overrides.git);
+			const tags = new Set(allTags.filter((tag) => shas.has(tag.sha)).map((tag) => tag.name));
+			return { shas, tags };
+		},
 		args.repo,
 		args.ref,
 	);

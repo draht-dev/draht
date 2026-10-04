@@ -59,7 +59,7 @@ interface RawCommit {
 }
 
 /** Lists commit shas via `git rev-list`, validating every entry before returning it. */
-async function listShas(
+export async function listShas(
 	git: GitRunner,
 	repo: string,
 	ref: string,
@@ -77,6 +77,45 @@ async function listShas(
 		.map((line) => line.trim())
 		.filter(Boolean)
 		.map(assertValidSha);
+}
+
+export interface FirstParentMeta {
+	sha: string;
+	parents: string[];
+	authorName: string;
+	subject: string;
+}
+
+/**
+ * Reads commit sha, parents, author, and subject for up to `limit` commits
+ * in one `git log --first-parent` call (newest first), instead of one
+ * `git show` per commit. Used by `mainline.ts` to seed its walk; `ref` may
+ * be a single revision (returns that commit as the first entry) or a range.
+ */
+export async function listFirstParentMeta(
+	git: GitRunner,
+	repo: string,
+	ref: string,
+	limit?: number,
+): Promise<FirstParentMeta[]> {
+	const format = ["%H", "%P", "%an", "%s"].join("%x00");
+	const args = ["log", "--first-parent", `--format=${format}`];
+	if (limit) args.push("-n", String(limit));
+	args.push("--end-of-options", ref);
+	const out = await git(args, repo);
+	return out
+		.split("\n")
+		.map((entry) => entry.trim())
+		.filter(Boolean)
+		.map((entry) => {
+			const [sha, parents, authorName, subject] = entry.split(NUL);
+			return {
+				sha: assertValidSha(sha ?? ""),
+				parents: (parents ?? "").split(" ").filter(Boolean).map(assertValidSha),
+				authorName: authorName ?? "",
+				subject: subject ?? "",
+			};
+		});
 }
 
 /** Fetches one commit's metadata with NUL-separated fields (body last), never trusting its content as structure. */

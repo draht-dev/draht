@@ -72,7 +72,7 @@ test("repository uses Bun as its single authoritative dependency lock", () => {
 
 test("release runs the suite on a CI-equivalent install without release credentials, then restores the strict one", () => {
 	const releaseScript = readFileSync(join(process.cwd(), "scripts/release.mjs"), "utf8");
-	const testInstall = releaseScript.indexOf('run("env -u NODE_AUTH_TOKEN -u GH_TOKEN -u GITHUB_TOKEN bun install --frozen-lockfile");');
+	const testInstall = releaseScript.indexOf('run("env -u NODE_AUTH_TOKEN -u NPM_CONFIG_TOKEN -u GH_TOKEN -u GITHUB_TOKEN bun install --frozen-lockfile");');
 	const suite = releaseScript.indexOf('run("./test.sh");');
 	const strictAfter = releaseScript.indexOf('run("bun install --frozen-lockfile --ignore-scripts --linker hoisted");', suite);
 	const build = releaseScript.indexOf('run("bun run build");');

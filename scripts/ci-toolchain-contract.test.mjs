@@ -72,3 +72,13 @@ test("release workflows give git a committer identity before they commit", () =>
 		assert.match(workflow, /git config user\.email "release@draht\.dev"/, `${name}.yml must set user.email`);
 	}
 });
+
+test("publishing workflow steps hand bun publish its token through NPM_CONFIG_TOKEN", () => {
+	for (const name of ["scheduled-release", "promote-daily-release"]) {
+		const workflow = read(`.github/workflows/${name}.yml`);
+		assert.match(workflow, /NPM_CONFIG_TOKEN: \$\{\{ secrets\.NPM_TOKEN \}\}/, `${name}.yml must set NPM_CONFIG_TOKEN`);
+	}
+	const scheduled = read(".github/workflows/scheduled-release.yml");
+	assert.match(scheduled, /resume_publish:/);
+	assert.match(scheduled, /run: npm run release -- --resume-publish/);
+});

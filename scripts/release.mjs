@@ -337,7 +337,7 @@ console.log();
 // vite). Test on a CI-equivalent install with the release credentials stripped
 // from the dependency scripts' environment, then restore the strict install.
 console.log("Running tests...");
-run("env -u NODE_AUTH_TOKEN -u GH_TOKEN -u GITHUB_TOKEN bun install --frozen-lockfile");
+run("env -u NODE_AUTH_TOKEN -u NPM_CONFIG_TOKEN -u GH_TOKEN -u GITHUB_TOKEN bun install --frozen-lockfile");
 run("./test.sh");
 run("bun install --frozen-lockfile --ignore-scripts --linker hoisted");
 console.log();

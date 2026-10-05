@@ -1236,7 +1236,13 @@ async function runBuildStory(args: BuildArgs, overrides: BuildOverrides): Promis
 	const poolByGroup = new Map<ReleaseGroup, ReturnType<typeof poolReleaseUpstreamRecap>>();
 	for (const group of groups) {
 		const anchorsWithRange = group.anchors.map((anchor) => ({ anchor, range: group.range }));
-		const result = await collectStories(group.units, { repo: args.repo, git, gh, anchors: anchorsWithRange });
+		const result = await collectStories(group.units, {
+			repo: args.repo,
+			git,
+			gh,
+			anchors: anchorsWithRange,
+			story: config.story,
+		});
 		// A story's `release` must be set before it leaves this loop: every
 		// downstream consumer (the entry's own `release` field, the release
 		// overview's story list, the playlist a story's approval updates)
@@ -1580,7 +1586,13 @@ export async function runRelease(argv: string[], overrides: BuildOverrides = {})
 	const poolByGroup = new Map<ReleaseGroup, ReturnType<typeof poolReleaseUpstreamRecap>>();
 	for (const group of groups) {
 		const anchorsWithRange = group.anchors.map((anchor) => ({ anchor, range: group.range }));
-		const result = await collectStories(group.units, { repo: args.repo, git, gh, anchors: anchorsWithRange });
+		const result = await collectStories(group.units, {
+			repo: args.repo,
+			git,
+			gh,
+			anchors: anchorsWithRange,
+			story: config.story,
+		});
 		for (const story of result.stories) story.release = group.tag;
 		allStories.push(...result.stories);
 		for (const [id, strength] of result.attribution) attribution.set(id, strength);

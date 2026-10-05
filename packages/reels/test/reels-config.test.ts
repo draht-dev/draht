@@ -109,6 +109,39 @@ describe("parseReelsConfig", () => {
 	});
 });
 
+describe("story.skipTypes / story.skipAuthors (housekeeping/bot filter)", () => {
+	test("defaults are filled in", () => {
+		const config = parseReelsConfig({});
+		expect(config.story.skipTypes).toEqual(DEFAULT_REELS_CONFIG.story.skipTypes);
+		expect(config.story.skipAuthors).toEqual(DEFAULT_REELS_CONFIG.story.skipAuthors);
+	});
+
+	test("accepts an override of both lists", () => {
+		const config = parseReelsConfig({ story: { skipTypes: ["chore", "docs"], skipAuthors: ["my-bot[bot]"] } });
+		expect(config.story.skipTypes).toEqual(["chore", "docs"]);
+		expect(config.story.skipAuthors).toEqual(["my-bot[bot]"]);
+	});
+
+	test("rejects a non-array skipTypes/skipAuthors", () => {
+		expect(() => parseReelsConfig({ story: { skipTypes: "chore" } })).toThrow(ReelsConfigError);
+		expect(() => parseReelsConfig({ story: { skipAuthors: "bot" } })).toThrow(ReelsConfigError);
+	});
+
+	test("rejects an uppercase or empty skipTypes entry", () => {
+		expect(() => parseReelsConfig({ story: { skipTypes: ["CHORE"] } })).toThrow(ReelsConfigError);
+		expect(() => parseReelsConfig({ story: { skipTypes: [""] } })).toThrow(ReelsConfigError);
+	});
+
+	test("rejects an empty or overlong skipAuthors entry", () => {
+		expect(() => parseReelsConfig({ story: { skipAuthors: [""] } })).toThrow(ReelsConfigError);
+		expect(() => parseReelsConfig({ story: { skipAuthors: ["x".repeat(129)] } })).toThrow(ReelsConfigError);
+	});
+
+	test("rejects a skipAuthors entry with a path separator", () => {
+		expect(() => parseReelsConfig({ story: { skipAuthors: ["foo/bar"] } })).toThrow(ReelsConfigError);
+	});
+});
+
 describe("loadReelsConfig", () => {
 	test("reads and validates a config file from disk", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "reels-config-test-"));

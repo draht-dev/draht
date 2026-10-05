@@ -33,6 +33,10 @@ export interface StoryConfig {
 	minAttribution: AttributionStrength;
 	/** `--unit story`'s default model (`"<provider>/<modelId>"`), used when `--model` is absent. */
 	model?: string;
+	/** Conventional-commit types that mark a branch/PR title or subject, or a changelog story's implementing commit, as housekeeping rather than a feature. */
+	skipTypes: string[];
+	/** Glob-like (`*` wildcard only) author patterns; a PR author or merge-commit author match marks a branch/PR story as bot housekeeping. */
+	skipAuthors: string[];
 }
 
 /** `--unit story` run-wide spend caps and draft output location (T12). */
@@ -85,10 +89,18 @@ export const DEFAULT_UPSTREAM_CONFIG: UpstreamConfig = {
 	foreignAuthorRatio: 0.6,
 };
 
+/** Conventional-commit types that mark a story as housekeeping rather than a feature (fix round: a Dependabot-style "ci:" PR must not become a story). */
+export const DEFAULT_SKIP_TYPES: string[] = ["chore", "ci", "build", "deps", "style", "test", "release"];
+
+/** Author glob patterns (`*` wildcard only) that mark a story's PR/merge author as a bot, never a real feature's author. */
+export const DEFAULT_SKIP_AUTHORS: string[] = ["dependabot[bot]", "renovate[bot]", "github-actions[bot]", "*[bot]"];
+
 export const DEFAULT_STORY_CONFIG: StoryConfig = {
 	directCommitTypes: ["feat"],
 	maxBranchCommits: 150,
 	minAttribution: "strong",
+	skipTypes: DEFAULT_SKIP_TYPES,
+	skipAuthors: DEFAULT_SKIP_AUTHORS,
 };
 
 export const DEFAULT_BUILD_CONFIG: BuildConfig = {
@@ -147,12 +159,20 @@ const ALLOWED_STORY_KEYS: ReadonlySet<string> = new Set([
 	"maxBranchCommits",
 	"minAttribution",
 	"model",
+	"skipTypes",
+	"skipAuthors",
 ]);
 const ALLOWED_DOCS_KEYS: ReadonlySet<string> = new Set(["allow", "deny", "maxChunks"]);
 const ALLOWED_CODE_KEYS: ReadonlySet<string> = new Set(["exclude", "include"]);
 const ALLOWED_PROSE_KEYS: ReadonlySet<string> = new Set(["denyPatterns"]);
 const ALLOWED_BUILD_KEYS: ReadonlySet<string> = new Set(["maxCostUsd", "maxLlmTokens", "maxTtsChars", "draftsDir"]);
 const ATTRIBUTION_STRENGTHS: ReadonlySet<string> = new Set(["strong", "weak"]);
+
+/** A conventional-commit type: lowercase letters/digits/hyphens, never empty. */
+const SKIP_TYPE_RE = /^[a-z][a-z0-9-]*$/;
+/** An author glob pattern: `*` plus the characters that show up in real git/GitHub author names and bot handles (`dependabot[bot]`). No path separators, no regex metacharacters besides `*`. */
+const SKIP_AUTHOR_RE = /^[A-Za-z0-9_.\-[\]*]+$/;
+const MAX_SKIP_AUTHOR_LENGTH = 128;
 
 export class ReelsConfigError extends Error {}
 
@@ -311,11 +331,28 @@ function parseStory(raw: unknown): StoryConfig {
 		assertValidModelSpec(raw.model, "story.model");
 	}
 
+	const skipTypes = raw.skipTypes === undefined ? DEFAULT_STORY_CONFIG.skipTypes : raw.skipTypes;
+	if (!Array.isArray(skipTypes) || !skipTypes.every((t) => typeof t === "string" && SKIP_TYPE_RE.test(t))) {
+		throw new ReelsConfigError("story.skipTypes must be an array of lowercase conventional-commit types");
+	}
+
+	const skipAuthors = raw.skipAuthors === undefined ? DEFAULT_STORY_CONFIG.skipAuthors : raw.skipAuthors;
+	if (
+		!Array.isArray(skipAuthors) ||
+		!skipAuthors.every(
+			(a) => typeof a === "string" && a.length > 0 && a.length <= MAX_SKIP_AUTHOR_LENGTH && SKIP_AUTHOR_RE.test(a),
+		)
+	) {
+		throw new ReelsConfigError("story.skipAuthors must be an array of author glob patterns");
+	}
+
 	return {
 		directCommitTypes,
 		maxBranchCommits,
 		minAttribution: minAttribution as AttributionStrength,
 		model: raw.model as string | undefined,
+		skipTypes,
+		skipAuthors,
 	};
 }
 

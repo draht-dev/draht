@@ -416,6 +416,149 @@ describe("collectStories: branch merges", () => {
 	);
 });
 
+/** Seeds a changelog with a given section heading instead of {@link seedChangelog}'s hardcoded "Added". */
+function seedChangelogSection(repo: GitRepo, section: string, path = "packages/reels/CHANGELOG.md"): string {
+	return repo.commit("chore: seed changelog", { path, content: `## [Unreleased]\n\n### ${section}\n\n` });
+}
+
+/** Sibling to {@link addChangelogEntry} for a non-"Added" section. */
+function addChangelogEntrySection(
+	repo: GitRepo,
+	section: string,
+	entryLine: string,
+	path = "packages/reels/CHANGELOG.md",
+): string {
+	return repo.commit("docs: changelog entry", {
+		path,
+		content: `## [Unreleased]\n\n### ${section}\n\n${entryLine}\n`,
+	});
+}
+
+describe("collectStories: housekeeping/bot filter (fix round)", () => {
+	test(
+		"a Dependabot-style PR is skipped as bot, even though its title also reads as housekeeping",
+		withRepo(async (repo) => {
+			const mergeSha = addFeatureBranchMerge(repo, {
+				subject: "Merge pull request #42 from acme/dependabot-checkout",
+			});
+			const units = await walkMainline({ repo: repo.dir, ref: "HEAD", tagPattern: "^v" });
+
+			const pr: PullRequestInfo = {
+				number: 42,
+				url: "https://github.com/acme/widget/pull/42",
+				title: "ci: bump actions/checkout from 4.2.2 to 7.0.1",
+				body: "Bumps actions/checkout.",
+				author: "dependabot[bot]",
+				labels: [],
+				reviews: [],
+				comments: [],
+			};
+			const gh: GithubLookup = { lookupPullRequestForSha: async (sha) => (sha === mergeSha ? pr : undefined) };
+
+			const result = await collectStories(units, { repo: repo.dir, gh });
+			expect(result.stories.some((s) => s.id === mergeSha)).toBe(false);
+			expect(result.skipped).toContainEqual({ sha: mergeSha, reason: "bot" });
+		}),
+	);
+
+	test(
+		"a ci: branch merge with no PR is skipped as housekeeping",
+		withRepo(async (repo) => {
+			const mergeSha = addFeatureBranchMerge(repo, { subject: "ci: bump actions/checkout from 4.2.2 to 7.0.1" });
+			const units = await walkMainline({ repo: repo.dir, ref: "HEAD", tagPattern: "^v" });
+
+			const result = await collectStories(units, { repo: repo.dir });
+			expect(result.stories.some((s) => s.id === mergeSha)).toBe(false);
+			expect(result.skipped).toContainEqual({ sha: mergeSha, reason: "housekeeping" });
+		}),
+	);
+
+	test(
+		"an ordinary feature PR is kept",
+		withRepo(async (repo) => {
+			const mergeSha = addFeatureBranchMerge(repo, { subject: "Merge pull request #7 from acme/widget-branch" });
+			const units = await walkMainline({ repo: repo.dir, ref: "HEAD", tagPattern: "^v" });
+
+			const pr: PullRequestInfo = {
+				number: 7,
+				url: "https://github.com/acme/widget/pull/7",
+				title: "Add the widget factory",
+				body: "Because it was needed.",
+				author: "octocat",
+				labels: [],
+				reviews: [],
+				comments: [],
+			};
+			const gh: GithubLookup = { lookupPullRequestForSha: async (sha) => (sha === mergeSha ? pr : undefined) };
+
+			const result = await collectStories(units, { repo: repo.dir, gh });
+			expect(result.stories.some((s) => s.id === mergeSha)).toBe(true);
+			expect(result.skipped.some((s) => s.sha === mergeSha)).toBe(false);
+		}),
+	);
+
+	test(
+		"overriding story.skipTypes to an empty list keeps a ci: branch merge",
+		withRepo(async (repo) => {
+			const mergeSha = addFeatureBranchMerge(repo, { subject: "ci: bump actions/checkout from 4.2.2 to 7.0.1" });
+			const units = await walkMainline({ repo: repo.dir, ref: "HEAD", tagPattern: "^v" });
+
+			const result = await collectStories(units, {
+				repo: repo.dir,
+				story: { skipTypes: [], skipAuthors: [] },
+			});
+			expect(result.stories.some((s) => s.id === mergeSha)).toBe(true);
+			expect(result.skipped.some((s) => s.sha === mergeSha)).toBe(false);
+		}),
+	);
+
+	test(
+		"a chore commit that implements an Added changelog entry is kept",
+		withRepo(async (repo) => {
+			const fromSha = seedChangelog(repo);
+			const implSha = repo.commit("chore(reels): add the widgetFactory helper", {
+				path: "packages/reels/src/widgetFactory.ts",
+				content: "export function widgetFactory() {\n\treturn 1;\n}\n",
+			});
+			addChangelogEntry(repo, "- add the `widgetFactory` helper");
+
+			const units = await walkMainline({ repo: repo.dir, ref: "HEAD", tagPattern: "^v" });
+			const range = `${fromSha}..HEAD`;
+			const anchors = filterFeatureAnchors(await findChangelogAnchors(units, { repo: repo.dir, range }), units).map(
+				(anchor) => ({ anchor, range }),
+			);
+
+			const result = await collectStories(units, { repo: repo.dir, anchors });
+			const story = result.stories.find((s) => s.origin === "commit");
+			expect(story).toBeDefined();
+			expect(story?.commits[0]).toBe(implSha.slice(0, 12));
+			expect(result.skipped.some((s) => s.reason === "housekeeping")).toBe(false);
+		}),
+	);
+
+	test(
+		"a chore commit that implements only a Fixed changelog entry is skipped as housekeeping",
+		withRepo(async (repo) => {
+			const fromSha = seedChangelogSection(repo, "Fixed");
+			repo.commit("chore(reels): tweak the widgetFactory internals", {
+				path: "packages/reels/src/widgetFactory.ts",
+				content: "export function widgetFactory() {\n\treturn 1;\n}\n",
+			});
+			const docsSha = addChangelogEntrySection(repo, "Fixed", "- fix the `widgetFactory` helper's edge case");
+
+			const units = await walkMainline({ repo: repo.dir, ref: "HEAD", tagPattern: "^v" });
+			const range = `${fromSha}..HEAD`;
+			const anchors = filterFeatureAnchors(await findChangelogAnchors(units, { repo: repo.dir, range }), units).map(
+				(anchor) => ({ anchor, range }),
+			);
+
+			const result = await collectStories(units, { repo: repo.dir, anchors });
+			expect(result.stories.some((s) => s.origin === "commit")).toBe(false);
+			expect(result.skipped.some((s) => s.sha === docsSha && s.reason === "housekeeping")).toBe(true);
+		}),
+	);
+});
+
 describe("collectStories: branch-sync merges", () => {
 	test(
 		"the branch-sync merge itself is skipped, not a story and not a sync recap",

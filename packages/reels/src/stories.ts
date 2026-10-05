@@ -39,6 +39,7 @@ import {
 	fetchCommitMetadata,
 	fetchFileChanges,
 	type GitRunner,
+	type RawCommit,
 	runGit,
 	selectFromWindow,
 	type WindowSelection,
@@ -46,6 +47,7 @@ import {
 import type { CommitInfo, PullRequestInfo, Story } from "./contract.ts";
 import type { GithubLookup } from "./github.ts";
 import type { ChangelogAnchor, MainlineUnit } from "./mainline.ts";
+import { DEFAULT_STORY_CONFIG, type StoryConfig } from "./reels-config.ts";
 
 export const DEFAULT_MAX_IDENTIFIERS = 8;
 export const DEFAULT_MAX_PROCESSES = 8;
@@ -371,6 +373,56 @@ export function isUpstreamCarriedSubject(subject: string): boolean {
 	return /^upstream:\s/i.test(subject);
 }
 
+// --- Housekeeping / bot filtering (fix round) -------------------------------
+
+const CONVENTIONAL_TYPE_RE = /^([a-z]+)(?:\([^)]*\))?!?:\s/;
+
+/** The lowercase conventional-commit type prefix of `subject`, e.g. `"chore"` from `"chore(deps): bump x"`. `undefined` when `subject` carries no such prefix. */
+export function conventionalCommitType(subject: string): string | undefined {
+	return CONVENTIONAL_TYPE_RE.exec(subject.trim())?.[1]?.toLowerCase();
+}
+
+/** True when any of `subjects` opens with a type in `skipTypes` (case-insensitive). */
+function hasSkippedType(subjects: readonly (string | undefined)[], skipTypes: readonly string[]): boolean {
+	return subjects.some((subject) => {
+		if (!subject) return false;
+		const type = conventionalCommitType(subject);
+		return type !== undefined && skipTypes.includes(type);
+	});
+}
+
+const authorGlobCache = new Map<string, RegExp>();
+
+/** `*` is the only wildcard; every other character is matched literally (case-insensitive), so `"*[bot]"` matches `"dependabot[bot]"` without `[`/`]` being treated as a regex character class. */
+function compileAuthorGlob(pattern: string): RegExp {
+	let compiled = authorGlobCache.get(pattern);
+	if (compiled) return compiled;
+	const source = pattern
+		.split("*")
+		.map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+		.join(".*");
+	compiled = new RegExp(`^${source}$`, "i");
+	authorGlobCache.set(pattern, compiled);
+	return compiled;
+}
+
+/** True when any of `authors` matches one of `patterns` ({@link compileAuthorGlob}). */
+function hasSkippedAuthor(authors: readonly (string | undefined)[], patterns: readonly string[]): boolean {
+	return authors.some((author) => !!author && patterns.some((pattern) => compileAuthorGlob(pattern).test(author)));
+}
+
+/** Why a branch/PR unit is housekeeping rather than a story candidate, per {@link StoryConfig.skipTypes}/{@link StoryConfig.skipAuthors}. `undefined` means it is a real story candidate. */
+function branchSkipReason(
+	unit: MainlineUnit,
+	head: RawCommit,
+	pr: PullRequestInfo | undefined,
+	config: Pick<StoryConfig, "skipTypes" | "skipAuthors">,
+): "bot" | "housekeeping" | undefined {
+	if (hasSkippedAuthor([head.authorName, pr?.author], config.skipAuthors)) return "bot";
+	if (hasSkippedType([unit.subject, pr?.title], config.skipTypes)) return "housekeeping";
+	return undefined;
+}
+
 // --- Overlap merging ---------------------------------------------------------
 
 interface AnchorAttribution {
@@ -528,7 +580,7 @@ export interface SyncRecapAnchor {
 
 export interface SkippedUnit {
 	sha: string;
-	reason: "oversized" | "back-merge" | "upstream-sync" | "branch-sync";
+	reason: "oversized" | "back-merge" | "upstream-sync" | "branch-sync" | "housekeeping" | "bot";
 }
 
 export interface CollectStoriesResult {
@@ -555,6 +607,8 @@ export interface CollectStoriesOptions {
 	maxProcesses?: number;
 	/** Shared pickaxe-process budget for this run; a fresh {@link createPickaxeBudget} is used when omitted. */
 	pickaxeBudget?: PickaxeBudget;
+	/** `skipTypes`/`skipAuthors` drive the housekeeping/bot filter (fix round); {@link DEFAULT_STORY_CONFIG} is used when omitted. */
+	story?: Pick<StoryConfig, "skipTypes" | "skipAuthors">;
 }
 
 // `execFile` rejects a literal NUL byte in argv, so the `--format` string
@@ -617,16 +671,14 @@ export function deriveBranchTitle(subject: string, prTitle?: string): string {
 
 async function buildBranchStory(
 	unit: MainlineUnit,
-	opts: { repo: string; git: GitRunner; gh?: GithubLookup },
+	head: RawCommit,
+	pr: PullRequestInfo | undefined,
+	opts: { repo: string; git: GitRunner },
 ): Promise<Story> {
-	const head = await fetchCommitMetadata(opts.git, opts.repo, unit.sha);
 	const branchCommits: CommitInfo[] = [];
 	for (const sha of unit.branchShas ?? []) {
 		branchCommits.push(toCommitInfo(await fetchCommitMetadata(opts.git, opts.repo, sha)));
 	}
-
-	let pr: PullRequestInfo | undefined;
-	if (opts.gh) pr = await opts.gh.lookupPullRequestForSha(unit.sha);
 
 	const files = await fetchFileChanges(opts.git, opts.repo, unit.sha);
 	const authors = Array.from(new Set([head.authorName, ...branchCommits.map((c) => c.author)]));
@@ -723,6 +775,9 @@ async function buildCommitStory(
 	};
 }
 
+/** Changelog sections exempt from the housekeeping-type filter: a `chore:`/`ci:` commit that adds a genuinely new feature or breaking change still counts, even though its own type reads as housekeeping. */
+const PRIVILEGED_CHANGELOG_SECTIONS: ReadonlySet<string> = new Set(["Added", "Breaking Changes"]);
+
 /**
  * Collects `Story`s from a mainline walk's feature-branch merges and from
  * changelog-anchored direct work (owner decision Q1), attributing each
@@ -734,6 +789,7 @@ export async function collectStories(
 	opts: CollectStoriesOptions,
 ): Promise<CollectStoriesResult> {
 	const git = opts.git ?? runGit;
+	const storyConfig = opts.story ?? DEFAULT_STORY_CONFIG;
 	const ownerByCommit = buildUnitOwnerMap(units);
 	const stories: Story[] = [];
 	const skipped: SkippedUnit[] = [];
@@ -742,7 +798,15 @@ export async function collectStories(
 
 	for (const unit of units) {
 		if (unit.class === "feature") {
-			stories.push(await buildBranchStory(unit, { repo: opts.repo, git, gh: opts.gh }));
+			const head = await fetchCommitMetadata(git, opts.repo, unit.sha);
+			let pr: PullRequestInfo | undefined;
+			if (opts.gh) pr = await opts.gh.lookupPullRequestForSha(unit.sha);
+			const skipReason = branchSkipReason(unit, head, pr, storyConfig);
+			if (skipReason) {
+				skipped.push({ sha: unit.sha, reason: skipReason });
+			} else {
+				stories.push(await buildBranchStory(unit, head, pr, { repo: opts.repo, git }));
+			}
 		} else if (unit.class === "oversized") {
 			skipped.push({ sha: unit.sha, reason: "oversized" });
 		} else if (unit.class === "back-merge") {
@@ -808,6 +872,14 @@ export async function collectStories(
 		const anchorSha = group[0]?.anchor.commitSha;
 		const headSha = group[0]?.implementing[0] ?? anchorSha;
 		if (!headSha || !anchorSha) continue;
+
+		const headSubject =
+			subjectBySha.get(headSha) ?? (headSha === anchorSha ? group[0]?.anchor.commitSubject : undefined);
+		const hasPrivilegedSection = group.some((a) => PRIVILEGED_CHANGELOG_SECTIONS.has(a.anchor.section));
+		if (!hasPrivilegedSection && hasSkippedType([headSubject], storyConfig.skipTypes)) {
+			skipped.push({ sha: anchorSha, reason: "housekeeping" });
+			continue;
+		}
 
 		const anchorTexts = group.map((a) => a.anchor.entryText);
 		const story = await buildCommitStory(headSha, anchorSha, anchorTexts, { repo: opts.repo, git });

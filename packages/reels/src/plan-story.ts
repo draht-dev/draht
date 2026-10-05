@@ -221,6 +221,7 @@ export async function planStories(options: PlanStoryOptions): Promise<StoryPlan>
 			git,
 			gh: options.gh,
 			anchors: anchorsWithRange,
+			story: options.config.story,
 		});
 		for (const story of result.stories) story.release = group.tag;
 		allStories.push(...result.stories);

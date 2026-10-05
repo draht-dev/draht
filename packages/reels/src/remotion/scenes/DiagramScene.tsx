@@ -4,6 +4,7 @@ import { AbsoluteFill, cancelRender, continueRender, delayRender, useCurrentFram
 import type { DiagramScene as DiagramSceneData } from "../../contract.ts";
 import { activeBeatIndex } from "../beats.ts";
 import { SAFE_ZONE_WIDTH, SCENE_CONTENT_HEIGHT } from "../props.ts";
+import { COLOR, FONT } from "../theme.ts";
 import { buildBeatFocusCss } from "./diagram-focus.ts";
 import { SafeZoneContent } from "./SafeZone.tsx";
 
@@ -19,11 +20,34 @@ function ensureMermaidInitialized() {
 	if (mermaidInitialized) return;
 	mermaid.initialize({
 		startOnLoad: false,
-		theme: "dark",
+		theme: "base",
 		securityLevel: "strict",
 		htmlLabels: false,
-		themeVariables: { fontSize: "34px" },
+		themeVariables: {
+			fontSize: "34px",
+			fontFamily: FONT.sans,
+			background: COLOR.foundryInk,
+			mainBkg: COLOR.foundryInk2,
+			primaryColor: COLOR.foundryInk2,
+			primaryTextColor: COLOR.workshopPaper,
+			primaryBorderColor: COLOR.ruleStrong,
+			secondaryColor: COLOR.foundryInk2,
+			secondaryBorderColor: COLOR.ruleStrong,
+			tertiaryColor: COLOR.foundryInk2,
+			tertiaryBorderColor: COLOR.ruleStrong,
+			lineColor: COLOR.foxedPage,
+			textColor: COLOR.workshopPaper,
+			nodeTextColor: COLOR.workshopPaper,
+			edgeLabelBackground: COLOR.foundryInk,
+			clusterBkg: COLOR.foundryInk2,
+			clusterBorder: COLOR.ruleStrong,
+			titleColor: COLOR.workshopPaper,
+		},
 		flowchart: {
+			// "classic" (not mermaid's newer "neo" default): "neo" bakes a default drop-shadow
+			// filter into every node regardless of focus, which violates the No-Shadow Rule —
+			// only the focused node's own glow (added by diagram-focus.ts) may have one.
+			look: "classic",
 			wrappingWidth: 380,
 			nodeSpacing: 60,
 			rankSpacing: 90,
@@ -55,7 +79,10 @@ function scaleSvgToFillContainer(svg: string): string {
 
 	return svg.replace(/<svg([^>]*)>/, (_match, attrs: string) => {
 		const stripped = attrs.replace(/\s(width|height|style)="[^"]*"/g, "");
-		return `<svg${stripped} width="${width}" height="${height}">`;
+		// The SVG root clips to its viewBox by default (overflow: hidden in the UA
+		// stylesheet); a focused node's drop-shadow glow extends past its own box, so
+		// without this it gets cut off in a visible rectangle at the diagram's edge.
+		return `<svg${stripped} width="${width}" height="${height}" style="overflow: visible">`;
 	});
 }
 
@@ -105,7 +132,7 @@ export function DiagramScene({ scene, beatStartFrames }: { scene: DiagramSceneDa
 	}, [svg, scene.beats, beatIndex]);
 
 	return (
-		<AbsoluteFill style={{ backgroundColor: "#0b0f19" }}>
+		<AbsoluteFill style={{ backgroundColor: COLOR.foundryInk }}>
 			<SafeZoneContent style={{ justifyContent: "center", alignItems: "center" }}>
 				{html ? (
 					// biome-ignore lint/security/noDangerouslySetInnerHtml: trusted output of mermaid.render plus our own generated <style>, not user HTML

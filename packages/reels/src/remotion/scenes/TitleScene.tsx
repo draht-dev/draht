@@ -1,6 +1,18 @@
 import { AbsoluteFill, interpolate, useCurrentFrame } from "remotion";
 import type { TitleScene as TitleSceneData } from "../../contract.ts";
+import { COLOR, FONT } from "../theme.ts";
 import { SafeZoneContent } from "./SafeZone.tsx";
+
+/** DESIGN.md: "The `.` period is the copper accent" on the `draht.` wordmark — the only place a title's trailing full stop gets picked out in Solder Copper rather than reading as plain punctuation. */
+function TitleText({ title }: { title: string }) {
+	if (!title.endsWith(".") || title.length < 2) return <>{title}</>;
+	return (
+		<>
+			{title.slice(0, -1)}
+			<span style={{ color: COLOR.solderCopper }}>.</span>
+		</>
+	);
+}
 
 export function TitleScene({ scene, beatStartFrames }: { scene: TitleSceneData; beatStartFrames?: number[] }) {
 	const frame = useCurrentFrame();
@@ -17,19 +29,31 @@ export function TitleScene({ scene, beatStartFrames }: { scene: TitleSceneData; 
 		: 1;
 
 	return (
-		<AbsoluteFill style={{ backgroundColor: "#0b0f19" }}>
+		<AbsoluteFill style={{ backgroundColor: COLOR.foundryInk }}>
 			<SafeZoneContent style={{ justifyContent: "center", alignItems: "center", textAlign: "center" }}>
 				<div style={{ opacity }}>
-					<div style={{ color: "#f8fafc", fontSize: 72, fontWeight: 700, lineHeight: 1.2, fontFamily: "sans-serif" }}>
-						{scene.title}
+					<div
+						style={{
+							color: COLOR.workshopPaper,
+							fontSize: 72,
+							fontWeight: 300,
+							fontStyle: "italic",
+							lineHeight: 0.98,
+							letterSpacing: "-0.02em",
+							fontFamily: FONT.serif,
+						}}
+					>
+						<TitleText title={scene.title} />
 					</div>
 					{scene.subtitle ? (
 						<div
 							style={{
-								color: "#94a3b8",
-								fontSize: 36,
+								color: COLOR.weatheredPaper,
+								fontSize: 30,
+								fontWeight: 400,
+								lineHeight: 1.45,
 								marginTop: 24,
-								fontFamily: "sans-serif",
+								fontFamily: FONT.sans,
 								opacity: subtitleOpacity,
 							}}
 						>

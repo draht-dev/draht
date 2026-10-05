@@ -1,5 +1,5 @@
 import { Composition } from "remotion";
-import { ensureCodeFontLoaded } from "./fonts.ts";
+import { ensureFontsLoaded } from "./fonts.ts";
 import {
 	DEFAULT_REEL_PROPS,
 	msToFrames,
@@ -13,11 +13,11 @@ import {
 import { Reel } from "./Reel.tsx";
 
 // Starts loading immediately so delayRender blocks the first frame until the
-// self-hosted font is ready, instead of each scene racing its own load. Safe
+// self-hosted fonts are ready, instead of each scene racing its own load. Safe
 // here because Root.tsx is only evaluated inside the browser bundle, never
 // imported by the Node-side CLI/render code (which imports REEL_COMPOSITION_ID
 // from props.ts instead).
-void ensureCodeFontLoaded();
+void ensureFontsLoaded();
 
 export function RemotionRoot() {
 	return (

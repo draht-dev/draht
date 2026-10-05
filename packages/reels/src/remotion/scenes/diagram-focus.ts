@@ -9,10 +9,12 @@
  */
 
 import type { Beat } from "../../contract.ts";
+import { COLOR } from "../theme.ts";
 
 export const DIMMED_NODE_OPACITY = 0.25;
 export const DIMMED_EDGE_OPACITY = 0.25;
-export const FOCUS_ACCENT = "#38bdf8";
+/** The signal accent for a focused node/edge — Solder Copper, per the Copper Scarcity Rule. */
+export const FOCUS_ACCENT = COLOR.solderCopper;
 
 export interface SvgNode {
 	domId: string;

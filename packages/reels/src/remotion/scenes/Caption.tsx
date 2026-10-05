@@ -12,6 +12,7 @@ import {
 	SAFE_ZONE_WIDTH,
 	SAFE_ZONE_X_MIN,
 } from "../props.ts";
+import { COLOR, FONT } from "../theme.ts";
 import { chunkWords, currentSentence, currentWordIndex, findChunkForWord } from "./caption-logic.ts";
 
 interface CaptionProps {
@@ -26,10 +27,10 @@ interface CaptionProps {
 function WordSpan({ word, state }: { word: TimedWord; state: "spoken" | "current" | "upcoming" }) {
 	const style =
 		state === "current"
-			? { color: "#38bdf8", fontWeight: 800 }
+			? { color: COLOR.solderCopper, fontWeight: 600 }
 			: state === "spoken"
-				? { color: "#f8fafc", fontWeight: 600 }
-				: { color: "#94a3b8", fontWeight: 600 };
+				? { color: COLOR.workshopPaper, fontWeight: 400 }
+				: { color: COLOR.weatheredPaper, fontWeight: 400 };
 	return <span style={style}>{word.text}</span>;
 }
 
@@ -51,11 +52,12 @@ function CaptionBox({ children }: { children: ReactNode }) {
 				style={{
 					maxWidth: "100%",
 					padding: `${CAPTION_PADDING_Y}px ${CAPTION_PADDING_X}px`,
-					borderRadius: 16,
-					backgroundColor: "rgba(0,0,0,0.45)",
+					backgroundColor: COLOR.foundryInk2,
+					border: `1px solid ${COLOR.ruleStrong}`,
 					textAlign: "center",
+					color: COLOR.workshopPaper,
 					fontSize: CAPTION_FONT_SIZE,
-					fontFamily: "sans-serif",
+					fontFamily: FONT.sans,
 					lineHeight: 1.25,
 					overflowWrap: "anywhere",
 					// Last-resort safety net, not the normal path: chunks are already kept inside

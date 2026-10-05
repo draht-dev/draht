@@ -1,13 +1,14 @@
 import { AbsoluteFill, interpolate, useCurrentFrame } from "remotion";
 import type { StatsScene as StatsSceneData } from "../../contract.ts";
+import { COLOR, FONT } from "../theme.ts";
 import { SafeZoneContent } from "./SafeZone.tsx";
-import { CODE_FONT_FAMILY } from "../fonts.ts";
 
+/** Patina for additions, Rust for deletions (see theme.ts); modified/renamed stay neutral so Solder Copper stays reserved for signal, not a status legend. */
 const STATUS_COLOR: Record<StatsSceneData["files"][number]["status"], string> = {
-	added: "#16a34a",
-	modified: "#2563eb",
-	deleted: "#dc2626",
-	renamed: "#9333ea",
+	added: COLOR.patina,
+	modified: COLOR.workshopPaper,
+	deleted: COLOR.rust,
+	renamed: COLOR.oxidizedCopper,
 };
 
 const MAX_ROWS = 8;
@@ -18,9 +19,19 @@ export function StatsScene({ scene }: { scene: StatsSceneData }) {
 	const maxChurn = Math.max(1, ...rows.map((r) => r.additions + r.deletions));
 
 	return (
-		<AbsoluteFill style={{ backgroundColor: "#0b0f19" }}>
+		<AbsoluteFill style={{ backgroundColor: COLOR.foundryInk }}>
 			<SafeZoneContent style={{ justifyContent: "center" }}>
-				<div style={{ color: "#f8fafc", fontSize: 44, fontWeight: 700, marginBottom: 48, fontFamily: "sans-serif" }}>
+				<div
+					style={{
+						color: COLOR.workshopPaper,
+						fontSize: 40,
+						fontWeight: 300,
+						fontStyle: "italic",
+						letterSpacing: "-0.01em",
+						marginBottom: 48,
+						fontFamily: FONT.serif,
+					}}
+				>
 					{scene.files.length} file{scene.files.length === 1 ? "" : "s"} changed
 				</div>
 				{rows.map((file, i) => {
@@ -31,9 +42,9 @@ export function StatsScene({ scene }: { scene: StatsSceneData }) {
 						<div key={file.path} style={{ opacity: reveal, marginBottom: 28 }}>
 							<div
 								style={{
-									color: "#e2e8f0",
-									fontSize: 28,
-									fontFamily: `"${CODE_FONT_FAMILY}", monospace`,
+									color: COLOR.weatheredPaper,
+									fontSize: 26,
+									fontFamily: FONT.mono,
 									marginBottom: 6,
 									whiteSpace: "nowrap",
 									overflow: "hidden",
@@ -42,13 +53,12 @@ export function StatsScene({ scene }: { scene: StatsSceneData }) {
 							>
 								{file.path}
 							</div>
-							<div style={{ height: 14, background: "#1e293b", borderRadius: 7, overflow: "hidden" }}>
+							<div style={{ height: 10, background: COLOR.foundryInk2, border: `1px solid ${COLOR.rule}` }}>
 								<div
 									style={{
 										height: "100%",
 										width: `${widthPct}%`,
 										background: STATUS_COLOR[file.status],
-										borderRadius: 7,
 									}}
 								/>
 							</div>

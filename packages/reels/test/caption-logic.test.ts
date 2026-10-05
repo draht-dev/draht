@@ -14,70 +14,66 @@ function words(...texts: string[]): TimedWord[] {
 	return texts.map((text, i) => ({ text, startMs: i * 100, endMs: (i + 1) * 100 }));
 }
 
+function chunkLength(chunk: TimedWord[]): number {
+	return chunk.reduce((sum, w, i) => sum + w.text.length + (i > 0 ? 1 : 0), 0);
+}
+
+function flatten(chunks: TimedWord[][]): string[] {
+	return chunks.flatMap((c) => c.map((w) => w.text));
+}
+
 describe("chunkWords", () => {
-	test("breaks at a max of 7 words", () => {
-		const chunks = chunkWords(words("one", "two", "three", "four", "five", "six", "seven", "eight"));
-		expect(chunks.map((c) => c.map((w) => w.text))).toEqual([
-			["one", "two", "three", "four", "five", "six", "seven"],
-			["eight"],
-		]);
+	// Regression: the root cause of captions cutting off after ~1 line — a sentence that
+	// comfortably fits the caption's 2 lines must be shown whole, not pre-emptively split
+	// once it crosses an arbitrary word count.
+	test("keeps a sentence that fits the character budget as a single chunk, however many words it has", () => {
+		const text = "This release tightens install security and sharpens review logic.";
+		expect(text.length).toBeLessThanOrEqual(CAPTION_CHAR_BUDGET);
+		const chunks = chunkWords(words(...text.split(" ")));
+		expect(chunks).toHaveLength(1);
+		expect(chunks[0]).toHaveLength(text.split(" ").length);
 	});
 
-	test("prefers breaking after punctuation once a chunk has a few words", () => {
-		const chunks = chunkWords(words("Draht's", "judge", "queue,", "nobody", "used", "it."));
-		expect(chunks.map((c) => c.map((w) => w.text))).toEqual([
-			["Draht's", "judge", "queue,"],
-			["nobody", "used", "it."],
-		]);
-	});
-
-	test("does not break on a clause comma before the minimum chunk size, but still breaks on a sentence end regardless of chunk size", () => {
-		const chunks = chunkWords(words("Wait,", "really?", "yes", "it", "does"));
-		expect(chunks.map((c) => c.map((w) => w.text))).toEqual([
-			["Wait,", "really?"],
-			["yes", "it", "does"],
-		]);
-	});
-
-	test("never lets a chunk run a sentence boundary through its middle, even well under the max chunk size", () => {
-		const chunks = chunkWords(
-			words("the", "test", "was", "a", "rubber", "stamp.", "An", "assertion", "failure", "is", "a", "real", "red,"),
-		);
-		expect(chunks.map((c) => c.map((w) => w.text))).toEqual([
-			["the", "test", "was", "a", "rubber", "stamp."],
-			["An", "assertion", "failure", "is", "a", "real", "red,"],
-		]);
-	});
-
-	test("breaks after a sentence end followed by a closing quote or paren", () => {
-		const chunks = chunkWords(words("He", "said", '"done."', "Then", "left."));
-		expect(chunks.map((c) => c.map((w) => w.text))).toEqual([
-			["He", "said", '"done."'],
-			["Then", "left."],
-		]);
-	});
-
-	// Regression: a run of words with no sentence/clause punctuation and under
-	// the max word count must still break once it would overflow the caption's character
-	// budget, or a long enough chunk would overflow the caption box at render time.
-	test("breaks on the character budget even with no punctuation and under the max word count", () => {
+	test("splits a sentence that overflows the character budget into multiple chunks, each within budget", () => {
 		const longWords = Array.from({ length: 7 }, (_, i) => `disestablishmentarianism${i}`);
 		const chunks = chunkWords(words(...longWords));
 		expect(chunks.length).toBeGreaterThan(1);
-		for (const chunk of chunks) {
-			const length = chunk.reduce((sum, w, i) => sum + w.text.length + (i > 0 ? 1 : 0), 0);
-			expect(length).toBeLessThanOrEqual(CAPTION_CHAR_BUDGET);
-		}
+		for (const chunk of chunks) expect(chunkLength(chunk)).toBeLessThanOrEqual(CAPTION_CHAR_BUDGET);
 	});
 
 	test("every chunk from a long, mostly unpunctuated narration stays within the character budget", () => {
 		const narration =
 			"Draht's judge queue used to ask a human to re approve decisions the agent had already made before anyone noticed the pattern";
 		const chunks = chunkWords(words(...narration.split(" ")));
-		for (const chunk of chunks) {
-			const length = chunk.reduce((sum, w, i) => sum + w.text.length + (i > 0 ? 1 : 0), 0);
-			expect(length).toBeLessThanOrEqual(CAPTION_CHAR_BUDGET);
+		for (const chunk of chunks) expect(chunkLength(chunk)).toBeLessThanOrEqual(CAPTION_CHAR_BUDGET);
+	});
+
+	test("never loses or duplicates a word when splitting", () => {
+		const narration =
+			"Draht's judge queue used to ask a human to re approve decisions the agent had already made before anyone noticed the pattern.";
+		const input = words(...narration.split(" "));
+		const chunks = chunkWords(input);
+		expect(flatten(chunks)).toEqual(input.map((w) => w.text));
+	});
+
+	test("never runs a sentence boundary through the middle of a chunk", () => {
+		const firstSentence =
+			"The same probabilistic process that gets code wrong also wrote the check that should catch it.";
+		const secondSentence = "A test written by an agent is a claim, not proof.";
+		const firstSentenceWordCount = firstSentence.split(" ").length;
+		const chunks = chunkWords(words(...firstSentence.split(" "), ...secondSentence.split(" ")));
+
+		let cumulative = 0;
+		let boundaryChunkIndex = -1;
+		for (let i = 0; i < chunks.length; i++) {
+			cumulative += chunks[i].length;
+			if (cumulative >= firstSentenceWordCount) {
+				boundaryChunkIndex = i;
+				break;
+			}
 		}
+		expect(cumulative).toBe(firstSentenceWordCount);
+		expect(boundaryChunkIndex).toBeGreaterThanOrEqual(0);
 	});
 
 	test("a single word longer than the budget still gets its own chunk, never an empty one", () => {
@@ -85,6 +81,97 @@ describe("chunkWords", () => {
 		const chunks = chunkWords(words(hugeWord, "ok"));
 		expect(chunks.every((c) => c.length > 0)).toBe(true);
 		expect(chunks[0].map((w) => w.text)).toEqual([hugeWord]);
+	});
+
+	test("prefers splitting at a clause boundary over an arbitrary midpoint when a sentence must split", () => {
+		const text =
+			"SHA-256-bound release evidence over the exact installer source, the review command template's step now escalates a critical finding.";
+		const chunks = chunkWords(words(...text.split(" ")));
+		expect(chunks.length).toBeGreaterThan(1);
+		expect(chunks[0][chunks[0].length - 1].text.endsWith(",")).toBe(true);
+	});
+
+	test("avoids a 1-2 word orphan chunk when a more balanced split is available", () => {
+		const text =
+			"Atomic token-directory lock ownership, destructive-boundary target revalidation, and release artifact signature verification all landed together.";
+		const chunks = chunkWords(words(...text.split(" ")));
+		for (const chunk of chunks) expect(chunk.length).toBeGreaterThanOrEqual(3);
+	});
+
+	// Real narration from a drafted release reel (release-v2026.9.5-1), copied verbatim from
+	// /tmp/reels-accept2/drafts/draht-mono/release-v2026.9.5-1/entry.json's transcript. Longer
+	// than the old MAX_CHUNK_WORDS=7 cap, which used to cut it after about one line.
+	test("real drafted narration: every chunk fits budget and no sentence is cut after ~1 line when it fits 2", () => {
+		const scenes: TimedWord[][] = [
+			words(
+				"This",
+				"release",
+				"tightens",
+				"install",
+				"security",
+				"and",
+				"sharpens",
+				"the",
+				"coding",
+				"agent's",
+				"review",
+				"and",
+				"verification",
+				"logic.",
+			),
+			words(
+				"This",
+				"release",
+				"also",
+				"folds",
+				"in",
+				"two",
+				"upstream-sync",
+				"merges,",
+				"integrating",
+				"7",
+				"and",
+				"14",
+				"commits",
+				"of",
+				"remaining",
+				"upstream",
+				"work",
+				"into",
+				"main.",
+			),
+			words(
+				"That's",
+				"the",
+				"overview",
+				"—",
+				"stronger",
+				"install",
+				"safeguards",
+				"and",
+				"a",
+				"more",
+				"rigorous",
+				"coding",
+				"agent,",
+				"all",
+				"in",
+				"this",
+				"release.",
+			),
+		];
+		for (const sceneWords of scenes) {
+			const chunks = chunkWords(sceneWords);
+			expect(flatten(chunks)).toEqual(sceneWords.map((w) => w.text));
+			for (const chunk of chunks) expect(chunkLength(chunk)).toBeLessThanOrEqual(CAPTION_CHAR_BUDGET);
+			const wholeLength = chunkLength(sceneWords);
+			if (wholeLength <= CAPTION_CHAR_BUDGET) {
+				expect(chunks).toHaveLength(1);
+			} else {
+				// Still reads as whole phrases, not a lone 1-2 word fragment stranded at the end.
+				for (const chunk of chunks) expect(chunk.length).toBeGreaterThanOrEqual(2);
+			}
+		}
 	});
 });
 
@@ -95,8 +182,8 @@ describe("currentWordIndex", () => {
 		expect(currentWordIndex(w, 150)).toBe(1);
 	});
 
-	// Regression: before the first word's startMs there is nothing to show yet
-	// (not "the first word already spoken") — the caller treats -1 as "render nothing".
+	// Regression: before the first word's startMs there is nothing to show yet (not "the
+	// first word already spoken") — the caller treats -1 as "render nothing".
 	test("returns -1 before the first word starts", () => {
 		expect(currentWordIndex(w, -50)).toBe(-1);
 	});
@@ -112,9 +199,11 @@ describe("currentWordIndex", () => {
 
 describe("findChunkForWord", () => {
 	test("finds the chunk and in-chunk position for a word spanning a chunk boundary", () => {
-		const chunks = chunkWords(words("one", "two", "three", "four", "five", "six", "seven", "eight", "nine"));
-		const found = findChunkForWord(chunks, 7);
-		expect(found?.chunk.map((w) => w.text)).toEqual(["eight", "nine"]);
+		const longWords = Array.from({ length: 3 }, (_, i) => `disestablishmentarianism${i}`);
+		const chunks = chunkWords(words(...longWords));
+		expect(chunks.length).toBeGreaterThan(1);
+		const found = findChunkForWord(chunks, 2);
+		expect(found?.chunk.map((w) => w.text)).toEqual([longWords[2]]);
 		expect(found?.indexInChunk).toBe(0);
 	});
 });

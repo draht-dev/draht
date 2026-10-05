@@ -7,6 +7,7 @@ import { OutroScene } from "./scenes/OutroScene.tsx";
 import { StatsScene } from "./scenes/StatsScene.tsx";
 import { TitleScene } from "./scenes/TitleScene.tsx";
 import { type ReelFrameProps, REEL_FPS, msToFrames } from "./props.ts";
+import { COLOR } from "./theme.ts";
 
 /** `segment.beatStartsMs` (reel-absolute) converted to scene-relative frame numbers, parallel to `scene.beats`. */
 function beatStartFramesFor(segment: TranscriptSegment | undefined): number[] | undefined {
@@ -30,7 +31,7 @@ function renderScene(scene: Scene, beatStartFrames: number[] | undefined) {
 
 export function Reel({ scenes, transcript, audioSrc }: ReelFrameProps) {
 	return (
-		<AbsoluteFill style={{ backgroundColor: "#0b0f19" }}>
+		<AbsoluteFill style={{ backgroundColor: COLOR.foundryInk }}>
 			{audioSrc ? <Audio src={audioSrc} /> : null}
 			{scenes.map((scene, index) => {
 				const segment = transcript.find((t) => t.sceneIndex === index);

@@ -9,19 +9,356 @@ It turns a repo's git history into short narrated "reels" (vertical
 1080x1920 video, optional ElevenLabs narration) and writes a `feed.json` per
 repo for a small PWA (`app/`, built separately) to browse them like a feed.
 
-## Privacy warning
+## What it is
+
+The default unit is a **story**, not a commit: one reel per feature, release,
+or upstream sync, not one reel per commit. A story's arc is the same whether
+it was written by a human or an LLM:
+
+1. **Hook** — what changed, in one line.
+2. **What** — the code, shown verbatim.
+3. **Why**/**effect** — why it was done, or what changed for someone, each
+   claim tied to a cited source (a commit, a PR, a changelog line) or the one
+   fixed "no source says" sentence (see "Evidence rule and validation").
+4. Optionally a **deep dive**: a longer second reel with more scenes, for
+   stories the writer judges worth it.
+
+A release also gets a **release overview** reel (every story in the release,
+plus any weakly-attributed changelog entries that did not get their own
+reel) and, when the release carries upstream-sourced work, an **upstream
+recap** reel. See "Units" below for what distinguishes each kind.
+
+## Quick start
+
+Prerequisites:
+
+- [Bun](https://bun.sh).
+- An ElevenLabs key, unless running with `--tts none` (see "TTS and video").
+- An LLM provider key for `--model <provider/id>` (`--unit story`, the
+  default, always needs a model — see "Owner decision" under "The publish
+  gate").
+
+Draft, review, approve:
+
+```sh
+bun run src/cli.ts build --repo <path> --out ./reels-site --model anthropic/claude-sonnet-5
+bun run src/cli.ts review --repo <path> --out ./reels-site
+bun run src/cli.ts review --repo <path> --out ./reels-site <id>
+bun run src/cli.ts approve --repo <path> --out ./reels-site <id>
+```
+
+`build` only ever writes drafts, under `--drafts-dir`
+(`<repo>/.reels-drafts` by default) — never the public feed. `review` lists
+pending drafts, or prints one draft's `review.md` for human sign-off.
+`approve` moves an approved draft's media and feed entry into `--out`;
+`reject` discards one instead.
+
+Open the PWA by running `site` once approvals exist, then serving `--out`
+with any static file server:
+
+```sh
+npm run build:app
+bun run src/cli.ts site --out ./reels-site
+npx serve ./reels-site
+```
+
+## Units
+
+`--unit story` (default) drafts four kinds of reel, keyed by how a story's
+evidence is anchored:
+
+- **PR-anchored** (`origin: "pr"`): a merged feature branch whose head sha
+  resolves to a GitHub PR. Strong attribution by construction — the PR body
+  and its commits are the evidence.
+- **Branch-anchored** (`origin: "branch"`): a merged feature branch with no
+  resolvable PR. Same evidence shape as a PR story, just without the PR body.
+- **Changelog-anchored** (`origin: "commit"`): one changelog entry (an
+  Added/Changed/Fixed/Removed line under a release section) that names
+  direct-to-mainline work. The commit that added the changelog line is
+  rarely the commit that did the work, so the pipeline extracts identifiers
+  from the entry text (backticked tokens, `/commands`, `--flags`, env vars,
+  symbols, file paths) and searches for them with `git log -S`/`-G` across
+  the release range. Finding an implementing commit this way makes the story
+  **strong**-attributed; falling back to the changelog commit itself makes it
+  **weak**-attributed. `story.minAttribution` (default `"strong"`) decides
+  whether weak stories get their own reel or are folded into the release
+  overview instead — see `src/reels-config.ts`.
+- **Release overview** (`kind: "release"`) and **upstream recap**
+  (`kind: "recap"`): synthesized from a release's own stories, its weakly-
+  attributed changelog entries, and (for the recap) its upstream-sync merges
+  and `upstream:`-prefixed commits. Neither belongs to a single commit.
+
+`--unit commit` is the legacy, per-commit path: one reel per change set
+(a mainline commit, with its merged-branch commits folded in), template or
+LLM narration, no stories, no drafts, no publish gate. Kept for repos that
+do not want release/story structure. `--unit story` is the default for
+`build`, `plan`, and `release`.
+
+## The publish gate
+
+LLM-written reels can be wrong, or can be steered: commit messages and PR
+bodies are attacker-controlled text that an LLM reads as part of its prompt,
+so a crafted commit body is prompt-injection material, not just metadata.
+`build` never writes directly to the public feed — it writes a draft under
+`--drafts-dir`, with `entry.json` (the would-be feed entry), `script.json`
+(the writer's internal notes and every source it was given, kept out of the
+public feed), and `review.md`.
+
+`review.md` is the human approval view: every scene, every beat, and for
+each cited claim the exact source excerpt the beat is supposed to match,
+plus a checklist ("every claim matches its cited source's text", "no
+injected or promotional text", "nothing private"). A validator (see "Evidence
+rule and validation") already rejects an uncited claim before the draft is
+written; `review.md` exists for the kind of failure a validator cannot
+catch — a plausible-sounding, correctly-cited sentence that is still wrong,
+or narration that reads like an instruction because the source text it
+quotes was written to look like one. That is why a human reviews every
+LLM-written reel before it publishes: `approve <id>` or `reject <id>
+[--reason <text>]` is the only way a draft reaches `--out`. Template/legacy
+(`--unit commit`) reels go through the same gate for consistency.
+
+## Commands and flags
+
+```sh
+bun run src/cli.ts build --repo <path> --out <dir> [options]
+bun run src/cli.ts release [<tag>…] --model <provider/id> [options]
+bun run src/cli.ts plan --repo <path> [options]
+bun run src/cli.ts review [<id>] [--repo <path>] [--out <dir>] [--drafts-dir <dir>] [--config <path>]
+bun run src/cli.ts approve <id>… [--repo <path>] [--out <dir>] [--drafts-dir <dir>] [--config <path>]
+bun run src/cli.ts reject <id>… [--reason <text>] [--repo <path>] [--out <dir>] [--drafts-dir <dir>] [--config <path>]
+bun run src/cli.ts site --out <dir>
+bun run src/cli.ts prune --repo <path> --out <dir> [--name <name>] [--ref <ref>]
+```
+
+`build` options:
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--repo <path>` | cwd | git repo to read |
+| `--name <name>` | basename of `--repo` | repo display name / feed slug; must match `/^[A-Za-z0-9][A-Za-z0-9._-]*$/` |
+| `--out <dir>` | `./reels-site` | output site directory (the public feed) |
+| `--drafts-dir <dir>` | `<repo>/.reels-drafts`, or `build.draftsDir` in `.reels.json` | where `--unit story` drafts live; refused if nested inside `--out` |
+| `--config <path>` | `<repo>/.reels.json` if present, else built-in defaults | path to `.reels.json` |
+| `--ref <ref>` | `HEAD` | git ref to walk |
+| `--since <date>` | — | only commits authored since this **date** (`--unit commit` only; passed straight to `git rev-list --since`, not a ref/sha) |
+| `--until <date>` | — | only commits authored until this date, same caveat as `--since` |
+| `--limit <n>` | `10` | cap how many stories/change sets to draft or render this run; must be a positive integer |
+| `--all-history` | off | ignore the floor and the scan window and consider every unpublished/undrafted unit, oldest first; `--limit` is uncapped unless given explicitly |
+| `--scan <n>` | `500` | how many first-parent commits (or releases, for `--unit story`) back from `--ref` to consider; must be a positive integer |
+| `--force` | off | retry units that hit the retry cap (3 failed attempts), and regenerate a pending draft in place; published/approved reels are never re-rendered |
+| `--mode visual\|audio\|both` | `both` | `audio` skips Remotion rendering entirely |
+| `--tts elevenlabs\|none` | `elevenlabs` | narration provider |
+| `--unit commit\|story` | `story` | selection and writer path (see "Units") |
+| `--writer template\|llm` | `template` | `--unit commit` only: script writer |
+| `--model <provider/id>` | — | required for `--unit story` (always) and `--unit commit --writer llm`, e.g. `anthropic/claude-sonnet-5` |
+| `--lang en\|de` | `en` | narration language |
+| `--repo-url <url>` | — | linked in the feed for commit URLs; omitting it on a later run keeps the previously stored value |
+| `--voice <id>` | `$DRAHT_SPEAK_VOICE_ID` or George | ElevenLabs voice id |
+| `--tts-model <id>` | `eleven_flash_v2_5` (`--unit commit`) / `eleven_v4` (`--unit story`) | ElevenLabs model id |
+| `--concurrency <n>` | Remotion default | render concurrency; must be a positive integer |
+| `--exclude <glob>` (repeatable) | — | additional path(s) whose content is withheld, on top of the default deny-list |
+| `--include <glob>` (repeatable) | — | path(s) exempted from the deny-list (default or `--exclude`) |
+| `--tag-pattern <regex>` | `.reels.json`'s `tagPattern` (`^v`) | `--unit story` only: overrides which tags mark a release |
+| `--deep-dive auto\|always\|never` | `auto` | `--unit story` only: whether a story also gets a deep-dive reel |
+| `--max-cost-usd <n>` | `.reels.json`'s `build.maxCostUsd` (5) | `--unit story` only: per-run LLM USD cap |
+| `--max-llm-tokens <n>` | `.reels.json`'s `build.maxLlmTokens` (2,000,000) | `--unit story` only: per-run LLM token cap |
+| `--max-tts-chars <n>` | `.reels.json`'s `build.maxTtsChars` (50,000) | per-run ElevenLabs character cap |
+
+Unknown flags, missing flag values, and invalid enum/integer values are
+rejected with a clear error before anything runs.
+
+Other commands:
+
+- `release [<tag>…]` — drafts the release overview and upstream recap for
+  the given tags (every non-tiny release in the scan when none are given),
+  without re-drafting stories. Run it after approving a release's stories,
+  to draft the overview over what is now approved. Requires `--model`;
+  shares `build`'s flags.
+- `plan` — `--unit story` (default): a read-only dry run of story
+  selection, printed as a readable report or, with `--json`, the raw
+  `StoryPlan`. Never calls TTS, Remotion, or the LLM. `--unit commit`: prints
+  the selected change sets and scripts as JSON, calling the writer but not
+  TTS/Remotion — use it to inspect cost before spending ElevenLabs characters
+  or render time.
+- `review [<id>]` — without an id, lists pending drafts (id, title,
+  release, created, writer); with one, prints that draft's `review.md`.
+- `approve <id>…` — publishes one or more drafts: media and feed entry into
+  `--out`, release playlist updated, draft removed. Idempotent — approving
+  an id with no pending draft is a no-op.
+- `reject <id>… [--reason <text>]` — deletes the draft(s) and records the
+  rejection, so a later `build` skips them unless `--force`.
+- `site` — copies the built PWA (`npm run build:app` output, `app/dist`)
+  into `--out` without touching `feed.json`/`repos.json`.
+- `prune --repo <path> --out <dir> [--name <name>] [--ref <ref>]` — removes
+  feed entries (and their media) no longer reachable from `--ref` — the tool
+  for retracting reels after a force-push. See "Privacy" for its limits.
+
+### Incremental range semantics
+
+Re-running `build` reads the existing feed and drafts state first. It never
+re-renders a published/approved unit and never retries one that hit the
+retry cap (3 failed attempts), unless `--force`:
+
+- **A published/approved unit is in the scan window**: the floor is the
+  oldest published unit in the window. Candidates are the unpublished,
+  undrafted, uncapped units newer than the floor, and the oldest `--limit`
+  (default 10) are drafted/rendered this run.
+- **No published unit is in the window** (first run, or history rewritten
+  past the window): only the newest `--limit` units are drafted/rendered.
+  Older history is never backfilled. Run `prune` to remove entries that are
+  no longer reachable.
+- **`--all-history`**: ignores the floor and the window; every unpublished,
+  uncapped unit, oldest first, bounded only by an explicit `--limit`.
+- **`--force`**: bypasses the retry cap, and regenerates a pending draft in
+  place. Published/approved units are never re-rendered.
+- During bootstrap, a unit that fails while newer ones in the same batch
+  succeed falls below the new floor and is not retried. Use `--all-history`
+  to pick it up.
+
+Metadata and diffs are fetched only for the selected units, so a run stays
+cheap in a large repository.
+
+## Configuration reference
+
+`.reels.json` at the repo root (or `--config <path>`). Unknown keys are
+rejected, so a config written against a newer README does not silently
+no-op on an older build. Every key is optional; omitted keys take the
+default shown.
+
+```json
+{
+  "tagPattern": "^v",
+  "historyFloor": "<sha or tag>",
+  "overrides": {},
+  "upstream": {
+    "subjectPatterns": ["sync upstream", "upstream[- ]sync"],
+    "markerPaths": [],
+    "foreignAuthorRatio": 0.6
+  },
+  "story": {
+    "directCommitTypes": ["feat"],
+    "maxBranchCommits": 150,
+    "minAttribution": "strong",
+    "model": "anthropic/claude-sonnet-5",
+    "skipTypes": ["chore", "ci", "build", "deps", "style", "test", "release"],
+    "skipAuthors": ["dependabot[bot]", "renovate[bot]", "github-actions[bot]", "*[bot]"]
+  },
+  "docs": {
+    "allow": ["README.md", "**/README.md", "docs/**", "**/CHANGELOG.md"],
+    "deny": [],
+    "maxChunks": 8
+  },
+  "code": { "exclude": [], "include": [] },
+  "prose": { "denyPatterns": [] },
+  "build": { "maxCostUsd": 5, "maxLlmTokens": 2000000, "maxTtsChars": 50000 }
+}
+```
+
+- `tagPattern` — regex (anchored, case-sensitive unless the string embeds
+  flags) matched against tag names to find releases.
+- `historyFloor` — a tag or sha that stops the walk; history before it
+  never yields stories or syncs. Mandatory in practice for a long-lived
+  repo: without it, `--all-history` walks every commit ever made.
+- `overrides` — `{ "<sha>": "skip" | "feature" | "upstream-sync" |
+  "back-merge" | "branch-sync" }`, for the rare merge the automatic
+  classifier gets wrong.
+- `upstream.subjectPatterns` — case-insensitive regexes matched against a
+  merge subject to classify it as an upstream sync.
+- `upstream.markerPaths` — paths that, when touched by a merge's diff, also
+  mark it as an upstream sync.
+- `upstream.foreignAuthorRatio` — share (0–1) of foreign-author branch
+  commits (of at least 20 sampled) that marks a merge as an upstream sync.
+- `story.directCommitTypes` — conventional-commit types that make a direct
+  mainline commit eligible as its own story.
+- `story.maxBranchCommits` — branch commit count above which a non-sync
+  merge counts as "oversized" rather than a normal feature merge.
+- `story.minAttribution` — `"strong"` (default) or `"weak"`: the minimum
+  attribution confidence a changelog-anchored story needs to get its own
+  reel. Branch/PR stories are always eligible regardless of this setting.
+- `story.model` — default `--model` for `--unit story`, used when `--model`
+  is not passed on the command line.
+- `story.skipTypes` — conventional-commit types excluded from story
+  candidacy outright (housekeeping that is never worth narrating). Default:
+  `["chore", "ci", "build", "deps", "style", "test", "release"]`.
+- `story.skipAuthors` — author names/logins excluded from story candidacy
+  (bot commits). Default: `["dependabot[bot]", "renovate[bot]",
+  "github-actions[bot]", "*[bot]"]` (`*[bot]` matches any `name[bot]`
+  pattern).
+- `docs.allow` / `docs.deny` — glob allowlist/denylist for prose the story
+  writer may read as context. `.planning/**` is deliberately absent from the
+  default allowlist: a repo must explicitly allowlist specific `.planning/`
+  paths to make them readable (see "Privacy"). `deny` always extends the
+  built-in deny list; it can never un-deny a default entry by omission.
+  `docs.maxChunks` caps how many ranked doc chunks a story's context keeps.
+- `code.exclude` / `code.include` — additional code deny/allow globs, on top
+  of `src/privacy.ts`'s built-in deny-list; also applied to doc paths.
+- `prose.denyPatterns` — regexes matched against narration/titles/captions;
+  a match rejects that text (customer names, internal codenames).
+- `build.maxCostUsd`, `build.maxLlmTokens`, `build.maxTtsChars` — per-run
+  spend caps for `--unit story` (`--max-cost-usd`/`--max-llm-tokens`/
+  `--max-tts-chars` override them per run). A run stops starting new
+  stories the moment any cap is reached; stories already drafted are kept.
+  `build.draftsDir` overrides the default `<repo>/.reels-drafts` location.
+
+A regex string anywhere in this config is checked for balanced syntax and a
+conservative nested-quantifier shape before use (`ReelsConfigError` on
+failure) — defense in depth, not a guarantee against every slow pattern;
+repo maintainers are a trusted but not infinitely careful input.
+
+In CI, the config path should be controlled by the runner, not by the
+commit being processed: `examples/github-actions.yml` checks out
+`.github/reels.json` from the repository's default branch in a separate
+step, before the build step ever looks at the triggering ref, so a crafted
+commit can never smuggle in a different `.reels.json`.
+
+## Evidence rule and validation
+
+Every line of code a reel shows is copied verbatim from the real git diff
+or, for a deep dive, from the file at `HEAD`. Every diagram node and edge
+comes from changed file paths. The writer — template or LLM — only chooses
+which hunks and files to show and writes narration text; it cannot invent
+code or structure that was not actually committed (see `src/contract.ts`
+for the full data contract).
+
+For `--unit story`, `src/story-validate.ts` enforces more before a draft is
+ever written:
+
+- Every "why" and "effect" beat must cite a source id from the registry and
+  include a verbatim quote (4–25 words, or at least 20 characters for
+  code-like text) that actually occurs in that source's text and shares a
+  real word with the beat.
+- A "what"/"how" beat inside a code or diagram scene must share a real word
+  or identifier with the shown code lines, or name one of the diagram's own
+  node labels; outside a code/diagram scene it is held to the same cite-and-
+  quote rule as "why"/"effect".
+- The one exception: when no source explains the reason, the beat's text
+  must be exactly the fixed sentence "The commits do not record why." (or,
+  for `--lang de`, "Die Commits dokumentieren den Grund nicht.") and nothing
+  else — no cites, no quote. A true claim with a hedge tacked onto it is not
+  exempt and is rejected the same as an invented one.
+- Captions, edge labels, headings, the summary, and theme names all go
+  through prose cleanup and `prose.denyPatterns` before they reach a scene.
+
+A failed validation falls back to the template writer rather than publishing
+an invalid draft; `review.md` still shows the human reviewer exactly what
+was cited and quoted, for the class of error a validator cannot catch (see
+"The publish gate").
+
+## Privacy
 
 `build` prints a one-line warning every run: its output is public-facing.
 
-Code is never rewritten: a shown line is copied byte-for-byte from the
-diff, or its whole hunk is withheld (see `src/privacy.ts`):
+Code is never rewritten: a shown line is copied byte-for-byte from the diff
+or the file at `HEAD`, or its whole hunk/file is withheld (see
+`src/privacy.ts`):
 
 - **Path deny-list**: files matching `DEFAULT_DENY_GLOBS` (`.env`,
   `.env.*`, `.envrc`, `.npmrc`, `.netrc`, `*.pem`, `*.key`, `id_rsa*`,
   cloud credential files, Kubernetes and Docker config, Terraform state, and
   more) have every hunk withheld, including the old path of a rename. Only
   the path and line-count stats show. Extend or narrow the list with
-  repeatable `--exclude <glob>` / `--include <glob>`.
+  repeatable `--exclude <glob>` / `--include <glob>`, or `code.exclude` /
+  `code.include` in `.reels.json`.
 - **Secret-shaped hunks**: a hunk is withheld when its header or any line
   looks like a secret: AWS, GitHub, OpenAI, Anthropic, Stripe, Google, or
   Slack tokens, PEM private keys, Bearer tokens, credentials in URLs, or a
@@ -29,15 +366,29 @@ diff, or its whole hunk is withheld (see `src/privacy.ts`):
   Withheld hunks never reach a code scene, the LLM prompt, or `feed.json`.
 - **Prose fields** (commit title, body, author names, narration) are not
   code, so a matched secret token in them is replaced with `[redacted]`.
+- **`.planning/**`** is excluded from the story writer's doc context by
+  default, even though `docs.allow` otherwise covers `docs/**`. A repo must
+  explicitly allowlist specific `.planning/` paths to make them readable;
+  `.planning/CONTINUE-HERE.md`, `.planning/DECISIONS-PENDING.md`,
+  `.planning/STATE.md`, `.planning/execution-log.jsonl`, and
+  `.planning/quick/**` stay denied even then (`docs.deny` only ever extends
+  that list, never replaces it).
 
 Neither exception is a substitute for not committing secrets in the first
-place, and the deny-list and secret patterns are best-effort, not exhaustive.
+place, and the deny-list and secret patterns are best-effort, not
+exhaustive.
 
 Publishing the generated site makes the surviving diffs publicly readable.
 **GitHub Pages sites are publicly readable on most plans, even for private
 repositories.** Do not use this on private code unless Pages access is
 restricted to your org (GitHub Enterprise Cloud) or you deploy the output
 somewhere access-controlled instead of plain GitHub Pages.
+
+Drafts carry the same risk one step earlier: `examples/github-actions.yml`
+uploads pending drafts to a `reels-drafts` branch/artifact for human review,
+separately from the public `reels-site` branch and never copied into the
+Pages artifact — but a `reels-drafts` branch on a public repo is itself
+publicly readable the moment it exists, same as any other branch.
 
 If a reel should never have been published (e.g. after a force-push rewrote
 history, or a secret slipped past redaction), run `draht-reels prune` to
@@ -50,41 +401,141 @@ GitHub may keep unreachable git objects and CDN-cached pages around for a
 while after a force-push, and anyone who already loaded the page has it.
 Prune (plus the orphan force-push) is retraction, not erasure.
 
-## Evidence rule
+## Cost
 
-Every line of code a reel shows is copied verbatim from the real git diff.
-Every diagram node and edge comes from changed file paths. The script writer
-— template or LLM — only chooses which hunks to show and writes narration
-text; it cannot invent code or structure that was not actually committed. See
-`src/contract.ts` for the full data contract.
+Three independent per-run caps apply to `--unit story`: `--max-cost-usd`
+(LLM USD), `--max-llm-tokens` (LLM tokens), and `--max-tts-chars` (ElevenLabs
+characters). A run stops starting new stories, release overviews, and
+recaps the moment any cap is reached; a story already finished and rendered
+is kept, never discarded for a later cap hit.
 
-## How it works
+Model choice: `--model` has no built-in default for `--unit story` — pass
+one explicitly, or set `story.model` in `.reels.json`. TTS defaults to
+`eleven_v4` for story/release/recap reels and `eleven_flash_v2_5` for legacy
+`--unit commit` reels (`--tts-model` overrides either).
 
-```
-collect (git) -> script (narration + hunk picks) -> tts (ElevenLabs|none)
-  -> render (Remotion) -> publish (feed.json, media, repos.json)
-```
+Real runs during development: a story script (one LLM call, occasionally
+one repair call) cost about $0.03–$0.11 with `claude-sonnet-5` and heavy
+prompt caching; a release overview plus its upstream recap together cost
+about $0.03. Actual cost depends on repo size, provider, and cache hit rate
+— treat these as a rough order of magnitude, not a quote.
 
-- `collect.ts` — lists commit shas with `git rev-list` (validated against a
-  strict sha regex before any further use — see "Security" below), folds
-  merge commits and their branch commits into one change set, parses unified
-  diffs.
-- `privacy.ts` — path deny-list, secret-shaped hunk withholding, and prose redaction (see "Privacy warning").
-- `diagram.ts` — deterministic Mermaid diagram of changed directories/files.
-- `script.ts` — `templateWriter` (no network, deterministic) or `llmWriter`
-  (calls an `@draht/ai` model; validates and rejects any hunk reference that
-  does not exist in the real diff).
-- `tts.ts` — `elevenLabsProvider` or `silentProvider` (duration estimated
-  from word count, no audio). ElevenLabs scene timing comes from the real
-  MP3 length (`mp3.ts` walks the frame headers), so captions stay in sync
-  with the concatenated audio.
-- `render.ts` — bundles and renders the Remotion composition to MP4 + a
-  poster JPEG.
-- `state.ts` — `<out>/<name>/.reels-state.json` sidecar tracking failed
-  reels and attempt counts, so one bad commit does not stall every later run.
-- `publish.ts` — merges new reels into `feed.json`/`repos.json` idempotently
-  by reel id (atomic writes: temp file + rename), and copies the built PWA
-  into the output site.
+## TTS and video
+
+- ElevenLabs key: `$ELEVENLABS_API_KEY`, or failing that
+  `~/.draht/keys/elevenlabs.key` (a file holding only the key, mode 600 —
+  the same file the `speak` helper reads). The key file keeps the key out of
+  shell environments and agent transcripts. `--tts none` renders silent
+  reels with estimated scene durations instead.
+- `ffmpeg` on `PATH` is optional: used to concatenate per-scene narration
+  MP3s. Falls back to raw MP3 concatenation (valid for same-format CBR MP3s,
+  which is what ElevenLabs returns per voice/model) when absent.
+- Remotion downloads a headless Chrome shell on first render
+  (`node_modules/.remotion/`). On NixOS or other non-FHS Linux, Chrome needs
+  `libnspr4.so`/`libnss3.so`/`libexpat.so.1` available on `LD_LIBRARY_PATH`
+  (e.g. via `nix-shell -p nspr nss expat`).
+- Remotion is free for individuals and companies up to 3 people. Larger
+  companies need a Remotion company license — see
+  <https://www.remotion.dev/license>. This package does not grant you a
+  license; check your own usage against Remotion's terms.
+- `--unit story` additionally requires `@draht/ai` to be built (`dist/`,
+  not just `src/`): run `npm run build` in `packages/ai` first. The
+  provider's API key must be set for that provider's auth convention (e.g.
+  `ANTHROPIC_API_KEY`).
+
+## The PWA
+
+`app/` is a small PWA built separately (`npm run build:app`, output
+`app/dist`) and copied into `--out` by `site`. It reads `repos.json` and
+each repo's `feed.json`:
+
+- **Playlists**: a release's stories, overview, and recap grouped under one
+  tag, in the order `feed.reels` already keeps.
+- **Deep dives**: a story with a deep-dive reel shows a rail button that
+  swaps the active card's media for the deep dive, in place, without
+  leaving the feed.
+- **Sources**: a rail button opens the public source list `toPublicSources`
+  attached to the entry (the redacted, public-safe view of what the writer
+  cited — not the full `script.json` snapshot kept with the draft).
+- **Audio mode**: a rail toggle switches a card between the rendered video
+  and audio-only playback (using the same narration/transcript either way).
+
+## CI
+
+`examples/github-actions.yml` (copy into `.github/workflows/reels.yml` in
+your own repo) and `examples/run-anywhere.sh` (a minimal generic runner for
+cron or other CI) live under `examples/`, not `.github/`, so they never run
+in this repo. `node scripts/check-github-actions-security.mjs` (run from the
+worktree root) only scans `.github/workflows/`, so it does not lint
+`examples/github-actions.yml`; review it by hand before using it.
+
+`@draht/reels` is private and depends on `@draht/ai: workspace:*`, which
+only resolves inside the draht-mono workspace — you cannot vendor just
+`packages/reels/` into another repo and `bun install` it. The example
+workflow instead checks out the public `draht-dev/draht` monorepo at a
+pinned commit into `.draht/`, installs its workspace there, and runs the CLI
+from inside it.
+
+Job graph (four jobs, minimal `permissions` per job):
+
+- **`build`** (`contents: read`, push-triggered or a `workflow_dispatch`
+  with no `approve`/`reject` input) — installs `.draht`, builds `@draht/ai`,
+  optionally runs `prune`, then `build --unit story`, and uploads two
+  artifacts regardless of its own exit code (`if: !cancelled()`): the full
+  site (for `push`) and the drafts directory (for `push`, and for human
+  review via the artifact download). A failed story still leaves every
+  already-drafted story saved.
+- **`publish`** (`contents: read`, a `workflow_dispatch` with `approve`
+  and/or `reject` set) — needs neither API key: it only runs `approve`/
+  `reject` against drafts already rendered by an earlier `build`, then
+  re-uploads the updated site/drafts artifacts.
+- **`push`** (`contents: write`, the only job with it) — downloads the site
+  and drafts artifacts, force-pushes each to its own branch (`reels-site`,
+  `reels-drafts`) as a single orphan commit.
+- **`deploy`** (`pages: write`, `id-token: write`) — deploys the Pages-only
+  artifact `build` or `publish` already uploaded (`.reels-state.json`
+  excluded — see "Privacy" and "Partial success" below).
+- **`finalize`** — runs last regardless of the other jobs' outcome and fails
+  the workflow run if `build`'s render step recorded a non-zero exit code,
+  even though `push`/`deploy` already published whatever did succeed.
+
+`workflow_dispatch` inputs: `backfill` (render full history instead of just
+new releases/commits), `prune` (run `draht-reels prune` first), `model`/
+`max_cost_usd`/`max_llm_tokens`/`max_tts_chars` (override `build`'s
+defaults), and `approve`/`reject` (space-separated draft ids — setting
+either skips the build step entirely and runs the `publish` job instead).
+
+### Partial success
+
+`build` exits non-zero when any story failed to draft, but it saves every
+story that *did* draft (and was already paid for via ElevenLabs/the LLM)
+to the drafts artifact before exiting. `push`/`deploy` still run as long as
+a site was produced, so a later failure in the same run never discards an
+earlier, already-rendered story. The overall workflow run still ends up red
+(via `finalize`) so failures are not silently swallowed.
+`examples/run-anywhere.sh` follows the same pattern and exits with
+`build`'s status.
+
+## Troubleshooting
+
+- **`--tts elevenlabs needs an ElevenLabs key`** — set `$ELEVENLABS_API_KEY`
+  or write the key to `~/.draht/keys/elevenlabs.key` (mode 600), or pass
+  `--tts none`.
+- **`requires @draht/ai to be built first`** — run `npm run build` in
+  `packages/ai` (and `packages/telemetry`, its own dependency) before
+  `--unit story` or `--writer llm`.
+- **`--unit story needs a model`** — pass `--model <provider/id>`, or set
+  `story.model` in `.reels.json`.
+- **`refusing --drafts-dir ... inside --out ...`** — drafts must live
+  outside the public feed directory; point `--drafts-dir` elsewhere.
+- **No commits found on ref** — the repo has no history reachable from
+  `--ref`; make at least one commit first.
+- **A draft never shows up in `review`** — check it was not already
+  rejected (`state.rejected`, shown by `review`'s id listing only once
+  resolved); `--force` re-selects a rejected or capped unit.
+- **A unit keeps failing and gets skipped** — after 3 failed attempts a
+  unit is capped and skipped with a warning; `--force` retries it. Published
+  and approved units are never re-rendered, `--force` or not.
 
 ## Security
 
@@ -99,81 +550,8 @@ collect (git) -> script (narration + hunk picks) -> tts (ElevenLabs|none)
 
 ## Requirements
 
-- [Bun](https://bun.sh) to run the CLI and tests.
-- `ffmpeg` on `PATH` is optional: used to concatenate per-scene narration
-  MP3s. Falls back to raw MP3 concatenation (valid for same-format CBR MP3s,
-  which is what ElevenLabs returns per voice/model) when absent.
-- Remotion downloads a headless Chrome shell on first render
-  (`node_modules/.remotion/`). On NixOS or other non-FHS Linux, Chrome needs
-  `libnspr4.so`/`libnss3.so`/`libexpat.so.1` available on `LD_LIBRARY_PATH`
-  (e.g. via `nix-shell -p nspr nss expat`).
-- An ElevenLabs key for narration (`--tts elevenlabs`, the default), from
-  `$ELEVENLABS_API_KEY` or, failing that, `~/.draht/keys/elevenlabs.key` (a
-  file holding only the key, mode 600; the same file the `speak` helper
-  reads). The key file keeps the key out of shell environments and agent
-  transcripts. Use `--tts none` to render silent reels with estimated scene
-  durations.
-- `--writer llm` additionally requires `@draht/ai` to be built (`dist/`,
-  not just `src/`) and `--model <provider/id>`; the provider's API key must
-  be set in the environment for that provider's auth convention (e.g.
-  `ANTHROPIC_API_KEY`). The example GitHub Actions workflow only builds
-  `@draht/ai` and injects the key when the `writer` input is `llm`.
-
-## Remotion licensing
-
-Remotion is free for individuals and companies up to 3 people. Larger
-companies need a Remotion company license — see
-<https://www.remotion.dev/license>. This package does not grant you a
-license; check your own usage against Remotion's terms.
-
-## CLI usage
-
-```sh
-bun run src/cli.ts build --repo <path> --out <dir> [options]
-bun run src/cli.ts site --out <dir>
-bun run src/cli.ts plan --repo <path> [options]
-bun run src/cli.ts prune --repo <path> --out <dir> [--name <name>] [--ref <ref>]
-```
-
-`build` options:
-
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `--repo <path>` | cwd | git repo to read |
-| `--name <name>` | basename of `--repo` | repo display name / feed slug; must match `/^[A-Za-z0-9][A-Za-z0-9._-]*$/` |
-| `--out <dir>` | `./reels-site` | output site directory |
-| `--ref <ref>` | `HEAD` | git ref to walk |
-| `--since <date>` | — | only commits authored since this **date** (passed straight to `git rev-list --since`; it does not accept a ref/sha — use `--ref`, or a `<sha>..<ref>` value for `--ref` itself, for that) |
-| `--until <date>` | — | only commits authored until this date, same caveat as `--since` |
-| `--limit <n>` | `10` | cap how many change sets to render this run (see range semantics below); must be a positive integer |
-| `--all-history` | off | ignore the floor and the scan window and consider every unpublished first-parent change set, oldest first; `--limit` is uncapped unless given explicitly |
-| `--scan <n>` | `500` | how many first-parent commits back from `--ref` to consider; must be a positive integer |
-| `--force` | off | retry commits that hit the retry cap (3 failed attempts); published reels are never re-rendered |
-| `--mode visual\|audio\|both` | `both` | `audio` skips Remotion rendering entirely |
-| `--tts elevenlabs\|none` | `elevenlabs` | narration provider |
-| `--voice <id>` | `$DRAHT_SPEAK_VOICE_ID` or George | ElevenLabs voice id |
-| `--tts-model <id>` | `eleven_flash_v2_5` | ElevenLabs model id |
-| `--writer template\|llm` | `template` | script writer |
-| `--model <provider/id>` | — | required for `--writer llm`, e.g. `anthropic/claude-sonnet-5` |
-| `--lang en\|de` | `en` | template narration language |
-| `--repo-url <url>` | — | linked in the feed for commit URLs; omitting it on a later run keeps the previously stored value |
-| `--concurrency <n>` | Remotion default | render concurrency; must be a positive integer |
-| `--exclude <glob>` (repeatable) | — | additional path(s) whose content is withheld, on top of the default deny-list |
-| `--include <glob>` (repeatable) | — | path(s) exempted from the deny-list (default or `--exclude`) |
-
-Unknown flags, missing flag values, and invalid enum/integer values are
-rejected with a clear error before anything runs.
-
-`plan` takes the same collection/writer flags and prints the change sets and
-scripts as JSON without calling TTS or Remotion — use it to inspect cost
-before spending ElevenLabs characters or render time.
-
-`site` copies the built PWA (`npm run build:app` output, `app/dist`) into
-`--out` without touching `feed.json`/`repos.json`.
-
-`prune` removes feed entries (and their media directories) no longer
-reachable from `--ref`'s first-parent history — the tool for retracting
-reels after a force-push. See "Privacy warning" for its limits.
+See "TTS and video" for ElevenLabs/Remotion/ffmpeg requirements, and "Cost"
+for `--unit story`'s model requirement.
 
 ## Output layout
 
@@ -181,133 +559,18 @@ reels after a force-push. See "Privacy warning" for its limits.
 <out>/
   repos.json               # RepoIndex: all repos published to this site
   <repo-name>/
-    feed.json               # Feed: reels, newest first
-    reels/<shortsha>/
+    feed.json               # Feed: reels and playlists, newest first
+    reels/<id>/
       video.mp4              # absent in audio mode
       audio.mp3               # absent when --tts none
       poster.jpg              # absent in audio mode
+      deep/                   # a story's deep-dive media, same layout, if rendered
   index.html, assets/...    # the built PWA, from `site`
 ```
 
-### Incremental range semantics
-
-Re-running `build` reads the existing `feed.json` and `.reels-state.json`
-first. It never re-renders a published change set and never retries one that
-hit the retry cap (3 failed attempts), unless `--force`. Selection comes from
-one bounded `git rev-list --first-parent` scan of `--ref` (`--scan`
-commits, default 500), in git order, never by author date:
-
-- **A published commit is in the scan window**: the floor is the oldest
-  published commit in the window. Candidates are the unpublished, uncapped
-  commits newer than the floor, and the oldest `--limit` (default 10) render
-  this run. A burst drains in order over successive runs, and a commit that
-  failed between two published ones is retried on later runs until it
-  succeeds or hits the cap.
-- **No published commit is in the window** (first run, or history rewritten
-  past the window): only the newest `--limit` commits render. Older history
-  is never backfilled. Run `prune` to remove entries that are no longer
-  reachable.
-- **`--all-history`**: ignores the floor and the window; every unpublished,
-  uncapped first-parent change set, oldest first, bounded only by an explicit
-  `--limit`.
-- **`--force`**: bypasses the retry cap, so capped commits become
-  candidates again. Published commits are never re-rendered.
-- During bootstrap, a commit that fails while newer ones in the same batch
-  succeed falls below the new floor and is not retried. Use
-  `--all-history` to pick it up.
-- `--since` and `--until` filter by date on top of any mode.
-
-Metadata and diffs are fetched only for the selected commits, so a run stays
-cheap in a large repository.
-
-## CI usage
-
-See `examples/github-actions.yml` for a GitHub Actions workflow and
-`examples/run-anywhere.sh` for a minimal generic runner for cron or other CI.
-Both live under `examples/`, not `.github/`, so they never run in this repo.
-`node scripts/check-github-actions-security.mjs` (run from the worktree
-root) only scans `.github/workflows/`, so it does not lint
-`examples/github-actions.yml`; review it by hand before using it.
-
-`@draht/reels` is private and depends on `@draht/ai: workspace:*`, which
-only resolves inside the draht-mono workspace — you cannot vendor just
-`packages/reels/` into another repo and `bun install` it. The example
-workflow instead checks out the public `draht-dev/draht` monorepo at a
-pinned commit into `.draht/`, installs its workspace there, and runs the CLI
-from inside it.
-
-The rendered site (feed.json, videos, audio) is committed to a `reels-site`
-branch of your own repo, not `actions/cache` — a cache entry can be evicted
-after 7 days unused or once the repo's cache storage cap is reached, which
-would silently drop history that `draht-reels build` has no other record
-of. Because `build` also skips already-published change sets and caps a
-normal run at `--limit 10`, even a lost `reels-site` branch only costs a
-bounded re-bootstrap (the newest 10 reels), never a runaway re-render of
-(and re-paid-for-via-ElevenLabs) the entire history.
-
-Unlike a normal branch, `reels-site` is force-pushed as a single **orphan**
-commit every run — no commit history, just the current feed/media. That's
-what makes `draht-reels prune` an effective retraction: a normal commit
-history would keep every previously-published diff and media file reachable
-forever, even after `prune` removed it from `feed.json`. See "Privacy
-warning" for what the orphan force-push does and does not guarantee.
-
-`.reels-state.json` (per-repo render state, including recent error strings)
-is kept in the `reels-site` branch so runs stay incremental, but it is
-deliberately **not** included in the artifact uploaded to GitHub Pages —
-the workflow copies the site into a separate directory with that file
-excluded before calling `actions/upload-pages-artifact`, so error text never
-ends up on the public page.
-
-### Job graph and permissions
-
-The example workflow splits into four jobs so that only the job that
-actually needs to push has `contents: write`:
-
-- **`build`** (`contents: read` only, `persist-credentials: false` on every
-  checkout) — installs `.draht`, optionally builds `@draht/ai` for
-  `--writer llm`, runs `prune` (if requested) and `build`, then uploads two
-  artifacts: the full site (with state, for `push`) and a Pages-only copy
-  (without state, for `deploy`). `build` keeps publishing/uploading even if
-  some reels failed to render (`if: ${{ !cancelled() }}` on the publish
-  steps) — see "Partial success" below — but its render step still records
-  and ultimately re-raises the real exit code.
-- **`push`** (`contents: write`, the only job with it) — downloads the full
-  site artifact, force-pushes it to `reels-site` as a single orphan commit.
-  Its checkout is the only one with `persist-credentials: true`, so the
-  token lives in git's config, not in a shell argument.
-- **`deploy`** (`pages: write`, `id-token: write`) — deploys the Pages-only
-  artifact `build` already uploaded.
-- **`finalize`** — runs last regardless of the other jobs' outcome and fails
-  the workflow run if `build`'s render step recorded a non-zero exit code,
-  even though `push`/`deploy` already published whatever did succeed.
-
-`build` also fetches the previous `reels-site` branch (read-only, via
-`actions/checkout` with `persist-credentials: false`) so incremental range
-selection and `prune` see the existing feed; a missing branch (first run) is
-detected with `git ls-remote --exit-code` and is not treated as an error.
-
-### Partial success
-
-`build` exits non-zero when any reel failed to render, but it publishes
-every reel that *did* render (feed entry, video, audio) before exiting —
-see `state.ts`. The workflow is built around that: the `push` and `deploy`
-jobs run even when `build`'s render step failed, as long as a site was
-actually produced, so reels that were already rendered (and, for
-ElevenLabs/LLM reels, already paid for) are never thrown away because a
-later reel in the same run failed. The overall workflow run still ends up
-red (via the `finalize` job) so failures aren't silently swallowed.
-`examples/run-anywhere.sh` follows the same pattern: it always runs `site`
-after `build`, then exits with `build`'s status.
-
-### Optional inputs (`workflow_dispatch`)
-
-- `backfill` — render the full history instead of just new commits.
-- `prune` — run `draht-reels prune` before building, to drop feed entries no
-  longer reachable from `HEAD` (e.g. after a force-push).
-- `writer` / `model` — `--writer llm` plus `--model <provider/id>`; builds
-  `@draht/ai` first (see "Requirements") and only exposes the provider's API
-  key secret to the render step.
+Drafts under `--drafts-dir/<repo-name>/<id>/` carry the same media plus
+`entry.json`, `script.json`, and `review.md`, until `approve` moves the
+media/`entry.json` into `<out>` and deletes the rest.
 
 ## Testing
 

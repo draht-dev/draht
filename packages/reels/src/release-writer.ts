@@ -151,6 +151,11 @@ function validateBeat(
 	if (text.length === 0) {
 		errors.push({ path, rule: "beats", detail: "beat text must not be empty" });
 	}
+	// An ellipsis in spoken narration almost always means a model quoted or restated a truncated
+	// display title (e.g. `deriveShortTitle`'s "…") verbatim instead of finishing the thought.
+	if (text.includes("…")) {
+		errors.push({ path, rule: "prose", detail: "beat text contains a truncation ellipsis (…)" });
+	}
 	if (wordCount(text) > MAX_BEAT_WORDS || text.length > MAX_BEAT_CHARS) {
 		errors.push({
 			path,
@@ -349,15 +354,52 @@ export function weakFeatureRef(index: number): string {
 
 /** At most this many weak features are ever shown to the model; a real release's weak list can run into the dozens, mostly the same change restated across package changelogs. */
 export const MAX_WEAK_FEATURES = 10;
-/** Two weak feature titles are near-duplicates when one's normalized token set covers at least this fraction of the other's. */
+/** Two weak features are near-duplicates when their full normalized token sets overlap this much (same change restated nearly verbatim). */
 const WEAK_FEATURE_DUP_COVERAGE = 0.8;
+/** Two weak features are still near-duplicates when only their *significant* tokens (connector words stripped) overlap this much — catches two model-list entries that share most of the same list items but differ in surrounding prose or list length (fix round: `selectWeakFeatures`' consumer saw two near-identical "new model support" lines survive as separate beats). */
+const WEAK_FEATURE_SIGNIFICANT_DUP_COVERAGE = 0.6;
 
-function weakFeatureTokenSet(title: string): Set<string> {
-	const normalized = title
+/** Filler words stripped before the {@link WEAK_FEATURE_SIGNIFICANT_DUP_COVERAGE} comparison: common connectors and the generic nouns changelog prose wraps a list in ("model support", "now the ... default"), which otherwise dilute two lines that list the same items. */
+const WEAK_FEATURE_DUP_STOPWORDS: ReadonlySet<string> = new Set([
+	"a",
+	"an",
+	"and",
+	"are",
+	"as",
+	"at",
+	"by",
+	"for",
+	"from",
+	"in",
+	"instead",
+	"is",
+	"it",
+	"model",
+	"models",
+	"new",
+	"now",
+	"of",
+	"on",
+	"or",
+	"support",
+	"that",
+	"the",
+	"this",
+	"to",
+	"with",
+]);
+
+function weakFeatureTokenSet(text: string): Set<string> {
+	const normalized = text
 		.toLowerCase()
 		.replace(/`/g, "")
 		.replace(/[^\p{L}\p{N}\s]+/gu, " ");
 	return new Set(normalized.split(/\s+/).filter(Boolean));
+}
+
+function significantTokenSet(tokens: ReadonlySet<string>): Set<string> {
+	const filtered = new Set([...tokens].filter((t) => t.length > 1 && !WEAK_FEATURE_DUP_STOPWORDS.has(t)));
+	return filtered.size > 0 ? filtered : new Set(tokens);
 }
 
 function tokenCoverage(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
@@ -367,17 +409,62 @@ function tokenCoverage(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
 	return Math.max(shared / a.size, shared / b.size);
 }
 
-/** Drops a weak feature whose (normalized, backtick/punctuation-stripped) title is a near-duplicate of one already kept — the same change described slightly differently across package changelogs. Keeps the first occurrence of each duplicate cluster, in input order. */
+interface WeakFeatureTokens {
+	candidate: WeakFeatureInput;
+	all: Set<string>;
+	significant: Set<string>;
+}
+
+function isNearDuplicate(a: WeakFeatureTokens, b: WeakFeatureTokens): boolean {
+	return (
+		tokenCoverage(a.all, b.all) >= WEAK_FEATURE_DUP_COVERAGE ||
+		tokenCoverage(a.significant, b.significant) >= WEAK_FEATURE_SIGNIFICANT_DUP_COVERAGE
+	);
+}
+
+/** Raw anchor-text length, used only to rank an already-deduplicated list (see {@link selectWeakFeatures}). */
+function textInformativeness(candidate: WeakFeatureInput): number {
+	return candidate.anchorText.length;
+}
+
+/**
+ * More distinct significant (non-markup, non-filler) tokens means more
+ * actual content — e.g. a changelog line naming six models over one naming
+ * four — so this, not raw character count, decides which of a duplicate
+ * pair survives: raw length would favor a noisier restatement (stray
+ * backticks, punctuation) of the exact same content over a cleaner one.
+ */
+function tokenInformativeness(entry: WeakFeatureTokens): number {
+	return entry.significant.size;
+}
+
+/**
+ * Drops a weak feature whose (normalized, backtick/punctuation-stripped)
+ * full changelog text is a near-duplicate of one already kept — the same
+ * change described slightly differently across package changelogs, or the
+ * same list of items (e.g. new model support) restated with a different
+ * subset or trailing prose. Keeps one slot per duplicate cluster at its
+ * first-seen input position, but fills that slot with whichever candidate
+ * in the cluster is strictly more informative (see {@link
+ * tokenInformativeness}); ties keep the first-seen candidate.
+ */
 function dedupeWeakFeatures(candidates: readonly WeakFeatureInput[]): WeakFeatureInput[] {
-	const kept: WeakFeatureInput[] = [];
-	const keptTokens: ReadonlySet<string>[] = [];
+	const kept: WeakFeatureTokens[] = [];
 	for (const candidate of candidates) {
-		const tokens = weakFeatureTokenSet(candidate.title);
-		if (keptTokens.some((other) => tokenCoverage(tokens, other) >= WEAK_FEATURE_DUP_COVERAGE)) continue;
-		kept.push(candidate);
-		keptTokens.push(tokens);
+		const all = weakFeatureTokenSet(candidate.anchorText);
+		const significant = significantTokenSet(all);
+		const entry: WeakFeatureTokens = { candidate, all, significant };
+		const dupIndex = kept.findIndex((other) => isNearDuplicate(entry, other));
+		if (dupIndex === -1) {
+			kept.push(entry);
+			continue;
+		}
+		const existing = kept[dupIndex];
+		if (existing && tokenInformativeness(entry) > tokenInformativeness(existing)) {
+			kept[dupIndex] = entry;
+		}
 	}
-	return kept;
+	return kept.map((entry) => entry.candidate);
 }
 
 export interface WeakFeatureSelection {
@@ -391,7 +478,7 @@ export interface WeakFeatureSelection {
  * entry often gets restated with slightly different wording across package
  * changelogs), then caps the result at `cap`, ranked by changelog section
  * significance (Breaking > Added > Changed > Fixed > Removed) and then by
- * title length. The cut remainder is only ever surfaced as a count.
+ * source text length. The cut remainder is only ever surfaced as a count.
  */
 export function selectWeakFeatures(
 	candidates: readonly WeakFeatureInput[],
@@ -399,13 +486,66 @@ export function selectWeakFeatures(
 ): WeakFeatureSelection {
 	const deduped = dedupeWeakFeatures(candidates);
 	const ranked = [...deduped].sort(
-		(a, b) => sectionRank(a.section) - sectionRank(b.section) || b.title.length - a.title.length,
+		(a, b) => sectionRank(a.section) - sectionRank(b.section) || textInformativeness(b) - textInformativeness(a),
 	);
 	return { kept: ranked.slice(0, cap), remainderCount: Math.max(0, ranked.length - cap) };
 }
 
 function weakFeaturesRemainderBeat(count: number): Beat {
 	return templateBeat(`And ${count} more smaller change${count === 1 ? "" : "s"}.`);
+}
+
+/** Natural clause boundaries {@link shortenToClauseBoundary} is allowed to cut a too-long weak-feature narration at — never mid-word, and never with an added "…" (fix round: the short display title's `deriveShortTitle` truncation leaked into spoken narration and ran beats together without punctuation). */
+const NARRATION_CLAUSE_BOUNDARIES = [". ", "; ", " — ", " ("];
+
+function clauseBoundaryIndices(text: string): number[] {
+	const indices: number[] = [];
+	for (const delimiter of NARRATION_CLAUSE_BOUNDARIES) {
+		let from = 0;
+		for (;;) {
+			const idx = text.indexOf(delimiter, from);
+			if (idx === -1) break;
+			if (idx > 0) indices.push(idx);
+			from = idx + delimiter.length;
+		}
+	}
+	return indices;
+}
+
+/** Shortens `text` to end at the latest natural clause boundary at or before `maxChars`, never with an ellipsis. Returns the full text unshortened when it already fits or no boundary is found short enough. */
+function shortenToClauseBoundary(text: string, maxChars: number): string {
+	if (text.length <= maxChars) return text;
+	const candidates = clauseBoundaryIndices(text).filter((i) => i <= maxChars);
+	if (candidates.length === 0) return text;
+	return text.slice(0, Math.max(...candidates)).trimEnd();
+}
+
+/** Strips markdown that reads badly aloud (backticks, `*`/`_` emphasis, `[text](url)` links collapsed to their text) while keeping every word. */
+function stripMarkdownForSpeech(text: string): string {
+	return text.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/[`*_]/g, "");
+}
+
+/** Turns already-clause-bounded text into one complete spoken sentence: capitalized, trailing connector punctuation dropped, and ended with a period (unless it already ends `!`/`?`). */
+function toSpokenSentence(text: string): string {
+	const stripped = stripMarkdownForSpeech(text).trim();
+	if (stripped.length === 0) return stripped;
+	const withoutTrailingConnectors = stripped.replace(/[\s.;,:\-–—(]+$/u, "");
+	const base = withoutTrailingConnectors.length > 0 ? withoutTrailingConnectors : stripped;
+	const capitalized = base.charAt(0).toUpperCase() + base.slice(1);
+	return /[.!?]$/.test(capitalized) ? capitalized : `${capitalized}.`;
+}
+
+/**
+ * The spoken beat text for one weak feature: the full (redacted) changelog
+ * text, shortened to a complete clause when it is too long for a beat
+ * rather than truncated with "…" (fix round — `deriveShortTitle`'s
+ * ellipsis-truncated display title used to be read aloud verbatim, running
+ * beats together with no terminal punctuation). Markdown is stripped for
+ * speech; the result is always one capitalized, period-terminated sentence.
+ */
+function weakFeatureNarrationText(anchorText: string): string {
+	const shortened = shortenToClauseBoundary(cleanProse(anchorText), MAX_BEAT_CHARS);
+	return toSpokenSentence(shortened);
 }
 
 function releaseGhrSourceId(tag: string): string {
@@ -643,8 +783,9 @@ export function validateReleaseOverview(
 				errors.push({ path, rule: "citations", detail: "quote does not occur in the anchor text" });
 				return;
 			}
-			// The pipeline renders the real title itself; the model never writes it.
-			weakBeats.push({ text: cleanProse(feature.title), cites: [feature.changelogSourceId] });
+			// The pipeline renders the real narration itself, from the full anchor text, never the model's
+			// words and never the short display title (which may be ellipsis-truncated).
+			weakBeats.push({ text: weakFeatureNarrationText(feature.anchorText), cites: [feature.changelogSourceId] });
 		});
 		for (const mention of raw.weak) {
 			if (!seenRefs.has(mention.ref)) {
@@ -709,7 +850,7 @@ export function templateReleaseOverview(input: ReleaseOverviewInput, themes: rea
 		);
 	}
 	if (input.weakFeatures.length > 0) {
-		const weakBeats = input.weakFeatures.map((w) => templateBeat(w.title));
+		const weakBeats = input.weakFeatures.map((w) => templateBeat(weakFeatureNarrationText(w.anchorText)));
 		if (input.weakFeaturesRemainderCount) weakBeats.push(weakFeaturesRemainderBeat(input.weakFeaturesRemainderCount));
 		scenes.push(sceneOf("overview", "Also shipped", weakBeats));
 	}

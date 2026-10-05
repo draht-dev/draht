@@ -75,6 +75,8 @@ const WEAK_FEATURE = {
 	anchorText: "tweak the profile grid spacing for small screens",
 	changelogSourceId: "cl:tui@2026.10.4-1#3",
 };
+/** The spoken beat text the pipeline renders for {@link WEAK_FEATURE}: its full anchor text (never the short title), capitalized and period-terminated. */
+const WEAK_FEATURE_NARRATION = "Tweak the profile grid spacing for small screens.";
 
 function releaseInput(overrides: Partial<ReleaseOverviewInput> = {}): ReleaseOverviewInput {
 	return {
@@ -111,15 +113,15 @@ describe("computeReleaseThemes", () => {
 });
 
 describe("selectWeakFeatures", () => {
-	test("drops a near-duplicate title whose token set is covered >= 80% by one already kept", () => {
+	test("drops a near-duplicate whose full anchor text token set is covered >= 80% by one already kept", () => {
 		const a: WeakFeatureInput = {
 			title: "Show draht logo on OAuth callback pages",
-			anchorText: "x",
+			anchorText: "Show draht logo on OAuth callback pages",
 			changelogSourceId: "cl:ai@v1#0",
 		};
 		const b: WeakFeatureInput = {
 			title: "show the `draht` logo on oauth callback pages!",
-			anchorText: "y",
+			anchorText: "show the `draht` logo on oauth callback pages!",
 			changelogSourceId: "cl:ai@v1#1",
 		};
 		const result = selectWeakFeatures([a, b]);
@@ -128,27 +130,64 @@ describe("selectWeakFeatures", () => {
 		expect(result.remainderCount).toBe(0);
 	});
 
-	test("keeps two titles that share only a minority of tokens", () => {
-		const a: WeakFeatureInput = { title: "tweak the profile grid spacing", anchorText: "x", changelogSourceId: "0" };
-		const b: WeakFeatureInput = { title: "add retry on 429 responses", anchorText: "y", changelogSourceId: "1" };
+	test("keeps two entries whose anchor text shares only a minority of tokens", () => {
+		const a: WeakFeatureInput = {
+			title: "tweak the profile grid spacing",
+			anchorText: "tweak the profile grid spacing",
+			changelogSourceId: "0",
+		};
+		const b: WeakFeatureInput = {
+			title: "add retry on 429 responses",
+			anchorText: "add retry on 429 responses",
+			changelogSourceId: "1",
+		};
 		const result = selectWeakFeatures([a, b]);
 		expect(result.kept).toHaveLength(2);
 		expect(result.remainderCount).toBe(0);
 	});
 
-	test("caps at `cap`, ranking Breaking > Added > Changed > Fixed > Removed then by title length, and reports the rest as a count", () => {
+	test("near-duplicate model-list entries collapse into one, keeping the more informative (longer) line", () => {
+		// Real paid-render finding: two changelog lines independently list new model support for the same
+		// release, one a strict subset of the other's models plus different wrapping prose. Neither reaches
+		// the 80% full-token-set bar (too much non-shared prose), but both are the same announcement.
+		const shorter: WeakFeatureInput = {
+			title: "GPT-6 Astra, GPT-6 Sol, GPT-6 Luna, and GPT-6.1 Sol (now the Codex default) model support",
+			anchorText: "GPT-6 Astra, GPT-6 Sol, GPT-6 Luna, and GPT-6.1 Sol (now the Codex default) model support",
+			changelogSourceId: "cl:agent@v2026.10.4-1#5",
+		};
+		const longer: WeakFeatureInput = {
+			title: "GPT-6 Astra, GPT-6 Sol, GPT-6 Luna, GPT-6.1 Sol, Claude Opus 5.5, Claude Sonnet 5.5,…",
+			anchorText:
+				"GPT-6 Astra, GPT-6 Sol, GPT-6 Luna, GPT-6.1 Sol, Claude Opus 5.5, and Claude Sonnet 5.5 all landed as new model support this release.",
+			changelogSourceId: "cl:agent@v2026.10.4-1#1",
+		};
+		const result = selectWeakFeatures([shorter, longer]);
+		expect(result.kept).toHaveLength(1);
+		expect(result.kept[0]?.changelogSourceId).toBe("cl:agent@v2026.10.4-1#1");
+	});
+
+	test("caps at `cap`, ranking Breaking > Added > Changed > Fixed > Removed then by anchor text length, and reports the rest as a count", () => {
 		const candidates: WeakFeatureInput[] = [
-			{ title: "a fixed thing", anchorText: "x", changelogSourceId: "f0", section: "Fixed" },
-			{ title: "a somewhat longer added thing here", anchorText: "x", changelogSourceId: "a0", section: "Added" },
+			{ title: "a fixed thing", anchorText: "a fixed thing", changelogSourceId: "f0", section: "Fixed" },
+			{
+				title: "a somewhat longer added thing here",
+				anchorText: "a somewhat longer added thing here",
+				changelogSourceId: "a0",
+				section: "Added",
+			},
 			{
 				title: "a breaking change of some kind",
-				anchorText: "x",
+				anchorText: "a breaking change of some kind",
 				changelogSourceId: "b0",
 				section: "Breaking Changes",
 			},
-			{ title: "a changed thing", anchorText: "x", changelogSourceId: "c0", section: "Changed" },
-			{ title: "a removed thing", anchorText: "x", changelogSourceId: "r0", section: "Removed" },
-			{ title: "an unranked thing with no section at all here", anchorText: "x", changelogSourceId: "u0" },
+			{ title: "a changed thing", anchorText: "a changed thing", changelogSourceId: "c0", section: "Changed" },
+			{ title: "a removed thing", anchorText: "a removed thing", changelogSourceId: "r0", section: "Removed" },
+			{
+				title: "an unranked thing with no section at all here",
+				anchorText: "an unranked thing with no section at all here",
+				changelogSourceId: "u0",
+			},
 		];
 		const result = selectWeakFeatures(candidates, 3);
 		expect(result.kept.map((w) => w.changelogSourceId)).toEqual(["b0", "a0", "c0"]);
@@ -175,7 +214,7 @@ describe("selectWeakFeatures", () => {
 		];
 		const candidates: WeakFeatureInput[] = topics.map((topic, i) => ({
 			title: `improve the ${topic}`,
-			anchorText: "x",
+			anchorText: `improve the ${topic}`,
 			changelogSourceId: `w${i}`,
 		}));
 		const result = selectWeakFeatures(candidates);
@@ -310,8 +349,9 @@ describe("validateReleaseOverview", () => {
 		);
 		expect(accepted.errors).toEqual([]);
 		const weakScene = accepted.script?.scenes.find((s) => s.section === "overview");
-		// The pipeline wrote the beat text itself: it equals the real title verbatim, never model prose.
-		expect(weakScene?.beats?.[0]).toEqual({ text: WEAK_FEATURE.title, cites: [WEAK_FEATURE.changelogSourceId] });
+		// The pipeline wrote the beat text itself: it narrates the full anchor text as one sentence, never
+		// model prose and never the short, possibly-ellipsis-truncated display title.
+		expect(weakScene?.beats?.[0]).toEqual({ text: WEAK_FEATURE_NARRATION, cites: [WEAK_FEATURE.changelogSourceId] });
 	});
 
 	test("appends a deterministic, uncited remainder beat after the model's grounded weak mentions", () => {
@@ -390,6 +430,89 @@ describe("validateReleaseOverview", () => {
 		);
 		expect(result.errors).toEqual([]);
 	});
+
+	// Regression for a real paid render (release-v2026.10.4-1): the "Also shipped" scene narrated weak
+	// features as their ellipsis-truncated short titles, read back-to-back with no terminal punctuation,
+	// and backticks were spoken verbatim.
+	describe("regression: weak feature narration is a complete, markdown-free sentence (release-v2026.10.4-1)", () => {
+		const momCredentials: WeakFeatureInput = {
+			title: "mom's Anthropic credentials now live at `~/.draht/mom/auth.json` instead of…",
+			anchorText:
+				"mom's Anthropic credentials now live at `~/.draht/mom/auth.json` instead of `~/.pi/mom/auth.json`",
+			changelogSourceId: "cl:mom@v2026.10.4-1#8",
+		};
+		const nativeClipboard: WeakFeatureInput = {
+			title: "native clipboard module, replacing the `@mariozechner/clipboard` dependency",
+			anchorText: "native clipboard module, replacing the `@mariozechner/clipboard` dependency",
+			changelogSourceId: "cl:agent@v2026.10.4-1#7",
+		};
+
+		test("the template writer narrates each beat as its own capitalized, period-terminated, backtick-free sentence", () => {
+			const input = releaseInput({ weakFeatures: [momCredentials, nativeClipboard] });
+			const script = templateReleaseOverview(input, computeReleaseThemes(input.stories));
+			const also = script.scenes.find((s) => s.kind === "title" && s.title === "Also shipped");
+			expect(also?.beats?.map((b) => b.text)).toEqual([
+				"Mom's Anthropic credentials now live at ~/.draht/mom/auth.json instead of ~/.pi/mom/auth.json.",
+				"Native clipboard module, replacing the @mariozechner/clipboard dependency.",
+			]);
+			// No beat carries a display-title truncation ellipsis into narration.
+			expect(also?.beats?.every((b) => !b.text.includes("…"))).toBe(true);
+			// Every beat is its own complete sentence, so concatenated narration never runs two beats together.
+			expect(also?.narration).toBe(
+				"Mom's Anthropic credentials now live at ~/.draht/mom/auth.json instead of ~/.pi/mom/auth.json. Native clipboard module, replacing the @mariozechner/clipboard dependency.",
+			);
+		});
+
+		test("the LLM-validated writer renders the same full-text narration, not the model's words", () => {
+			const input = releaseInput({ weakFeatures: [momCredentials] });
+			const themes = computeReleaseThemes(input.stories);
+			const sources = buildReleaseSourceRegistry(input);
+			const ref = weakFeatureRef(0);
+			const raw = fullReleaseScenes({
+				weak: [{ ref, quote: "mom's Anthropic credentials now live at" }],
+			});
+			const result = validateReleaseOverview(
+				raw,
+				{ themes, weakFeatures: input.weakFeatures, sources, hasSyncs: false },
+				"release-v1",
+			);
+			expect(result.errors).toEqual([]);
+			const weakScene = result.script?.scenes.find((s) => s.section === "overview");
+			expect(weakScene?.beats?.[0]?.text).toBe(
+				"Mom's Anthropic credentials now live at ~/.draht/mom/auth.json instead of ~/.pi/mom/auth.json.",
+			);
+		});
+
+		test("a too-long anchor text is shortened at its first clause boundary, never with an ellipsis", () => {
+			const longAnchor: WeakFeatureInput = {
+				title: "x",
+				anchorText: `This weak feature already fits in one short sentence. ${"Extra trailing detail ".repeat(20)}that would push the whole entry well past the beat cap if it were kept.`,
+				changelogSourceId: "cl:x@v1#0",
+			};
+			expect(longAnchor.anchorText.length).toBeGreaterThan(280);
+			const input = releaseInput({ weakFeatures: [longAnchor] });
+			const script = templateReleaseOverview(input, computeReleaseThemes(input.stories));
+			const also = script.scenes.find((s) => s.kind === "title" && s.title === "Also shipped");
+			const text = also?.beats?.[0]?.text ?? "";
+			expect(text).toBe("This weak feature already fits in one short sentence.");
+			expect(text.includes("…")).toBe(false);
+			expect(text.length).toBeLessThanOrEqual(280);
+		});
+
+		test("validateBeat rejects narration carrying a truncation ellipsis even from the model itself", () => {
+			const input = releaseInput();
+			const themes = computeReleaseThemes(input.stories);
+			const sources = buildReleaseSourceRegistry(input);
+			const raw = fullReleaseScenes({ themeAi: { text: "Streams model output and retries rate limits…" } });
+			const result = validateReleaseOverview(
+				raw,
+				{ themes, weakFeatures: [], sources, hasSyncs: false },
+				"release-v1",
+			);
+			expect(result.script).toBeUndefined();
+			expect(result.errors.some((e) => e.rule === "prose" && /ellipsis/.test(e.detail))).toBe(true);
+		});
+	});
 });
 
 describe("parseReleaseOverviewResponse", () => {
@@ -461,7 +584,7 @@ describe("writeReleaseOverview", () => {
 		if (result.ok) {
 			expect(result.writer).toBe("template");
 			const weakScene = result.script.scenes.find((s) => s.kind === "title" && s.title === "Also shipped");
-			expect(weakScene?.beats?.some((b) => b.text === WEAK_FEATURE.title)).toBe(true);
+			expect(weakScene?.beats?.some((b) => b.text === WEAK_FEATURE_NARRATION)).toBe(true);
 			const syncScene = result.script.scenes.find((s) => s.kind === "title" && s.title === "From upstream");
 			expect(syncScene).toBeDefined();
 		}

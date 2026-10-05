@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import type { BuildOverrides } from "../src/cli.ts";
 import { runApprove, runBuild, runPrune, runReject, runRelease } from "../src/cli.ts";
 import type { Feed, ReelEntry } from "../src/contract.ts";
+import type { DraftScriptSnapshot } from "../src/review.ts";
 import type { ModelCompleter, ModelCompletionResult } from "../src/script.ts";
 import {
 	addFeatureBranchMerge,
@@ -84,6 +85,10 @@ function readDraftIds(draftsDir: string, name: string): string[] {
 
 function readDraftEntry(draftsDir: string, name: string, id: string): ReelEntry {
 	return JSON.parse(readFileSync(join(draftsDir, name, id, "entry.json"), "utf-8")) as ReelEntry;
+}
+
+function readDraftScript(draftsDir: string, name: string, id: string): DraftScriptSnapshot {
+	return JSON.parse(readFileSync(join(draftsDir, name, id, "script.json"), "utf-8")) as DraftScriptSnapshot;
 }
 
 function readFeed(out: string, name: string): Feed {
@@ -168,6 +173,43 @@ describe("build --unit story: pooled upstream recap and release overview (T12c)"
 				expect(recap.kind).toBe("recap");
 				expect(recap.release).toBe(tag);
 				expect(recap.recap).toBeDefined();
+			} finally {
+				rmSync(out, { recursive: true, force: true });
+				rmSync(drafts, { recursive: true, force: true });
+			}
+		}),
+	);
+
+	test(
+		// Regression for a real paid render (release-v2026.10.4-1): the "Also shipped" scene used to narrate
+		// weak features as `deriveShortTitle`'s ellipsis-truncated display title, read back-to-back with no
+		// terminal punctuation. The overview must narrate the full changelog line as its own complete sentence.
+		"a weak feature long enough to need a short display title still narrates its full changelog text",
+		withRepo(async (repo) => {
+			seedChangelog(repo);
+			addFeatureBranchMerge(repo, { subject: "Merge feature A" });
+			addFeatureBranchMerge(repo, { subject: "Merge feature B" });
+			const longEntry =
+				"mom's Anthropic credentials now live at `~/.draht/mom/auth.json` instead of `~/.pi/mom/auth.json`, matching the new config layout";
+			addChangelogEntry(repo, `- ${longEntry}`);
+			const tag = "v1.0.0";
+			repo.tag(tag);
+
+			const out = tmpDir("release-out-");
+			const drafts = tmpDir("release-drafts-");
+			try {
+				const overrides: BuildOverrides = { complete: fallingBackCompleter() };
+				await runBuild(baseArgv(repo.dir, drafts, out), overrides);
+
+				const script = readDraftScript(drafts, "demo", `release-${tag}`);
+				const alsoShipped = script.script.scenes.find((s) => s.kind === "title" && s.title === "Also shipped");
+				expect(alsoShipped).toBeDefined();
+				const text = alsoShipped?.beats?.[0]?.text ?? "";
+				expect(text).not.toContain("…");
+				expect(text.endsWith(".")).toBe(true);
+				expect(text).not.toContain("`");
+				expect(text).toContain("~/.draht/mom/auth.json");
+				expect(text.charAt(0)).toBe(text.charAt(0).toUpperCase());
 			} finally {
 				rmSync(out, { recursive: true, force: true });
 				rmSync(drafts, { recursive: true, force: true });

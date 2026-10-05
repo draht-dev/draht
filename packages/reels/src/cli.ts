@@ -784,6 +784,22 @@ function weakStorySection(story: Story, anchors: readonly ChangelogAnchor[]): Ch
 }
 
 /**
+ * A weak-attributed story's own changelog anchor, matched the same way as
+ * {@link weakStorySection}: its full, untruncated `entryText` (fix round —
+ * `story.title` is `deriveShortTitle`'s result, capped at {@link
+ * MAX_SHORT_TITLE_LENGTH} and often cut mid-sentence with "…"; the release
+ * overview must narrate the real text, never that display-only title).
+ * Falls back to `story.title` when no anchor matches (should not happen for
+ * a story that came from `collectStories`'s changelog-anchor path, but a
+ * weak feature still needs something to quote from).
+ */
+function weakStoryAnchorText(story: Story, anchors: readonly ChangelogAnchor[]): string {
+	const sha12 = story.commits[0];
+	const anchor = sha12 ? anchors.find((a) => a.commitSha.startsWith(sha12)) : undefined;
+	return anchor?.entryText ?? story.title;
+}
+
+/**
  * Weak-attributed changelog stories excluded from their own reel by
  * `story.minAttribution` (default `"strong"`): listed in the release
  * overview instead (owner decision on weak stories), never duplicated when
@@ -807,7 +823,7 @@ function collectWeakFeatures(
 		)
 		.map((s, i) => ({
 			title: s.title,
-			anchorText: s.title,
+			anchorText: weakStoryAnchorText(s, group.anchors),
 			changelogSourceId: changelogSourceId(topPackage(s.files), group.tag ?? "unreleased", i),
 			section: weakStorySection(s, group.anchors),
 		}));

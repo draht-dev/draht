@@ -1,4 +1,5 @@
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { AgentTool } from "@draht/agent-core";
 import {
 	type AssistantImages,
@@ -495,6 +496,24 @@ describe("codemode options and store", () => {
 		);
 		expect(result.isError).toBe(false);
 		expect(resultText(result)).toBe('["out\\n",3,"number"]');
+	});
+
+	// https://github.com/badlogic/pi-mono/issues/10251
+	it("resolves read calls to text for text files and to image blocks that image() shows", async () => {
+		const harness = await createHarness({
+			initialActiveToolNames: ["codemode", "read"],
+			extensionFactories: [createCodemodeExtension()],
+		});
+		harnesses.push(harness);
+		writeFileSync(join(harness.tempDir, "notes.txt"), "hello");
+		writeFileSync(join(harness.tempDir, "pixel.png"), Buffer.from(TINY_PNG_BASE64, "base64"));
+		const result = await run(
+			harness,
+			'text(await tools.read({ path: "notes.txt" }));\nconst shot = await tools.read({ path: "pixel.png" });\ntext(shot.note);\nimage(shot);',
+		);
+		expect(result.isError).toBe(false);
+		expect(checkSavedImages(resultText(result))).toBe("hello\nRead image file [image/png]\n<saved>\n<image>");
+		expect(result.content.at(-1)).toEqual({ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" });
 	});
 
 	it("persists store() writes as custom entries for later calls", async () => {

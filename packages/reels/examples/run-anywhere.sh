@@ -14,14 +14,13 @@
 #   REELS_DRAFTS_DIR    drafts directory, outside REELS_OUT (default: ./reels-drafts)
 #   REELS_NAME          repo display name (default: basename of REELS_REPO)
 #   REELS_CONFIG        path to .reels.json (default: unset = <repo>/.reels.json, else built-in defaults)
-#   REELS_MODEL         --model for the story writer (default: anthropic/claude-sonnet-5)
+#   REELS_MODEL         --model for the story writer (default: unset = story.model from REELS_CONFIG)
 #   REELS_MAX_COST_USD    --max-cost-usd cap for this run (default: 5)
 #   REELS_MAX_LLM_TOKENS  --max-llm-tokens cap for this run (default: 2000000)
 #   REELS_MAX_TTS_CHARS   --max-tts-chars cap for this run (default: 50000)
-#   REELS_SINCE         only draft commits authored since this DATE, not a ref/sha (git rev-list --since semantics; default: unset = incremental)
 #   REELS_TTS           "elevenlabs" or "none" (default: elevenlabs if ELEVENLABS_API_KEY is set, else none)
 #   ELEVENLABS_API_KEY  required when REELS_TTS=elevenlabs
-#   ANTHROPIC_API_KEY   required for the default anthropic/claude-sonnet-5 model (or the matching key for REELS_MODEL's provider)
+#   ANTHROPIC_API_KEY   required for the anthropic/* model resolved above (REELS_MODEL or story.model); set the matching key for a different provider instead
 
 set -euo pipefail
 
@@ -35,7 +34,7 @@ DRAFTS_DIR="${REELS_DRAFTS_DIR:-./reels-drafts}"
 mkdir -p "$DRAFTS_DIR"
 DRAFTS_DIR="$(cd "$DRAFTS_DIR" && pwd)"
 NAME="${REELS_NAME:-$(basename "$REPO")}"
-MODEL="${REELS_MODEL:-anthropic/claude-sonnet-5}"
+MODEL="${REELS_MODEL:-}"
 MAX_COST_USD="${REELS_MAX_COST_USD:-5}"
 MAX_LLM_TOKENS="${REELS_MAX_LLM_TOKENS:-2000000}"
 MAX_TTS_CHARS="${REELS_MAX_TTS_CHARS:-50000}"
@@ -61,15 +60,18 @@ ARGS=(
 	--out "$OUT"
 	--drafts-dir "$DRAFTS_DIR"
 	--unit story
-	--model "$MODEL"
 	--max-cost-usd "$MAX_COST_USD"
 	--max-llm-tokens "$MAX_LLM_TOKENS"
 	--max-tts-chars "$MAX_TTS_CHARS"
 	--tts "$TTS"
 	--mode both
 )
-if [ -n "${REELS_SINCE:-}" ]; then
-	ARGS+=(--since "$REELS_SINCE")
+# Omit --model entirely unless REELS_MODEL is set, so story.model in
+# REELS_CONFIG takes effect by default instead of being overridden here.
+# --since is not passed here: it is silently ignored for --unit story,
+# which is all this script ever builds (see selectStoryUnits in cli.ts).
+if [ -n "$MODEL" ]; then
+	ARGS+=(--model "$MODEL")
 fi
 if [ -n "${REELS_CONFIG:-}" ]; then
 	ARGS+=(--config "$REELS_CONFIG")

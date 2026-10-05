@@ -82,9 +82,9 @@ on:
         type: boolean
         default: false
       model:
-        description: "Model for the story writer, e.g. anthropic/claude-sonnet-5"
+        description: "Model for the story writer, e.g. anthropic/claude-sonnet-5 (empty = use story.model from .github/reels.json)"
         type: string
-        default: "anthropic/claude-sonnet-5"
+        default: ""
       max_cost_usd:
         description: "Per-run LLM spend cap in USD (--max-cost-usd)"
         type: string
@@ -137,6 +137,7 @@ jobs:
     timeout-minutes: 300
     permissions:
       contents: read # no pushes here; the `push` job owns contents: write
+      pull-requests: read # the render step's PR lookup/bot filter need this
     outputs:
       exit_code: ${{ steps.render.outputs.exit_code }}
       site_published: ${{ steps.site_check.outputs.exists }}
@@ -247,6 +248,15 @@ jobs:
         run: npm run build:app
         working-directory: .draht/packages/reels
 
+      - name: Publish the PWA shell into the site directory
+        # Runs unconditionally, before the story build below (which may fail
+        # per-story or exhaust a cap): on a fresh repo with no reels-site
+        # branch, this is what first makes "$GITHUB_WORKSPACE/site" exist at
+        # all, so site_check/push/deploy below have something to publish even
+        # if `build --unit story` drafts nothing yet. Non-destructive: it
+        # never touches feed.json/repos.json (see publishSite in publish.ts).
+        run: bun .draht/packages/reels/src/cli.ts site --out "$GITHUB_WORKSPACE/site"
+
       - name: Build @draht/ai (the story writer always needs it)
         working-directory: .draht
         run: |
@@ -267,13 +277,15 @@ jobs:
         env:
           ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Read-only; lets the story writer's PR lookup/bot filter work (requires
+          # `pull-requests: read` above). Never contents: write — this step never pushes.
+          GH_TOKEN: ${{ github.token }}
           BACKFILL: ${{ inputs.backfill }}
           MODEL: ${{ inputs.model }}
           MAX_COST_USD: ${{ inputs.max_cost_usd }}
           MAX_LLM_TOKENS: ${{ inputs.max_llm_tokens }}
           MAX_TTS_CHARS: ${{ inputs.max_tts_chars }}
         run: |
-          MODEL="${MODEL:-anthropic/claude-sonnet-5}"
           MAX_COST_USD="${MAX_COST_USD:-5}"
           MAX_LLM_TOKENS="${MAX_LLM_TOKENS:-2000000}"
           MAX_TTS_CHARS="${MAX_TTS_CHARS:-50000}"
@@ -286,6 +298,12 @@ jobs:
           else
             EXTRA_ARGS+=(--limit 10)
           fi
+          # Omit --model entirely unless the dispatch input set one, so
+          # story.model in .github/reels.json (the runner-controlled config)
+          # takes effect by default instead of being overridden here.
+          if [ -n "$MODEL" ]; then
+            EXTRA_ARGS+=(--model "$MODEL")
+          fi
 
           set +e
           bun .draht/packages/reels/src/cli.ts build \
@@ -295,7 +313,6 @@ jobs:
             --drafts-dir "$GITHUB_WORKSPACE/drafts" \
             --config "$GITHUB_WORKSPACE/config-src/.github/reels.json" \
             --unit story \
-            --model "$MODEL" \
             --max-cost-usd "$MAX_COST_USD" \
             --max-llm-tokens "$MAX_LLM_TOKENS" \
             --max-tts-chars "$MAX_TTS_CHARS" \
@@ -305,11 +322,13 @@ jobs:
           code=$?
           set -e
 
-          # Record the exit code before (possibly) failing this step, so
-          # downstream steps/jobs can still save whatever did draft —
-          # partial success must never be discarded. See the top-of-file note.
+          # Record the exit code but never fail this step on it: a failed
+          # story must never skip the push/deploy jobs below, which is what
+          # would drop every draft that *did* succeed in the same run. Only
+          # `finalize` turns a non-zero code here into a red run, after
+          # push/deploy have already persisted/published whatever succeeded.
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          exit $code
+          exit 0
 
       - name: Check whether a site was produced
         id: site_check
@@ -409,14 +428,8 @@ jobs:
           check_branch reels-site site_exists
           check_branch reels-drafts drafts_exists
 
-      - name: Fail fast if there is nothing to approve/reject against yet
-        run: |
-          if [ "${{ steps.branches.outputs.site_exists }}" != "true" ] || [ "${{ steps.branches.outputs.drafts_exists }}" != "true" ]; then
-            echo "::error::reels-site and/or reels-drafts branch does not exist yet; run a normal build first." >&2
-            exit 1
-          fi
-
       - name: Checkout reels-site branch (read-only; the publish gate's target)
+        if: steps.branches.outputs.site_exists == 'true'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: reels-site
@@ -424,11 +437,19 @@ jobs:
           persist-credentials: false
 
       - name: Checkout reels-drafts branch (read-only; the publish gate's source)
+        if: steps.branches.outputs.drafts_exists == 'true'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: reels-drafts
           path: drafts
           persist-credentials: false
+
+      - name: Create empty site/drafts dirs when the branch doesn't exist yet
+        # First-use tolerance: an approve/reject dispatch against a repo that
+        # never had a successful build still gets a site/drafts dir to work
+        # with (the approve/reject CLI commands then fail on their own terms
+        # — e.g. "draft not found" — instead of this job failing fast here).
+        run: mkdir -p "$GITHUB_WORKSPACE/site" "$GITHUB_WORKSPACE/drafts"
 
       - name: Drop the nested .git from the checked-out site/drafts
         run: rm -rf "$GITHUB_WORKSPACE/site/.git" "$GITHUB_WORKSPACE/drafts/.git"
@@ -441,6 +462,10 @@ jobs:
       - name: Install the draht-mono workspace
         run: bun install --frozen-lockfile
         working-directory: .draht
+
+      - name: Build the reel site (PWA)
+        run: npm run build:app
+        working-directory: .draht/packages/reels
 
       - name: Approve/reject the requested draft ids
         env:
@@ -493,6 +518,13 @@ jobs:
               "${IDS[@]}" "${REASON_ARGS[@]}"
           fi
 
+      - name: Publish the PWA shell into the site directory
+        # Approving the very first draft against a repo with no reels-site
+        # branch yet gets the app shell too, not just the feed update above —
+        # otherwise the first Pages deploy would have index.html missing.
+        # Non-destructive: see the matching step in the build job.
+        run: bun .draht/packages/reels/src/cli.ts site --out "$GITHUB_WORKSPACE/site"
+
       - name: Upload the full site (including state) for the push job
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -521,7 +553,16 @@ jobs:
 
   push:
     needs: [build, publish]
-    if: always() && ((needs.build.result == 'success' && needs.build.outputs.site_published == 'true') || needs.publish.result == 'success')
+    # Gated on the site/drafts artifacts existing, not on needs.build.result:
+    # the render step inside `build` always exits 0 (see its comment above),
+    # so a per-story failure must never skip this job and drop the drafts
+    # that did succeed. needs.build.outputs.site_published comes from a step
+    # that runs even when a later step in `build` fails, so a job that never
+    # got far enough to produce a site still correctly evaluates to false here.
+    if: >-
+      !cancelled() &&
+      ((needs.build.result != 'skipped' && needs.build.outputs.site_published == 'true') ||
+       needs.publish.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: write # the only job that can push; build/publish/deploy do not have this
@@ -575,7 +616,11 @@ jobs:
 
   deploy:
     needs: [build, publish]
-    if: always() && ((needs.build.result == 'success' && needs.build.outputs.site_published == 'true') || needs.publish.result == 'success')
+    # Same gate as `push` above — see its comment.
+    if: >-
+      !cancelled() &&
+      ((needs.build.result != 'skipped' && needs.build.outputs.site_published == 'true') ||
+       needs.publish.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       pages: write

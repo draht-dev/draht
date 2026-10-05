@@ -16,7 +16,7 @@
  * across runs and must live outside any directory a run publishes: it is
  * never policed by the privacy pipeline's doc/prose rules the way context
  * assembly is, so a cache file sitting inside a published output tree would
- * be served as-is. {@link createGithubLookup}'s optional `outDir` refuses a
+ * be served as-is. {@link createGithubLookup}'s required `outDir` refuses a
  * `cacheDir` nested inside it. PR/review/comment bodies are run through
  * {@link redactText} before they are ever written to the cache file, so the
  * text at rest on disk never carries a raw secret-shaped token even if the
@@ -25,7 +25,7 @@
 
 import { execFile } from "node:child_process";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { assertValidSha } from "./collect.ts";
 import type { PullRequestInfo } from "./contract.ts";
@@ -181,18 +181,26 @@ async function fetchPullRequestForSha(gh: GhRunner, repo: string, sha: string): 
 export interface GithubLookupOptions {
 	/** `owner/repo`, e.g. from {@link parseGithubRepo}. */
 	repo: string;
-	/** Directory holding the cache file; caller passes the output's state/cache dir. Must live outside `outDir` when `outDir` is given. */
+	/** Directory holding the cache file; caller passes the output's state/cache dir. Must live outside `outDir`. */
 	cacheDir: string;
-	/** The run's published output directory, when known; `cacheDir` nested inside it is refused. */
-	outDir?: string;
+	/** The run's published output directory. `cacheDir` nested inside it is refused. */
+	outDir: string;
 	gh?: GhRunner;
 	warn?: (message: string) => void;
 }
 
-/** True when `cacheDir` is `outDir` itself or nested inside it. */
+/**
+ * True when `cacheDir` is `outDir` itself or nested inside it. `relative`'s
+ * result only means "outside" when it is exactly `..`, or starts with `..`
+ * followed by a path separator — a sibling literally named e.g. `..cache`
+ * also starts with the two characters `..` but is not an escape, so a bare
+ * `rel.startsWith("..")` check would wrongly wave it through as "outside"
+ * (and therefore accepted) when it is actually a child of `outDir`.
+ */
 function isNestedInside(outDir: string, cacheDir: string): boolean {
 	const rel = relative(resolve(outDir), resolve(cacheDir));
-	return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+	const isOutside = rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+	return !isOutside;
 }
 
 export interface GithubLookup {
@@ -208,7 +216,7 @@ export function createGithubLookup(options: GithubLookupOptions): GithubLookup {
 	if (!isValidGithubOwnerRepo(options.repo)) {
 		throw new Error(`refusing to use "${options.repo}" as a GitHub repo: expected "owner/repo"`);
 	}
-	if (options.outDir !== undefined && isNestedInside(options.outDir, options.cacheDir)) {
+	if (isNestedInside(options.outDir, options.cacheDir)) {
 		throw new Error(
 			`refusing to use cacheDir "${options.cacheDir}" inside outDir "${options.outDir}": the GitHub cache must live outside published output`,
 		);

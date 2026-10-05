@@ -78,6 +78,19 @@ describe("listReleaseRanges", () => {
 	);
 
 	test(
+		"a tag name containing a comma is not mistaken for a shorter tag via %D decoration splitting",
+		withRepo(async (repo) => {
+			const v1 = repo.commit("feat: real release work");
+			repo.tag("v2.0.0,junk", { ref: v1 });
+
+			const ranges = await listReleaseRanges({ repo: repo.dir, ref: "HEAD", tagPattern: "^v2\\.0\\.0,junk$" });
+			const tagged = ranges.filter((r) => r.tag !== undefined);
+			expect(tagged.map((r) => r.tag)).toEqual(["v2.0.0,junk"]);
+			expect(ranges.some((r) => r.tag === "v2.0.0")).toBe(false);
+		}),
+	);
+
+	test(
 		"tagPattern excludes v0.* releases",
 		withRepo(async (repo) => {
 			const v0 = repo.commit("feat: old upstream release");

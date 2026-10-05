@@ -117,6 +117,24 @@ describe("findExactSubjectMatch", () => {
 		]);
 		expect(match).toHaveLength(0);
 	});
+
+	test("stays well under the unfixed quadratic blowup for 500 anchors against 2000 large-bodied candidates", () => {
+		const candidates = Array.from({ length: 2000 }, (_, i) => ({
+			sha: i.toString(16).padStart(40, "0"),
+			subject: `feat: candidate subject number ${i} with enough words to pass the length floor`,
+			body: `commit body filler text repeated to simulate a real release note. `.repeat(200),
+		}));
+
+		const start = performance.now();
+		for (let i = 0; i < 500; i++) {
+			findExactSubjectMatch(`anchor entry number ${i} that never matches any candidate wording at all`, candidates);
+		}
+		const elapsedMs = performance.now() - start;
+		// Without per-range normalization caching this takes ~40s; the fixed
+		// version takes ~1.1s. 5s leaves ample margin for CI jitter while
+		// still catching a reintroduced per-anchor renormalization pass.
+		expect(elapsedMs).toBeLessThan(5000);
+	}, 10_000);
 });
 
 describe("groupOverlappingAttributions", () => {

@@ -8,6 +8,11 @@ import { createGithubLookup, parseGithubRepo } from "../src/github.ts";
 const SHA_WITH_PR = "a".repeat(40);
 const SHA_WITHOUT_PR = "b".repeat(40);
 
+/** A sibling directory that never exists on disk: `isNestedInside` only ever does path math, so the tests that aren't exercising the nesting guard itself can pass any non-nested `outDir`. */
+function siblingOutDir(cacheDir: string): string {
+	return join(cacheDir, "..", "unused-out-dir");
+}
+
 function withTmpDir<T>(fn: (dir: string) => Promise<T> | T): Promise<T> | T {
 	const dir = mkdtempSync(join(tmpdir(), "reels-github-test-"));
 	try {
@@ -92,7 +97,7 @@ describe("createGithubLookup", () => {
 				},
 				calls,
 			);
-			const lookup = createGithubLookup({ repo: "acme/widget", cacheDir, gh });
+			const lookup = createGithubLookup({ repo: "acme/widget", cacheDir, outDir: siblingOutDir(cacheDir), gh });
 			const pr = await lookup.lookupPullRequestForSha(SHA_WITH_PR);
 			expect(pr).toBeDefined();
 			expect(pr?.number).toBe(42);
@@ -109,7 +114,7 @@ describe("createGithubLookup", () => {
 		await withTmpDir(async (cacheDir) => {
 			const calls: string[][] = [];
 			const gh = recordingGh({ [`repos/acme/widget/commits/${SHA_WITHOUT_PR}/pulls`]: "[]" }, calls);
-			const lookup = createGithubLookup({ repo: "acme/widget", cacheDir, gh });
+			const lookup = createGithubLookup({ repo: "acme/widget", cacheDir, outDir: siblingOutDir(cacheDir), gh });
 			const pr = await lookup.lookupPullRequestForSha(SHA_WITHOUT_PR);
 			expect(pr).toBeUndefined();
 		});
@@ -123,7 +128,13 @@ describe("createGithubLookup", () => {
 				error.code = "ENOENT";
 				throw error;
 			};
-			const lookup = createGithubLookup({ repo: "acme/widget", cacheDir, gh, warn: (m) => warnings.push(m) });
+			const lookup = createGithubLookup({
+				repo: "acme/widget",
+				cacheDir,
+				outDir: siblingOutDir(cacheDir),
+				gh,
+				warn: (m) => warnings.push(m),
+			});
 			const first = await lookup.lookupPullRequestForSha(SHA_WITH_PR);
 			const second = await lookup.lookupPullRequestForSha(SHA_WITHOUT_PR);
 			expect(first).toBeUndefined();
@@ -140,7 +151,13 @@ describe("createGithubLookup", () => {
 				error.code = "1";
 				throw error;
 			};
-			const lookup = createGithubLookup({ repo: "acme/widget", cacheDir, gh, warn: (m) => warnings.push(m) });
+			const lookup = createGithubLookup({
+				repo: "acme/widget",
+				cacheDir,
+				outDir: siblingOutDir(cacheDir),
+				gh,
+				warn: (m) => warnings.push(m),
+			});
 			const pr = await lookup.lookupPullRequestForSha(SHA_WITH_PR);
 			expect(pr).toBeUndefined();
 			expect(warnings).toHaveLength(1);
@@ -162,7 +179,7 @@ describe("createGithubLookup", () => {
 				},
 				calls,
 			);
-			const lookup = createGithubLookup({ repo: "acme/widget", cacheDir, gh });
+			const lookup = createGithubLookup({ repo: "acme/widget", cacheDir, outDir: siblingOutDir(cacheDir), gh });
 			const pr = await lookup.lookupPullRequestForSha(SHA_WITH_PR);
 			expect(Buffer.byteLength(pr?.body ?? "", "utf-8")).toBeLessThanOrEqual(16 * 1024 + 3);
 			expect(pr?.body.length).toBeLessThan(hugeBody.length);
@@ -180,7 +197,7 @@ describe("createGithubLookup", () => {
 				},
 				calls,
 			);
-			const first = createGithubLookup({ repo: "acme/widget", cacheDir, gh });
+			const first = createGithubLookup({ repo: "acme/widget", cacheDir, outDir: siblingOutDir(cacheDir), gh });
 			await first.lookupPullRequestForSha(SHA_WITH_PR);
 			const callsAfterFirst = calls.length;
 			expect(callsAfterFirst).toBeGreaterThan(0);
@@ -192,7 +209,12 @@ describe("createGithubLookup", () => {
 			const throwingGh: GhRunner = async () => {
 				throw new Error("gh must not be called again");
 			};
-			const second = createGithubLookup({ repo: "acme/widget", cacheDir, gh: throwingGh });
+			const second = createGithubLookup({
+				repo: "acme/widget",
+				cacheDir,
+				outDir: siblingOutDir(cacheDir),
+				gh: throwingGh,
+			});
 			const pr = await second.lookupPullRequestForSha(SHA_WITH_PR);
 			expect(pr?.number).toBe(42);
 		});
@@ -202,13 +224,18 @@ describe("createGithubLookup", () => {
 		await withTmpDir(async (cacheDir) => {
 			const calls: string[][] = [];
 			const gh = recordingGh({ [`repos/acme/widget/commits/${SHA_WITHOUT_PR}/pulls`]: "[]" }, calls);
-			const first = createGithubLookup({ repo: "acme/widget", cacheDir, gh });
+			const first = createGithubLookup({ repo: "acme/widget", cacheDir, outDir: siblingOutDir(cacheDir), gh });
 			await first.lookupPullRequestForSha(SHA_WITHOUT_PR);
 
 			const throwingGh: GhRunner = async () => {
 				throw new Error("gh must not be called again");
 			};
-			const second = createGithubLookup({ repo: "acme/widget", cacheDir, gh: throwingGh });
+			const second = createGithubLookup({
+				repo: "acme/widget",
+				cacheDir,
+				outDir: siblingOutDir(cacheDir),
+				gh: throwingGh,
+			});
 			const pr = await second.lookupPullRequestForSha(SHA_WITHOUT_PR);
 			expect(pr).toBeUndefined();
 		});
@@ -232,7 +259,7 @@ describe("createGithubLookup", () => {
 				},
 				calls,
 			);
-			const lookup = createGithubLookup({ repo: "acme/widget", cacheDir, gh });
+			const lookup = createGithubLookup({ repo: "acme/widget", cacheDir, outDir: siblingOutDir(cacheDir), gh });
 			const pr = await lookup.lookupPullRequestForSha(SHA_WITH_PR);
 
 			expect(pr?.title).not.toContain(secret);
@@ -253,6 +280,13 @@ describe("createGithubLookup", () => {
 		});
 	});
 
+	test("security: a cacheDir literally named '..cache' inside outDir is rejected, not mistaken for an escape", async () => {
+		await withTmpDir(async (outDir) => {
+			const cacheDir = join(outDir, "..cache");
+			expect(() => createGithubLookup({ repo: "acme/widget", cacheDir, outDir })).toThrow();
+		});
+	});
+
 	test("accepts a cacheDir that is a sibling of outDir, not nested inside it", async () => {
 		await withTmpDir(async (parent) => {
 			const outDir = join(parent, "out");
@@ -263,8 +297,8 @@ describe("createGithubLookup", () => {
 
 	test("rejects a repo with a '.' or '..' segment", async () => {
 		await withTmpDir(async (cacheDir) => {
-			expect(() => createGithubLookup({ repo: "acme/..", cacheDir })).toThrow();
-			expect(() => createGithubLookup({ repo: "acme/.", cacheDir })).toThrow();
+			expect(() => createGithubLookup({ repo: "acme/..", cacheDir, outDir: siblingOutDir(cacheDir) })).toThrow();
+			expect(() => createGithubLookup({ repo: "acme/.", cacheDir, outDir: siblingOutDir(cacheDir) })).toThrow();
 		});
 	});
 
@@ -279,7 +313,7 @@ describe("createGithubLookup", () => {
 				},
 				calls,
 			);
-			const lookup = createGithubLookup({ repo: "acme/widget", cacheDir, gh });
+			const lookup = createGithubLookup({ repo: "acme/widget", cacheDir, outDir: siblingOutDir(cacheDir), gh });
 			await lookup.lookupPullRequestForSha(SHA_WITH_PR);
 			for (const args of calls) {
 				for (const arg of args) {

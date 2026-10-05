@@ -132,12 +132,85 @@ function assertNoUnknownKeys(obj: Record<string, unknown>, allowed: ReadonlySet<
 	}
 }
 
+/**
+ * Defense in depth, not a real guarantee: `.reels.json` comes from repo
+ * maintainers, not from an untrusted request, so a determined maintainer
+ * could still write a slow regex this conservative, syntax-only check
+ * misses. Any text one of these patterns is later matched against (a tag
+ * name, commit subject, or prose chunk) must additionally be capped at
+ * {@link MAX_USER_REGEX_INPUT_BYTES} by its own call site — this check alone
+ * does not bound the cost of a safe-looking pattern against unbounded input.
+ */
+export const MAX_USER_REGEX_INPUT_BYTES = 4 * 1024;
+
+/** True when `text` (from the position after an unescaped `(`/`)`) opens with a quantifier: `+`, `*`, or `{m,n}`. */
+function startsWithQuantifier(text: string): boolean {
+	return /^(?:[+*]|\{\d*,?\d*\})/.test(text);
+}
+
+/** True when `text` contains an unescaped `+`, `*`, or `{m,n}` quantifier anywhere. */
+function containsUnescapedQuantifier(text: string): boolean {
+	let escaped = false;
+	for (let i = 0; i < text.length; i++) {
+		const ch = text[i];
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (ch === "\\") {
+			escaped = true;
+			continue;
+		}
+		if (ch === "+" || ch === "*") return true;
+		if (ch === "{" && /^\{\d*,?\d*\}/.test(text.slice(i))) return true;
+	}
+	return false;
+}
+
+/**
+ * Conservative, syntax-only catastrophic-backtracking check: true when some
+ * unescaped group `(...)` is itself quantified (`)+`, `)*`, `){m,n}`) and
+ * also contains its own unescaped quantifier, e.g. `(a+)+` or `(a*)*` — the
+ * classic exponential-backtrack shape. May reject some patterns that are
+ * actually safe; never claims to catch every ReDoS shape.
+ */
+function hasNestedQuantifierGroup(pattern: string): boolean {
+	const openIndexes: number[] = [];
+	let escaped = false;
+	for (let i = 0; i < pattern.length; i++) {
+		const ch = pattern[i];
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (ch === "\\") {
+			escaped = true;
+			continue;
+		}
+		if (ch === "(") {
+			openIndexes.push(i);
+			continue;
+		}
+		if (ch !== ")") continue;
+		const openIndex = openIndexes.pop();
+		if (openIndex === undefined) continue;
+		if (!startsWithQuantifier(pattern.slice(i + 1))) continue;
+		if (containsUnescapedQuantifier(pattern.slice(openIndex + 1, i))) return true;
+	}
+	return false;
+}
+
 function assertValidRegexString(pattern: string, where: string): void {
 	try {
 		// eslint-disable-next-line no-new
 		new RegExp(pattern);
 	} catch (err) {
 		throw new ReelsConfigError(`invalid regular expression for ${where}: ${(err as Error).message}`);
+	}
+	if (hasNestedQuantifierGroup(pattern)) {
+		throw new ReelsConfigError(
+			`${where} looks like it can cause catastrophic regex backtracking (a quantified group containing its own quantifier): "${pattern}"`,
+		);
 	}
 }
 
@@ -200,10 +273,14 @@ function parseDocs(raw: unknown): DocsConfig {
 	if (!Array.isArray(allow) || !allow.every((p) => typeof p === "string")) {
 		throw new ReelsConfigError("docs.allow must be an array of strings");
 	}
-	const deny = raw.deny === undefined ? DEFAULT_DOCS_CONFIG.deny : raw.deny;
-	if (!Array.isArray(deny) || !deny.every((p) => typeof p === "string")) {
+	// docs.deny always extends DEFAULT_DOCS_CONFIG.deny, never replaces it: a
+	// config author listing their own sensitive paths must not accidentally
+	// un-deny .planning's state files by omission.
+	const configuredDeny = raw.deny === undefined ? [] : raw.deny;
+	if (!Array.isArray(configuredDeny) || !configuredDeny.every((p) => typeof p === "string")) {
 		throw new ReelsConfigError("docs.deny must be an array of strings");
 	}
+	const deny = Array.from(new Set([...DEFAULT_DOCS_CONFIG.deny, ...configuredDeny]));
 	const maxChunks = raw.maxChunks === undefined ? DEFAULT_DOCS_CONFIG.maxChunks : raw.maxChunks;
 	if (typeof maxChunks !== "number" || maxChunks <= 0) {
 		throw new ReelsConfigError("docs.maxChunks must be a positive number");

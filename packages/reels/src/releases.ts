@@ -60,43 +60,72 @@ export async function listReleaseTags(
 }
 
 /**
+ * Lists `tagPattern`-matching tags reachable from `refSha` (one
+ * `--merged=<sha>` `for-each-ref` call), matching the pattern against each
+ * tag's full name rather than against a comma-joined `%D` decoration list —
+ * a tag literally named e.g. `v2.0.0,junk` must never be mistaken for
+ * `v2.0.0` by splitting on `,`.
+ */
+async function listMergedTags(repo: string, refSha: string, tagPattern: RegExp, git: GitRunner): Promise<ReleaseTag[]> {
+	const out = await git(
+		[
+			"for-each-ref",
+			`--format=${RELEASE_TAG_FORMAT}`,
+			`--merged=${assertValidSha(refSha)}`,
+			"--end-of-options",
+			"refs/tags",
+		],
+		repo,
+	);
+	const tags: ReleaseTag[] = [];
+	for (const line of out.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		const [name, objectName, dereferenced, date] = trimmed.split("\x00");
+		if (!name || !tagPattern.test(name)) continue;
+		const sha = dereferenced || objectName;
+		if (!sha) continue;
+		tags.push({ name, sha: assertValidSha(sha), date: date ?? "" });
+	}
+	return tags;
+}
+
+/**
  * Lists `tagPattern`-matching tags that are ancestors of `ref`, newest
- * first, in ancestor order: one `git log --simplify-by-decoration`
- * traversal of `ref`'s history (a bounded method per the redesign note —
- * the walk is one process regardless of history size, and the per-release
- * scan budget is spent later, by {@link listReleaseRanges}, not here).
+ * first, in ancestor order: {@link listMergedTags} finds the correct,
+ * full-name-matched set (immune to comma splitting), and one `git log
+ * --simplify-by-decoration --format=%H` traversal of `ref`'s history (a
+ * bounded method per the redesign note — the walk is one process regardless
+ * of history size, and the per-release scan budget is spent later, by
+ * {@link listReleaseRanges}, not here) orders them by commit reachability.
  * Order follows `--topo-order`'s parent-after-child guarantee, so for
  * ordinary release-tag topologies each entry's nearest older match is
  * simply the next one in this list.
  */
 async function listAncestorTags(repo: string, ref: string, tagPattern: RegExp, git: GitRunner): Promise<ReleaseTag[]> {
+	const mergedTags = await listMergedTags(repo, ref, tagPattern, git);
+	if (mergedTags.length === 0) return [];
+
+	const bySha = new Map<string, ReleaseTag[]>();
+	for (const tag of mergedTags) {
+		const group = bySha.get(tag.sha);
+		if (group) group.push(tag);
+		else bySha.set(tag.sha, [tag]);
+	}
+
 	const out = await git(
-		[
-			"log",
-			"--simplify-by-decoration",
-			"--topo-order",
-			"--decorate=full",
-			"--format=%H%x00%ai%x00%D",
-			"--end-of-options",
-			ref,
-		],
+		["log", "--simplify-by-decoration", "--topo-order", "--format=%H", "--end-of-options", ref],
 		repo,
 	);
 	const tags: ReleaseTag[] = [];
 	const seen = new Set<string>();
 	for (const line of out.split("\n")) {
-		const trimmed = line.trim();
-		if (!trimmed) continue;
-		const [sha, date, decorations] = trimmed.split("\x00");
-		if (!sha || !decorations) continue;
-		for (const raw of decorations.split(",")) {
-			const decoration = raw.trim();
-			const match = decoration.match(/^tag:\s*refs\/tags\/(.+)$/);
-			if (!match) continue;
-			const name = match[1] ?? "";
-			if (!name || !tagPattern.test(name) || seen.has(name)) continue;
-			seen.add(name);
-			tags.push({ name, sha: assertValidSha(sha), date: date ?? "" });
+		const sha = line.trim();
+		if (!sha) continue;
+		for (const tag of bySha.get(sha) ?? []) {
+			if (seen.has(tag.name)) continue;
+			seen.add(tag.name);
+			tags.push(tag);
 		}
 	}
 	return tags;

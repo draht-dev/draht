@@ -7,6 +7,7 @@ import { access, cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/prom
 import { join, resolve, sep } from "node:path";
 import { assertValidSha } from "./collect.ts";
 import { FEED_SCHEMA_VERSION, type Feed, type ReelEntry, type ReleasePlaylist, type RepoIndex } from "./contract.ts";
+import { isValidStoryId, storyIdSha } from "./stories.ts";
 
 export interface RepoMeta {
 	name: string;
@@ -250,14 +251,23 @@ export async function pruneFeed(
 	const reelsDir = resolve(outDir, repoName, "reels");
 	for (const entry of removed) {
 		if (entry.kind === "release") continue;
-		let shortSha: string;
+		// A changelog story's id is `<sha>-<hash8>` (stories.ts's
+		// computeChangelogStoryId), never itself a bare sha, so `assertValidSha`
+		// alone rejects it and its media would never be pruned. Validate the
+		// whole id strictly, then validate the sha part it is built from, and
+		// build the media path from the full id (not a 12-char slice of the sha
+		// part, which would collide across hash8 variants of the same anchor).
+		if (!isValidStoryId(entry.id)) {
+			console.warn(`draht-reels: skipping media prune for entry with invalid id "${entry.id}"`);
+			continue;
+		}
 		try {
-			shortSha = assertValidSha(entry.id).slice(0, 12);
+			assertValidSha(storyIdSha(entry.id));
 		} catch {
 			console.warn(`draht-reels: skipping media prune for entry with invalid id "${entry.id}"`);
 			continue;
 		}
-		const target = resolve(reelsDir, shortSha);
+		const target = resolve(reelsDir, entry.id);
 		if (target !== reelsDir && !target.startsWith(reelsDir + sep)) {
 			console.warn(`draht-reels: refusing to prune path outside the reels directory: ${target}`);
 			continue;

@@ -227,10 +227,8 @@ function stripConventionalPrefix(subject: string): string {
 
 const MIN_EXACT_MATCH_LENGTH = 12;
 
-/** True when `entryText` and `candidateText` are the same sentence, ignoring markdown emphasis/case/whitespace, or one contains the other verbatim (both sides long enough to rule out a coincidental short match). */
-function isExactOrNearMatch(entryText: string, candidateText: string): boolean {
-	const a = normalizeForExactMatch(entryText);
-	const b = normalizeForExactMatch(candidateText);
+/** True when two already-normalized strings are the same sentence, or one contains the other verbatim (both sides long enough to rule out a coincidental short match). */
+function isExactOrNearMatch(a: string, b: string): boolean {
 	if (a.length < MIN_EXACT_MATCH_LENGTH || b.length < MIN_EXACT_MATCH_LENGTH) return false;
 	if (a === b) return true;
 	return a.includes(b) || b.includes(a);
@@ -240,6 +238,32 @@ export interface ExactMatchCandidate {
 	sha: string;
 	subject: string;
 	body: string;
+}
+
+interface NormalizedCandidate {
+	subject: string;
+	body: string;
+}
+
+/**
+ * {@link findExactSubjectMatch} is called once per changelog anchor against
+ * the same, range-wide `candidates` array (`collectStories` fetches a
+ * range's commits once and reuses that array for every anchor in it), so
+ * normalizing a candidate's subject/body is cached by object identity here
+ * instead of being redone for every anchor — the difference between O(anchors
+ * + commits) and O(anchors * commits) normalization work over a range.
+ */
+const normalizedCandidateCache = new WeakMap<ExactMatchCandidate, NormalizedCandidate>();
+
+function normalizedCandidate(candidate: ExactMatchCandidate): NormalizedCandidate {
+	const cached = normalizedCandidateCache.get(candidate);
+	if (cached) return cached;
+	const computed: NormalizedCandidate = {
+		subject: normalizeForExactMatch(stripConventionalPrefix(candidate.subject)),
+		body: normalizeForExactMatch(candidate.body.slice(0, MAX_ENTRY_TEXT_BYTES)),
+	};
+	normalizedCandidateCache.set(candidate, computed);
+	return computed;
 }
 
 /**
@@ -252,12 +276,10 @@ export function findExactSubjectMatch(
 	entryText: string,
 	candidates: readonly ExactMatchCandidate[],
 ): ImplementingCommit[] {
-	const text = entryText.slice(0, MAX_ENTRY_TEXT_BYTES);
+	const text = normalizeForExactMatch(entryText.slice(0, MAX_ENTRY_TEXT_BYTES));
 	for (const candidate of candidates) {
-		if (
-			isExactOrNearMatch(text, stripConventionalPrefix(candidate.subject)) ||
-			isExactOrNearMatch(text, candidate.body)
-		) {
+		const { subject, body } = normalizedCandidate(candidate);
+		if (isExactOrNearMatch(text, subject) || isExactOrNearMatch(text, body)) {
 			return [{ sha: candidate.sha, subject: candidate.subject }];
 		}
 	}

@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { ChangeSet, FileChange } from "../src/contract.ts";
-import { applyContentPolicy, DEFAULT_DENY_GLOBS, isPathDenied, lineHasSecret, redactText } from "../src/privacy.ts";
+import {
+	applyContentPolicy,
+	DEFAULT_DENY_GLOBS,
+	isPathDenied,
+	lineHasSecret,
+	redactText,
+	testBounded,
+} from "../src/privacy.ts";
 
 describe("isPathDenied", () => {
 	test("matches the default deny-list by basename", () => {
@@ -442,5 +449,30 @@ describe("applyContentPolicy", () => {
 		for (const secret of ["hunter2hunter2", "wJalrXUtnFEMI", "abcd1234efgh", "sk-proj-", "sk-ant-api03-", "MIIB"]) {
 			expect(serialized).not.toContain(secret);
 		}
+	});
+});
+
+describe("testBounded", () => {
+	test("finds a deny term far beyond the per-run input cap", () => {
+		const text = `${"a".repeat(20_000)} AcmeCustomer ${"b".repeat(20_000)}`;
+		expect(testBounded(/AcmeCustomer/, text)).toBe(true);
+	});
+
+	test("finds a term that straddles a window edge", () => {
+		const prefix = "x".repeat(4096 - 512 - 3);
+		expect(testBounded(/AcmeCustomer/, `${prefix}AcmeCustomer${"y".repeat(10_000)}`)).toBe(true);
+	});
+
+	test("never runs a pattern on more than the cap at once", () => {
+		const seen: number[] = [];
+		const spy = {
+			lastIndex: 0,
+			test: (s: string) => {
+				seen.push(s.length);
+				return false;
+			},
+		} as unknown as RegExp;
+		testBounded(spy, "z".repeat(50_000));
+		expect(Math.max(...seen)).toBeLessThanOrEqual(4096);
 	});
 });

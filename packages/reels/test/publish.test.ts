@@ -283,6 +283,28 @@ describe("pruneFeed (file system)", () => {
 		}
 	});
 
+	test("security: removes a changelog-story entry's media dir, whose id is <sha>-<hash8>, not just a plain sha", async () => {
+		const outDir = mkdtempSync(join(tmpdir(), "reels-prune-test-"));
+		try {
+			const changelogStoryId = `${VALID_SHA_A}-deadbeef`;
+			await publishFeed({
+				outDir,
+				repo: { name: "demo" },
+				entries: [entry({ id: changelogStoryId, kind: "story", date: "2024-01-01T00:00:00Z" })],
+				now: () => "2024-01-01T00:00:00Z",
+			});
+
+			const mediaDir = join(outDir, "demo", "reels", changelogStoryId);
+			mkdirSync(mediaDir, { recursive: true });
+
+			const result = await pruneFeed(outDir, "demo", reachable([]));
+			expect(result?.removed.map((r) => r.id)).toEqual([changelogStoryId]);
+			expect(existsSync(mediaDir)).toBe(false);
+		} finally {
+			rmSync(outDir, { recursive: true, force: true });
+		}
+	});
+
 	test("removes a release entry and its playlist when the tag no longer resolves", async () => {
 		const outDir = mkdtempSync(join(tmpdir(), "reels-prune-test-"));
 		try {

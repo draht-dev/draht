@@ -14,7 +14,7 @@
  */
 
 import type { PublicSource } from "./contract.ts";
-import { redactText } from "./privacy.ts";
+import { redactText, testBounded } from "./privacy.ts";
 
 const SHA12_RE = /^[0-9a-f]{12}$/;
 
@@ -132,7 +132,7 @@ export function cleanProse(text: string): string {
 /** True when `text` matches any of `patterns`, used to reject a deny-listed prose field. */
 export function proseViolatesDenyPatterns(text: string, patterns: RegExp[] | undefined): boolean {
 	if (!patterns || patterns.length === 0) return false;
-	return patterns.some((pattern) => pattern.test(text));
+	return patterns.some((pattern) => testBounded(pattern, text));
 }
 
 const QUOTE_STOPWORDS = new Set([

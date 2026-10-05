@@ -13,6 +13,7 @@
  */
 
 import type { ChangeSet, FileChange, Hunk } from "./contract.ts";
+import { MAX_USER_REGEX_INPUT_BYTES } from "./reels-config.ts";
 
 export const DEFAULT_DENY_GLOBS = [
 	".env",
@@ -343,7 +344,33 @@ export function policeDocChunk(text: string): PolicedDocChunk {
 
 /** `prose.denyPatterns` (customer names, internal codenames): a match drops the source chunk, or rejects narration/title/caption. */
 export function matchesProseDeny(text: string, patterns: readonly RegExp[]): boolean {
-	return patterns.some((pattern) => pattern.test(text));
+	return patterns.some((pattern) => testBounded(pattern, text));
+}
+
+/** Overlap between windows, so a deny term straddling a window edge is still matched. */
+const BOUNDED_WINDOW_OVERLAP = 512;
+
+/**
+ * Tests a user-supplied regex (from .reels.json) against arbitrarily long text
+ * without ever running it on more than MAX_USER_REGEX_INPUT_BYTES at once: the
+ * text is matched line by line, and longer lines in overlapping windows. Unlike
+ * truncation this never misses a match beyond the cap, which matters because a
+ * missed deny pattern publishes what the repo asked to keep private.
+ */
+export function testBounded(pattern: RegExp, text: string): boolean {
+	const step = MAX_USER_REGEX_INPUT_BYTES - BOUNDED_WINDOW_OVERLAP;
+	for (const line of text.split("\n")) {
+		if (line.length <= MAX_USER_REGEX_INPUT_BYTES) {
+			pattern.lastIndex = 0;
+			if (pattern.test(line)) return true;
+			continue;
+		}
+		for (let start = 0; start < line.length; start += step) {
+			pattern.lastIndex = 0;
+			if (pattern.test(line.slice(start, start + MAX_USER_REGEX_INPUT_BYTES))) return true;
+		}
+	}
+	return false;
 }
 
 export interface ContentPolicyOptions {

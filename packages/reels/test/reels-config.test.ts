@@ -47,6 +47,31 @@ describe("parseReelsConfig", () => {
 		expect(() => parseReelsConfig({ upstream: { subjectPatterns: ["[unclosed"] } })).toThrow(ReelsConfigError);
 	});
 
+	test("security: rejects a catastrophic-backtracking nested quantifier in tagPattern", () => {
+		expect(() => parseReelsConfig({ tagPattern: "^(a+)+$" })).toThrow(ReelsConfigError);
+	});
+
+	test("security: rejects a catastrophic-backtracking nested quantifier in upstream.subjectPatterns", () => {
+		expect(() => parseReelsConfig({ upstream: { subjectPatterns: ["(a*)*"] } })).toThrow(ReelsConfigError);
+	});
+
+	test("security: rejects a catastrophic-backtracking nested quantifier in prose.denyPatterns", () => {
+		expect(() => parseReelsConfig({ prose: { denyPatterns: ["(a+)*"] } })).toThrow(ReelsConfigError);
+	});
+
+	test("an ordinary regex with an unnested quantifier is still accepted", () => {
+		const config = parseReelsConfig({ tagPattern: "^v[0-9]+\\.[0-9]+\\.[0-9]+$" });
+		expect(config.tagPattern).toBe("^v[0-9]+\\.[0-9]+\\.[0-9]+$");
+	});
+
+	test("docs.deny extends the default deny list instead of replacing it", () => {
+		const config = parseReelsConfig({ docs: { deny: ["custom/secret.md"] } });
+		expect(config.docs.deny).toContain("custom/secret.md");
+		for (const defaultDeny of DEFAULT_REELS_CONFIG.docs.deny) {
+			expect(config.docs.deny).toContain(defaultDeny);
+		}
+	});
+
 	test("rejects an override value outside the enum", () => {
 		expect(() => parseReelsConfig({ overrides: { deadbeef: "not-a-real-class" } })).toThrow(ReelsConfigError);
 	});

@@ -18,35 +18,50 @@
 # with Pages access control restricted to your org, or you deploy the output
 # to storage that is itself access-controlled (not plain GitHub Pages).
 #
-# Builds narrated explainer reels for new commits on push, publishes the
-# feed + PWA to GitHub Pages. The rendered site (feed.json, videos, audio)
-# lives permanently in a `reels-site` branch of THIS repo, not in
-# actions/cache — a cache can be evicted after 7 days of no hits or once the
-# repo's 10 GB cache cap is reached, which would silently drop history.
-# `draht-reels build` also skips change sets already in feed.json and caps a
-# normal run at --limit 10, so even a lost branch only costs a bounded
-# re-bootstrap (newest 10), never a runaway full re-render.
+# PUBLISH GATE: LLM-written reels are drafts until a human approves them
+# (owner decision — see docs/REELS-STORY-PIPELINE.md "publish gate"). `build`
+# only ever writes to the `reels-drafts` branch/artifact; a draft reaches the
+# `reels-site` branch (and the public Pages artifact) only via the `publish`
+# job below, triggered by a `workflow_dispatch` run with the `approve` (or
+# `reject`) input set. Drafts are never copied into the Pages artifact.
 #
-# Each run force-pushes the entire `reels-site` branch as a single orphan
-# commit (no git history) so `draht-reels prune` can actually retract
-# content — see README.md "Privacy warning" for what that does and does not
-# guarantee (GitHub may keep unreachable objects / CDN caches around for a
-# while, and anyone who already downloaded a page has it regardless).
+# Builds narrated explainer *story* reels for new releases/commits on push,
+# drafts them for review, and (on approval) publishes the feed + PWA to
+# GitHub Pages. The rendered site (feed.json, videos, audio) lives
+# permanently in a `reels-site` branch of THIS repo, and pending drafts (plus
+# their review.md, for human review) live in a separate `reels-drafts`
+# branch — neither lives in actions/cache, which can be evicted after 7 days
+# of no hits or once the repo's 10 GB cache cap is reached, silently
+# dropping history. `draht-reels build` also skips change sets already
+# drafted/published/rejected and caps a normal run at --limit 10, so even a
+# lost branch only costs a bounded re-bootstrap (newest 10), never a runaway
+# full re-render.
 #
-# Partial success: if some reels fail to render, `build` still exits
-# non-zero, but every reel that *did* render (and was already paid for via
-# ElevenLabs/an LLM) is still published, committed, and deployed. Only the
-# very last step of the build job fails the run, after publishing.
+# Each run force-pushes the entire `reels-site` and `reels-drafts` branches
+# as single orphan commits (no git history) so `draht-reels prune` can
+# actually retract content — see README.md "Privacy warning" for what that
+# does and does not guarantee (GitHub may keep unreachable objects / CDN
+# caches around for a while, and anyone who already downloaded a page has it
+# regardless).
 #
-# Token separation: only the `push` job (which force-pushes `reels-site`)
-# gets `contents: write`. `build` (bun install, Chrome download, third-party
-# code from .draht) gets `contents: read` only and never persists
-# credentials. `deploy` only gets `pages: write` / `id-token: write`.
+# Partial success: if some stories fail to draft, `build` still exits
+# non-zero, but every story that *did* draft (and was already paid for via
+# ElevenLabs/the LLM) is still saved to the drafts branch/artifact. Only the
+# very last step of the build job fails the run, after saving.
 #
-# Required repo secret:
-#   ELEVENLABS_API_KEY   — only exposed to the render step.
-#   ANTHROPIC_API_KEY    — only needed (and only exposed) when the `writer`
-#                           input is "llm"; see the `model`/`writer` inputs.
+# Token separation: only the `push` job (which force-pushes `reels-site` and
+# `reels-drafts`) gets `contents: write`. `build` (bun install, Chrome
+# download, third-party code from .draht, the LLM/TTS calls) gets
+# `contents: read` only, never persists credentials, and is the only job
+# that sees ANTHROPIC_API_KEY/ELEVENLABS_API_KEY — they are scoped to its
+# single render step, not the whole job. `publish` (approve/reject) gets
+# `contents: read` only and needs neither secret: it only moves already-
+# rendered media from a draft into the feed. `deploy` only gets
+# `pages: write` / `id-token: write`.
+#
+# Required repo secrets:
+#   ELEVENLABS_API_KEY   — only exposed to the build job's render step.
+#   ANTHROPIC_API_KEY    — only exposed to the build job's render step.
 #
 # Required repo settings:
 #   Settings -> Pages -> Build and deployment -> Source: GitHub Actions.
@@ -59,22 +74,39 @@ on:
   workflow_dispatch:
     inputs:
       backfill:
-        description: "Render the full history instead of just new commits"
+        description: "Render the full history instead of just new releases/commits"
         type: boolean
         default: false
       prune:
         description: "Run `draht-reels prune` before building, to drop feed entries no longer reachable from HEAD (e.g. after a force-push)"
         type: boolean
         default: false
-      writer:
-        description: "Script writer: template (no network) or llm (requires ANTHROPIC_API_KEY and the model input)"
-        type: choice
-        options:
-          - template
-          - llm
-        default: template
       model:
-        description: "Model for --writer llm, e.g. anthropic/claude-sonnet-5. Ignored when writer is template."
+        description: "Model for the story writer, e.g. anthropic/claude-sonnet-5"
+        type: string
+        default: "anthropic/claude-sonnet-5"
+      max_cost_usd:
+        description: "Per-run LLM spend cap in USD (--max-cost-usd)"
+        type: string
+        default: "5"
+      max_llm_tokens:
+        description: "Per-run LLM token cap (--max-llm-tokens)"
+        type: string
+        default: "2000000"
+      max_tts_chars:
+        description: "Per-run TTS character cap (--max-tts-chars)"
+        type: string
+        default: "50000"
+      approve:
+        description: "Space-separated draft ids to approve and publish (skips the build step entirely)"
+        type: string
+        default: ""
+      reject:
+        description: "Space-separated draft ids to reject and discard (skips the build step entirely)"
+        type: string
+        default: ""
+      reject_reason:
+        description: "Optional --reason applied to every id in `reject`"
         type: string
         default: ""
 
@@ -89,12 +121,18 @@ env:
   # Pin to a commit on github.com/draht-dev/draht, not a branch: resolve with
   #   gh api repos/draht-dev/draht/commits/main --jq .sha
   # Must contain packages/reels/src/cli.ts.
+  # MUST be bumped to a commit that contains the story pipeline (--unit
+  # story, the drafts/review/approve/reject commands) once it merges — this
+  # pin predates it.
   DRAHT_MONO_REF: a3e67aa30620e40181807f8214b104cb18864050
 
 jobs:
   build:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.approve == '' && inputs.reject == '')
     runs-on: ubuntu-latest
-    # A timeout cancels the job and skips the upload steps, losing paid-for reels;
+    # A timeout cancels the job and skips the upload steps, losing paid-for drafts;
     # backfills are bounded by --limit below so a run finishes well inside this.
     timeout-minutes: 300
     permissions:
@@ -124,8 +162,29 @@ jobs:
             exit 1
           fi
 
-      - name: Check whether the reels-site branch exists
-        id: site_branch
+      - name: Checkout .reels.json from the default branch (never from the commit being processed)
+        # The config a run is built with must never come from the commit that
+        # triggered the run — a separate checkout of the default branch keeps
+        # that true uniformly for `push` and for a `workflow_dispatch` run on
+        # any other ref (e.g. a manual backfill from a feature branch).
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: config-src
+          sparse-checkout: |
+            .github/reels.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Verify the default branch has .github/reels.json
+        run: |
+          if [ ! -f "$GITHUB_WORKSPACE/config-src/.github/reels.json" ]; then
+            echo "::error::no .github/reels.json on the default branch (${{ github.event.repository.default_branch }}). Add one (see packages/reels/README.md's config section) before running this workflow." >&2
+            exit 1
+          fi
+
+      - name: Check whether the reels-site/reels-drafts branches exist
+        id: branches
         env:
           GH_TOKEN_FOR_LS_REMOTE: ${{ github.token }}
         run: |
@@ -135,31 +194,45 @@ jobs:
           export GIT_CONFIG_KEY_0=http.extraheader
           GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN_FOR_LS_REMOTE" | base64 -w0)"
           export GIT_CONFIG_VALUE_0
-          set +e
-          git ls-remote --exit-code --heads origin reels-site >/dev/null 2>&1
-          code=$?
-          set -e
-          if [ "$code" = "0" ]; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          elif [ "$code" = "2" ]; then
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "::error::git ls-remote for reels-site failed with exit code $code" >&2
-            exit "$code"
-          fi
+
+          check_branch() {
+            local branch="$1" out_name="$2"
+            set +e
+            git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1
+            code=$?
+            set -e
+            if [ "$code" = "0" ]; then
+              echo "${out_name}=true" >> "$GITHUB_OUTPUT"
+            elif [ "$code" = "2" ]; then
+              echo "${out_name}=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "::error::git ls-remote for $branch failed with exit code $code" >&2
+              exit "$code"
+            fi
+          }
+          check_branch reels-site site_exists
+          check_branch reels-drafts drafts_exists
 
       - name: Checkout previous reels-site branch (read-only, for incremental state)
-        if: steps.site_branch.outputs.exists == 'true'
+        if: steps.branches.outputs.site_exists == 'true'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: reels-site
           path: site
           persist-credentials: false
 
-      - name: Drop the nested .git from the checked-out site
+      - name: Checkout previous reels-drafts branch (read-only, for pending drafts)
+        if: steps.branches.outputs.drafts_exists == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: reels-drafts
+          path: drafts
+          persist-credentials: false
+
+      - name: Drop the nested .git from the checked-out site/drafts
         # Otherwise it would get swept into the artifacts below, including
         # the public Pages one.
-        run: rm -rf "$GITHUB_WORKSPACE/site/.git"
+        run: rm -rf "$GITHUB_WORKSPACE/site/.git" "$GITHUB_WORKSPACE/drafts/.git"
 
       - name: Setup bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -174,8 +247,7 @@ jobs:
         run: npm run build:app
         working-directory: .draht/packages/reels
 
-      - name: Build @draht/ai (only needed for --writer llm)
-        if: ${{ inputs.writer == 'llm' }}
+      - name: Build @draht/ai (the story writer always needs it)
         working-directory: .draht
         run: |
           npm --prefix packages/telemetry run build
@@ -187,27 +259,32 @@ jobs:
           bun .draht/packages/reels/src/cli.ts prune \
             --repo "$GITHUB_WORKSPACE" \
             --name "$(basename "$GITHUB_REPOSITORY")" \
-            --out "$GITHUB_WORKSPACE/site"
+            --out "$GITHUB_WORKSPACE/site" \
+            --config "$GITHUB_WORKSPACE/config-src/.github/reels.json"
 
-      - name: Render new reels
+      - name: Draft new story reels
         id: render
         env:
           ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ inputs.writer == 'llm' && secrets.ANTHROPIC_API_KEY || '' }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           BACKFILL: ${{ inputs.backfill }}
-          WRITER: ${{ inputs.writer }}
           MODEL: ${{ inputs.model }}
+          MAX_COST_USD: ${{ inputs.max_cost_usd }}
+          MAX_LLM_TOKENS: ${{ inputs.max_llm_tokens }}
+          MAX_TTS_CHARS: ${{ inputs.max_tts_chars }}
         run: |
+          MODEL="${MODEL:-anthropic/claude-sonnet-5}"
+          MAX_COST_USD="${MAX_COST_USD:-5}"
+          MAX_LLM_TOKENS="${MAX_LLM_TOKENS:-2000000}"
+          MAX_TTS_CHARS="${MAX_TTS_CHARS:-50000}"
+
           EXTRA_ARGS=()
           if [ "$BACKFILL" = "true" ]; then
             # Bounded so one dispatch finishes inside the job timeout; re-run the
-            # backfill dispatch until it renders nothing new. It drains oldest first.
+            # backfill dispatch until it drafts nothing new. It drains oldest first.
             EXTRA_ARGS+=(--all-history --limit 50)
           else
             EXTRA_ARGS+=(--limit 10)
-          fi
-          if [ "$WRITER" = "llm" ]; then
-            EXTRA_ARGS+=(--writer llm --model "$MODEL")
           fi
 
           set +e
@@ -215,6 +292,13 @@ jobs:
             --repo "$GITHUB_WORKSPACE" \
             --name "$(basename "$GITHUB_REPOSITORY")" \
             --out "$GITHUB_WORKSPACE/site" \
+            --drafts-dir "$GITHUB_WORKSPACE/drafts" \
+            --config "$GITHUB_WORKSPACE/config-src/.github/reels.json" \
+            --unit story \
+            --model "$MODEL" \
+            --max-cost-usd "$MAX_COST_USD" \
+            --max-llm-tokens "$MAX_LLM_TOKENS" \
+            --max-tts-chars "$MAX_TTS_CHARS" \
             --tts elevenlabs \
             --mode both \
             "${EXTRA_ARGS[@]}"
@@ -222,14 +306,10 @@ jobs:
           set -e
 
           # Record the exit code before (possibly) failing this step, so
-          # downstream steps/jobs can still publish whatever did render —
-          # partial success must not be discarded. See the top-of-file note.
+          # downstream steps/jobs can still save whatever did draft —
+          # partial success must never be discarded. See the top-of-file note.
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit $code
-
-      - name: Publish the PWA into the site
-        if: ${{ !cancelled() }}
-        run: bun .draht/packages/reels/src/cli.ts site --out "$GITHUB_WORKSPACE/site"
 
       - name: Check whether a site was produced
         id: site_check
@@ -257,18 +337,194 @@ jobs:
           include-hidden-files: true
           retention-days: 1
 
+      - name: Upload the drafts (for the push job, and for human review)
+        # Never included in pages-artifact above: drafts must never reach
+        # the public site before a human approves them.
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: reels-drafts
+          path: drafts
+          include-hidden-files: true
+          retention-days: 14
+
       - name: Upload Pages artifact
         if: ${{ !cancelled() && steps.site_check.outputs.exists == 'true' }}
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           path: pages-artifact
 
+  publish:
+    # Approval gate: the only way a draft reaches reels-site/Pages. Needs
+    # neither ANTHROPIC_API_KEY nor ELEVENLABS_API_KEY — it only moves media
+    # a build job already rendered (and paid for) from a draft into the feed.
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.approve != '' || inputs.reject != '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read # no pushes here either; the `push` job owns contents: write
+    steps:
+      - name: Checkout draht-dev/draht (for the reels pipeline)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: draht-dev/draht
+          ref: ${{ env.DRAHT_MONO_REF }}
+          path: .draht
+          persist-credentials: false
+
+      - name: Verify the pinned draht-mono commit contains packages/reels
+        run: |
+          if [ ! -f .draht/packages/reels/src/cli.ts ]; then
+            echo "::error::DRAHT_MONO_REF=$DRAHT_MONO_REF has no packages/reels/src/cli.ts. Bump DRAHT_MONO_REF to a commit on draht-dev/draht that includes packages/reels (see the comment at the top of this workflow)." >&2
+            exit 1
+          fi
+
+      - name: Check whether the reels-site/reels-drafts branches exist
+        id: branches
+        env:
+          GH_TOKEN_FOR_LS_REMOTE: ${{ github.token }}
+        run: |
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraheader
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN_FOR_LS_REMOTE" | base64 -w0)"
+          export GIT_CONFIG_VALUE_0
+
+          check_branch() {
+            local branch="$1" out_name="$2"
+            set +e
+            git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1
+            code=$?
+            set -e
+            if [ "$code" = "0" ]; then
+              echo "${out_name}=true" >> "$GITHUB_OUTPUT"
+            elif [ "$code" = "2" ]; then
+              echo "${out_name}=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "::error::git ls-remote for $branch failed with exit code $code" >&2
+              exit "$code"
+            fi
+          }
+          check_branch reels-site site_exists
+          check_branch reels-drafts drafts_exists
+
+      - name: Fail fast if there is nothing to approve/reject against yet
+        run: |
+          if [ "${{ steps.branches.outputs.site_exists }}" != "true" ] || [ "${{ steps.branches.outputs.drafts_exists }}" != "true" ]; then
+            echo "::error::reels-site and/or reels-drafts branch does not exist yet; run a normal build first." >&2
+            exit 1
+          fi
+
+      - name: Checkout reels-site branch (read-only; the publish gate's target)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: reels-site
+          path: site
+          persist-credentials: false
+
+      - name: Checkout reels-drafts branch (read-only; the publish gate's source)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: reels-drafts
+          path: drafts
+          persist-credentials: false
+
+      - name: Drop the nested .git from the checked-out site/drafts
+        run: rm -rf "$GITHUB_WORKSPACE/site/.git" "$GITHUB_WORKSPACE/drafts/.git"
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Install the draht-mono workspace
+        run: bun install --frozen-lockfile
+        working-directory: .draht
+
+      - name: Approve/reject the requested draft ids
+        env:
+          APPROVE_IDS: ${{ inputs.approve }}
+          REJECT_IDS: ${{ inputs.reject }}
+          REJECT_REASON: ${{ inputs.reject_reason }}
+        run: |
+          set -euo pipefail
+
+          # Mirrors stories.ts's STORY_ID_RE / RELEASE_ARTIFACT_ID_RE exactly;
+          # the CLI re-validates independently, this is defense in depth so a
+          # malformed id never reaches a shell array built from user input.
+          STORY_ID_RE='^[0-9a-f]{40}([0-9a-f]{24})?(-[0-9a-f]{8})?$'
+          ARTIFACT_ID_RE='^(release|recap)-.+$'
+
+          validate_ids() {
+            local raw="$1"
+            local id
+            for id in $raw; do
+              if [[ "$id" =~ $STORY_ID_RE ]] || [[ "$id" =~ $ARTIFACT_ID_RE ]]; then
+                printf '%s\n' "$id"
+              else
+                echo "::error::\"$id\" is not a valid draft id" >&2
+                exit 1
+              fi
+            done
+          }
+
+          if [ -n "${APPROVE_IDS:-}" ]; then
+            mapfile -t IDS < <(validate_ids "$APPROVE_IDS")
+            bun .draht/packages/reels/src/cli.ts approve \
+              --repo "$GITHUB_WORKSPACE" \
+              --name "$(basename "$GITHUB_REPOSITORY")" \
+              --out "$GITHUB_WORKSPACE/site" \
+              --drafts-dir "$GITHUB_WORKSPACE/drafts" \
+              "${IDS[@]}"
+          fi
+
+          if [ -n "${REJECT_IDS:-}" ]; then
+            mapfile -t IDS < <(validate_ids "$REJECT_IDS")
+            REASON_ARGS=()
+            if [ -n "${REJECT_REASON:-}" ]; then
+              REASON_ARGS=(--reason "$REJECT_REASON")
+            fi
+            bun .draht/packages/reels/src/cli.ts reject \
+              --repo "$GITHUB_WORKSPACE" \
+              --name "$(basename "$GITHUB_REPOSITORY")" \
+              --out "$GITHUB_WORKSPACE/site" \
+              --drafts-dir "$GITHUB_WORKSPACE/drafts" \
+              "${IDS[@]}" "${REASON_ARGS[@]}"
+          fi
+
+      - name: Upload the full site (including state) for the push job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: reels-site
+          path: site
+          include-hidden-files: true
+          retention-days: 1
+
+      - name: Upload the drafts (for the push job)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: reels-drafts
+          path: drafts
+          include-hidden-files: true
+          retention-days: 1
+
+      - name: Prepare the Pages artifact (state file excluded, it contains error strings)
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/pages-artifact"
+          rsync -a --exclude '.reels-state.json' "$GITHUB_WORKSPACE/site/" "$GITHUB_WORKSPACE/pages-artifact/"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+        with:
+          path: pages-artifact
+
   push:
-    needs: build
-    if: ${{ !cancelled() && needs.build.outputs.site_published == 'true' }}
+    needs: [build, publish]
+    if: always() && ((needs.build.result == 'success' && needs.build.outputs.site_published == 'true') || needs.publish.result == 'success')
     runs-on: ubuntu-latest
     permissions:
-      contents: write # the only job that can push; build/deploy do not have this
+      contents: write # the only job that can push; build/publish/deploy do not have this
     steps:
       - name: Checkout this repo
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -281,7 +537,13 @@ jobs:
           name: reels-site
           path: incoming-site
 
-      - name: Publish as a single orphan commit (no branch history, so prune can actually retract)
+      - name: Download the drafts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: reels-drafts
+          path: incoming-drafts
+
+      - name: Publish reels-site as a single orphan commit (no branch history, so prune can actually retract)
         run: |
           git worktree add --orphan -B reels-site reels-site-publish
           rsync -a --exclude '.git' incoming-site/ reels-site-publish/
@@ -290,15 +552,30 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then
-            echo "no changes to publish"
+            echo "no changes to publish to reels-site"
           else
             git commit -m "reels: update site for ${{ github.sha }}"
             git push --force origin HEAD:reels-site
           fi
 
+      - name: Publish reels-drafts as a single orphan commit
+        run: |
+          git worktree add --orphan -B reels-drafts reels-drafts-publish
+          rsync -a --exclude '.git' incoming-drafts/ reels-drafts-publish/
+          cd reels-drafts-publish
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "no changes to publish to reels-drafts"
+          else
+            git commit -m "reels: update drafts for ${{ github.sha }}"
+            git push --force origin HEAD:reels-drafts
+          fi
+
   deploy:
-    needs: build
-    if: ${{ !cancelled() && needs.build.outputs.site_published == 'true' }}
+    needs: [build, publish]
+    if: always() && ((needs.build.result == 'success' && needs.build.outputs.site_published == 'true') || needs.publish.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       pages: write
@@ -312,15 +589,15 @@ jobs:
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
 
   finalize:
-    needs: [build, push, deploy]
+    needs: [build, publish, push, deploy]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - name: Fail the run if any reel failed to render
+      - name: Fail the run if any draft failed to render
         env:
           BUILD_EXIT_CODE: ${{ needs.build.outputs.exit_code }}
         run: |
           if [ -n "$BUILD_EXIT_CODE" ] && [ "$BUILD_EXIT_CODE" != "0" ]; then
-            echo "::error::draht-reels build failed for one or more reels (exit code $BUILD_EXIT_CODE). Successful reels were still published; see the build job's render step for details." >&2
+            echo "::error::draht-reels build failed for one or more stories (exit code $BUILD_EXIT_CODE). Successful drafts were still saved; see the build job's render step for details." >&2
             exit 1
           fi

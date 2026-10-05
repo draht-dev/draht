@@ -24,6 +24,7 @@ import {
 } from "./story-protocol.ts";
 import {
 	REASON_NOT_RECORDED_TEXT,
+	type SceneNotes,
 	type ValidationContext,
 	type ValidationError,
 	validateStoryScript,
@@ -223,6 +224,7 @@ interface ParsedAttempt {
 	script?: ReelScript;
 	errors: ValidationError[];
 	raw?: RawWriterResponse;
+	notes?: SceneNotes[];
 }
 
 function parseAndValidate(text: string, ctx: ValidationContext, headSha: string): ParsedAttempt {
@@ -233,7 +235,12 @@ function parseAndValidate(text: string, ctx: ValidationContext, headSha: string)
 		return { errors: [{ path: "response", rule: "shape", detail: (error as Error).message }] };
 	}
 	const result = validateStoryScript(raw, ctx, headSha);
-	return { script: result.script, errors: result.errors, raw };
+	return { script: result.script, errors: result.errors, raw, notes: result.notes };
+}
+
+interface DeterministicFixResult {
+	script?: ReelScript;
+	notes?: SceneNotes[];
 }
 
 function tryDeterministicFix(
@@ -241,9 +248,10 @@ function tryDeterministicFix(
 	errors: readonly ValidationError[],
 	ctx: ValidationContext,
 	headSha: string,
-): ReelScript | undefined {
+): DeterministicFixResult {
 	const fixed = applyDeterministicFixes(raw, errors);
-	return validateStoryScript(fixed, ctx, headSha).script;
+	const result = validateStoryScript(fixed, ctx, headSha);
+	return { script: result.script, notes: result.notes };
 }
 
 export interface WriteOneScriptOptions {
@@ -260,6 +268,8 @@ export interface WriteOneScriptResult {
 	script: ReelScript;
 	writer: "llm" | "template";
 	repaired: boolean;
+	/** Review-only (never published), parallel to `script.scenes`. Absent for a `"template"` result. */
+	notes?: SceneNotes[];
 }
 
 function toValidationContext(story: Story, ctx: AssembledStoryContext, opts: WriteOneScriptOptions): ValidationContext {
@@ -317,7 +327,7 @@ export async function writeOneScript(
 	}
 
 	const attempt1 = parseAndValidate(text1, validationCtx, story.id);
-	if (attempt1.script) return { script: attempt1.script, writer: "llm", repaired: false };
+	if (attempt1.script) return { script: attempt1.script, writer: "llm", repaired: false, notes: attempt1.notes };
 
 	if (!costMeter.hasBudget()) return fallback("cost cap reached before the repair call");
 
@@ -339,15 +349,15 @@ export async function writeOneScript(
 	}
 
 	const attempt2 = parseAndValidate(text2, validationCtx, story.id);
-	if (attempt2.script) return { script: attempt2.script, writer: "llm", repaired: true };
+	if (attempt2.script) return { script: attempt2.script, writer: "llm", repaired: true, notes: attempt2.notes };
 
 	if (attempt2.raw) {
 		const fixed = tryDeterministicFix(attempt2.raw, attempt2.errors, validationCtx, story.id);
-		if (fixed) return { script: fixed, writer: "llm", repaired: true };
+		if (fixed.script) return { script: fixed.script, writer: "llm", repaired: true, notes: fixed.notes };
 	}
 	if (attempt1.raw) {
 		const fixed = tryDeterministicFix(attempt1.raw, attempt1.errors, validationCtx, story.id);
-		if (fixed) return { script: fixed, writer: "llm", repaired: true };
+		if (fixed.script) return { script: fixed.script, writer: "llm", repaired: true, notes: fixed.notes };
 	}
 
 	const unparseableTwice = !attempt1.raw && !attempt2.raw;
@@ -416,11 +426,23 @@ export function shouldRenderDeepDive(mode: DeepDiveMode, score: number): boolean
 	return score >= 3;
 }
 
-/** A deep dive must never invent a section its sources do not support (plan: "never invented"). */
-function stripUnsourcedSections(script: ReelScript, inputs: DeepDiveScoreInputs): ReelScript {
-	if (inputs.hasAlternativesDoc) return script;
-	const scenes = script.scenes.filter((scene: Scene) => scene.section !== "alternatives");
-	return scenes.length === script.scenes.length ? script : { ...script, scenes };
+/**
+ * A deep dive must never invent a section its sources do not support (plan:
+ * "never invented"). `notes`, when given, is filtered in lockstep with
+ * `script.scenes` so it stays parallel to the returned script.
+ */
+function stripUnsourcedSections(
+	script: ReelScript,
+	inputs: DeepDiveScoreInputs,
+	notes?: SceneNotes[],
+): { script: ReelScript; notes?: SceneNotes[] } {
+	if (inputs.hasAlternativesDoc) return { script, notes };
+	const keep = script.scenes.map((scene: Scene) => scene.section !== "alternatives");
+	if (keep.every(Boolean)) return { script, notes };
+	return {
+		script: { ...script, scenes: script.scenes.filter((_, i) => keep[i]) },
+		notes: notes?.filter((_, i) => keep[i]),
+	};
 }
 
 // --- per-run orchestration ------------------------------------------------------------------------
@@ -446,9 +468,11 @@ export interface StoryWriteResult {
 	script: ReelScript;
 	writer: "llm" | "template";
 	repaired: boolean;
+	/** Review-only (never published), parallel to `script.scenes`. Absent for a `"template"` result. */
+	notes?: SceneNotes[];
 	deepDiveScore: number;
 	deepDiveOutcome: "rendered" | "not-warranted";
-	deepDive?: { script: ReelScript; writer: "llm" | "template"; repaired: boolean };
+	deepDive?: { script: ReelScript; writer: "llm" | "template"; repaired: boolean; notes?: SceneNotes[] };
 }
 
 /** Writes a short, and — when warranted — a deep dive, for one story. */
@@ -476,6 +500,7 @@ export async function writeStoryScript(
 			script: shortResult.script,
 			writer: shortResult.writer,
 			repaired: shortResult.repaired,
+			notes: shortResult.notes,
 			deepDiveScore: score,
 			deepDiveOutcome: "not-warranted",
 		};
@@ -489,17 +514,20 @@ export async function writeStoryScript(
 		lang: options.lang,
 		onFallback: (reason) => options.onFallback?.(story, "deep", reason),
 	});
+	const stripped = stripUnsourcedSections(deepResult.script, scoreInputs, deepResult.notes);
 
 	return {
 		script: shortResult.script,
 		writer: shortResult.writer,
 		repaired: shortResult.repaired,
+		notes: shortResult.notes,
 		deepDiveScore: score,
 		deepDiveOutcome: "rendered",
 		deepDive: {
-			script: stripUnsourcedSections(deepResult.script, scoreInputs),
+			script: stripped.script,
 			writer: deepResult.writer,
 			repaired: deepResult.repaired,
+			notes: stripped.notes,
 		},
 	};
 }

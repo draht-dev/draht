@@ -6,7 +6,7 @@
  * rule and the plan's "Validation and the evidence rule" section.
  */
 
-import type { AnchorContext } from "./anchored-diagram.ts";
+import type { AnchorContext, DiagramNode } from "./anchored-diagram.ts";
 import { validateAndEmitDiagram } from "./anchored-diagram.ts";
 import type { CodeRef, HeadFileContent, ResolveCodeRefContext } from "./code-ref.ts";
 import { resolveCodeRef } from "./code-ref.ts";
@@ -22,8 +22,27 @@ import {
 	quoteIsWellFormed,
 	quoteOccursIn,
 } from "./sources.ts";
-import type { RawBeat, RawCode, RawScene, RawWriterResponse } from "./story-protocol.ts";
+import type { ClaimKind, RawBeat, RawCode, RawScene, RawWriterResponse } from "./story-protocol.ts";
 import { normalizeBeats } from "./tts.ts";
+
+/**
+ * Review-only (never published) record of what each surviving beat and
+ * diagram node actually was before validation stripped the writer-internal
+ * `claim`/`quote` fields from the public {@link Beat}: a human approving a
+ * draft needs to see the exact quote next to its cited source text, since
+ * prompt injection through commit/PR text can only be caught by a human
+ * (plan: "Security re-audit 2"). Parallel to {@link Scene.beats}.
+ */
+export interface BeatNote {
+	claim: ClaimKind;
+	quote?: string;
+}
+
+/** Parallel to a validated {@link Scene}: its beats' notes, and (for a `mechanism` scene) the surviving diagram nodes with their real anchors, dropped from the published `mermaid` string. */
+export interface SceneNotes {
+	beats: BeatNote[];
+	diagramNodes?: Array<{ id: string; anchor: DiagramNode["anchor"]; caption: string }>;
+}
 
 export interface ValidationError {
 	path: string;
@@ -52,6 +71,8 @@ export interface ValidateStoryScriptResult {
 	errors: ValidationError[];
 	/** Non-blocking removals: dropped diagram node ids, stripped focus. */
 	dropped: string[];
+	/** Review-only, parallel to `script.scenes`. Present only when `script` is. */
+	notes?: SceneNotes[];
 }
 
 /**
@@ -86,6 +107,7 @@ interface SceneValidation {
 	scene?: Scene;
 	errors: ValidationError[];
 	dropped: string[];
+	notes?: SceneNotes;
 }
 
 const MAX_BEATS_PER_SCENE = 8;
@@ -325,6 +347,7 @@ function validateScene(
 
 	let diagramScene: DiagramScene | undefined;
 	let diagramIdMap: ReadonlyMap<string, string> | undefined;
+	let diagramNodes: SceneNotes["diagramNodes"];
 	if (raw.diagram) {
 		const result = validateAndEmitDiagram(raw.diagram, ctx.anchors, ctx.denyPatterns);
 		dropped.push(...result.droppedIds.map((id) => `${scenePath}.diagram.nodes[id=${id}]`));
@@ -333,6 +356,9 @@ function validateScene(
 		} else {
 			diagramIdMap = result.idMap;
 			diagramScene = { kind: "diagram", mermaid: result.mermaid, narration: "" };
+			diagramNodes = raw.diagram.nodes
+				.filter((node) => diagramIdMap?.has(node.id))
+				.map((node) => ({ id: diagramIdMap?.get(node.id) as string, anchor: node.anchor, caption: node.caption }));
 		}
 	}
 
@@ -365,6 +391,7 @@ function validateScene(
 				: "";
 
 	const beats: Beat[] = [];
+	const beatNotes: BeatNote[] = [];
 	raw.beats.forEach((rawBeat, beatIndex) => {
 		const beatPath = `${scenePath}.beats[${beatIndex}]`;
 		const cleanedText = cleanProse(rawBeat.text);
@@ -407,6 +434,7 @@ function validateScene(
 				: rawBeat.cites;
 
 		beats.push({ text: cleanedText, ...(focus ? { focus } : {}), cites });
+		beatNotes.push({ claim: rawBeat.claim, quote: rawBeat.quote });
 	});
 
 	if (errors.length > 0) return { errors, dropped };
@@ -416,7 +444,7 @@ function validateScene(
 	const withBeats = { ...baseScene, beats, section: raw.section, narration: "" } as Scene;
 	const normalized = normalizeBeats(withBeats);
 
-	return { scene: normalized, errors: [], dropped };
+	return { scene: normalized, errors: [], dropped, notes: { beats: beatNotes, diagramNodes } };
 }
 
 const EXTENSION_LANGUAGE: Record<string, string> = {
@@ -558,11 +586,15 @@ export function validateStoryScript(
 
 	const titleWords = titleWordSet(raw.title);
 	const scenes: Scene[] = [];
+	const sceneNotes: SceneNotes[] = [];
 	raw.scenes.forEach((rawScene, index) => {
 		const result = validateScene(rawScene, index, ctx, titleWords);
 		dropped.push(...result.dropped);
 		errors.push(...result.errors);
-		if (result.scene) scenes.push(result.scene);
+		if (result.scene) {
+			scenes.push(result.scene);
+			if (result.notes) sceneNotes.push(result.notes);
+		}
 	});
 
 	if (raw.scenes.length === 0) {
@@ -572,5 +604,5 @@ export function validateStoryScript(
 	if (errors.length > 0) return { errors, dropped };
 
 	const script: ReelScript = { changeSetId: headSha, writer: "llm", scenes };
-	return { script, errors: [], dropped };
+	return { script, errors: [], dropped, notes: sceneNotes };
 }

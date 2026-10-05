@@ -17,8 +17,21 @@ export interface FailedEntry {
 	lastAttemptAt: string;
 }
 
+export interface RejectedEntry {
+	reason?: string;
+	date: string;
+}
+
+export interface ApprovedEntry {
+	date: string;
+}
+
 export interface ReelsState {
 	failed: Record<string, FailedEntry>;
+	/** T12b: story ids a human rejected (`draht-reels reject`). `build` skips these unless `--force`. Absent means none. */
+	rejected?: Record<string, RejectedEntry>;
+	/** T12b: story ids a human approved (`draht-reels approve`), for audit; `build`'s own skip of approved ids reads the real public feed, not this. Absent means none. */
+	approved?: Record<string, ApprovedEntry>;
 }
 
 function statePath(outDir: string, repoName: string): string {
@@ -27,11 +40,12 @@ function statePath(outDir: string, repoName: string): string {
 
 export async function readState(outDir: string, repoName: string): Promise<ReelsState> {
 	const path = statePath(outDir, repoName);
+	const empty: ReelsState = { failed: {} };
 	let raw: string;
 	try {
 		raw = await readFile(path, "utf-8");
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return { failed: {} };
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return empty;
 		throw error;
 	}
 
@@ -40,13 +54,18 @@ export async function readState(outDir: string, repoName: string): Promise<Reels
 		parsed = JSON.parse(raw);
 	} catch (error) {
 		console.warn(`draht-reels: ignoring corrupt state file ${path}: ${(error as Error).message}`);
-		return { failed: {} };
+		return empty;
 	}
 	if (typeof parsed !== "object" || parsed === null) {
 		console.warn(`draht-reels: ignoring invalid state file ${path}: expected a JSON object`);
-		return { failed: {} };
+		return empty;
 	}
-	return { failed: (parsed as Partial<ReelsState>).failed ?? {} };
+	const partial = parsed as Partial<ReelsState>;
+	return {
+		failed: partial.failed ?? {},
+		...(partial.rejected ? { rejected: partial.rejected } : {}),
+		...(partial.approved ? { approved: partial.approved } : {}),
+	};
 }
 
 export async function writeState(outDir: string, repoName: string, state: ReelsState): Promise<void> {
@@ -59,14 +78,29 @@ export async function writeState(outDir: string, repoName: string, state: ReelsS
 
 export function recordFailure(state: ReelsState, id: string, errorMessage: string, now: string): ReelsState {
 	const attempts = (state.failed[id]?.attempts ?? 0) + 1;
-	return { failed: { ...state.failed, [id]: { attempts, lastError: errorMessage, lastAttemptAt: now } } };
+	return { ...state, failed: { ...state.failed, [id]: { attempts, lastError: errorMessage, lastAttemptAt: now } } };
 }
 
 export function recordSuccess(state: ReelsState, id: string): ReelsState {
 	if (!(id in state.failed)) return state;
 	const failed = { ...state.failed };
 	delete failed[id];
-	return { failed };
+	return { ...state, failed };
+}
+
+/** T12b `draht-reels reject <id>`: records who/when/why, so `build` skips it unless `--force`. */
+export function recordRejection(state: ReelsState, id: string, now: string, reason?: string): ReelsState {
+	return { ...state, rejected: { ...state.rejected, [id]: { date: now, ...(reason ? { reason } : {}) } } };
+}
+
+/** T12b `draht-reels approve <id>…`: audit trail only (the public feed itself is the source of truth for "already published"). */
+export function recordApproval(state: ReelsState, id: string, now: string): ReelsState {
+	return { ...state, approved: { ...state.approved, [id]: { date: now } } };
+}
+
+/** True when `id` was rejected; `build` excludes it unless `--force`. */
+export function isRejected(state: ReelsState, id: string): boolean {
+	return id in (state.rejected ?? {});
 }
 
 export function shouldSkip(state: ReelsState, id: string, maxAttempts: number = MAX_RENDER_ATTEMPTS): boolean {

@@ -5,7 +5,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { access, copyFile, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, cp, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { elevenLabsKeyFilePath, resolveElevenLabsApiKey } from "./api-key.ts";
 import {
@@ -24,6 +24,8 @@ import { pruneFeed, publishFeed, publishSite, readFeed } from "./publish.ts";
 import { DEFAULT_REELS_CONFIG, loadReelsConfig, type ReelsConfig } from "./reels-config.ts";
 import { buildReleaseGroups, listReleaseTags } from "./releases.ts";
 import { createBundle, publishAudioForRender, renderReel } from "./render.ts";
+import type { DraftScriptSnapshot } from "./review.ts";
+import { renderReviewMd } from "./review.ts";
 import {
 	type Lang,
 	llmWriter,
@@ -33,7 +35,17 @@ import {
 	withTemplateFallback,
 } from "./script.ts";
 import { toPublicSources } from "./sources.ts";
-import { cappedIds, MAX_RENDER_ATTEMPTS, readState, recordFailure, recordSuccess, writeState } from "./state.ts";
+import {
+	cappedIds,
+	MAX_RENDER_ATTEMPTS,
+	type ReelsState,
+	readState,
+	recordApproval,
+	recordFailure,
+	recordRejection,
+	recordSuccess,
+	writeState,
+} from "./state.ts";
 import { collectStories, isValidStoryId, selectStoryUnits, storyIdSha } from "./stories.ts";
 import type { DeepDiveMode } from "./story-writer.ts";
 import { CostMeter, writeStoryScript } from "./story-writer.ts";
@@ -617,8 +629,14 @@ async function runBuildStory(args: BuildArgs, overrides: BuildOverrides): Promis
 	await mkdir(draftsDir, { recursive: true });
 	let state = await readState(draftsBaseDir, name);
 	const capped = args.force ? new Set<string>() : cappedIds(state);
-	const draftedIds = (await readdir(draftsDir).catch(() => [] as string[])).filter((entry) => isValidStoryId(entry));
-	const publishedIds = new Set(draftedIds);
+	// A pending draft is not yet "published" (it has not gone through `approve`), so it must never anchor the
+	// floor/bootstrap window the way a real published id does — only the real public feed does that, same as
+	// `--unit commit`. `--force` re-selects a pending draft too (T12b: it "regenerates the draft" in place via
+	// `replaceDir`, same as an existing media dir); without `--force` it is filtered back out below.
+	const draftedIds = new Set((await readdir(draftsDir).catch(() => [] as string[])).filter(isValidStoryId));
+	const existingFeed = await readFeed(outDir, name);
+	const approvedIds = new Set(existingFeed?.reels.map((r) => r.id) ?? []);
+	const rejectedIds = args.force ? new Set<string>() : new Set(Object.keys(state.rejected ?? {}));
 
 	const groups = await collectOrFail(
 		() =>
@@ -652,9 +670,13 @@ async function runBuildStory(args: BuildArgs, overrides: BuildOverrides): Promis
 		return attribution.get(story.id) !== "weak";
 	});
 	const storyById = new Map(eligibleStories.map((story) => [story.id, story]));
-	const storyIds = eligibleStories.map((story) => story.id);
+	const storyIds = eligibleStories.map((story) => story.id).filter((id) => !rejectedIds.has(id));
+	for (const id of rejectedIds) {
+		if (storyById.has(id))
+			console.warn(`draht-reels: skipping rejected story ${id.slice(0, 12)} (use --force to retry)`);
+	}
 
-	const selection = selectStoryUnits(storyIds, publishedIds, capped, {
+	const selection = selectStoryUnits(storyIds, approvedIds, capped, {
 		allHistory: args.allHistory,
 		limit: args.limit,
 		force: args.force,
@@ -664,9 +686,11 @@ async function runBuildStory(args: BuildArgs, overrides: BuildOverrides): Promis
 			`draht-reels: skipping story ${id.slice(0, 12)} after ${MAX_RENDER_ATTEMPTS} failed attempts (use --force to retry)`,
 		);
 	}
-	console.log(`draht-reels: drafting ${selection.ids.length} story/stories`);
+	// A pending (not yet approved/rejected) draft is skipped by default; `--force` regenerates it in place.
+	const idsToProcess = selection.ids.filter((id) => args.force || !draftedIds.has(id));
+	console.log(`draht-reels: drafting ${idsToProcess.length} story/stories`);
 
-	const renderBundle = selection.ids.length > 0 && args.mode !== "audio" ? await createBundle() : undefined;
+	const renderBundle = idsToProcess.length > 0 && args.mode !== "audio" ? await createBundle() : undefined;
 	const budget = { targetChars: tokensToChars(STORY_CONTEXT_TARGET_TOKENS) };
 
 	const llmMeter = new CostMeter(maxCostUsd, maxLlmTokens);
@@ -675,7 +699,7 @@ async function runBuildStory(args: BuildArgs, overrides: BuildOverrides): Promis
 	let draftedCount = 0;
 	let failedCount = 0;
 
-	for (const id of selection.ids) {
+	for (const id of idsToProcess) {
 		if (!llmMeter.hasBudget() || !ttsMeter.hasBudget()) {
 			console.warn("draht-reels: stopping: a spend cap is reached; keeping already-drafted stories");
 			break;
@@ -687,6 +711,7 @@ async function runBuildStory(args: BuildArgs, overrides: BuildOverrides): Promis
 		const tmpDir = join(draftsDir, `.tmp-${randomUUID()}`);
 		try {
 			const ctx = await assembleStoryContext(story, args.repo, config, budget, { git });
+			const costBefore = llmMeter.spentAmount;
 			const writeResult = await writeStoryScript(story, ctx, complete, llmMeter, {
 				deepDive: args.deepDive,
 				lang: args.lang,
@@ -812,11 +837,15 @@ async function runBuildStory(args: BuildArgs, overrides: BuildOverrides): Promis
 				writer: writeResult.writer,
 			};
 
-			// Kept for review (T12b): every source handed to (or withheld from) the writer, by id, so a reviewer can
-			// check a cite's quote against the exact text the model saw, without re-assembling context from git.
-			const scriptSnapshot = {
+			// Kept for review (T12b): every source handed to (or withheld from) the writer, by id, plus the
+			// writer-internal claim/quote the validator stripped from the published beats, so a reviewer can check
+			// every claim next to its cited source's exact text without re-assembling context from git. Never
+			// merged into entry.json/feed.json: quotes are verbatim source text, which the public feed never carries.
+			const scriptSnapshot: DraftScriptSnapshot = {
 				script: writeResult.script,
+				notes: writeResult.notes,
 				deepDive: deepScript,
+				deepDiveNotes: writeResult.deepDive?.notes,
 				sources: Array.from(ctx.sources.values()).map((record) => ({
 					id: record.id,
 					kind: record.kind,
@@ -825,10 +854,24 @@ async function runBuildStory(args: BuildArgs, overrides: BuildOverrides): Promis
 					text: record.text,
 					included: record.included !== false,
 				})),
+				meta: {
+					title: entry.title,
+					origin: story.origin,
+					attribution: story.origin === "commit" ? attribution.get(id) : undefined,
+					release: story.release,
+					writer: writeResult.writer,
+					repaired: writeResult.repaired,
+					costUsd: llmMeter.spentAmount - costBefore,
+					createdAt: now(),
+					deepDive: writeResult.deepDive
+						? { writer: writeResult.deepDive.writer, repaired: writeResult.deepDive.repaired }
+						: undefined,
+				},
 			};
 
 			await writeFile(join(tmpDir, "entry.json"), `${JSON.stringify(entry, null, "\t")}\n`);
 			await writeFile(join(tmpDir, "script.json"), `${JSON.stringify(scriptSnapshot, null, "\t")}\n`);
+			await writeFile(join(tmpDir, "review.md"), renderReviewMd(entry, scriptSnapshot));
 
 			await replaceDir(finalDir, tmpDir);
 			draftedCount++;
@@ -850,6 +893,201 @@ async function runBuildStory(args: BuildArgs, overrides: BuildOverrides): Promis
 		`draht-reels: spend — LLM $${llmMeter.spentAmount.toFixed(2)}/$${maxCostUsd}, ${llmMeter.spentTokenAmount}/${maxLlmTokens} tokens; TTS ${ttsMeter.spentAmount}/${maxTtsChars} chars`,
 	);
 	return { published: draftedCount, failed: failedCount };
+}
+
+/** Shared `--repo`/`--name`/`--out`/`--drafts-dir`/`--config` target for `review`/`approve`/`reject` (the publish-gate commands, T12b). */
+interface DraftTargetArgs {
+	repo: string;
+	name?: string;
+	out: string;
+	draftsDir?: string;
+	config?: string;
+}
+
+function parseDraftTargetFlag(args: DraftTargetArgs, flag: string, value: string): boolean {
+	switch (flag) {
+		case "--repo":
+			args.repo = value;
+			return true;
+		case "--name":
+			args.name = value;
+			return true;
+		case "--out":
+			args.out = value;
+			return true;
+		case "--drafts-dir":
+			args.draftsDir = value;
+			return true;
+		case "--config":
+			args.config = value;
+			return true;
+		default:
+			return false;
+	}
+}
+
+const DRAFT_TARGET_FLAGS = new Set(["--repo", "--name", "--out", "--drafts-dir", "--config"]);
+
+function parseReviewArgs(argv: string[]): DraftTargetArgs & { id?: string } {
+	const args: DraftTargetArgs & { id?: string } = { repo: process.cwd(), out: "./reels-site" };
+	for (let i = 0; i < argv.length; i++) {
+		const a = argv[i];
+		if (a !== undefined && DRAFT_TARGET_FLAGS.has(a)) {
+			parseDraftTargetFlag(args, a, takeValue(argv, ++i, a));
+		} else if (a !== undefined && !a.startsWith("--") && args.id === undefined) {
+			args.id = a;
+		} else {
+			fail(`unknown option "${a}"`);
+		}
+	}
+	return args;
+}
+
+function parseApproveArgs(argv: string[]): DraftTargetArgs & { ids: string[] } {
+	const args: DraftTargetArgs & { ids: string[] } = { repo: process.cwd(), out: "./reels-site", ids: [] };
+	for (let i = 0; i < argv.length; i++) {
+		const a = argv[i];
+		if (a !== undefined && DRAFT_TARGET_FLAGS.has(a)) {
+			parseDraftTargetFlag(args, a, takeValue(argv, ++i, a));
+		} else if (a !== undefined && !a.startsWith("--")) {
+			args.ids.push(a);
+		} else {
+			fail(`unknown option "${a}"`);
+		}
+	}
+	if (args.ids.length === 0) fail("approve requires at least one draft id");
+	return args;
+}
+
+function parseRejectArgs(argv: string[]): DraftTargetArgs & { ids: string[]; reason?: string } {
+	const args: DraftTargetArgs & { ids: string[]; reason?: string } = {
+		repo: process.cwd(),
+		out: "./reels-site",
+		ids: [],
+	};
+	for (let i = 0; i < argv.length; i++) {
+		const a = argv[i];
+		if (a === "--reason") {
+			args.reason = takeValue(argv, ++i, a);
+		} else if (a !== undefined && DRAFT_TARGET_FLAGS.has(a)) {
+			parseDraftTargetFlag(args, a, takeValue(argv, ++i, a));
+		} else if (a !== undefined && !a.startsWith("--")) {
+			args.ids.push(a);
+		} else {
+			fail(`unknown option "${a}"`);
+		}
+	}
+	if (args.ids.length === 0) fail("reject requires at least one draft id");
+	return args;
+}
+
+/** `<draftsDir>/<name>` for `review`/`approve`/`reject`: same `--drafts-dir` > `.reels.json`'s `build.draftsDir` > default rule `runBuildStory` uses, so a draft's id resolves to the same path under either command. */
+async function resolveDraftPaths(
+	args: DraftTargetArgs,
+): Promise<{ name: string; draftsDir: string; draftsBaseDir: string; outDir: string }> {
+	const config = await resolveReelsConfig(args);
+	const name = repoName(args);
+	const draftsBaseDir = resolve(args.draftsDir ?? config.build.draftsDir ?? defaultDraftsDir(args.repo));
+	return { name, draftsDir: join(draftsBaseDir, name), draftsBaseDir, outDir: resolve(args.out) };
+}
+
+async function readJsonFile<T>(path: string): Promise<T> {
+	return JSON.parse(await readFile(path, "utf-8")) as T;
+}
+
+/** `draht-reels review [<id>]`: without an id, lists pending drafts; with one, prints that draft's `review.md` (T12b's human approval view — every claim next to its cited source text). */
+export async function runReview(argv: string[]): Promise<void> {
+	const args = parseReviewArgs(argv);
+	const { draftsDir } = await resolveDraftPaths(args);
+
+	if (args.id !== undefined) {
+		if (!isValidStoryId(args.id)) fail(`"${args.id}" is not a valid draft id`);
+		let content: string;
+		try {
+			content = await readFile(join(draftsDir, args.id, "review.md"), "utf-8");
+		} catch {
+			fail(`no draft "${args.id}" in ${draftsDir}`);
+		}
+		console.log(content);
+		return;
+	}
+
+	const ids = (await readdir(draftsDir).catch(() => [] as string[])).filter(isValidStoryId);
+	if (ids.length === 0) {
+		console.log(`draht-reels: no drafts in ${draftsDir}`);
+		return;
+	}
+	for (const id of ids) {
+		const entry = await readJsonFile<ReelEntry>(join(draftsDir, id, "entry.json"));
+		const snapshot = await readJsonFile<DraftScriptSnapshot>(join(draftsDir, id, "script.json"));
+		console.log(
+			`${id}  ${entry.title}  release=${entry.release ?? "unreleased"}  created=${snapshot.meta.createdAt}  writer=${entry.writer ?? "template"}`,
+		);
+	}
+}
+
+/** `draht-reels approve <id>…`: publishes a draft's media and feed entry (same atomic media → feed → repos.json order `publishFeed` already uses), removes the draft, and records the approval in state. Idempotent: approving an id with no pending draft is a no-op. */
+export async function runApprove(argv: string[]): Promise<void> {
+	const args = parseApproveArgs(argv);
+	const { name, draftsDir, draftsBaseDir, outDir } = await resolveDraftPaths(args);
+	const mediaDir = join(outDir, name, "reels");
+	await mkdir(mediaDir, { recursive: true });
+
+	let state: ReelsState = await readState(draftsBaseDir, name);
+	for (const id of args.ids) {
+		if (!isValidStoryId(id)) {
+			console.error(`draht-reels: "${id}" is not a valid draft id`);
+			process.exitCode = 1;
+			continue;
+		}
+		const draftDir = join(draftsDir, id);
+		if (!(await pathExists(draftDir))) {
+			console.log(
+				`draht-reels: ${id} has no pending draft (already approved, rejected, or never drafted); nothing to do`,
+			);
+			continue;
+		}
+
+		const entry = await readJsonFile<ReelEntry>(join(draftDir, "entry.json"));
+		const finalDir = join(mediaDir, id);
+		const mediaTmp = join(mediaDir, `.tmp-${id}-${randomUUID()}`);
+		await cp(draftDir, mediaTmp, { recursive: true });
+		await rm(join(mediaTmp, "entry.json"), { force: true });
+		await rm(join(mediaTmp, "script.json"), { force: true });
+		await rm(join(mediaTmp, "review.md"), { force: true });
+		await replaceDir(finalDir, mediaTmp);
+
+		await publishFeed({ outDir, repo: { name }, entries: [entry] });
+
+		await rm(draftDir, { recursive: true, force: true });
+		state = recordApproval(state, id, new Date().toISOString());
+		await writeState(draftsBaseDir, name, state);
+		console.log(`draht-reels: approved ${id}`);
+	}
+}
+
+/** `draht-reels reject <id> [--reason <text>]`: deletes the draft and records the rejection, so `build` skips it unless `--force`. */
+export async function runReject(argv: string[]): Promise<void> {
+	const args = parseRejectArgs(argv);
+	const { name, draftsDir, draftsBaseDir } = await resolveDraftPaths(args);
+
+	let state: ReelsState = await readState(draftsBaseDir, name);
+	for (const id of args.ids) {
+		if (!isValidStoryId(id)) {
+			console.error(`draht-reels: "${id}" is not a valid draft id`);
+			process.exitCode = 1;
+			continue;
+		}
+		const draftDir = join(draftsDir, id);
+		if (!(await pathExists(draftDir))) {
+			console.log(`draht-reels: ${id} has no pending draft; nothing to do`);
+			continue;
+		}
+		await rm(draftDir, { recursive: true, force: true });
+		state = recordRejection(state, id, new Date().toISOString(), args.reason);
+		await writeState(draftsBaseDir, name, state);
+		console.log(`draht-reels: rejected ${id}${args.reason ? ` (${args.reason})` : ""}`);
+	}
 }
 
 async function runSite(argv: string[]): Promise<void> {
@@ -923,8 +1161,17 @@ async function main(): Promise<void> {
 		case "prune":
 			await runPrune(rest);
 			break;
+		case "review":
+			await runReview(rest);
+			break;
+		case "approve":
+			await runApprove(rest);
+			break;
+		case "reject":
+			await runReject(rest);
+			break;
 		default:
-			console.log("usage: draht-reels <build|site|plan|prune> [options]");
+			console.log("usage: draht-reels <build|site|plan|prune|review|approve|reject> [options]");
 			if (command && command !== "--help" && command !== "-h") process.exit(1);
 	}
 }

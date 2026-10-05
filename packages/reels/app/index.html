@@ -3,11 +3,16 @@
 	<head>
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-		<meta name="theme-color" content="#0a0a0c" />
+		<meta name="theme-color" content="#0e0d0b" />
 		<title>Draht Reels</title>
 		<link rel="manifest" href="./manifest.webmanifest" />
 		<link rel="icon" href="./icons/icon.svg" type="image/svg+xml" />
 		<link rel="apple-touch-icon" href="./icons/icon.svg" />
+		<!-- Self-hosted fonts, preloaded so they make first paint (font-display:
+		     optional in styles.css guarantees no visible swap if they don't). -->
+		<link rel="preload" href="./fonts/instrument-serif-italic-latin.woff2" as="font" type="font/woff2" crossorigin />
+		<link rel="preload" href="./fonts/instrument-sans-latin.woff2" as="font" type="font/woff2" crossorigin />
+		<link rel="preload" href="./fonts/geist-mono-latin.woff2" as="font" type="font/woff2" crossorigin />
 		<style>
 			html,
 			body,
@@ -17,8 +22,8 @@
 			}
 
 			body {
-				background: #0a0a0c;
-				color: #f2f2f2;
+				background: #0e0d0b;
+				color: #efe7d8;
 				font-family:
 					system-ui,
 					-apple-system,

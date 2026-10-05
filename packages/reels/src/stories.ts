@@ -443,6 +443,45 @@ export function isValidStoryId(id: string): boolean {
 	return STORY_ID_RE.test(id);
 }
 
+/** Validates a release tag as a safe path segment (D9's `releases/<tag>` media dir, and the `release-<tag>`/`recap-<tag>` id convention below): no `../`, no `/`, no leading dot. Canonical home for this pattern; `publish.ts` re-exports it. */
+export const SAFE_TAG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+const RELEASE_ARTIFACT_ID_RE = /^(release|recap)-(.+)$/;
+
+/**
+ * The stable id for a release overview draft/entry: `release-<tag>`, or
+ * `release-unreleased` for the still-open "Unreleased" group (matching
+ * `release-writer.ts`'s own `release-${tag ?? "unreleased"}` convention).
+ */
+export function releaseOverviewId(tag: string): string {
+	if (!SAFE_TAG_RE.test(tag)) throw new Error(`"${tag}" is not a valid release tag`);
+	return `release-${tag}`;
+}
+
+/** The stable id for a pooled upstream-recap draft/entry: `recap-<tag>` (T11 finding: one recap per release, not per sync merge). */
+export function recapId(tag: string): string {
+	if (!SAFE_TAG_RE.test(tag)) throw new Error(`"${tag}" is not a valid release tag`);
+	return `recap-${tag}`;
+}
+
+/** Validates a `release-<tag>` or `recap-<tag>` id: sibling to {@link isValidStoryId} for the other two draft/entry kinds `build`'s `release` command writes. */
+export function isValidReleaseArtifactId(id: string): boolean {
+	const match = RELEASE_ARTIFACT_ID_RE.exec(id);
+	return match !== null && SAFE_TAG_RE.test(match[2] as string);
+}
+
+/** The tag a `release-<tag>`/`recap-<tag>` id was built from. Throws on an id that does not match either shape — callers must check {@link isValidReleaseArtifactId} first. */
+export function releaseArtifactTag(id: string): string {
+	const match = RELEASE_ARTIFACT_ID_RE.exec(id);
+	if (!match) throw new Error(`"${id}" is not a valid release/recap id`);
+	return match[2] as string;
+}
+
+/** True for any id this pipeline ever writes as a draft directory or feed entry: a story id, or a release overview / sync recap id. Use wherever a bare {@link isValidStoryId} check used to be the complete one (draft listing, approve/reject, prune). */
+export function isValidDraftId(id: string): boolean {
+	return isValidStoryId(id) || isValidReleaseArtifactId(id);
+}
+
 /** The sha a story id is built from, stripping any `-<hash8>` disambiguation suffix — the part every `git`/`fetchCommitMetadata` call must use instead of the raw id. */
 export function storyIdSha(id: string): string {
 	const match = STORY_ID_SHA_RE.exec(id);
@@ -715,4 +754,42 @@ export async function collectStories(
 	}
 
 	return { stories, syncRecap, attribution, skipped };
+}
+
+/** One release's pooled upstream-carried material, fed to `release-writer.ts`'s `writeSyncRecap` (T11 finding). */
+export interface ReleaseUpstreamPool {
+	/** This release's `upstream-sync` merge units, informational (mentioned in the recap's narration, never a theme). */
+	syncMerges: Array<{ sha: string; subject: string; commitCount: number }>;
+	/** This release's direct `upstream: <type>(scope): ...` replay commits (`isUpstreamCarriedSubject`), the common case in draht: upstream work usually arrives this way, not inside a sync merge. */
+	upstreamCommits: Array<{ sha: string; subject: string }>;
+	/** The changelog anchors `collectStories` routed to `syncRecap` for this release: the actual narration material. */
+	anchors: SyncRecapAnchor[];
+}
+
+/**
+ * Pools one release's upstream-carried material: the `syncRecap` anchors
+ * `collectStories` already routed away from story-hood (owned by an
+ * `upstream-sync` merge or an `upstream:`-prefixed commit), plus the sync
+ * merges and direct `upstream:` commits themselves (informational — never
+ * narrated as their own reel). T11 finding: in draht, upstream changes are
+ * spread over `upstream:` commits across a release, not concentrated inside
+ * its sync merges, so recapping per-merge (the original owner decision Q2)
+ * would mostly produce empty recaps; pooling by release is what actually has
+ * material to narrate. The pool is "non-empty" — worth drafting a recap for
+ * — exactly when `anchors.length > 0`: `syncMerges`/`upstreamCommits` with no
+ * routed anchor carry nothing a recap could narrate (no changelog entry).
+ */
+export function poolReleaseUpstreamRecap(
+	units: readonly MainlineUnit[],
+	syncRecap: readonly SyncRecapAnchor[],
+): ReleaseUpstreamPool {
+	return {
+		syncMerges: units
+			.filter((u) => u.class === "upstream-sync")
+			.map((u) => ({ sha: u.sha, subject: u.subject, commitCount: u.branchShas?.length ?? 0 })),
+		upstreamCommits: units
+			.filter((u) => u.class === "commit" && isUpstreamCarriedSubject(u.subject))
+			.map((u) => ({ sha: u.sha, subject: u.subject })),
+		anchors: [...syncRecap],
+	};
 }

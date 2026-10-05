@@ -7,7 +7,7 @@ import { access, cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/prom
 import { join, resolve, sep } from "node:path";
 import { assertValidSha } from "./collect.ts";
 import { FEED_SCHEMA_VERSION, type Feed, type ReelEntry, type ReleasePlaylist, type RepoIndex } from "./contract.ts";
-import { isValidStoryId, storyIdSha } from "./stories.ts";
+import { isValidReleaseArtifactId, isValidStoryId, releaseArtifactTag, SAFE_TAG_RE, storyIdSha } from "./stories.ts";
 
 export interface RepoMeta {
 	name: string;
@@ -15,8 +15,8 @@ export interface RepoMeta {
 	commitUrlTemplate?: string;
 }
 
-/** Validates a release tag as a safe path segment under `releases/<tag>` (D9): no `../`, no `/`, no leading dot. */
-export const SAFE_TAG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+/** Re-exported for callers that only need the tag pattern; `stories.ts` is its canonical home (shared with the `release-<tag>`/`recap-<tag>` id convention). */
+export { SAFE_TAG_RE };
 
 /** Thrown by {@link readFeed}-family readers when a feed's `schemaVersion` is newer than this build understands. */
 export class FeedVersionError extends Error {}
@@ -189,18 +189,28 @@ export interface MainlineReachability {
 	tags: ReadonlySet<string>;
 }
 
-/** The release tag of a `kind: "release"` entry, from `release` or (fallback) the `release-<tag>` id. */
+/** The release tag of a `kind: "release"`/`kind: "recap"` entry, from `release` or (fallback) the `release-<tag>`/`recap-<tag>` id. */
 function releaseEntryTag(entry: ReelEntry): string | undefined {
-	return entry.release ?? entry.id.replace(/^release-/, "");
+	if (entry.release !== undefined) return entry.release;
+	return isValidReleaseArtifactId(entry.id) ? releaseArtifactTag(entry.id) : undefined;
 }
 
 /** A changelog story's id (stories.ts's `computeChangelogStoryId`) is `<anchorSha>-<hash8>`, never itself a sha, so reachability must compare against the sha part only. */
 const STORY_ID_SHA_RE = /^[0-9a-f]{40}([0-9a-f]{24})?/;
 
+/**
+ * Release overview and sync recap entries belong to a release, never to a
+ * reachable sha, so they are kept exactly when their tag is reachable — with
+ * one exception: the still-open "Unreleased" group's `release-unreleased`/
+ * `recap-unreleased` id names no real git tag (never in `reachable.tags`),
+ * so it is always kept; the next `approve` naturally replaces it as the
+ * release moves on.
+ */
 function isEntryReachable(entry: ReelEntry, reachable: MainlineReachability): boolean {
-	if (entry.kind === "release") {
+	if (entry.kind === "release" || entry.kind === "recap") {
 		const tag = releaseEntryTag(entry);
-		return tag !== undefined && SAFE_TAG_RE.test(tag) && reachable.tags.has(tag);
+		if (tag === undefined || !SAFE_TAG_RE.test(tag)) return false;
+		return tag === "unreleased" || reachable.tags.has(tag);
 	}
 	if (reachable.shas.has(entry.id)) return true;
 	const sha = STORY_ID_SHA_RE.exec(entry.id)?.[0];
@@ -250,7 +260,21 @@ export async function pruneFeed(
 
 	const reelsDir = resolve(outDir, repoName, "reels");
 	for (const entry of removed) {
-		if (entry.kind === "release") continue;
+		if (entry.kind === "release" || entry.kind === "recap") {
+			// Published the same way a story is (`reels/<id>/`, T12c): `id` is
+			// already a validated `release-<tag>`/`recap-<tag>` path segment.
+			if (!isValidReleaseArtifactId(entry.id)) {
+				console.warn(`draht-reels: skipping media prune for entry with invalid id "${entry.id}"`);
+				continue;
+			}
+			const target = resolve(reelsDir, entry.id);
+			if (target !== reelsDir && !target.startsWith(reelsDir + sep)) {
+				console.warn(`draht-reels: refusing to prune path outside the reels directory: ${target}`);
+				continue;
+			}
+			await rm(target, { recursive: true, force: true });
+			continue;
+		}
 		// A changelog story's id is `<sha>-<hash8>` (stories.ts's
 		// computeChangelogStoryId), never itself a bare sha, so `assertValidSha`
 		// alone rejects it and its media would never be pruned. Validate the
@@ -285,7 +309,7 @@ export async function pruneFeed(
 		releaseTagsToRemove.add(tag);
 	}
 	for (const entry of removed) {
-		if (entry.kind !== "release") continue;
+		if (entry.kind !== "release" && entry.kind !== "recap") continue;
 		const tag = releaseEntryTag(entry);
 		if (tag === undefined) continue;
 		if (!SAFE_TAG_RE.test(tag)) {

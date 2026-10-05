@@ -400,8 +400,8 @@ function changelogEntry(
 }
 
 const RECAP_INPUT: SyncRecapInput = {
-	mergeTitle: "sync upstream through v0.99.2",
-	mergeSha12: "dddddddddddd",
+	title: "sync upstream through v0.99.2",
+	id: "dddddddddddd",
 	commits: [
 		{ sha12: "111111111111", subject: "feat(ai): add thinking budget" },
 		{ sha12: "222222222222", subject: "fix(cli): correct flag parsing" },

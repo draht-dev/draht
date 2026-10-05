@@ -17,13 +17,37 @@ import {
 	selectBuildShas,
 } from "./collect.ts";
 import { assembleStoryContext, tokensToChars } from "./context.ts";
-import type { ChangeSet, ReelEntry, ReelMedia, ReelScript, Scene, Story } from "./contract.ts";
+import type {
+	ChangeSet,
+	FileChange,
+	ReelEntry,
+	ReelMedia,
+	ReelScript,
+	ReleasePlaylist,
+	Scene,
+	Story,
+} from "./contract.ts";
 import { createGithubLookup, type GithubLookup, isNestedInside, parseGithubRepo } from "./github.ts";
 import { applyContentPolicy, DEFAULT_DENY_GLOBS, redactText } from "./privacy.ts";
-import { pruneFeed, publishFeed, publishSite, readFeed } from "./publish.ts";
+import { mergePlaylists, pruneFeed, publishFeed, publishSite, readFeed } from "./publish.ts";
 import { DEFAULT_REELS_CONFIG, loadReelsConfig, type ReelsConfig } from "./reels-config.ts";
-import { buildReleaseGroups, listReleaseTags } from "./releases.ts";
-import { createBundle, publishAudioForRender, renderReel } from "./render.ts";
+import {
+	buildRecapSourceRegistry,
+	buildReleaseSourceRegistry,
+	type ChangelogSection,
+	type RecapChangelogInput,
+	type RecapCommitInput,
+	type ReleaseOverviewInput,
+	type ReleaseStoryInput,
+	type SyncRecapInput,
+	type SyncSummaryInput,
+	selectRecapCommits,
+	type WeakFeatureInput,
+	writeReleaseOverview,
+	writeSyncRecap,
+} from "./release-writer.ts";
+import { buildReleaseGroups, listReleaseTags, type ReleaseGroup } from "./releases.ts";
+import { type Bundle, createBundle, publishAudioForRender, renderReel } from "./render.ts";
 import type { DraftScriptSnapshot } from "./review.ts";
 import { renderReviewMd } from "./review.ts";
 import {
@@ -34,7 +58,7 @@ import {
 	templateWriter,
 	withTemplateFallback,
 } from "./script.ts";
-import { toPublicSources } from "./sources.ts";
+import { changelogSourceId, type SourceRegistry, toPublicSources } from "./sources.ts";
 import {
 	cappedIds,
 	MAX_RENDER_ATTEMPTS,
@@ -46,7 +70,18 @@ import {
 	recordSuccess,
 	writeState,
 } from "./state.ts";
-import { collectStories, isValidStoryId, selectStoryUnits, storyIdSha } from "./stories.ts";
+import {
+	collectStories,
+	isValidDraftId,
+	isValidReleaseArtifactId,
+	isValidStoryId,
+	poolReleaseUpstreamRecap,
+	recapId,
+	releaseArtifactTag,
+	releaseOverviewId,
+	selectStoryUnits,
+	storyIdSha,
+} from "./stories.ts";
 import type { DeepDiveMode } from "./story-writer.ts";
 import { CostMeter, writeStoryScript } from "./story-writer.ts";
 import {
@@ -571,6 +606,432 @@ function countTtsChars(scenes: readonly Scene[], model: string): number {
 	return scenes.reduce((sum, scene) => sum + sanitizeForV4(normalizeBeats(scene).narration, model).length, 0);
 }
 
+/** A story's (or weak feature's) deterministic theme/package key — `computeReleaseThemes`' grouping key (D-documented in `StoryMeta.theme`) — from its first `packages/<pkg>/...` changed path, else `"general"`. Never chosen by a writer. */
+function topPackage(files: readonly FileChange[]): string {
+	for (const file of files) {
+		const match = /^packages\/([^/]+)\//.exec(file.path);
+		if (match) return match[1] as string;
+	}
+	return "general";
+}
+
+/** The "hook" scene's narration, used as a story's one-line summary for the release overview when one was rendered (`ReleaseStoryInput.summary`); `undefined` when the story has no hook scene (e.g. the template writer's commit-origin output). */
+function hookSummary(entry: Pick<ReelEntry, "scenes">): string | undefined {
+	return entry.scenes.find((s) => s.section === "hook")?.narration || undefined;
+}
+
+const CHANGELOG_SECTIONS = new Set<ChangelogSection>(["Breaking Changes", "Added", "Changed", "Fixed", "Removed"]);
+
+/** Narrows a `ChangelogAnchor.section` string (a CHANGELOG.md heading) to the closed set `release-writer.ts` ranks by, or `undefined` for a heading outside that set (never ranked, not an error). */
+function asChangelogSection(section: string): ChangelogSection | undefined {
+	return CHANGELOG_SECTIONS.has(section as ChangelogSection) ? (section as ChangelogSection) : undefined;
+}
+
+function toReleaseStoryInput(entry: ReelEntry): ReleaseStoryInput {
+	return {
+		sha12: entry.id.slice(0, 12),
+		title: entry.title,
+		origin: entry.story?.origin ?? "commit",
+		summary: entry.story?.summary ?? hookSummary(entry),
+		packages: [entry.story?.theme || "general"],
+	};
+}
+
+/**
+ * This release's story inputs for the overview writer (T12c): approved
+ * entries (from the public feed) plus pending drafts (this run's own, and
+ * any already on disk from an earlier run) for `tag`, converted to {@link
+ * ReleaseStoryInput}. A story can never be both at once (`approve` deletes
+ * its draft), so there is nothing to de-duplicate.
+ */
+async function collectReleaseStoryInputs(
+	outDir: string,
+	name: string,
+	draftsDir: string,
+	tag: string | undefined,
+): Promise<ReleaseStoryInput[]> {
+	const feed = await readFeed(outDir, name);
+	const approved = (feed?.reels ?? []).filter((r) => r.kind === "story" && r.release === tag);
+
+	const draftIds = (await readdir(draftsDir).catch(() => [] as string[])).filter(isValidStoryId);
+	const pending: ReelEntry[] = [];
+	for (const id of draftIds) {
+		try {
+			pending.push(await readJsonFile<ReelEntry>(join(draftsDir, id, "entry.json")));
+		} catch {
+			// A draft directory mid-write (no entry.json yet) is not this run's concern; it will exist next run.
+		}
+	}
+
+	return [...approved, ...pending.filter((e) => e.kind === "story" && e.release === tag)].map(toReleaseStoryInput);
+}
+
+/**
+ * Weak-attributed changelog stories excluded from their own reel by
+ * `story.minAttribution` (default `"strong"`): listed in the release
+ * overview instead (owner decision on weak stories), never duplicated when
+ * `minAttribution: "weak"` lets them become their own story (then they are
+ * simply absent from `storyById`'s complement below).
+ */
+function collectWeakFeatures(
+	group: ReleaseGroup,
+	allStories: readonly Story[],
+	attribution: ReadonlyMap<string, "strong" | "weak">,
+	storyById: ReadonlyMap<string, Story>,
+): WeakFeatureInput[] {
+	return allStories
+		.filter(
+			(s) =>
+				s.release === group.tag &&
+				s.origin === "commit" &&
+				attribution.get(s.id) === "weak" &&
+				!storyById.has(s.id),
+		)
+		.map((s, i) => ({
+			title: s.title,
+			anchorText: s.title,
+			changelogSourceId: changelogSourceId(topPackage(s.files), group.tag ?? "unreleased", i),
+		}));
+}
+
+/** One release overview or sync recap, ready to render into a draft the same way a story is. */
+interface ReleaseArtifactDraft {
+	id: string;
+	kind: "release" | "recap";
+	title: string;
+	release: string | undefined;
+	script: ReelScript;
+	writer: "llm" | "template";
+	repaired: boolean;
+	costUsd: number;
+	sources: SourceRegistry;
+	recap?: NonNullable<ReelEntry["recap"]>;
+}
+
+/**
+ * Writes a release overview for `group` unless it is tiny, sharing `llmMeter`
+ * with story drafting (T12c: "same cost caps"). Returns `undefined` for a
+ * tiny release (nothing to draft).
+ */
+async function writeReleaseOverviewArtifact(
+	group: ReleaseGroup,
+	opts: {
+		outDir: string;
+		name: string;
+		draftsDir: string;
+		allStories: readonly Story[];
+		attribution: ReadonlyMap<string, "strong" | "weak">;
+		storyById: ReadonlyMap<string, Story>;
+		complete: ModelCompleter;
+		llmMeter: CostMeter;
+		denyPatterns: RegExp[];
+		onFallback?: (reason: string) => void;
+	},
+): Promise<ReleaseArtifactDraft | undefined> {
+	if (group.tiny) return undefined;
+	const tag = group.tag;
+	const stories = await collectReleaseStoryInputs(opts.outDir, opts.name, opts.draftsDir, tag);
+	const weakFeatures = collectWeakFeatures(group, opts.allStories, opts.attribution, opts.storyById);
+	const pool = poolReleaseUpstreamRecap(group.units, []); // syncs mention only; anchors belong to the recap, not the overview
+	const syncs: SyncSummaryInput[] = pool.syncMerges.map((m) => ({ title: m.subject, commitCount: m.commitCount }));
+
+	const input: ReleaseOverviewInput = { tag, stories, weakFeatures, syncs, tiny: group.tiny };
+	const costBefore = opts.llmMeter.spentAmount;
+	const result = await writeReleaseOverview(input, opts.complete, opts.llmMeter, {
+		denyPatterns: opts.denyPatterns,
+		onFallback: opts.onFallback,
+	});
+	if (!result.ok) return undefined;
+
+	return {
+		id: releaseOverviewId(tag ?? "unreleased"),
+		kind: "release",
+		title: `Release overview: ${tag ?? "Unreleased"}`,
+		release: tag,
+		script: result.script,
+		writer: result.writer,
+		repaired: result.repaired,
+		costUsd: opts.llmMeter.spentAmount - costBefore,
+		sources: buildReleaseSourceRegistry(input),
+	};
+}
+
+/**
+ * Writes the pooled upstream recap for `group` (T11 finding) when its pool
+ * is non-empty, sharing `llmMeter` with story drafting. Returns `undefined`
+ * when the release carries no routed anchor to narrate.
+ */
+async function writeRecapArtifact(
+	group: ReleaseGroup,
+	pool: ReturnType<typeof poolReleaseUpstreamRecap>,
+	opts: {
+		complete: ModelCompleter;
+		llmMeter: CostMeter;
+		denyPatterns: RegExp[];
+		onFallback?: (reason: string) => void;
+	},
+): Promise<ReleaseArtifactDraft | undefined> {
+	if (pool.anchors.length === 0) return undefined;
+	const tag = group.tag;
+
+	const commits: RecapCommitInput[] = pool.upstreamCommits.map((c) => ({
+		sha12: c.sha.slice(0, 12),
+		subject: c.subject,
+	}));
+	const changelogEntries: RecapChangelogInput[] = pool.anchors.map(({ anchor }, i) => ({
+		text: anchor.entryText,
+		sourceId: changelogSourceId(anchor.packages[0] ?? "general", tag ?? "unreleased", i),
+		pkg: anchor.packages[0] ?? "general",
+		section: asChangelogSection(anchor.section),
+	}));
+	const title =
+		pool.syncMerges.length > 0
+			? pool.syncMerges.map((m) => m.subject).join(", ")
+			: `upstream-carried changes in ${tag ?? "this release"}`;
+	const input: SyncRecapInput = {
+		title,
+		id: tag ?? "unreleased",
+		commits,
+		changelogEntries,
+		versionRange: group.previousTag ? `${group.previousTag}..${tag}` : undefined,
+	};
+
+	const costBefore = opts.llmMeter.spentAmount;
+	const result = await writeSyncRecap(input, opts.complete, opts.llmMeter, {
+		denyPatterns: opts.denyPatterns,
+		onFallback: opts.onFallback,
+	});
+	const shownCommits = selectRecapCommits(input.commits);
+	const sources = buildRecapSourceRegistry(input, result.themes, shownCommits);
+	const commitCount = pool.syncMerges.reduce((sum, m) => sum + m.commitCount, 0) + pool.upstreamCommits.length;
+
+	return {
+		id: recapId(tag ?? "unreleased"),
+		kind: "recap",
+		title: `Upstream recap: ${tag ?? "Unreleased"}`,
+		release: tag,
+		script: result.script,
+		writer: result.writer,
+		repaired: result.repaired,
+		costUsd: opts.llmMeter.spentAmount - costBefore,
+		sources,
+		recap: {
+			fromRef: group.previousTag ?? "",
+			toRef: tag ?? "unreleased",
+			commitCount,
+			themes: result.themes.map((t) => ({ name: t.name, sourceIds: t.sourceIds })),
+		},
+	};
+}
+
+/** Renders `artifact`'s TTS/video (same media layout as a story draft, no deep dive) and writes `entry.json`/`script.json`/`review.md`, then atomically replaces the final draft dir — the same shape `runBuildStory`'s per-story loop writes. */
+async function renderReleaseArtifactDraft(
+	artifact: ReleaseArtifactDraft,
+	opts: {
+		draftsDir: string;
+		tts: TtsProvider;
+		renderBundle: Bundle | undefined;
+		concurrency?: number;
+		now: () => string;
+	},
+): Promise<void> {
+	const finalDir = join(opts.draftsDir, artifact.id);
+	const tmpDir = join(opts.draftsDir, `.tmp-${randomUUID()}`);
+	await mkdir(tmpDir, { recursive: true });
+
+	const narration = await opts.tts.synthesize(artifact.script.scenes, tmpDir);
+	let video: string | undefined;
+	let poster: string | undefined;
+	let durationMs = narration.transcript.reduce((max, s) => Math.max(max, s.endMs), 0);
+	if (opts.renderBundle) {
+		const videoPath = join(tmpDir, "video.mp4");
+		const posterPath = join(tmpDir, "poster.jpg");
+		const audioSrc = narration.audioPath
+			? await publishAudioForRender(opts.renderBundle, artifact.id, narration.audioPath)
+			: undefined;
+		const result = await renderReel({
+			bundle: opts.renderBundle,
+			props: { scenes: artifact.script.scenes, transcript: narration.transcript, audioSrc },
+			outVideoPath: videoPath,
+			outPosterPath: posterPath,
+			concurrency: opts.concurrency,
+		});
+		video = "video.mp4";
+		poster = "poster.jpg";
+		durationMs = Math.max(durationMs, Math.round((result.durationInFrames / result.fps) * 1000));
+	}
+	if (narration.audioPath) {
+		const target = join(tmpDir, "audio.mp3");
+		if (narration.audioPath !== target) await copyFile(narration.audioPath, target);
+	}
+
+	const entry: ReelEntry = {
+		id: artifact.id,
+		commits: [],
+		title: artifact.title,
+		authors: [],
+		date: opts.now(),
+		durationMs,
+		video,
+		audio: narration.audioPath ? "audio.mp3" : undefined,
+		poster,
+		scenes: artifact.script.scenes,
+		transcript: narration.transcript,
+		stats: { files: 0, additions: 0, deletions: 0 },
+		kind: artifact.kind,
+		release: artifact.release,
+		sources: toPublicSources(artifact.sources),
+		writer: artifact.writer,
+		recap: artifact.recap,
+	};
+
+	// `DraftMeta.origin` has no "release"/"recap" option (it documents a *story's* provenance); "commit" is an
+	// inert placeholder here — review.md's header line is cosmetic for these two kinds, never validated.
+	const scriptSnapshot: DraftScriptSnapshot = {
+		script: artifact.script,
+		sources: Array.from(artifact.sources.values()).map((record) => ({
+			id: record.id,
+			kind: record.kind,
+			label: record.label,
+			url: record.url,
+			text: record.text,
+			included: record.included !== false,
+		})),
+		meta: {
+			title: entry.title,
+			origin: "commit",
+			release: artifact.release,
+			writer: artifact.writer,
+			repaired: artifact.repaired,
+			costUsd: artifact.costUsd,
+			createdAt: opts.now(),
+		},
+	};
+
+	await writeFile(join(tmpDir, "entry.json"), `${JSON.stringify(entry, null, "\t")}\n`);
+	await writeFile(join(tmpDir, "script.json"), `${JSON.stringify(scriptSnapshot, null, "\t")}\n`);
+	await writeFile(join(tmpDir, "review.md"), renderReviewMd(entry, scriptSnapshot));
+	await replaceDir(finalDir, tmpDir);
+}
+
+/**
+ * Drafts the release overview and pooled upstream recap for every `groups`
+ * entry matching `tagFilter` (all of them when absent), skipping an entry
+ * already drafted or approved unless `force`. Shared by `build --unit
+ * story` (every non-tiny/non-empty release in the scan, after its own
+ * stories) and the `release` command (explicit tags, no story drafting).
+ */
+async function draftReleaseArtifacts(
+	groups: readonly ReleaseGroup[],
+	poolByGroup: ReadonlyMap<ReleaseGroup, ReturnType<typeof poolReleaseUpstreamRecap>>,
+	ctx: {
+		outDir: string;
+		name: string;
+		draftsDir: string;
+		draftsBaseDir: string;
+		allStories: readonly Story[];
+		attribution: ReadonlyMap<string, "strong" | "weak">;
+		storyById: ReadonlyMap<string, Story>;
+		complete: ModelCompleter;
+		tts: TtsProvider;
+		mode: Mode;
+		concurrency?: number;
+		denyPatterns: RegExp[];
+		force: boolean;
+		llmMeter: CostMeter;
+		ttsModelId: string;
+		ttsMeter: CostMeter;
+		now: () => string;
+	},
+	tagFilter: ReadonlySet<string> | undefined,
+	state: ReelsState,
+): Promise<{ drafted: number; failed: number; state: ReelsState }> {
+	let drafted = 0;
+	let failed = 0;
+	let draftedIds = new Set((await readdir(ctx.draftsDir).catch(() => [] as string[])).filter(isValidDraftId));
+	const approvedIds = new Set((await readFeed(ctx.outDir, ctx.name))?.reels.map((r) => r.id) ?? []);
+	let renderBundle: Bundle | undefined;
+
+	for (const group of groups) {
+		const groupKey = group.tag ?? "unreleased";
+		if (tagFilter && !tagFilter.has(groupKey)) continue;
+
+		const onFallback = (reason: string) =>
+			console.warn(`draht-reels: release artifact ${groupKey} writer fallback: ${reason}`);
+		const candidates: Array<() => Promise<ReleaseArtifactDraft | undefined>> = [
+			() =>
+				writeReleaseOverviewArtifact(group, {
+					outDir: ctx.outDir,
+					name: ctx.name,
+					draftsDir: ctx.draftsDir,
+					allStories: ctx.allStories,
+					attribution: ctx.attribution,
+					storyById: ctx.storyById,
+					complete: ctx.complete,
+					llmMeter: ctx.llmMeter,
+					denyPatterns: ctx.denyPatterns,
+					onFallback,
+				}),
+			() =>
+				writeRecapArtifact(group, poolByGroup.get(group) ?? poolReleaseUpstreamRecap(group.units, []), {
+					complete: ctx.complete,
+					llmMeter: ctx.llmMeter,
+					denyPatterns: ctx.denyPatterns,
+					onFallback,
+				}),
+		];
+
+		for (const build of candidates) {
+			if (!ctx.llmMeter.hasBudget() || !ctx.ttsMeter.hasBudget()) {
+				console.warn("draht-reels: stopping: a spend cap is reached; keeping already-drafted release artifacts");
+				return { drafted, failed, state };
+			}
+			let artifact: ReleaseArtifactDraft | undefined;
+			try {
+				artifact = await build();
+			} catch (error) {
+				failed++;
+				const message = error instanceof Error ? error.message : String(error);
+				console.error(`draht-reels: failed to draft a release artifact for ${groupKey} (${message})`);
+				continue;
+			}
+			if (!artifact) continue;
+			if (!ctx.force && (draftedIds.has(artifact.id) || approvedIds.has(artifact.id))) continue;
+
+			const chars = countTtsChars(artifact.script.scenes, ctx.ttsModelId);
+			if (ctx.ttsMeter.spentAmount + chars > ctx.ttsMeter.capAmount) {
+				console.warn(
+					`draht-reels: stopping: ${artifact.id} needs ${chars} TTS chars, exceeding the remaining budget; keeping already-drafted release artifacts`,
+				);
+				return { drafted, failed, state };
+			}
+
+			try {
+				if (!renderBundle && ctx.mode !== "audio") renderBundle = await createBundle();
+				await renderReleaseArtifactDraft(artifact, {
+					draftsDir: ctx.draftsDir,
+					tts: ctx.tts,
+					renderBundle,
+					concurrency: ctx.concurrency,
+					now: ctx.now,
+				});
+				ctx.ttsMeter.record(chars);
+				drafted++;
+				draftedIds = new Set([...draftedIds, artifact.id]);
+				state = recordSuccess(state, artifact.id);
+			} catch (error) {
+				failed++;
+				const message = error instanceof Error ? error.message : String(error);
+				console.error(`draht-reels: failed to render release artifact ${artifact.id} (${message})`);
+				state = recordFailure(state, artifact.id, message, ctx.now());
+			}
+			await writeState(ctx.draftsBaseDir, ctx.name, state);
+		}
+	}
+
+	return { drafted, failed, state };
+}
+
 /** `gh` PR lookup is attached only when `origin`'s remote resolves to a GitHub repo; a missing remote (or non-GitHub host) silently disables it, same as a missing `gh` binary does inside `github.ts` itself. */
 async function resolveStoryGithubLookup(
 	repo: string,
@@ -656,11 +1117,22 @@ async function runBuildStory(args: BuildArgs, overrides: BuildOverrides): Promis
 
 	const allStories: Story[] = [];
 	const attribution = new Map<string, "strong" | "weak">();
+	// Pooled upstream recap material (T11 finding), keyed by group (its own
+	// `tag`, undefined for "Unreleased"): `collectStories` already separates
+	// each group's own `syncRecap` anchors, so pooling them with that group's
+	// sync merges and direct `upstream:` commits needs no second pass.
+	const poolByGroup = new Map<ReleaseGroup, ReturnType<typeof poolReleaseUpstreamRecap>>();
 	for (const group of groups) {
 		const anchorsWithRange = group.anchors.map((anchor) => ({ anchor, range: group.range }));
 		const result = await collectStories(group.units, { repo: args.repo, git, gh, anchors: anchorsWithRange });
+		// A story's `release` must be set before it leaves this loop: every
+		// downstream consumer (the entry's own `release` field, the release
+		// overview's story list, the playlist a story's approval updates)
+		// keys off it, and `collectStories` itself has no notion of releases.
+		for (const story of result.stories) story.release = group.tag;
 		allStories.push(...result.stories);
 		for (const [id, strength] of result.attribution) attribution.set(id, strength);
+		poolByGroup.set(group, poolReleaseUpstreamRecap(group.units, result.syncRecap));
 	}
 
 	const minAttribution = config.story.minAttribution;
@@ -828,7 +1300,8 @@ async function runBuildStory(args: BuildArgs, overrides: BuildOverrides): Promis
 					base: story.base,
 					commitCount: 1 + story.branchCommits.length,
 					pr: story.pr ? { number: story.pr.number, url: story.pr.url } : undefined,
-					theme: "",
+					theme: topPackage(story.files),
+					summary: hookSummary({ scenes: writeResult.script.scenes }),
 					deepDive: writeResult.deepDiveOutcome === "rendered" ? "rendered" : "not-warranted",
 				},
 				release: story.release,
@@ -888,11 +1361,170 @@ async function runBuildStory(args: BuildArgs, overrides: BuildOverrides): Promis
 		await writeState(draftsBaseDir, name, state);
 	}
 
-	console.log(`draht-reels: drafted ${draftedCount} story/stories, ${failedCount} failed`);
+	const releaseArtifacts = await draftReleaseArtifacts(
+		groups,
+		poolByGroup,
+		{
+			outDir,
+			name,
+			draftsDir,
+			draftsBaseDir,
+			allStories,
+			attribution,
+			storyById,
+			complete,
+			tts,
+			mode: args.mode,
+			concurrency: args.concurrency,
+			denyPatterns: config.prose.denyPatterns.map((p) => new RegExp(p, "i")),
+			force: args.force,
+			llmMeter,
+			ttsModelId,
+			ttsMeter,
+			now,
+		},
+		undefined, // every non-tiny/non-empty release in the scan, not an explicit subset (that's the `release` command's job)
+		state,
+	);
+	state = releaseArtifacts.state;
+	draftedCount += releaseArtifacts.drafted;
+	failedCount += releaseArtifacts.failed;
+
+	console.log(`draht-reels: drafted ${draftedCount} story/stories and release artifact(s), ${failedCount} failed`);
 	console.log(
 		`draht-reels: spend — LLM $${llmMeter.spentAmount.toFixed(2)}/$${maxCostUsd}, ${llmMeter.spentTokenAmount}/${maxLlmTokens} tokens; TTS ${ttsMeter.spentAmount}/${maxTtsChars} chars`,
 	);
 	return { published: draftedCount, failed: failedCount };
+}
+
+/** Splits `release [<tag>…] [--flags]`'s leading positional tags from the rest, which `parseBuildArgs` then parses exactly like `build`'s own flags. */
+function splitReleaseTags(argv: string[]): { tags: string[]; rest: string[] } {
+	let i = 0;
+	while (i < argv.length && !(argv[i] as string).startsWith("--")) i++;
+	return { tags: argv.slice(0, i), rest: argv.slice(i) };
+}
+
+/**
+ * `draht-reels release [<tag>…]` (T13): drafts the release overview and
+ * pooled upstream recap for the given release tags, or every non-tiny
+ * release in the scan when none are given, without re-drafting stories —
+ * useful after `approve`ing a release's stories, to draft the overview over
+ * what is now approved. Shares `draftReleaseArtifacts` with `build --unit
+ * story`, so the draft layout, review.md, cost caps, and state are
+ * identical.
+ */
+export async function runRelease(argv: string[], overrides: BuildOverrides = {}): Promise<BuildResult> {
+	const { tags, rest } = splitReleaseTags(argv);
+	const args = parseBuildArgs(rest);
+	if (!args.model && !overrides.complete) fail("release requires --model <provider/id>");
+
+	let config = await resolveReelsConfig(args);
+	if (args.tagPattern) config = { ...config, tagPattern: args.tagPattern };
+
+	const name = repoName(args);
+	const outDir = resolve(args.out);
+	const draftsBaseDir = resolve(args.draftsDir ?? config.build.draftsDir ?? defaultDraftsDir(args.repo));
+	if (isNestedInside(outDir, draftsBaseDir)) {
+		fail(
+			`refusing --drafts-dir "${draftsBaseDir}" inside --out "${outDir}": drafts must never land in the public feed`,
+		);
+	}
+	const draftsDir = join(draftsBaseDir, name);
+
+	const maxCostUsd = args.maxCostUsd ?? config.build.maxCostUsd;
+	const maxLlmTokens = args.maxLlmTokens ?? config.build.maxLlmTokens;
+	const maxTtsChars = args.maxTtsChars ?? config.build.maxTtsChars;
+
+	const git = overrides.git ?? runGit;
+	const complete = overrides.complete ?? (await resolveModelCompleter(args.model as string));
+	const ttsModelId = resolveTtsModel("story", args.ttsModel);
+	const tts = overrides.tts ?? resolveTts(args, ttsModelId);
+	const gh = overrides.gh ?? (await resolveStoryGithubLookup(args.repo, outDir, join(args.repo, ".reels-cache"), git));
+	const now = overrides.now ?? (() => new Date().toISOString());
+
+	await mkdir(draftsDir, { recursive: true });
+	const state = await readState(draftsBaseDir, name);
+
+	const groups = await collectOrFail(
+		() =>
+			buildReleaseGroups({
+				repo: args.repo,
+				ref: args.ref,
+				tagPattern: config.tagPattern,
+				historyFloor: config.historyFloor,
+				scan: args.scan,
+				allHistory: args.allHistory,
+				config,
+				git,
+			}),
+		args.repo,
+		args.ref,
+	);
+
+	const allStories: Story[] = [];
+	const attribution = new Map<string, "strong" | "weak">();
+	const poolByGroup = new Map<ReleaseGroup, ReturnType<typeof poolReleaseUpstreamRecap>>();
+	for (const group of groups) {
+		const anchorsWithRange = group.anchors.map((anchor) => ({ anchor, range: group.range }));
+		const result = await collectStories(group.units, { repo: args.repo, git, gh, anchors: anchorsWithRange });
+		for (const story of result.stories) story.release = group.tag;
+		allStories.push(...result.stories);
+		for (const [id, strength] of result.attribution) attribution.set(id, strength);
+		poolByGroup.set(group, poolReleaseUpstreamRecap(group.units, result.syncRecap));
+	}
+
+	const minAttribution = config.story.minAttribution;
+	const storyById = new Map(
+		allStories
+			.filter(
+				(story) => story.origin !== "commit" || minAttribution === "weak" || attribution.get(story.id) !== "weak",
+			)
+			.map((story) => [story.id, story]),
+	);
+
+	const requestedTags = new Set(tags);
+	if (requestedTags.size > 0) {
+		const knownTags = new Set(groups.map((group) => group.tag ?? "unreleased"));
+		for (const requestedTag of requestedTags) {
+			if (!knownTags.has(requestedTag)) console.warn(`draht-reels: "${requestedTag}" is not a release in this scan`);
+		}
+	}
+	const tagFilter = requestedTags.size > 0 ? requestedTags : undefined;
+
+	const llmMeter = new CostMeter(maxCostUsd, maxLlmTokens);
+	const ttsMeter = new CostMeter(maxTtsChars);
+
+	const result = await draftReleaseArtifacts(
+		groups,
+		poolByGroup,
+		{
+			outDir,
+			name,
+			draftsDir,
+			draftsBaseDir,
+			allStories,
+			attribution,
+			storyById,
+			complete,
+			tts,
+			mode: args.mode,
+			concurrency: args.concurrency,
+			denyPatterns: config.prose.denyPatterns.map((p) => new RegExp(p, "i")),
+			force: args.force,
+			llmMeter,
+			ttsModelId,
+			ttsMeter,
+			now,
+		},
+		tagFilter,
+		state,
+	);
+
+	console.log(`draht-reels: drafted ${result.drafted} release artifact(s), ${result.failed} failed`);
+	console.log(
+		`draht-reels: spend — LLM $${llmMeter.spentAmount.toFixed(2)}/$${maxCostUsd}, ${llmMeter.spentTokenAmount}/${maxLlmTokens} tokens; TTS ${ttsMeter.spentAmount}/${maxTtsChars} chars`,
+	);
+	return { published: result.drafted, failed: result.failed };
 }
 
 /** Shared `--repo`/`--name`/`--out`/`--drafts-dir`/`--config` target for `review`/`approve`/`reject` (the publish-gate commands, T12b). */
@@ -1001,7 +1633,7 @@ export async function runReview(argv: string[]): Promise<void> {
 	const { draftsDir } = await resolveDraftPaths(args);
 
 	if (args.id !== undefined) {
-		if (!isValidStoryId(args.id)) fail(`"${args.id}" is not a valid draft id`);
+		if (!isValidDraftId(args.id)) fail(`"${args.id}" is not a valid draft id`);
 		let content: string;
 		try {
 			content = await readFile(join(draftsDir, args.id, "review.md"), "utf-8");
@@ -1012,7 +1644,7 @@ export async function runReview(argv: string[]): Promise<void> {
 		return;
 	}
 
-	const ids = (await readdir(draftsDir).catch(() => [] as string[])).filter(isValidStoryId);
+	const ids = (await readdir(draftsDir).catch(() => [] as string[])).filter(isValidDraftId);
 	if (ids.length === 0) {
 		console.log(`draht-reels: no drafts in ${draftsDir}`);
 		return;
@@ -1026,7 +1658,66 @@ export async function runReview(argv: string[]): Promise<void> {
 	}
 }
 
-/** `draht-reels approve <id>…`: publishes a draft's media and feed entry (same atomic media → feed → repos.json order `publishFeed` already uses), removes the draft, and records the approval in state. Idempotent: approving an id with no pending draft is a no-op. */
+/**
+ * A release/recap/story entry's own tag, for routing an approval into the
+ * right {@link ReleasePlaylist}: `entry.release` when set, else (for a
+ * `release-<tag>`/`recap-<tag>` id) the tag the id itself names. `undefined`
+ * for a story with no release yet (unreleased; no playlist to update).
+ */
+function entryPlaylistTag(entry: ReelEntry): string | undefined {
+	if (entry.release !== undefined) return entry.release;
+	return isValidReleaseArtifactId(entry.id) ? releaseArtifactTag(entry.id) : undefined;
+}
+
+/** A fresh playlist for a tag never seen before: every required field defaults to empty/zero, filled in by whichever approval (story, overview, or recap) creates it first; later approvals only ever add to it, never erase an already-set field. */
+function blankPlaylist(tag: string, date: string): ReleasePlaylist {
+	return {
+		tag,
+		sha: "",
+		date,
+		title: tag,
+		storyIds: [],
+		themes: [],
+		syncs: [],
+		changeCount: 0,
+		tiny: false,
+	};
+}
+
+/**
+ * Updates `tag`'s {@link ReleasePlaylist} for one newly-approved entry:
+ * `entry.kind === "story"` recomputes `storyIds` from every approved story
+ * for this tag (newest-first by date, the same order `feed.reels` itself
+ * keeps — "mainline order" in the absence of a cheaper signal at approve
+ * time), `"release"` sets `overviewId`, `"recap"` sets `recapId`. Any other
+ * field an existing playlist already carries (`sha`, `themes`, `syncs`,
+ * `changeCount`, `tiny`) is preserved untouched.
+ */
+async function updateReleasePlaylist(outDir: string, name: string, tag: string, entry: ReelEntry): Promise<void> {
+	const feed = await readFeed(outDir, name);
+	const existing = feed?.playlists?.find((p) => p.tag === tag) ?? blankPlaylist(tag, entry.date);
+
+	let playlist: ReleasePlaylist = existing;
+	if (entry.kind === "story") {
+		const storyIds = (feed?.reels ?? [])
+			.filter((r) => r.kind === "story" && r.release === tag)
+			.map((r) => r.id)
+			.includes(entry.id)
+			? (feed?.reels ?? []).filter((r) => r.kind === "story" && r.release === tag)
+			: [...(feed?.reels ?? []).filter((r) => r.kind === "story" && r.release === tag), entry];
+		playlist = { ...existing, storyIds: storyIds.map((r) => r.id) };
+	} else if (entry.kind === "release") {
+		playlist = { ...existing, overviewId: entry.id };
+	} else if (entry.kind === "recap") {
+		playlist = { ...existing, recapId: entry.id };
+	} else {
+		return;
+	}
+
+	await publishFeed({ outDir, repo: { name }, entries: [], playlists: mergePlaylists(feed?.playlists, [playlist]) });
+}
+
+/** `draht-reels approve <id>…`: publishes a draft's media and feed entry (same atomic media → feed → repos.json order `publishFeed` already uses), updates that release's playlist, removes the draft, and records the approval in state. Idempotent: approving an id with no pending draft is a no-op. */
 export async function runApprove(argv: string[]): Promise<void> {
 	const args = parseApproveArgs(argv);
 	const { name, draftsDir, draftsBaseDir, outDir } = await resolveDraftPaths(args);
@@ -1035,7 +1726,7 @@ export async function runApprove(argv: string[]): Promise<void> {
 
 	let state: ReelsState = await readState(draftsBaseDir, name);
 	for (const id of args.ids) {
-		if (!isValidStoryId(id)) {
+		if (!isValidDraftId(id)) {
 			console.error(`draht-reels: "${id}" is not a valid draft id`);
 			process.exitCode = 1;
 			continue;
@@ -1059,6 +1750,12 @@ export async function runApprove(argv: string[]): Promise<void> {
 
 		await publishFeed({ outDir, repo: { name }, entries: [entry] });
 
+		// A release overview may itself be approved before every one of its stories is (owner decision, T12c):
+		// the overview just cites whichever `st:`/`cl:` ids its own draft was built from, and the playlist below
+		// only ever grows — approving overview, recap, and stories in any order converges to the same playlist.
+		const tag = entryPlaylistTag(entry);
+		if (tag !== undefined) await updateReleasePlaylist(outDir, name, tag, entry);
+
 		await rm(draftDir, { recursive: true, force: true });
 		state = recordApproval(state, id, new Date().toISOString());
 		await writeState(draftsBaseDir, name, state);
@@ -1073,7 +1770,7 @@ export async function runReject(argv: string[]): Promise<void> {
 
 	let state: ReelsState = await readState(draftsBaseDir, name);
 	for (const id of args.ids) {
-		if (!isValidStoryId(id)) {
+		if (!isValidDraftId(id)) {
 			console.error(`draht-reels: "${id}" is not a valid draft id`);
 			process.exitCode = 1;
 			continue;
@@ -1152,6 +1849,11 @@ async function main(): Promise<void> {
 			if (result.failed > 0) process.exitCode = 1;
 			break;
 		}
+		case "release": {
+			const result = await runRelease(rest);
+			if (result.failed > 0) process.exitCode = 1;
+			break;
+		}
 		case "site":
 			await runSite(rest);
 			break;
@@ -1171,7 +1873,7 @@ async function main(): Promise<void> {
 			await runReject(rest);
 			break;
 		default:
-			console.log("usage: draht-reels <build|site|plan|prune|review|approve|reject> [options]");
+			console.log("usage: draht-reels <build|release|site|plan|prune|review|approve|reject> [options]");
 			if (command && command !== "--help" && command !== "-h") process.exit(1);
 	}
 }

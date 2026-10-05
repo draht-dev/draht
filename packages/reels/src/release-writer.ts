@@ -16,7 +16,12 @@
  * fail validation on real data). Cites are restricted to `st:` (story),
  * `cl:` (changelog), or `ghr:` (GitHub release body) ids.
  *
- * Sync recap writer: one per upstream-sync unit (owner decision Q2).
+ * Sync recap writer: one per release that carries any upstream-carried work
+ * (T11 finding, superseding owner decision Q2's "one per upstream-sync
+ * unit": in draht, upstream changes mostly arrive as scattered `upstream:`
+ * commits across a release, not inside its sync merges, so a per-merge recap
+ * would mostly be empty — `stories.ts`'s `poolReleaseUpstreamRecap` pools
+ * both sources' anchors per release instead).
  * Themes are computed deterministically from the carried changelog
  * entries' package, condensed (fix round) to at most {@link
  * MAX_RECAP_THEMES} theme groups and {@link MAX_ENTRIES_PER_THEME} entries
@@ -758,8 +763,10 @@ export interface RecapChangelogInput {
 }
 
 export interface SyncRecapInput {
-	mergeTitle: string;
-	mergeSha12: string;
+	/** Narration title: what this recap summarizes (e.g. a release tag's pooled upstream work, T11 finding; or, legacily, one sync merge's own title). */
+	title: string;
+	/** Stable id suffix for this recap's `recap-<id>` changeSetId (a release tag, T13's `recapId`, or a sync merge's sha12). */
+	id: string;
 	/** Only ever condensed to subjects for the single optional "key moment" — commits never define themes. */
 	commits: RecapCommitInput[];
 	changelogEntries: RecapChangelogInput[];
@@ -948,7 +955,7 @@ function buildRecapUserPrompt(
 		.map((record) => wrapSource(nonce, record));
 	const commitLines = shownCommits.map((c) => `${commitSourceId(c.sha12)}: ${c.subject}`).join("\n");
 	return [
-		`Summarize the upstream sync "${input.mergeTitle}"${input.versionRange ? ` (${input.versionRange})` : ""}.`,
+		`Summarize the upstream work for "${input.title}"${input.versionRange ? ` (${input.versionRange})` : ""}.`,
 		"Themes you must use (exact ids, exact source id sets per theme):",
 		JSON.stringify(themesSpec, null, 2),
 		"Return exactly this JSON shape (fill in every string field):",
@@ -1143,8 +1150,8 @@ export function templateSyncRecap(
 		);
 	}
 	if (overflow) scenes.push(sceneOf("overview", "More from upstream", [overflowBeat(overflow)]));
-	scenes.push(sceneOf("outro", "", [templateBeat(`That is what came in from upstream in "${input.mergeTitle}".`)]));
-	return { changeSetId: `recap-${input.mergeSha12}`, writer: "template", scenes };
+	scenes.push(sceneOf("outro", "", [templateBeat(`That is what came in from upstream in "${input.title}".`)]));
+	return { changeSetId: `recap-${input.id}`, writer: "template", scenes };
 }
 
 export interface WriteSyncRecapOptions {
@@ -1170,7 +1177,7 @@ export async function writeSyncRecap(
 	const { themes, overflow } = computeRecapThemes(input);
 	const shownCommits = selectRecapCommits(input.commits);
 	const sources = buildRecapSourceRegistry(input, themes, shownCommits);
-	const changeSetId = `recap-${input.mergeSha12}`;
+	const changeSetId = `recap-${input.id}`;
 	const validationCtx: RecapValidationContext = { themes, overflow, sources, denyPatterns: opts.denyPatterns };
 	const fallback = (reason: string): WriteSyncRecapResult => {
 		opts.onFallback?.(reason);

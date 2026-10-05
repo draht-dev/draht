@@ -258,6 +258,14 @@ export interface ReleasePlaylist {
 	storyIds: string[];
 	/** Id of the rendered overview reel, absent until rendered or when the playlist is `tiny`. */
 	overviewId?: string;
+	/**
+	 * Id of the rendered upstream recap reel for this release, absent until
+	 * rendered or when the release pools no upstream-carried anchors (T11
+	 * finding: one pooled recap per release, superseding the per-sync
+	 * `syncs[].recapId` below for the common case where upstream work arrives
+	 * as scattered `upstream:` commits rather than inside a sync merge).
+	 */
+	recapId?: string;
 	themes: Array<{ name: string; storyIds: string[] }>;
 	/** Upstream-sync merges in this release: never feature reels, but may have a `recapId` (owner decision Q2: one recap reel per sync). */
 	syncs: Array<{ title: string; commitCount: number; recapId?: string }>;

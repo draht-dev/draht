@@ -12,7 +12,7 @@
 import type { AnchorContext } from "./anchored-diagram.ts";
 import type { AssembledStoryContext } from "./context.ts";
 import type { ReelScript, Scene, Story } from "./contract.ts";
-import type { ModelCompleter } from "./script.ts";
+import type { Lang, ModelCompleter } from "./script.ts";
 import { templateWriter } from "./script.ts";
 import type { SourceRegistry } from "./sources.ts";
 import {
@@ -49,6 +49,24 @@ Ground rules, enforced by a validator after you answer (you get one chance to fi
 9. The required arc for a SHORT: optional "hook", then "problem" -> "idea" -> "mechanism" (must have a diagram) -> 1 to 3 "code" scenes -> "impact" (may include trade-offs) -> "outro", in exactly that order, "outro" last. A DEEP dive allows 1 to 6 "code" scenes and may add "alternatives" and/or "edge-cases" between "impact" and "outro".
 
 Return exactly one JSON object, no markdown code fence, no commentary before or after it.`;
+
+const PROMPT_LANGUAGE: Record<Lang, string> = { en: "English", de: "German" };
+
+/**
+ * The English prompt, unchanged (see the `SYSTEM_PROMPT` export/tests). For
+ * `"de"`, the one fixed "no source says" sentence rule 1 points at is
+ * swapped to its German wording ({@link REASON_NOT_RECORDED_TEXT}) and an
+ * explicit output-language instruction is appended — the validator itself
+ * already accepts either language's fixed sentence regardless of this
+ * prompt (see `REASON_NOT_RECORDED_SET`), so this only decides what the
+ * model is asked to write.
+ */
+export function buildSystemPrompt(lang: Lang): string {
+	if (lang === "en") return SYSTEM_PROMPT;
+	return `${SYSTEM_PROMPT.replace(REASON_NOT_RECORDED_TEXT.en, REASON_NOT_RECORDED_TEXT.de)}
+
+Write every title, subtitle, heading, and beat text in ${PROMPT_LANGUAGE[lang]}.`;
+}
 
 export function buildUserPrompt(promptContext: string, isDeepDive: boolean): string {
 	const arc = isDeepDive
@@ -233,6 +251,8 @@ export interface WriteOneScriptOptions {
 	maxTokens: number;
 	maxCodeLines: number;
 	denyPatterns?: RegExp[];
+	/** Defaults to `"en"`. */
+	lang?: Lang;
 	onFallback?: (reason: string) => void;
 }
 
@@ -277,6 +297,7 @@ export async function writeOneScript(
 	};
 
 	const userPrompt = buildUserPrompt(ctx.promptContext, opts.isDeepDive);
+	const systemPrompt = buildSystemPrompt(opts.lang ?? "en");
 
 	// L4: the budget is checked before EVERY model call, the repair included — not just once per story — so an
 	// unpriced model (token cap only) or a cap that runs out between the initial call and its repair still stops
@@ -285,7 +306,7 @@ export async function writeOneScript(
 
 	let text1: string;
 	try {
-		const completion = await complete({ systemPrompt: SYSTEM_PROMPT, prompt: userPrompt, maxTokens: opts.maxTokens });
+		const completion = await complete({ systemPrompt, prompt: userPrompt, maxTokens: opts.maxTokens });
 		costMeter.record(
 			completion.usage?.costUsd ?? 0,
 			(completion.usage?.input ?? 0) + (completion.usage?.output ?? 0),
@@ -304,7 +325,7 @@ export async function writeOneScript(
 	let text2: string;
 	try {
 		const completion = await complete({
-			systemPrompt: SYSTEM_PROMPT,
+			systemPrompt,
 			prompt: repairPrompt,
 			maxTokens: opts.maxTokens,
 		});
@@ -416,6 +437,8 @@ export interface StoryWriterOptions {
 	shortMaxCodeLines?: number;
 	deepMaxCodeLines?: number;
 	denyPatterns?: RegExp[];
+	/** Defaults to `"en"`. */
+	lang?: Lang;
 	onFallback?: (story: Story, phase: "short" | "deep", reason: string) => void;
 }
 
@@ -441,6 +464,7 @@ export async function writeStoryScript(
 		maxTokens: options.shortMaxTokens ?? DEFAULT_SHORT_MAX_TOKENS,
 		maxCodeLines: options.shortMaxCodeLines ?? SHORT_MAX_CODE_LINES,
 		denyPatterns: options.denyPatterns,
+		lang: options.lang,
 		onFallback: (reason) => options.onFallback?.(story, "short", reason),
 	});
 
@@ -462,6 +486,7 @@ export async function writeStoryScript(
 		maxTokens: options.deepMaxTokens ?? DEFAULT_DEEP_MAX_TOKENS,
 		maxCodeLines: options.deepMaxCodeLines ?? DEEP_MAX_CODE_LINES,
 		denyPatterns: options.denyPatterns,
+		lang: options.lang,
 		onFallback: (reason) => options.onFallback?.(story, "deep", reason),
 	});
 

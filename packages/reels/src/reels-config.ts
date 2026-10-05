@@ -22,11 +22,24 @@ export interface UpstreamConfig {
 	foreignAuthorRatio: number;
 }
 
+export type AttributionStrength = "strong" | "weak";
+
 export interface StoryConfig {
 	/** Conventional-commit types that make a direct mainline commit its own story. */
 	directCommitTypes: string[];
 	/** Branch commit count above which a non-sync merge is "oversized" rather than "feature". */
 	maxBranchCommits: number;
+	/** `--unit story`: minimum attribution confidence a changelog (`origin: "commit"`) story needs to be eligible. Branch/PR stories are always eligible, regardless of this setting. */
+	minAttribution: AttributionStrength;
+}
+
+/** `--unit story` run-wide spend caps and draft output location (T12). */
+export interface BuildConfig {
+	maxCostUsd: number;
+	maxLlmTokens: number;
+	maxTtsChars: number;
+	/** Overrides the default `<repo>/.reels-drafts` location. */
+	draftsDir?: string;
 }
 
 /** Doc/prose allowlist for `context.ts` (D8): `deny` always wins over `allow`. */
@@ -59,6 +72,7 @@ export interface ReelsConfig {
 	docs: DocsConfig;
 	code: CodeConfig;
 	prose: ProseConfig;
+	build: BuildConfig;
 }
 
 export const DEFAULT_TAG_PATTERN = "^v";
@@ -72,6 +86,13 @@ export const DEFAULT_UPSTREAM_CONFIG: UpstreamConfig = {
 export const DEFAULT_STORY_CONFIG: StoryConfig = {
 	directCommitTypes: ["feat"],
 	maxBranchCommits: 150,
+	minAttribution: "strong",
+};
+
+export const DEFAULT_BUILD_CONFIG: BuildConfig = {
+	maxCostUsd: 5,
+	maxLlmTokens: 2_000_000,
+	maxTtsChars: 50_000,
 };
 
 /** `.planning/**` is deliberately absent from `allow`: it is readable only when a repo config allowlists specific paths (owner decision Q4). */
@@ -104,6 +125,7 @@ export const DEFAULT_REELS_CONFIG: ReelsConfig = {
 	docs: DEFAULT_DOCS_CONFIG,
 	code: DEFAULT_CODE_CONFIG,
 	prose: DEFAULT_PROSE_CONFIG,
+	build: DEFAULT_BUILD_CONFIG,
 };
 
 const ALLOWED_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
@@ -115,12 +137,15 @@ const ALLOWED_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
 	"docs",
 	"code",
 	"prose",
+	"build",
 ]);
 const ALLOWED_UPSTREAM_KEYS: ReadonlySet<string> = new Set(["subjectPatterns", "markerPaths", "foreignAuthorRatio"]);
-const ALLOWED_STORY_KEYS: ReadonlySet<string> = new Set(["directCommitTypes", "maxBranchCommits"]);
+const ALLOWED_STORY_KEYS: ReadonlySet<string> = new Set(["directCommitTypes", "maxBranchCommits", "minAttribution"]);
 const ALLOWED_DOCS_KEYS: ReadonlySet<string> = new Set(["allow", "deny", "maxChunks"]);
 const ALLOWED_CODE_KEYS: ReadonlySet<string> = new Set(["exclude", "include"]);
 const ALLOWED_PROSE_KEYS: ReadonlySet<string> = new Set(["denyPatterns"]);
+const ALLOWED_BUILD_KEYS: ReadonlySet<string> = new Set(["maxCostUsd", "maxLlmTokens", "maxTtsChars", "draftsDir"]);
+const ATTRIBUTION_STRENGTHS: ReadonlySet<string> = new Set(["strong", "weak"]);
 
 export class ReelsConfigError extends Error {}
 
@@ -261,7 +286,12 @@ function parseStory(raw: unknown): StoryConfig {
 		throw new ReelsConfigError("story.maxBranchCommits must be a positive number");
 	}
 
-	return { directCommitTypes, maxBranchCommits };
+	const minAttribution = raw.minAttribution === undefined ? DEFAULT_STORY_CONFIG.minAttribution : raw.minAttribution;
+	if (typeof minAttribution !== "string" || !ATTRIBUTION_STRENGTHS.has(minAttribution)) {
+		throw new ReelsConfigError('story.minAttribution must be "strong" or "weak"');
+	}
+
+	return { directCommitTypes, maxBranchCommits, minAttribution: minAttribution as AttributionStrength };
 }
 
 function parseDocs(raw: unknown): DocsConfig {
@@ -320,6 +350,30 @@ function parseProse(raw: unknown): ProseConfig {
 	return { denyPatterns };
 }
 
+function parseBuild(raw: unknown): BuildConfig {
+	if (raw === undefined) return DEFAULT_BUILD_CONFIG;
+	if (!isPlainObject(raw)) throw new ReelsConfigError("build must be an object");
+	assertNoUnknownKeys(raw, ALLOWED_BUILD_KEYS, "build");
+
+	const maxCostUsd = raw.maxCostUsd === undefined ? DEFAULT_BUILD_CONFIG.maxCostUsd : raw.maxCostUsd;
+	if (typeof maxCostUsd !== "number" || maxCostUsd <= 0) {
+		throw new ReelsConfigError("build.maxCostUsd must be a positive number");
+	}
+	const maxLlmTokens = raw.maxLlmTokens === undefined ? DEFAULT_BUILD_CONFIG.maxLlmTokens : raw.maxLlmTokens;
+	if (typeof maxLlmTokens !== "number" || maxLlmTokens <= 0) {
+		throw new ReelsConfigError("build.maxLlmTokens must be a positive number");
+	}
+	const maxTtsChars = raw.maxTtsChars === undefined ? DEFAULT_BUILD_CONFIG.maxTtsChars : raw.maxTtsChars;
+	if (typeof maxTtsChars !== "number" || maxTtsChars <= 0) {
+		throw new ReelsConfigError("build.maxTtsChars must be a positive number");
+	}
+	if (raw.draftsDir !== undefined && typeof raw.draftsDir !== "string") {
+		throw new ReelsConfigError("build.draftsDir must be a string");
+	}
+
+	return { maxCostUsd, maxLlmTokens, maxTtsChars, draftsDir: raw.draftsDir as string | undefined };
+}
+
 function parseOverrides(raw: unknown): Record<string, MergeOverride> {
 	if (raw === undefined) return {};
 	if (!isPlainObject(raw)) throw new ReelsConfigError("overrides must be an object");
@@ -355,6 +409,7 @@ export function parseReelsConfig(raw: unknown): ReelsConfig {
 		docs: parseDocs(raw.docs),
 		code: parseCode(raw.code),
 		prose: parseProse(raw.prose),
+		build: parseBuild(raw.build),
 	};
 }
 

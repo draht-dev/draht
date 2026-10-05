@@ -197,7 +197,7 @@ export interface GithubLookupOptions {
  * `rel.startsWith("..")` check would wrongly wave it through as "outside"
  * (and therefore accepted) when it is actually a child of `outDir`.
  */
-function isNestedInside(outDir: string, cacheDir: string): boolean {
+export function isNestedInside(outDir: string, cacheDir: string): boolean {
 	const rel = relative(resolve(outDir), resolve(cacheDir));
 	const isOutside = rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
 	return !isOutside;

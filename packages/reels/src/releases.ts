@@ -245,6 +245,8 @@ export interface ReleaseGroup {
 	previousTag?: string;
 	/** This release's own units, newest first. */
 	units: MainlineUnit[];
+	/** The `git log`/`rev-list` revision arguments covering this exact release range (joined), reused by `collectStories` to attribute this group's anchors. */
+	range: string;
 	/** Unit shas that are feature-branch merges, or (once anchors are attached) own a changelog anchor. */
 	featureUnitIds: string[];
 	/** Unit shas classified `upstream-sync`. */
@@ -312,9 +314,9 @@ export async function buildReleaseGroups(opts: BuildReleaseGroupsOptions): Promi
 		const units = await buildRangeUnits({ repo: opts.repo, revisions: range.revisions, config, git });
 		const buckets = bucketUnits(units);
 
+		const rangeArg = range.revisions.join(" ");
 		let anchors: ChangelogAnchor[] = [];
 		if (units.length > 0) {
-			const rangeArg = range.revisions.join(" ");
 			const rawAnchors = await findChangelogAnchors(units, { repo: opts.repo, range: rangeArg, git });
 			anchors = filterFeatureAnchors(rawAnchors, units);
 		}
@@ -330,6 +332,7 @@ export async function buildReleaseGroups(opts: BuildReleaseGroupsOptions): Promi
 			date: range.date,
 			previousTag: range.previousTag,
 			units,
+			range: rangeArg,
 			featureUnitIds,
 			syncUnitIds: buckets.syncUnitIds,
 			otherUnitIds,

@@ -5,7 +5,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { access, copyFile, mkdir, rename, rm } from "node:fs/promises";
+import { access, copyFile, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { elevenLabsKeyFilePath, resolveElevenLabsApiKey } from "./api-key.ts";
 import {
@@ -16,11 +16,13 @@ import {
 	runGit,
 	selectBuildShas,
 } from "./collect.ts";
-import type { ChangeSet, ReelEntry, ReelScript } from "./contract.ts";
+import { assembleStoryContext, tokensToChars } from "./context.ts";
+import type { ChangeSet, ReelEntry, ReelMedia, ReelScript, Scene, Story } from "./contract.ts";
+import { createGithubLookup, type GithubLookup, isNestedInside, parseGithubRepo } from "./github.ts";
 import { applyContentPolicy, DEFAULT_DENY_GLOBS, redactText } from "./privacy.ts";
 import { pruneFeed, publishFeed, publishSite, readFeed } from "./publish.ts";
 import { DEFAULT_REELS_CONFIG, loadReelsConfig, type ReelsConfig } from "./reels-config.ts";
-import { listReleaseTags } from "./releases.ts";
+import { buildReleaseGroups, listReleaseTags } from "./releases.ts";
 import { createBundle, publishAudioForRender, renderReel } from "./render.ts";
 import {
 	type Lang,
@@ -30,17 +32,31 @@ import {
 	templateWriter,
 	withTemplateFallback,
 } from "./script.ts";
+import { toPublicSources } from "./sources.ts";
 import { cappedIds, MAX_RENDER_ATTEMPTS, readState, recordFailure, recordSuccess, writeState } from "./state.ts";
-import { elevenLabsProvider, silentProvider, type TtsProvider } from "./tts.ts";
+import { collectStories, isValidStoryId, selectStoryUnits, storyIdSha } from "./stories.ts";
+import type { DeepDiveMode } from "./story-writer.ts";
+import { CostMeter, writeStoryScript } from "./story-writer.ts";
+import {
+	elevenLabsProvider,
+	normalizeBeats,
+	resolveTtsModel,
+	sanitizeForV4,
+	silentProvider,
+	type TtsProvider,
+} from "./tts.ts";
 
 type Mode = "visual" | "audio" | "both";
 type WriterKind = "template" | "llm";
 type TtsKind = "elevenlabs" | "none";
+type Unit = "commit" | "story";
 
 const MODES: Mode[] = ["visual", "audio", "both"];
 const TTS_KINDS: TtsKind[] = ["elevenlabs", "none"];
 const WRITER_KINDS: WriterKind[] = ["template", "llm"];
 const LANGS: Lang[] = ["en", "de"];
+const UNITS: Unit[] = ["commit", "story"];
+const DEEP_DIVE_MODES: DeepDiveMode[] = ["auto", "always", "never"];
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -67,6 +83,13 @@ interface BuildArgs {
 	excludeGlobs: string[];
 	includeGlobs: string[];
 	config?: string;
+	unit: Unit;
+	tagPattern?: string;
+	deepDive: DeepDiveMode;
+	maxCostUsd?: number;
+	maxLlmTokens?: number;
+	maxTtsChars?: number;
+	draftsDir?: string;
 }
 
 function fail(message: string): never {
@@ -83,6 +106,12 @@ function takeValue(argv: string[], i: number, flag: string): string {
 function parsePositiveInt(raw: string, flag: string): number {
 	const n = Number(raw);
 	if (!Number.isInteger(n) || n <= 0) fail(`${flag} must be a positive integer, got "${raw}"`);
+	return n;
+}
+
+function parsePositiveNumber(raw: string, flag: string): number {
+	const n = Number(raw);
+	if (!Number.isFinite(n) || n <= 0) fail(`${flag} must be a positive number, got "${raw}"`);
 	return n;
 }
 
@@ -106,6 +135,8 @@ function parseBuildArgs(argv: string[]): BuildArgs {
 		lang: "en",
 		excludeGlobs: [],
 		includeGlobs: [],
+		unit: "commit",
+		deepDive: "auto",
 	};
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i];
@@ -176,6 +207,27 @@ function parseBuildArgs(argv: string[]): BuildArgs {
 			case "--config":
 				args.config = takeValue(argv, ++i, a);
 				break;
+			case "--unit":
+				args.unit = parseEnum(takeValue(argv, ++i, a), a, UNITS);
+				break;
+			case "--tag-pattern":
+				args.tagPattern = takeValue(argv, ++i, a);
+				break;
+			case "--deep-dive":
+				args.deepDive = parseEnum(takeValue(argv, ++i, a), a, DEEP_DIVE_MODES);
+				break;
+			case "--max-cost-usd":
+				args.maxCostUsd = parsePositiveNumber(takeValue(argv, ++i, a), a);
+				break;
+			case "--max-llm-tokens":
+				args.maxLlmTokens = parsePositiveNumber(takeValue(argv, ++i, a), a);
+				break;
+			case "--max-tts-chars":
+				args.maxTtsChars = parsePositiveNumber(takeValue(argv, ++i, a), a);
+				break;
+			case "--drafts-dir":
+				args.draftsDir = takeValue(argv, ++i, a);
+				break;
 			default:
 				fail(`unknown option "${a}"`);
 		}
@@ -200,25 +252,26 @@ async function importAiCompleterLazy(): Promise<AiCompleterModule> {
 	return import("./ai-completer.lazy.ts");
 }
 
-async function resolveWriter(args: Pick<BuildArgs, "writer" | "model">): Promise<ScriptWriter> {
-	if (args.writer === "template") return templateWriter;
-	if (!args.model) fail("--writer llm requires --model <provider/id>");
-
+/** Builds a model completer for `--model <provider/id>`, lazily loading `@draht/ai` the same way `resolveWriter` does. Shared by `--writer llm` (`--unit commit`) and the story writer (`--unit story`). */
+async function resolveModelCompleter(model: string): Promise<ModelCompleter> {
 	let mod: AiCompleterModule;
 	try {
 		mod = await importAiCompleterLazy();
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		fail(`--writer llm requires @draht/ai to be built first (run "npm run build" in packages/ai): ${message}`);
+		fail(`requires @draht/ai to be built first (run "npm run build" in packages/ai): ${message}`);
 	}
-
-	let completer: ModelCompleter;
 	try {
-		completer = mod.createAiModelCompleter(args.model);
+		return mod.createAiModelCompleter(model);
 	} catch (error) {
 		fail(error instanceof Error ? error.message : String(error));
 	}
+}
 
+async function resolveWriter(args: Pick<BuildArgs, "writer" | "model">): Promise<ScriptWriter> {
+	if (args.writer === "template") return templateWriter;
+	if (!args.model) fail("--writer llm requires --model <provider/id>");
+	const completer = await resolveModelCompleter(args.model);
 	return withTemplateFallback(llmWriter(completer), (changeSet, error) => {
 		console.warn(
 			`draht-reels: llm writer failed for ${changeSet.id.slice(0, 12)} (${error.message}); using the template writer`,
@@ -226,7 +279,8 @@ async function resolveWriter(args: Pick<BuildArgs, "writer" | "model">): Promise
 	});
 }
 
-function resolveTts(args: Pick<BuildArgs, "tts" | "voice" | "ttsModel">): TtsProvider {
+/** `modelOverride` wins over `args.ttsModel` (T12: `--unit story` defaults to {@link resolveTtsModel}'s per-kind default, not `elevenLabsProvider`'s own `DEFAULT_TTS_MODEL`). */
+function resolveTts(args: Pick<BuildArgs, "tts" | "voice" | "ttsModel">, modelOverride?: string): TtsProvider {
 	if (args.tts === "none") return silentProvider;
 	const resolved = resolveElevenLabsApiKey();
 	if (!resolved) {
@@ -235,7 +289,7 @@ function resolveTts(args: Pick<BuildArgs, "tts" | "voice" | "ttsModel">): TtsPro
 		);
 	}
 	if (resolved.warning) console.warn(`draht-reels: ${resolved.warning}`);
-	return elevenLabsProvider({ apiKey: resolved.key, voice: args.voice, model: args.ttsModel });
+	return elevenLabsProvider({ apiKey: resolved.key, voice: args.voice, model: modelOverride ?? args.ttsModel });
 }
 
 function repoName(args: Pick<BuildArgs, "name" | "repo">): string {
@@ -351,12 +405,20 @@ async function replaceDir(finalDir: string, tmpDir: string): Promise<void> {
 	await rm(asideDir, { recursive: true, force: true }).catch(() => {});
 }
 
-/** `overrides` exists only for tests: production always resolves `writer`/`tts` from `args`. */
-export async function runBuild(
-	argv: string[],
-	overrides: { writer?: ScriptWriter; tts?: TtsProvider } = {},
-): Promise<BuildResult> {
+export interface BuildOverrides {
+	writer?: ScriptWriter;
+	tts?: TtsProvider;
+	/** `--unit story` only: the model completer the story writer calls, bypassing `--model`/`@draht/ai`. */
+	complete?: ModelCompleter;
+	git?: GitRunner;
+	gh?: GithubLookup;
+	now?: () => string;
+}
+
+/** `overrides` exists only for tests: production always resolves `writer`/`tts`/`complete` from `args`. */
+export async function runBuild(argv: string[], overrides: BuildOverrides = {}): Promise<BuildResult> {
 	const args = parseBuildArgs(argv);
+	if (args.unit === "story") return runBuildStory(args, overrides);
 	const writer = overrides.writer ?? (await resolveWriter(args));
 	const tts = overrides.tts ?? resolveTts(args);
 	const name = repoName(args);
@@ -486,6 +548,308 @@ export async function runBuild(
 
 	console.log(`draht-reels: published ${publishedCount} reel(s), ${failedCount} failed`);
 	return { published: publishedCount, failed: failedCount };
+}
+
+function defaultDraftsDir(repo: string): string {
+	return join(resolve(repo), ".reels-drafts");
+}
+
+/** Sum of the sanitized narration lengths `tts.synthesize` would actually send, counted the same way `tts.ts`'s providers derive what they send (`normalizeBeats` then, for v3/v4 models, `sanitizeForV4`). */
+function countTtsChars(scenes: readonly Scene[], model: string): number {
+	return scenes.reduce((sum, scene) => sum + sanitizeForV4(normalizeBeats(scene).narration, model).length, 0);
+}
+
+/** `gh` PR lookup is attached only when `origin`'s remote resolves to a GitHub repo; a missing remote (or non-GitHub host) silently disables it, same as a missing `gh` binary does inside `github.ts` itself. */
+async function resolveStoryGithubLookup(
+	repo: string,
+	outDir: string,
+	cacheDir: string,
+	git: GitRunner,
+): Promise<GithubLookup | undefined> {
+	let remoteUrl: string;
+	try {
+		remoteUrl = (await git(["remote", "get-url", "origin"], repo)).trim();
+	} catch {
+		return undefined;
+	}
+	const ownerRepo = parseGithubRepo(remoteUrl);
+	if (!ownerRepo) return undefined;
+	return createGithubLookup({ repo: ownerRepo, cacheDir, outDir });
+}
+
+const STORY_CONTEXT_TARGET_TOKENS = 60_000;
+
+/**
+ * `--unit story` (T12a): drafts stories under `<draftsDir>/<name>/<id>/`
+ * (media, `entry.json`, `script.json`), never touching the public feed.
+ * Three independent {@link CostMeter}s (LLM USD+tokens combined, as the
+ * class already tracks; TTS characters separately) are checked before every
+ * story starts, so the run stops drafting new stories — without discarding
+ * one already finished — the moment any cap is exhausted.
+ */
+async function runBuildStory(args: BuildArgs, overrides: BuildOverrides): Promise<BuildResult> {
+	if (!args.model && !overrides.complete) fail("--unit story requires --model <provider/id>");
+
+	let config = await resolveReelsConfig(args);
+	if (args.tagPattern) config = { ...config, tagPattern: args.tagPattern };
+
+	const name = repoName(args);
+	const outDir = resolve(args.out);
+	const draftsBaseDir = resolve(args.draftsDir ?? config.build.draftsDir ?? defaultDraftsDir(args.repo));
+	if (isNestedInside(outDir, draftsBaseDir)) {
+		fail(
+			`refusing --drafts-dir "${draftsBaseDir}" inside --out "${outDir}": drafts must never land in the public feed`,
+		);
+	}
+	const draftsDir = join(draftsBaseDir, name);
+
+	const maxCostUsd = args.maxCostUsd ?? config.build.maxCostUsd;
+	const maxLlmTokens = args.maxLlmTokens ?? config.build.maxLlmTokens;
+	const maxTtsChars = args.maxTtsChars ?? config.build.maxTtsChars;
+
+	const git = overrides.git ?? runGit;
+	const complete = overrides.complete ?? (await resolveModelCompleter(args.model as string));
+	const ttsModelId = resolveTtsModel("story", args.ttsModel);
+	const tts = overrides.tts ?? resolveTts(args, ttsModelId);
+	const gh = overrides.gh ?? (await resolveStoryGithubLookup(args.repo, outDir, join(args.repo, ".reels-cache"), git));
+	const now = overrides.now ?? (() => new Date().toISOString());
+
+	await mkdir(draftsDir, { recursive: true });
+	let state = await readState(draftsBaseDir, name);
+	const capped = args.force ? new Set<string>() : cappedIds(state);
+	const draftedIds = (await readdir(draftsDir).catch(() => [] as string[])).filter((entry) => isValidStoryId(entry));
+	const publishedIds = new Set(draftedIds);
+
+	const groups = await collectOrFail(
+		() =>
+			buildReleaseGroups({
+				repo: args.repo,
+				ref: args.ref,
+				tagPattern: config.tagPattern,
+				historyFloor: config.historyFloor,
+				scan: args.scan,
+				allHistory: args.allHistory,
+				config,
+				git,
+			}),
+		args.repo,
+		args.ref,
+	);
+
+	const allStories: Story[] = [];
+	const attribution = new Map<string, "strong" | "weak">();
+	for (const group of groups) {
+		const anchorsWithRange = group.anchors.map((anchor) => ({ anchor, range: group.range }));
+		const result = await collectStories(group.units, { repo: args.repo, git, gh, anchors: anchorsWithRange });
+		allStories.push(...result.stories);
+		for (const [id, strength] of result.attribution) attribution.set(id, strength);
+	}
+
+	const minAttribution = config.story.minAttribution;
+	const eligibleStories = allStories.filter((story) => {
+		if (story.origin !== "commit") return true; // branch/pr stories are always eligible
+		if (minAttribution === "weak") return true;
+		return attribution.get(story.id) !== "weak";
+	});
+	const storyById = new Map(eligibleStories.map((story) => [story.id, story]));
+	const storyIds = eligibleStories.map((story) => story.id);
+
+	const selection = selectStoryUnits(storyIds, publishedIds, capped, {
+		allHistory: args.allHistory,
+		limit: args.limit,
+		force: args.force,
+	});
+	for (const id of selection.cappedSkipped) {
+		console.warn(
+			`draht-reels: skipping story ${id.slice(0, 12)} after ${MAX_RENDER_ATTEMPTS} failed attempts (use --force to retry)`,
+		);
+	}
+	console.log(`draht-reels: drafting ${selection.ids.length} story/stories`);
+
+	const renderBundle = selection.ids.length > 0 && args.mode !== "audio" ? await createBundle() : undefined;
+	const budget = { targetChars: tokensToChars(STORY_CONTEXT_TARGET_TOKENS) };
+
+	const llmMeter = new CostMeter(maxCostUsd, maxLlmTokens);
+	const ttsMeter = new CostMeter(maxTtsChars);
+
+	let draftedCount = 0;
+	let failedCount = 0;
+
+	for (const id of selection.ids) {
+		if (!llmMeter.hasBudget() || !ttsMeter.hasBudget()) {
+			console.warn("draht-reels: stopping: a spend cap is reached; keeping already-drafted stories");
+			break;
+		}
+		const story = storyById.get(id);
+		if (!story) continue;
+
+		const finalDir = join(draftsDir, id);
+		const tmpDir = join(draftsDir, `.tmp-${randomUUID()}`);
+		try {
+			const ctx = await assembleStoryContext(story, args.repo, config, budget, { git });
+			const writeResult = await writeStoryScript(story, ctx, complete, llmMeter, {
+				deepDive: args.deepDive,
+				lang: args.lang,
+				denyPatterns: config.prose.denyPatterns.map((p) => new RegExp(p, "i")),
+				onFallback: (s, phase, reason) =>
+					console.warn(`draht-reels: story ${s.id.slice(0, 12)} ${phase} writer fallback: ${reason}`),
+			});
+
+			const shortChars = countTtsChars(writeResult.script.scenes, ttsModelId);
+			const deepChars = writeResult.deepDive ? countTtsChars(writeResult.deepDive.script.scenes, ttsModelId) : 0;
+			const totalChars = shortChars + deepChars;
+			if (ttsMeter.spentAmount + totalChars > ttsMeter.capAmount) {
+				console.warn(
+					`draht-reels: stopping: story ${id.slice(0, 12)} needs ${totalChars} TTS chars, exceeding the remaining budget; keeping already-drafted stories`,
+				);
+				break;
+			}
+
+			await mkdir(tmpDir, { recursive: true });
+			const headSha = storyIdSha(story.id);
+
+			const narration = await tts.synthesize(writeResult.script.scenes, tmpDir);
+			ttsMeter.record(shortChars);
+
+			let video: string | undefined;
+			let poster: string | undefined;
+			let durationMs = narration.transcript.reduce((max, s) => Math.max(max, s.endMs), 0);
+			if (renderBundle) {
+				const videoPath = join(tmpDir, "video.mp4");
+				const posterPath = join(tmpDir, "poster.jpg");
+				const audioSrc = narration.audioPath
+					? await publishAudioForRender(renderBundle, headSha, narration.audioPath)
+					: undefined;
+				const result = await renderReel({
+					bundle: renderBundle,
+					props: { scenes: writeResult.script.scenes, transcript: narration.transcript, audioSrc },
+					outVideoPath: videoPath,
+					outPosterPath: posterPath,
+					concurrency: args.concurrency,
+				});
+				video = "video.mp4";
+				poster = "poster.jpg";
+				durationMs = Math.max(durationMs, Math.round((result.durationInFrames / result.fps) * 1000));
+			}
+			if (narration.audioPath) {
+				const target = join(tmpDir, "audio.mp3");
+				if (narration.audioPath !== target) await copyFile(narration.audioPath, target);
+			}
+
+			let deepDiveMedia: ReelMedia | undefined;
+			let deepScript: ReelScript | undefined;
+			if (writeResult.deepDive) {
+				const deepDir = join(tmpDir, "deep");
+				await mkdir(deepDir, { recursive: true });
+				const deepNarration = await tts.synthesize(writeResult.deepDive.script.scenes, deepDir);
+				ttsMeter.record(deepChars);
+
+				let deepVideo: string | undefined;
+				let deepPoster: string | undefined;
+				let deepDurationMs = deepNarration.transcript.reduce((max, s) => Math.max(max, s.endMs), 0);
+				if (renderBundle) {
+					const videoPath = join(deepDir, "video.mp4");
+					const posterPath = join(deepDir, "poster.jpg");
+					const audioSrc = deepNarration.audioPath
+						? await publishAudioForRender(renderBundle, headSha, deepNarration.audioPath)
+						: undefined;
+					const result = await renderReel({
+						bundle: renderBundle,
+						props: { scenes: writeResult.deepDive.script.scenes, transcript: deepNarration.transcript, audioSrc },
+						outVideoPath: videoPath,
+						outPosterPath: posterPath,
+						concurrency: args.concurrency,
+					});
+					deepVideo = "deep/video.mp4";
+					deepPoster = "deep/poster.jpg";
+					deepDurationMs = Math.max(deepDurationMs, Math.round((result.durationInFrames / result.fps) * 1000));
+				}
+				if (deepNarration.audioPath) {
+					const target = join(deepDir, "audio.mp3");
+					if (deepNarration.audioPath !== target) await copyFile(deepNarration.audioPath, target);
+				}
+				deepDiveMedia = {
+					durationMs: deepDurationMs,
+					video: deepVideo,
+					audio: deepNarration.audioPath ? "deep/audio.mp3" : undefined,
+					poster: deepPoster,
+					scenes: writeResult.deepDive.script.scenes,
+					transcript: deepNarration.transcript,
+				};
+				deepScript = writeResult.deepDive.script;
+			}
+
+			const sources = toPublicSources(ctx.sources);
+			const entry: ReelEntry = {
+				id: story.id,
+				commits: story.commits,
+				title: redactText(story.title),
+				authors: story.authors.map(redactText),
+				date: story.date,
+				durationMs,
+				video,
+				audio: narration.audioPath ? "audio.mp3" : undefined,
+				poster,
+				scenes: writeResult.script.scenes,
+				transcript: narration.transcript,
+				stats: {
+					files: story.files.length,
+					additions: story.files.reduce((sum, f) => sum + f.additions, 0),
+					deletions: story.files.reduce((sum, f) => sum + f.deletions, 0),
+				},
+				kind: "story",
+				story: {
+					origin: story.origin,
+					base: story.base,
+					commitCount: 1 + story.branchCommits.length,
+					pr: story.pr ? { number: story.pr.number, url: story.pr.url } : undefined,
+					theme: "",
+					deepDive: writeResult.deepDiveOutcome === "rendered" ? "rendered" : "not-warranted",
+				},
+				release: story.release,
+				sources,
+				deepDive: deepDiveMedia,
+				writer: writeResult.writer,
+			};
+
+			// Kept for review (T12b): every source handed to (or withheld from) the writer, by id, so a reviewer can
+			// check a cite's quote against the exact text the model saw, without re-assembling context from git.
+			const scriptSnapshot = {
+				script: writeResult.script,
+				deepDive: deepScript,
+				sources: Array.from(ctx.sources.values()).map((record) => ({
+					id: record.id,
+					kind: record.kind,
+					label: record.label,
+					url: record.url,
+					text: record.text,
+					included: record.included !== false,
+				})),
+			};
+
+			await writeFile(join(tmpDir, "entry.json"), `${JSON.stringify(entry, null, "\t")}\n`);
+			await writeFile(join(tmpDir, "script.json"), `${JSON.stringify(scriptSnapshot, null, "\t")}\n`);
+
+			await replaceDir(finalDir, tmpDir);
+			draftedCount++;
+			state = recordSuccess(state, id);
+		} catch (error) {
+			failedCount++;
+			const message = error instanceof Error ? error.message : String(error);
+			console.error(
+				`draht-reels: failed to draft story ${id.slice(0, 12)} (${message}); continuing with the next one`,
+			);
+			await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+			state = recordFailure(state, id, message, now());
+		}
+		await writeState(draftsBaseDir, name, state);
+	}
+
+	console.log(`draht-reels: drafted ${draftedCount} story/stories, ${failedCount} failed`);
+	console.log(
+		`draht-reels: spend — LLM $${llmMeter.spentAmount.toFixed(2)}/$${maxCostUsd}, ${llmMeter.spentTokenAmount}/${maxLlmTokens} tokens; TTS ${ttsMeter.spentAmount}/${maxTtsChars} chars`,
+	);
+	return { published: draftedCount, failed: failedCount };
 }
 
 async function runSite(argv: string[]): Promise<void> {

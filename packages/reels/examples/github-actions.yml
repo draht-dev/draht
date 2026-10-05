@@ -125,7 +125,7 @@ env:
   # MUST be bumped to a commit that contains the story pipeline (--unit
   # story, the drafts/review/approve/reject commands) once it merges — this
   # pin predates it.
-  DRAHT_MONO_REF: a3e67aa30620e40181807f8214b104cb18864050
+  DRAHT_MONO_REF: cd541770a5db4179e61489db7c1a0530266ddf4c
 
 jobs:
   build:

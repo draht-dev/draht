@@ -113,7 +113,7 @@ describe("max thinking level", () => {
 
 	it("sends max to the Azure OpenAI Responses API", async () => {
 		const model = {
-			...getModel("azure-openai-responses", "gpt-5.6-sol")!,
+			...getModel("azure", "gpt-5.6-sol")!,
 			baseUrl: "https://example.openai.azure.com/openai/v1",
 		};
 		const context: Context = {

@@ -29,6 +29,8 @@ import type {
 	Story,
 } from "./contract.ts";
 import { createGithubLookup, type GithubLookup, isNestedInside, parseGithubRepo } from "./github.ts";
+import type { ChangelogAnchor } from "./mainline.ts";
+import { formatStoryPlan, planStories } from "./plan-story.ts";
 import { applyContentPolicy, DEFAULT_DENY_GLOBS, redactText } from "./privacy.ts";
 import { mergePlaylists, pruneFeed, publishFeed, publishSite, readFeed } from "./publish.ts";
 import { DEFAULT_REELS_CONFIG, loadReelsConfig, type ReelsConfig } from "./reels-config.ts";
@@ -44,6 +46,7 @@ import {
 	type SyncRecapInput,
 	type SyncSummaryInput,
 	selectRecapCommits,
+	selectWeakFeatures,
 	type WeakFeatureInput,
 	writeReleaseOverview,
 	writeSyncRecap,
@@ -139,6 +142,8 @@ interface BuildArgs {
 	maxLlmTokens?: number;
 	maxTtsChars?: number;
 	draftsDir?: string;
+	/** `plan --unit story` only: prints the `StoryPlan` as JSON instead of the readable text report. */
+	json: boolean;
 }
 
 function fail(message: string): never {
@@ -186,6 +191,7 @@ function parseBuildArgs(argv: string[]): BuildArgs {
 		includeGlobs: [],
 		unit: "story",
 		deepDive: "auto",
+		json: false,
 	};
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i];
@@ -276,6 +282,9 @@ function parseBuildArgs(argv: string[]): BuildArgs {
 				break;
 			case "--drafts-dir":
 				args.draftsDir = takeValue(argv, ++i, a);
+				break;
+			case "--json":
+				args.json = true;
 				break;
 			default:
 				fail(`unknown option "${a}"`);
@@ -369,8 +378,43 @@ async function collectOrFail<T>(action: () => Promise<T>, repo: string, ref: str
 	}
 }
 
-async function runPlan(argv: string[]): Promise<void> {
-	const args = parseBuildArgs(argv);
+/** `plan --unit story`: a read-only dry run of `--unit story`'s selection (config, release groups, `collectStories`,
+ * `minAttribution`, overview/recap eligibility) — never a writer, a TTS provider, or an LLM call, and never writes
+ * to `--out`/`--drafts-dir`. Shares `resolveReelsConfig`/`defaultDraftsDir`/`resolveStoryGithubLookup` with
+ * `runBuildStory`, so a story's reported status matches what the next real `build --unit story` would do with it. */
+async function runPlanStory(args: BuildArgs, overrides: BuildOverrides): Promise<void> {
+	let config = await resolveReelsConfig(args);
+	if (args.tagPattern) config = { ...config, tagPattern: args.tagPattern };
+
+	const name = repoName(args);
+	const outDir = resolve(args.out);
+	const draftsBaseDir = resolve(args.draftsDir ?? config.build.draftsDir ?? defaultDraftsDir(args.repo));
+	const maxTtsChars = args.maxTtsChars ?? config.build.maxTtsChars;
+
+	const git = overrides.git ?? runGit;
+	const gh = overrides.gh ?? (await resolveStoryGithubLookup(args.repo, outDir, join(args.repo, ".reels-cache"), git));
+
+	const plan = await planStories({
+		repo: args.repo,
+		ref: args.ref,
+		allHistory: args.allHistory,
+		scan: args.scan,
+		limit: args.limit,
+		force: args.force,
+		config,
+		deepDive: args.deepDive,
+		maxTtsChars,
+		outDir,
+		name,
+		draftsBaseDir,
+		git,
+		gh,
+	});
+
+	console.log(args.json ? JSON.stringify(plan, null, "\t") : formatStoryPlan(plan));
+}
+
+async function runPlanCommit(args: BuildArgs): Promise<void> {
 	const writer = await resolveWriter(args);
 	const name = repoName(args);
 	const outDir = resolve(args.out);
@@ -418,6 +462,15 @@ async function runPlan(argv: string[]): Promise<void> {
 		});
 	}
 	console.log(JSON.stringify({ changeSets: reportedChangeSets, scripts }, null, "\t"));
+}
+
+/** `--unit commit` keeps its original report (changeSets/scripts JSON); `--unit story` (the default, matching
+ * `build`'s own default) is the read-only dry run `runPlanStory` implements. `overrides` exists only for tests,
+ * same as `runBuild`'s. */
+export async function runPlan(argv: string[], overrides: BuildOverrides = {}): Promise<void> {
+	const args = parseBuildArgs(argv);
+	if (args.unit === "commit") return runPlanCommit(args);
+	return runPlanStory(args, overrides);
 }
 
 export interface BuildResult {
@@ -599,7 +652,7 @@ export async function runBuild(argv: string[], overrides: BuildOverrides = {}): 
 	return { published: publishedCount, failed: failedCount };
 }
 
-function defaultDraftsDir(repo: string): string {
+export function defaultDraftsDir(repo: string): string {
 	return join(resolve(repo), ".reels-drafts");
 }
 
@@ -689,12 +742,21 @@ async function collectReleaseStoryInputs(
 	return [...approved, ...pending.filter((e) => e.kind === "story" && e.release === tag)].map(toReleaseStoryInput);
 }
 
+/** A weak-attributed story's own changelog anchor is always its head commit (`buildCommitStory`'s weak path never finds a separate implementing commit), so matching `group.anchors` by that commit's 12-char prefix recovers the section the story's title has no other record of. */
+function weakStorySection(story: Story, anchors: readonly ChangelogAnchor[]): ChangelogSection | undefined {
+	const sha12 = story.commits[0];
+	if (!sha12) return undefined;
+	const anchor = anchors.find((a) => a.commitSha.startsWith(sha12));
+	return anchor ? asChangelogSection(anchor.section) : undefined;
+}
+
 /**
  * Weak-attributed changelog stories excluded from their own reel by
  * `story.minAttribution` (default `"strong"`): listed in the release
  * overview instead (owner decision on weak stories), never duplicated when
  * `minAttribution: "weak"` lets them become their own story (then they are
- * simply absent from `storyById`'s complement below).
+ * simply absent from `storyById`'s complement below). The full candidate
+ * list (not yet deduplicated or capped — see `selectWeakFeatures`).
  */
 function collectWeakFeatures(
 	group: ReleaseGroup,
@@ -714,6 +776,7 @@ function collectWeakFeatures(
 			title: s.title,
 			anchorText: s.title,
 			changelogSourceId: changelogSourceId(topPackage(s.files), group.tag ?? "unreleased", i),
+			section: weakStorySection(s, group.anchors),
 		}));
 }
 
@@ -733,9 +796,10 @@ interface ReleaseArtifactDraft {
 }
 
 /**
- * Writes a release overview for `group` unless it is tiny, sharing `llmMeter`
- * with story drafting (T12c: "same cost caps"). Returns `undefined` for a
- * tiny release (nothing to draft).
+ * Writes a release overview for `group` unless it is tiny or still
+ * "Unreleased" (no release to summarize yet — stories in unreleased work
+ * stay eligible on their own, just without an overview), sharing `llmMeter`
+ * with story drafting (T12c: "same cost caps").
  */
 async function writeReleaseOverviewArtifact(
 	group: ReleaseGroup,
@@ -752,14 +816,23 @@ async function writeReleaseOverviewArtifact(
 		onFallback?: (reason: string) => void;
 	},
 ): Promise<ReleaseArtifactDraft | undefined> {
-	if (group.tiny) return undefined;
+	if (group.tiny || group.tag === undefined) return undefined;
 	const tag = group.tag;
 	const stories = await collectReleaseStoryInputs(opts.outDir, opts.name, opts.draftsDir, tag);
-	const weakFeatures = collectWeakFeatures(group, opts.allStories, opts.attribution, opts.storyById);
+	const { kept: weakFeatures, remainderCount: weakFeaturesRemainderCount } = selectWeakFeatures(
+		collectWeakFeatures(group, opts.allStories, opts.attribution, opts.storyById),
+	);
 	const pool = poolReleaseUpstreamRecap(group.units, []); // syncs mention only; anchors belong to the recap, not the overview
 	const syncs: SyncSummaryInput[] = pool.syncMerges.map((m) => ({ title: m.subject, commitCount: m.commitCount }));
 
-	const input: ReleaseOverviewInput = { tag, stories, weakFeatures, syncs, tiny: group.tiny };
+	const input: ReleaseOverviewInput = {
+		tag,
+		stories,
+		weakFeatures,
+		weakFeaturesRemainderCount,
+		syncs,
+		tiny: group.tiny,
+	};
 	const costBefore = opts.llmMeter.spentAmount;
 	const result = await writeReleaseOverview(input, opts.complete, opts.llmMeter, {
 		denyPatterns: opts.denyPatterns,
@@ -787,7 +860,8 @@ async function writeReleaseOverviewArtifact(
 /**
  * Writes the pooled upstream recap for `group` (T11 finding) when its pool
  * is non-empty, sharing `llmMeter` with story drafting. Returns `undefined`
- * when the release carries no routed anchor to narrate.
+ * when the release carries no routed anchor to narrate, or when `group` is
+ * still "Unreleased" (no release to summarize yet).
  */
 async function writeRecapArtifact(
 	group: ReleaseGroup,
@@ -799,7 +873,7 @@ async function writeRecapArtifact(
 		onFallback?: (reason: string) => void;
 	},
 ): Promise<ReleaseArtifactDraft | undefined> {
-	if (pool.anchors.length === 0) return undefined;
+	if (pool.anchors.length === 0 || group.tag === undefined) return undefined;
 	const tag = group.tag;
 
 	const commits: RecapCommitInput[] = pool.upstreamCommits.map((c) => ({
@@ -1066,7 +1140,7 @@ async function draftReleaseArtifacts(
 }
 
 /** `gh` PR lookup is attached only when `origin`'s remote resolves to a GitHub repo; a missing remote (or non-GitHub host) silently disables it, same as a missing `gh` binary does inside `github.ts` itself. */
-async function resolveStoryGithubLookup(
+export async function resolveStoryGithubLookup(
 	repo: string,
 	outDir: string,
 	cacheDir: string,
@@ -1872,7 +1946,7 @@ async function runSite(argv: string[]): Promise<void> {
  * command will use (not yet runner-controlled — see the README once T13's
  * sibling tasks land).
  */
-async function resolveReelsConfig(args: Pick<BuildArgs, "repo" | "config">): Promise<ReelsConfig> {
+export async function resolveReelsConfig(args: Pick<BuildArgs, "repo" | "config">): Promise<ReelsConfig> {
 	const path = args.config ?? join(args.repo, ".reels.json");
 	try {
 		return await loadReelsConfig(path);

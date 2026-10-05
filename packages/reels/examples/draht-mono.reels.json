@@ -2,7 +2,7 @@
 	"tagPattern": "^v2026\\.",
 	"historyFloor": "95276df0608dabe8d443c3191fa8e391f9922cca",
 	"upstream": {
-		"subjectPatterns": ["^merge: sync upstream pi", "^upstream:"],
+		"subjectPatterns": ["^merge: sync upstream pi", "^upstream:", "upstream[- ]sync"],
 		"markerPaths": [".upstream-sync"]
 	},
 	"story": {

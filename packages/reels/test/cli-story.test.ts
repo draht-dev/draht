@@ -253,9 +253,8 @@ describe("build --unit story: minAttribution eligibility", () => {
 			try {
 				const overrides: BuildOverrides = { complete: fallingBackCompleter() };
 				const result1 = await runBuild(baseArgv(repo.dir, drafts, out), overrides);
-				// 1 story (the strong one) plus the "Unreleased" release overview (T12c): 2 anchor-owning commits
-				// promote this group out of "tiny" regardless of attribution, and no draft of it exists yet.
-				expect(result1.published).toBe(2);
+				// Just the strong story: "Unreleased" never gets a release overview (no release to summarize yet).
+				expect(result1.published).toBe(1);
 				const idsAfterFirst = readDraftIds(drafts, "demo");
 				expect(idsAfterFirst.some((id) => id.startsWith(strongDocsSha))).toBe(true);
 				expect(idsAfterFirst.some((id) => id.startsWith(weakDocsSha))).toBe(false);
@@ -298,10 +297,8 @@ describe("build --unit story: a failing story is recorded and the run continues"
 				const overrides: BuildOverrides = { complete: fallingBackCompleter(), tts: flakyTts };
 				const result = await runBuild(baseArgv(repo.dir, drafts, out, ["--limit", "10"]), overrides);
 
-				// 1 story (the good one) plus the "Unreleased" release overview (T12c: 2 feature merges make this
-				// group non-tiny); the overview's own title scene is never "Merge bad feature", so `flakyTts` lets it
-				// through.
-				expect(result.published).toBe(2);
+				// Just the good story: "Unreleased" never gets a release overview (no release to summarize yet).
+				expect(result.published).toBe(1);
 				expect(result.failed).toBe(1);
 
 				const ids = readDraftIds(drafts, "demo");

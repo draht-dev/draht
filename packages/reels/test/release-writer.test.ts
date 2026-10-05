@@ -15,6 +15,8 @@ import {
 	type ReleaseStoryInput,
 	type SyncRecapInput,
 	selectRecapCommits,
+	selectWeakFeatures,
+	templateReleaseOverview,
 	validateReleaseOverview,
 	validateSyncRecap,
 	type WeakFeatureInput,
@@ -105,6 +107,99 @@ describe("computeReleaseThemes", () => {
 		expect(themes).toHaveLength(5);
 		expect(themes[4]?.id).toBe("theme:more");
 		expect(themes[4]?.storyIds).toHaveLength(3);
+	});
+});
+
+describe("selectWeakFeatures", () => {
+	test("drops a near-duplicate title whose token set is covered >= 80% by one already kept", () => {
+		const a: WeakFeatureInput = {
+			title: "Show draht logo on OAuth callback pages",
+			anchorText: "x",
+			changelogSourceId: "cl:ai@v1#0",
+		};
+		const b: WeakFeatureInput = {
+			title: "show the `draht` logo on oauth callback pages!",
+			anchorText: "y",
+			changelogSourceId: "cl:ai@v1#1",
+		};
+		const result = selectWeakFeatures([a, b]);
+		expect(result.kept).toHaveLength(1);
+		expect(result.kept[0]?.changelogSourceId).toBe("cl:ai@v1#0");
+		expect(result.remainderCount).toBe(0);
+	});
+
+	test("keeps two titles that share only a minority of tokens", () => {
+		const a: WeakFeatureInput = { title: "tweak the profile grid spacing", anchorText: "x", changelogSourceId: "0" };
+		const b: WeakFeatureInput = { title: "add retry on 429 responses", anchorText: "y", changelogSourceId: "1" };
+		const result = selectWeakFeatures([a, b]);
+		expect(result.kept).toHaveLength(2);
+		expect(result.remainderCount).toBe(0);
+	});
+
+	test("caps at `cap`, ranking Breaking > Added > Changed > Fixed > Removed then by title length, and reports the rest as a count", () => {
+		const candidates: WeakFeatureInput[] = [
+			{ title: "a fixed thing", anchorText: "x", changelogSourceId: "f0", section: "Fixed" },
+			{ title: "a somewhat longer added thing here", anchorText: "x", changelogSourceId: "a0", section: "Added" },
+			{
+				title: "a breaking change of some kind",
+				anchorText: "x",
+				changelogSourceId: "b0",
+				section: "Breaking Changes",
+			},
+			{ title: "a changed thing", anchorText: "x", changelogSourceId: "c0", section: "Changed" },
+			{ title: "a removed thing", anchorText: "x", changelogSourceId: "r0", section: "Removed" },
+			{ title: "an unranked thing with no section at all here", anchorText: "x", changelogSourceId: "u0" },
+		];
+		const result = selectWeakFeatures(candidates, 3);
+		expect(result.kept.map((w) => w.changelogSourceId)).toEqual(["b0", "a0", "c0"]);
+		expect(result.remainderCount).toBe(3);
+	});
+
+	test("defaults the cap to 10", () => {
+		const topics = [
+			"startup latency for cold boots",
+			"pagination cursor off-by-one",
+			"caching layer for redundant requests",
+			"unused imports across the codebase",
+			"error messages on request timeout",
+			"null checks in the parser",
+			"typo in the help text",
+			"color contrast in the settings panel",
+			"retry with backoff for flaky calls",
+			"memory usage during large uploads",
+			"race condition saving config",
+			"logging detail for failed auth",
+			"keyboard navigation in the file picker",
+			"scroll position after a tab switch",
+			"clock skew handling in the scheduler",
+		];
+		const candidates: WeakFeatureInput[] = topics.map((topic, i) => ({
+			title: `improve the ${topic}`,
+			anchorText: "x",
+			changelogSourceId: `w${i}`,
+		}));
+		const result = selectWeakFeatures(candidates);
+		expect(result.kept).toHaveLength(10);
+		expect(result.remainderCount).toBe(5);
+	});
+});
+
+describe("templateReleaseOverview: weak feature remainder", () => {
+	test("appends a deterministic, uncited 'and N more smaller changes' beat when a remainder is given", () => {
+		const input = releaseInput({ weakFeatures: [WEAK_FEATURE], weakFeaturesRemainderCount: 7 });
+		const script = templateReleaseOverview(input, computeReleaseThemes(input.stories));
+		const also = script.scenes.find((s) => s.kind === "title" && s.title === "Also shipped");
+		expect(also).toBeDefined();
+		const last = also?.beats?.at(-1);
+		expect(last?.text).toBe("And 7 more smaller changes.");
+		expect(last?.cites).toEqual([]);
+	});
+
+	test("omits the remainder beat when the count is zero", () => {
+		const input = releaseInput({ weakFeatures: [WEAK_FEATURE], weakFeaturesRemainderCount: 0 });
+		const script = templateReleaseOverview(input, computeReleaseThemes(input.stories));
+		const also = script.scenes.find((s) => s.kind === "title" && s.title === "Also shipped");
+		expect(also?.beats).toHaveLength(1);
 	});
 });
 
@@ -217,6 +312,23 @@ describe("validateReleaseOverview", () => {
 		const weakScene = accepted.script?.scenes.find((s) => s.section === "overview");
 		// The pipeline wrote the beat text itself: it equals the real title verbatim, never model prose.
 		expect(weakScene?.beats?.[0]).toEqual({ text: WEAK_FEATURE.title, cites: [WEAK_FEATURE.changelogSourceId] });
+	});
+
+	test("appends a deterministic, uncited remainder beat after the model's grounded weak mentions", () => {
+		const input = releaseInput({ weakFeatures: [WEAK_FEATURE], weakFeaturesRemainderCount: 4 });
+		const themes = computeReleaseThemes(input.stories);
+		const sources = buildReleaseSourceRegistry(input);
+		const ref = weakFeatureRef(0);
+		const grounded = fullReleaseScenes({ weak: [{ ref, quote: "tweak the profile grid spacing" }] });
+		const accepted = validateReleaseOverview(
+			grounded,
+			{ themes, weakFeatures: input.weakFeatures, weakFeaturesRemainderCount: 4, sources, hasSyncs: false },
+			"release-v1",
+		);
+		expect(accepted.errors).toEqual([]);
+		const weakScene = accepted.script?.scenes.find((s) => s.section === "overview");
+		expect(weakScene?.beats).toHaveLength(2);
+		expect(weakScene?.beats?.[1]).toEqual({ text: "And 4 more smaller changes.", cites: [] });
 	});
 
 	test("rejects a weak mention whose quote is not grounded in its own anchor text", () => {

@@ -289,6 +289,8 @@ export interface WeakFeatureInput {
 	anchorText: string;
 	/** `cl:<pkg>@<version>#<i>`, built by the caller via `sources.ts`'s `changelogSourceId`. */
 	changelogSourceId: string;
+	/** Used only to rank selection significance (Breaking > Added > Changed > Fixed > Removed); unranked when absent. */
+	section?: ChangelogSection;
 }
 
 export interface SyncSummaryInput {
@@ -300,7 +302,10 @@ export interface ReleaseOverviewInput {
 	/** Absent for the "Unreleased" group. */
 	tag?: string;
 	stories: ReleaseStoryInput[];
+	/** Already deduplicated and capped by {@link selectWeakFeatures} — the writer never sees the dropped remainder, only its count. */
 	weakFeatures: WeakFeatureInput[];
+	/** Count of near-duplicate-free weak features cut by {@link selectWeakFeatures}'s cap, rendered as a deterministic, uncited sentence. */
+	weakFeaturesRemainderCount?: number;
 	syncs: SyncSummaryInput[];
 	/** GitHub release body text for this tag, when available; cited as `ghr:<tag>`. */
 	ghrBody?: string;
@@ -340,6 +345,67 @@ function capReleaseThemes(themes: ReleaseTheme[]): ReleaseTheme[] {
 /** The index-based ref a weak feature is addressed by in the protocol (fix round): the model never sees or restates a weak feature's title, only this ref and a grounding quote. The pipeline renders the real title itself. */
 export function weakFeatureRef(index: number): string {
 	return `w${index}`;
+}
+
+/** At most this many weak features are ever shown to the model; a real release's weak list can run into the dozens, mostly the same change restated across package changelogs. */
+export const MAX_WEAK_FEATURES = 10;
+/** Two weak feature titles are near-duplicates when one's normalized token set covers at least this fraction of the other's. */
+const WEAK_FEATURE_DUP_COVERAGE = 0.8;
+
+function weakFeatureTokenSet(title: string): Set<string> {
+	const normalized = title
+		.toLowerCase()
+		.replace(/`/g, "")
+		.replace(/[^\p{L}\p{N}\s]+/gu, " ");
+	return new Set(normalized.split(/\s+/).filter(Boolean));
+}
+
+function tokenCoverage(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
+	if (a.size === 0 || b.size === 0) return 0;
+	let shared = 0;
+	for (const token of a) if (b.has(token)) shared++;
+	return Math.max(shared / a.size, shared / b.size);
+}
+
+/** Drops a weak feature whose (normalized, backtick/punctuation-stripped) title is a near-duplicate of one already kept — the same change described slightly differently across package changelogs. Keeps the first occurrence of each duplicate cluster, in input order. */
+function dedupeWeakFeatures(candidates: readonly WeakFeatureInput[]): WeakFeatureInput[] {
+	const kept: WeakFeatureInput[] = [];
+	const keptTokens: ReadonlySet<string>[] = [];
+	for (const candidate of candidates) {
+		const tokens = weakFeatureTokenSet(candidate.title);
+		if (keptTokens.some((other) => tokenCoverage(tokens, other) >= WEAK_FEATURE_DUP_COVERAGE)) continue;
+		kept.push(candidate);
+		keptTokens.push(tokens);
+	}
+	return kept;
+}
+
+export interface WeakFeatureSelection {
+	kept: WeakFeatureInput[];
+	/** Deduplicated features cut by the cap, never shown to the model; rendered as a deterministic count sentence. */
+	remainderCount: number;
+}
+
+/**
+ * Deduplicates near-duplicate weak features (fix round: the same changelog
+ * entry often gets restated with slightly different wording across package
+ * changelogs), then caps the result at `cap`, ranked by changelog section
+ * significance (Breaking > Added > Changed > Fixed > Removed) and then by
+ * title length. The cut remainder is only ever surfaced as a count.
+ */
+export function selectWeakFeatures(
+	candidates: readonly WeakFeatureInput[],
+	cap: number = MAX_WEAK_FEATURES,
+): WeakFeatureSelection {
+	const deduped = dedupeWeakFeatures(candidates);
+	const ranked = [...deduped].sort(
+		(a, b) => sectionRank(a.section) - sectionRank(b.section) || b.title.length - a.title.length,
+	);
+	return { kept: ranked.slice(0, cap), remainderCount: Math.max(0, ranked.length - cap) };
+}
+
+function weakFeaturesRemainderBeat(count: number): Beat {
+	return templateBeat(`And ${count} more smaller change${count === 1 ? "" : "s"}.`);
 }
 
 function releaseGhrSourceId(tag: string): string {
@@ -467,6 +533,7 @@ const RELEASE_RESTRICTED_PREFIXES = ["st:"];
 export interface ReleaseValidationContext {
 	themes: readonly ReleaseTheme[];
 	weakFeatures: readonly WeakFeatureInput[];
+	weakFeaturesRemainderCount?: number;
 	sources: SourceRegistry;
 	hasSyncs: boolean;
 	denyPatterns?: RegExp[];
@@ -589,6 +656,7 @@ export function validateReleaseOverview(
 			}
 		}
 		if (weakBeats.length === ctx.weakFeatures.length && errors.length === 0) {
+			if (ctx.weakFeaturesRemainderCount) weakBeats.push(weakFeaturesRemainderBeat(ctx.weakFeaturesRemainderCount));
 			scenes.push(sceneOf("overview", "Also shipped", weakBeats));
 		}
 	}
@@ -641,13 +709,9 @@ export function templateReleaseOverview(input: ReleaseOverviewInput, themes: rea
 		);
 	}
 	if (input.weakFeatures.length > 0) {
-		scenes.push(
-			sceneOf(
-				"overview",
-				"Also shipped",
-				input.weakFeatures.map((w) => templateBeat(w.title)),
-			),
-		);
+		const weakBeats = input.weakFeatures.map((w) => templateBeat(w.title));
+		if (input.weakFeaturesRemainderCount) weakBeats.push(weakFeaturesRemainderBeat(input.weakFeaturesRemainderCount));
+		scenes.push(sceneOf("overview", "Also shipped", weakBeats));
 	}
 	if (input.syncs.length > 0) {
 		const total = input.syncs.reduce((sum, s) => sum + s.commitCount, 0);
@@ -688,6 +752,7 @@ export async function writeReleaseOverview(
 	const validationCtx: ReleaseValidationContext = {
 		themes,
 		weakFeatures: input.weakFeatures,
+		weakFeaturesRemainderCount: input.weakFeaturesRemainderCount,
 		sources,
 		hasSyncs: input.syncs.length > 0,
 		denyPatterns: opts.denyPatterns,

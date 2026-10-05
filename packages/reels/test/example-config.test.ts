@@ -24,7 +24,7 @@ describe("draht-mono.reels.json", () => {
 
 		expect(config.tagPattern).toBe("^v2026\\.");
 		expect(config.historyFloor).toBe("95276df0608dabe8d443c3191fa8e391f9922cca");
-		expect(config.upstream.subjectPatterns).toEqual(["^merge: sync upstream pi", "^upstream:"]);
+		expect(config.upstream.subjectPatterns).toEqual(["^merge: sync upstream pi", "^upstream:", "upstream[- ]sync"]);
 		expect(config.upstream.markerPaths).toEqual([".upstream-sync"]);
 		expect(config.story.minAttribution).toBe("strong");
 		expect(config.story.model).toBe("anthropic/claude-sonnet-5");
@@ -34,5 +34,30 @@ describe("draht-mono.reels.json", () => {
 		expect(config.build.maxCostUsd).toBe(5);
 		expect(config.build.maxLlmTokens).toBe(2_000_000);
 		expect(config.build.maxTtsChars).toBe(50_000);
+	});
+
+	test("subjectPatterns classify real upstream-sync merge subjects without over-matching feature merges", async () => {
+		const config = await loadReelsConfig(join(import.meta.dir, "../examples/draht-mono.reels.json"));
+		const patterns = config.upstream.subjectPatterns.map((p) => new RegExp(p, "i"));
+		const matches = (subject: string) => patterns.some((p) => p.test(subject));
+
+		for (const subject of [
+			"merge: sync upstream pi through 005af57d8 (v0.99.2)",
+			"merge: integrate upstream-sync into main",
+			"merge: integrate remaining upstream-sync work",
+			"merge: bring GitHub main (4375df32e) into the v0.99.2 upstream sync",
+			"upstream: fix(ai) Google thinking detection",
+		]) {
+			expect(matches(subject)).toBe(true);
+		}
+
+		for (const subject of [
+			"merge: judge reviews gates instead of decisions",
+			"merge: integrate unified installer and canonical skills scaffold",
+			"merge: integrate verified Geist foundation beat B-031",
+			"merge: auth storage backend refactor",
+		]) {
+			expect(matches(subject)).toBe(false);
+		}
 	});
 });

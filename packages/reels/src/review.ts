@@ -67,10 +67,15 @@ function findQuoteSpan(quote: string, text: string): { start: number; end: numbe
 	return { start: match.index, end: match.index + match[0].length };
 }
 
+/** `text` truncated to its first `limit` chars, with an ellipsis marker when truncated. */
+function truncatedHead(text: string, limit: number): string {
+	return text.length > limit ? `${text.slice(0, limit)}…` : text;
+}
+
 /** `text` sliced to `±radius` chars around `quote`, with the quote itself marked `»…«`. Falls back to a plain head-of-text excerpt when `quote` cannot be found verbatim (should not happen for a validated beat; review must still render something). */
 export function excerptAroundQuote(text: string, quote: string, radius: number = EXCERPT_RADIUS): string {
 	const span = findQuoteSpan(quote, text);
-	if (!span) return text.length > radius * 2 ? `${text.slice(0, radius * 2)}…` : text;
+	if (!span) return truncatedHead(text, radius * 2);
 	const before = text.slice(Math.max(0, span.start - radius), span.start);
 	const marked = text.slice(span.start, span.end);
 	const after = text.slice(span.end, Math.min(text.length, span.end + radius));
@@ -78,6 +83,9 @@ export function excerptAroundQuote(text: string, quote: string, radius: number =
 	const trailEllipsis = span.end + radius < text.length ? "…" : "";
 	return `${leadEllipsis}${before}»${marked}«${after}${trailEllipsis}`;
 }
+
+/** Bound for a cited source's full text, shown for release/recap claims that have a cite but no quote (`DraftMeta.origin` for those kinds carries no per-beat notes, see `cli.ts`'s `renderReleaseArtifactDraft`). */
+const SOURCE_TEXT_LIMIT = EXCERPT_RADIUS * 2;
 
 function heading(text: string, level: number): string {
 	return `${"#".repeat(level)} ${text}`;
@@ -88,6 +96,7 @@ function renderBeat(
 	beat: Scene["beats"] extends (infer B)[] | undefined ? B : never,
 	note: BeatNote | undefined,
 	sourcesById: ReadonlyMap<string, DraftSourceSnapshot>,
+	showSourceTextWithoutQuote: boolean,
 ): string[] {
 	const lines: string[] = [];
 	const claimLabel = note ? `[${note.claim}]` : "[unspecified claim]";
@@ -102,6 +111,8 @@ function renderBeat(
 		if (note?.quote) {
 			lines.push(`     quote: "${note.quote}"`);
 			lines.push(`     excerpt: ${excerptAroundQuote(source.text, note.quote)}`);
+		} else if (showSourceTextWithoutQuote) {
+			lines.push(`     source: ${truncatedHead(source.text, SOURCE_TEXT_LIMIT)}`);
 		}
 	}
 	if ((beat.cites ?? []).length === 0 && note?.quote) {
@@ -115,6 +126,7 @@ function renderScene(
 	index: number,
 	notes: SceneNotes | undefined,
 	sourcesById: ReadonlyMap<string, DraftSourceSnapshot>,
+	showSourceTextWithoutQuote: boolean,
 ): string[] {
 	const lines: string[] = [];
 	const label = scene.section ? `${scene.section} (${scene.kind})` : scene.kind;
@@ -152,7 +164,7 @@ function renderScene(
 		lines.push("");
 		lines.push("Beats:");
 		scene.beats.forEach((beat, beatIndex) => {
-			lines.push(...renderBeat(beatIndex, beat, notes?.beats[beatIndex], sourcesById));
+			lines.push(...renderBeat(beatIndex, beat, notes?.beats[beatIndex], sourcesById, showSourceTextWithoutQuote));
 		});
 	}
 	return lines;
@@ -186,15 +198,20 @@ export function renderReviewMd(entry: ReelEntry, snapshot: DraftScriptSnapshot):
 	const sourcesById = new Map(snapshot.sources.map((s) => [s.id, s]));
 	const lines: string[] = [...renderHeader(entry, snapshot.meta)];
 
+	// Release/recap artifacts carry no per-beat notes (no quote to narrow an excerpt to, see
+	// `cli.ts`'s `renderReleaseArtifactDraft`), so fall back to the cited source's full text
+	// (bounded) rather than showing nothing. Story drafts keep their quote-anchored excerpts.
+	const showSourceTextWithoutQuote = entry.kind === "release" || entry.kind === "recap";
+
 	lines.push("", heading("Short", 2));
 	snapshot.script.scenes.forEach((scene, i) => {
-		lines.push("", ...renderScene(scene, i, snapshot.notes?.[i], sourcesById));
+		lines.push("", ...renderScene(scene, i, snapshot.notes?.[i], sourcesById, showSourceTextWithoutQuote));
 	});
 
 	if (snapshot.deepDive) {
 		lines.push("", heading("Deep dive", 2));
 		snapshot.deepDive.scenes.forEach((scene, i) => {
-			lines.push("", ...renderScene(scene, i, snapshot.deepDiveNotes?.[i], sourcesById));
+			lines.push("", ...renderScene(scene, i, snapshot.deepDiveNotes?.[i], sourcesById, showSourceTextWithoutQuote));
 		});
 	}
 

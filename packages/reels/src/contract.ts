@@ -12,7 +12,7 @@
  * symbol that appears in a non-withheld diff line or policed head content,
  * or a workspace component — validated by `anchored-diagram.ts` before the
  * pipeline emits Mermaid itself (a model never writes raw Mermaid). Every
- * `why`/`impact` beat either cites a source whose text contains its quote,
+ * `why`/`effect` beat either cites a source whose text contains its quote,
  * or says plainly that no reason was recorded. `narration` is always the
  * pipeline-computed join of `beats`, never taken from the model. The script
  * writer (template or LLM) may only choose hunks, head ranges, anchors, and

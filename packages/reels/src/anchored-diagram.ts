@@ -7,6 +7,7 @@
  */
 
 import { escapeMermaidLabel } from "./diagram.ts";
+import { cleanProse, proseViolatesDenyPatterns } from "./sources.ts";
 
 export type AnchorKind = "path" | "symbol" | "component";
 
@@ -58,10 +59,39 @@ function capWords(text: string, maxWords: number): string {
 	return words.length <= maxWords ? words.join(" ") : words.slice(0, maxWords).join(" ");
 }
 
+/**
+ * Matches `value` as a whole token: `\b` fails for a value starting or ending with `-` or `/` (CLI flags,
+ * `/commands`), since those are not word characters, so the boundary is instead "not another token character"
+ * (`[\w\-/]`) on each side rather than a strict `\b`.
+ */
 function symbolPattern(value: string): RegExp {
 	const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	return new RegExp(`\\b${escaped}\\b`);
+	return new RegExp(`(?<![\\w\\-/])${escaped}(?![\\w\\-/])`);
 }
+
+const SYMBOL_KEYWORDS = new Set([
+	"const",
+	"function",
+	"return",
+	"class",
+	"def",
+	"import",
+	"export",
+	"if",
+	"else",
+	"for",
+	"while",
+	"true",
+	"false",
+	"null",
+	"none",
+	"self",
+	"this",
+	"let",
+	"var",
+	"async",
+	"await",
+]);
 
 export function isAnchorValid(anchor: DiagramAnchor, ctx: AnchorContext): boolean {
 	switch (anchor.kind) {
@@ -70,6 +100,7 @@ export function isAnchorValid(anchor: DiagramAnchor, ctx: AnchorContext): boolea
 		case "component":
 			return ctx.packageNames.has(anchor.value) || ctx.topLevelDirs.has(anchor.value);
 		case "symbol": {
+			if (anchor.value.length < 3 || SYMBOL_KEYWORDS.has(anchor.value)) return false;
 			const pattern = symbolPattern(anchor.value);
 			for (const text of ctx.textByPath.values()) {
 				if (pattern.test(text)) return true;
@@ -90,9 +121,14 @@ export interface AnchoredDiagramAccepted {
 	droppedIds: string[];
 }
 
+export interface DiagramError {
+	rule: "anchors" | "prose";
+	detail: string;
+}
+
 export interface AnchoredDiagramRejected {
 	ok: false;
-	errors: string[];
+	errors: DiagramError[];
 	droppedIds: string[];
 }
 
@@ -100,13 +136,28 @@ export type AnchoredDiagramResult = AnchoredDiagramAccepted | AnchoredDiagramRej
 
 /**
  * Drops nodes with an invalid anchor (and the edges touching them); rejects
- * the whole diagram when fewer than {@link MIN_NODES} valid nodes remain or
- * more than a third of the original nodes were dropped. On success, emits
- * `graph TD` Mermaid from only the validated nodes/edges, with ids the
+ * the whole diagram when more than {@link MAX_NODES} nodes were offered,
+ * fewer than {@link MIN_NODES} valid nodes remain, or more than a third of
+ * the original nodes were dropped. Every caption, edge label, and anchor
+ * value used as a label goes through `cleanProse` and `denyPatterns` before
+ * being emitted; a deny-pattern match rejects the whole diagram. On success,
+ * emits `graph TD` Mermaid from only the validated nodes/edges, with ids the
  * pipeline generates (`n0`, `n1`, ...), never the model's own id strings.
  */
-export function validateAndEmitDiagram(diagram: RawDiagram, ctx: AnchorContext): AnchoredDiagramResult {
+export function validateAndEmitDiagram(
+	diagram: RawDiagram,
+	ctx: AnchorContext,
+	denyPatterns?: RegExp[],
+): AnchoredDiagramResult {
 	const totalNodes = diagram.nodes.length;
+	if (totalNodes > MAX_NODES) {
+		return {
+			ok: false,
+			errors: [{ rule: "anchors", detail: `diagram: ${totalNodes} nodes exceeds the ${MAX_NODES}-node cap` }],
+			droppedIds: [],
+		};
+	}
+
 	const seenIds = new Set<string>();
 	const validNodes: DiagramNode[] = [];
 	const droppedIds: string[] = [];
@@ -129,10 +180,22 @@ export function validateAndEmitDiagram(diagram: RawDiagram, ctx: AnchorContext):
 		return {
 			ok: false,
 			errors: [
-				`diagram: only ${validNodes.length}/${totalNodes} node(s) have a valid anchor (minimum ${MIN_NODES}, at most ${Math.floor(MAX_DROPPED_FRACTION * 100)}% may be dropped)`,
+				{
+					rule: "anchors",
+					detail: `diagram: only ${validNodes.length}/${totalNodes} node(s) have a valid anchor (minimum ${MIN_NODES}, at most ${Math.floor(MAX_DROPPED_FRACTION * 100)}% may be dropped)`,
+				},
 			],
 			droppedIds,
 		};
+	}
+
+	const proseErrors: DiagramError[] = [];
+	function label(text: string, where: string): string {
+		const cleaned = cleanProse(text);
+		if (proseViolatesDenyPatterns(cleaned, denyPatterns)) {
+			proseErrors.push({ rule: "prose", detail: `${where} matches a deny pattern: ${JSON.stringify(text)}` });
+		}
+		return cleaned;
 	}
 
 	const idMap = new Map<string, string>();
@@ -143,8 +206,10 @@ export function validateAndEmitDiagram(diagram: RawDiagram, ctx: AnchorContext):
 	const lines: string[] = ["graph TD"];
 	for (const node of validNodes) {
 		const pipelineId = idMap.get(node.id);
-		const caption = escapeMermaidLabel(capWords(node.caption, MAX_CAPTION_WORDS));
-		const anchorValue = escapeMermaidLabel(node.anchor.value);
+		const caption = escapeMermaidLabel(
+			capWords(label(node.caption, `diagram node ${node.id} caption`), MAX_CAPTION_WORDS),
+		);
+		const anchorValue = escapeMermaidLabel(label(node.anchor.value, `diagram node ${node.id} anchor value`));
 		lines.push(`${pipelineId}["${caption}\n${anchorValue}"]`);
 	}
 	for (const edge of diagram.edges) {
@@ -152,10 +217,15 @@ export function validateAndEmitDiagram(diagram: RawDiagram, ctx: AnchorContext):
 		const to = idMap.get(edge.to);
 		if (!from || !to) continue;
 		if (edge.label) {
-			lines.push(`${from} -->|${escapeMermaidLabel(capWords(edge.label, MAX_EDGE_LABEL_WORDS))}| ${to}`);
+			const edgeLabel = capWords(label(edge.label, `edge ${edge.from}->${edge.to} label`), MAX_EDGE_LABEL_WORDS);
+			lines.push(`${from} -->|${escapeMermaidLabel(edgeLabel)}| ${to}`);
 		} else {
 			lines.push(`${from} --> ${to}`);
 		}
+	}
+
+	if (proseErrors.length > 0) {
+		return { ok: false, errors: proseErrors, droppedIds };
 	}
 
 	return { ok: true, mermaid: lines.join("\n"), idMap, droppedIds };

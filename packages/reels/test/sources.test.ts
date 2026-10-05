@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import {
+	cleanProse,
 	commitSourceId,
 	createSourceRegistry,
 	getSource,
 	isSourceAvailable,
 	normalizeForQuote,
+	proseViolatesDenyPatterns,
+	quoteHasValidLength,
+	quoteIsWellFormed,
 	quoteOccursIn,
+	quoteOverlapsBeat,
 	toPublicSources,
 } from "../src/sources.ts";
 
@@ -59,5 +64,61 @@ describe("normalizeForQuote / quoteOccursIn", () => {
 
 	test("an empty quote never matches", () => {
 		expect(quoteOccursIn("   ", "anything")).toBe(false);
+	});
+});
+
+describe("quoteHasValidLength / quoteOverlapsBeat / quoteIsWellFormed", () => {
+	test("a quote under 4 words is rejected, even if it occurs in the source", () => {
+		expect(quoteHasValidLength("the")).toBe(false);
+		expect(quoteIsWellFormed("the", "the fix was needed because the index was missing")).toBe(false);
+	});
+
+	test("a quote over 25 words is rejected", () => {
+		const tooLong = Array.from({ length: 26 }, (_, i) => `word${i}`).join(" ");
+		expect(quoteHasValidLength(tooLong)).toBe(false);
+	});
+
+	test("a 4-25 word prose quote is valid length", () => {
+		expect(quoteHasValidLength("performance degraded under load")).toBe(true);
+	});
+
+	test("a code-like quote under 4 words is valid if it is at least 20 characters", () => {
+		expect(quoteHasValidLength("resolveCodeRef(ref1)")).toBe(true);
+		expect(quoteHasValidLength("a.b()")).toBe(false);
+	});
+
+	test("a quote sharing a content word with the beat text overlaps", () => {
+		expect(quoteOverlapsBeat("performance degraded under load", "It was slow because performance dropped.")).toBe(
+			true,
+		);
+	});
+
+	test("a quote sharing no content word with the beat text does not overlap", () => {
+		expect(quoteOverlapsBeat("the weather was nice that day", "It was slow because of load.")).toBe(false);
+	});
+
+	test("a beat's code identifier occurring verbatim in the quote counts as overlap", () => {
+		expect(
+			quoteOverlapsBeat("the function resolveCodeRef is called here", "It calls resolveCodeRef internally."),
+		).toBe(true);
+	});
+
+	test("quoteIsWellFormed requires both length and overlap", () => {
+		expect(quoteIsWellFormed("performance degraded under load", "It was slow under load.")).toBe(true);
+		expect(quoteIsWellFormed("the weather was nice today", "It was slow under load.")).toBe(false);
+	});
+});
+
+describe("cleanProse / proseViolatesDenyPatterns", () => {
+	test("cleanProse redacts secrets and strips URLs", () => {
+		const cleaned = cleanProse('api_key = "supersecretvalue123" see https://example.com/x for details');
+		expect(cleaned).toContain("[redacted]");
+		expect(cleaned).not.toContain("https://");
+	});
+
+	test("proseViolatesDenyPatterns matches any configured pattern", () => {
+		expect(proseViolatesDenyPatterns("Acme Corp internal project", [/acme corp/i])).toBe(true);
+		expect(proseViolatesDenyPatterns("nothing sensitive here", [/acme corp/i])).toBe(false);
+		expect(proseViolatesDenyPatterns("anything", undefined)).toBe(false);
 	});
 });

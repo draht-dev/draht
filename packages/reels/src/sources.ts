@@ -14,6 +14,7 @@
  */
 
 import type { PublicSource } from "./contract.ts";
+import { redactText } from "./privacy.ts";
 
 const SHA12_RE = /^[0-9a-f]{12}$/;
 
@@ -116,4 +117,92 @@ export function quoteOccursIn(quote: string, sourceText: string): boolean {
 	const needle = normalizeForQuote(quote);
 	if (needle.length === 0) return false;
 	return normalizeForQuote(sourceText).includes(needle);
+}
+
+const URL_RE = /\bhttps?:\/\/[^\s)]+/gi;
+
+/** `redactText`, then owner decision Q7: URLs are always stripped from narration and prose fields. */
+export function cleanProse(text: string): string {
+	return redactText(text)
+		.replace(URL_RE, "")
+		.replace(/\s{2,}/g, " ")
+		.trim();
+}
+
+/** True when `text` matches any of `patterns`, used to reject a deny-listed prose field. */
+export function proseViolatesDenyPatterns(text: string, patterns: RegExp[] | undefined): boolean {
+	if (!patterns || patterns.length === 0) return false;
+	return patterns.some((pattern) => pattern.test(text));
+}
+
+const QUOTE_STOPWORDS = new Set([
+	"that",
+	"this",
+	"with",
+	"from",
+	"have",
+	"been",
+	"were",
+	"which",
+	"while",
+	"about",
+	"after",
+	"before",
+	"because",
+	"then",
+	"than",
+	"they",
+	"them",
+	"their",
+	"there",
+	"what",
+	"when",
+	"where",
+	"into",
+	"would",
+	"could",
+	"should",
+	"your",
+	"will",
+]);
+
+/** A quote with code punctuation or an identifier-like token is held to a character length, not a word count. */
+function isCodeLikeQuote(quote: string): boolean {
+	return /[{}()[\];=<>]|::|->|=>/.test(quote) || /[a-z][_.][a-z]/i.test(quote);
+}
+
+/** 4-25 words for prose, or at least 20 characters for a code-like quote (a punctuation-heavy or identifier-bearing fragment). */
+export function quoteHasValidLength(quote: string): boolean {
+	const trimmed = quote.trim();
+	if (trimmed.length === 0) return false;
+	if (isCodeLikeQuote(trimmed)) return trimmed.length >= 20;
+	const words = trimmed.split(/\s+/).filter(Boolean);
+	return words.length >= 4 && words.length <= 25;
+}
+
+function contentWords(text: string): Set<string> {
+	const words = text.toLowerCase().match(/[a-z0-9_]{4,}/g) ?? [];
+	return new Set(words.filter((w) => !QUOTE_STOPWORDS.has(w)));
+}
+
+function codeIdentifiers(text: string): string[] {
+	return text.match(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)?.filter((id) => id.length >= 3 && /[A-Z_]/.test(id)) ?? [];
+}
+
+/**
+ * True when `quote` shares at least one content word (length >= 4, after stopword removal) with `beatText`, or
+ * when one of `beatText`'s code-shaped identifiers (camelCase/snake_case, length >= 3) occurs verbatim in `quote`.
+ */
+export function quoteOverlapsBeat(quote: string, beatText: string): boolean {
+	const quoteWords = contentWords(quote);
+	for (const word of contentWords(beatText)) {
+		if (quoteWords.has(word)) return true;
+	}
+	const lowerQuote = quote.toLowerCase();
+	return codeIdentifiers(beatText).some((id) => lowerQuote.includes(id.toLowerCase()));
+}
+
+/** The combined quote-shape rule (length plus overlap with the beat it supports). `quoteIsWellFormed("the", beatText)` is always false. */
+export function quoteIsWellFormed(quote: string, beatText: string): boolean {
+	return quoteHasValidLength(quote) && quoteOverlapsBeat(quote, beatText);
 }

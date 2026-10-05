@@ -196,10 +196,37 @@ export interface LlmScriptResponse {
 	outroNarration: string;
 }
 
-export type ModelCompleter = (prompt: string) => Promise<string>;
+export interface ModelCompletionRequest {
+	/** System instructions, separate from the user `prompt` (see `ai-completer.lazy.ts`'s `Context.systemPrompt`). */
+	systemPrompt?: string;
+	prompt: string;
+	maxTokens: number;
+}
+
+export interface ModelCompletionUsage {
+	input: number;
+	output: number;
+	costUsd: number;
+}
+
+export interface ModelCompletionResult {
+	text: string;
+	/** Absent for completers (tests, the faux queue) that do not track usage. */
+	usage?: ModelCompletionUsage;
+}
+
+/**
+ * A completer always resolves to a finished response; an adapter maps a
+ * failed stop reason (`"error"`/`"aborted"`) to a rejected promise instead of
+ * surfacing it here, so callers never have to re-check `stopReason`.
+ */
+export type ModelCompleter = (request: ModelCompletionRequest) => Promise<ModelCompletionResult>;
 
 /** Upper bound per narration string, so a runaway model response cannot inflate TTS cost. */
 const MAX_NARRATION_CHARS = 300;
+
+/** `--unit commit`'s `llmWriter` output is small (one title/stats/outro plus a few scene narrations). */
+const DEFAULT_COMMIT_MAX_TOKENS = 2048;
 
 const PROMPT_LANGUAGE: Record<Lang, string> = { en: "English", de: "German" };
 
@@ -323,8 +350,11 @@ function resolveHunkRef(changeSet: ChangeSet, ref: HunkRef): { file: FileChange;
 export function llmWriter(complete: ModelCompleter): ScriptWriter {
 	return async (changeSet, options = {}) => {
 		const lang = options.lang ?? "en";
-		const raw = await complete(buildPrompt(changeSet, lang));
-		const response = parseLlmResponse(raw);
+		const completion = await complete({
+			prompt: buildPrompt(changeSet, lang),
+			maxTokens: DEFAULT_COMMIT_MAX_TOKENS,
+		});
+		const response = parseLlmResponse(completion.text);
 
 		const scenes: Scene[] = [];
 		scenes.push({
@@ -368,10 +398,10 @@ export function llmWriter(complete: ModelCompleter): ScriptWriter {
  * fails (network error, malformed or invalid model output), so one bad
  * response does not abort a run that has already paid for earlier reels.
  */
-export function withTemplateFallback(
-	writer: ScriptWriter,
-	onFallback: (changeSet: ChangeSet, error: Error) => void,
-): ScriptWriter {
+export function withTemplateFallback<T extends ChangeSet>(
+	writer: (changeSet: T, options?: ScriptWriterOptions) => Promise<ReelScript>,
+	onFallback: (changeSet: T, error: Error) => void,
+): (changeSet: T, options?: ScriptWriterOptions) => Promise<ReelScript> {
 	return async (changeSet, options) => {
 		try {
 			return await writer(changeSet, options);

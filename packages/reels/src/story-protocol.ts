@@ -11,7 +11,7 @@
 import type { DiagramEdge, DiagramNode } from "./anchored-diagram.ts";
 import type { Section } from "./contract.ts";
 
-export type ClaimKind = "why" | "what" | "how" | "impact" | "meta";
+export type ClaimKind = "why" | "what" | "how" | "effect" | "meta";
 
 export interface RawFocus {
 	lines?: [number, number];
@@ -82,7 +82,7 @@ const SECTIONS: ReadonlySet<Section> = new Set([
 	"outro",
 ]);
 
-const CLAIMS: ReadonlySet<ClaimKind> = new Set(["why", "what", "how", "impact", "meta"]);
+const CLAIMS: ReadonlySet<ClaimKind> = new Set(["why", "what", "how", "effect", "meta"]);
 
 class ShapeError extends Error {}
 

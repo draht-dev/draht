@@ -41,6 +41,35 @@ describe("isAnchorValid", () => {
 		expect(isAnchorValid({ kind: "component", value: "src" }, ctx)).toBe(true);
 		expect(isAnchorValid({ kind: "component", value: "packages/unknown" }, ctx)).toBe(false);
 	});
+
+	test("an empty symbol anchor is invalid (the old /\\b\\b/ bug matched anything)", () => {
+		expect(isAnchorValid({ kind: "symbol", value: "" }, ctx)).toBe(false);
+	});
+
+	test("a symbol anchor shorter than 3 characters is invalid", () => {
+		expect(isAnchorValid({ kind: "symbol", value: "fn" }, ctx)).toBe(false);
+	});
+
+	test("a language keyword is never a valid symbol anchor, even if it appears in the text", () => {
+		const keywordCtx: AnchorContext = {
+			...ctx,
+			textByPath: new Map([["src/foo.ts", "export function resolveCodeRef(ref) { return ref; }"]]),
+		};
+		for (const keyword of ["const", "function", "return", "if", "this", "async", "await"]) {
+			expect(isAnchorValid({ kind: "symbol", value: keyword }, keywordCtx)).toBe(false);
+		}
+	});
+
+	test("a symbol anchor starting with - or / matches as a whole token (CLI flags, /commands)", () => {
+		const flagCtx: AnchorContext = {
+			...ctx,
+			textByPath: new Map([["docs/cli.md", "Run with --output=x to force, or use --force, or /help."]]),
+		};
+		expect(isAnchorValid({ kind: "symbol", value: "--output" }, flagCtx)).toBe(true);
+		expect(isAnchorValid({ kind: "symbol", value: "--force" }, flagCtx)).toBe(true);
+		expect(isAnchorValid({ kind: "symbol", value: "/help" }, flagCtx)).toBe(true);
+		expect(isAnchorValid({ kind: "symbol", value: "--missing" }, flagCtx)).toBe(false);
+	});
 });
 
 function node(id: string, anchorValue: string, caption = "does something") {
@@ -107,6 +136,46 @@ describe("validateAndEmitDiagram", () => {
 			expect(result.mermaid).not.toContain("click Y call evil()");
 			expect(result.mermaid).toContain("n0");
 			expect(result.mermaid).toContain("n0 -->|feeds| n1");
+		}
+	});
+
+	test("more than 9 (MAX_NODES) offered nodes rejects the whole diagram, even if all are valid", () => {
+		const diagram: RawDiagram = {
+			nodes: Array.from({ length: 10 }, (_, i) => node(`n${i}`, "resolveCodeRef")),
+			edges: [],
+		};
+		const result = validateAndEmitDiagram(diagram, ctx);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.errors.some((e) => e.rule === "anchors" && e.detail.includes("9-node cap"))).toBe(true);
+		}
+	});
+
+	test("a deny pattern in a caption rejects the diagram", () => {
+		const diagram: RawDiagram = {
+			nodes: [
+				node("a", "resolveCodeRef", "Acme Corp internal"),
+				node("b", "collectStories", "collects Y"),
+				node("c", "resolveCodeRef", "does Z"),
+			],
+			edges: [],
+		};
+		const result = validateAndEmitDiagram(diagram, ctx, [/acme corp/i]);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.errors.some((e) => e.rule === "prose")).toBe(true);
+		}
+	});
+
+	test("a deny pattern in an edge label rejects the diagram", () => {
+		const diagram: RawDiagram = {
+			nodes: [node("a", "resolveCodeRef"), node("b", "collectStories"), node("c", "resolveCodeRef")],
+			edges: [{ from: "a", to: "b", label: "feeds Acme Corp" }],
+		};
+		const result = validateAndEmitDiagram(diagram, ctx, [/acme corp/i]);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.errors.some((e) => e.rule === "prose")).toBe(true);
 		}
 	});
 

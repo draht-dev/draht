@@ -10,11 +10,19 @@ import type { AnchorContext } from "./anchored-diagram.ts";
 import { validateAndEmitDiagram } from "./anchored-diagram.ts";
 import type { CodeRef, HeadFileContent, ResolveCodeRefContext } from "./code-ref.ts";
 import { resolveCodeRef } from "./code-ref.ts";
-import type { Beat, CodeScene, DiagramScene, FileChange, Focus, ReelScript, Scene } from "./contract.ts";
-import { redactText } from "./privacy.ts";
+import type { Beat, CodeScene, DiagramScene, FileChange, Focus, ReelScript, Scene, Section } from "./contract.ts";
 import type { SourceRegistry } from "./sources.ts";
-import { getSource, isSourceAvailable, quoteOccursIn } from "./sources.ts";
-import type { ClaimKind, RawBeat, RawScene, RawWriterResponse } from "./story-protocol.ts";
+import {
+	cleanProse,
+	getSource,
+	headFileSourceId,
+	hunkIndexSourceId,
+	isSourceAvailable,
+	proseViolatesDenyPatterns,
+	quoteIsWellFormed,
+	quoteOccursIn,
+} from "./sources.ts";
+import type { ClaimKind, RawBeat, RawCode, RawScene, RawWriterResponse } from "./story-protocol.ts";
 import { normalizeBeats } from "./tts.ts";
 
 export interface ValidationError {
@@ -43,30 +51,20 @@ export interface ValidateStoryScriptResult {
 	dropped: string[];
 }
 
-const URL_RE = /\bhttps?:\/\/[^\s)]+/gi;
+/**
+ * The ONE fixed sentence a `why`/`effect` beat may use, verbatim and alone, to admit that no source explains the
+ * reason, instead of inventing one. A real claim plus a trailing hedge (e.g. "...; the commits don't say why")
+ * no longer bypasses grounding — only this exact sentence, making up the whole beat text, does.
+ */
+export const REASON_NOT_RECORDED_TEXT: Record<"en" | "de", string> = {
+	en: "The commits do not record why.",
+	de: "Die Commits dokumentieren den Grund nicht.",
+};
 
-function stripUrls(text: string): string {
-	return text
-		.replace(URL_RE, "")
-		.replace(/\s{2,}/g, " ")
-		.trim();
-}
+const REASON_NOT_RECORDED_SET = new Set(Object.values(REASON_NOT_RECORDED_TEXT));
 
-const UNKNOWN_REASON_RE =
-	/\b(does not|doesn't|do not|don't)\s+(say|record|explain)\b|\bnot recorded\b|\bisn't recorded\b|\bno recorded reason\b/i;
-
-function admitsUnknownReason(text: string): boolean {
-	return UNKNOWN_REASON_RE.test(text);
-}
-
-function proseViolatesDenyPatterns(text: string, denyPatterns: RegExp[] | undefined): boolean {
-	if (!denyPatterns || denyPatterns.length === 0) return false;
-	return denyPatterns.some((pattern) => pattern.test(text));
-}
-
-/** `redactText`, then owner decision Q7: URLs are always stripped from narration and prose fields. */
-function cleanProse(text: string): string {
-	return stripUrls(redactText(text));
+function isReasonNotRecorded(text: string): boolean {
+	return REASON_NOT_RECORDED_SET.has(text.trim());
 }
 
 function toCodeRef(code: RawScene["code"]): CodeRef | undefined {
@@ -75,13 +73,28 @@ function toCodeRef(code: RawScene["code"]): CodeRef | undefined {
 	return { path: code.path, ref: "head", lines: code.lines };
 }
 
+/** The source id implicitly behind a shown code scene: the hunk index entry for a diff ref, the head file for a head ref. */
+function impliedCodeSourceId(code: RawCode | undefined): string | undefined {
+	if (!code) return undefined;
+	return code.ref === "diff" ? hunkIndexSourceId(code.path, code.hunk) : headFileSourceId(code.path);
+}
+
 interface SceneValidation {
 	scene?: Scene;
 	errors: ValidationError[];
 	dropped: string[];
 }
 
-function validateCitations(beat: RawBeat, beatPath: string, sources: SourceRegistry): { errors: ValidationError[] } {
+const MAX_BEATS_PER_SCENE = 8;
+const MAX_BEAT_WORDS = 40;
+const MAX_BEAT_CHARS = 280;
+
+function validateCitations(
+	beat: RawBeat,
+	beatPath: string,
+	sources: SourceRegistry,
+	sceneIsGrounded: boolean,
+): { errors: ValidationError[] } {
 	const errors: ValidationError[] = [];
 	for (const id of beat.cites) {
 		if (!isSourceAvailable(sources, id)) {
@@ -93,8 +106,9 @@ function validateCitations(beat: RawBeat, beatPath: string, sources: SourceRegis
 		}
 	}
 
-	const needsGrounding: ClaimKind[] = ["why", "impact"];
-	if (needsGrounding.includes(beat.claim) && !admitsUnknownReason(beat.text)) {
+	const needsQuoteGrounding: ClaimKind[] = ["why", "effect"];
+	if (needsQuoteGrounding.includes(beat.claim)) {
+		if (isReasonNotRecorded(beat.text)) return { errors };
 		if (beat.cites.length === 0) {
 			errors.push({ path: beatPath, rule: "citations", detail: `a "${beat.claim}" beat needs at least one cite` });
 		} else if (!beat.quote) {
@@ -110,8 +124,17 @@ function validateCitations(beat: RawBeat, beatPath: string, sources: SourceRegis
 					rule: "citations",
 					detail: "quote does not occur in any cited source's text",
 				});
+			} else if (!quoteIsWellFormed(beat.quote, beat.text)) {
+				errors.push({
+					path: `${beatPath}.quote`,
+					rule: "citations",
+					detail:
+						"quote must be 4-25 words (or at least 20 characters if code-like) and share a content word with the beat text",
+				});
 			}
 		}
+	} else if (beat.claim !== "meta" && beat.cites.length === 0 && !sceneIsGrounded) {
+		errors.push({ path: beatPath, rule: "citations", detail: `a "${beat.claim}" beat needs at least one cite` });
 	}
 
 	return { errors };
@@ -188,28 +211,52 @@ function validateScene(raw: RawScene, index: number, ctx: ValidationContext): Sc
 	let diagramScene: DiagramScene | undefined;
 	let diagramIdMap: ReadonlyMap<string, string> | undefined;
 	if (raw.diagram) {
-		const result = validateAndEmitDiagram(raw.diagram, ctx.anchors);
+		const result = validateAndEmitDiagram(raw.diagram, ctx.anchors, ctx.denyPatterns);
 		dropped.push(...result.droppedIds.map((id) => `${scenePath}.diagram.nodes[id=${id}]`));
 		if (!result.ok) {
-			errors.push(...result.errors.map((detail) => ({ path: `${scenePath}.diagram`, rule: "anchors", detail })));
+			errors.push(...result.errors.map((e) => ({ path: `${scenePath}.diagram`, rule: e.rule, detail: e.detail })));
 		} else {
 			diagramIdMap = result.idMap;
 			diagramScene = { kind: "diagram", mermaid: result.mermaid, narration: "" };
 		}
 	}
 
-	if (raw.heading !== undefined && proseViolatesDenyPatterns(raw.heading, ctx.denyPatterns)) {
+	if (raw.heading !== undefined && proseViolatesDenyPatterns(cleanProse(raw.heading), ctx.denyPatterns)) {
 		errors.push({ path: `${scenePath}.heading`, rule: "prose", detail: "heading matches a deny pattern" });
 	}
+
+	if (raw.beats.length === 0) {
+		errors.push({ path: scenePath, rule: "beats", detail: "a scene needs at least one beat" });
+	}
+	if (raw.beats.length > MAX_BEATS_PER_SCENE) {
+		errors.push({
+			path: scenePath,
+			rule: "beats",
+			detail: `at most ${MAX_BEATS_PER_SCENE} beats per scene, got ${raw.beats.length}`,
+		});
+	}
+
+	const impliedCiteId = codeScene ? impliedCodeSourceId(raw.code) : undefined;
+	const sceneIsGrounded = Boolean(codeScene) || Boolean(diagramScene);
 
 	const beats: Beat[] = [];
 	raw.beats.forEach((rawBeat, beatIndex) => {
 		const beatPath = `${scenePath}.beats[${beatIndex}]`;
-		if (proseViolatesDenyPatterns(rawBeat.text, ctx.denyPatterns)) {
+		if (proseViolatesDenyPatterns(cleanProse(rawBeat.text), ctx.denyPatterns)) {
 			errors.push({ path: beatPath, rule: "prose", detail: "beat text matches a deny pattern" });
 			return;
 		}
-		const { errors: citeErrors } = validateCitations(rawBeat, beatPath, ctx.sources);
+
+		const words = rawBeat.text.trim().split(/\s+/).filter(Boolean);
+		if (words.length > MAX_BEAT_WORDS || rawBeat.text.length > MAX_BEAT_CHARS) {
+			errors.push({
+				path: beatPath,
+				rule: "beats",
+				detail: `beat text exceeds the ${MAX_BEAT_WORDS}-word/${MAX_BEAT_CHARS}-char cap`,
+			});
+		}
+
+		const { errors: citeErrors } = validateCitations(rawBeat, beatPath, ctx.sources, sceneIsGrounded);
 		errors.push(...citeErrors);
 
 		const focus = resolveFocus(
@@ -221,7 +268,12 @@ function validateScene(raw: RawScene, index: number, ctx: ValidationContext): Sc
 			dropped,
 		);
 
-		beats.push({ text: cleanProse(rawBeat.text), ...(focus ? { focus } : {}), cites: rawBeat.cites });
+		const cites =
+			rawBeat.cites.length === 0 && impliedCiteId && (rawBeat.claim === "what" || rawBeat.claim === "how")
+				? [impliedCiteId]
+				: rawBeat.cites;
+
+		beats.push({ text: cleanProse(rawBeat.text), ...(focus ? { focus } : {}), cites });
 	});
 
 	if (errors.length > 0) return { errors, dropped };
@@ -259,6 +311,78 @@ function languageForPath(path: string): string {
 	return EXTENSION_LANGUAGE[path.slice(dot + 1).toLowerCase()] ?? "text";
 }
 
+const MAX_CODE_SCENES = { short: 3, deep: 6 };
+
+/**
+ * The D7 required arc: optional leading `hook`, then `problem` -> `idea` -> `mechanism` (with a diagram) -> 1-3
+ * (short) / 1-6 (deep) `code` scenes -> `impact` -> any number of `tradeoffs` -> (deep only) optional
+ * `alternatives`, optional `edge-cases` -> a closing `outro`, which must be the last scene.
+ */
+function validateArc(scenes: RawScene[], isDeepDive: boolean): ValidationError[] {
+	const errors: ValidationError[] = [];
+	const sections: (Section | undefined)[] = scenes.map((s) => s.section);
+	let i = 0;
+
+	const expect = (section: Section, label: string): boolean => {
+		if (sections[i] !== section) {
+			errors.push({
+				path: `scenes[${i}]`,
+				rule: "arc",
+				detail: `expected a "${section}" scene (${label}) at position ${i}, got ${sections[i] ?? "end of scenes"}`,
+			});
+			return false;
+		}
+		i++;
+		return true;
+	};
+
+	if (sections[i] === "hook") i++;
+	if (!expect("problem", "the problem")) return errors;
+	if (!expect("idea", "the idea")) return errors;
+
+	const mechanismIndex = i;
+	if (!expect("mechanism", "the mechanism, with a diagram")) return errors;
+	if (!scenes[mechanismIndex]?.diagram) {
+		errors.push({ path: `scenes[${mechanismIndex}]`, rule: "arc", detail: 'the "mechanism" scene needs a diagram' });
+	}
+
+	let codeCount = 0;
+	while (sections[i] === "code") {
+		codeCount++;
+		i++;
+	}
+	const maxCode = isDeepDive ? MAX_CODE_SCENES.deep : MAX_CODE_SCENES.short;
+	if (codeCount < 1) {
+		errors.push({ path: "scenes", rule: "arc", detail: 'needs at least 1 "code" scene after "mechanism"' });
+	} else if (codeCount > maxCode) {
+		errors.push({ path: "scenes", rule: "arc", detail: `at most ${maxCode} "code" scenes, got ${codeCount}` });
+	}
+
+	if (!expect("impact", "the impact")) return errors;
+	while (sections[i] === "tradeoffs") i++;
+
+	if (isDeepDive) {
+		if (sections[i] === "alternatives") i++;
+		if (sections[i] === "edge-cases") i++;
+	}
+
+	if (sections[i] !== "outro") {
+		errors.push({
+			path: `scenes[${i}]`,
+			rule: "arc",
+			detail: `expected the closing "outro" scene at position ${i}, got ${sections[i] ?? "end of scenes"}`,
+		});
+	} else if (i !== sections.length - 1) {
+		errors.push({
+			path: "scenes",
+			rule: "arc",
+			detail: `"outro" must be the last scene; found ${sections.length - 1 - i} scene(s) after it`,
+		});
+	}
+
+	return errors;
+}
+
 /**
  * Validates a shape-checked writer response and either returns a valid
  * {@link ReelScript}, or a non-empty `errors` list (and no `script`) usable
@@ -275,11 +399,19 @@ export function validateStoryScript(
 	const dropped: string[] = [];
 
 	if (
-		proseViolatesDenyPatterns(raw.title, ctx.denyPatterns) ||
-		proseViolatesDenyPatterns(raw.subtitle, ctx.denyPatterns)
+		proseViolatesDenyPatterns(cleanProse(raw.title), ctx.denyPatterns) ||
+		proseViolatesDenyPatterns(cleanProse(raw.subtitle), ctx.denyPatterns)
 	) {
 		errors.push({ path: "title", rule: "prose", detail: "title or subtitle matches a deny pattern" });
 	}
+	if (proseViolatesDenyPatterns(cleanProse(raw.summary.text), ctx.denyPatterns)) {
+		errors.push({ path: "summary.text", rule: "prose", detail: "summary matches a deny pattern" });
+	}
+	if (raw.theme !== undefined && proseViolatesDenyPatterns(cleanProse(raw.theme), ctx.denyPatterns)) {
+		errors.push({ path: "theme", rule: "prose", detail: "theme matches a deny pattern" });
+	}
+
+	errors.push(...validateArc(raw.scenes, ctx.isDeepDive));
 
 	for (const id of raw.summary.cites) {
 		if (!isSourceAvailable(ctx.sources, id)) {

@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import {
 	assembleStoryContext,
 	type ContextBudget,
@@ -6,6 +8,7 @@ import {
 	isPathMentioned,
 	rankDocChunks,
 	rankKeyFiles,
+	sliceAtCharBoundary,
 	slugifyHeading,
 	splitMarkdownIntoChunks,
 } from "../src/context.ts";
@@ -441,6 +444,206 @@ describe("assembleStoryContext: redactText on every prose path", () => {
 			for (const record of sources.values()) {
 				expect(record.text).not.toContain(secret);
 			}
+		}),
+	);
+});
+
+describe("assembleStoryContext: deny-listed files never reach the writer (HIGH-1)", () => {
+	test(
+		"a .env file never becomes a citable key-file source, in the prompt, or in the hunk index",
+		withRepo(async (repo) => {
+			const story = await buildStory(repo, [
+				{ path: "src/a.ts", content: "export const a = 1;\n" },
+				{ path: ".env", content: "DB_NAME=abc\n" },
+			]);
+			const { sources, promptContext } = await assembleStoryContext(story, repo.dir, DEFAULT_REELS_CONFIG, BUDGET);
+			expect(Array.from(sources.keys()).some((id) => id === "f:.env")).toBe(false);
+			expect(promptContext).not.toContain("DB_NAME=abc");
+			expect(promptContext).not.toMatch(/^.*@@.*\.env.*$/m);
+		}),
+	);
+
+	test(
+		"a code.exclude path never becomes a citable key-file source, in the prompt, or in the hunk index",
+		withRepo(async (repo) => {
+			const config = configWith({ code: { exclude: ["private/**"], include: [] } });
+			const story = await buildStory(repo, [
+				{ path: "src/a.ts", content: "export const a = 1;\n" },
+				{ path: "private/notes.ts", content: "export const internalThing = 1;\n" },
+			]);
+			const { sources, promptContext } = await assembleStoryContext(story, repo.dir, config, BUDGET);
+			expect(Array.from(sources.keys()).some((id) => id === "f:private/notes.ts")).toBe(false);
+			expect(promptContext).not.toContain("internalThing");
+			expect(promptContext).not.toContain("private/notes.ts");
+		}),
+	);
+
+	test(
+		"a docs.deny .planning file changed as part of the story never becomes a citable source, even though code.exclude never heard of it",
+		withRepo(async (repo) => {
+			const story = await buildStory(repo, [
+				{ path: "src/a.ts", content: "export const a = 1;\n" },
+				{ path: ".planning/DECISIONS-PENDING.md", content: "## Pending\n\nsecret internal roadmap item\n" },
+			]);
+			const { sources, promptContext } = await assembleStoryContext(story, repo.dir, DEFAULT_REELS_CONFIG, BUDGET);
+			expect(Array.from(sources.keys()).some((id) => id.includes(".planning/DECISIONS-PENDING.md"))).toBe(false);
+			expect(promptContext).not.toContain("secret internal roadmap item");
+			expect(promptContext).not.toContain(".planning/DECISIONS-PENDING.md");
+		}),
+	);
+});
+
+describe("assembleStoryContext: a generic allow glob never admits .planning/**", () => {
+	test(
+		"the default '**/README.md' allow glob does not surface a real .planning/**/README.md file",
+		withRepo(async (repo) => {
+			const story = await buildStory(
+				repo,
+				[
+					{ path: "src/a.ts", content: "export const a = 1;\n" },
+					{ path: ".planning/geist/README.md", content: "# Geist\n\ninternal tooling notes\n" },
+				],
+				{ branchBody: "see .planning/geist/README.md" },
+			);
+			const { sources } = await assembleStoryContext(story, repo.dir, DEFAULT_REELS_CONFIG, BUDGET);
+			expect(Array.from(sources.keys()).some((id) => id.startsWith("doc:.planning/geist/README.md"))).toBe(false);
+		}),
+	);
+});
+
+describe("assembleStoryContext: duplicate doc headings get unique source ids", () => {
+	test(
+		"the same heading repeated under two different sections gets distinct, numbered ids with the right text each",
+		withRepo(async (repo) => {
+			const doc = [
+				"# Doc",
+				"",
+				"## Section A",
+				"",
+				"### Setup",
+				"",
+				"details A",
+				"",
+				"## Section B",
+				"",
+				"### Setup",
+				"",
+				"details B",
+				"",
+			].join("\n");
+			const story = await buildStory(
+				repo,
+				[
+					{ path: "src/a.ts", content: "export const a = 1;\n" },
+					{ path: "docs/dup.md", content: doc },
+				],
+				{ branchBody: "see docs/dup.md for the full write-up" },
+			);
+			const { sources } = await assembleStoryContext(story, repo.dir, DEFAULT_REELS_CONFIG, BUDGET);
+			const first = sources.get("doc:docs/dup.md#setup");
+			const second = sources.get("doc:docs/dup.md#setup-2");
+			expect(first?.text).toContain("details A");
+			expect(second?.text).toContain("details B");
+			expect(first?.id).not.toBe(second?.id);
+		}),
+	);
+});
+
+describe("assembleStoryContext: a crafted ref name is never trusted as a git revision (option injection)", () => {
+	test(
+		"story.release as a crafted '--output=<path>' ref never makes git write that file",
+		withRepo(async (repo) => {
+			const story = await buildStory(repo, [{ path: "src/a.ts", content: "export const a = 1;\n" }]);
+			const pwnedPath = join(repo.dir, "pwned-by-test");
+			const craftedTag = `--output=${pwnedPath}`;
+			// Written directly via `update-ref`, bypassing `git tag`'s own
+			// check-ref-format validation, to prove the pipeline itself (not git's
+			// porcelain) is what must refuse to trust this as a revision.
+			repo.git(["update-ref", `refs/tags/${craftedTag}`, story.id]);
+			const maliciousStory: Story = { ...story, release: craftedTag };
+
+			await assembleStoryContext(maliciousStory, repo.dir, DEFAULT_REELS_CONFIG, BUDGET);
+
+			expect(existsSync(pwnedPath)).toBe(false);
+			expect(existsSync(`${pwnedPath}:CHANGELOG.md`)).toBe(false);
+		}),
+	);
+});
+
+describe("assembleStoryContext: nonce hygiene (cryptographic, and id values are JSON-escaped)", () => {
+	test(
+		"the nonce is 24 lowercase hex chars (12 cryptographically random bytes), and a key file path becomes a JSON-escaped id= in the prompt wrapper",
+		withRepo(async (repo) => {
+			const story = await buildStory(repo, [{ path: "src/a.ts", content: "export const a = 1;\n" }]);
+			const { promptContext, nonce } = await assembleStoryContext(story, repo.dir, DEFAULT_REELS_CONFIG, BUDGET);
+			expect(/^[0-9a-f]{24}$/.test(nonce)).toBe(true);
+			expect(promptContext).toContain(`id=${JSON.stringify("f:src/a.ts")}`);
+		}),
+	);
+});
+
+describe("sliceAtCharBoundary", () => {
+	const emoji = "🙂"; // U+1F642, a surrogate pair in UTF-16: charCodeAt(0) is a high surrogate.
+
+	test("drops a lone high surrogate at the cut point instead of splitting the pair", () => {
+		const text = `ab${emoji}cd`;
+		expect(sliceAtCharBoundary(text, 3)).toBe("ab");
+	});
+
+	test("keeps the full pair when the cut lands exactly after it", () => {
+		const text = `ab${emoji}cd`;
+		expect(sliceAtCharBoundary(text, 4)).toBe(`ab${emoji}`);
+	});
+
+	test("never leaves a lone high surrogate as the result's last char, for every cut point around the pair", () => {
+		const text = `ab${emoji}cd`;
+		for (let cut = 0; cut <= text.length; cut++) {
+			const sliced = sliceAtCharBoundary(text, cut);
+			const lastCode = sliced.charCodeAt(sliced.length - 1);
+			const isLoneHighSurrogate = lastCode >= 0xd800 && lastCode <= 0xdbff;
+			expect(isLoneHighSurrogate).toBe(false);
+		}
+	});
+});
+
+describe("assembleStoryContext: doc headings go through redaction and prose-deny (published as PublicSource.label)", () => {
+	test(
+		"a secret-shaped doc heading is redacted before it ever becomes a source label",
+		withRepo(async (repo) => {
+			const secret = `sk-${"c".repeat(40)}`;
+			const doc = `## Rotate ${secret} immediately\n\nclean body text about rotation steps\n`;
+			const story = await buildStory(
+				repo,
+				[
+					{ path: "src/a.ts", content: "export const a = 1;\n" },
+					{ path: "docs/rotate.md", content: doc },
+				],
+				{ branchBody: "see docs/rotate.md for the rotation steps" },
+			);
+			const { sources, promptContext } = await assembleStoryContext(story, repo.dir, DEFAULT_REELS_CONFIG, BUDGET);
+			const record = Array.from(sources.values()).find((r) => r.id.startsWith("doc:docs/rotate.md"));
+			expect(record).toBeDefined();
+			expect(record?.label).not.toContain(secret);
+			expect(record?.id).not.toContain(secret);
+			expect(promptContext).not.toContain(secret);
+		}),
+	);
+
+	test(
+		"a doc chunk whose heading matches prose.denyPatterns is dropped entirely, as a doc source",
+		withRepo(async (repo) => {
+			const doc = "## Project Codename Nightjar\n\ninternal details about the codenamed project\n";
+			const story = await buildStory(
+				repo,
+				[
+					{ path: "src/a.ts", content: "export const a = 1;\n" },
+					{ path: "docs/codename.md", content: doc },
+				],
+				{ branchBody: "see docs/codename.md for details" },
+			);
+			const config = configWith({ prose: { denyPatterns: ["nightjar"] } });
+			const { sources } = await assembleStoryContext(story, repo.dir, config, BUDGET);
+			expect(Array.from(sources.keys()).some((id) => id.startsWith("doc:docs/codename.md"))).toBe(false);
 		}),
 	);
 });

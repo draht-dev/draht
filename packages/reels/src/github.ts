@@ -11,14 +11,25 @@
  * throwing, so the pipeline continues with git-only sources. Auth stays with
  * `gh` itself (`GH_TOKEN` / `GITHUB_TOKEN` from the environment); this module
  * never reads, constructs, or passes a token, and no argv ever carries one.
+ *
+ * `cacheDir` persists raw `gh` responses (already redacted, see below)
+ * across runs and must live outside any directory a run publishes: it is
+ * never policed by the privacy pipeline's doc/prose rules the way context
+ * assembly is, so a cache file sitting inside a published output tree would
+ * be served as-is. {@link createGithubLookup}'s optional `outDir` refuses a
+ * `cacheDir` nested inside it. PR/review/comment bodies are run through
+ * {@link redactText} before they are ever written to the cache file, so the
+ * text at rest on disk never carries a raw secret-shaped token even if the
+ * caller's `cacheDir` guard is skipped.
  */
 
 import { execFile } from "node:child_process";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { assertValidSha } from "./collect.ts";
 import type { PullRequestInfo } from "./contract.ts";
+import { redactText } from "./privacy.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -28,6 +39,15 @@ const MAX_COMMENTS = 30;
 const CACHE_FILE_NAME = "github.json";
 
 const GITHUB_OWNER_REPO_RE = /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
+const DOT_SEGMENT_RE = /^\.{1,2}$/;
+
+/** `owner/repo` shape check plus a reject on `.`/`..` segments, which the character class alone allows through (a repo segment of just dots). */
+function isValidGithubOwnerRepo(ownerRepo: string): boolean {
+	if (!GITHUB_OWNER_REPO_RE.test(ownerRepo)) return false;
+	const [owner, repo] = ownerRepo.split("/");
+	if (owner === undefined || repo === undefined) return false;
+	return !DOT_SEGMENT_RE.test(owner) && !DOT_SEGMENT_RE.test(repo);
+}
 
 export type GhRunner = (args: string[]) => Promise<string>;
 
@@ -50,7 +70,7 @@ export function parseGithubRepo(remoteUrl: string): string | undefined {
 	const match = scp ?? ssh ?? https;
 	if (!match) return undefined;
 	const ownerRepo = match[1];
-	return GITHUB_OWNER_REPO_RE.test(ownerRepo) ? ownerRepo : undefined;
+	return ownerRepo !== undefined && isValidGithubOwnerRepo(ownerRepo) ? ownerRepo : undefined;
 }
 
 function capBytes(text: string, maxBytes: number): string {
@@ -124,7 +144,7 @@ async function fetchReviews(gh: GhRunner, repo: string, number: number): Promise
 	return (Array.isArray(raw) ? raw : []).slice(0, MAX_REVIEWS).map((review) => ({
 		author: review.user?.login ?? "unknown",
 		state: review.state ?? "unknown",
-		body: capBytes(review.body ?? "", MAX_BODY_BYTES),
+		body: capBytes(redactText(review.body ?? ""), MAX_BODY_BYTES),
 	}));
 }
 
@@ -133,7 +153,7 @@ async function fetchComments(gh: GhRunner, repo: string, number: number): Promis
 	return (Array.isArray(raw) ? raw : []).slice(0, MAX_COMMENTS).map((comment) => ({
 		author: comment.user?.login ?? "unknown",
 		path: comment.path ?? undefined,
-		body: capBytes(comment.body ?? "", MAX_BODY_BYTES),
+		body: capBytes(redactText(comment.body ?? ""), MAX_BODY_BYTES),
 	}));
 }
 
@@ -148,8 +168,8 @@ async function fetchPullRequestForSha(gh: GhRunner, repo: string, sha: string): 
 	return {
 		number: pr.number,
 		url: pr.html_url,
-		title: capBytes(pr.title ?? "", MAX_BODY_BYTES),
-		body: capBytes(pr.body ?? "", MAX_BODY_BYTES),
+		title: capBytes(redactText(pr.title ?? ""), MAX_BODY_BYTES),
+		body: capBytes(redactText(pr.body ?? ""), MAX_BODY_BYTES),
 		author: pr.user?.login ?? "unknown",
 		mergedAt: pr.merged_at ?? undefined,
 		labels: (pr.labels ?? []).map((label) => label.name),
@@ -161,10 +181,18 @@ async function fetchPullRequestForSha(gh: GhRunner, repo: string, sha: string): 
 export interface GithubLookupOptions {
 	/** `owner/repo`, e.g. from {@link parseGithubRepo}. */
 	repo: string;
-	/** Directory holding the cache file; caller passes the output's state/cache dir. */
+	/** Directory holding the cache file; caller passes the output's state/cache dir. Must live outside `outDir` when `outDir` is given. */
 	cacheDir: string;
+	/** The run's published output directory, when known; `cacheDir` nested inside it is refused. */
+	outDir?: string;
 	gh?: GhRunner;
 	warn?: (message: string) => void;
+}
+
+/** True when `cacheDir` is `outDir` itself or nested inside it. */
+function isNestedInside(outDir: string, cacheDir: string): boolean {
+	const rel = relative(resolve(outDir), resolve(cacheDir));
+	return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 export interface GithubLookup {
@@ -177,8 +205,13 @@ export interface GithubLookup {
  * responses) warn on every affected sha but never throw.
  */
 export function createGithubLookup(options: GithubLookupOptions): GithubLookup {
-	if (!GITHUB_OWNER_REPO_RE.test(options.repo)) {
+	if (!isValidGithubOwnerRepo(options.repo)) {
 		throw new Error(`refusing to use "${options.repo}" as a GitHub repo: expected "owner/repo"`);
+	}
+	if (options.outDir !== undefined && isNestedInside(options.outDir, options.cacheDir)) {
+		throw new Error(
+			`refusing to use cacheDir "${options.cacheDir}" inside outDir "${options.outDir}": the GitHub cache must live outside published output`,
+		);
 	}
 	const gh = options.gh ?? runGh;
 	const warn = options.warn ?? ((message: string) => console.warn(message));

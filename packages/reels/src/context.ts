@@ -14,8 +14,11 @@
  * 8 related commits.
  */
 
+import { randomBytes } from "node:crypto";
+import type { AnchorContext } from "./anchored-diagram.ts";
+import type { HeadFileContent } from "./code-ref.ts";
 import type { GitRunner } from "./collect.ts";
-import { fetchCommitMetadata, type RawCommit, runGit } from "./collect.ts";
+import { assertValidSha, fetchCommitMetadata, type RawCommit, runGit } from "./collect.ts";
 import type { FileChange, Story } from "./contract.ts";
 import {
 	applyContentPolicy,
@@ -88,6 +91,10 @@ export interface AssembledStoryContext {
 	promptContext: string;
 	manifest: ContextManifest;
 	nonce: string;
+	/** Head content of every key file shown to the writer, for `resolveCodeRef`'s `ref: "head"`. */
+	headFiles: ReadonlyMap<string, HeadFileContent>;
+	/** Anchors `validateAndEmitDiagram` may check a diagram node against. */
+	anchors: AnchorContext;
 }
 
 export interface AssembleStoryContextOptions {
@@ -97,11 +104,11 @@ export interface AssembleStoryContextOptions {
 // --- nonce-delimited source blocks -----------------------------------------
 
 export function createNonce(): string {
-	return `${Math.random().toString(36).slice(2, 10)}${Math.random().toString(36).slice(2, 10)}`;
+	return randomBytes(12).toString("hex");
 }
 
 function wrapSource(nonce: string, id: string, kind: string, label: string, text: string): string {
-	return `<<src id=${id} kind=${kind} label=${JSON.stringify(label)} nonce=${nonce}>>\n${text}\n<</src nonce=${nonce}>>`;
+	return `<<src id=${JSON.stringify(id)} kind=${kind} label=${JSON.stringify(label)} nonce=${nonce}>>\n${text}\n<</src nonce=${nonce}>>`;
 }
 
 // --- prompt chunks: the unit the budget cuts -------------------------------
@@ -122,6 +129,14 @@ const BLOCK_SEPARATOR_LEN = 2;
 
 function wrapLen(nonce: string, chunk: PromptChunk): number {
 	return wrapSource(nonce, chunk.id, chunk.kind, chunk.label, "").length + BLOCK_SEPARATOR_LEN;
+}
+
+/** `text.slice(0, maxLen)`, but never leaving a lone leading (high) surrogate at the cut point, which would otherwise split a UTF-16 surrogate pair (e.g. an emoji) into two invalid code units. */
+export function sliceAtCharBoundary(text: string, maxLen: number): string {
+	if (maxLen <= 0) return "";
+	const code = text.charCodeAt(maxLen - 1);
+	const end = code >= 0xd800 && code <= 0xdbff ? maxLen - 1 : maxLen;
+	return text.slice(0, end);
 }
 
 /**
@@ -159,7 +174,7 @@ function truncateChunks(
 			manifest.push({ bucket: chunk.bucket, id: chunk.id, action: "dropped", detail: "budget exhausted" });
 			continue;
 		}
-		const truncatedText = chunk.text.slice(0, remaining);
+		const truncatedText = sliceAtCharBoundary(chunk.text, remaining);
 		kept.push({ ...chunk, text: truncatedText });
 		used += overhead + truncatedText.length;
 		manifest.push({
@@ -232,9 +247,32 @@ const MINIFIED_RE = /\.min\.(js|css)$/;
 const DIST_RE = /(^|\/)(dist|build|node_modules)\//;
 const TEST_PATH_RE = /(^|\/)(test|tests|__tests__)\/|\.(test|spec)\.[jt]sx?$/;
 
-function isKeyFileCandidate(file: FileChange): boolean {
+export interface KeyFileDenyOptions {
+	/** `code.exclude` plus the built-in secret-shaped-path defaults. */
+	denyGlobs?: readonly string[];
+	/** `code.include` override for `denyGlobs`. */
+	allowGlobs?: readonly string[];
+	/** `docs.deny`: also kept out of key files and the hunk index, even though it is a doc-only list. */
+	docsDenyGlobs?: readonly string[];
+}
+
+/**
+ * True when `path` is blocked from ever reaching the writer as a key file or
+ * a hunk-index entry: a denied path (`applyContentPolicy`'s own deny-list)
+ * still carries a withheld-but-present hunk, which {@link isKeyFileCandidate}
+ * alone does not reject, and `docs.deny` paths are never withheld by
+ * `applyContentPolicy` at all (it only knows about code deny globs).
+ */
+function isContextBlocked(path: string, deny: Required<KeyFileDenyOptions>): boolean {
+	if (isPathDenied(path, deny.denyGlobs, deny.allowGlobs)) return true;
+	return isPathDenied(path, deny.docsDenyGlobs, []);
+}
+
+function isKeyFileCandidate(file: FileChange, deny: Required<KeyFileDenyOptions>): boolean {
 	if (file.status === "deleted") return false;
 	if (file.hunks.length === 0) return false; // binary, or fully withheld (no content to show)
+	if (file.hunks.every((h) => h.withheld)) return false;
+	if (isContextBlocked(file.path, deny)) return false;
 	if (LOCKFILE_RE.test(file.path)) return false;
 	if (GENERATED_RE.test(file.path)) return false;
 	if (MINIFIED_RE.test(file.path)) return false;
@@ -261,8 +299,14 @@ export function rankKeyFiles(
 	files: readonly FileChange[],
 	identifiers: readonly string[],
 	limit: number,
+	deny: KeyFileDenyOptions = {},
 ): FileChange[] {
-	const candidates = files.filter(isKeyFileCandidate);
+	const resolvedDeny: Required<KeyFileDenyOptions> = {
+		denyGlobs: deny.denyGlobs ?? [],
+		allowGlobs: deny.allowGlobs ?? [],
+		docsDenyGlobs: deny.docsDenyGlobs ?? [],
+	};
+	const candidates = files.filter((f) => isKeyFileCandidate(f, resolvedDeny));
 	const scored = candidates.map((file) => ({
 		file,
 		score: file.additions + file.deletions + countIdentifierHits(file, identifiers) * IDENTIFIER_HIT_WEIGHT,
@@ -341,10 +385,29 @@ function renderHeadFileText(file: FileChange, lines: readonly string[]): string 
 
 // --- git reads ----------------------------------------------------------------
 
+/**
+ * `sha` must already be a validated commit object id (never a tag/branch
+ * name or other attacker-influenced revspec): `--end-of-options` is placed
+ * before the revision, but that alone does not stop a crafted ref name from
+ * being parsed as a recognized `git show` option (e.g. `--output=<path>`)
+ * when the ref itself starts with `--`. {@link resolveRefToSha} must run
+ * first for any ref that is not already a known-valid sha.
+ */
 async function readHeadFile(git: GitRunner, repo: string, sha: string, path: string): Promise<string[] | undefined> {
 	try {
-		const out = await git(["show", `${sha}:${path}`, "--end-of-options"], repo);
+		const validSha = assertValidSha(sha);
+		const out = await git(["show", "--end-of-options", `${validSha}:${path}`], repo);
 		return out.split("\n");
+	} catch {
+		return undefined;
+	}
+}
+
+/** Resolves a possibly-untrusted ref (e.g. a release tag name) to a validated commit sha, or `undefined` if it does not resolve to one. */
+async function resolveRefToSha(git: GitRunner, repo: string, ref: string): Promise<string | undefined> {
+	try {
+		const out = await git(["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], repo);
+		return assertValidSha(out.trim());
 	} catch {
 		return undefined;
 	}
@@ -356,19 +419,31 @@ async function readHeadFile(git: GitRunner, repo: string, sha: string, path: str
  * semantics, so showing the raw file here would just be noisy duplication.
  * `README.md` is not listed generically either; it is added only via the
  * "packages touched" heuristic in {@link collectRawDocChunks}, intro-only.
+ *
+ * `.planning/**` paths are listed only when `docsConfig.allow` contains a
+ * glob that itself starts with `.planning/`: a generic allow glob like
+ * `**\/README.md` must never admit a `.planning/**` file by accident (e.g.
+ * `.planning/geist/README.md`), so the per-path {@link isDocAllowed} check
+ * downstream is not the only gate for this directory.
  */
-async function listDocCandidates(git: GitRunner, repo: string, sha: string): Promise<string[]> {
+async function listDocCandidates(
+	git: GitRunner,
+	repo: string,
+	sha: string,
+	docsAllowGlobs: readonly string[],
+): Promise<string[]> {
 	let out: string;
 	try {
 		out = await git(["ls-tree", "-r", "--name-only", "--end-of-options", sha], repo);
 	} catch {
 		return [];
 	}
+	const planningAllowed = docsAllowGlobs.some((g) => g.startsWith(".planning/"));
 	return out
 		.split("\n")
 		.map((line) => line.trim())
 		.filter(Boolean)
-		.filter((path) => path.startsWith("docs/") || path.startsWith(".planning/"));
+		.filter((path) => path.startsWith("docs/") || (planningAllowed && path.startsWith(".planning/")));
 }
 
 async function readTextFile(git: GitRunner, repo: string, sha: string, path: string): Promise<string | undefined> {
@@ -427,13 +502,14 @@ async function collectMatchingChangelogEntries(
 		if (match?.[1]) packages.add(match[1]);
 	}
 	const version = story.release ?? "Unreleased";
-	const ref = story.release ?? story.id;
+	const sha = story.release === undefined ? story.id : await resolveRefToSha(git, repo, story.release);
+	if (sha === undefined) return [];
 	const normalizedDescriptions = descriptions.map((d) => stripConventionalPrefix(d).toLowerCase().trim());
 
 	const matches: RawChangelogEntry[] = [];
 	for (const pkg of packages) {
 		const path = pkg === "root" ? "CHANGELOG.md" : `packages/${pkg}/CHANGELOG.md`;
-		const content = await readTextFile(git, repo, ref, path);
+		const content = await readTextFile(git, repo, sha, path);
 		if (!content) continue;
 		const entries = parseChangelogEntries(path, content, version);
 		for (const entry of entries) {
@@ -624,25 +700,45 @@ async function collectRawDocChunks(
 	proseDeny: readonly RegExp[],
 ): Promise<RawDocChunk[]> {
 	const raw: RawDocChunk[] = [];
-	const policeAndPush = (path: string, slug: string, heading: string, candidateText: string) => {
+	const slugCountsByPath = new Map<string, Map<string, number>>();
+	/** `splitMarkdownIntoChunks` slugs on heading text alone, so the same heading repeated under different parent sections collides; number every repeat after the first so every doc source id stays unique within its file. */
+	const uniqueSlug = (path: string, slug: string): string => {
+		let counts = slugCountsByPath.get(path);
+		if (!counts) {
+			counts = new Map();
+			slugCountsByPath.set(path, counts);
+		}
+		const count = (counts.get(slug) ?? 0) + 1;
+		counts.set(slug, count);
+		return count === 1 ? slug : `${slug}-${count}`;
+	};
+	const policeAndPush = (path: string, heading: string, candidateText: string) => {
 		const policed = policeDocChunk(candidateText);
 		if (policed.dropped) return;
 		const text = redactText(policed.text);
 		if (matchesProseDeny(text, proseDeny)) return;
-		raw.push({ path, slug, heading, text });
+		// The heading becomes a published PublicSource.label, so it goes through
+		// the same redaction and deny-pattern gate as the chunk body. The slug
+		// (part of the published source id) is re-derived from the *redacted*
+		// heading, never the raw one, or a secret-shaped heading would survive
+		// verbatim inside the id even though the label itself is clean.
+		const redactedHeading = redactText(heading);
+		if (matchesProseDeny(redactedHeading, proseDeny)) return;
+		const slug = uniqueSlug(path, slugifyHeading(redactedHeading));
+		raw.push({ path, slug, heading: redactedHeading, text });
 	};
 
-	for (const path of await listDocCandidates(git, repo, story.id)) {
+	for (const path of await listDocCandidates(git, repo, story.id, docsConfig.allow)) {
 		const content = await readPolicedDocText(git, repo, story, path, docsConfig, denyGlobs);
 		if (content === undefined) continue;
-		for (const chunk of splitMarkdownIntoChunks(content)) policeAndPush(path, chunk.slug, chunk.heading, chunk.text);
+		for (const chunk of splitMarkdownIntoChunks(content)) policeAndPush(path, chunk.heading, chunk.text);
 	}
 
 	for (const pkg of touchedPackages(story)) {
 		const path = `packages/${pkg}/README.md`;
 		const content = await readPolicedDocText(git, repo, story, path, docsConfig, denyGlobs);
 		if (content === undefined) continue;
-		policeAndPush(path, "intro", "intro", extractReadmeIntro(content));
+		policeAndPush(path, "intro", extractReadmeIntro(content));
 	}
 
 	return raw;
@@ -702,10 +798,12 @@ async function buildKeyFileChunks(
 	story: Story,
 	identifiers: readonly string[],
 	maxFiles: number,
-): Promise<{ chunks: PromptChunk[]; selectedPaths: Set<string> }> {
-	const ranked = rankKeyFiles(story.files, identifiers, maxFiles);
+	deny: KeyFileDenyOptions,
+): Promise<{ chunks: PromptChunk[]; selectedPaths: Set<string>; headFiles: Map<string, HeadFileContent> }> {
+	const ranked = rankKeyFiles(story.files, identifiers, maxFiles, deny);
 	const chunks: PromptChunk[] = [];
 	const selectedPaths = new Set<string>();
+	const headFiles = new Map<string, HeadFileContent>();
 	for (const file of ranked) {
 		const lines = await readHeadFile(git, repo, story.id, file.path);
 		if (!lines) continue;
@@ -716,14 +814,52 @@ async function buildKeyFileChunks(
 		// own, per D8.
 		if (policed.withheld) continue;
 		selectedPaths.add(file.path);
+		headFiles.set(file.path, { path: file.path, lines: policed.lines });
 		const text = renderHeadFileText(file, policed.lines);
 		chunks.push(textRecord(headFileSourceId(file.path), "keyFiles", "file", `${file.path} (head)`, text));
 	}
-	return { chunks, selectedPaths };
+	return { chunks, selectedPaths, headFiles };
 }
 
-function buildIndexChunk(files: readonly FileChange[], keyFilePaths: ReadonlySet<string>): PromptChunk | undefined {
-	const remaining = files.filter((f) => !keyFilePaths.has(f.path)).slice(0, MAX_INDEX_FILES);
+function buildTextByPath(story: Story, headFiles: ReadonlyMap<string, HeadFileContent>): Map<string, string> {
+	const textByPath = new Map<string, string>();
+	for (const file of story.files) {
+		const diffText = file.hunks
+			.filter((h) => !h.withheld)
+			.map((h) => h.lines.join("\n"))
+			.join("\n");
+		const headText = headFiles.get(file.path)?.lines.join("\n") ?? "";
+		textByPath.set(file.path, `${diffText}\n${headText}`);
+	}
+	return textByPath;
+}
+
+function buildAnchorContext(story: Story, headFiles: ReadonlyMap<string, HeadFileContent>): AnchorContext {
+	const changedPaths = new Set(story.files.map((f) => f.path));
+	const packageNames = new Set<string>();
+	const topLevelDirs = new Set<string>();
+	for (const file of story.files) {
+		const match = file.path.match(/^packages\/([^/]+)\//);
+		if (match) packageNames.add(`@draht/${match[1]}`);
+		topLevelDirs.add(file.path.includes("/") ? file.path.slice(0, file.path.indexOf("/")) : file.path);
+	}
+	return {
+		changedPaths,
+		contextPaths: new Set(),
+		textByPath: buildTextByPath(story, headFiles),
+		packageNames,
+		topLevelDirs,
+	};
+}
+
+function buildIndexChunk(
+	files: readonly FileChange[],
+	keyFilePaths: ReadonlySet<string>,
+	deny: Required<KeyFileDenyOptions>,
+): PromptChunk | undefined {
+	const remaining = files
+		.filter((f) => !keyFilePaths.has(f.path) && !isContextBlocked(f.path, deny))
+		.slice(0, MAX_INDEX_FILES);
 	if (remaining.length === 0) return undefined;
 	const lines = remaining.map((file) => {
 		const nonWithheld = file.hunks.filter((h) => !h.withheld);
@@ -809,15 +945,18 @@ export async function assembleStoryContext(
 		nonce,
 		manifest,
 	);
-	const { chunks: keyFileChunks, selectedPaths } = await buildKeyFileChunks(
-		git,
-		repo,
-		policedStory,
-		identifiers,
-		MAX_KEY_FILES,
-	);
+	const keyFileDeny: Required<KeyFileDenyOptions> = {
+		denyGlobs,
+		allowGlobs,
+		docsDenyGlobs: config.docs.deny,
+	};
+	const {
+		chunks: keyFileChunks,
+		selectedPaths,
+		headFiles,
+	} = await buildKeyFileChunks(git, repo, policedStory, identifiers, MAX_KEY_FILES, keyFileDeny);
 	const cappedKeyFileChunks = capBucket(keyFileChunks, KEY_FILES_BUCKET_CAP, nonce, manifest);
-	const indexChunk = buildIndexChunk(policedStory.files, selectedPaths);
+	const indexChunk = buildIndexChunk(policedStory.files, selectedPaths, keyFileDeny);
 	const relatedChunks = capBucket(buildRelatedChunks(policedStory, proseDeny), RELATED_BUCKET_CAP, nonce, manifest);
 
 	const body: PromptChunk[] = [
@@ -866,5 +1005,7 @@ export async function assembleStoryContext(
 		promptContext,
 		manifest: { totalChars: promptContext.length, budgetChars: effectiveBudget, entries: manifest },
 		nonce,
+		headFiles,
+		anchors: buildAnchorContext(policedStory, headFiles),
 	};
 }

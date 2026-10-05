@@ -68,6 +68,12 @@ describe("parseGithubRepo", () => {
 		expect(parseGithubRepo("https://gitlab.com/a/b")).toBeUndefined();
 		expect(parseGithubRepo("https://github.com.evil.com/a/b")).toBeUndefined();
 	});
+
+	test("rejects a repo segment that is '.' or '..'", () => {
+		expect(parseGithubRepo("https://github.com/acme/..")).toBeUndefined();
+		expect(parseGithubRepo("https://github.com/acme/.")).toBeUndefined();
+		expect(parseGithubRepo("git@github.com:acme/...git")).toBeUndefined();
+	});
 });
 
 describe("createGithubLookup", () => {
@@ -205,6 +211,60 @@ describe("createGithubLookup", () => {
 			const second = createGithubLookup({ repo: "acme/widget", cacheDir, gh: throwingGh });
 			const pr = await second.lookupPullRequestForSha(SHA_WITHOUT_PR);
 			expect(pr).toBeUndefined();
+		});
+	});
+
+	test("redacts a secret-shaped PR title/body/review/comment before it is ever written to the cache file", async () => {
+		await withTmpDir(async (cacheDir) => {
+			const secret = `sk-${"a".repeat(40)}`;
+			const calls: string[][] = [];
+			const gh = recordingGh(
+				{
+					[`repos/acme/widget/commits/${SHA_WITH_PR}/pulls`]: JSON.stringify([
+						{ ...PR_RESPONSE[0], title: `leaked ${secret} in title`, body: `leaked ${secret} in body` },
+					]),
+					"repos/acme/widget/pulls/42/reviews": JSON.stringify([
+						{ user: { login: "reviewer" }, state: "APPROVED", body: `lgtm, rotate ${secret} first` },
+					]),
+					"repos/acme/widget/pulls/42/comments": JSON.stringify([
+						{ user: { login: "reviewer" }, path: "src/widget.ts", body: `nit: ${secret} still here` },
+					]),
+				},
+				calls,
+			);
+			const lookup = createGithubLookup({ repo: "acme/widget", cacheDir, gh });
+			const pr = await lookup.lookupPullRequestForSha(SHA_WITH_PR);
+
+			expect(pr?.title).not.toContain(secret);
+			expect(pr?.body).not.toContain(secret);
+			expect(pr?.reviews[0]?.body).not.toContain(secret);
+			expect(pr?.comments[0]?.body).not.toContain(secret);
+
+			const cacheRaw = readFileSync(join(cacheDir, "github.json"), "utf-8");
+			expect(cacheRaw).not.toContain(secret);
+		});
+	});
+
+	test("refuses a cacheDir nested inside the given outDir", async () => {
+		await withTmpDir(async (outDir) => {
+			const cacheDir = join(outDir, "cache");
+			expect(() => createGithubLookup({ repo: "acme/widget", cacheDir, outDir })).toThrow();
+			expect(() => createGithubLookup({ repo: "acme/widget", cacheDir: outDir, outDir })).toThrow();
+		});
+	});
+
+	test("accepts a cacheDir that is a sibling of outDir, not nested inside it", async () => {
+		await withTmpDir(async (parent) => {
+			const outDir = join(parent, "out");
+			const cacheDir = join(parent, "cache");
+			expect(() => createGithubLookup({ repo: "acme/widget", cacheDir, outDir })).not.toThrow();
+		});
+	});
+
+	test("rejects a repo with a '.' or '..' segment", async () => {
+		await withTmpDir(async (cacheDir) => {
+			expect(() => createGithubLookup({ repo: "acme/..", cacheDir })).toThrow();
+			expect(() => createGithubLookup({ repo: "acme/.", cacheDir })).toThrow();
 		});
 	});
 

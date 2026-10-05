@@ -143,6 +143,30 @@ describe("mapUnitsToReleases", () => {
 	);
 
 	test(
+		"a branch-sync merge lands in otherUnitIds, not syncUnitIds",
+		withRepo((repo) => {
+			const base = repo.currentBranch();
+			repo.checkoutNewBranch("sync-branch");
+			repo.commit("feat: a change living only on the sync branch");
+			repo.checkout(base);
+			const mergeSha = repo.mergeNoFF("sync-branch", "merge: sync with origin/main (fixture)");
+			const v1 = repo.commit("feat: tagged work");
+			repo.tag("v1.0.0", { ref: v1 });
+
+			return walkMainline({ repo: repo.dir, ref: "HEAD", tagPattern: "^v" }).then((units) => {
+				expect(units.find((u) => u.sha === mergeSha)?.class).toBe("branch-sync");
+				return listReleaseTags(repo.dir, "^v").then((tags) => {
+					const groups = mapUnitsToReleases(units, tags);
+					const release = groups.find((g) => g.tag === "v1.0.0");
+					expect(release?.otherUnitIds).toContain(mergeSha);
+					expect(release?.syncUnitIds).not.toContain(mergeSha);
+					expect(release?.featureUnitIds).not.toContain(mergeSha);
+				});
+			});
+		}),
+	);
+
+	test(
 		"units newer than the newest tag are unreleased",
 		withRepo((repo) => {
 			const v1 = repo.commit("feat: tagged work");

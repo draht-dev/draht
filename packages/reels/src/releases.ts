@@ -63,7 +63,7 @@ export interface ReleaseGroup {
 	featureUnitIds: string[];
 	/** Unit shas classified `upstream-sync`. */
 	syncUnitIds: string[];
-	/** Everything else: back-merge containers, oversized merges, and unanchored direct commits. */
+	/** Everything else: back-merge containers, oversized merges, branch-sync merges, and unanchored direct commits. */
 	otherUnitIds: string[];
 	anchors: ChangelogAnchor[];
 	tiny: boolean;
@@ -96,6 +96,9 @@ function bucketUnits(
 	for (const unit of units) {
 		if (unit.class === "feature") featureUnitIds.push(unit.sha);
 		else if (unit.class === "upstream-sync") syncUnitIds.push(unit.sha);
+		// back-merge, oversized, branch-sync, and plain commits all land here;
+		// a branch-sync merge carries no upstream work, so it must not join
+		// syncUnitIds and get a recap reel it doesn't deserve.
 		else otherUnitIds.push(unit.sha);
 	}
 	return { featureUnitIds, syncUnitIds, otherUnitIds };

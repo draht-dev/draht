@@ -181,6 +181,66 @@ describe("collectStories: branch merges", () => {
 	);
 });
 
+describe("collectStories: branch-sync merges", () => {
+	test(
+		"the branch-sync merge itself is skipped, not a story and not a sync recap",
+		withRepo(async (repo) => {
+			const base = repo.currentBranch();
+			repo.checkoutNewBranch("sync-branch");
+			repo.commit("feat: a change living only on the sync branch");
+			repo.checkout(base);
+			const mergeSha = repo.mergeNoFF("sync-branch", "merge: sync with origin/main (fixture)");
+
+			const units = await walkMainline({ repo: repo.dir, ref: "HEAD", tagPattern: "^v" });
+			expect(units.find((u) => u.sha === mergeSha)?.class).toBe("branch-sync");
+
+			const result = await collectStories(units, { repo: repo.dir });
+			expect(result.stories.some((s) => s.id === mergeSha)).toBe(false);
+			expect(result.syncRecap.some((r) => r.implementing.includes(mergeSha))).toBe(false);
+			expect(result.skipped).toContainEqual({ sha: mergeSha, reason: "branch-sync" });
+		}),
+	);
+
+	test(
+		"a changelog entry implemented inside a branch-sync's branch still becomes its own story, not a sync recap",
+		withRepo(async (repo) => {
+			const fromSha = seedChangelog(repo);
+
+			const base = repo.currentBranch();
+			repo.checkoutNewBranch("sync-branch");
+			const implSha = commitWithBody(
+				repo,
+				"feat: add branchWidgetHelper",
+				"",
+				"packages/reels/src/branchWidgetHelper.ts",
+				"export function branchWidgetHelper() {}\n",
+			);
+			repo.checkout(base);
+			repo.mergeNoFF("sync-branch", "merge: sync with origin/main (fixture)");
+
+			const docsSha = addChangelogEntry(repo, "- add the `branchWidgetHelper` function");
+
+			const units = await walkMainline({ repo: repo.dir, ref: "HEAD", tagPattern: "^v" });
+			const range = `${fromSha}..HEAD`;
+			const rawAnchors = await findChangelogAnchors(units, { repo: repo.dir, range });
+			const anchors = filterFeatureAnchors(rawAnchors, units);
+			// filterFeatureAnchors deliberately keeps anchors owned by a
+			// branch-sync unit: the branch's own commits are draht's work, not
+			// upstream's.
+			expect(anchors.some((a) => a.commitSha === docsSha)).toBe(true);
+
+			const result = await collectStories(units, {
+				repo: repo.dir,
+				anchors: anchors.map((anchor) => ({ anchor, range })),
+			});
+
+			const story = result.stories.find((s) => s.origin === "commit");
+			expect(story?.id).toBe(implSha);
+			expect(result.syncRecap).toHaveLength(0);
+		}),
+	);
+});
+
 describe("collectStories: changelog attribution (T1 amendment)", () => {
 	test(
 		"finds the implementing commit when a later docs commit added the changelog entry (42fdbb49c pattern)",

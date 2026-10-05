@@ -24,7 +24,7 @@ import {
 } from "./collect.ts";
 import { DEFAULT_REELS_CONFIG, type MergeOverride, type ReelsConfig, type UpstreamConfig } from "./reels-config.ts";
 
-export type MergeClass = "feature" | "upstream-sync" | "back-merge" | "oversized";
+export type MergeClass = "feature" | "upstream-sync" | "back-merge" | "oversized" | "branch-sync";
 export type UnitClass = "commit" | MergeClass;
 
 export interface MainlineUnit {
@@ -57,6 +57,28 @@ export function isBackMergeSubject(subject: string): boolean {
 	return BACK_MERGE_SUBJECT_PATTERNS.some((re) => re.test(subject));
 }
 
+/**
+ * Subjects that announce a branch-sync merge (one branch catching up with
+ * another, e.g. "merge: sync with origin/main (…)" or a remote-tracking
+ * branch merge of `.../main` or `.../master`) in wording the back-merge
+ * patterns above do not already cover. These never trigger the back-merge
+ * parent swap — only {@link isBackMergeSubject} does that. A branch-sync
+ * merge is not an upstream pi sync (it carries no recap-worthy upstream
+ * work, just draht's own branches catching up with each other), so
+ * {@link classifyMergeClass} gives it its own `branch-sync` class rather
+ * than folding it into `upstream-sync`: `upstream-sync` units each get a
+ * recap reel (one per pi sync), and a branch sync would wrongly produce one.
+ */
+const BRANCH_SYNC_SUBJECT_PATTERNS: readonly RegExp[] = [
+	/^merge:\s*sync with \S+\/(?:main|master)\b/i,
+	/^Merge remote-tracking branch '[^']*\/(?:main|master)'/i,
+];
+
+/** True for a branch-sync merge subject not already caught by {@link isBackMergeSubject}'s swap-triggering patterns. */
+export function isBranchSyncSubject(subject: string): boolean {
+	return BRANCH_SYNC_SUBJECT_PATTERNS.some((re) => re.test(subject));
+}
+
 export interface ClassifyMergeInput {
 	subject: string;
 	/** Branch commits excluding the merge itself. */
@@ -70,10 +92,14 @@ export interface ClassifyMergeInput {
 }
 
 /** Classifies an ordinary (non-back-merge) merge. Pure: all git-derived facts are passed in. */
-export function classifyMergeClass(input: ClassifyMergeInput): "feature" | "upstream-sync" | "oversized" {
-	if (input.override === "feature" || input.override === "upstream-sync") {
+export function classifyMergeClass(
+	input: ClassifyMergeInput,
+): "feature" | "upstream-sync" | "oversized" | "branch-sync" {
+	if (input.override === "feature" || input.override === "upstream-sync" || input.override === "branch-sync") {
 		return input.override;
 	}
+
+	if (isBranchSyncSubject(input.subject)) return "branch-sync";
 
 	const subjectMatches = input.upstream.subjectPatterns.some((pattern) =>
 		new RegExp(pattern, "i").test(input.subject),
@@ -226,13 +252,31 @@ export async function walkMainline(opts: WalkMainlineOptions): Promise<MainlineU
 		? (await listShas(git, opts.repo, historyFloorRef, { limit: 1 }))[0]
 		: undefined;
 
+	// Metadata is prefetched one first-parent chain at a time, not one commit
+	// at a time: the chain starting at `sha` is exactly what `walkChain` is
+	// about to step through (until it swaps to a back-merge's second parent,
+	// which starts a new chain of its own), so one `git log --first-parent`
+	// call per chain root covers every commit that chain will ask for. A
+	// `allHistory` walk over thousands of commits with a handful of
+	// back-merges still costs only a handful of git processes, not one per
+	// commit.
 	const metaCache = new Map<string, FirstParentMeta>();
+	const prefetchedChainRoots = new Set<string>();
+	const prefetchChain = async (sha: string): Promise<void> => {
+		if (prefetchedChainRoots.has(sha)) return;
+		prefetchedChainRoots.add(sha);
+		const limit = opts.allHistory ? undefined : scanLimit;
+		const metas = await listFirstParentMeta(git, opts.repo, sha, limit);
+		for (const meta of metas) {
+			if (!metaCache.has(meta.sha)) metaCache.set(meta.sha, meta);
+		}
+	};
 	const getMeta = async (sha: string): Promise<FirstParentMeta> => {
 		const cached = metaCache.get(sha);
 		if (cached) return cached;
-		const [meta] = await listFirstParentMeta(git, opts.repo, sha, 1);
+		await prefetchChain(sha);
+		const meta = metaCache.get(sha);
 		if (!meta) throw new Error(`commit ${sha} not found while walking the mainline`);
-		metaCache.set(sha, meta);
 		return meta;
 	};
 
@@ -284,7 +328,7 @@ export async function walkMainline(opts: WalkMainlineOptions): Promise<MainlineU
 
 			let isBack: boolean;
 			if (override === "back-merge") isBack = true;
-			else if (override === "feature" || override === "upstream-sync") isBack = false;
+			else if (override === "feature" || override === "upstream-sync" || override === "branch-sync") isBack = false;
 			else
 				isBack =
 					(await detectBackMergeByTags(git, opts.repo, p1, p2, tagPattern)) || isBackMergeSubject(meta.subject);
@@ -568,6 +612,12 @@ export function isReleaseCutCommit(subject: string): boolean {
  * for the large majority of raw anchors (94% in a spot check) by restating
  * entries an earlier commit in the same range already anchored. Pure: takes
  * exactly the data `findChangelogAnchors` already returns.
+ *
+ * Deliberately NOT dropped: anchors owned by a `branch-sync` unit. Unlike an
+ * `upstream-sync` merge, a branch-sync merge carries no upstream work at
+ * all — its branch commits are draht's own, just caught up from another of
+ * draht's own branches — so an anchor it owns is a real feature and is
+ * routed like any other direct commit's anchor, not dropped or recapped.
  */
 export function filterFeatureAnchors(
 	anchors: readonly ChangelogAnchor[],

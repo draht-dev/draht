@@ -23,7 +23,11 @@
  * routed to {@link CollectStoriesResult.syncRecap} instead of becoming a
  * story (Q2). An implementing set owned by a `feature` merge unit means the
  * entry documents that merge's own branch, so it is folded into that
- * branch's story rather than duplicated as a second one.
+ * branch's story rather than duplicated as a second one. A `branch-sync`
+ * merge (one draht branch catching up with another, not an upstream sync)
+ * is itself skipped — it is neither a story nor a recap — but an anchor it
+ * owns is routed like a direct commit's: it can still become its own story,
+ * since the branch commits underneath it are draht's own work.
  *
  * Selection reuses `collect.ts`'s `selectFromWindow` (the same floor,
  * bootstrap, drain, all-history, and retry-cap semantics as `--unit
@@ -301,7 +305,7 @@ export interface SyncRecapAnchor {
 
 export interface SkippedUnit {
 	sha: string;
-	reason: "oversized" | "back-merge" | "upstream-sync";
+	reason: "oversized" | "back-merge" | "upstream-sync" | "branch-sync";
 }
 
 export interface CollectStoriesResult {
@@ -434,6 +438,13 @@ export async function collectStories(
 			skipped.push({ sha: unit.sha, reason: "back-merge" });
 		} else if (unit.class === "upstream-sync") {
 			skipped.push({ sha: unit.sha, reason: "upstream-sync" });
+		} else if (unit.class === "branch-sync") {
+			// The merge itself is neither a story nor a sync recap — it carries no
+			// upstream work. Its branch commits are still eligible for a commit
+			// story below: a branch-sync-owned anchor is handled like a direct
+			// commit's, not routed to syncRecap or dropped (mainline.ts's
+			// filterFeatureAnchors deliberately keeps them).
+			skipped.push({ sha: unit.sha, reason: "branch-sync" });
 		}
 	}
 

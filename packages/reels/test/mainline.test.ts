@@ -7,6 +7,7 @@ import {
 	filterFeatureAnchors,
 	findChangelogAnchors,
 	isBackMergeSubject,
+	isBranchSyncSubject,
 	isReleaseCutCommit,
 	walkMainline,
 } from "../src/mainline.ts";
@@ -50,6 +51,26 @@ describe("isBackMergeSubject", () => {
 	});
 });
 
+describe("isBranchSyncSubject", () => {
+	test("matches a sync-with-origin/main subject", () => {
+		expect(isBranchSyncSubject("merge: sync with origin/main (geist phases 33-34, speak command, v0.82-v0.83)")).toBe(
+			true,
+		);
+	});
+
+	test("matches a remote-tracking branch merge of a .../main or .../master ref", () => {
+		expect(isBranchSyncSubject("Merge remote-tracking branch 'origin/main' into claude/graphify-draht-parity")).toBe(
+			true,
+		);
+		expect(isBranchSyncSubject("Merge remote-tracking branch 'upstream/master' into feature")).toBe(true);
+	});
+
+	test("does not match an ordinary feature merge subject", () => {
+		expect(isBranchSyncSubject("merge: judge reviews gates instead of decisions")).toBe(false);
+		expect(isBranchSyncSubject("Merge remote-tracking branch 'origin/feature-x' into feature")).toBe(false);
+	});
+});
+
 describe("classifyMergeClass", () => {
 	const base = {
 		subject: "Merge feature",
@@ -88,6 +109,34 @@ describe("classifyMergeClass", () => {
 	test("an override wins over every mechanical signal", () => {
 		expect(classifyMergeClass({ ...base, branchCommitCount: 151, override: "feature" })).toBe("feature");
 		expect(classifyMergeClass({ ...base, markerTouched: true, override: "feature" })).toBe("feature");
+	});
+
+	test("a branch-sync subject alone marks it branch-sync, not upstream-sync", () => {
+		expect(classifyMergeClass({ ...base, subject: "merge: sync with origin/main (geist phases 33-34)" })).toBe(
+			"branch-sync",
+		);
+		expect(
+			classifyMergeClass({
+				...base,
+				subject: "Merge remote-tracking branch 'origin/main' into claude/graphify-draht-parity",
+			}),
+		).toBe("branch-sync");
+	});
+
+	test("a judge-gates style merge subject is not mistaken for a branch sync", () => {
+		expect(classifyMergeClass({ ...base, subject: "merge: judge reviews gates instead of decisions" })).toBe(
+			"feature",
+		);
+	});
+
+	test("an override of feature beats the branch-sync subject pattern", () => {
+		expect(classifyMergeClass({ ...base, subject: "merge: sync with origin/main (…)", override: "feature" })).toBe(
+			"feature",
+		);
+	});
+
+	test("an override of branch-sync wins even without a matching subject", () => {
+		expect(classifyMergeClass({ ...base, subject: "Merge feature", override: "branch-sync" })).toBe("branch-sync");
 	});
 });
 
@@ -244,6 +293,24 @@ describe("walkMainline: merge classification", () => {
 	);
 
 	test(
+		"a branch-sync merge is classified branch-sync, not upstream-sync, without triggering the back-merge parent swap",
+		withRepo((repo) => {
+			const base = repo.currentBranch();
+			repo.checkoutNewBranch("sync-branch");
+			const branchHead = repo.commit("feat: a change living only on the sync branch");
+			repo.checkout(base);
+			const mergeSha = repo.mergeNoFF("sync-branch", "merge: sync with origin/main (fixture)");
+			return walkMainline({ repo: repo.dir, ref: "HEAD", tagPattern: "^v" }).then((units) => {
+				const merge = units.find((u) => u.sha === mergeSha);
+				expect(merge?.class).toBe("branch-sync");
+				expect(merge?.side).toBe("main");
+				expect(merge?.branchShas).toEqual([branchHead]);
+				expect(units.every((u) => u.side === "main")).toBe(true);
+			});
+		}),
+	);
+
+	test(
 		"a per-sha override beats every detection signal",
 		withRepo((repo) => {
 			const mergeSha = addOversizedMerge(repo, { branchCommitCount: 151 });
@@ -302,6 +369,32 @@ describe("walkMainline: defaults", () => {
 	test("exports a sane default scan window", () => {
 		expect(DEFAULT_MAINLINE_SCAN).toBeGreaterThan(0);
 	});
+});
+
+describe("walkMainline: performance", () => {
+	test(
+		"fetches commit metadata for a long linear history in a small, bounded number of git processes",
+		withRepo(async (repo) => {
+			repo.commitChain(200, { messagePrefix: "chain commit" });
+
+			let callCount = 0;
+			const countingGit: GitRunner = async (args, cwd) => {
+				callCount++;
+				return runGit(args, cwd);
+			};
+
+			const units = await walkMainline({
+				repo: repo.dir,
+				ref: "HEAD",
+				tagPattern: "^v",
+				allHistory: true,
+				git: countingGit,
+			});
+
+			expect(units.length).toBeGreaterThanOrEqual(201);
+			expect(callCount).toBeLessThan(10);
+		}),
+	);
 });
 
 describe("findChangelogAnchors", () => {
@@ -497,6 +590,31 @@ describe("filterFeatureAnchors", () => {
 					const filtered = filterFeatureAnchors(anchors, units);
 					expect(filtered.some((a) => a.commitSha === featureCommitSha)).toBe(true);
 					expect(filtered.some((a) => a.unitId === syncMergeSha)).toBe(false);
+				});
+			});
+		}),
+	);
+
+	test(
+		"keeps anchors owned by a branch-sync unit: the branch commits are draht's own work",
+		withRepo((repo) => {
+			const fromSha = repo.sha("HEAD");
+			const base = repo.currentBranch();
+			repo.checkoutNewBranch("sync-branch");
+			repo.writeFile(
+				"packages/reels/CHANGELOG.md",
+				"## [Unreleased]\n\n### Added\n\n- a real feature on the branch\n",
+			);
+			repo.commit("feat: a real feature on the branch", { path: "packages/reels/CHANGELOG.md", content: "" });
+			repo.checkout(base);
+			const branchSyncMergeSha = repo.mergeNoFF("sync-branch", "merge: sync with origin/main (fixture)");
+
+			return walkMainline({ repo: repo.dir, ref: "HEAD", tagPattern: "^v" }).then((units) => {
+				expect(units.find((u) => u.sha === branchSyncMergeSha)?.class).toBe("branch-sync");
+				return findChangelogAnchors(units, { repo: repo.dir, range: `${fromSha}..HEAD` }).then((anchors) => {
+					expect(anchors.some((a) => a.unitId === branchSyncMergeSha)).toBe(true);
+					const filtered = filterFeatureAnchors(anchors, units);
+					expect(filtered.some((a) => a.unitId === branchSyncMergeSha)).toBe(true);
 				});
 			});
 		}),

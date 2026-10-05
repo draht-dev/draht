@@ -7,6 +7,8 @@ import {
 	computeBranchStoryId,
 	computeChangelogStoryId,
 	createPickaxeBudget,
+	deriveBranchTitle,
+	deriveShortTitle,
 	extractIdentifiers,
 	findExactSubjectMatch,
 	findImplementingCommits,
@@ -135,6 +137,86 @@ describe("findExactSubjectMatch", () => {
 		// still catching a reintroduced per-anchor renormalization pass.
 		expect(elapsedMs).toBeLessThan(5000);
 	}, 10_000);
+});
+
+describe("deriveShortTitle", () => {
+	test("splits at the first sentence boundary", () => {
+		const entry =
+			"Add the `widgetFactory` helper. It replaces the old ad-hoc construction code scattered across three call sites.";
+		expect(deriveShortTitle(entry)).toBe("Add the `widgetFactory` helper");
+	});
+
+	test("splits at a semicolon clause boundary", () => {
+		const entry = "Speed up cold start by lazily loading the renderer; this cuts startup time by roughly 40%.";
+		expect(deriveShortTitle(entry)).toBe("Speed up cold start by lazily loading the renderer");
+	});
+
+	test("splits at a colon clause boundary", () => {
+		const entry = "Fix the release writer: it was dropping the second paragraph of every commit body.";
+		expect(deriveShortTitle(entry)).toBe("Fix the release writer");
+	});
+
+	test("splits at an em-dash clause boundary", () => {
+		const entry = "Rework the pickaxe budget — it used to leak across runs and starve later entries of search quota.";
+		expect(deriveShortTitle(entry)).toBe("Rework the pickaxe budget");
+	});
+
+	test("splits at the first comma only once past the 40-char floor", () => {
+		const entry =
+			"Add support for nested skill channels with cascading overrides, falling back to the parent channel when unset.";
+		expect(deriveShortTitle(entry)).toBe("Add support for nested skill channels with cascading overrides");
+	});
+
+	test("a comma before the 40-char floor is not treated as a split point", () => {
+		const entry = "Fix flaky, intermittent test failures in the collection pipeline under load.";
+		expect(deriveShortTitle(entry)).toBe(entry);
+	});
+
+	test("keeps markdown backticks in the derived title", () => {
+		const entry = "Rename `--old-flag` to `--new-flag`. Old scripts keep working via a deprecation shim.";
+		expect(deriveShortTitle(entry)).toBe("Rename `--old-flag` to `--new-flag`");
+	});
+
+	test("caps a long, delimiter-free clause at 90 chars on a word boundary with an ellipsis", () => {
+		const entry =
+			"Overhaul the entire mainline walker to classify branch syncs apart from ordinary feature branches and upstream carries";
+		const title = deriveShortTitle(entry);
+		expect(title.length).toBeLessThanOrEqual(90);
+		expect(title.endsWith("…")).toBe(true);
+		expect(title).not.toMatch(/ …$/);
+	});
+
+	test("a short entry with no delimiter is returned unchanged", () => {
+		expect(deriveShortTitle("improve the general experience for everyone")).toBe(
+			"improve the general experience for everyone",
+		);
+	});
+});
+
+describe("deriveBranchTitle", () => {
+	test("prefers the PR title when one is available", () => {
+		expect(deriveBranchTitle("Merge pull request #42 from acme/widget-branch", "Add the widget factory")).toBe(
+			"Add the widget factory",
+		);
+	});
+
+	test("strips a leading merge: prefix when there is no PR", () => {
+		expect(deriveBranchTitle("merge: add the widget factory")).toBe("add the widget factory");
+	});
+
+	test("strips a Merge pull request #N from … prefix when there is no PR", () => {
+		const subject = "Merge pull request #42 from acme/widget-branch add the widget factory";
+		expect(deriveBranchTitle(subject)).toBe("add the widget factory");
+	});
+
+	test("falls back to the unstripped subject when stripping would leave nothing", () => {
+		const subject = "Merge pull request #42 from acme/widget-branch";
+		expect(deriveBranchTitle(subject)).toBe(subject);
+	});
+
+	test("leaves an ordinary subject untouched", () => {
+		expect(deriveBranchTitle("feat: add the widget factory")).toBe("feat: add the widget factory");
+	});
 });
 
 describe("groupOverlappingAttributions", () => {
@@ -511,6 +593,43 @@ describe("collectStories: changelog attribution (T1 amendment, strengthened in t
 			const commitStories = result.stories.filter((s) => s.origin === "commit");
 			expect(commitStories).toHaveLength(1);
 			expect(commitStories[0]?.commits[0]).toBe(implSha.slice(0, 12));
+			// The merged story's id is derived from the earliest anchor of the
+			// group and combines both entries' texts, not just the first one's.
+			const firstAnchor = anchors[0];
+			expect(firstAnchor).toBeDefined();
+			expect(commitStories[0]?.id).toBe(
+				computeChangelogStoryId(
+					firstAnchor?.commitSha as string,
+					anchors.map((a) => a.entryText),
+				),
+			);
+			expect(commitStories[0]?.title).toBe(deriveShortTitle(anchors[0]?.entryText ?? ""));
+		}),
+	);
+
+	test(
+		"a merged story's id is stable across runs regardless of pickaxe candidate ordering",
+		withRepo(async (repo) => {
+			const fromSha = seedChangelog(repo);
+			repo.commit("feat(reels): add the shared helper", {
+				path: "packages/reels/src/sharedHelper.ts",
+				content: "export function sharedHelper() {\n\treturn 1;\n}\n",
+			});
+			addChangelogEntry(repo, "- add the `sharedHelper` function");
+			addChangelogEntry(repo, "- wire up the `sharedHelper` function in the CLI");
+
+			const units = await walkMainline({ repo: repo.dir, ref: "HEAD", tagPattern: "^v" });
+			const range = `${fromSha}..HEAD`;
+			const anchors = filterFeatureAnchors(await findChangelogAnchors(units, { repo: repo.dir, range }), units).map(
+				(anchor) => ({ anchor, range }),
+			);
+
+			const run1 = await collectStories(units, { repo: repo.dir, anchors });
+			const run2 = await collectStories(units, { repo: repo.dir, anchors });
+			const id1 = run1.stories.find((s) => s.origin === "commit")?.id;
+			const id2 = run2.stories.find((s) => s.origin === "commit")?.id;
+			expect(id1).toBeDefined();
+			expect(id1).toBe(id2);
 		}),
 	);
 

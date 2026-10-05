@@ -598,6 +598,23 @@ function toCommitInfo(raw: {
 	return { sha: raw.sha, subject: raw.subject, body: raw.body, author: raw.authorName, date: raw.date };
 }
 
+const MERGE_SUBJECT_PREFIX_RE = /^merge:\s*/i;
+const MERGE_PR_SUBJECT_PREFIX_RE = /^Merge pull request #\d+ from\s+\S+\s*/i;
+
+/**
+ * A branch/PR story's title (fix round): the PR title when GitHub reports
+ * one, else the merge commit's own subject minus a leading `"merge: "` or
+ * `"Merge pull request #N from …"` prefix — neither of which names the
+ * feature itself. Falls back to the unstripped subject when stripping would
+ * leave nothing (the common no-trailing-text shape of a GitHub merge
+ * commit).
+ */
+export function deriveBranchTitle(subject: string, prTitle?: string): string {
+	if (prTitle) return prTitle;
+	const stripped = subject.replace(MERGE_PR_SUBJECT_PREFIX_RE, "").replace(MERGE_SUBJECT_PREFIX_RE, "").trim();
+	return stripped || subject;
+}
+
 async function buildBranchStory(
 	unit: MainlineUnit,
 	opts: { repo: string; git: GitRunner; gh?: GithubLookup },
@@ -618,7 +635,7 @@ async function buildBranchStory(
 	return {
 		id: computeBranchStoryId(unit.sha),
 		commits: [unit.sha, ...(unit.branchShas ?? [])].map((s) => s.slice(0, 12)),
-		title: unit.subject,
+		title: deriveBranchTitle(unit.subject, pr?.title),
 		body: branchCommits
 			.map((c) => c.body)
 			.filter(Boolean)
@@ -634,6 +651,53 @@ async function buildBranchStory(
 	};
 }
 
+/** The longest a {@link deriveShortTitle} result is ever allowed to be, ellipsis included. */
+export const MAX_SHORT_TITLE_LENGTH = 90;
+
+/** Split points {@link deriveShortTitle} looks for, tried left-to-right (earliest match in the text wins, not earliest in this list). */
+const SHORT_TITLE_DELIMITERS = [". ", "; ", ": ", " — "];
+
+/** The first comma at or after this offset ends the title clause too — short entries never need it, long ones usually ramble past their first idea by here. */
+const SHORT_TITLE_COMMA_FLOOR = 40;
+
+function shortTitleSplitIndex(text: string): number | null {
+	let earliest = -1;
+	for (const delimiter of SHORT_TITLE_DELIMITERS) {
+		const index = text.indexOf(delimiter);
+		if (index !== -1 && (earliest === -1 || index < earliest)) earliest = index;
+	}
+	const commaIndex = text.indexOf(",");
+	if (commaIndex !== -1 && commaIndex >= SHORT_TITLE_COMMA_FLOOR && (earliest === -1 || commaIndex < earliest)) {
+		earliest = commaIndex;
+	}
+	return earliest === -1 ? null : earliest;
+}
+
+function capAtWordBoundary(text: string, max: number): string {
+	if (text.length <= max) return text;
+	const truncated = text.slice(0, max - 1);
+	const lastSpace = truncated.lastIndexOf(" ");
+	const base = (lastSpace > 0 ? truncated.slice(0, lastSpace) : truncated).trimEnd();
+	return `${base}…`;
+}
+
+/**
+ * A changelog story's title (fix round): a changelog entry's full text is
+ * often several sentences and hundreds of characters, unusable as a story
+ * title even though the writer still needs the full text in the story body.
+ * Takes the entry's first sentence or clause — split at the earliest of
+ * `". "`, `"; "`, `": "`, `" — "`, or the first comma at or after {@link
+ * SHORT_TITLE_COMMA_FLOOR} — then caps the result at {@link
+ * MAX_SHORT_TITLE_LENGTH} on a word boundary with `"…"`. Markdown backticks
+ * are never stripped.
+ */
+export function deriveShortTitle(entryText: string): string {
+	const text = entryText.trim();
+	const splitIndex = shortTitleSplitIndex(text);
+	const clause = splitIndex !== null ? text.slice(0, splitIndex).trim() : text;
+	return capAtWordBoundary(clause, MAX_SHORT_TITLE_LENGTH);
+}
+
 async function buildCommitStory(
 	headSha: string,
 	anchorSha: string,
@@ -647,7 +711,7 @@ async function buildCommitStory(
 	return {
 		id: computeChangelogStoryId(anchorSha, anchorTexts),
 		commits: [headSha.slice(0, 12)],
-		title: anchorTexts[0] ?? head.subject,
+		title: deriveShortTitle(anchorTexts[0] ?? head.subject),
 		body: head.body,
 		authors: [head.authorName],
 		date: head.date,

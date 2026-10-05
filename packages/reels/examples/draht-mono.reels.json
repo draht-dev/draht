@@ -1,0 +1,19 @@
+{
+	"tagPattern": "^v2026\\.",
+	"historyFloor": "95276df0608dabe8d443c3191fa8e391f9922cca",
+	"upstream": {
+		"subjectPatterns": ["^merge: sync upstream pi", "^upstream:"],
+		"markerPaths": [".upstream-sync"]
+	},
+	"story": {
+		"minAttribution": "strong"
+	},
+	"docs": {
+		"allow": ["README.md", "**/README.md", "**/CHANGELOG.md", "docs/**", "docs/adr/**"]
+	},
+	"build": {
+		"maxCostUsd": 5,
+		"maxLlmTokens": 2000000,
+		"maxTtsChars": 50000
+	}
+}

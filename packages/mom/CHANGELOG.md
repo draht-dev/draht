@@ -2,9 +2,18 @@
 
 ## [Unreleased]
 
-### Breaking Changes
+## [2026.10.4-1] - 2026-10-04
 
-- mom's Anthropic credentials now live at `~/.draht/mom/auth.json` instead of `~/.pi/mom/auth.json`, matching draht's config directory everywhere else. There is no migration: relink `/login` or move the file yourself
+### Changed
+
+- feat: build with TypeScript 7 and run sources with plain node
+- Mid conversation system messages (badlogic/pi-mono#9548)
+
+### Fixed
+
+- drop stray "pi" product reference from description
+- store credentials under ~/.draht/mom instead of ~/.pi/mom
+- give the session the executor's bash working directory
 
 ## [2026.7.30] - 2026-07-30
 

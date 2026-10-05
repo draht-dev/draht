@@ -331,8 +331,15 @@ if (!DRY_RUN) {
 }
 console.log();
 
+// The strict install above (no lifecycle scripts, hoisted layout) is what gets
+// built and published, but the suite needs what CI installs: built native
+// bindings (better-sqlite3) and per-workspace node_modules/.bin (geist-console's
+// vite). Test on a CI-equivalent install with the release credentials stripped
+// from the dependency scripts' environment, then restore the strict install.
 console.log("Running tests...");
+run("env -u NODE_AUTH_TOKEN -u NPM_CONFIG_TOKEN -u GH_TOKEN -u GITHUB_TOKEN bun install --frozen-lockfile");
 run("./test.sh");
+run("bun install --frozen-lockfile --ignore-scripts --linker hoisted");
 console.log();
 
 // Fail closed before creating or publishing an immutable release commit/tag.

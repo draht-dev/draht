@@ -2,27 +2,232 @@
 
 ## [Unreleased]
 
-### Breaking Changes
+### Fixed
 
-- renamed `PI_CACHE_RETENTION` to `DRAHT_CACHE_RETENTION` and `PI_OAUTH_CALLBACK_HOST` to `DRAHT_OAUTH_CALLBACK_HOST`
-- the shared `getPiUserAgent`/`pi-user-agent.ts` helper is now `getDrahtUserAgent`/`draht-user-agent.ts` and produces a `draht (...)` User-Agent instead of `pi (...)`
-- the OpenAI Codex adapter's `originator` request header now sends `draht` instead of `pi`
+- OAuth callback pages now show the draht logo instead of the upstream pi mark
+
+## [2026.10.4-1] - 2026-10-04
 
 ### Added
 
-- `deepseek-v4-flash-vision-exp` and `deepseek-v4-pro-0813` model ids
-- Meta provider with Muse subscription OAuth login
-- GPT-6 Astra, GPT-6 Sol, GPT-6 Luna, GPT-6.1 Sol, Claude Opus 5.5, Claude Sonnet 5.5, Fable 5.1, and Grok 4.7 model ids
+- Anthropic workload identity federation (badlogic/pi-mono#10242)
+- add alternative sign in for the openai provider
+- report token usage and cost for System One classify results
+- Discount jev (badlogic/pi-mono#10119)
+- add image input limits (closes badlogic/pi-mono#9631)
+- refresh generated image model catalog
+- refresh generated image model catalog
+- move service wire semantics into Chord
+- add deepseek-v4-flash-vision-exp
+- add simple tool choice option
+- add assistant message frame reducer
+- add strict tool schema conversion
+- AI Gateway transport over the Cloudflare AI binding (badlogic/pi-mono#7901)
+- preserve Codex end_turn for debugging (badlogic/pi-mono#7766)
+- preserve structured metadata for Bedrock provider errors (badlogic/pi-mono#7286)
 
 ### Changed
 
-- renamed the `qwen3.8-max-preview` model id to `qwen3.8-max` across the Qwen Token Plan catalogs
-- `@google/genai` raised to `^2.21.0` (needed for `FinishReason.TOO_MANY_TOOL_CALLS`, which the Gemini adapter now maps)
-- regenerated the bundled model catalog
+- changelog coverage for the v0.99.2 upstream sync
+- convert inline type-position import() to top-level import type
+- rebrand remaining pi prose and TUI env wording
+- advance the Copilot login clock only after the device code
+- drop the stale Fireworks tool-references assertion
+- regenerate model catalog from live data
+- feat(ai,durable): add lightweight pi-ai/models entry and avoid TypeBox in durable
+- feat(ai,coding-agent): add GPT-6.1 Sol and make it the Codex default
+- feat(ai): expose Jev on Vercel AI Gateway and OpenCode Zen
+- feat(ai,coding-agent): share OAuth callback server and sign-in page
+- feat(coding-agent): codemode and MCP
+- feat(coding-agent): Virtual models (badlogic/pi-mono#10035)
+- feat(ai,coding-agent): add Claude Sonnet 5.5 support
+- fix(ai,coding-agent): update Fireworks tests and default for removed models
+- fix(ai): upgrade openai SDK to 7.19.0 (badlogic/pi-mono#10044)
+- fix(ai): ignore empty Mistral content deltas
+- feat(tui,coding-agent): add color values and theme styling (badlogic/pi-mono#8398)
+- feat(ai): serve Jev classifier through OpenRouter and Cloudflare Workers AI
+- feat(ai,coding-agent): unify image and classifier model infrastructure (badlogic/pi-mono#9948)
+- feat: expose provider stream events to extensions (badlogic/pi-mono#9901)
+- feat(ai,coding-agent): add new Copilot models
+- feat(ai,coding-agent): add GPT-6 Sol and Luna support
+- feat(ai,coding-agent): add Claude Opus 5.5 support
+- feat(ai,coding-agent): add Grok 4.7 support
+- fix(ai): exclude Cerebras from supportsStrictMode (badlogic/pi-mono#9804)
+- feat(ai,coding-agent): add Meta provider with Muse subscription OAuth (badlogic/pi-mono#9096)
+- feat(coding-agent): add prompt cache warming (badlogic/pi-mono#9668)
+- feat(ai): ship Radius model catalog
+- feat(agent): add Pico storage foundation
+- fix(ai): preserve DeepSeek V4 effort metadata
+- fix(ai): update tests for current model catalogs
+- fix(ai): derive Google thinking levels from models.dev
+- Mid conversation system messages (badlogic/pi-mono#9548)
+- fix(coding-agent): export extension event hook types (badlogic/pi-mono#9642)
+- feat(ai): enable Fireworks Messages deferred tool loading
+- fix(ai): update DeepSeek Flash catalog
+- fix(ai): preserve Fireworks thinking and native effort levels
+- fix: cap agent retry backoff
+- fix(coding-agent): update runtime dependencies (badlogic/pi-mono#9341)
+- fix(ai): route Copilot GPT models through Responses (badlogic/pi-mono#9253)
+- feat(ai): add GPT-6 Astra support
+- fix(ai): remove unnecessary Chord dependency
+- feat(ai): preserve Anthropic per-turn thinking effort
+- feat(ai): add vllmPriority compat flag for vLLM scheduler priority (badlogic/pi-mono#9004)
+- feat: add delta-backed replicated state
+- feat: isolate Chord context API
+- feat: consolidate Chord public API
+- feat: move facet services into Chord
+- correct Unreleased CHANGELOG classification errors
+- feat(agent,ai): add narrow subpath exports so clients skip the barrel
+- fix(ai): keep cloudflare ai gateway workers-ai models when models.dev drops them
+- fix(ai): retain reasoning details in thinking signature
+- feat(ai): opeani completions reasoning details (badlogic/pi-mono#8246)
+- feat(ai): generalize openai-completions thinking token budget fields (badlogic/pi-mono#8275)
+- fix(ai): remove unused opentelemetry dependency
+- fix(ai): update cloudflare gateway sonnet test id (badlogic/pi-mono#8260)
+- fix(ai): use Chinese ZAI Coding Plan catalog
+- feat(ai): route xAI models through Responses and default to Grok 4.6 (badlogic/pi-mono#8124)
+- feat(ai): support UUIDv7 follower timestamps
+- fix(ai): replace Mistral SDK with native transport
+- feat(ai): use additional_tools for deferred tools
+- replace sync placeholder catalog entries with models.dev data
+- feat(ai): add Qwen Token Plan Individual provider (badlogic/pi-mono#7659)
+- feat: extract telemetry package
+- feat(ai): support thinking_token_budget on openai-completions (badlogic/pi-mono#7638)
+- feat: add typed telemetry contracts
+- fix(ai): update Groq Qwen reasoning override
+- fix(ai): separate deferred request options
+- fix(ai): route Copilot Grok 4.5 through Responses, closes badlogic/pi-mono#7560
+- fix(ai): remove OAuth refresh lock test
+- fix(ai): bound OAuth refresh duration
+- add openai background mode responses (badlogic/pi-mono#7339)
+- fix(coding-agent): make model refresh cancellation caller-owned
+- feat(ai): add Baseten provider
+- fix(ai): support streams without finish reasons
+- feat: search index sqlite
 
-### Removed
+### Fixed
 
-- xiaomi `mimo-v2-flash`, `mimo-v2-omni`, and `mimo-v2-pro` model ids, superseded by the `mimo-v2.5` family
+- send the draht originator on the Codex OAuth authorize URL
+- use exponential backoff when Retry-After is unparseable
+- send Anthropic tools non-strict when schema has rejected keywords
+- detect Z.AI CN endpoint context overflow errors
+- brand the openai-chatgpt sign-in flow for draht
+- replace removed Together Kimi K2.6 with Kimi K3
+- reject unfinished Responses tool calls instead of running them
+- allow empty thinking signatures for OpenCode qwen3.8-flash
+- send requested thinking level to Mistral reasoning models
+- update tests for removed OpenCode Go Kimi K2.6
+- price OpenAI Fast mode service tier like priority
+- apply model samplingParams in direct stream()/complete() calls
+- price Vercel AI Gateway 1-hour cache writes correctly
+- stabilize Copilot Claude Opus 5.5 effort levels
+- stabilize Claude Opus 5.5 effort levels
+- update reported Claude Code version
+- omit empty text parts from multimodal user messages
+- update strict mode test expectations
+- default unknown providers to non-strict tools (closes badlogic/pi-mono#9816)
+- detect z.ai prompt-too-long errors
+- mock Radius in model generation tests
+- scope bodyless overflow errors to Cerebras
+- preserve Vercel AI Gateway unsigned thinking
+- retry Azure peak-load capacity errors
+- retry Cloudflare 520 responses
+- preserve thinking replay through renamed Anthropic models
+- avoid unsupported Gemini thinking levels
+- send Baseten session affinity headers
+- price Bedrock one-hour cache writes
+- identify Responses error providers
+- enable GLM-5.2 reasoning on Mistral
+- remove retired GPT-5.4 Codex models
+- send OpenRouter session affinity headers by default
+- accept Fireworks models in adaptive thinking metadata test
+- send Codex Off reasoning effort
+- send OpenCode session header
+- use reasoning_effort for reasoning-capable mistral-medium-* models
+- optimize EventStream queue
+- keep Copilot tests aligned with current model catalog
+- remove Grok Build 0.1 from built-in xAI model catalog (badlogic/pi-mono#9093)
+- preserve provider thinking level in frames
+- restore stream compatibility
+- add Qwen3.8 Flash to individual token plan
+- repair Baseten and coding-agent test checks
+- process unterminated Codex SSE terminal events
+- keep Baseten GLM-5.2 text-only (badlogic/pi-mono#8293)
+- use completions API for all Fireworks GLM models
+- route GitHub Copilot Fable 5 through Anthropic Messages
+- bump claude code user agent version
+- add supportsMaxOutputTokens compat flag for openai-responses (badlogic/pi-mono#8941)
+- match subdomains and root domains in NO_PROXY (badlogic/pi-mono#8737)
+- splice live PAYG cost for zai glm-4.7 and glm-5-turbo
+- rename PI_* env vars and rebrand user-agent/originator header to draht
+- rebuild model data manifest after catalog reconciliation
+- set supportsStrictMode for Cloudflare AI Gateway Responses models
+- set supportsAdditionalTools for OpenAI/Codex tool-search models
+- route Fireworks Kimi K3 through openai-completions
+- fix Z.ai GLM-5.2/5.3 reasoning effort and GLM-5.3 pricing
+- restore Qwen Token Plan deepseek-v4-pro-0813 and qwen3.8-max
+- add DeepSeek V4 Flash Vision Exp and fix low thinking level
+- enable low thinking level for OpenCode DeepSeek V4 Flash
+- drop deprecated Xiaomi MiMo V2 models from tracked catalog
+- refresh generated image model catalog
+- merge indexed Mistral tool call chunks
+- remove retired Fireworks turbo router test
+- serialize thinking signature once (badlogic/pi-mono#8671)
+- omit tool_choice without tools closes badlogic/pi-mono#8607
+- derive OpenRouter reasoning controls (badlogic/pi-mono#8614)
+- concatenate openai completions reasoning deltas (badlogic/pi-mono#8605)
+- update glm 5.3 price
+- cloudflare gateway type, include workers
+- derive Z.AI reasoning effort metadata
+- round-trip Bedrock redacted reasoning (badlogic/pi-mono#8314)
+- fallback cost not via stream options (badlogic/pi-mono#8352)
+- prevent copilot policy login rate limits (badlogic/pi-mono#8254)
+- anthropic fallback usage (badlogic/pi-mono#8319)
+- anthropic fallback usage (badlogic/pi-mono#8308)
+- update Baseten GLM input modalities
+- forward Azure Responses tool choice
+- anthropic refusal error and fallbacks (badlogic/pi-mono#8258)
+- add Qwen Token Plan Individual DeepSeek V4 Pro 0813
+- remove deprecated Xiaomi models
+- bedrock response to include smithy headers (badlogic/pi-mono#8243)
+- honor Google thinking level maps
+- expose low thinking level for DeepSeek V4 Flash on opencode/opencode-go (badlogic/pi-mono#8181)
+- track kimi cached tokens (badlogic/pi-mono#8119)
+- retry Copilot GET /models once on 429 during login
+- enable Copilot model policies sequentially during login
+- preserve Google length stops with tool calls
+- use pi user agent for Kimi Coding requests
+- bound Copilot policy update concurrency
+- expose low reasoning effort for native DeepSeek V4 Flash (badlogic/pi-mono#7807)
+- detect DeepSeek base URLs case-insensitively (badlogic/pi-mono#7933)
+- declare Cloudflare Responses strict tools (badlogic/pi-mono#7934)
+- sanitize empty Bedrock tool argument keys (badlogic/pi-mono#7882)
+- update stale Gemini test model
+- send max_tokens to DeepSeek APIs
+- preserve Responses tool-call namespaces
+- retry upstream request buffer failures
+- update OpenCode completions fixture
+- stop Google OAuth login when cancelled during discovery
+- honour refresh cancellation in draht's Google OAuth providers
+- lift brace-expansion and ai's undici out of advisory ranges
+- update Kimi model catalog source
+- correct Fireworks GLM prompt caching, closes badlogic/pi-mono#7676
+- remove stale adaptive thinking model expectation
+- update Anthropic abort test model
+- replace qwen3.8-max-preview with qwen3.8-max on token plan (badlogic/pi-mono#7670)
+- restore Copilot models from account policy (badlogic/pi-mono#7672)
+- test composite OAuth refresh cancellation
+- avoid stale Copilot model in overflow test
+- validateToolArguments() coerces nullable union (badlogic/pi-mono#7373)
+- preserve Gemini 3 tool call IDs (badlogic/pi-mono#7494)
+- retry transient provider errors in Google adapters (badlogic/pi-mono#7471)
+- update Z.AI model test references
+- route Fireworks Kimi K3 through OpenAI compatibility
+- scope Codex sockets to accounts
+- preserve Anthropic initial stream block content (badlogic/pi-mono#7358)
+- keep signed empty text/thinking blocks in google history (badlogic/pi-mono#7362)
+- treat only plain objects as provider error bodies (badlogic/pi-mono#7205)
+- update GPT-5.6 pricing
 
 ## [2026.9.5-1] - 2026-09-05
 

@@ -1,6 +1,6 @@
 {
 	"name": "@draht/ci",
-	"version": "2026.9.5-1",
+	"version": "2026.10.4-3",
 	"private": true,
 	"description": "Internal GitHub Action for AI-assisted pull-request review",
 	"type": "module",

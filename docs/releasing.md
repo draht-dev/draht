@@ -2,7 +2,7 @@
 
 **Lockstep versioning**: All packages always share the same version number. Every release updates all packages together.
 
-**Version scheme**: CalVer, always suffixed — `YYYY.M.D-N`, where `N` starts at `1` for the first release of a day and increments for same-day follow-ups (`scripts/release.mjs` → `computeNextVersion` in `scripts/lib/version-stamp.mjs`). The bare `YYYY.M.D` form is retired: it sorted *above* every same-day `-N` under semver, which broke fielded update comparators. There are no `release:patch`/`release:minor` commands and no semver semantics.
+**Version scheme**: CalVer, always suffixed — `YYYY.M.D-N`, where `N` starts at `1` for the first release of a day and increments for same-day follow-ups (`scripts/release.mjs` → `computeNextVersion` in `scripts/lib/version-stamp.mjs`). The day is always the UTC calendar day, regardless of the releaser's timezone. The bare `YYYY.M.D` form is retired: it sorted *above* every same-day `-N` under semver, which broke fielded update comparators. There are no `release:patch`/`release:minor` commands and no semver semantics.
 
 ## Steps
 

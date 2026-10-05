@@ -39,9 +39,9 @@ test("findPromotionCandidates picks the newest -N of each finished day that has 
 
 test("findPromotionCandidates waits for the newest -N to age before closing a day", () => {
 	const tags = [{ tag: "v2026.9.4-3", createdAt: at("2026-09-04T23:30:00Z") }];
-	assert.deepEqual(findPromotionCandidates(tags, { now: at("2026-09-05T02:00:00Z") }), []);
-	assert.equal(findPromotionCandidates(tags, { now: at("2026-09-05T06:00:00Z") }).length, 1);
-	assert.equal(findPromotionCandidates(tags, { now: at("2026-09-05T02:00:00Z"), minAgeMs: 0 }).length, 1);
+	assert.deepEqual(findPromotionCandidates(tags, { now: at("2026-09-05T01:00:00Z") }), []);
+	assert.equal(findPromotionCandidates(tags, { now: at("2026-09-05T02:00:00Z") }).length, 1);
+	assert.equal(findPromotionCandidates(tags, { now: at("2026-09-05T01:00:00Z"), minAgeMs: 0 }).length, 1);
 });
 
 test("findPromotionCandidates never touches today, and returns a backlog oldest first", () => {

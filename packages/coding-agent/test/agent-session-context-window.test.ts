@@ -58,6 +58,18 @@ describe("context-window profiles", () => {
 		expect(formatContextWindow(1050000)).toBe("1.05M");
 	});
 
+	it("offers the extended windows for every GPT-6 model on OpenAI and Codex", () => {
+		for (const id of ["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"] as const) {
+			const direct = getModel("openai", id);
+			const codex = getModel("openai-codex", id);
+			expect(direct, `openai/${id} in catalog`).toBeDefined();
+			expect(codex, `openai-codex/${id} in catalog`).toBeDefined();
+			if (!direct || !codex) continue;
+			expect(getAvailableContextWindows(direct)).toEqual([272000, 1050000]);
+			expect(getAvailableContextWindows(codex)).toEqual([272000, 372000, 1050000]);
+		}
+	});
+
 	it("cycles the active window and persists it in the session", async () => {
 		const { session, sessionManager } = await createDirectSession();
 		const events: AgentSessionEvent[] = [];

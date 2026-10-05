@@ -10,6 +10,11 @@ on:
         required: false
         default: false
         type: boolean
+      resume_publish:
+        description: Finish npm publication for the already tagged and verified release at HEAD (release.mjs --resume-publish)
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: scheduled-release
@@ -55,8 +60,9 @@ jobs:
         id: pending
         env:
           FORCE_RELEASE: ${{ inputs.force || false }}
+          RESUME_PUBLISH: ${{ inputs.resume_publish || false }}
         run: |
-          if [[ "${FORCE_RELEASE}" == "true" ]]; then
+          if [[ "${FORCE_RELEASE}" == "true" || "${RESUME_PUBLISH}" == "true" ]]; then
             echo "should-release=true" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
@@ -128,9 +134,27 @@ jobs:
           git fetch origin main
           test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
 
-      - name: Release and publish
+      - name: Set the release commit identity
         if: steps.pending.outputs.should-release == 'true'
+        run: |
+          git config user.name "draht-release[bot]"
+          git config user.email "release@draht.dev"
+
+      # bun publish (scripts/publish-workspaces.mjs) does not read the .npmrc that
+      # setup-node writes through NPM_CONFIG_USERCONFIG; it authenticates with
+      # NPM_CONFIG_TOKEN.
+      - name: Release and publish
+        if: steps.pending.outputs.should-release == 'true' && !inputs.resume_publish
         env:
           GH_TOKEN: ${{ secrets.DRAHT_RELEASE_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm run release
+
+      - name: Resume publication of the tagged release
+        if: inputs.resume_publish
+        env:
+          GH_TOKEN: ${{ secrets.DRAHT_RELEASE_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm run release -- --resume-publish

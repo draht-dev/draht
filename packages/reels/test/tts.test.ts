@@ -2,8 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Scene } from "../src/contract.ts";
-import { elevenLabsProvider, silentProvider } from "../src/tts.ts";
+import type { Beat, Scene } from "../src/contract.ts";
+import {
+	beatStartsMsFromWords,
+	elevenLabsProvider,
+	estimateWordTimings,
+	normalizeBeats,
+	silentProvider,
+	wordsFromAlignment,
+} from "../src/tts.ts";
 
 const SCENES: Scene[] = [
 	{ kind: "title", title: "t", subtitle: "s", narration: "This is the first scene." },
@@ -33,6 +40,58 @@ describe("silentProvider", () => {
 		expect(result.transcript).toHaveLength(2);
 		expect(result.transcript[0].startMs).toBe(0);
 		expect(result.transcript[1].startMs).toBe(result.transcript[0].endMs);
+	});
+
+	test("derives beat starts from estimated word timings, offset by the running scene duration", async () => {
+		const beats: Beat[] = [{ text: "One two" }, { text: "three four" }];
+		const scenes: Scene[] = [
+			{ kind: "title", title: "t", subtitle: "s", narration: "One two three four", beats },
+			{ kind: "outro", narration: "five six" },
+		];
+		const result = await silentProvider.synthesize(scenes, "/unused");
+		const [scene1, scene2] = result.transcript;
+
+		expect(scene1.beatStartsMs).toHaveLength(2);
+		expect(scene1.beatStartsMs?.[0]).toBe(scene1.startMs);
+		expect(scene1.beatStartsMs?.[1]).toBeGreaterThan(scene1.startMs);
+		expect(scene1.beatStartsMs?.[1]).toBeLessThan(scene1.endMs);
+
+		// Regression: scene 2's words and beat starts are offset by scene 1's
+		// duration (the running cursor buildTranscript carries forward), not scene-relative 0.
+		expect(scene2.startMs).toBe(scene1.endMs);
+		expect(scene2.words?.[0].startMs).toBe(scene2.startMs);
+		expect(scene2.words?.every((w) => w.startMs >= scene1.endMs)).toBe(true);
+	});
+});
+
+describe("elevenLabsProvider beat timing", () => {
+	test("drops beat timing (and warns) for a scene when the aligned word count doesn't match the beats, without affecting other scenes", async () => {
+		const beats: Beat[] = [{ text: "One two" }, { text: "three four" }];
+		const scenes: Scene[] = [
+			{ kind: "title", title: "t", subtitle: "s", narration: "ignored", beats },
+			{ kind: "outro", narration: "five six" },
+		];
+		// The alignment's text has only 3 words where the beats expect 4 — a real-world
+		// mismatch between what was sent and what came back aligned.
+		const fetchStub = (async (_url: string | URL, init?: RequestInit) => {
+			const body = JSON.parse(String(init?.body)) as { text: string };
+			if (body.text.startsWith("One")) return fauxElevenLabsResponse("One two three", 3) as unknown as Response;
+			return fauxElevenLabsResponse(body.text, 1) as unknown as Response;
+		}) as typeof fetch;
+
+		const warnings: unknown[] = [];
+		const originalWarn = console.warn;
+		console.warn = (...args: unknown[]) => warnings.push(args);
+		const outDir = mkdtempSync(join(tmpdir(), "reels-tts-test-"));
+		try {
+			const result = await elevenLabsProvider({ apiKey: "fake-key", fetch: fetchStub }).synthesize(scenes, outDir);
+			expect(result.transcript[0].beatStartsMs).toBeUndefined();
+			expect(warnings.length).toBeGreaterThan(0);
+			expect(String(warnings[0])).toContain("scene 0");
+		} finally {
+			console.warn = originalWarn;
+			rmSync(outDir, { recursive: true, force: true });
+		}
 	});
 });
 
@@ -130,5 +189,105 @@ describe("elevenLabsProvider timing from real audio", () => {
 		} finally {
 			rmSync(outDir, { recursive: true, force: true });
 		}
+	});
+});
+
+function uniformAlignment(text: string, msPerChar: number) {
+	const characters = text.split("");
+	return {
+		characters,
+		character_start_times_seconds: characters.map((_, i) => (i * msPerChar) / 1000),
+		character_end_times_seconds: characters.map((_, i) => ((i + 1) * msPerChar) / 1000),
+	};
+}
+
+describe("wordsFromAlignment", () => {
+	test("splits on whitespace, keeping punctuation attached to the word", () => {
+		const words = wordsFromAlignment(uniformAlignment("Wait, really?", 10));
+		expect(words.map((w) => w.text)).toEqual(["Wait,", "really?"]);
+		expect(words[0].startMs).toBe(0);
+		expect(words[0].endMs).toBe(50);
+		expect(words[1].startMs).toBe(60);
+		expect(words[1].endMs).toBe(130);
+	});
+
+	test("collapses runs of multiple spaces into a single separator", () => {
+		const words = wordsFromAlignment(uniformAlignment("a  b", 10));
+		expect(words.map((w) => w.text)).toEqual(["a", "b"]);
+	});
+
+	test("falls back to the previous character's end time when no start-times array is present", () => {
+		const alignment = uniformAlignment("hi", 10);
+		const withoutStartTimes = {
+			characters: alignment.characters,
+			character_end_times_seconds: alignment.character_end_times_seconds,
+		};
+		const words = wordsFromAlignment(withoutStartTimes);
+		expect(words).toEqual([{ text: "hi", startMs: 0, endMs: 20 }]);
+	});
+});
+
+describe("estimateWordTimings", () => {
+	test("distributes words evenly across the scene duration", () => {
+		const words = estimateWordTimings("one two three four", 4000);
+		expect(words.map((w) => w.text)).toEqual(["one", "two", "three", "four"]);
+		expect(words.map((w) => w.startMs)).toEqual([0, 1000, 2000, 3000]);
+		expect(words.map((w) => w.endMs)).toEqual([1000, 2000, 3000, 4000]);
+	});
+});
+
+describe("normalizeBeats", () => {
+	test("rebuilds narration from the beats, trimmed and with internal whitespace collapsed", () => {
+		const scene: Scene = {
+			kind: "outro",
+			narration: "stale",
+			beats: [{ text: "  One   two  " }, { text: "three\tfour" }],
+		};
+		const normalized = normalizeBeats(scene);
+		const beatTexts = normalized.beats?.map((b) => b.text) ?? [];
+		expect(beatTexts).toEqual(["One two", "three four"]);
+		expect(normalized.narration).toBe("One two three four");
+		expect(normalized.narration).toBe(beatTexts.join(" "));
+	});
+
+	test("leaves a scene with no beats unchanged", () => {
+		const scene: Scene = { kind: "outro", narration: "plain narration" };
+		expect(normalizeBeats(scene)).toEqual(scene);
+	});
+});
+
+describe("beatStartsMsFromWords", () => {
+	test("locates a beat boundary by word index, immune to character-level drift", () => {
+		const beats: Beat[] = [{ text: "One two" }, { text: "three four" }];
+		const words = estimateWordTimings("One two three four", 4000);
+		const starts = beatStartsMsFromWords(beats, words);
+		expect(starts).toEqual([words[0].startMs, words[2].startMs]);
+	});
+
+	// Regression: if the beats' word counts don't sum to the aligned words'
+	// count, something split differently than the beat texts assumed — never shift
+	// every later beat to compensate; drop timing for the whole scene instead.
+	test("returns undefined when the beats' word count does not match the aligned words", () => {
+		const beats: Beat[] = [{ text: "One two" }, { text: "three four" }];
+		const words = estimateWordTimings("One two three four five", 5000); // 5 words, beats expect 4
+		expect(beatStartsMsFromWords(beats, words)).toBeUndefined();
+	});
+});
+
+describe("normalizeBeats empty beats", () => {
+	test("drops empty beats so no beat starts at 0 and the narration has no double space", () => {
+		const scene: Scene = {
+			kind: "outro",
+			narration: "",
+			beats: [{ text: "one two" }, { text: "  " }, { text: "three" }],
+		};
+		const normalized = normalizeBeats(scene);
+		expect(normalized.beats?.map((b) => b.text)).toEqual(["one two", "three"]);
+		expect(normalized.narration).toBe("one two three");
+	});
+
+	test("removes beats entirely when all of them are empty", () => {
+		const scene: Scene = { kind: "outro", narration: "kept", beats: [{ text: " " }] };
+		expect(normalizeBeats(scene).beats).toBeUndefined();
 	});
 });

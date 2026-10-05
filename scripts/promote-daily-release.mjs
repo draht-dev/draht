@@ -56,10 +56,10 @@ function utcDayKey(date) {
  *
  * A day qualifies when it is strictly before today (UTC), has at least one -N
  * tag, has no bare tag yet, and its newest -N tag is older than `minAgeMs`
- * (so a release cut late in a releaser's local day is never promoted from
- * under them by a UTC boundary).
+ * (so a release still running across midnight UTC is never promoted from
+ * under it).
  */
-export function findPromotionCandidates(tags, { now = new Date(), minAgeMs = 6 * 60 * 60 * 1000 } = {}) {
+export function findPromotionCandidates(tags, { now = new Date(), minAgeMs = 2 * 60 * 60 * 1000 } = {}) {
 	const days = new Map();
 	for (const entry of tags) {
 		const parsed = parseDrahtTag(entry.tag);

@@ -1,0 +1,651 @@
+import { describe, expect, test } from "bun:test";
+import {
+	buildRecapSourceRegistry,
+	buildReleaseSourceRegistry,
+	CostMeter,
+	computeRecapThemes,
+	computeReleaseThemes,
+	estimateRecapMaxTokens,
+	looksTruncated,
+	parseRecapResponse,
+	parseReleaseOverviewResponse,
+	type RecapChangelogInput,
+	type RecapCommitInput,
+	type ReleaseOverviewInput,
+	type ReleaseStoryInput,
+	type SyncRecapInput,
+	selectRecapCommits,
+	validateReleaseOverview,
+	validateSyncRecap,
+	type WeakFeatureInput,
+	weakFeatureRef,
+	writeReleaseOverview,
+	writeSyncRecap,
+} from "../src/release-writer.ts";
+import type { ModelCompleter, ModelCompletionResult } from "../src/script.ts";
+
+function queueCompleter(responses: ModelCompletionResult[]): { complete: ModelCompleter; calls: number } {
+	const queue = [...responses];
+	const state = { calls: 0 };
+	const complete: ModelCompleter = async () => {
+		state.calls++;
+		const next = queue.shift();
+		if (!next) throw new Error("faux completer queue exhausted");
+		return next;
+	};
+	return {
+		complete,
+		get calls() {
+			return state.calls;
+		},
+	} as { complete: ModelCompleter; calls: number };
+}
+
+const STORY_AI: ReleaseStoryInput = {
+	sha12: "aaaaaaaaaaaa",
+	title: "feat(ai): add streaming",
+	origin: "branch",
+	attribution: "strong",
+	summary: "Streams model output as it is generated.",
+	packages: ["ai"],
+};
+
+const STORY_AI_2: ReleaseStoryInput = {
+	sha12: "bbbbbbbbbbbb",
+	title: "feat(ai): retry on 429",
+	origin: "commit",
+	attribution: "strong",
+	summary: "Retries a request once when the provider rate-limits it.",
+	packages: ["ai"],
+};
+
+const STORY_REELS: ReleaseStoryInput = {
+	sha12: "cccccccccccc",
+	title: "feat(reels): add release overviews",
+	origin: "pr",
+	attribution: "strong",
+	summary: "Renders a release overview reel.",
+	packages: ["reels"],
+};
+
+const WEAK_FEATURE = {
+	title: "tweak the profile grid spacing",
+	anchorText: "tweak the profile grid spacing for small screens",
+	changelogSourceId: "cl:tui@2026.10.4-1#3",
+};
+
+function releaseInput(overrides: Partial<ReleaseOverviewInput> = {}): ReleaseOverviewInput {
+	return {
+		tag: "v2026.10.4-1",
+		stories: [STORY_AI, STORY_AI_2, STORY_REELS],
+		weakFeatures: [],
+		syncs: [],
+		tiny: false,
+		...overrides,
+	};
+}
+
+describe("computeReleaseThemes", () => {
+	test("groups stories by their top package deterministically", () => {
+		const themes = computeReleaseThemes([STORY_AI, STORY_AI_2, STORY_REELS]);
+		expect(themes).toEqual([
+			{ id: "theme:ai", name: "ai", storyIds: ["aaaaaaaaaaaa", "bbbbbbbbbbbb"] },
+			{ id: "theme:reels", name: "reels", storyIds: ["cccccccccccc"] },
+		]);
+	});
+
+	test("caps at 5 themes, merging overflow into a trailing 'More' theme", () => {
+		const stories: ReleaseStoryInput[] = Array.from({ length: 7 }, (_, i) => ({
+			sha12: `${i}`.padStart(12, "0"),
+			title: `feat(pkg${i}): x`,
+			origin: "commit",
+			packages: [`pkg${i}`],
+		}));
+		const themes = computeReleaseThemes(stories);
+		expect(themes).toHaveLength(5);
+		expect(themes[4]?.id).toBe("theme:more");
+		expect(themes[4]?.storyIds).toHaveLength(3);
+	});
+});
+
+function fullReleaseScenes(opts: {
+	themeAi?: { cites?: string[]; text?: string };
+	themeReels?: { cites?: string[]; text?: string };
+	weak?: Array<{ ref: string; quote: string }>;
+	syncs?: { text: string; cites?: string[] } | null;
+}) {
+	return {
+		themes: [
+			{
+				id: "theme:ai",
+				name: "AI",
+				beats: [
+					{
+						text: opts.themeAi?.text ?? "The AI package now streams output and retries rate limits.",
+						cites: opts.themeAi?.cites ?? ["st:aaaaaaaaaaaa", "st:bbbbbbbbbbbb"],
+					},
+				],
+			},
+			{
+				id: "theme:reels",
+				name: "Reels",
+				beats: [
+					{
+						text: opts.themeReels?.text ?? "Reels can now render a release overview.",
+						cites: opts.themeReels?.cites ?? ["st:cccccccccccc"],
+					},
+				],
+			},
+		],
+		weak: opts.weak ?? [],
+		...(opts.syncs === null || opts.syncs === undefined
+			? {}
+			: { syncs: { text: opts.syncs.text, cites: opts.syncs.cites ?? [] } }),
+		outro: { text: "That is this release.", cites: [] },
+	};
+}
+
+describe("validateReleaseOverview", () => {
+	test("cites restricted to st:/cl:/ghr:", () => {
+		const input = releaseInput();
+		const themes = computeReleaseThemes(input.stories);
+		const sources = buildReleaseSourceRegistry(input);
+		const raw = fullReleaseScenes({ themeAi: { cites: ["h:src/foo.ts#0"] } });
+		const result = validateReleaseOverview(raw, { themes, weakFeatures: [], sources, hasSyncs: false }, "release-v1");
+		expect(result.script).toBeUndefined();
+		expect(result.errors.some((e) => e.rule === "citations" && /must start with one of/.test(e.detail))).toBe(true);
+	});
+
+	test("rejects a story id cited under a theme it was not assigned to (moved)", () => {
+		const input = releaseInput();
+		const themes = computeReleaseThemes(input.stories);
+		const sources = buildReleaseSourceRegistry(input);
+		// "cccccccccccc" belongs to theme:reels, not theme:ai.
+		const raw = fullReleaseScenes({ themeAi: { cites: ["st:cccccccccccc"] } });
+		const result = validateReleaseOverview(raw, { themes, weakFeatures: [], sources, hasSyncs: false }, "release-v1");
+		expect(result.script).toBeUndefined();
+		expect(result.errors.some((e) => /moved/.test(e.detail))).toBe(true);
+	});
+
+	test("accepts a valid response and builds theme scenes", () => {
+		const input = releaseInput();
+		const themes = computeReleaseThemes(input.stories);
+		const sources = buildReleaseSourceRegistry(input);
+		const raw = fullReleaseScenes({});
+		const result = validateReleaseOverview(raw, { themes, weakFeatures: [], sources, hasSyncs: false }, "release-v1");
+		expect(result.errors).toEqual([]);
+		expect(result.script?.scenes.map((s) => s.section)).toEqual(["theme", "theme", "outro"]);
+	});
+
+	test("requires a syncs sentence when syncs exist", () => {
+		const input = releaseInput({ syncs: [{ title: "sync upstream through v0.99.2", commitCount: 365 }] });
+		const themes = computeReleaseThemes(input.stories);
+		const sources = buildReleaseSourceRegistry(input);
+		const withoutSyncs = fullReleaseScenes({ syncs: null });
+		const missing = validateReleaseOverview(
+			withoutSyncs,
+			{ themes, weakFeatures: [], sources, hasSyncs: true },
+			"release-v1",
+		);
+		expect(missing.errors.some((e) => e.path === "syncs")).toBe(true);
+
+		const withSyncs = fullReleaseScenes({
+			syncs: { text: "This release also carries an upstream sync.", cites: [] },
+		});
+		const ok = validateReleaseOverview(
+			withSyncs,
+			{ themes, weakFeatures: [], sources, hasSyncs: true },
+			"release-v1",
+		);
+		expect(ok.errors).toEqual([]);
+		expect(ok.script?.scenes.some((s) => s.section === "overview")).toBe(true);
+	});
+
+	test("the model never writes a weak feature's title; it only supplies ref + quote, and the pipeline renders the title", () => {
+		const input = releaseInput({ weakFeatures: [WEAK_FEATURE] });
+		const themes = computeReleaseThemes(input.stories);
+		const sources = buildReleaseSourceRegistry(input);
+		const ref = weakFeatureRef(0);
+
+		const grounded = fullReleaseScenes({ weak: [{ ref, quote: "tweak the profile grid spacing" }] });
+		const accepted = validateReleaseOverview(
+			grounded,
+			{ themes, weakFeatures: input.weakFeatures, sources, hasSyncs: false },
+			"release-v1",
+		);
+		expect(accepted.errors).toEqual([]);
+		const weakScene = accepted.script?.scenes.find((s) => s.section === "overview");
+		// The pipeline wrote the beat text itself: it equals the real title verbatim, never model prose.
+		expect(weakScene?.beats?.[0]).toEqual({ text: WEAK_FEATURE.title, cites: [WEAK_FEATURE.changelogSourceId] });
+	});
+
+	test("rejects a weak mention whose quote is not grounded in its own anchor text", () => {
+		const input = releaseInput({ weakFeatures: [WEAK_FEATURE] });
+		const themes = computeReleaseThemes(input.stories);
+		const sources = buildReleaseSourceRegistry(input);
+		const ref = weakFeatureRef(0);
+		const raw = fullReleaseScenes({ weak: [{ ref, quote: "something not in the anchor text" }] });
+		const result = validateReleaseOverview(
+			raw,
+			{ themes, weakFeatures: input.weakFeatures, sources, hasSyncs: false },
+			"release-v1",
+		);
+		expect(result.script).toBeUndefined();
+		expect(result.errors.some((e) => e.path === `weak[${ref}]` && /anchor text/.test(e.detail))).toBe(true);
+	});
+
+	test("rejects a response that restates a title instead of using the given ref", () => {
+		const input = releaseInput({ weakFeatures: [WEAK_FEATURE] });
+		const themes = computeReleaseThemes(input.stories);
+		const sources = buildReleaseSourceRegistry(input);
+		const raw = fullReleaseScenes({
+			weak: [
+				{ ref: WEAK_FEATURE.title, quote: "tweak the profile grid spacing" } as unknown as {
+					ref: string;
+					quote: string;
+				},
+			],
+		});
+		const result = validateReleaseOverview(
+			raw,
+			{ themes, weakFeatures: input.weakFeatures, sources, hasSyncs: false },
+			"release-v1",
+		);
+		expect(result.script).toBeUndefined();
+		expect(result.errors.some((e) => /unknown weak feature ref/.test(e.detail))).toBe(true);
+		expect(result.errors.some((e) => /missing a mention/.test(e.detail))).toBe(true);
+	});
+
+	test("tolerates a quote that drops markdown punctuation present in the anchor text (real-model finding)", () => {
+		const markdownFeature: WeakFeatureInput = {
+			title: "mom's credentials path",
+			anchorText:
+				"mom's Anthropic credentials now live at `~/.draht/mom/auth.json` instead of `~/.pi/mom/auth.json`",
+			changelogSourceId: "cl:ai@2026.10.4-1#9",
+		};
+		const input = releaseInput({ weakFeatures: [markdownFeature] });
+		const themes = computeReleaseThemes(input.stories);
+		const sources = buildReleaseSourceRegistry(input);
+		const ref = weakFeatureRef(0);
+		// The model quoted the same words but, as real runs showed, sometimes drops the backticks.
+		const raw = fullReleaseScenes({
+			weak: [{ ref, quote: "mom's Anthropic credentials now live at ~/.draht/mom/auth.json" }],
+		});
+		const result = validateReleaseOverview(
+			raw,
+			{ themes, weakFeatures: input.weakFeatures, sources, hasSyncs: false },
+			"release-v1",
+		);
+		expect(result.errors).toEqual([]);
+	});
+});
+
+describe("parseReleaseOverviewResponse", () => {
+	test("strips a markdown code fence and parses the shape", () => {
+		const raw = `\`\`\`json\n${JSON.stringify(fullReleaseScenes({}))}\n\`\`\``;
+		const parsed = parseReleaseOverviewResponse(raw);
+		expect(parsed.themes).toHaveLength(2);
+		expect(parsed.outro.text).toBe("That is this release.");
+	});
+});
+
+describe("writeReleaseOverview", () => {
+	test("tiny releases are refused without calling the model", async () => {
+		const queue = queueCompleter([]);
+		const result = await writeReleaseOverview(releaseInput({ tiny: true }), queue.complete, new CostMeter(100));
+		expect(result).toEqual({ ok: false, reason: "tiny" });
+		expect(queue.calls).toBe(0);
+	});
+
+	test("valid on the first try", async () => {
+		const input = releaseInput();
+		const queue = queueCompleter([{ text: JSON.stringify(fullReleaseScenes({})) }]);
+		const result = await writeReleaseOverview(input, queue.complete, new CostMeter(100));
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.writer).toBe("llm");
+			expect(result.repaired).toBe(false);
+		}
+		expect(queue.calls).toBe(1);
+	});
+
+	test("invalid then repaired", async () => {
+		const input = releaseInput();
+		const bad = fullReleaseScenes({ themeAi: { cites: ["st:cccccccccccc"] } });
+		const good = fullReleaseScenes({});
+		const queue = queueCompleter([{ text: JSON.stringify(bad) }, { text: JSON.stringify(good) }]);
+		const result = await writeReleaseOverview(input, queue.complete, new CostMeter(100));
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.writer).toBe("llm");
+			expect(result.repaired).toBe(true);
+		}
+		expect(queue.calls).toBe(2);
+	});
+
+	test("falls back to the template writer when the model is unparseable twice", async () => {
+		const input = releaseInput();
+		const queue = queueCompleter([{ text: "not json" }, { text: "still not json" }]);
+		const fallbacks: string[] = [];
+		const result = await writeReleaseOverview(input, queue.complete, new CostMeter(100), {
+			onFallback: (r) => fallbacks.push(r),
+		});
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.writer).toBe("template");
+			expect(result.script.scenes.some((s) => s.section === "theme")).toBe(true);
+		}
+		expect(fallbacks).toHaveLength(1);
+	});
+
+	test("the template fallback still mentions weak features and syncs", async () => {
+		const input = releaseInput({
+			weakFeatures: [WEAK_FEATURE],
+			syncs: [{ title: "sync upstream", commitCount: 10 }],
+		});
+		const queue = queueCompleter([{ text: "not json" }, { text: "not json" }]);
+		const result = await writeReleaseOverview(input, queue.complete, new CostMeter(100));
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.writer).toBe("template");
+			const weakScene = result.script.scenes.find((s) => s.kind === "title" && s.title === "Also shipped");
+			expect(weakScene?.beats?.some((b) => b.text === WEAK_FEATURE.title)).toBe(true);
+			const syncScene = result.script.scenes.find((s) => s.kind === "title" && s.title === "From upstream");
+			expect(syncScene).toBeDefined();
+		}
+	});
+
+	test("a truncated-looking repair response still gets a 'be shorter' prompt, not the generic error dump", async () => {
+		// Second call's prompt is inspected via a custom completer instead of the queue helper.
+		const prompts: string[] = [];
+		const good = fullReleaseScenes({});
+		const complete: ModelCompleter = async (req) => {
+			prompts.push(req.prompt);
+			if (prompts.length === 1) return { text: '{"themes": [ { "incomplete' }; // unbalanced -> looks truncated
+			return { text: JSON.stringify(good) };
+		};
+		const result = await writeReleaseOverview(releaseInput(), complete, new CostMeter(100));
+		expect(result.ok).toBe(true);
+		if (result.ok) expect(result.writer).toBe("llm");
+		expect(prompts[1]).toMatch(/cut off/);
+		expect(prompts[1]).not.toMatch(/error list/i);
+	});
+});
+
+describe("looksTruncated", () => {
+	test("flags an unterminated string and unbalanced braces", () => {
+		expect(looksTruncated('{"a": "b')).toBe(true);
+		expect(looksTruncated('{"a": [1, 2')).toBe(true);
+	});
+
+	test("does not flag well-formed (even if semantically wrong) JSON", () => {
+		expect(looksTruncated('{"a": "b"}')).toBe(false);
+		expect(looksTruncated("not json but balanced")).toBe(false);
+	});
+});
+
+// --- sync recap writer -----------------------------------------------------------------------
+
+function changelogEntry(
+	i: number,
+	pkg: string,
+	section: RecapChangelogInput["section"] = "Fixed",
+): RecapChangelogInput {
+	return {
+		text: `change number ${i} in ${pkg}, with a \`flag${i}\` detail`,
+		sourceId: `cl:${pkg}@0.99.2#${i}`,
+		pkg,
+		section,
+	};
+}
+
+const RECAP_INPUT: SyncRecapInput = {
+	mergeTitle: "sync upstream through v0.99.2",
+	mergeSha12: "dddddddddddd",
+	commits: [
+		{ sha12: "111111111111", subject: "feat(ai): add thinking budget" },
+		{ sha12: "222222222222", subject: "fix(cli): correct flag parsing" },
+	],
+	changelogEntries: [changelogEntry(0, "ai", "Added"), changelogEntry(1, "cli", "Fixed")],
+	versionRange: "v0.83.0..v0.99.2",
+};
+
+describe("computeRecapThemes", () => {
+	test("groups by package only; commits never define a theme", () => {
+		const { themes, overflow } = computeRecapThemes(RECAP_INPUT);
+		expect(overflow).toBeUndefined();
+		expect(themes).toEqual([
+			{ id: "theme:ai", name: "ai", sourceIds: ["cl:ai@0.99.2#0"], overflowCount: 0 },
+			{ id: "theme:cli", name: "cli", sourceIds: ["cl:cli@0.99.2#1"], overflowCount: 0 },
+		]);
+	});
+
+	test("condenses a package's entries to the top N by significance, counting the rest as overflow", () => {
+		const entries = [
+			...Array.from({ length: 12 }, (_, i) => changelogEntry(i, "ai", "Fixed")),
+			changelogEntry(100, "ai", "Breaking Changes"),
+		];
+		const { themes } = computeRecapThemes({ ...RECAP_INPUT, changelogEntries: entries });
+		const aiTheme = themes.find((t) => t.id === "theme:ai");
+		expect(aiTheme?.sourceIds).toHaveLength(8);
+		// The lone "Breaking Changes" entry outranks every "Fixed" entry, so it must survive condensing.
+		expect(aiTheme?.sourceIds).toContain("cl:ai@0.99.2#100");
+		expect(aiTheme?.overflowCount).toBe(5);
+	});
+
+	test("caps at MAX_RECAP_THEMES package groups, summarizing the rest as a deterministic overflow count", () => {
+		const entries = Array.from({ length: 7 }, (_, i) => changelogEntry(i, `pkg${i}`, "Fixed"));
+		const { themes, overflow } = computeRecapThemes({ ...RECAP_INPUT, changelogEntries: entries });
+		expect(themes).toHaveLength(4);
+		expect(overflow).toEqual({ themeCount: 3, entryCount: 3 });
+	});
+});
+
+describe("selectRecapCommits", () => {
+	test("ranks feature-shaped subjects first, then longer subjects, and caps the count", () => {
+		const commits: RecapCommitInput[] = [
+			{ sha12: "aaaaaaaaaaaa", subject: "chore: bump deps" },
+			{ sha12: "bbbbbbbbbbbb", subject: "feat(ai): add a very descriptive thinking budget feature" },
+			{ sha12: "cccccccccccc", subject: "fix: typo" },
+		];
+		const selected = selectRecapCommits(commits, 2);
+		expect(selected).toHaveLength(2);
+		expect(selected[0]?.sha12).toBe("bbbbbbbbbbbb");
+	});
+});
+
+describe("estimateRecapMaxTokens", () => {
+	test("scales with the condensed theme/entry count and stays within bounds", () => {
+		const { themes } = computeRecapThemes(RECAP_INPUT);
+		const small = estimateRecapMaxTokens(themes, 2);
+		const bigThemes = Array.from({ length: 4 }, (_, i) => ({
+			id: `theme:pkg${i}`,
+			name: `pkg${i}`,
+			sourceIds: Array.from({ length: 8 }, (_, j) => `cl:pkg${i}@1#${j}`),
+			overflowCount: 0,
+		}));
+		const big = estimateRecapMaxTokens(bigThemes, 30);
+		expect(big).toBeGreaterThan(small);
+		expect(big).toBeLessThanOrEqual(6_000);
+	});
+});
+
+function fullRecapScenes(opts: {
+	themeAi?: { cites?: string[]; text?: string };
+	themeCli?: { cites?: string[]; text?: string };
+	keyMoment?: { text: string; cites: string[] } | null;
+}) {
+	return {
+		themes: [
+			{
+				id: "theme:ai",
+				name: "AI",
+				beats: [
+					{
+						text: opts.themeAi?.text ?? "Models can now stop thinking after a budget is used up.",
+						cites: opts.themeAi?.cites ?? ["cl:ai@0.99.2#0"],
+					},
+				],
+			},
+			{
+				id: "theme:cli",
+				name: "CLI",
+				beats: [
+					{
+						text: opts.themeCli?.text ?? "A flag-parsing bug in the CLI is fixed.",
+						cites: opts.themeCli?.cites ?? ["cl:cli@0.99.2#1"],
+					},
+				],
+			},
+		],
+		...(opts.keyMoment === null ? {} : { keyMoment: opts.keyMoment }),
+		outro: { text: "That is what came in from upstream.", cites: [] },
+	};
+}
+
+function recapThemes() {
+	return computeRecapThemes(RECAP_INPUT).themes;
+}
+
+function recapSources() {
+	const themes = recapThemes();
+	return buildRecapSourceRegistry(RECAP_INPUT, themes, selectRecapCommits(RECAP_INPUT.commits));
+}
+
+describe("validateSyncRecap", () => {
+	test("groups by package and scope, and the moved-cite rule applies across themes", () => {
+		const themes = recapThemes();
+		const sources = recapSources();
+		const raw = fullRecapScenes({ themeAi: { cites: ["cl:cli@0.99.2#1"] } });
+		const result = validateSyncRecap(raw, { themes, sources }, "recap-ddd");
+		expect(result.script).toBeUndefined();
+		expect(result.errors.some((e) => /moved/.test(e.detail))).toBe(true);
+	});
+
+	test("a commit (c:) cite is always 'moved' inside a theme, since themes never contain commit ids", () => {
+		const themes = recapThemes();
+		const sources = buildRecapSourceRegistry(RECAP_INPUT, themes, selectRecapCommits(RECAP_INPUT.commits));
+		const raw = fullRecapScenes({ themeAi: { cites: ["c:111111111111"] } });
+		const result = validateSyncRecap(raw, { themes, sources }, "recap-ddd");
+		expect(result.script).toBeUndefined();
+		expect(result.errors.some((e) => /moved/.test(e.detail))).toBe(true);
+	});
+
+	test("rejects an uncited claim", () => {
+		const themes = recapThemes();
+		const sources = recapSources();
+		const raw = fullRecapScenes({ themeAi: { cites: [] } });
+		const result = validateSyncRecap(raw, { themes, sources }, "recap-ddd");
+		expect(result.script).toBeUndefined();
+		expect(result.errors.some((e) => e.rule === "citations" && /at least one cite/.test(e.detail))).toBe(true);
+	});
+
+	test("accepts a valid response with at most one key moment", () => {
+		const themes = recapThemes();
+		const sources = recapSources();
+		const raw = fullRecapScenes({
+			keyMoment: { text: "One commit added the thinking budget flag.", cites: ["c:111111111111"] },
+		});
+		const result = validateSyncRecap(raw, { themes, sources }, "recap-ddd");
+		expect(result.errors).toEqual([]);
+		expect(result.script?.scenes.map((s) => s.section)).toEqual(["theme", "theme", "code", "outro"]);
+	});
+
+	test("rejects a key moment that cites more than one commit", () => {
+		const themes = recapThemes();
+		const sources = recapSources();
+		const raw = fullRecapScenes({
+			keyMoment: { text: "Two commits did this.", cites: ["c:111111111111", "c:222222222222"] },
+		});
+		const result = validateSyncRecap(raw, { themes, sources }, "recap-ddd");
+		expect(result.errors.some((e) => e.path === "keyMoment")).toBe(true);
+	});
+
+	test("rejects a st: cite, which is never allowed in a recap", () => {
+		const themes = recapThemes();
+		const sources = recapSources();
+		const raw = fullRecapScenes({ themeAi: { cites: ["st:aaaaaaaaaaaa"] } });
+		const result = validateSyncRecap(raw, { themes, sources }, "recap-ddd");
+		expect(result.errors.some((e) => /must start with one of/.test(e.detail))).toBe(true);
+	});
+
+	test("appends a deterministic overflow scene when package groups were condensed away", () => {
+		const entries = Array.from({ length: 7 }, (_, i) => changelogEntry(i, `pkg${i}`, "Fixed"));
+		const { themes, overflow } = computeRecapThemes({ ...RECAP_INPUT, changelogEntries: entries });
+		const sources = buildRecapSourceRegistry(
+			{ ...RECAP_INPUT, changelogEntries: entries },
+			themes,
+			selectRecapCommits(RECAP_INPUT.commits),
+		);
+		const raw = {
+			themes: themes.map((t) => ({
+				id: t.id,
+				name: t.name,
+				beats: [{ text: `${t.name} update.`, cites: t.sourceIds }],
+			})),
+			outro: { text: "That is what came in from upstream.", cites: [] },
+		};
+		const result = validateSyncRecap(raw, { themes, overflow, sources }, "recap-ddd");
+		expect(result.errors).toEqual([]);
+		const overflowScene = result.script?.scenes.find((s) => s.kind === "title" && s.title === "More from upstream");
+		expect(overflowScene?.beats?.[0]?.text).toMatch(/3 more area.*3 more change/);
+	});
+});
+
+describe("parseRecapResponse", () => {
+	test("strips a markdown code fence and parses the shape", () => {
+		const raw = `\`\`\`json\n${JSON.stringify(fullRecapScenes({}))}\n\`\`\``;
+		const parsed = parseRecapResponse(raw);
+		expect(parsed.themes).toHaveLength(2);
+		expect(parsed.outro.text).toBe("That is what came in from upstream.");
+	});
+});
+
+describe("writeSyncRecap", () => {
+	test("valid on the first try", async () => {
+		const queue = queueCompleter([{ text: JSON.stringify(fullRecapScenes({})) }]);
+		const result = await writeSyncRecap(RECAP_INPUT, queue.complete, new CostMeter(100));
+		expect(result.writer).toBe("llm");
+		expect(result.repaired).toBe(false);
+		expect(queue.calls).toBe(1);
+	});
+
+	test("invalid then repaired", async () => {
+		const bad = fullRecapScenes({ themeAi: { cites: [] } });
+		const good = fullRecapScenes({});
+		const queue = queueCompleter([{ text: JSON.stringify(bad) }, { text: JSON.stringify(good) }]);
+		const result = await writeSyncRecap(RECAP_INPUT, queue.complete, new CostMeter(100));
+		expect(result.writer).toBe("llm");
+		expect(result.repaired).toBe(true);
+		expect(queue.calls).toBe(2);
+	});
+
+	test("the template fallback works and groups by theme, including overflow", async () => {
+		const entries = Array.from({ length: 7 }, (_, i) => changelogEntry(i, `pkg${i}`, "Fixed"));
+		const input = { ...RECAP_INPUT, changelogEntries: entries };
+		const queue = queueCompleter([{ text: "not json" }, { text: "not json" }]);
+		const fallbacks: string[] = [];
+		const result = await writeSyncRecap(input, queue.complete, new CostMeter(100), {
+			onFallback: (r) => fallbacks.push(r),
+		});
+		expect(result.writer).toBe("template");
+		expect(result.script.scenes.filter((s) => s.section === "theme")).toHaveLength(4);
+		expect(result.script.scenes.some((s) => s.kind === "title" && s.title === "More from upstream")).toBe(true);
+		expect(fallbacks).toHaveLength(1);
+	});
+
+	test("a truncated first response triggers a 'be shorter' repair with a larger token budget, not parse-garbage handling", async () => {
+		const prompts: Array<{ prompt: string; maxTokens: number }> = [];
+		const good = fullRecapScenes({});
+		const complete: ModelCompleter = async (req) => {
+			prompts.push({ prompt: req.prompt, maxTokens: req.maxTokens });
+			if (prompts.length === 1)
+				return { text: '{"themes": [ {"id": "theme:ai", "name": "AI", "beats": [ {"text": "cut off here' };
+			return { text: JSON.stringify(good) };
+		};
+		const result = await writeSyncRecap(RECAP_INPUT, complete, new CostMeter(100));
+		expect(result.writer).toBe("llm");
+		expect(prompts[1]?.prompt).toMatch(/cut off/);
+		expect(prompts[1]?.maxTokens).toBeGreaterThan(prompts[0]?.maxTokens ?? 0);
+	});
+});

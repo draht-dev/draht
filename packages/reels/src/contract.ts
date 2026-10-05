@@ -248,6 +248,22 @@ export interface PublicSource {
 	url?: string;
 }
 
+/**
+ * A draft's release context, carried in {@link ReelEntry.releaseMeta} from
+ * {@link ReleaseGroup} (`releases.ts`) through to `approve`, so a {@link
+ * ReleasePlaylist} it creates or fills in gets the tag's real sha/date
+ * instead of defaulting to empty/zero.
+ */
+export interface ReleaseMeta {
+	sha: string;
+	date: string;
+	previousTag?: string;
+	tiny: boolean;
+	changeCount: number;
+	/** Theme names, when already computed by the writer that produced this draft. */
+	themes?: string[];
+}
+
 /** One release's grouping of stories and sync containers, newest-tag-first in {@link Feed.playlists}. */
 export interface ReleasePlaylist {
 	tag: string;
@@ -296,6 +312,8 @@ export interface ReelEntry {
 	story?: StoryMeta;
 	/** Tag of the release this entry belongs to, absent if unreleased. */
 	release?: string;
+	/** This entry's release's tag metadata, absent when unreleased or when built before this field existed. */
+	releaseMeta?: ReleaseMeta;
 	sources?: PublicSource[];
 	/** The optional deep dive, rendered separately under `reels/<short>/deep/`. */
 	deepDive?: ReelMedia;

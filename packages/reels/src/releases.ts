@@ -255,6 +255,8 @@ export interface ReleaseGroup {
 	otherUnitIds: string[];
 	anchors: ChangelogAnchor[];
 	tiny: boolean;
+	/** Total mainline units in this release's exact range, for {@link ReleasePlaylist.changeCount}. */
+	changeCount: number;
 }
 
 export const DEFAULT_MIN_STORIES = 2;
@@ -338,6 +340,7 @@ export async function buildReleaseGroups(opts: BuildReleaseGroupsOptions): Promi
 			otherUnitIds,
 			anchors,
 			tiny: isTinyRelease({ featureUnitIds, anchors }, opts.thresholds),
+			changeCount: units.length,
 		});
 	}
 

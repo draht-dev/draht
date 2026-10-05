@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { BuildOverrides } from "../src/cli.ts";
@@ -273,6 +273,135 @@ describe("approve: release playlists (T12c)", () => {
 				playlist = feed.playlists?.find((p) => p.tag === "v1.0.0");
 				expect(playlist?.storyIds).toHaveLength(2);
 				expect(new Set(playlist?.storyIds)).toEqual(new Set([shaA, shaB]));
+			} finally {
+				rmSync(out, { recursive: true, force: true });
+				rmSync(drafts, { recursive: true, force: true });
+			}
+		}),
+	);
+
+	test(
+		"approving a story creates a playlist with tag, sha, date, prevTag, tiny, and changeCount",
+		withRepo(async (repo) => {
+			repo.commit("feat: setup");
+			repo.tag("v0.9.0");
+			const shaA = addFeatureBranchMerge(repo, { subject: "Merge feature A" });
+			repo.tag("v1.0.0");
+			const tagDate = repo.git(["log", "-1", "--format=%cI", "v1.0.0"]);
+
+			const out = tmpDir("release-out-");
+			const drafts = tmpDir("release-drafts-");
+			try {
+				const overrides: BuildOverrides = { complete: fallingBackCompleter() };
+				await runBuild(baseArgv(repo.dir, drafts, out), overrides);
+				await runApprove(targetArgv(repo.dir, drafts, out, [shaA]));
+
+				const feed = readFeed(out, "demo");
+				const playlist = feed.playlists?.find((p) => p.tag === "v1.0.0");
+				expect(playlist?.sha).toBe(repo.sha("v1.0.0"));
+				expect(playlist?.date).toBe(tagDate);
+				expect(playlist?.previousTag).toBe("v0.9.0");
+				expect(typeof playlist?.tiny).toBe("boolean");
+				expect(playlist?.changeCount).toBeGreaterThan(0);
+			} finally {
+				rmSync(out, { recursive: true, force: true });
+				rmSync(drafts, { recursive: true, force: true });
+			}
+		}),
+	);
+
+	test(
+		"approving a second story does not clear the playlist's release fields",
+		withRepo(async (repo) => {
+			const shaA = addFeatureBranchMerge(repo, { subject: "Merge feature A" });
+			const shaB = addFeatureBranchMerge(repo, { subject: "Merge feature B" });
+			repo.tag("v1.0.0");
+
+			const out = tmpDir("release-out-");
+			const drafts = tmpDir("release-drafts-");
+			try {
+				const overrides: BuildOverrides = { complete: fallingBackCompleter() };
+				await runBuild(baseArgv(repo.dir, drafts, out), overrides);
+				await runApprove(targetArgv(repo.dir, drafts, out, [shaA]));
+
+				const first = readFeed(out, "demo").playlists?.find((p) => p.tag === "v1.0.0");
+				expect(first?.sha).not.toBe("");
+
+				await runApprove(targetArgv(repo.dir, drafts, out, [shaB]));
+				const second = readFeed(out, "demo").playlists?.find((p) => p.tag === "v1.0.0");
+				expect(second?.sha).toBe(first?.sha);
+				expect(second?.date).toBe(first?.date);
+				expect(second?.changeCount).toBe(first?.changeCount);
+				expect(second?.storyIds).toHaveLength(2);
+			} finally {
+				rmSync(out, { recursive: true, force: true });
+				rmSync(drafts, { recursive: true, force: true });
+			}
+		}),
+	);
+
+	test(
+		"filling in a playlist with a blanked date/sha/changeCount backfills them from a later approval",
+		withRepo(async (repo) => {
+			const shaA = addFeatureBranchMerge(repo, { subject: "Merge feature A" });
+			const shaB = addFeatureBranchMerge(repo, { subject: "Merge feature B" });
+			repo.tag("v1.0.0");
+			const tagDate = repo.git(["log", "-1", "--format=%cI", "v1.0.0"]);
+
+			const out = tmpDir("release-out-");
+			const drafts = tmpDir("release-drafts-");
+			try {
+				const overrides: BuildOverrides = { complete: fallingBackCompleter() };
+				await runBuild(baseArgv(repo.dir, drafts, out), overrides);
+				await runApprove(targetArgv(repo.dir, drafts, out, [shaA]));
+
+				// Simulate a pre-fix playlist: blank date/sha/changeCount, same as `blankPlaylist` used to leave them.
+				const feedPath = join(out, "demo", "feed.json");
+				const feed = JSON.parse(readFileSync(feedPath, "utf-8")) as Feed;
+				const playlist = feed.playlists?.find((p) => p.tag === "v1.0.0");
+				expect(playlist).toBeDefined();
+				if (playlist) {
+					playlist.sha = "";
+					playlist.date = "";
+					playlist.changeCount = 0;
+				}
+				writeFileSync(feedPath, JSON.stringify(feed, null, "\t"));
+
+				await runApprove(targetArgv(repo.dir, drafts, out, [shaB]));
+				const refilled = readFeed(out, "demo").playlists?.find((p) => p.tag === "v1.0.0");
+				expect(refilled?.date).toBe(tagDate);
+				expect(refilled?.sha).toBe(repo.sha("v1.0.0"));
+				expect(refilled?.changeCount).toBeGreaterThan(0);
+			} finally {
+				rmSync(out, { recursive: true, force: true });
+				rmSync(drafts, { recursive: true, force: true });
+			}
+		}),
+	);
+
+	test(
+		"playlists sort newest first by the tag's own date, regardless of approval order",
+		withRepo(async (repo) => {
+			addFeatureBranchMerge(repo, { subject: "Merge feature A" });
+			const shaA2 = addFeatureBranchMerge(repo, { subject: "Merge feature A2" });
+			repo.tag("v1.0.0");
+			addFeatureBranchMerge(repo, { subject: "Merge feature B" });
+			const shaB2 = addFeatureBranchMerge(repo, { subject: "Merge feature B2" });
+			repo.tag("v2.0.0");
+
+			const out = tmpDir("release-out-");
+			const drafts = tmpDir("release-drafts-");
+			try {
+				const overrides: BuildOverrides = { complete: fallingBackCompleter() };
+				await runBuild(baseArgv(repo.dir, drafts, out, ["--all-history"]), overrides);
+
+				// Approve the newer release first: playlist order must come from each tag's own date, never approval order.
+				await runApprove(targetArgv(repo.dir, drafts, out, [shaB2]));
+				await runApprove(targetArgv(repo.dir, drafts, out, [shaA2]));
+
+				const feed = readFeed(out, "demo");
+				const tags = (feed.playlists ?? []).map((p) => p.tag);
+				expect(tags).toEqual(["v2.0.0", "v1.0.0"]);
 			} finally {
 				rmSync(out, { recursive: true, force: true });
 				rmSync(drafts, { recursive: true, force: true });

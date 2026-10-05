@@ -23,6 +23,7 @@ import type {
 	ReelEntry,
 	ReelMedia,
 	ReelScript,
+	ReleaseMeta,
 	ReleasePlaylist,
 	Scene,
 	Story,
@@ -35,6 +36,7 @@ import {
 	buildRecapSourceRegistry,
 	buildReleaseSourceRegistry,
 	type ChangelogSection,
+	computeReleaseThemes,
 	type RecapChangelogInput,
 	type RecapCommitInput,
 	type ReleaseOverviewInput,
@@ -620,6 +622,27 @@ function hookSummary(entry: Pick<ReelEntry, "scenes">): string | undefined {
 	return entry.scenes.find((s) => s.section === "hook")?.narration || undefined;
 }
 
+/**
+ * The release metadata a story/overview/recap draft carries forward to
+ * `approve` (`entry.releaseMeta`), from the {@link ReleaseGroup} it belongs
+ * to. `undefined` for the "unreleased" group (`group.tag`/`group.tagSha`
+ * absent) — unreleased work gets no playlist, so it needs no release meta.
+ */
+function releaseMetaOf(
+	group: Pick<ReleaseGroup, "tag" | "tagSha" | "date" | "previousTag" | "tiny" | "changeCount">,
+	themes?: string[],
+): ReleaseMeta | undefined {
+	if (group.tag === undefined || group.tagSha === undefined) return undefined;
+	return {
+		sha: group.tagSha,
+		date: group.date ?? "",
+		previousTag: group.previousTag,
+		tiny: group.tiny,
+		changeCount: group.changeCount,
+		themes,
+	};
+}
+
 const CHANGELOG_SECTIONS = new Set<ChangelogSection>(["Breaking Changes", "Added", "Changed", "Fixed", "Removed"]);
 
 /** Narrows a `ChangelogAnchor.section` string (a CHANGELOG.md heading) to the closed set `release-writer.ts` ranks by, or `undefined` for a heading outside that set (never ranked, not an error). */
@@ -700,6 +723,7 @@ interface ReleaseArtifactDraft {
 	kind: "release" | "recap";
 	title: string;
 	release: string | undefined;
+	releaseMeta: ReleaseMeta | undefined;
 	script: ReelScript;
 	writer: "llm" | "template";
 	repaired: boolean;
@@ -748,6 +772,10 @@ async function writeReleaseOverviewArtifact(
 		kind: "release",
 		title: `Release overview: ${tag ?? "Unreleased"}`,
 		release: tag,
+		releaseMeta: releaseMetaOf(
+			group,
+			computeReleaseThemes(stories).map((t) => t.name),
+		),
 		script: result.script,
 		writer: result.writer,
 		repaired: result.repaired,
@@ -810,6 +838,10 @@ async function writeRecapArtifact(
 		kind: "recap",
 		title: `Upstream recap: ${tag ?? "Unreleased"}`,
 		release: tag,
+		releaseMeta: releaseMetaOf(
+			group,
+			result.themes.map((t) => t.name),
+		),
 		script: result.script,
 		writer: result.writer,
 		repaired: result.repaired,
@@ -880,6 +912,7 @@ async function renderReleaseArtifactDraft(
 		stats: { files: 0, additions: 0, deletions: 0 },
 		kind: artifact.kind,
 		release: artifact.release,
+		releaseMeta: artifact.releaseMeta,
 		sources: toPublicSources(artifact.sources),
 		writer: artifact.writer,
 		recap: artifact.recap,
@@ -1117,6 +1150,8 @@ async function runBuildStory(args: BuildArgs, overrides: BuildOverrides): Promis
 
 	const allStories: Story[] = [];
 	const attribution = new Map<string, "strong" | "weak">();
+	// For looking up a story's own group later, by the same `tag` key it was stamped with below.
+	const groupByTag = new Map<string | undefined, ReleaseGroup>(groups.map((g) => [g.tag, g]));
 	// Pooled upstream recap material (T11 finding), keyed by group (its own
 	// `tag`, undefined for "Unreleased"): `collectStories` already separates
 	// each group's own `syncRecap` anchors, so pooling them with that group's
@@ -1277,6 +1312,7 @@ async function runBuildStory(args: BuildArgs, overrides: BuildOverrides): Promis
 			}
 
 			const sources = toPublicSources(ctx.sources);
+			const storyGroup = story.release !== undefined ? groupByTag.get(story.release) : undefined;
 			const entry: ReelEntry = {
 				id: story.id,
 				commits: story.commits,
@@ -1305,6 +1341,7 @@ async function runBuildStory(args: BuildArgs, overrides: BuildOverrides): Promis
 					deepDive: writeResult.deepDiveOutcome === "rendered" ? "rendered" : "not-warranted",
 				},
 				release: story.release,
+				releaseMeta: storyGroup ? releaseMetaOf(storyGroup, [topPackage(story.files)]) : undefined,
 				sources,
 				deepDive: deepDiveMedia,
 				writer: writeResult.writer,
@@ -1669,18 +1706,47 @@ function entryPlaylistTag(entry: ReelEntry): string | undefined {
 	return isValidReleaseArtifactId(entry.id) ? releaseArtifactTag(entry.id) : undefined;
 }
 
-/** A fresh playlist for a tag never seen before: every required field defaults to empty/zero, filled in by whichever approval (story, overview, or recap) creates it first; later approvals only ever add to it, never erase an already-set field. */
-function blankPlaylist(tag: string, date: string): ReleasePlaylist {
+/**
+ * A fresh playlist for a tag never seen before: every tag-level field
+ * (`sha`, `date`, `previousTag`, `tiny`, `changeCount`) comes from
+ * `entry.releaseMeta` when the first-approved entry carries it, else
+ * defaults to empty/zero exactly as before — filled in later by {@link
+ * fillReleaseMeta} the moment any approved entry does carry it.
+ */
+function blankPlaylist(tag: string, entry: ReelEntry): ReleasePlaylist {
+	const meta = entry.releaseMeta;
 	return {
 		tag,
-		sha: "",
-		date,
+		sha: meta?.sha ?? "",
+		date: meta?.date ?? entry.date,
+		previousTag: meta?.previousTag,
 		title: tag,
 		storyIds: [],
 		themes: [],
 		syncs: [],
-		changeCount: 0,
-		tiny: false,
+		changeCount: meta?.changeCount ?? 0,
+		tiny: meta?.tiny ?? false,
+	};
+}
+
+/**
+ * Fills a playlist's own `sha`/`date`/`previousTag`/`changeCount` from
+ * `entry.releaseMeta` wherever the playlist's current value is the blank
+ * default (empty string, undefined, or zero) — never overwriting a value an
+ * earlier approval already set. `tiny` is always taken from `meta` when
+ * present: it is a deterministic fact about the release itself, identical
+ * for every entry that belongs to it, so there is nothing to preserve.
+ */
+function fillReleaseMeta(playlist: ReleasePlaylist, entry: ReelEntry): ReleasePlaylist {
+	const meta = entry.releaseMeta;
+	if (!meta) return playlist;
+	return {
+		...playlist,
+		sha: playlist.sha !== "" ? playlist.sha : meta.sha,
+		date: playlist.date !== "" ? playlist.date : meta.date,
+		previousTag: playlist.previousTag ?? meta.previousTag,
+		changeCount: playlist.changeCount !== 0 ? playlist.changeCount : meta.changeCount,
+		tiny: meta.tiny,
 	};
 }
 
@@ -1689,15 +1755,17 @@ function blankPlaylist(tag: string, date: string): ReleasePlaylist {
  * `entry.kind === "story"` recomputes `storyIds` from every approved story
  * for this tag (newest-first by date, the same order `feed.reels` itself
  * keeps — "mainline order" in the absence of a cheaper signal at approve
- * time), `"release"` sets `overviewId`, `"recap"` sets `recapId`. Any other
- * field an existing playlist already carries (`sha`, `themes`, `syncs`,
- * `changeCount`, `tiny`) is preserved untouched.
+ * time), `"release"` sets `overviewId`, `"recap"` sets `recapId`. Every
+ * field an existing playlist already carries is preserved untouched, except
+ * that {@link fillReleaseMeta} fills in a still-blank `sha`/`date`/
+ * `previousTag`/`changeCount`/`tiny` from this entry's own release metadata.
  */
 async function updateReleasePlaylist(outDir: string, name: string, tag: string, entry: ReelEntry): Promise<void> {
 	const feed = await readFeed(outDir, name);
-	const existing = feed?.playlists?.find((p) => p.tag === tag) ?? blankPlaylist(tag, entry.date);
+	const existing = feed?.playlists?.find((p) => p.tag === tag) ?? blankPlaylist(tag, entry);
 
-	let playlist: ReleasePlaylist = existing;
+	const withMeta = fillReleaseMeta(existing, entry);
+	let playlist: ReleasePlaylist = withMeta;
 	if (entry.kind === "story") {
 		const storyIds = (feed?.reels ?? [])
 			.filter((r) => r.kind === "story" && r.release === tag)
@@ -1705,11 +1773,11 @@ async function updateReleasePlaylist(outDir: string, name: string, tag: string, 
 			.includes(entry.id)
 			? (feed?.reels ?? []).filter((r) => r.kind === "story" && r.release === tag)
 			: [...(feed?.reels ?? []).filter((r) => r.kind === "story" && r.release === tag), entry];
-		playlist = { ...existing, storyIds: storyIds.map((r) => r.id) };
+		playlist = { ...withMeta, storyIds: storyIds.map((r) => r.id) };
 	} else if (entry.kind === "release") {
-		playlist = { ...existing, overviewId: entry.id };
+		playlist = { ...withMeta, overviewId: entry.id };
 	} else if (entry.kind === "recap") {
-		playlist = { ...existing, recapId: entry.id };
+		playlist = { ...withMeta, recapId: entry.id };
 	} else {
 		return;
 	}

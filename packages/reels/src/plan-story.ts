@@ -31,12 +31,17 @@ import {
 	type ReleaseUpstreamPool,
 	recapId,
 	releaseOverviewId,
+	SAFE_TAG_RE,
 	selectStoryUnits,
 } from "./stories.ts";
 import { computeDeepDiveScoreInputs, type DeepDiveMode, deepDiveScore, shouldRenderDeepDive } from "./story-writer.ts";
 
-/** `"later"`: eligible and not yet drafted/approved/rejected, but beyond this run's `selectStoryUnits` window (e.g. `--limit`) — the next `build --unit story` run would not draft it either. */
-export type DraftStatus = "approved" | "pending" | "rejected" | "new" | "later";
+/** `"later"`: eligible and not yet drafted/approved/rejected, but beyond this run's `selectStoryUnits` window (e.g.
+ * `--limit`) — the next `build --unit story` run would not draft it either. `"skipped"`: a release overview/recap
+ * whose tag fails `SAFE_TAG_RE` (e.g. `listReleaseTags` matched a tag outside the id convention it enforces) —
+ * `build`/`release` would skip it with a warning rather than draft it. `"capped"`: a release overview/recap that
+ * reached the render retry limit — `build` skips it until `--force`. */
+export type DraftStatus = "approved" | "pending" | "rejected" | "capped" | "new" | "later" | "skipped";
 
 export interface StoryPlanEntry {
 	id: string;
@@ -139,12 +144,14 @@ function artifactStatusOf(
 	approvedIds: ReadonlySet<string>,
 	draftedIds: ReadonlySet<string>,
 	state: ReelsState,
+	capped: ReadonlySet<string>,
 	force: boolean,
 ): DraftStatus {
 	if (force) return "new";
 	if (approvedIds.has(id)) return "approved";
 	if (draftedIds.has(id)) return "pending";
 	if (isRejected(state, id)) return "rejected";
+	if (capped.has(id)) return "capped";
 	return "new";
 }
 
@@ -261,11 +268,15 @@ export async function planStories(options: PlanStoryOptions): Promise<StoryPlan>
 	const storyById = new Map(eligibleStories.map((s) => [s.id, s]));
 
 	// Mirrors `runBuildStory`'s own selection exactly: the same floor/scan/limit/force semantics through
-	// `selectStoryUnits`, over the same flat, rejection-filtered id list, so a story's reported status matches what
-	// the next real `build --unit story` run would do with it.
+	// `selectStoryUnits`, over the same flat, rejection-filtered id list (and, like `runBuildStory`, with pending
+	// drafted ids also removed first — a pending draft must never consume a `--limit` slot), so a story's reported
+	// status matches what the next real `build --unit story` run would do with it.
 	const capped = options.force ? new Set<string>() : cappedIds(state);
 	const rejectedIds = options.force ? new Set<string>() : new Set(Object.keys(state.rejected ?? {}));
-	const storyIdsForSelection = eligibleStories.map((s) => s.id).filter((id) => !rejectedIds.has(id));
+	const storyIdsForSelection = eligibleStories
+		.map((s) => s.id)
+		.filter((id) => !rejectedIds.has(id))
+		.filter((id) => options.force || !draftedIds.has(id));
 	const selection = selectStoryUnits(storyIdsForSelection, approvedIds, capped, {
 		allHistory: options.allHistory,
 		limit: options.limit,
@@ -301,22 +312,44 @@ export async function planStories(options: PlanStoryOptions): Promise<StoryPlan>
 		const weakFeatures = weakFeaturesKept.map((w) => redactText(w.title));
 
 		const tagKey = group.tag ?? "unreleased";
+		// `listReleaseTags` only filters by `tagPattern` (default `^v`), which a tag like `v2.0.0+hotfix` still
+		// matches even though `releaseOverviewId`/`recapId` (and `SAFE_TAG_RE` itself) reject it as an unsafe path
+		// segment. Mirrors `cli.ts`'s `draftReleaseArtifacts`: skip both artifacts for this group before either id
+		// is built, instead of letting the id constructor throw and crash the whole plan.
+		const unsafeTag = group.tag !== undefined && !SAFE_TAG_RE.test(group.tag);
 		const overviewLabel = `Release overview: ${group.tag ?? "Unreleased"}`;
-		const overviewId = releaseOverviewId(tagKey);
-		// No release overview or upstream recap for still-open "Unreleased" work: there is no release to summarize
-		// yet. Stories in unreleased work stay eligible above; only these two artifacts are skipped.
-		const overviewWouldDraft = !group.tiny && group.tag !== undefined;
-		const overviewStatus = artifactStatusOf(overviewId, approvedIds, draftedIds, state, options.force ?? false);
-		if (overviewWouldDraft && overviewStatus === "new") {
-			ttsItems.push({ id: overviewId, kind: "overview", title: overviewLabel, chars: OVERVIEW_CHARS, fits: false });
-		}
-
 		const recapLabel = `Upstream recap: ${group.tag ?? "Unreleased"}`;
-		const recapIdValue = recapId(tagKey);
-		const recapWouldDraft = pool.anchors.length > 0 && group.tag !== undefined;
-		const recapStatus = artifactStatusOf(recapIdValue, approvedIds, draftedIds, state, options.force ?? false);
-		if (recapWouldDraft && recapStatus === "new") {
-			ttsItems.push({ id: recapIdValue, kind: "recap", title: recapLabel, chars: RECAP_CHARS, fits: false });
+		let overviewWouldDraft: boolean;
+		let overviewStatus: DraftStatus;
+		let recapWouldDraft: boolean;
+		let recapStatus: DraftStatus;
+		if (unsafeTag) {
+			overviewWouldDraft = false;
+			overviewStatus = "skipped";
+			recapWouldDraft = false;
+			recapStatus = "skipped";
+		} else {
+			const overviewId = releaseOverviewId(tagKey);
+			// No release overview or upstream recap for still-open "Unreleased" work: there is no release to
+			// summarize yet. Stories in unreleased work stay eligible above; only these two artifacts are skipped.
+			overviewWouldDraft = !group.tiny && group.tag !== undefined;
+			overviewStatus = artifactStatusOf(overviewId, approvedIds, draftedIds, state, capped, options.force ?? false);
+			if (overviewWouldDraft && overviewStatus === "new") {
+				ttsItems.push({
+					id: overviewId,
+					kind: "overview",
+					title: overviewLabel,
+					chars: OVERVIEW_CHARS,
+					fits: false,
+				});
+			}
+
+			const recapIdValue = recapId(tagKey);
+			recapWouldDraft = pool.anchors.length > 0 && group.tag !== undefined;
+			recapStatus = artifactStatusOf(recapIdValue, approvedIds, draftedIds, state, capped, options.force ?? false);
+			if (recapWouldDraft && recapStatus === "new") {
+				ttsItems.push({ id: recapIdValue, kind: "recap", title: recapLabel, chars: RECAP_CHARS, fits: false });
+			}
 		}
 
 		releases.push({
@@ -384,11 +417,23 @@ export function formatStoryPlan(plan: StoryPlan): string {
 			lines.push(`  weak features: ${release.weakFeatures.join("; ")}${remainder}`);
 		}
 		lines.push(`  pooled upstream anchors: ${release.upstreamAnchorCount}`);
+		const overviewReason =
+			release.overview.status === "skipped"
+				? "would not draft (unsafe tag)"
+				: release.tag === undefined
+					? "would not draft (unreleased)"
+					: "would not draft (tiny)";
 		lines.push(
-			`  overview: ${release.overview.wouldDraft ? "would draft" : release.tag === undefined ? "would not draft (unreleased)" : "would not draft (tiny)"} (${statusLabel(release.overview.status)})`,
+			`  overview: ${release.overview.wouldDraft ? "would draft" : overviewReason} (${statusLabel(release.overview.status)})`,
 		);
+		const recapReason =
+			release.recap.status === "skipped"
+				? "would not draft (unsafe tag)"
+				: release.tag === undefined
+					? "would not draft (unreleased)"
+					: "would not draft (no pooled anchors)";
 		lines.push(
-			`  recap: ${release.recap.wouldDraft ? "would draft" : release.tag === undefined ? "would not draft (unreleased)" : "would not draft (no pooled anchors)"} (${statusLabel(release.recap.status)})`,
+			`  recap: ${release.recap.wouldDraft ? "would draft" : recapReason} (${statusLabel(release.recap.status)})`,
 		);
 		lines.push("");
 	}

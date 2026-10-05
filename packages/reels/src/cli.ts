@@ -85,6 +85,7 @@ import {
 	recapId,
 	releaseArtifactTag,
 	releaseOverviewId,
+	SAFE_TAG_RE,
 	selectStoryUnits,
 	storyIdSha,
 } from "./stories.ts";
@@ -971,6 +972,8 @@ async function renderReleaseArtifactDraft(
 		renderBundle: Bundle | undefined;
 		concurrency?: number;
 		now: () => string;
+		ttsMeter: CostMeter;
+		chars: number;
 	},
 ): Promise<void> {
 	// `artifact.id` (a `release-<tag>`/`recap-<tag>` id) is never a git sha; validated here, before the TTS
@@ -986,6 +989,9 @@ async function renderReleaseArtifactDraft(
 	let publishedToFinalDir = false;
 	try {
 		const narration = await opts.tts.synthesize(artifact.script.scenes, tmpDir);
+		// Recorded right after the paid TTS call, same as the per-story loop: a render failure later in this
+		// function (video render, file copy) must still count these chars against `--max-tts-chars`.
+		opts.ttsMeter.record(opts.chars);
 		let video: string | undefined;
 		let poster: string | undefined;
 		let durationMs = narration.transcript.reduce((max, s) => Math.max(max, s.endMs), 0);
@@ -1108,7 +1114,16 @@ async function draftReleaseArtifacts(
 	for (const group of groups) {
 		const groupKey = group.tag ?? "unreleased";
 		if (tagFilter && !tagFilter.has(groupKey)) continue;
+		// `listReleaseTags` only filters by `tagPattern` (default `^v`), which a tag like `v2.0.0+hotfix` still
+		// matches even though `releaseOverviewId`/`recapId` reject it as an unsafe path segment. Skipping here,
+		// before either id is built, keeps one bad tag from aborting every other release's drafting.
+		if (group.tag !== undefined && !SAFE_TAG_RE.test(group.tag)) {
+			// A warning, not a failure: the tag cannot change, so counting it would fail every future run.
+			console.warn(`draht-reels: skipping release artifacts for "${group.tag}": not a safe tag name`);
+			continue;
+		}
 
+		const capped = ctx.force ? new Set<string>() : cappedIds(state);
 		const onFallback = (reason: string) =>
 			console.warn(`draht-reels: release artifact ${groupKey} writer fallback: ${reason}`);
 		const candidates: Array<{ id: string; build: () => Promise<ReleaseArtifactDraft | undefined> }> = [
@@ -1141,10 +1156,11 @@ async function draftReleaseArtifacts(
 		];
 
 		for (const { id, build } of candidates) {
-			// Skipped before any paid work (LLM write, TTS) ever starts: an artifact already pending, approved, or
-			// rejected must never be re-written and re-paid for on every run. `--force` bypasses all three, same as
-			// the stories loop above.
-			if (!ctx.force && (draftedIds.has(id) || approvedIds.has(id) || isRejected(state, id))) continue;
+			// Skipped before any paid work (LLM write, TTS) ever starts: an artifact already pending, approved,
+			// rejected, or capped at the render retry limit must never be re-written and re-paid for on every run.
+			// `--force` bypasses all four, same as the stories loop above.
+			if (!ctx.force && (draftedIds.has(id) || approvedIds.has(id) || isRejected(state, id) || capped.has(id)))
+				continue;
 			if (!ctx.llmMeter.hasBudget() || !ctx.ttsMeter.hasBudget()) {
 				console.warn("draht-reels: stopping: a spend cap is reached; keeping already-drafted release artifacts");
 				return { drafted, failed, state };
@@ -1156,6 +1172,8 @@ async function draftReleaseArtifacts(
 				failed++;
 				const message = error instanceof Error ? error.message : String(error);
 				console.error(`draht-reels: failed to draft a release artifact for ${groupKey} (${message})`);
+				state = recordFailure(state, id, message, ctx.now());
+				await writeState(ctx.draftsBaseDir, ctx.name, state);
 				continue;
 			}
 			if (!artifact) continue;
@@ -1176,8 +1194,9 @@ async function draftReleaseArtifacts(
 					renderBundle,
 					concurrency: ctx.concurrency,
 					now: ctx.now,
+					ttsMeter: ctx.ttsMeter,
+					chars,
 				});
-				ctx.ttsMeter.record(chars);
 				drafted++;
 				draftedIds = new Set([...draftedIds, artifact.id]);
 				state = recordSuccess(state, artifact.id);
@@ -1857,7 +1876,7 @@ export async function runReview(argv: string[]): Promise<void> {
  * for a story with no release yet (unreleased; no playlist to update).
  */
 function entryPlaylistTag(entry: ReelEntry): string | undefined {
-	if (entry.release !== undefined) return entry.release;
+	if (entry.release !== undefined) return SAFE_TAG_RE.test(entry.release) ? entry.release : undefined;
 	return isValidReleaseArtifactId(entry.id) ? releaseArtifactTag(entry.id) : undefined;
 }
 
@@ -1944,6 +1963,25 @@ async function updateReleasePlaylist(outDir: string, name: string, tag: string, 
  * itself, since the draft and its media are colocated. `approve` relocates that media to `reels/<id>/`, so the
  * published entry's paths must gain that same prefix — exactly what a non-draft `build` already writes
  * directly (`runBuild`'s `video = "reels/${sha}/video.mp4"`). */
+/** A relative media path as `withPublishedMediaPaths` is willing to prefix: no leading dot (so no `../`), no
+ * absolute path, no empty segment. */
+const SAFE_MEDIA_PATH_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/;
+
+/** The first `video`/`audio`/`poster`/`deepDive.*` path in `entry` that is not a safe relative path, or `undefined`
+ * when all present paths are safe. A draft's `entry.json` is otherwise-trusted pipeline output, but its paths
+ * still become path components here — defense in depth, same reasoning as `shortSha`'s re-check. */
+function findUnsafeMediaPath(entry: ReelEntry): string | undefined {
+	const paths = [
+		entry.video,
+		entry.audio,
+		entry.poster,
+		entry.deepDive?.video,
+		entry.deepDive?.audio,
+		entry.deepDive?.poster,
+	];
+	return paths.find((path): path is string => path !== undefined && !SAFE_MEDIA_PATH_RE.test(path));
+}
+
 function withPublishedMediaPaths(entry: ReelEntry, id: string): ReelEntry {
 	const prefix = (path: string | undefined) => (path === undefined ? undefined : `reels/${id}/${path}`);
 	return {
@@ -1988,6 +2026,14 @@ export async function runApprove(argv: string[]): Promise<void> {
 		if (draftEntry.id !== id) {
 			console.error(
 				`draht-reels: refusing to approve "${id}": its entry.json carries id "${draftEntry.id}", which does not match the draft directory`,
+			);
+			process.exitCode = 1;
+			continue;
+		}
+		const unsafePath = findUnsafeMediaPath(draftEntry);
+		if (unsafePath !== undefined) {
+			console.error(
+				`draht-reels: refusing to approve "${id}": its entry.json carries an unsafe media path "${unsafePath}"`,
 			);
 			process.exitCode = 1;
 			continue;

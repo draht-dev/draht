@@ -447,6 +447,100 @@ describe("approve: rewrites draft-relative media paths to reels/<id>/... (critic
 	);
 });
 
+describe("approve: refuses a draft whose entry.json carries an unsafe media path", () => {
+	test(
+		"approve fails and does not publish when video escapes the draft dir via ../",
+		withRepo(async (repo) => {
+			const out = tmpDir("gate-out-");
+			const drafts = tmpDir("gate-drafts-");
+			try {
+				const entry = draftStoryEntry(DRAFT_ID);
+				entry.video = "../../../etc/passwd";
+				writeDraft(drafts, "demo", DRAFT_ID, entry);
+
+				const originalError = console.error;
+				let loggedError = "";
+				console.error = (...args: unknown[]) => {
+					loggedError += args.map(String).join(" ");
+				};
+				try {
+					await runApprove(targetArgv(repo.dir, drafts, out, [DRAFT_ID]));
+				} finally {
+					console.error = originalError;
+				}
+
+				expect(process.exitCode).toBe(1);
+				process.exitCode = 0;
+				expect(loggedError).toContain("unsafe media path");
+				expect(() => readFileSync(join(out, "demo", "feed.json"), "utf-8")).toThrow();
+				expect(readDraftIds(drafts, "demo")).toContain(DRAFT_ID);
+			} finally {
+				cleanupGitRepo(repo);
+				rmSync(out, { recursive: true, force: true });
+				rmSync(drafts, { recursive: true, force: true });
+			}
+		}),
+	);
+
+	test(
+		"approve fails when a deepDive media path escapes the draft dir",
+		withRepo(async (repo) => {
+			const out = tmpDir("gate-out-");
+			const drafts = tmpDir("gate-drafts-");
+			try {
+				const entry = draftStoryEntry(DRAFT_ID);
+				if (entry.deepDive) entry.deepDive.audio = "../outside.mp3";
+				writeDraft(drafts, "demo", DRAFT_ID, entry);
+
+				const originalError = console.error;
+				let loggedError = "";
+				console.error = (...args: unknown[]) => {
+					loggedError += args.map(String).join(" ");
+				};
+				try {
+					await runApprove(targetArgv(repo.dir, drafts, out, [DRAFT_ID]));
+				} finally {
+					console.error = originalError;
+				}
+
+				expect(process.exitCode).toBe(1);
+				process.exitCode = 0;
+				expect(loggedError).toContain("unsafe media path");
+				expect(() => readFileSync(join(out, "demo", "feed.json"), "utf-8")).toThrow();
+			} finally {
+				cleanupGitRepo(repo);
+				rmSync(out, { recursive: true, force: true });
+				rmSync(drafts, { recursive: true, force: true });
+			}
+		}),
+	);
+});
+
+describe("approve: a story with an unsafe release tag still publishes, but gets no playlist", () => {
+	test(
+		"approving a story whose entry.release fails SAFE_TAG_RE creates no playlist for that tag",
+		withRepo(async (repo) => {
+			const out = tmpDir("gate-out-");
+			const drafts = tmpDir("gate-drafts-");
+			try {
+				const entry = draftStoryEntry(DRAFT_ID);
+				entry.release = "v2.0.0+hotfix";
+				writeDraft(drafts, "demo", DRAFT_ID, entry);
+
+				await runApprove(targetArgv(repo.dir, drafts, out, [DRAFT_ID]));
+
+				const feed = JSON.parse(readFileSync(join(out, "demo", "feed.json"), "utf-8")) as Feed;
+				expect(feed.reels.some((r) => r.id === DRAFT_ID)).toBe(true);
+				expect(feed.playlists?.some((p) => p.tag === "v2.0.0+hotfix")).toBeFalsy();
+			} finally {
+				cleanupGitRepo(repo);
+				rmSync(out, { recursive: true, force: true });
+				rmSync(drafts, { recursive: true, force: true });
+			}
+		}),
+	);
+});
+
 describe("approve: refuses a draft whose entry.json id does not match the directory", () => {
 	test(
 		"approve fails and does not publish when entry.json's id disagrees with the draft dir",

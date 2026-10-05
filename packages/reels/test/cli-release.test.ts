@@ -502,6 +502,36 @@ describe("build --unit story: release artifacts are not re-written/re-paid on an
 	);
 });
 
+describe("build --unit story: a release tag outside SAFE_TAG_RE is skipped, not fatal (regression)", () => {
+	test(
+		"a tag matching tagPattern but failing SAFE_TAG_RE (e.g. v2.0.0+hotfix) does not abort drafting other releases",
+		withRepo(async (repo) => {
+			addFeatureBranchMerge(repo, { subject: "Merge unsafe-tag A" });
+			addFeatureBranchMerge(repo, { subject: "Merge unsafe-tag B" });
+			repo.tag("v2.0.0+hotfix"); // matches the default `^v` tagPattern, fails SAFE_TAG_RE
+
+			const safeTag = buildNonTinyReleaseWithUpstreamPool(repo, "v3.0.0");
+
+			const out = tmpDir("release-out-");
+			const drafts = tmpDir("release-drafts-");
+			try {
+				const overrides: BuildOverrides = { complete: fallingBackCompleter() };
+				const result = await runBuild(baseArgv(repo.dir, drafts, out, ["--all-history"]), overrides);
+				expect(result.failed).toBe(0); // a warning, not a failure: the tag cannot change, so it must not fail every run
+
+				const ids = readDraftIds(drafts, "demo");
+				// The unsafe-tag release never gets an overview/recap id built (it would throw), but the safe one still does.
+				expect(ids).toContain(`release-${safeTag}`);
+				expect(ids).toContain(`recap-${safeTag}`);
+				expect(ids.some((id) => id.includes("v2.0.0+hotfix"))).toBe(false);
+			} finally {
+				rmSync(out, { recursive: true, force: true });
+				rmSync(drafts, { recursive: true, force: true });
+			}
+		}),
+	);
+});
+
 describe("release command: model precedence (C: --model, then story.model)", () => {
 	test("story.model in .reels.json is used by `release` when --model is absent", () => {
 		const repo = initGitRepo();
@@ -640,6 +670,105 @@ describe("approve/reject: invalid release ids are refused", () => {
 			rmSync(drafts, { recursive: true, force: true });
 		}
 	});
+});
+
+describe("release artifacts: capped (MAX_RENDER_ATTEMPTS) ids are skipped without --force (regression)", () => {
+	test(
+		"a release overview that fails after TTS on 3 runs is not retried on a 4th run, but --force retries it",
+		withRepo(async (repo) => {
+			addFeatureBranchMerge(repo, { subject: "Merge feature A" });
+			addFeatureBranchMerge(repo, { subject: "Merge feature B" });
+			repo.tag("v1.0.0");
+
+			const out = tmpDir("release-out-");
+			const drafts = tmpDir("release-drafts-");
+			try {
+				let calls = 0;
+				const counting: ModelCompleter = async () => {
+					calls++;
+					return fallingBackCompleter()({ prompt: "", maxTokens: 0 });
+				};
+				// Simulates a render failure that happens only after the (paid) TTS call already returned, same
+				// fixture `cli-release.test.ts`'s own cleanup test uses.
+				const failingAfterTts = {
+					synthesize: async () => ({
+						scenes: [],
+						transcript: [],
+						audioPath: join(drafts, "narration-that-does-not-exist.mp3"),
+					}),
+				};
+				const overrides: BuildOverrides = { complete: counting, tts: failingAfterTts };
+
+				for (let i = 0; i < 3; i++) {
+					const result = await runRelease(releaseArgv(["v1.0.0"], repo.dir, drafts, out), overrides);
+					expect(result.failed).toBe(1);
+				}
+				const callsAfterThreeFailures = calls;
+				expect(callsAfterThreeFailures).toBeGreaterThan(0);
+
+				// A 4th run must not retry: the artifact is now capped at MAX_RENDER_ATTEMPTS. No further model
+				// calls means `build()` was never invoked for it.
+				const fourth = await runRelease(releaseArgv(["v1.0.0"], repo.dir, drafts, out), overrides);
+				expect(fourth.failed).toBe(0);
+				expect(fourth.published).toBe(0);
+				expect(calls).toBe(callsAfterThreeFailures);
+
+				// --force bypasses the cap, same as build/plan do for stories: `build()` runs again.
+				const forced = await runRelease(releaseArgv(["v1.0.0"], repo.dir, drafts, out, ["--force"]), overrides);
+				expect(forced.failed).toBe(1);
+				expect(calls).toBeGreaterThan(callsAfterThreeFailures);
+			} finally {
+				rmSync(out, { recursive: true, force: true });
+				rmSync(drafts, { recursive: true, force: true });
+			}
+		}),
+	);
+});
+
+describe("release artifacts: TTS chars count toward --max-tts-chars even when the render fails after synthesize (regression)", () => {
+	test(
+		"a release overview that fails after TTS still records its chars against the TTS meter",
+		withRepo(async (repo) => {
+			addFeatureBranchMerge(repo, { subject: "Merge feature A" });
+			addFeatureBranchMerge(repo, { subject: "Merge feature B" });
+			repo.tag("v1.0.0");
+
+			const out = tmpDir("release-out-");
+			const drafts = tmpDir("release-drafts-");
+			try {
+				const failingAfterTts = {
+					synthesize: async () => ({
+						scenes: [],
+						transcript: [],
+						audioPath: join(drafts, "narration-that-does-not-exist.mp3"),
+					}),
+				};
+				const overrides: BuildOverrides = { complete: fallingBackCompleter(), tts: failingAfterTts };
+
+				const logs: string[] = [];
+				const originalLog = console.log;
+				console.log = (msg?: unknown) => logs.push(String(msg));
+				try {
+					const result = await runRelease(
+						releaseArgv(["v1.0.0"], repo.dir, drafts, out, ["--max-tts-chars", "100"]),
+						overrides,
+					);
+					expect(result.failed).toBe(1);
+				} finally {
+					console.log = originalLog;
+				}
+
+				const spendLine = logs.find((l) => l.includes("TTS"));
+				expect(spendLine).toBeDefined();
+				// Chars were recorded even though the render failed after synthesize: the spend line must show more
+				// than 0/100, not 0/100 (which would mean a failed render never counted against the cap).
+				expect(spendLine).not.toContain("TTS 0/100 chars");
+			} finally {
+				rmSync(out, { recursive: true, force: true });
+				rmSync(drafts, { recursive: true, force: true });
+			}
+		}),
+	);
 });
 
 describe("release artifact draft: cleans up its .tmp-<uuid> dir on render failure after TTS", () => {

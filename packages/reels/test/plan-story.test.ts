@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { type BuildOverrides, runApprove, runBuild, runPlan, runReject } from "../src/cli.ts";
 import type { StoryPlan } from "../src/plan-story.ts";
 import type { ModelCompleter } from "../src/script.ts";
+import { MAX_RENDER_ATTEMPTS, readState, recordFailure, writeState } from "../src/state.ts";
 import {
 	addFeatureBranchMerge,
 	cleanupGitRepo,
@@ -281,6 +282,57 @@ describe("plan --unit story: read-only dry run, never calls the model completer"
 	);
 
 	test(
+		"a release tag outside SAFE_TAG_RE is reported as skipped, not a thrown crash (regression)",
+		withRepo(async (repo) => {
+			addFeatureBranchMerge(repo, { subject: "Merge unsafe-tag A" });
+			addFeatureBranchMerge(repo, { subject: "Merge unsafe-tag B" });
+			repo.tag("v2.0.0+hotfix"); // matches the default `^v` tagPattern, fails SAFE_TAG_RE
+			const out = tmpDir("plan-out-");
+			const drafts = tmpDir("plan-drafts-");
+			try {
+				const { plan } = await capturePlan(planArgv(repo.dir, out, drafts, ["--all-history"]), {
+					complete: throwingCompleter,
+				});
+				const release = plan.releases.find((r) => r.tag === "v2.0.0+hotfix");
+				expect(release).toBeDefined();
+				expect(release?.overview.wouldDraft).toBe(false);
+				expect(release?.overview.status).toBe("skipped");
+				expect(release?.recap.wouldDraft).toBe(false);
+				expect(release?.recap.status).toBe("skipped");
+			} finally {
+				rmSync(out, { recursive: true, force: true });
+				rmSync(drafts, { recursive: true, force: true });
+			}
+		}),
+	);
+
+	test(
+		"a release overview at the render retry cap is reported capped, and new again under --force",
+		withRepo(async (repo) => {
+			const tag = buildNonTinyReleaseWithUpstreamPool(repo, "v1.0.0");
+			const out = tmpDir("plan-out-");
+			const drafts = tmpDir("plan-drafts-");
+			try {
+				let state = await readState(drafts, "demo");
+				for (let i = 0; i < MAX_RENDER_ATTEMPTS; i++) {
+					state = recordFailure(state, `release-${tag}`, "render failed", "2026-10-05T00:00:00Z");
+				}
+				await writeState(drafts, "demo", state);
+				const { plan } = await capturePlan(planArgv(repo.dir, out, drafts), { complete: throwingCompleter });
+				expect(plan.releases.find((r) => r.tag === tag)?.overview.status).toBe("capped");
+				expect(plan.ttsEstimate.items.map((i) => i.id)).not.toContain(`release-${tag}`);
+				const forced = await capturePlan(planArgv(repo.dir, out, drafts, ["--force"]), {
+					complete: throwingCompleter,
+				});
+				expect(forced.plan.releases.find((r) => r.tag === tag)?.overview.status).toBe("new");
+			} finally {
+				rmSync(out, { recursive: true, force: true });
+				rmSync(drafts, { recursive: true, force: true });
+			}
+		}),
+	);
+
+	test(
 		"a tiny release would draft neither an overview nor a recap",
 		withRepo(async (repo) => {
 			addFeatureBranchMerge(repo, { subject: "Merge only feature" });
@@ -317,6 +369,49 @@ describe("plan --unit story: read-only dry run, never calls the model completer"
 				const lastFits = plan.ttsEstimate.items.at(-1)?.fits;
 				expect(typeof lastFits).toBe("boolean");
 				expect(plan.ttsEstimate.fitsWithinCap).toBe(plan.ttsEstimate.totalChars <= 1500);
+			} finally {
+				rmSync(out, { recursive: true, force: true });
+				rmSync(drafts, { recursive: true, force: true });
+			}
+		}),
+	);
+
+	test(
+		"pending drafts never consume a --limit slot, mirroring build --unit story's own selection (parity)",
+		withRepo(async (repo) => {
+			// Mirrors `runBuildStory`'s own `storyIds` filter (`.filter((id) => args.force || !draftedIds.has(id))`),
+			// which `selectStoryUnits` applies before `--limit`: a pending draft must never consume a window slot
+			// that `selectFromWindow`'s drain mode would otherwise give to a genuinely new story above the floor.
+			const floorSha = addFeatureBranchMerge(repo, { subject: "Merge floor" });
+			const pendingShas: string[] = [];
+			for (let i = 0; i < 10; i++) pendingShas.push(addFeatureBranchMerge(repo, { subject: `Merge pending ${i}` }));
+
+			const out = tmpDir("plan-out-");
+			const drafts = tmpDir("plan-drafts-");
+			try {
+				// Drafts floorSha and all 10 pendingShas (nothing else exists yet); --limit 11 covers all of them
+				// (the default build limit is 10, which would otherwise leave the oldest, floorSha, undrafted).
+				await runBuild(buildArgv(repo.dir, out, drafts, ["--limit", "11"]), { complete: fallingBackCompleter });
+				// Approving floorSha (only) establishes the drain-mode floor; the 10 pendingShas stay pending drafts.
+				await runApprove(["--repo", repo.dir, "--name", "demo", "--out", out, "--drafts-dir", drafts, floorSha]);
+
+				// Three more commits land after the pending drafts — above the floor, genuinely new, newest of all.
+				const newShaA = addFeatureBranchMerge(repo, { subject: "Merge new A" });
+				const newShaB = addFeatureBranchMerge(repo, { subject: "Merge new B" });
+				const newShaC = addFeatureBranchMerge(repo, { subject: "Merge new C" });
+
+				const { plan } = await capturePlan(planArgv(repo.dir, out, drafts, ["--limit", "2"]), {
+					complete: throwingCompleter,
+				});
+				const unreleased = plan.releases.find((r) => r.tag === undefined);
+				const byId = new Map(unreleased?.stories.map((s) => [s.id, s.status]));
+
+				for (const sha of pendingShas) expect(byId.get(sha)).toBe("pending");
+				// Drain mode selects the OLDEST --limit ids above the floor: with pendingShas correctly excluded from
+				// the selection window (same as build), that is newA and newB; newC is beyond the window ("later").
+				expect(byId.get(newShaA)).toBe("new");
+				expect(byId.get(newShaB)).toBe("new");
+				expect(byId.get(newShaC)).toBe("later");
 			} finally {
 				rmSync(out, { recursive: true, force: true });
 				rmSync(drafts, { recursive: true, force: true });

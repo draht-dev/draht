@@ -47,7 +47,8 @@
 # Partial success: if some stories fail to draft, `build` still exits
 # non-zero, but every story that *did* draft (and was already paid for via
 # ElevenLabs/the LLM) is still saved to the drafts branch/artifact. Only the
-# very last step of the build job fails the run, after saving.
+# `finalize` job turns that into a red run, after push/deploy have already
+# persisted/published whatever succeeded.
 #
 # Token separation: only the `push` job (which force-pushes `reels-site` and
 # `reels-drafts`) gets `contents: write`. `build` (bun install, Chrome
@@ -356,6 +357,20 @@ jobs:
           include-hidden-files: true
           retention-days: 1
 
+      - name: Ensure the drafts dir has at least one file, so the artifact always uploads
+        # On a fresh repo (no reels-drafts branch) with nothing newly drafted
+        # this run, drafts/<name> would otherwise be empty, and
+        # upload-artifact's default if-no-files-found: warn then creates no
+        # artifact at all — failing the push job's download step below. A
+        # placeholder dotfile (not a valid story/release/recap id per
+        # isValidStoryId/isValidReleaseArtifactId in src/stories.ts) is
+        # invisible to every draft listing in the CLI and safe to push to
+        # the orphan reels-drafts branch.
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/drafts/$(basename "$GITHUB_REPOSITORY")"
+          touch "$GITHUB_WORKSPACE/drafts/$(basename "$GITHUB_REPOSITORY")/.keep"
+
       - name: Upload the drafts (for the push job, and for human review)
         # Never included in pages-artifact above: drafts must never reach
         # the public site before a human approves them.
@@ -475,9 +490,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Mirrors stories.ts's STORY_ID_RE / RELEASE_ARTIFACT_ID_RE exactly;
-          # the CLI re-validates independently, this is defense in depth so a
-          # malformed id never reaches a shell array built from user input.
+          # Loosely mirrors stories.ts's STORY_ID_RE / RELEASE_ARTIFACT_ID_RE
+          # (ARTIFACT_ID_RE here is broader than RELEASE_ARTIFACT_ID_RE's tag
+          # rule); the CLI re-validates independently with the exact regexes,
+          # this is defense in depth so a malformed id never reaches a shell
+          # array built from user input.
           STORY_ID_RE='^[0-9a-f]{40}([0-9a-f]{24})?(-[0-9a-f]{8})?$'
           ARTIFACT_ID_RE='^(release|recap)-.+$'
 
@@ -532,6 +549,14 @@ jobs:
           path: site
           include-hidden-files: true
           retention-days: 1
+
+      - name: Ensure the drafts dir has at least one file, so the artifact always uploads
+        # Same reasoning as the matching step in the build job: an
+        # approve/reject run leaves drafts/<name> with the approved/rejected
+        # draft removed, which can empty the directory entirely.
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/drafts/$(basename "$GITHUB_REPOSITORY")"
+          touch "$GITHUB_WORKSPACE/drafts/$(basename "$GITHUB_REPOSITORY")/.keep"
 
       - name: Upload the drafts (for the push job)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

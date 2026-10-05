@@ -68,8 +68,9 @@ ARGS=(
 )
 # Omit --model entirely unless REELS_MODEL is set, so story.model in
 # REELS_CONFIG takes effect by default instead of being overridden here.
-# --since is not passed here: it is silently ignored for --unit story,
-# which is all this script ever builds (see selectStoryUnits in cli.ts).
+# --since is not passed here: the CLI rejects it outright for --unit story,
+# which is all this script ever builds (see the `args.unit === "story"`
+# check in cli.ts).
 if [ -n "$MODEL" ]; then
 	ARGS+=(--model "$MODEL")
 fi

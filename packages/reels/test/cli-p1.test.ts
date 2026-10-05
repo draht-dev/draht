@@ -45,9 +45,12 @@ describe("P1: one reel's failure does not lose the whole run", () => {
 				return templateWriter(changeSet, options);
 			};
 
-			await runBuild(["--repo", repo, "--name", "demo", "--out", outDir, "--tts", "none", "--mode", "audio"], {
-				writer: flakyWriter,
-			});
+			await runBuild(
+				["--repo", repo, "--name", "demo", "--unit", "commit", "--out", outDir, "--tts", "none", "--mode", "audio"],
+				{
+					writer: flakyWriter,
+				},
+			);
 
 			const feed = JSON.parse(readFileSync(join(outDir, "demo", "feed.json"), "utf-8")) as Feed;
 			const publishedTitles = feed.reels.map((r) => r.title).sort();
@@ -80,17 +83,36 @@ describe("P1: one reel's failure does not lose the whole run", () => {
 			};
 
 			for (let i = 0; i < 3; i++) {
-				await runBuild(["--repo", repo, "--name", "demo", "--out", outDir, "--tts", "none", "--mode", "audio"], {
-					writer: alwaysFailWriter,
-				});
+				await runBuild(
+					[
+						"--repo",
+						repo,
+						"--name",
+						"demo",
+						"--unit",
+						"commit",
+						"--out",
+						outDir,
+						"--tts",
+						"none",
+						"--mode",
+						"audio",
+					],
+					{
+						writer: alwaysFailWriter,
+					},
+				);
 			}
 			let state = await readState(outDir, "demo");
 			expect(state.failed[badSha]?.attempts).toBe(3);
 
 			// A 4th run must not retry it (shouldSkip trips), and must not error.
-			await runBuild(["--repo", repo, "--name", "demo", "--out", outDir, "--tts", "none", "--mode", "audio"], {
-				writer: alwaysFailWriter,
-			});
+			await runBuild(
+				["--repo", repo, "--name", "demo", "--unit", "commit", "--out", outDir, "--tts", "none", "--mode", "audio"],
+				{
+					writer: alwaysFailWriter,
+				},
+			);
 			state = await readState(outDir, "demo");
 			expect(state.failed[badSha]?.attempts).toBe(3); // unchanged: skipped, not retried
 		} finally {
@@ -116,7 +138,7 @@ describe("M7: runBuild reports failures via its return value, not process.exitCo
 			};
 
 			const result = await runBuild(
-				["--repo", repo, "--name", "demo", "--out", outDir, "--tts", "none", "--mode", "audio"],
+				["--repo", repo, "--name", "demo", "--unit", "commit", "--out", outDir, "--tts", "none", "--mode", "audio"],
 				{ writer: alwaysFailWriter },
 			);
 
@@ -140,9 +162,12 @@ describe("S7: a failing render must not touch already-published media or feed en
 			git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "published commit"]);
 			const sha = git(repo, ["rev-parse", "HEAD"]);
 
-			await runBuild(["--repo", repo, "--name", "demo", "--out", outDir, "--tts", "none", "--mode", "audio"], {
-				writer: templateWriter,
-			});
+			await runBuild(
+				["--repo", repo, "--name", "demo", "--unit", "commit", "--out", outDir, "--tts", "none", "--mode", "audio"],
+				{
+					writer: templateWriter,
+				},
+			);
 
 			const mediaDir = join(outDir, "demo", "reels", sha.slice(0, 12));
 			const canaryFile = join(mediaDir, "live-media-canary.txt");
@@ -161,7 +186,7 @@ describe("S7: a failing render must not touch already-published media or feed en
 			git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "failing commit"]);
 
 			const result = await runBuild(
-				["--repo", repo, "--name", "demo", "--out", outDir, "--tts", "none", "--mode", "audio"],
+				["--repo", repo, "--name", "demo", "--unit", "commit", "--out", outDir, "--tts", "none", "--mode", "audio"],
 				{
 					writer: alwaysFailWriter,
 				},

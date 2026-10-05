@@ -31,6 +31,8 @@ export interface StoryConfig {
 	maxBranchCommits: number;
 	/** `--unit story`: minimum attribution confidence a changelog (`origin: "commit"`) story needs to be eligible. Branch/PR stories are always eligible, regardless of this setting. */
 	minAttribution: AttributionStrength;
+	/** `--unit story`'s default model (`"<provider>/<modelId>"`), used when `--model` is absent. */
+	model?: string;
 }
 
 /** `--unit story` run-wide spend caps and draft output location (T12). */
@@ -140,7 +142,12 @@ const ALLOWED_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
 	"build",
 ]);
 const ALLOWED_UPSTREAM_KEYS: ReadonlySet<string> = new Set(["subjectPatterns", "markerPaths", "foreignAuthorRatio"]);
-const ALLOWED_STORY_KEYS: ReadonlySet<string> = new Set(["directCommitTypes", "maxBranchCommits", "minAttribution"]);
+const ALLOWED_STORY_KEYS: ReadonlySet<string> = new Set([
+	"directCommitTypes",
+	"maxBranchCommits",
+	"minAttribution",
+	"model",
+]);
 const ALLOWED_DOCS_KEYS: ReadonlySet<string> = new Set(["allow", "deny", "maxChunks"]);
 const ALLOWED_CODE_KEYS: ReadonlySet<string> = new Set(["exclude", "include"]);
 const ALLOWED_PROSE_KEYS: ReadonlySet<string> = new Set(["denyPatterns"]);
@@ -239,6 +246,14 @@ function assertValidRegexString(pattern: string, where: string): void {
 	}
 }
 
+/** `spec` must be `"<provider>/<id>"`: non-empty, with exactly one `/` separating two non-empty parts. */
+function assertValidModelSpec(spec: string, where: string): void {
+	const parts = spec.split("/");
+	if (parts.length !== 2 || parts[0] === "" || parts[1] === "") {
+		throw new ReelsConfigError(`${where} must be "<provider>/<modelId>", got "${spec}"`);
+	}
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -291,7 +306,17 @@ function parseStory(raw: unknown): StoryConfig {
 		throw new ReelsConfigError('story.minAttribution must be "strong" or "weak"');
 	}
 
-	return { directCommitTypes, maxBranchCommits, minAttribution: minAttribution as AttributionStrength };
+	if (raw.model !== undefined) {
+		if (typeof raw.model !== "string") throw new ReelsConfigError("story.model must be a string");
+		assertValidModelSpec(raw.model, "story.model");
+	}
+
+	return {
+		directCommitTypes,
+		maxBranchCommits,
+		minAttribution: minAttribution as AttributionStrength,
+		model: raw.model as string | undefined,
+	};
 }
 
 function parseDocs(raw: unknown): DocsConfig {

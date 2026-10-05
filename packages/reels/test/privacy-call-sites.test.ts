@@ -29,9 +29,12 @@ describe("privacy call sites: a secret-shaped commit subject never reaches publi
 		const repo = initRepoWithSecretCommit();
 		const outDir = mkdtempSync(join(tmpdir(), "reels-privacy-callsites-out-"));
 		try {
-			await runBuild(["--repo", repo, "--name", "demo", "--out", outDir, "--tts", "none", "--mode", "audio"], {
-				writer: templateWriter,
-			});
+			await runBuild(
+				["--repo", repo, "--name", "demo", "--unit", "commit", "--out", outDir, "--tts", "none", "--mode", "audio"],
+				{
+					writer: templateWriter,
+				},
+			);
 
 			const feedRaw = readFileSync(join(outDir, "demo", "feed.json"), "utf-8");
 			expect(feedRaw).not.toContain("sk-proj-");

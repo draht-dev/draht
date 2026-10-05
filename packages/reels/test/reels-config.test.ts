@@ -72,6 +72,32 @@ describe("parseReelsConfig", () => {
 		}
 	});
 
+	test("accepts a valid story.model", () => {
+		const config = parseReelsConfig({ story: { model: "anthropic/claude-sonnet-5" } });
+		expect(config.story.model).toBe("anthropic/claude-sonnet-5");
+	});
+
+	test("story.model is undefined when absent", () => {
+		expect(parseReelsConfig({}).story.model).toBeUndefined();
+	});
+
+	test("rejects a story.model with no slash", () => {
+		expect(() => parseReelsConfig({ story: { model: "anthropic" } })).toThrow(ReelsConfigError);
+	});
+
+	test("rejects a story.model with more than one slash", () => {
+		expect(() => parseReelsConfig({ story: { model: "anthropic/claude/sonnet" } })).toThrow(ReelsConfigError);
+	});
+
+	test("rejects a story.model with an empty provider or id", () => {
+		expect(() => parseReelsConfig({ story: { model: "/claude-sonnet-5" } })).toThrow(ReelsConfigError);
+		expect(() => parseReelsConfig({ story: { model: "anthropic/" } })).toThrow(ReelsConfigError);
+	});
+
+	test("rejects a non-string story.model", () => {
+		expect(() => parseReelsConfig({ story: { model: 123 } })).toThrow(ReelsConfigError);
+	});
+
 	test("rejects an override value outside the enum", () => {
 		expect(() => parseReelsConfig({ overrides: { deadbeef: "not-a-real-class" } })).toThrow(ReelsConfigError);
 	});

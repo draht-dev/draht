@@ -184,7 +184,7 @@ function parseBuildArgs(argv: string[]): BuildArgs {
 		lang: "en",
 		excludeGlobs: [],
 		includeGlobs: [],
-		unit: "commit",
+		unit: "story",
 		deepDive: "auto",
 	};
 	for (let i = 0; i < argv.length; i++) {
@@ -1094,10 +1094,13 @@ const STORY_CONTEXT_TARGET_TOKENS = 60_000;
  * one already finished — the moment any cap is exhausted.
  */
 async function runBuildStory(args: BuildArgs, overrides: BuildOverrides): Promise<BuildResult> {
-	if (!args.model && !overrides.complete) fail("--unit story requires --model <provider/id>");
-
 	let config = await resolveReelsConfig(args);
 	if (args.tagPattern) config = { ...config, tagPattern: args.tagPattern };
+
+	const model = args.model ?? config.story.model;
+	if (!model && !overrides.complete) {
+		fail("--unit story needs a model: pass --model provider/id or set story.model in .reels.json");
+	}
 
 	const name = repoName(args);
 	const outDir = resolve(args.out);
@@ -1114,7 +1117,7 @@ async function runBuildStory(args: BuildArgs, overrides: BuildOverrides): Promis
 	const maxTtsChars = args.maxTtsChars ?? config.build.maxTtsChars;
 
 	const git = overrides.git ?? runGit;
-	const complete = overrides.complete ?? (await resolveModelCompleter(args.model as string));
+	const complete = overrides.complete ?? (await resolveModelCompleter(model as string));
 	const ttsModelId = resolveTtsModel("story", args.ttsModel);
 	const tts = overrides.tts ?? resolveTts(args, ttsModelId);
 	const gh = overrides.gh ?? (await resolveStoryGithubLookup(args.repo, outDir, join(args.repo, ".reels-cache"), git));

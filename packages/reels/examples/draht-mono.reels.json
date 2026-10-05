@@ -6,7 +6,8 @@
 		"markerPaths": [".upstream-sync"]
 	},
 	"story": {
-		"minAttribution": "strong"
+		"minAttribution": "strong",
+		"model": "anthropic/claude-sonnet-5"
 	},
 	"docs": {
 		"allow": ["README.md", "**/README.md", "**/CHANGELOG.md", "docs/**", "docs/adr/**"]

@@ -32,7 +32,21 @@ describe("prune performance", () => {
 			}
 
 			await runBuild(
-				["--repo", repo, "--name", "demo", "--out", outDir, "--tts", "none", "--mode", "audio", "--all-history"],
+				[
+					"--repo",
+					repo,
+					"--name",
+					"demo",
+					"--unit",
+					"commit",
+					"--out",
+					outDir,
+					"--tts",
+					"none",
+					"--mode",
+					"audio",
+					"--all-history",
+				],
 				{ writer: templateWriter },
 			);
 

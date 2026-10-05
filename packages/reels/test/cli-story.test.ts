@@ -117,7 +117,9 @@ describe("build --unit story: argument errors happen before any work", () => {
 				encoding: "utf8",
 			});
 			expect(result.status).not.toBe(0);
-			expect(result.stderr).toContain("--unit story requires --model");
+			expect(result.stderr).toContain(
+				"--unit story needs a model: pass --model provider/id or set story.model in .reels.json",
+			);
 		} finally {
 			cleanupGitRepo(repo);
 		}
@@ -152,6 +154,84 @@ describe("build --unit story: argument errors happen before any work", () => {
 		} finally {
 			cleanupGitRepo(repo);
 			rmSync(out, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("build: --unit defaults to story", () => {
+	test(
+		"omitting --unit drafts a story (never the public feed), same as --unit story",
+		withRepo(async (repo) => {
+			const mergeSha = addFeatureBranchMerge(repo);
+			const out = tmpDir("reels-story-out-");
+			const drafts = tmpDir("reels-story-drafts-");
+			try {
+				const overrides: BuildOverrides = { complete: fallingBackCompleter() };
+				const argv = [
+					"--repo",
+					repo.dir,
+					"--name",
+					"demo",
+					"--model",
+					"test/fake",
+					"--tts",
+					"none",
+					"--mode",
+					"audio",
+					"--deep-dive",
+					"never",
+					"--out",
+					out,
+					"--drafts-dir",
+					drafts,
+				];
+				const result = await runBuild(argv, overrides);
+				expect(result.published).toBe(1);
+
+				const ids = readDraftIds(drafts, "demo");
+				expect(ids).toContain(mergeSha);
+				expect(() => readFileSync(join(out, "demo", "feed.json"), "utf-8")).toThrow();
+			} finally {
+				cleanupGitRepo(repo);
+				rmSync(out, { recursive: true, force: true });
+				rmSync(drafts, { recursive: true, force: true });
+			}
+		}),
+	);
+});
+
+describe("build --unit story: model precedence (--model, then story.model)", () => {
+	test("--model wins over story.model in .reels.json", () => {
+		const repo = initGitRepo();
+		const configPath = join(repo.dir, ".reels.json");
+		try {
+			writeFileSync(configPath, JSON.stringify({ story: { model: "config-provider/config-id" } }));
+			const cliPath = resolve(import.meta.dirname, "..", "src", "cli.ts");
+			const result = spawnSync(
+				"bun",
+				["run", cliPath, "build", "--repo", repo.dir, "--model", "flag-provider/flag-id"],
+				{ encoding: "utf8" },
+			);
+			expect(result.status).not.toBe(0);
+			expect(result.stderr).toContain('"flag-provider/flag-id"');
+			expect(result.stderr).not.toContain("config-provider/config-id");
+		} finally {
+			cleanupGitRepo(repo);
+		}
+	});
+
+	test("story.model in .reels.json is used when --model is absent", () => {
+		const repo = initGitRepo();
+		const configPath = join(repo.dir, ".reels.json");
+		try {
+			writeFileSync(configPath, JSON.stringify({ story: { model: "config-provider/config-id" } }));
+			const cliPath = resolve(import.meta.dirname, "..", "src", "cli.ts");
+			const result = spawnSync("bun", ["run", cliPath, "build", "--repo", repo.dir], { encoding: "utf8" });
+			expect(result.status).not.toBe(0);
+			expect(result.stderr).toContain('"config-provider/config-id"');
+			expect(result.stderr).not.toContain("needs a model");
+		} finally {
+			cleanupGitRepo(repo);
 		}
 	});
 });
@@ -420,7 +500,7 @@ describe("--unit story: lang de reaches the validator", () => {
 
 describe("--unit commit is unchanged", () => {
 	test(
-		"the default (--unit commit) still publishes to the public feed",
+		"--unit commit still publishes to the public feed",
 		withRepo(async (repo) => {
 			repo.commit("feat: a plain commit", { path: "a.txt" });
 			const out = tmpDir("reels-story-out-");
@@ -430,6 +510,8 @@ describe("--unit commit is unchanged", () => {
 					repo.dir,
 					"--name",
 					"demo",
+					"--unit",
+					"commit",
 					"--out",
 					out,
 					"--tts",

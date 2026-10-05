@@ -27,6 +27,7 @@ describe("draht-mono.reels.json", () => {
 		expect(config.upstream.subjectPatterns).toEqual(["^merge: sync upstream pi", "^upstream:"]);
 		expect(config.upstream.markerPaths).toEqual([".upstream-sync"]);
 		expect(config.story.minAttribution).toBe("strong");
+		expect(config.story.model).toBe("anthropic/claude-sonnet-5");
 		expect(config.docs.allow).toContain("docs/**");
 		expect(config.docs.allow).toContain("docs/adr/**");
 		expect(config.docs.deny).toEqual(DEFAULT_REELS_CONFIG.docs.deny);

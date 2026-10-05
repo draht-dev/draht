@@ -766,10 +766,15 @@ export async function writeReleaseOverview(
 	const userPrompt = buildReleaseUserPrompt(input, themes, sources, nonce);
 	const maxTokens = opts.maxTokens ?? MAX_TOKENS_DEFAULT;
 
+	if (!costMeter.hasBudget()) return fallback("cost cap reached before the initial call");
+
 	let text1: string;
 	try {
 		const completion = await complete({ systemPrompt: RELEASE_SYSTEM_PROMPT, prompt: userPrompt, maxTokens });
-		costMeter.record(completion.usage?.costUsd ?? 0);
+		costMeter.record(
+			completion.usage?.costUsd ?? 0,
+			(completion.usage?.input ?? 0) + (completion.usage?.output ?? 0),
+		);
 		text1 = completion.text;
 	} catch (error) {
 		return fallback(`model call failed: ${(error as Error).message}`);
@@ -778,11 +783,16 @@ export async function writeReleaseOverview(
 	const attempt1 = tryParseAndValidateRelease(text1, validationCtx, changeSetId);
 	if (attempt1.script) return { ok: true, script: attempt1.script, writer: "llm", repaired: false };
 
+	if (!costMeter.hasBudget()) return fallback("cost cap reached before the repair call");
+
 	const repairPrompt = buildRepairPrompt(attempt1.errors, text1);
 	let text2: string;
 	try {
 		const completion = await complete({ systemPrompt: RELEASE_SYSTEM_PROMPT, prompt: repairPrompt, maxTokens });
-		costMeter.record(completion.usage?.costUsd ?? 0);
+		costMeter.record(
+			completion.usage?.costUsd ?? 0,
+			(completion.usage?.input ?? 0) + (completion.usage?.output ?? 0),
+		);
 		text2 = completion.text;
 	} catch (error) {
 		return fallback(`repair model call failed: ${(error as Error).message}`);
@@ -1253,10 +1263,15 @@ export async function writeSyncRecap(
 	const userPrompt = buildRecapUserPrompt(input, themes, shownCommits, sources, nonce);
 	const maxTokens = opts.maxTokens ?? estimateRecapMaxTokens(themes, shownCommits.length);
 
+	if (!costMeter.hasBudget()) return fallback("cost cap reached before the initial call");
+
 	let text1: string;
 	try {
 		const completion = await complete({ systemPrompt: RECAP_SYSTEM_PROMPT, prompt: userPrompt, maxTokens });
-		costMeter.record(completion.usage?.costUsd ?? 0);
+		costMeter.record(
+			completion.usage?.costUsd ?? 0,
+			(completion.usage?.input ?? 0) + (completion.usage?.output ?? 0),
+		);
 		text1 = completion.text;
 	} catch (error) {
 		return fallback(`model call failed: ${(error as Error).message}`);
@@ -1264,6 +1279,8 @@ export async function writeSyncRecap(
 
 	const attempt1 = tryParseAndValidateRecap(text1, validationCtx, changeSetId);
 	if (attempt1.script) return { script: attempt1.script, writer: "llm", repaired: false, themes };
+
+	if (!costMeter.hasBudget()) return fallback("cost cap reached before the repair call");
 
 	const repairPrompt = buildRepairPrompt(attempt1.errors, text1);
 	const repairMaxTokens = looksTruncated(text1)
@@ -1276,7 +1293,10 @@ export async function writeSyncRecap(
 			prompt: repairPrompt,
 			maxTokens: repairMaxTokens,
 		});
-		costMeter.record(completion.usage?.costUsd ?? 0);
+		costMeter.record(
+			completion.usage?.costUsd ?? 0,
+			(completion.usage?.input ?? 0) + (completion.usage?.output ?? 0),
+		);
 		text2 = completion.text;
 	} catch (error) {
 		return fallback(`repair model call failed: ${(error as Error).message}`);

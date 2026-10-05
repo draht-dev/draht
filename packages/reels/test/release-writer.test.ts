@@ -467,6 +467,29 @@ describe("writeReleaseOverview", () => {
 		}
 	});
 
+	test("records input+output tokens into the CostMeter after a call", async () => {
+		const input = releaseInput();
+		const queue = queueCompleter([
+			{ text: JSON.stringify(fullReleaseScenes({})), usage: { input: 100, output: 50, costUsd: 0 } },
+		]);
+		const meter = new CostMeter(100, 1_000);
+		await writeReleaseOverview(input, queue.complete, meter);
+		expect(meter.spentTokenAmount).toBe(150);
+	});
+
+	test("skips the repair call and falls back to the template when the token budget is exhausted after the first call", async () => {
+		const input = releaseInput();
+		const bad = fullReleaseScenes({ themeAi: { cites: ["st:cccccccccccc"] } });
+		const queue = queueCompleter([{ text: JSON.stringify(bad), usage: { input: 100, output: 50, costUsd: 0 } }]);
+		const meter = new CostMeter(100, 150);
+		const fallbacks: string[] = [];
+		const result = await writeReleaseOverview(input, queue.complete, meter, { onFallback: (r) => fallbacks.push(r) });
+		expect(result.ok).toBe(true);
+		if (result.ok) expect(result.writer).toBe("template");
+		expect(queue.calls).toBe(1);
+		expect(fallbacks).toEqual(["cost cap reached before the repair call"]);
+	});
+
 	test("a truncated-looking repair response still gets a 'be shorter' prompt, not the generic error dump", async () => {
 		// Second call's prompt is inspected via a custom completer instead of the queue helper.
 		const prompts: string[] = [];
@@ -744,6 +767,26 @@ describe("writeSyncRecap", () => {
 		expect(result.script.scenes.filter((s) => s.section === "theme")).toHaveLength(4);
 		expect(result.script.scenes.some((s) => s.kind === "title" && s.title === "More from upstream")).toBe(true);
 		expect(fallbacks).toHaveLength(1);
+	});
+
+	test("records input+output tokens into the CostMeter after a call", async () => {
+		const queue = queueCompleter([
+			{ text: JSON.stringify(fullRecapScenes({})), usage: { input: 200, output: 80, costUsd: 0 } },
+		]);
+		const meter = new CostMeter(100, 1_000);
+		await writeSyncRecap(RECAP_INPUT, queue.complete, meter);
+		expect(meter.spentTokenAmount).toBe(280);
+	});
+
+	test("skips the repair call and falls back to the template when the token budget is exhausted after the first call", async () => {
+		const bad = fullRecapScenes({ themeAi: { cites: [] } });
+		const queue = queueCompleter([{ text: JSON.stringify(bad), usage: { input: 200, output: 80, costUsd: 0 } }]);
+		const meter = new CostMeter(100, 280);
+		const fallbacks: string[] = [];
+		const result = await writeSyncRecap(RECAP_INPUT, queue.complete, meter, { onFallback: (r) => fallbacks.push(r) });
+		expect(result.writer).toBe("template");
+		expect(queue.calls).toBe(1);
+		expect(fallbacks).toEqual(["cost cap reached before the repair call"]);
 	});
 
 	test("a truncated first response triggers a 'be shorter' repair with a larger token budget, not parse-garbage handling", async () => {

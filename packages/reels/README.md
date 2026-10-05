@@ -89,10 +89,12 @@ evidence is anchored:
   and `upstream:`-prefixed commits. Neither belongs to a single commit.
 
 `--unit commit` is the legacy, per-commit path: one reel per change set
-(a mainline commit, with its merged-branch commits folded in), template or
-LLM narration, no stories, no drafts, no publish gate. Kept for repos that
-do not want release/story structure. `--unit story` is the default for
-`build`, `plan`, and `release`.
+(a mainline commit, with its merged-branch commits folded in), template
+narration only, no stories, no drafts, no publish gate — it writes straight
+into `--out`. `--writer llm` is rejected outright for `--unit commit`: an
+LLM-written reel must go through the draft/approve gate, and `--unit commit`
+never offers one. Kept for repos that do not want release/story structure.
+`--unit story` is the default for `build`, `plan`, and `release`.
 
 ## The publish gate
 
@@ -114,8 +116,10 @@ catch — a plausible-sounding, correctly-cited sentence that is still wrong,
 or narration that reads like an instruction because the source text it
 quotes was written to look like one. That is why a human reviews every
 LLM-written reel before it publishes: `approve <id>` or `reject <id>
-[--reason <text>]` is the only way a draft reaches `--out`. Template/legacy
-(`--unit commit`) reels go through the same gate for consistency.
+[--reason <text>]` is the only way a story/release/recap draft reaches
+`--out`. `--unit commit` has no LLM-written path to gate — `--writer llm` is
+rejected for it — so its template reels publish straight into `--out`, with
+no draft step.
 
 ## Commands and flags
 
@@ -137,20 +141,20 @@ bun run src/cli.ts prune --repo <path> --out <dir> [--name <name>] [--ref <ref>]
 | `--repo <path>` | cwd | git repo to read |
 | `--name <name>` | basename of `--repo` | repo display name / feed slug; must match `/^[A-Za-z0-9][A-Za-z0-9._-]*$/` |
 | `--out <dir>` | `./reels-site` | output site directory (the public feed) |
-| `--drafts-dir <dir>` | `<repo>/.reels-drafts`, or `build.draftsDir` in `.reels.json` | where `--unit story` drafts live; refused if nested inside `--out` |
+| `--drafts-dir <dir>` | `<repo>/.reels-drafts`, or `build.draftsDir` in `.reels.json` | where `--unit story` drafts live; refused if nested inside `--out`; resolved relative to cwd. `build.draftsDir` instead resolves relative to the config file's own directory, not cwd |
 | `--config <path>` | `<repo>/.reels.json` if present, else built-in defaults | path to `.reels.json` |
 | `--ref <ref>` | `HEAD` | git ref to walk |
 | `--since <date>` | — | only commits authored since this **date** (`--unit commit` only; passed straight to `git rev-list --since`, not a ref/sha) |
 | `--until <date>` | — | only commits authored until this date, same caveat as `--since` |
 | `--limit <n>` | `10` | cap how many stories/change sets to draft or render this run; must be a positive integer |
 | `--all-history` | off | ignore the floor and the scan window and consider every unpublished/undrafted unit, oldest first; `--limit` is uncapped unless given explicitly |
-| `--scan <n>` | `500` | how many first-parent commits (or releases, for `--unit story`) back from `--ref` to consider; must be a positive integer |
+| `--scan <n>` | `500` for `--unit commit` (first-parent commits back from `--ref`), `6` for `--unit story` (releases back from `--ref`) | must be a positive integer |
 | `--force` | off | retry units that hit the retry cap (3 failed attempts), and regenerate a pending draft in place; published/approved reels are never re-rendered |
 | `--mode visual\|audio\|both` | `both` | `audio` skips Remotion rendering entirely |
 | `--tts elevenlabs\|none` | `elevenlabs` | narration provider |
 | `--unit commit\|story` | `story` | selection and writer path (see "Units") |
-| `--writer template\|llm` | `template` | `--unit commit` only: script writer |
-| `--model <provider/id>` | — | required for `--unit story` (always) and `--unit commit --writer llm`, e.g. `anthropic/claude-sonnet-5` |
+| `--writer template\|llm` | `template` | `--unit commit` only: script writer. `--unit commit --writer llm` is rejected — an LLM-written reel always needs the draft/approve gate, which `--unit commit` does not have; use `--unit story` for LLM narration |
+| `--model <provider/id>` | — | required for `--unit story` (always), e.g. `anthropic/claude-sonnet-5`; unused and unneeded for `--unit commit`, since its only allowed writer is `template` |
 | `--lang en\|de` | `en` | narration language |
 | `--repo-url <url>` | — | linked in the feed for commit URLs; omitting it on a later run keeps the previously stored value |
 | `--voice <id>` | `$DRAHT_SPEAK_VOICE_ID` or George | ElevenLabs voice id |
@@ -298,7 +302,9 @@ default shown.
   spend caps for `--unit story` (`--max-cost-usd`/`--max-llm-tokens`/
   `--max-tts-chars` override them per run). A run stops starting new
   stories the moment any cap is reached; stories already drafted are kept.
-  `build.draftsDir` overrides the default `<repo>/.reels-drafts` location.
+  `build.draftsDir` overrides the default `<repo>/.reels-drafts` location,
+  resolved relative to the config file's own directory (`--drafts-dir`
+  resolves relative to cwd instead).
 
 A regex string anywhere in this config is checked for balanced syntax and a
 conservative nested-quantifier shape before use (`ReelsConfigError` on
@@ -476,34 +482,48 @@ workflow instead checks out the public `draht-dev/draht` monorepo at a
 pinned commit into `.draht/`, installs its workspace there, and runs the CLI
 from inside it.
 
-Job graph (four jobs, minimal `permissions` per job):
+Job graph (five jobs, minimal `permissions` per job):
 
 - **`build`** (`contents: read`, push-triggered or a `workflow_dispatch`
-  with no `approve`/`reject` input) — installs `.draht`, builds `@draht/ai`,
-  optionally runs `prune`, then `build --unit story`, and uploads two
-  artifacts regardless of its own exit code (`if: !cancelled()`): the full
-  site (for `push`) and the drafts directory (for `push`, and for human
-  review via the artifact download). A failed story still leaves every
-  already-drafted story saved.
+  with no `approve`/`reject` input) — installs `.draht`, builds the PWA
+  (`npm run build:app`) and runs `site` once, unconditionally, to publish the
+  PWA shell into the site directory before anything else — this is what
+  makes a site exist at all on a repo's first run, even if the story build
+  below drafts nothing. It then builds `@draht/ai`, optionally runs `prune`,
+  then `build --unit story` (omitting `--model` unless the `model` dispatch
+  input was set, so `story.model` in `.github/reels.json` applies by
+  default), and uploads two artifacts regardless of its own exit code
+  (`if: !cancelled()`): the full site (for `push`) and the drafts directory
+  (for `push`, and for human review via the artifact download). A failed
+  story still leaves every already-drafted story saved.
 - **`publish`** (`contents: read`, a `workflow_dispatch` with `approve`
-  and/or `reject` set) — needs neither API key: it only runs `approve`/
-  `reject` against drafts already rendered by an earlier `build`, then
-  re-uploads the updated site/drafts artifacts.
-- **`push`** (`contents: write`, the only job with it) — downloads the site
-  and drafts artifacts, force-pushes each to its own branch (`reels-site`,
+  and/or `reject` set) — needs neither API key: it builds the PWA, runs
+  `approve`/`reject` against drafts already rendered by an earlier `build`,
+  runs `site` once (so an approval against a repo with no `reels-site`
+  branch yet still gets the app shell), then re-uploads the updated
+  site/drafts artifacts.
+- **`push`** (`contents: write`, the only job with it) — runs whenever
+  `build` produced a site or `publish` succeeded, regardless of whether
+  `build`'s story drafting itself failed; downloads the site and drafts
+  artifacts, force-pushes each to its own branch (`reels-site`,
   `reels-drafts`) as a single orphan commit.
-- **`deploy`** (`pages: write`, `id-token: write`) — deploys the Pages-only
-  artifact `build` or `publish` already uploaded (`.reels-state.json`
-  excluded — see "Privacy" and "Partial success" below).
+- **`deploy`** (`pages: write`, `id-token: write`) — same gate as `push`;
+  deploys the Pages-only artifact `build` or `publish` already uploaded
+  (`.reels-state.json` excluded — see "Privacy" and "Partial success"
+  below).
 - **`finalize`** — runs last regardless of the other jobs' outcome and fails
   the workflow run if `build`'s render step recorded a non-zero exit code,
-  even though `push`/`deploy` already published whatever did succeed.
+  even though `push`/`deploy` already published whatever did succeed — a
+  failed story turns the overall run red without discarding the stories
+  that did draft and the site/Pages update that did happen.
 
 `workflow_dispatch` inputs: `backfill` (render full history instead of just
-new releases/commits), `prune` (run `draht-reels prune` first), `model`/
-`max_cost_usd`/`max_llm_tokens`/`max_tts_chars` (override `build`'s
-defaults), and `approve`/`reject` (space-separated draft ids — setting
-either skips the build step entirely and runs the `publish` job instead).
+new releases/commits), `prune` (run `draht-reels prune` first), `model`
+(defaults to empty — `--model` is then omitted entirely so `story.model` in
+`.github/reels.json` applies instead)/`max_cost_usd`/`max_llm_tokens`/
+`max_tts_chars` (override `build`'s defaults), and `approve`/`reject`
+(space-separated draft ids — setting either skips the build job entirely and
+runs the `publish` job instead).
 
 ### Partial success
 
@@ -523,7 +543,7 @@ earlier, already-rendered story. The overall workflow run still ends up red
   `--tts none`.
 - **`requires @draht/ai to be built first`** — run `npm run build` in
   `packages/ai` (and `packages/telemetry`, its own dependency) before
-  `--unit story` or `--writer llm`.
+  `--unit story`.
 - **`--unit story needs a model`** — pass `--model <provider/id>`, or set
   `story.model` in `.reels.json`.
 - **`refusing --drafts-dir ... inside --out ...`** — drafts must live

@@ -6,7 +6,7 @@
 
 import { randomUUID } from "node:crypto";
 import { access, copyFile, cp, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { elevenLabsKeyFilePath, resolveElevenLabsApiKey } from "./api-key.ts";
 import {
 	assertValidSha,
@@ -52,7 +52,7 @@ import {
 	writeSyncRecap,
 } from "./release-writer.ts";
 import { buildReleaseGroups, listReleaseTags, type ReleaseGroup } from "./releases.ts";
-import { type Bundle, createBundle, publishAudioForRender, renderReel } from "./render.ts";
+import { assertSafeRenderKey, type Bundle, createBundle, publishAudioForRender, renderReel } from "./render.ts";
 import type { DraftScriptSnapshot } from "./review.ts";
 import { renderReviewMd } from "./review.ts";
 import {
@@ -293,6 +293,13 @@ function parseBuildArgs(argv: string[]): BuildArgs {
 	if (args.name !== undefined && !NAME_RE.test(args.name)) {
 		fail(`--name "${args.name}" must match ${NAME_RE} (used as a directory and URL path segment)`);
 	}
+	// `--unit commit` auto-publishes (no draft/approve step); an LLM writer's output must go through the gate.
+	// `--writer template` reels may still auto-publish.
+	if (args.unit === "commit" && args.writer === "llm") {
+		fail(
+			"--unit commit --writer llm would auto-publish LLM-written reels, bypassing the draft/approve gate; use --unit story, or --writer template for --unit commit",
+		);
+	}
 	return args;
 }
 
@@ -388,7 +395,7 @@ async function runPlanStory(args: BuildArgs, overrides: BuildOverrides): Promise
 
 	const name = repoName(args);
 	const outDir = resolve(args.out);
-	const draftsBaseDir = resolve(args.draftsDir ?? config.build.draftsDir ?? defaultDraftsDir(args.repo));
+	const draftsBaseDir = resolveDraftsBaseDir(args, config);
 	const maxTtsChars = args.maxTtsChars ?? config.build.maxTtsChars;
 
 	const git = overrides.git ?? runGit;
@@ -654,6 +661,25 @@ export async function runBuild(argv: string[], overrides: BuildOverrides = {}): 
 
 export function defaultDraftsDir(repo: string): string {
 	return join(resolve(repo), ".reels-drafts");
+}
+
+/**
+ * Resolves `--drafts-dir`/`build.draftsDir`/the default, in that priority order. `--drafts-dir` is a CLI flag
+ * and stays cwd-relative, same as every other path flag; `build.draftsDir` is a value from the config file, so
+ * a relative path in it means relative to that file's own directory, not whatever directory the CLI happened
+ * to run from. Mirrors the `args.config ?? join(args.repo, ".reels.json")` path {@link resolveReelsConfig}
+ * itself resolves against.
+ */
+function resolveDraftsBaseDir(
+	args: { repo: string; draftsDir?: string; config?: string },
+	config: Pick<ReelsConfig, "build">,
+): string {
+	if (args.draftsDir !== undefined) return resolve(args.draftsDir);
+	if (config.build.draftsDir !== undefined) {
+		const configPath = args.config ?? join(args.repo, ".reels.json");
+		return resolve(dirname(configPath), config.build.draftsDir);
+	}
+	return defaultDraftsDir(args.repo);
 }
 
 /** Sum of the sanitized narration lengths `tts.synthesize` would actually send, counted the same way `tts.ts`'s providers derive what they send (`normalizeBeats` then, for v3/v4 models, `sanitizeForV4`). */
@@ -941,84 +967,98 @@ async function renderReleaseArtifactDraft(
 		now: () => string;
 	},
 ): Promise<void> {
+	// `artifact.id` (a `release-<tag>`/`recap-<tag>` id) is never a git sha; validated here, before the TTS
+	// call below, so a bad id fails before paying for narration, not after (it was already validated by
+	// `releaseOverviewId`/`recapId` at construction, but `publishAudioForRender` needs it as a safe path
+	// component regardless — checking again here keeps the failure before the paid work, not inside it).
+	assertSafeRenderKey(artifact.id);
+
 	const finalDir = join(opts.draftsDir, artifact.id);
 	const tmpDir = join(opts.draftsDir, `.tmp-${randomUUID()}`);
 	await mkdir(tmpDir, { recursive: true });
 
-	const narration = await opts.tts.synthesize(artifact.script.scenes, tmpDir);
-	let video: string | undefined;
-	let poster: string | undefined;
-	let durationMs = narration.transcript.reduce((max, s) => Math.max(max, s.endMs), 0);
-	if (opts.renderBundle) {
-		const videoPath = join(tmpDir, "video.mp4");
-		const posterPath = join(tmpDir, "poster.jpg");
-		const audioSrc = narration.audioPath
-			? await publishAudioForRender(opts.renderBundle, artifact.id, narration.audioPath)
-			: undefined;
-		const result = await renderReel({
-			bundle: opts.renderBundle,
-			props: { scenes: artifact.script.scenes, transcript: narration.transcript, audioSrc },
-			outVideoPath: videoPath,
-			outPosterPath: posterPath,
-			concurrency: opts.concurrency,
-		});
-		video = "video.mp4";
-		poster = "poster.jpg";
-		durationMs = Math.max(durationMs, Math.round((result.durationInFrames / result.fps) * 1000));
-	}
-	if (narration.audioPath) {
-		const target = join(tmpDir, "audio.mp3");
-		if (narration.audioPath !== target) await copyFile(narration.audioPath, target);
-	}
+	let publishedToFinalDir = false;
+	try {
+		const narration = await opts.tts.synthesize(artifact.script.scenes, tmpDir);
+		let video: string | undefined;
+		let poster: string | undefined;
+		let durationMs = narration.transcript.reduce((max, s) => Math.max(max, s.endMs), 0);
+		if (opts.renderBundle) {
+			const videoPath = join(tmpDir, "video.mp4");
+			const posterPath = join(tmpDir, "poster.jpg");
+			const audioSrc = narration.audioPath
+				? await publishAudioForRender(opts.renderBundle, artifact.id, narration.audioPath)
+				: undefined;
+			const result = await renderReel({
+				bundle: opts.renderBundle,
+				props: { scenes: artifact.script.scenes, transcript: narration.transcript, audioSrc },
+				outVideoPath: videoPath,
+				outPosterPath: posterPath,
+				concurrency: opts.concurrency,
+			});
+			video = "video.mp4";
+			poster = "poster.jpg";
+			durationMs = Math.max(durationMs, Math.round((result.durationInFrames / result.fps) * 1000));
+		}
+		if (narration.audioPath) {
+			const target = join(tmpDir, "audio.mp3");
+			if (narration.audioPath !== target) await copyFile(narration.audioPath, target);
+		}
 
-	const entry: ReelEntry = {
-		id: artifact.id,
-		commits: [],
-		title: artifact.title,
-		authors: [],
-		date: opts.now(),
-		durationMs,
-		video,
-		audio: narration.audioPath ? "audio.mp3" : undefined,
-		poster,
-		scenes: artifact.script.scenes,
-		transcript: narration.transcript,
-		stats: { files: 0, additions: 0, deletions: 0 },
-		kind: artifact.kind,
-		release: artifact.release,
-		releaseMeta: artifact.releaseMeta,
-		sources: toPublicSources(artifact.sources),
-		writer: artifact.writer,
-		recap: artifact.recap,
-	};
-
-	// `DraftMeta.origin` has no "release"/"recap" option (it documents a *story's* provenance); "commit" is an
-	// inert placeholder here — review.md's header line is cosmetic for these two kinds, never validated.
-	const scriptSnapshot: DraftScriptSnapshot = {
-		script: artifact.script,
-		sources: Array.from(artifact.sources.values()).map((record) => ({
-			id: record.id,
-			kind: record.kind,
-			label: record.label,
-			url: record.url,
-			text: record.text,
-			included: record.included !== false,
-		})),
-		meta: {
-			title: entry.title,
-			origin: "commit",
+		const entry: ReelEntry = {
+			id: artifact.id,
+			commits: [],
+			title: artifact.title,
+			authors: [],
+			date: opts.now(),
+			durationMs,
+			video,
+			audio: narration.audioPath ? "audio.mp3" : undefined,
+			poster,
+			scenes: artifact.script.scenes,
+			transcript: narration.transcript,
+			stats: { files: 0, additions: 0, deletions: 0 },
+			kind: artifact.kind,
 			release: artifact.release,
+			releaseMeta: artifact.releaseMeta,
+			sources: toPublicSources(artifact.sources),
 			writer: artifact.writer,
-			repaired: artifact.repaired,
-			costUsd: artifact.costUsd,
-			createdAt: opts.now(),
-		},
-	};
+			recap: artifact.recap,
+		};
 
-	await writeFile(join(tmpDir, "entry.json"), `${JSON.stringify(entry, null, "\t")}\n`);
-	await writeFile(join(tmpDir, "script.json"), `${JSON.stringify(scriptSnapshot, null, "\t")}\n`);
-	await writeFile(join(tmpDir, "review.md"), renderReviewMd(entry, scriptSnapshot));
-	await replaceDir(finalDir, tmpDir);
+		// `DraftMeta.origin` has no "release"/"recap" option (it documents a *story's* provenance); "commit" is an
+		// inert placeholder here — review.md's header line is cosmetic for these two kinds, never validated.
+		const scriptSnapshot: DraftScriptSnapshot = {
+			script: artifact.script,
+			sources: Array.from(artifact.sources.values()).map((record) => ({
+				id: record.id,
+				kind: record.kind,
+				label: record.label,
+				url: record.url,
+				text: record.text,
+				included: record.included !== false,
+			})),
+			meta: {
+				title: entry.title,
+				origin: "commit",
+				release: artifact.release,
+				writer: artifact.writer,
+				repaired: artifact.repaired,
+				costUsd: artifact.costUsd,
+				createdAt: opts.now(),
+			},
+		};
+
+		await writeFile(join(tmpDir, "entry.json"), `${JSON.stringify(entry, null, "\t")}\n`);
+		await writeFile(join(tmpDir, "script.json"), `${JSON.stringify(scriptSnapshot, null, "\t")}\n`);
+		await writeFile(join(tmpDir, "review.md"), renderReviewMd(entry, scriptSnapshot));
+		await replaceDir(finalDir, tmpDir);
+		publishedToFinalDir = true;
+	} finally {
+		// `replaceDir` already moved/removed `tmpDir` on success; only a failure before that point leaves it
+		// behind (e.g. a render crash after the TTS call above already ran and was paid for).
+		if (!publishedToFinalDir) await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+	}
 }
 
 /**
@@ -1178,7 +1218,7 @@ async function runBuildStory(args: BuildArgs, overrides: BuildOverrides): Promis
 
 	const name = repoName(args);
 	const outDir = resolve(args.out);
-	const draftsBaseDir = resolve(args.draftsDir ?? config.build.draftsDir ?? defaultDraftsDir(args.repo));
+	const draftsBaseDir = resolveDraftsBaseDir(args, config);
 	if (isNestedInside(outDir, draftsBaseDir)) {
 		fail(
 			`refusing --drafts-dir "${draftsBaseDir}" inside --out "${outDir}": drafts must never land in the public feed`,
@@ -1543,7 +1583,7 @@ export async function runRelease(argv: string[], overrides: BuildOverrides = {})
 
 	const name = repoName(args);
 	const outDir = resolve(args.out);
-	const draftsBaseDir = resolve(args.draftsDir ?? config.build.draftsDir ?? defaultDraftsDir(args.repo));
+	const draftsBaseDir = resolveDraftsBaseDir(args, config);
 	if (isNestedInside(outDir, draftsBaseDir)) {
 		fail(
 			`refusing --drafts-dir "${draftsBaseDir}" inside --out "${outDir}": drafts must never land in the public feed`,
@@ -1745,7 +1785,7 @@ async function resolveDraftPaths(
 ): Promise<{ name: string; draftsDir: string; draftsBaseDir: string; outDir: string }> {
 	const config = await resolveReelsConfig(args);
 	const name = repoName(args);
-	const draftsBaseDir = resolve(args.draftsDir ?? config.build.draftsDir ?? defaultDraftsDir(args.repo));
+	const draftsBaseDir = resolveDraftsBaseDir(args, config);
 	return { name, draftsDir: join(draftsBaseDir, name), draftsBaseDir, outDir: resolve(args.out) };
 }
 
@@ -1874,6 +1914,28 @@ async function updateReleasePlaylist(outDir: string, name: string, tag: string, 
 	await publishFeed({ outDir, repo: { name }, entries: [], playlists: mergePlaylists(feed?.playlists, [playlist]) });
 }
 
+/** A draft's `entry.json` stores `video`/`audio`/`poster` (and `deepDive`'s own) relative to the draft dir
+ * itself, since the draft and its media are colocated. `approve` relocates that media to `reels/<id>/`, so the
+ * published entry's paths must gain that same prefix — exactly what a non-draft `build` already writes
+ * directly (`runBuild`'s `video = "reels/${sha}/video.mp4"`). */
+function withPublishedMediaPaths(entry: ReelEntry, id: string): ReelEntry {
+	const prefix = (path: string | undefined) => (path === undefined ? undefined : `reels/${id}/${path}`);
+	return {
+		...entry,
+		video: prefix(entry.video),
+		audio: prefix(entry.audio),
+		poster: prefix(entry.poster),
+		deepDive: entry.deepDive
+			? {
+					...entry.deepDive,
+					video: prefix(entry.deepDive.video),
+					audio: prefix(entry.deepDive.audio),
+					poster: prefix(entry.deepDive.poster),
+				}
+			: undefined,
+	};
+}
+
 /** `draht-reels approve <id>…`: publishes a draft's media and feed entry (same atomic media → feed → repos.json order `publishFeed` already uses), updates that release's playlist, removes the draft, and records the approval in state. Idempotent: approving an id with no pending draft is a no-op. */
 export async function runApprove(argv: string[]): Promise<void> {
 	const args = parseApproveArgs(argv);
@@ -1896,7 +1958,15 @@ export async function runApprove(argv: string[]): Promise<void> {
 			continue;
 		}
 
-		const entry = await readJsonFile<ReelEntry>(join(draftDir, "entry.json"));
+		const draftEntry = await readJsonFile<ReelEntry>(join(draftDir, "entry.json"));
+		if (draftEntry.id !== id) {
+			console.error(
+				`draht-reels: refusing to approve "${id}": its entry.json carries id "${draftEntry.id}", which does not match the draft directory`,
+			);
+			process.exitCode = 1;
+			continue;
+		}
+		const entry = withPublishedMediaPaths(draftEntry, id);
 		const finalDir = join(mediaDir, id);
 		const mediaTmp = join(mediaDir, `.tmp-${id}-${randomUUID()}`);
 		await cp(draftDir, mediaTmp, { recursive: true });

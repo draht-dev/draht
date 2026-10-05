@@ -556,3 +556,40 @@ describe("approve/reject: invalid release ids are refused", () => {
 		}
 	});
 });
+
+describe("release artifact draft: cleans up its .tmp-<uuid> dir on render failure after TTS", () => {
+	test(
+		"a release overview draft that fails after TTS leaves no .tmp-* directory behind",
+		withRepo(async (repo) => {
+			addFeatureBranchMerge(repo, { subject: "Merge feature A" });
+			addFeatureBranchMerge(repo, { subject: "Merge feature B" });
+			repo.tag("v1.0.0");
+
+			const out = tmpDir("release-out-");
+			const drafts = tmpDir("release-drafts-");
+			try {
+				// Simulates a render failure that happens only after the (paid) TTS call already returned: the
+				// narration "succeeds" with an audio path that does not actually exist, so the post-synthesize
+				// copyFile in renderReleaseArtifactDraft throws.
+				const failingAfterTts = {
+					synthesize: async () => ({
+						scenes: [],
+						transcript: [],
+						audioPath: join(drafts, "narration-that-does-not-exist.mp3"),
+					}),
+				};
+				const overrides: BuildOverrides = { complete: fallingBackCompleter(), tts: failingAfterTts };
+
+				const result = await runRelease(releaseArgv(["v1.0.0"], repo.dir, drafts, out), overrides);
+				expect(result.failed).toBe(1);
+				expect(result.published).toBe(0);
+
+				const leftoverTmpDirs = readdirSync(join(drafts, "demo")).filter((e) => e.startsWith(".tmp-"));
+				expect(leftoverTmpDirs).toEqual([]);
+			} finally {
+				rmSync(out, { recursive: true, force: true });
+				rmSync(drafts, { recursive: true, force: true });
+			}
+		}),
+	);
+});

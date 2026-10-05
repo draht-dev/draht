@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { BuildOverrides } from "../src/cli.ts";
@@ -361,6 +361,118 @@ describe("build: a pending draft is not regenerated without --force", () => {
 				const result3 = await runBuild(baseArgv(repo.dir, drafts, out, ["--limit", "10", "--force"]), overrides);
 				expect(result3.published).toBe(1);
 				expect(readDraftIds(drafts, "demo")).toEqual([mergeSha]);
+			} finally {
+				cleanupGitRepo(repo);
+				rmSync(out, { recursive: true, force: true });
+				rmSync(drafts, { recursive: true, force: true });
+			}
+		}),
+	);
+});
+
+/** Hand-writes a draft dir the way `runBuildStory`/`renderReleaseArtifactDraft` would, with media paths
+ * relative to the draft dir itself (`video.mp4`, `deep/video.mp4`, …), for tests that need to assert what
+ * `approve` does to those paths without paying for a real TTS/render pipeline. */
+function writeDraft(draftsDir: string, name: string, id: string, entry: ReelEntry): void {
+	const dir = join(draftsDir, name, id);
+	mkdirSync(join(dir, "deep"), { recursive: true });
+	writeFileSync(join(dir, "video.mp4"), "video-bytes");
+	writeFileSync(join(dir, "audio.mp3"), "audio-bytes");
+	writeFileSync(join(dir, "poster.jpg"), "poster-bytes");
+	writeFileSync(join(dir, "deep", "video.mp4"), "deep-video-bytes");
+	writeFileSync(join(dir, "deep", "audio.mp3"), "deep-audio-bytes");
+	writeFileSync(join(dir, "deep", "poster.jpg"), "deep-poster-bytes");
+	writeFileSync(join(dir, "entry.json"), `${JSON.stringify(entry, null, "\t")}\n`);
+}
+
+const DRAFT_ID = "a".repeat(40);
+
+function draftStoryEntry(id: string): ReelEntry {
+	return {
+		id,
+		commits: [id.slice(0, 12)],
+		title: "feat: add the widget factory",
+		authors: ["Ada Lovelace"],
+		date: "2024-01-01T00:00:00Z",
+		durationMs: 1000,
+		video: "video.mp4",
+		audio: "audio.mp3",
+		poster: "poster.jpg",
+		scenes: [],
+		transcript: [],
+		stats: { files: 1, additions: 2, deletions: 0 },
+		kind: "story",
+		deepDive: {
+			durationMs: 500,
+			video: "deep/video.mp4",
+			audio: "deep/audio.mp3",
+			poster: "deep/poster.jpg",
+			scenes: [],
+			transcript: [],
+		},
+	};
+}
+
+describe("approve: rewrites draft-relative media paths to reels/<id>/... (critical)", () => {
+	test(
+		"the published entry's video/audio/poster and deepDive media all gain the reels/<id>/ prefix",
+		withRepo(async (repo) => {
+			const out = tmpDir("gate-out-");
+			const drafts = tmpDir("gate-drafts-");
+			try {
+				writeDraft(drafts, "demo", DRAFT_ID, draftStoryEntry(DRAFT_ID));
+
+				await runApprove(targetArgv(repo.dir, drafts, out, [DRAFT_ID]));
+
+				const feed = JSON.parse(readFileSync(join(out, "demo", "feed.json"), "utf-8")) as Feed;
+				const published = feed.reels.find((r) => r.id === DRAFT_ID);
+				expect(published?.video).toBe(`reels/${DRAFT_ID}/video.mp4`);
+				expect(published?.audio).toBe(`reels/${DRAFT_ID}/audio.mp3`);
+				expect(published?.poster).toBe(`reels/${DRAFT_ID}/poster.jpg`);
+				expect(published?.deepDive?.video).toBe(`reels/${DRAFT_ID}/deep/video.mp4`);
+				expect(published?.deepDive?.audio).toBe(`reels/${DRAFT_ID}/deep/audio.mp3`);
+				expect(published?.deepDive?.poster).toBe(`reels/${DRAFT_ID}/deep/poster.jpg`);
+
+				// The rewritten paths must resolve to where approve actually put the media.
+				expect(readFileSync(join(out, "demo", published?.video as string), "utf-8")).toBe("video-bytes");
+				expect(readFileSync(join(out, "demo", published?.deepDive?.video as string), "utf-8")).toBe(
+					"deep-video-bytes",
+				);
+			} finally {
+				cleanupGitRepo(repo);
+				rmSync(out, { recursive: true, force: true });
+				rmSync(drafts, { recursive: true, force: true });
+			}
+		}),
+	);
+});
+
+describe("approve: refuses a draft whose entry.json id does not match the directory", () => {
+	test(
+		"approve fails and does not publish when entry.json's id disagrees with the draft dir",
+		withRepo(async (repo) => {
+			const out = tmpDir("gate-out-");
+			const drafts = tmpDir("gate-drafts-");
+			try {
+				const wrongId = "b".repeat(40);
+				writeDraft(drafts, "demo", DRAFT_ID, draftStoryEntry(wrongId));
+
+				const originalError = console.error;
+				let loggedError = "";
+				console.error = (...args: unknown[]) => {
+					loggedError += args.map(String).join(" ");
+				};
+				try {
+					await runApprove(targetArgv(repo.dir, drafts, out, [DRAFT_ID]));
+				} finally {
+					console.error = originalError;
+				}
+
+				expect(process.exitCode).toBe(1);
+				process.exitCode = 0;
+				expect(loggedError).toContain(DRAFT_ID);
+				expect(() => readFileSync(join(out, "demo", "feed.json"), "utf-8")).toThrow();
+				expect(readDraftIds(drafts, "demo")).toContain(DRAFT_ID);
 			} finally {
 				cleanupGitRepo(repo);
 				rmSync(out, { recursive: true, force: true });

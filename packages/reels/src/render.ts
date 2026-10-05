@@ -8,7 +8,6 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bundle } from "@remotion/bundler";
 import { renderMedia, renderStill, selectComposition } from "@remotion/renderer";
-import { assertValidSha } from "./collect.ts";
 import { REEL_COMPOSITION_ID, type ReelFrameProps } from "./remotion/props.ts";
 
 const ENTRY_POINT = fileURLToPath(new URL("./remotion/index.tsx", import.meta.url));
@@ -29,19 +28,32 @@ export async function createBundle(): Promise<Bundle> {
 	return { serveUrl };
 }
 
+/** A safe path component: never a git object id (release/recap ids like `release-v1.2.3` are not shas), only
+ * ever used to build a path under the bundle's served directory, never passed to `git`. */
+const SAFE_RENDER_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+export function assertSafeRenderKey(key: string): string {
+	if (!SAFE_RENDER_KEY_RE.test(key)) {
+		throw new Error(`refusing to use "${key}" as a render key: not a safe filename`);
+	}
+	return key;
+}
+
 /**
  * Headless Chrome cannot load an absolute filesystem path as `<Audio src>`.
- * Copies a change set's synthesized narration audio into the running
- * bundle's served directory and returns a root-relative URL (the same shape
- * `staticFile()` produces) that the browser can actually fetch.
+ * Copies a render's synthesized narration audio into the running bundle's
+ * served directory and returns a root-relative URL (the same shape
+ * `staticFile()` produces) that the browser can actually fetch. `renderKey`
+ * is a path component, not necessarily a git sha (story drafts use one,
+ * release/recap drafts use their `release-<tag>`/`recap-<tag>` id).
  */
 export async function publishAudioForRender(
 	bundle: Bundle,
-	changeSetId: string,
+	renderKey: string,
 	sourceAudioPath: string,
 ): Promise<string> {
-	assertValidSha(changeSetId);
-	const relativePath = `audio/${changeSetId}.mp3`;
+	assertSafeRenderKey(renderKey);
+	const relativePath = `audio/${renderKey}.mp3`;
 	const destination = join(bundle.serveUrl, relativePath);
 	await mkdir(dirname(destination), { recursive: true });
 	await copyFile(sourceAudioPath, destination);

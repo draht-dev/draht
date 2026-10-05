@@ -8,10 +8,10 @@ import type { TimedWord } from "../../contract.ts";
 import { CAPTION_FONT_SIZE, CAPTION_MAX_LINES, CAPTION_PADDING_X, SAFE_ZONE_WIDTH } from "../props.ts";
 
 /**
- * A chunk's word count ceiling. No longer the primary limit — the character
- * budget below does the real work — but a backstop against a chunk of many
- * short words (e.g. "a a a a a a a a a a a a a a a a") still reading as one
- * giant block.
+ * A chunk's word count ceiling. No longer the primary limit — the line-fit
+ * simulation below does the real work — but a backstop against a chunk of
+ * many short words (e.g. "a a a a a a a a a a a a a a a a") still reading as
+ * one giant block.
  */
 const MAX_CHUNK_WORDS = 16;
 /** Below this many words, a chunk reads as an orphaned fragment; avoided when another split is available. */
@@ -33,8 +33,18 @@ const FUNCTION_WORD_PATTERN = /^(the|a|an|to|of|in|and|or|but|for|with|at|by|fro
 const AVG_CHAR_WIDTH_EM = 0.5;
 
 const CAPTION_CONTENT_WIDTH = SAFE_ZONE_WIDTH - CAPTION_PADDING_X * 2;
-const CHARS_PER_LINE = Math.floor(CAPTION_CONTENT_WIDTH / (CAPTION_FONT_SIZE * AVG_CHAR_WIDTH_EM));
-/** Max characters (including inter-word spaces) a chunk/piece may contain and still fit {@link CAPTION_MAX_LINES} lines at the caption's font size and width. */
+/** Characters that fit one caption line at {@link AVG_CHAR_WIDTH_EM}'s estimated glyph width. */
+export const CHARS_PER_LINE = Math.floor(CAPTION_CONTENT_WIDTH / (CAPTION_FONT_SIZE * AVG_CHAR_WIDTH_EM));
+/**
+ * Max characters (including inter-word spaces) a piece may contain and still
+ * fit {@link CAPTION_MAX_LINES} lines, as a flat character sum. Used only by
+ * the no-word-timing fallback ({@link currentSentence}), which has no word
+ * boundaries to simulate a real wrap against. The word-timed path
+ * ({@link chunkWords}) uses {@link simulateLineCount} instead — a character
+ * sum can't tell a chunk that wraps efficiently from one wasted by a single
+ * long unbreakable token (a path, URL, or identifier), which is exactly the
+ * case it used to get wrong: the sum fit, but the real layout needed 3 lines.
+ */
 export const CAPTION_CHAR_BUDGET = CHARS_PER_LINE * CAPTION_MAX_LINES;
 
 function textLength(words: readonly string[]): number {
@@ -50,26 +60,137 @@ function endsOnFunctionWord(words: readonly TimedWord[]): boolean {
 	return last !== undefined && FUNCTION_WORD_PATTERN.test(bareWord(last.text));
 }
 
-function rangeLength(words: readonly TimedWord[], from: number, to: number): number {
-	return textLength(words.slice(from, to + 1).map((w) => w.text));
+/**
+ * Splits `word` at its preferred break points: right after a `/`, `.`, `-`,
+ * or `_`, and right before a camelCase capital. Mirrors the `<wbr/>`
+ * placement in {@link Caption.tsx}, so the browser only ever breaks a token
+ * where this function already decided it could.
+ */
+export function wordBreakSegments(word: string): string[] {
+	const breaks: number[] = [];
+	for (let i = 1; i < word.length; i++) {
+		const prev = word[i - 1];
+		const cur = word[i];
+		if (prev === "/" || prev === "." || prev === "-" || prev === "_") breaks.push(i);
+		else if (/[a-z0-9]/.test(prev) && /[A-Z]/.test(cur)) breaks.push(i);
+	}
+	if (breaks.length === 0) return [word];
+	const segments: string[] = [];
+	let start = 0;
+	for (const pos of breaks) {
+		segments.push(word.slice(start, pos));
+		start = pos;
+	}
+	segments.push(word.slice(start));
+	return segments;
+}
+
+/**
+ * `word` split into the pieces a greedy line-wrap would actually place: its
+ * break-point segments, hard-chunked further if a segment is itself still
+ * wider than one line (no break point gave the browser anywhere to go).
+ */
+function wrapAtoms(word: string, charsPerLine: number): string[] {
+	if (word.length <= charsPerLine) return [word];
+	const atoms: string[] = [];
+	for (const segment of wordBreakSegments(word)) {
+		if (segment.length <= charsPerLine) {
+			atoms.push(segment);
+			continue;
+		}
+		for (let i = 0; i < segment.length; i += charsPerLine) atoms.push(segment.slice(i, i + charsPerLine));
+	}
+	return atoms;
+}
+
+/**
+ * Simulates greedy word-wrap layout (the same algorithm a browser uses for
+ * `white-space: normal`) and returns how many lines `words` needs at
+ * `charsPerLine`. Words wrap whole; a word wider than one line is broken at
+ * its {@link wordBreakSegments} points, each piece continuing immediately
+ * (no inter-word space) on whatever line has room, exactly like a `<wbr/>`.
+ */
+export function simulateLineCount(words: readonly string[], charsPerLine: number): number {
+	let lines = 1;
+	let col = 0;
+	for (const word of words) {
+		const atoms = wrapAtoms(word, charsPerLine);
+		for (let i = 0; i < atoms.length; i++) {
+			const atom = atoms[i];
+			const spaceLen = i === 0 && col > 0 ? 1 : 0;
+			if (col + spaceLen + atom.length <= charsPerLine) {
+				col += spaceLen + atom.length;
+			} else if (col === 0) {
+				// Atom alone is wider than a full line even at line start (e.g. a
+				// break-point-free token); place it anyway rather than loop forever.
+				col = atom.length;
+			} else {
+				lines += 1;
+				col = atom.length;
+			}
+		}
+	}
+	return lines;
+}
+
+/** Whether `words`, laid out as a caption, fits {@link CAPTION_MAX_LINES} lines. */
+function fitsCaption(words: readonly string[]): boolean {
+	return simulateLineCount(words, CHARS_PER_LINE) <= CAPTION_MAX_LINES;
+}
+
+/** Number of lines `word` alone needs, with its own break points, at the caption's width. */
+export function wordLineCount(word: string): number {
+	return simulateLineCount([word], CHARS_PER_LINE);
+}
+
+/**
+ * Groups `word`'s break-point segments into pages that each fit
+ * {@link CAPTION_MAX_LINES} lines on their own, for a single token so long
+ * it alone needs more lines than the caption has. Used to page through such
+ * a token over its own spoken duration instead of clamping it. Returns
+ * `[word]` unchanged when it has no break points (nothing to split on) or
+ * already fits.
+ */
+export function splitWordIntoPages(word: string): string[] {
+	if (wordLineCount(word) <= CAPTION_MAX_LINES) return [word];
+	const segments = wordBreakSegments(word);
+	if (segments.length <= 1) return [word];
+
+	const pages: string[] = [];
+	let current = "";
+	for (const segment of segments) {
+		const candidate = current + segment;
+		if (current.length > 0 && simulateLineCount([candidate], CHARS_PER_LINE) > CAPTION_MAX_LINES) {
+			pages.push(current);
+			current = segment;
+		} else {
+			current = candidate;
+		}
+	}
+	if (current.length > 0) pages.push(current);
+	return pages.length > 0 ? pages : [word];
+}
+
+function rangeFits(words: readonly TimedWord[], from: number, to: number): boolean {
+	return fitsCaption(words.slice(from, to + 1).map((w) => w.text));
 }
 
 /**
  * Picks the best index `i` to split `words` into `words[0..i]` and
  * `words[i+1..]` (both non-empty). Prefers, in order: a split where both
- * sides fit the character budget; among those, one that lands on a clause
- * boundary (comma/semicolon/colon); among those, one that doesn't leave an
- * orphan side under {@link MIN_CHUNK_WORDS} or end the first side on a
- * function word; and ties break toward the most balanced (closest to the
- * middle) split.
+ * sides fit {@link CAPTION_MAX_LINES} lines; among those, one that lands on
+ * a clause boundary (comma/semicolon/colon); among those, one that doesn't
+ * leave an orphan side under {@link MIN_CHUNK_WORDS} or end the first side
+ * on a function word; and ties break toward the most balanced (closest to
+ * the middle) split.
  */
-function pickSplitIndex(words: readonly TimedWord[], budget: number): number {
+function pickSplitIndex(words: readonly TimedWord[]): number {
 	const n = words.length;
-	const inBudget: number[] = [];
+	const inFit: number[] = [];
 	for (let i = 0; i < n - 1; i++) {
-		if (rangeLength(words, 0, i) <= budget && rangeLength(words, i + 1, n - 1) <= budget) inBudget.push(i);
+		if (rangeFits(words, 0, i) && rangeFits(words, i + 1, n - 1)) inFit.push(i);
 	}
-	const candidates = inBudget.length > 0 ? inBudget : [Math.max(0, Math.floor(n / 2) - 1)];
+	const candidates = inFit.length > 0 ? inFit : [Math.max(0, Math.floor(n / 2) - 1)];
 
 	const mid = (n - 1) / 2;
 	const score = (i: number): number => {
@@ -85,20 +206,22 @@ function pickSplitIndex(words: readonly TimedWord[], budget: number): number {
 
 /**
  * Splits one sentence's words into caption chunks: kept whole when it
- * already fits {@link CAPTION_CHAR_BUDGET} and {@link MAX_CHUNK_WORDS} — the
- * common case, and the fix for captions that used to be cut after about one
- * line regardless of how much room the box actually had — otherwise
- * recursively bisected via {@link pickSplitIndex} until every piece fits.
+ * already fits {@link CAPTION_MAX_LINES} lines (simulated) and
+ * {@link MAX_CHUNK_WORDS} — the common case — otherwise recursively bisected
+ * via {@link pickSplitIndex} until every piece fits. A lone word is always
+ * its own chunk regardless of fit: it can't be split further without
+ * changing word count (see {@link splitWordIntoPages} for how `Caption.tsx`
+ * pages through one that's still too long on its own).
  */
-function splitSentenceIntoChunks(words: readonly TimedWord[], budget: number): TimedWord[][] {
+function splitSentenceIntoChunks(words: readonly TimedWord[]): TimedWord[][] {
 	if (words.length === 0) return [];
 	if (words.length === 1) return [[...words]];
-	if (textLength(words.map((w) => w.text)) <= budget && words.length <= MAX_CHUNK_WORDS) return [[...words]];
+	if (fitsCaption(words.map((w) => w.text)) && words.length <= MAX_CHUNK_WORDS) return [[...words]];
 
-	const splitAt = pickSplitIndex(words, budget);
+	const splitAt = pickSplitIndex(words);
 	const left = words.slice(0, splitAt + 1);
 	const right = words.slice(splitAt + 1);
-	return [...splitSentenceIntoChunks(left, budget), ...splitSentenceIntoChunks(right, budget)];
+	return [...splitSentenceIntoChunks(left), ...splitSentenceIntoChunks(right)];
 }
 
 function groupIntoSentences(words: TimedWord[]): TimedWord[][] {
@@ -122,7 +245,7 @@ function groupIntoSentences(words: TimedWord[]): TimedWord[][] {
  * lines as-is is shown whole instead of being pre-emptively cut.
  */
 export function chunkWords(words: TimedWord[]): TimedWord[][] {
-	return groupIntoSentences(words).flatMap((sentence) => splitSentenceIntoChunks(sentence, CAPTION_CHAR_BUDGET));
+	return groupIntoSentences(words).flatMap((sentence) => splitSentenceIntoChunks(sentence));
 }
 
 /**

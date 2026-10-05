@@ -1,13 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import type { TimedWord } from "../src/contract.ts";
+import { CAPTION_MAX_LINES } from "../src/remotion/props.ts";
 import {
 	CAPTION_CHAR_BUDGET,
+	CHARS_PER_LINE,
 	chunkWords,
 	currentSentence,
 	currentWordIndex,
 	findChunkForWord,
+	simulateLineCount,
 	splitIntoBudgetChunks,
 	splitSentences,
+	splitWordIntoPages,
+	wordBreakSegments,
+	wordLineCount,
 } from "../src/remotion/scenes/caption-logic.ts";
 
 function words(...texts: string[]): TimedWord[] {
@@ -172,6 +178,93 @@ describe("chunkWords", () => {
 				for (const chunk of chunks) expect(chunk.length).toBeGreaterThanOrEqual(2);
 			}
 		}
+	});
+});
+
+function chunkLineCount(chunk: TimedWord[]): number {
+	return simulateLineCount(
+		chunk.map((w) => w.text),
+		CHARS_PER_LINE,
+	);
+}
+
+describe("chunkWords: real wrap simulation (regression for frame_013-016.jpg)", () => {
+	// The reported defect: a character-SUM budget let "Here is <58-char path>." through as one
+	// chunk because the sum fit, even though the unbreakable path wasted most of a line and the
+	// real layout needed 3 lines, line-clamping to "bug-…" for ~9s.
+	test("a sentence with one long unbreakable path never simulates to more than CAPTION_MAX_LINES lines", () => {
+		const text = "Here is packages/coding-agent/src/modes/interactive/bug-report.ts.";
+		const chunks = chunkWords(words(...text.split(" ")));
+		expect(flatten(chunks)).toEqual(text.split(" "));
+		for (const chunk of chunks) expect(chunkLineCount(chunk)).toBeLessThanOrEqual(CAPTION_MAX_LINES);
+	});
+
+	// A single-word chunk that alone needs more than CAPTION_MAX_LINES lines isn't split by
+	// chunkWords (that would desync the chunk/word-index mapping Caption.tsx relies on) — instead
+	// Caption.tsx pages through it via splitWordIntoPages. Every multi-word chunk must still fit.
+	test("a long URL fits per chunk, or (as a lone word) pages into pieces that each fit", () => {
+		const text =
+			"See the details at https://github.com/draht-dev/draht/blob/main/packages/reels/src/remotion/scenes/caption-logic.ts for the full diff.";
+		const chunks = chunkWords(words(...text.split(" ")));
+		expect(flatten(chunks)).toEqual(text.split(" "));
+		for (const chunk of chunks) {
+			if (chunk.length === 1) {
+				for (const page of splitWordIntoPages(chunk[0].text)) {
+					expect(simulateLineCount([page], CHARS_PER_LINE)).toBeLessThanOrEqual(CAPTION_MAX_LINES);
+				}
+			} else {
+				expect(chunkLineCount(chunk)).toBeLessThanOrEqual(CAPTION_MAX_LINES);
+			}
+		}
+	});
+
+	test("a sentence with several long identifiers never simulates to more than CAPTION_MAX_LINES lines per chunk", () => {
+		const text =
+			"The InteractiveBugReportModeController now calls validateReleaseArtifactSignature before escalating to the destructiveBoundaryRevalidation step.";
+		const chunks = chunkWords(words(...text.split(" ")));
+		expect(flatten(chunks)).toEqual(text.split(" "));
+		for (const chunk of chunks) expect(chunkLineCount(chunk)).toBeLessThanOrEqual(CAPTION_MAX_LINES);
+	});
+
+	test("never breaks a long token except at one of its own break points", () => {
+		const path = "packages/coding-agent/src/modes/interactive/bug-report.ts";
+		const segments = wordBreakSegments(path);
+		expect(segments.join("")).toBe(path);
+		for (const segment of segments) expect(path.includes(segment)).toBe(true);
+	});
+});
+
+describe("simulateLineCount", () => {
+	test("packs whole words greedily onto lines, like CSS normal wrapping", () => {
+		expect(simulateLineCount(["one", "two", "three"], 100)).toBe(1);
+		expect(simulateLineCount(["aaaa", "bbbb"], 5)).toBe(2);
+	});
+
+	test("breaks a token wider than a line at its own break points, continuing without a space", () => {
+		const lines = simulateLineCount(["packages/coding-agent/src/modes/interactive/bug-report.ts."], 20);
+		expect(lines).toBeGreaterThan(1);
+	});
+});
+
+describe("splitWordIntoPages", () => {
+	test("returns the word unchanged when it already fits", () => {
+		expect(splitWordIntoPages("short")).toEqual(["short"]);
+	});
+
+	test("returns the word unchanged when it has no break points, however long", () => {
+		const hugeWord = "x".repeat(CHARS_PER_LINE * CAPTION_MAX_LINES * 3);
+		expect(wordLineCount(hugeWord)).toBeGreaterThan(CAPTION_MAX_LINES);
+		expect(splitWordIntoPages(hugeWord)).toEqual([hugeWord]);
+	});
+
+	test("pages a long, breakable token into pieces that each fit CAPTION_MAX_LINES lines and reconstruct the word", () => {
+		const longPath = Array.from({ length: 12 }, (_, i) => `very-long-directory-segment-${i}`).join("/");
+		expect(wordLineCount(longPath)).toBeGreaterThan(CAPTION_MAX_LINES);
+		const pages = splitWordIntoPages(longPath);
+		expect(pages.length).toBeGreaterThan(1);
+		expect(pages.join("")).toBe(longPath);
+		for (const page of pages)
+			expect(simulateLineCount([page], CHARS_PER_LINE)).toBeLessThanOrEqual(CAPTION_MAX_LINES);
 	});
 });
 

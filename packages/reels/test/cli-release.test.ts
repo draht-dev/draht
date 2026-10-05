@@ -4,7 +4,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { BuildOverrides } from "../src/cli.ts";
-import { runApprove, runBuild, runPrune, runRelease } from "../src/cli.ts";
+import { runApprove, runBuild, runPrune, runReject, runRelease } from "../src/cli.ts";
 import type { Feed, ReelEntry } from "../src/contract.ts";
 import type { ModelCompleter, ModelCompletionResult } from "../src/script.ts";
 import {
@@ -436,6 +436,91 @@ describe("approve: release playlists (T12c)", () => {
 			}
 		}),
 	);
+});
+
+describe("build --unit story: release artifacts are not re-written/re-paid on an already-drafted run (A)", () => {
+	test(
+		"a pending release overview/recap is not rebuilt (no extra LLM call) on the next run without --force",
+		withRepo(async (repo) => {
+			const tag = buildNonTinyReleaseWithUpstreamPool(repo, "v1.0.0");
+			const out = tmpDir("release-out-");
+			const drafts = tmpDir("release-drafts-");
+			try {
+				let calls = 0;
+				const counting: ModelCompleter = async () => {
+					calls++;
+					return fallingBackCompleter()({ prompt: "", maxTokens: 0 });
+				};
+				const overrides: BuildOverrides = { complete: counting };
+
+				await runBuild(baseArgv(repo.dir, drafts, out), overrides);
+				expect(readDraftIds(drafts, "demo")).toContain(`release-${tag}`);
+				expect(readDraftIds(drafts, "demo")).toContain(`recap-${tag}`);
+				const callsAfterFirst = calls;
+				expect(callsAfterFirst).toBeGreaterThan(0);
+
+				await runBuild(baseArgv(repo.dir, drafts, out), overrides);
+				expect(calls).toBe(callsAfterFirst);
+			} finally {
+				rmSync(out, { recursive: true, force: true });
+				rmSync(drafts, { recursive: true, force: true });
+			}
+		}),
+	);
+
+	test(
+		"a rejected release overview is skipped (not rebuilt) without --force",
+		withRepo(async (repo) => {
+			const tag = buildNonTinyReleaseWithUpstreamPool(repo, "v1.0.0");
+			const out = tmpDir("release-out-");
+			const drafts = tmpDir("release-drafts-");
+			try {
+				const overrides: BuildOverrides = { complete: fallingBackCompleter() };
+				await runBuild(baseArgv(repo.dir, drafts, out), overrides);
+				expect(readDraftIds(drafts, "demo")).toContain(`release-${tag}`);
+
+				await runReject([
+					"--repo",
+					repo.dir,
+					"--name",
+					"demo",
+					"--out",
+					out,
+					"--drafts-dir",
+					drafts,
+					`release-${tag}`,
+				]);
+				expect(readDraftIds(drafts, "demo")).not.toContain(`release-${tag}`);
+
+				await runBuild(baseArgv(repo.dir, drafts, out), overrides);
+				expect(readDraftIds(drafts, "demo")).not.toContain(`release-${tag}`);
+			} finally {
+				rmSync(out, { recursive: true, force: true });
+				rmSync(drafts, { recursive: true, force: true });
+			}
+		}),
+	);
+});
+
+describe("release command: model precedence (C: --model, then story.model)", () => {
+	test("story.model in .reels.json is used by `release` when --model is absent", () => {
+		const repo = initGitRepo();
+		const configPath = join(repo.dir, ".reels.json");
+		try {
+			addFeatureBranchMerge(repo, { subject: "Merge feature A" });
+			repo.tag("v1.0.0");
+			writeFileSync(configPath, JSON.stringify({ story: { model: "config-provider/config-id" } }));
+			const cliPath = resolve(import.meta.dirname, "..", "src", "cli.ts");
+			const result = spawnSync("bun", ["run", cliPath, "release", "v1.0.0", "--repo", repo.dir], {
+				encoding: "utf8",
+			});
+			expect(result.status).not.toBe(0);
+			expect(result.stderr).not.toContain("release requires --model");
+			expect(result.stderr).toContain('"config-provider/config-id"');
+		} finally {
+			cleanupGitRepo(repo);
+		}
+	});
 });
 
 describe("release command (T13)", () => {

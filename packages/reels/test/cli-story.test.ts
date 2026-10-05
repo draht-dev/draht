@@ -125,6 +125,34 @@ describe("build --unit story: argument errors happen before any work", () => {
 		}
 	});
 
+	test("--since with --unit story is rejected (D: --since has no effect for story units)", () => {
+		const repo = initGitRepo();
+		try {
+			const cliPath = resolve(import.meta.dirname, "..", "src", "cli.ts");
+			const result = spawnSync(
+				"bun",
+				[
+					"run",
+					cliPath,
+					"build",
+					"--unit",
+					"story",
+					"--repo",
+					repo.dir,
+					"--model",
+					"test/fake",
+					"--since",
+					"2024-01-01",
+				],
+				{ encoding: "utf8" },
+			);
+			expect(result.status).not.toBe(0);
+			expect(result.stderr).toContain("--since");
+		} finally {
+			cleanupGitRepo(repo);
+		}
+	});
+
 	test("a --drafts-dir nested inside --out is refused", () => {
 		const repo = initGitRepo();
 		const out = tmpDir("reels-story-out-");
@@ -234,6 +262,35 @@ describe("build --unit story: model precedence (--model, then story.model)", () 
 			cleanupGitRepo(repo);
 		}
 	});
+});
+
+describe("build --unit story: a pending draft never consumes a --limit slot (B)", () => {
+	test(
+		"--limit 1 still drafts one new story when two newer ones are already pending",
+		withRepo(async (repo) => {
+			const shaA = addFeatureBranchMerge(repo, { subject: "Merge feature A" });
+			const shaB = addFeatureBranchMerge(repo, { subject: "Merge feature B" });
+			const shaC = addFeatureBranchMerge(repo, { subject: "Merge feature C" });
+			const out = tmpDir("reels-story-out-");
+			const drafts = tmpDir("reels-story-drafts-");
+			try {
+				const overrides: BuildOverrides = { complete: fallingBackCompleter() };
+				const first = await runBuild(baseArgv(repo.dir, drafts, out, ["--limit", "2"]), overrides);
+				expect(first.published).toBe(2);
+				const idsAfterFirst = readDraftIds(drafts, "demo").sort();
+				expect(idsAfterFirst).toEqual([shaB, shaC].sort());
+
+				const second = await runBuild(baseArgv(repo.dir, drafts, out, ["--limit", "1"]), overrides);
+				expect(second.published).toBe(1);
+				const idsAfterSecond = readDraftIds(drafts, "demo");
+				expect(idsAfterSecond).toContain(shaA);
+			} finally {
+				cleanupGitRepo(repo);
+				rmSync(out, { recursive: true, force: true });
+				rmSync(drafts, { recursive: true, force: true });
+			}
+		}),
+	);
 });
 
 describe("build --unit story: minAttribution eligibility", () => {

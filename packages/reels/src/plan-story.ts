@@ -114,12 +114,34 @@ export interface PlanStoryOptions {
 	gh?: GithubLookup;
 }
 
+/** A story's status: `build --force` never bypasses `approvedIds` (`selectFromWindow` filters a published id
+ * regardless of `force`), so `"approved"` is reported unconditionally; `force` does bypass the pending-draft and
+ * rejection filters (same as `runBuildStory`'s own `storyIds` window), so those two report `"new"` under force. */
 function statusOf(
 	id: string,
 	approvedIds: ReadonlySet<string>,
 	draftedIds: ReadonlySet<string>,
 	state: ReelsState,
+	force: boolean,
 ): DraftStatus {
+	if (approvedIds.has(id)) return "approved";
+	if (force) return "new";
+	if (draftedIds.has(id)) return "pending";
+	if (isRejected(state, id)) return "rejected";
+	return "new";
+}
+
+/** Release overview/recap artifacts: `draftReleaseArtifacts` bypasses its combined drafted/approved/rejected skip
+ * entirely under `--force` (unlike a story, an artifact has no separate "already published" floor check), so
+ * `force` reports `"new"` even for an otherwise-approved artifact. */
+function artifactStatusOf(
+	id: string,
+	approvedIds: ReadonlySet<string>,
+	draftedIds: ReadonlySet<string>,
+	state: ReelsState,
+	force: boolean,
+): DraftStatus {
+	if (force) return "new";
 	if (approvedIds.has(id)) return "approved";
 	if (draftedIds.has(id)) return "pending";
 	if (isRejected(state, id)) return "rejected";
@@ -129,15 +151,16 @@ function statusOf(
 /** A story's status additionally considers `selectStoryUnits`' window (`--limit`, floor/scan): a story that is
  * otherwise `"new"` but outside this run's selected ids is `"later"` — the next real `build --unit story` run
  * would not draft it either. Release overview/recap artifacts are never limited this way (`draftReleaseArtifacts`
- * has no `--limit` of its own), so they keep plain {@link statusOf}. */
+ * has no `--limit` of its own), so they keep plain {@link artifactStatusOf}. */
 function storyStatusOf(
 	id: string,
 	approvedIds: ReadonlySet<string>,
 	draftedIds: ReadonlySet<string>,
 	state: ReelsState,
 	selectedIds: ReadonlySet<string>,
+	force: boolean,
 ): DraftStatus {
-	const status = statusOf(id, approvedIds, draftedIds, state);
+	const status = statusOf(id, approvedIds, draftedIds, state, force);
 	return status === "new" && !selectedIds.has(id) ? "later" : status;
 }
 
@@ -260,11 +283,12 @@ export async function planStories(options: PlanStoryOptions): Promise<StoryPlan>
 			origin: s.origin,
 			attribution: s.origin === "commit" ? attribution.get(s.id) : undefined,
 			title: redactText(s.title),
-			status: storyStatusOf(s.id, approvedIds, draftedIds, state, selectedIds),
+			status: storyStatusOf(s.id, approvedIds, draftedIds, state, selectedIds, options.force ?? false),
 		}));
 
 		for (const story of groupStories) {
-			if (storyStatusOf(story.id, approvedIds, draftedIds, state, selectedIds) !== "new") continue;
+			if (storyStatusOf(story.id, approvedIds, draftedIds, state, selectedIds, options.force ?? false) !== "new")
+				continue;
 			const score = deepDiveScore(computeDeepDiveScoreInputs(story, new Map()));
 			const chars = SHORT_STORY_CHARS + (shouldRenderDeepDive(options.deepDive, score) ? DEEP_DIVE_CHARS : 0);
 			ttsItems.push({ id: story.id, kind: "story", title: redactText(story.title), chars, fits: false });
@@ -282,7 +306,7 @@ export async function planStories(options: PlanStoryOptions): Promise<StoryPlan>
 		// No release overview or upstream recap for still-open "Unreleased" work: there is no release to summarize
 		// yet. Stories in unreleased work stay eligible above; only these two artifacts are skipped.
 		const overviewWouldDraft = !group.tiny && group.tag !== undefined;
-		const overviewStatus = statusOf(overviewId, approvedIds, draftedIds, state);
+		const overviewStatus = artifactStatusOf(overviewId, approvedIds, draftedIds, state, options.force ?? false);
 		if (overviewWouldDraft && overviewStatus === "new") {
 			ttsItems.push({ id: overviewId, kind: "overview", title: overviewLabel, chars: OVERVIEW_CHARS, fits: false });
 		}
@@ -290,7 +314,7 @@ export async function planStories(options: PlanStoryOptions): Promise<StoryPlan>
 		const recapLabel = `Upstream recap: ${group.tag ?? "Unreleased"}`;
 		const recapIdValue = recapId(tagKey);
 		const recapWouldDraft = pool.anchors.length > 0 && group.tag !== undefined;
-		const recapStatus = statusOf(recapIdValue, approvedIds, draftedIds, state);
+		const recapStatus = artifactStatusOf(recapIdValue, approvedIds, draftedIds, state, options.force ?? false);
 		if (recapWouldDraft && recapStatus === "new") {
 			ttsItems.push({ id: recapIdValue, kind: "recap", title: recapLabel, chars: RECAP_CHARS, fits: false });
 		}

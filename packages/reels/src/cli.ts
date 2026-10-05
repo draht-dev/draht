@@ -66,6 +66,7 @@ import {
 import { changelogSourceId, type SourceRegistry, toPublicSources } from "./sources.ts";
 import {
 	cappedIds,
+	isRejected,
 	MAX_RENDER_ATTEMPTS,
 	type ReelsState,
 	readState,
@@ -299,6 +300,11 @@ function parseBuildArgs(argv: string[]): BuildArgs {
 		fail(
 			"--unit commit --writer llm would auto-publish LLM-written reels, bypassing the draft/approve gate; use --unit story, or --writer template for --unit commit",
 		);
+	}
+	// `--unit story` selects stories through `selectStoryUnits`' floor/scan/limit window, which has no notion of a
+	// date cutoff; silently ignoring `--since` here would make the flag look respected when it never was.
+	if (args.unit === "story" && args.since !== undefined) {
+		fail("--since has no effect on --unit story; use --scan/--all-history/--limit instead");
 	}
 	return args;
 }
@@ -1105,30 +1111,40 @@ async function draftReleaseArtifacts(
 
 		const onFallback = (reason: string) =>
 			console.warn(`draht-reels: release artifact ${groupKey} writer fallback: ${reason}`);
-		const candidates: Array<() => Promise<ReleaseArtifactDraft | undefined>> = [
-			() =>
-				writeReleaseOverviewArtifact(group, {
-					outDir: ctx.outDir,
-					name: ctx.name,
-					draftsDir: ctx.draftsDir,
-					allStories: ctx.allStories,
-					attribution: ctx.attribution,
-					storyById: ctx.storyById,
-					complete: ctx.complete,
-					llmMeter: ctx.llmMeter,
-					denyPatterns: ctx.denyPatterns,
-					onFallback,
-				}),
-			() =>
-				writeRecapArtifact(group, poolByGroup.get(group) ?? poolReleaseUpstreamRecap(group.units, []), {
-					complete: ctx.complete,
-					llmMeter: ctx.llmMeter,
-					denyPatterns: ctx.denyPatterns,
-					onFallback,
-				}),
+		const candidates: Array<{ id: string; build: () => Promise<ReleaseArtifactDraft | undefined> }> = [
+			{
+				id: releaseOverviewId(groupKey),
+				build: () =>
+					writeReleaseOverviewArtifact(group, {
+						outDir: ctx.outDir,
+						name: ctx.name,
+						draftsDir: ctx.draftsDir,
+						allStories: ctx.allStories,
+						attribution: ctx.attribution,
+						storyById: ctx.storyById,
+						complete: ctx.complete,
+						llmMeter: ctx.llmMeter,
+						denyPatterns: ctx.denyPatterns,
+						onFallback,
+					}),
+			},
+			{
+				id: recapId(groupKey),
+				build: () =>
+					writeRecapArtifact(group, poolByGroup.get(group) ?? poolReleaseUpstreamRecap(group.units, []), {
+						complete: ctx.complete,
+						llmMeter: ctx.llmMeter,
+						denyPatterns: ctx.denyPatterns,
+						onFallback,
+					}),
+			},
 		];
 
-		for (const build of candidates) {
+		for (const { id, build } of candidates) {
+			// Skipped before any paid work (LLM write, TTS) ever starts: an artifact already pending, approved, or
+			// rejected must never be re-written and re-paid for on every run. `--force` bypasses all three, same as
+			// the stories loop above.
+			if (!ctx.force && (draftedIds.has(id) || approvedIds.has(id) || isRejected(state, id))) continue;
 			if (!ctx.llmMeter.hasBudget() || !ctx.ttsMeter.hasBudget()) {
 				console.warn("draht-reels: stopping: a spend cap is reached; keeping already-drafted release artifacts");
 				return { drafted, failed, state };
@@ -1143,7 +1159,6 @@ async function draftReleaseArtifacts(
 				continue;
 			}
 			if (!artifact) continue;
-			if (!ctx.force && (draftedIds.has(artifact.id) || approvedIds.has(artifact.id))) continue;
 
 			const chars = countTtsChars(artifact.script.scenes, ctx.ttsModelId);
 			if (ctx.ttsMeter.spentAmount + chars > ctx.ttsMeter.capAmount) {
@@ -1300,7 +1315,13 @@ async function runBuildStory(args: BuildArgs, overrides: BuildOverrides): Promis
 		return attribution.get(story.id) !== "weak";
 	});
 	const storyById = new Map(eligibleStories.map((story) => [story.id, story]));
-	const storyIds = eligibleStories.map((story) => story.id).filter((id) => !rejectedIds.has(id));
+	// A pending (not yet approved/rejected) draft must never consume a `--limit` slot: it is excluded from the
+	// window `selectStoryUnits` bounds by here, before `--limit` is applied, not filtered out of its result
+	// afterward. `--force` re-includes it, regenerating it in place via `replaceDir`.
+	const storyIds = eligibleStories
+		.map((story) => story.id)
+		.filter((id) => !rejectedIds.has(id))
+		.filter((id) => args.force || !draftedIds.has(id));
 	for (const id of rejectedIds) {
 		if (storyById.has(id))
 			console.warn(`draht-reels: skipping rejected story ${id.slice(0, 12)} (use --force to retry)`);
@@ -1316,8 +1337,7 @@ async function runBuildStory(args: BuildArgs, overrides: BuildOverrides): Promis
 			`draht-reels: skipping story ${id.slice(0, 12)} after ${MAX_RENDER_ATTEMPTS} failed attempts (use --force to retry)`,
 		);
 	}
-	// A pending (not yet approved/rejected) draft is skipped by default; `--force` regenerates it in place.
-	const idsToProcess = selection.ids.filter((id) => args.force || !draftedIds.has(id));
+	const idsToProcess = selection.ids;
 	console.log(`draht-reels: drafting ${idsToProcess.length} story/stories`);
 
 	const renderBundle = idsToProcess.length > 0 && args.mode !== "audio" ? await createBundle() : undefined;
@@ -1576,10 +1596,16 @@ function splitReleaseTags(argv: string[]): { tags: string[]; rest: string[] } {
 export async function runRelease(argv: string[], overrides: BuildOverrides = {}): Promise<BuildResult> {
 	const { tags, rest } = splitReleaseTags(argv);
 	const args = parseBuildArgs(rest);
-	if (!args.model && !overrides.complete) fail("release requires --model <provider/id>");
 
 	let config = await resolveReelsConfig(args);
 	if (args.tagPattern) config = { ...config, tagPattern: args.tagPattern };
+
+	// Same model resolution as `build --unit story`: `--model` wins over `story.model` in `.reels.json`, since
+	// a release artifact is written by the same story writer, sharing the same model.
+	const model = args.model ?? config.story.model;
+	if (!model && !overrides.complete) {
+		fail("release requires --model <provider/id> or story.model in .reels.json");
+	}
 
 	const name = repoName(args);
 	const outDir = resolve(args.out);
@@ -1596,7 +1622,7 @@ export async function runRelease(argv: string[], overrides: BuildOverrides = {})
 	const maxTtsChars = args.maxTtsChars ?? config.build.maxTtsChars;
 
 	const git = overrides.git ?? runGit;
-	const complete = overrides.complete ?? (await resolveModelCompleter(args.model as string));
+	const complete = overrides.complete ?? (await resolveModelCompleter(model as string));
 	const ttsModelId = resolveTtsModel("story", args.ttsModel);
 	const tts = overrides.tts ?? resolveTts(args, ttsModelId);
 	const gh = overrides.gh ?? (await resolveStoryGithubLookup(args.repo, outDir, join(args.repo, ".reels-cache"), git));

@@ -189,6 +189,39 @@ describe("plan --unit story: read-only dry run, never calls the model completer"
 	);
 
 	test(
+		"--force reports a pending draft and a rejected story as new (mirroring build --force), but an approved one stays approved (E)",
+		withRepo(async (repo) => {
+			// `selectFromWindow`'s floor is the latest approved id; an item older than the floor is permanently
+			// out of scope regardless of `--force` (by design, shared by build and plan), so the approved commit
+			// must be the oldest here for the pending/rejected ones above it to stay in scope under `--force`.
+			const shaApproved = addFeatureBranchMerge(repo, { subject: "Merge approved" });
+			const shaRejected = addFeatureBranchMerge(repo, { subject: "Merge rejected" });
+			const shaPending = addFeatureBranchMerge(repo, { subject: "Merge pending" });
+			const out = tmpDir("plan-out-");
+			const drafts = tmpDir("plan-drafts-");
+			try {
+				const overrides: BuildOverrides = { complete: fallingBackCompleter };
+				await runBuild(buildArgv(repo.dir, out, drafts), overrides);
+
+				await runApprove(["--repo", repo.dir, "--name", "demo", "--out", out, "--drafts-dir", drafts, shaApproved]);
+				await runReject(["--repo", repo.dir, "--name", "demo", "--out", out, "--drafts-dir", drafts, shaRejected]);
+
+				const { plan } = await capturePlan(planArgv(repo.dir, out, drafts, ["--force"]), {
+					complete: throwingCompleter,
+				});
+				const unreleased = plan.releases.find((r) => r.tag === undefined);
+				const byId = new Map(unreleased?.stories.map((s) => [s.id, s.status]));
+				expect(byId.get(shaPending)).toBe("new");
+				expect(byId.get(shaRejected)).toBe("new");
+				expect(byId.get(shaApproved)).toBe("approved");
+			} finally {
+				rmSync(out, { recursive: true, force: true });
+				rmSync(drafts, { recursive: true, force: true });
+			}
+		}),
+	);
+
+	test(
 		"a non-tiny release lists its weak feature, pooled anchor count, and would draft an overview and a recap",
 		withRepo(async (repo) => {
 			const tag = buildNonTinyReleaseWithUpstreamPool(repo, "v1.0.0");

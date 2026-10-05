@@ -1,6 +1,6 @@
 {
 	"name": "@draht/telemetry",
-	"version": "2026.10.4-3",
+	"version": "2026.10.4",
 	"description": "Vendor-neutral telemetry contracts and typed schema utilities for draht",
 	"type": "module",
 	"main": "./dist/index.js",

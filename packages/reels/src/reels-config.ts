@@ -9,9 +9,9 @@
 
 import { readFile } from "node:fs/promises";
 
-export type MergeOverride = "skip" | "feature" | "upstream-sync" | "back-merge";
+export type MergeOverride = "skip" | "feature" | "upstream-sync" | "back-merge" | "branch-sync";
 
-const MERGE_OVERRIDES: ReadonlySet<string> = new Set(["skip", "feature", "upstream-sync", "back-merge"]);
+const MERGE_OVERRIDES: ReadonlySet<string> = new Set(["skip", "feature", "upstream-sync", "back-merge", "branch-sync"]);
 
 export interface UpstreamConfig {
 	/** Regex strings (case-insensitive) matched against a merge subject. */
@@ -29,6 +29,25 @@ export interface StoryConfig {
 	maxBranchCommits: number;
 }
 
+/** Doc/prose allowlist for `context.ts` (D8): `deny` always wins over `allow`. */
+export interface DocsConfig {
+	allow: string[];
+	deny: string[];
+	/** Cap on the number of ranked doc chunks kept per story (identifier hits plus explicit mentions). */
+	maxChunks: number;
+}
+
+/** Code deny globs (also applied to doc paths, D8) plus an `--include` override. */
+export interface CodeConfig {
+	exclude: string[];
+	include: string[];
+}
+
+/** Customer names and internal codenames: a match drops the source chunk, or rejects narration/title/caption. */
+export interface ProseConfig {
+	denyPatterns: string[];
+}
+
 export interface ReelsConfig {
 	/** Regex string (anchored, case-sensitive unless the string embeds flags) matched against tag names. */
 	tagPattern: string;
@@ -37,6 +56,9 @@ export interface ReelsConfig {
 	overrides: Readonly<Record<string, MergeOverride>>;
 	upstream: UpstreamConfig;
 	story: StoryConfig;
+	docs: DocsConfig;
+	code: CodeConfig;
+	prose: ProseConfig;
 }
 
 export const DEFAULT_TAG_PATTERN = "^v";
@@ -52,11 +74,36 @@ export const DEFAULT_STORY_CONFIG: StoryConfig = {
 	maxBranchCommits: 150,
 };
 
+/** `.planning/**` is deliberately absent from `allow`: it is readable only when a repo config allowlists specific paths (owner decision Q4). */
+export const DEFAULT_DOCS_CONFIG: DocsConfig = {
+	allow: ["README.md", "**/README.md", "docs/**", "**/CHANGELOG.md"],
+	deny: [
+		".planning/CONTINUE-HERE.md",
+		".planning/DECISIONS-PENDING.md",
+		".planning/STATE.md",
+		".planning/execution-log.jsonl",
+		".planning/quick/**",
+	],
+	maxChunks: 8,
+};
+
+export const DEFAULT_CODE_CONFIG: CodeConfig = {
+	exclude: [],
+	include: [],
+};
+
+export const DEFAULT_PROSE_CONFIG: ProseConfig = {
+	denyPatterns: [],
+};
+
 export const DEFAULT_REELS_CONFIG: ReelsConfig = {
 	tagPattern: DEFAULT_TAG_PATTERN,
 	overrides: {},
 	upstream: DEFAULT_UPSTREAM_CONFIG,
 	story: DEFAULT_STORY_CONFIG,
+	docs: DEFAULT_DOCS_CONFIG,
+	code: DEFAULT_CODE_CONFIG,
+	prose: DEFAULT_PROSE_CONFIG,
 };
 
 const ALLOWED_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
@@ -65,9 +112,15 @@ const ALLOWED_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
 	"overrides",
 	"upstream",
 	"story",
+	"docs",
+	"code",
+	"prose",
 ]);
 const ALLOWED_UPSTREAM_KEYS: ReadonlySet<string> = new Set(["subjectPatterns", "markerPaths", "foreignAuthorRatio"]);
 const ALLOWED_STORY_KEYS: ReadonlySet<string> = new Set(["directCommitTypes", "maxBranchCommits"]);
+const ALLOWED_DOCS_KEYS: ReadonlySet<string> = new Set(["allow", "deny", "maxChunks"]);
+const ALLOWED_CODE_KEYS: ReadonlySet<string> = new Set(["exclude", "include"]);
+const ALLOWED_PROSE_KEYS: ReadonlySet<string> = new Set(["denyPatterns"]);
 
 export class ReelsConfigError extends Error {}
 
@@ -138,6 +191,58 @@ function parseStory(raw: unknown): StoryConfig {
 	return { directCommitTypes, maxBranchCommits };
 }
 
+function parseDocs(raw: unknown): DocsConfig {
+	if (raw === undefined) return DEFAULT_DOCS_CONFIG;
+	if (!isPlainObject(raw)) throw new ReelsConfigError("docs must be an object");
+	assertNoUnknownKeys(raw, ALLOWED_DOCS_KEYS, "docs");
+
+	const allow = raw.allow === undefined ? DEFAULT_DOCS_CONFIG.allow : raw.allow;
+	if (!Array.isArray(allow) || !allow.every((p) => typeof p === "string")) {
+		throw new ReelsConfigError("docs.allow must be an array of strings");
+	}
+	const deny = raw.deny === undefined ? DEFAULT_DOCS_CONFIG.deny : raw.deny;
+	if (!Array.isArray(deny) || !deny.every((p) => typeof p === "string")) {
+		throw new ReelsConfigError("docs.deny must be an array of strings");
+	}
+	const maxChunks = raw.maxChunks === undefined ? DEFAULT_DOCS_CONFIG.maxChunks : raw.maxChunks;
+	if (typeof maxChunks !== "number" || maxChunks <= 0) {
+		throw new ReelsConfigError("docs.maxChunks must be a positive number");
+	}
+
+	return { allow, deny, maxChunks };
+}
+
+function parseCode(raw: unknown): CodeConfig {
+	if (raw === undefined) return DEFAULT_CODE_CONFIG;
+	if (!isPlainObject(raw)) throw new ReelsConfigError("code must be an object");
+	assertNoUnknownKeys(raw, ALLOWED_CODE_KEYS, "code");
+
+	const exclude = raw.exclude === undefined ? DEFAULT_CODE_CONFIG.exclude : raw.exclude;
+	if (!Array.isArray(exclude) || !exclude.every((p) => typeof p === "string")) {
+		throw new ReelsConfigError("code.exclude must be an array of strings");
+	}
+	const include = raw.include === undefined ? DEFAULT_CODE_CONFIG.include : raw.include;
+	if (!Array.isArray(include) || !include.every((p) => typeof p === "string")) {
+		throw new ReelsConfigError("code.include must be an array of strings");
+	}
+
+	return { exclude, include };
+}
+
+function parseProse(raw: unknown): ProseConfig {
+	if (raw === undefined) return DEFAULT_PROSE_CONFIG;
+	if (!isPlainObject(raw)) throw new ReelsConfigError("prose must be an object");
+	assertNoUnknownKeys(raw, ALLOWED_PROSE_KEYS, "prose");
+
+	const denyPatterns = raw.denyPatterns === undefined ? DEFAULT_PROSE_CONFIG.denyPatterns : raw.denyPatterns;
+	if (!Array.isArray(denyPatterns) || !denyPatterns.every((p) => typeof p === "string")) {
+		throw new ReelsConfigError("prose.denyPatterns must be an array of strings");
+	}
+	for (const pattern of denyPatterns) assertValidRegexString(pattern, "prose.denyPatterns");
+
+	return { denyPatterns };
+}
+
 function parseOverrides(raw: unknown): Record<string, MergeOverride> {
 	if (raw === undefined) return {};
 	if (!isPlainObject(raw)) throw new ReelsConfigError("overrides must be an object");
@@ -170,6 +275,9 @@ export function parseReelsConfig(raw: unknown): ReelsConfig {
 		overrides: parseOverrides(raw.overrides),
 		upstream: parseUpstream(raw.upstream),
 		story: parseStory(raw.story),
+		docs: parseDocs(raw.docs),
+		code: parseCode(raw.code),
+		prose: parseProse(raw.prose),
 	};
 }
 

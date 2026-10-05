@@ -289,6 +289,63 @@ export function redactText(text: string): string {
 	return out;
 }
 
+export interface DocAllowOptions {
+	allowGlobs: readonly string[];
+	denyGlobs: readonly string[];
+}
+
+/**
+ * Allowlist-first doc check (D8): `path` must match a `docs.allow` glob, and
+ * `docs.deny` always wins over `allow` even when a path matches both. Unlike
+ * {@link isPathDenied} (where an explicit `--include` overrides a matching
+ * deny glob), a denied doc can never be made readable by also allowing it.
+ */
+export function isDocAllowed(path: string, options: DocAllowOptions): boolean {
+	if (path.length > MAX_GLOB_PATH_LENGTH) return false;
+	const matches = (globs: readonly string[]) =>
+		globs.some((g) => {
+			const re = globToRegExp(g);
+			const base = path.split("/").pop() ?? path;
+			return g.includes("/") ? re.test(path) : re.test(base);
+		});
+	if (matches(options.denyGlobs)) return false;
+	return matches(options.allowGlobs);
+}
+
+/** Result of policing a context file's full head content (D8: all-or-nothing). */
+export interface PolicedHeadFile {
+	/** The original lines, or `[]` when withheld. */
+	lines: string[];
+	withheld: boolean;
+}
+
+/**
+ * Head content of a context file is all-or-nothing: if any line is
+ * secret-shaped, the file's full content is withheld (its individually
+ * policed hunks, via {@link applyContentPolicy}, still stand on their own).
+ */
+export function policeHeadFile(lines: readonly string[]): PolicedHeadFile {
+	const withheld = lines.some((line) => lineHasSecret(line));
+	return { lines: withheld ? [] : Array.from(lines), withheld };
+}
+
+/** Result of policing one markdown doc chunk. */
+export interface PolicedDocChunk {
+	text: string;
+	dropped: boolean;
+}
+
+/** Doc chunks (split by markdown heading) with a secret-shaped line are dropped whole, not redacted line-by-line. */
+export function policeDocChunk(text: string): PolicedDocChunk {
+	const dropped = text.split("\n").some((line) => lineHasSecret(line));
+	return { text: dropped ? "" : text, dropped };
+}
+
+/** `prose.denyPatterns` (customer names, internal codenames): a match drops the source chunk, or rejects narration/title/caption. */
+export function matchesProseDeny(text: string, patterns: readonly RegExp[]): boolean {
+	return patterns.some((pattern) => pattern.test(text));
+}
+
 export interface ContentPolicyOptions {
 	denyGlobs?: readonly string[];
 	allowGlobs?: readonly string[];

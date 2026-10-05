@@ -13,6 +13,7 @@ export function Feed({
 	initialReelId,
 	initialDeepDive,
 	onActiveReelChange,
+	onDeepDiveChange,
 	playback,
 }: {
 	feed: FeedData;
@@ -21,6 +22,8 @@ export function Feed({
 	initialReelId: string | undefined;
 	initialDeepDive?: boolean;
 	onActiveReelChange: (reelId: string) => void;
+	/** Fires when a card's deep-dive view is toggled while active, so the route can mirror it. */
+	onDeepDiveChange?: (reelId: string, deep: boolean) => void;
 	playback: ReturnType<typeof usePlaybackPreference>;
 }) {
 	// Drafts (owner decision 2026-10-05: LLM-written reels are drafts until approved)
@@ -40,6 +43,22 @@ export function Feed({
 	// round-trip into a forced `scrollIntoView` fighting the scroll that
 	// caused it in the first place.
 	const lastReportedReelId = useRef<string | undefined>(undefined);
+
+	// A route change can swap `reels` between a playlist scope and the full
+	// feed without remounting this component, leaving `activeIndex` stale
+	// until the next render. Correcting it here, during render (rather than in
+	// an effect), means every effect below — including the one that reports
+	// the active reel back up — already sees the right index in this same
+	// commit, instead of first firing once for the stale reel and briefly
+	// stomping the route that was just navigated to (e.g. dropping a deep-dive
+	// flag) before a later commit corrects it.
+	const prevReelsRef = useRef(reels);
+	if (prevReelsRef.current !== reels) {
+		prevReelsRef.current = reels;
+		if (!(initialReelId !== undefined && initialReelId === lastReportedReelId.current) && activeIndex !== initialIndex) {
+			setActiveIndex(initialIndex);
+		}
+	}
 
 	useEffect(() => {
 		if (initialReelId !== undefined && initialReelId === lastReportedReelId.current) return;
@@ -140,6 +159,7 @@ export function Feed({
 						// caching is triggered by the players on `canplaythrough`.
 						preload={index === activeIndex ? "auto" : index === activeIndex + 1 ? "metadata" : "none"}
 						initialDeepDive={reel.id === initialReelId ? initialDeepDive : undefined}
+						onDeepDiveChange={onDeepDiveChange && ((deep) => onDeepDiveChange(reel.id, deep))}
 					/>
 				</div>
 			))}

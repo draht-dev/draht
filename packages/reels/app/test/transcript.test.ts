@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { TranscriptSegment } from "../../src/contract.js";
-import { activeBeatIndex, activeSceneIndex, activeSegment, activeWordIndex } from "../src/lib/transcript.js";
+import type { ReelMedia, TranscriptSegment } from "../../src/contract.js";
+import { activeBeat, activeBeatIndex, activeSceneIndex, activeSegment, activeWordIndex } from "../src/lib/transcript.js";
 
 const transcript: TranscriptSegment[] = [
 	{ sceneIndex: 0, text: "a", startMs: 0, endMs: 1000 },
@@ -64,6 +64,38 @@ const segmentWithWords: TranscriptSegment = {
 		{ text: "there", startMs: 900, endMs: 2000 },
 	],
 };
+
+const reelWithBeats: ReelMedia = {
+	durationMs: 6000,
+	scenes: [
+		{ kind: "title", narration: "a", title: "Title", subtitle: "" },
+		{
+			kind: "outro",
+			narration: "b",
+			beats: [{ text: "beat 0" }, { text: "beat 1" }, { text: "beat 2" }],
+		},
+		{ kind: "outro", narration: "c" },
+	],
+	transcript: [
+		{ sceneIndex: 0, text: "a", startMs: 0, endMs: 1000 },
+		segmentWithBeats,
+		{ sceneIndex: 2, text: "c", startMs: 3000, endMs: 6000 },
+	],
+};
+
+describe("activeBeat", () => {
+	test("resolves the beat active at the given time via its owning scene", () => {
+		expect(activeBeat(reelWithBeats, 1000)?.text).toBe("beat 0");
+		expect(activeBeat(reelWithBeats, 1800)?.text).toBe("beat 1");
+		expect(activeBeat(reelWithBeats, 2999)?.text).toBe("beat 2");
+	});
+
+	test("returns undefined before the first beat, and for a scene with no beats", () => {
+		expect(activeBeat(reelWithBeats, 999)).toBeUndefined();
+		expect(activeBeat(reelWithBeats, 0)).toBeUndefined();
+		expect(activeBeat(reelWithBeats, 4000)).toBeUndefined();
+	});
+});
 
 describe("activeWordIndex", () => {
 	test("returns the word active at the given time", () => {

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import type { ReelMedia } from "../../../src/contract.js";
+import type { Beat, ReelMedia } from "../../../src/contract.js";
 import { resolveAutoplayGesture } from "../lib/autoplayFallback.js";
 import { cacheMediaInBackground } from "../lib/mediaCache.js";
+import { activeBeat } from "../lib/transcript.js";
 
 export function VisualPlayer({
 	reel,
@@ -10,6 +11,7 @@ export function VisualPlayer({
 	preload,
 	onEnded,
 	onProgress,
+	onActiveBeatChange,
 }: {
 	reel: ReelMedia;
 	active: boolean;
@@ -17,6 +19,8 @@ export function VisualPlayer({
 	preload: "auto" | "metadata" | "none";
 	onEnded: () => void;
 	onProgress: (fraction: number) => void;
+	/** Lifted for the sources sheet, which highlights the beat's cited sources. */
+	onActiveBeatChange?: (beat: Beat | undefined) => void;
 }) {
 	const videoRef = useRef<HTMLVideoElement>(null);
 	const [gesture, setGesture] = useState<"play" | "unmute" | null>(null);
@@ -81,8 +85,9 @@ export function VisualPlayer({
 
 	const handleTimeUpdate = () => {
 		const video = videoRef.current;
-		if (!video || !video.duration) return;
-		onProgress(video.currentTime / video.duration);
+		if (!video) return;
+		if (onActiveBeatChange) onActiveBeatChange(activeBeat(reel, video.currentTime * 1000));
+		if (video.duration) onProgress(video.currentTime / video.duration);
 	};
 
 	// `canplaythrough` fires once the browser judges it can play to the end

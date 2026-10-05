@@ -3,7 +3,7 @@ import type { Beat, ReelMedia } from "../../../src/contract.js";
 import { resolveAutoplayGesture } from "../lib/autoplayFallback.js";
 import { type CaptionChunk, currentCaptionChunk } from "../lib/captions.js";
 import { cacheMediaInBackground } from "../lib/mediaCache.js";
-import { activeBeatIndex, activeSegment } from "../lib/transcript.js";
+import { activeBeat, activeBeatIndex, activeSegment } from "../lib/transcript.js";
 import { SceneView } from "./SceneView.js";
 
 export function AudioPlayer({
@@ -98,7 +98,7 @@ export function AudioPlayer({
 			const beat = activeBeatIndex(segment, currentMs);
 			setBeatIndex(beat);
 			setCaptionChunk(currentCaptionChunk(segment, currentMs));
-			onActiveBeatChange?.(beat >= 0 ? reel.scenes[segment.sceneIndex]?.beats?.[beat] : undefined);
+			onActiveBeatChange?.(activeBeat(reel, currentMs));
 		}
 		if (audio.duration > 0) onProgress(audio.currentTime / audio.duration);
 	};

@@ -1,4 +1,4 @@
-import type { TranscriptSegment } from "../../../src/contract.js";
+import type { Beat, ReelMedia, TranscriptSegment } from "../../../src/contract.js";
 import { currentWordIndex } from "../../../src/remotion/scenes/caption-logic.ts";
 
 /**
@@ -47,4 +47,17 @@ export function activeWordIndex(segment: TranscriptSegment | undefined, currentM
 	const words = segment?.words;
 	if (!words || words.length === 0) return -1;
 	return currentWordIndex(words, currentMs);
+}
+
+/**
+ * The {@link Beat} active at `currentMs`, resolved via the transcript's
+ * `beatStartsMs` into the owning scene's `beats`. Shared by `AudioPlayer`
+ * and `VisualPlayer` so the sources sheet highlights the same beat
+ * regardless of playback mode.
+ */
+export function activeBeat(reel: ReelMedia, currentMs: number): Beat | undefined {
+	const segment = activeSegment(reel.transcript, currentMs);
+	const beat = activeBeatIndex(segment, currentMs);
+	if (!segment || beat < 0) return undefined;
+	return reel.scenes[segment.sceneIndex]?.beats?.[beat];
 }

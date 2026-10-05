@@ -220,6 +220,8 @@ a:focus-visible,
 	gap: 10px;
 	overflow-x: auto;
 	padding-bottom: 4px;
+	scroll-snap-type: x mandatory;
+	-webkit-overflow-scrolling: touch;
 }
 
 .release-card {
@@ -229,6 +231,7 @@ a:focus-visible,
 	flex-direction: column;
 	gap: 4px;
 	text-align: left;
+	scroll-snap-align: start;
 }
 
 .release-card-poster {
@@ -245,27 +248,6 @@ a:focus-visible,
 }
 
 .release-card-meta {
-	font-size: 11px;
-	color: var(--text-dim);
-}
-
-.release-chip {
-	flex-shrink: 0;
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-	padding: 10px 14px;
-	border-radius: 12px;
-	background: var(--surface);
-	align-self: flex-start;
-}
-
-.release-chip-tag {
-	font-size: 12px;
-	font-weight: 600;
-}
-
-.release-chip-meta {
 	font-size: 11px;
 	color: var(--text-dim);
 }

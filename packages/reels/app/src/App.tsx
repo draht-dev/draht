@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { Feed } from "./components/Feed.js";
 import { Home } from "./components/Home.js";
 import { Playlist } from "./components/Playlist.js";
@@ -7,15 +7,12 @@ import { useFeed } from "./hooks/useFeed.js";
 import { useHashRoute } from "./hooks/useHashRoute.js";
 import { usePlaybackPreference } from "./hooks/usePlaybackPreference.js";
 import { useRepoIndex } from "./hooks/useRepoIndex.js";
-
-/** Reel ids currently playing from a release playlist, and its tag (so navigating away from that reel, e.g. via the "All" grid, drops the scope). */
-type PlaylistScope = { tag: string; reelIds: string[] };
+import { playlistReelIds } from "./lib/playlists.js";
 
 export function App() {
 	const repoIndexState = useRepoIndex();
 	const [route, navigate] = useHashRoute();
 	const playback = usePlaybackPreference();
-	const [playlistScope, setPlaylistScope] = useState<PlaylistScope | undefined>(undefined);
 
 	const repoName = route.kind !== "home" ? route.repo : undefined;
 	const repoEntry =
@@ -68,10 +65,7 @@ export function App() {
 		return (
 			<Profile
 				feed={feed}
-				onOpenReel={(reelId) => {
-					setPlaylistScope(undefined);
-					navigate({ kind: "reel", repo: route.repo, reelId });
-				}}
+				onOpenReel={(reelId) => navigate({ kind: "reel", repo: route.repo, reelId })}
 				onOpenRelease={(tag) => navigate({ kind: "release", repo: route.repo, tag })}
 			/>
 		);
@@ -87,21 +81,19 @@ export function App() {
 				feed={feed}
 				playlist={playlist}
 				onPlay={(reelIds) => {
-					setPlaylistScope({ tag: route.tag, reelIds });
 					const first = reelIds[0];
-					if (first) navigate({ kind: "reel", repo: route.repo, reelId: first });
+					if (first) navigate({ kind: "reel", repo: route.repo, reelId: first, releaseTag: route.tag });
 				}}
-				onOpenReel={(reelId) => {
-					setPlaylistScope({ tag: route.tag, reelIds: [reelId] });
-					navigate({ kind: "reel", repo: route.repo, reelId });
-				}}
+				onOpenReel={(reelId) => navigate({ kind: "reel", repo: route.repo, reelId, releaseTag: route.tag })}
 				onBack={() => navigate({ kind: "repo", repo: route.repo })}
 			/>
 		);
 	}
 
-	const scopedIds =
-		playlistScope && playlistScope.reelIds.includes(route.reelId) ? playlistScope.reelIds : undefined;
+	// The playlist scope is recomputed from the route (rather than kept as
+	// local state) so a reload or a shared link restores it.
+	const scopedPlaylist = route.releaseTag ? feed.playlists?.find((candidate) => candidate.tag === route.releaseTag) : undefined;
+	const scopedIds = scopedPlaylist ? playlistReelIds(scopedPlaylist, feed) : undefined;
 
 	return (
 		<Feed
@@ -110,7 +102,20 @@ export function App() {
 			initialReelId={route.reelId}
 			initialDeepDive={route.deep}
 			onActiveReelChange={(reelId) => {
-				if (reelId !== route.reelId) navigate({ kind: "reel", repo: route.repo, reelId }, { replace: true });
+				if (reelId !== route.reelId) {
+					navigate({ kind: "reel", repo: route.repo, reelId, releaseTag: route.releaseTag }, { replace: true });
+				}
+			}}
+			onDeepDiveChange={(reelId, deep) => {
+				// A route change that swaps the feed's reel scope can transiently
+				// report a different card as "active" before the feed scrolls to
+				// `route.reelId`; ignoring any reel other than the routed one keeps
+				// that transient signal from stomping the deep-dive flag it just set.
+				if (reelId !== route.reelId || Boolean(route.deep) === deep) return;
+				navigate(
+					{ kind: "reel", repo: route.repo, reelId: route.reelId, releaseTag: route.releaseTag, deep: deep ? true : undefined },
+					{ replace: true },
+				);
 			}}
 			playback={playback}
 		/>

@@ -35,6 +35,7 @@ export function ReelCard({
 	onEnded,
 	preload,
 	initialDeepDive,
+	onDeepDiveChange,
 }: {
 	reel: ReelEntry;
 	repo: Feed["repo"];
@@ -47,6 +48,8 @@ export function ReelCard({
 	preload: "auto" | "metadata" | "none";
 	/** Seeds the deep-dive view on mount, for a direct `.../deep` link. Only meaningful once; later toggles are local state. */
 	initialDeepDive?: boolean;
+	/** Fires with this card's deep-dive state while it is the active card, so the route can mirror it. */
+	onDeepDiveChange?: (deep: boolean) => void;
 }) {
 	const [viewingDeepDive, setViewingDeepDive] = useState(Boolean(initialDeepDive && reel.deepDive));
 	const [showSources, setShowSources] = useState(false);
@@ -63,6 +66,11 @@ export function ReelCard({
 			setActiveBeat(undefined);
 		}
 	}, [active]);
+
+	useEffect(() => {
+		if (!active) return;
+		onDeepDiveChange?.(viewingDeepDive);
+	}, [active, viewingDeepDive, onDeepDiveChange]);
 
 	useEffect(() => {
 		if (!active || !reel.deepDive) return;
@@ -111,6 +119,7 @@ export function ReelCard({
 						preload={preload}
 						onEnded={viewingDeepDive ? handleDeepDiveEnded : onEnded}
 						onProgress={onProgress}
+						onActiveBeatChange={setActiveBeat}
 					/>
 				)}
 				{mode === "audio" && (

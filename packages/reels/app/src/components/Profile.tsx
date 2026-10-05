@@ -34,22 +34,6 @@ function ReleaseRow({ feed, onOpenRelease }: { feed: Feed; onOpenRelease: (tag: 
 			<div className="profile-releases-row">
 				{playlists.map((playlist) => {
 					const label = playlist.date.slice(0, 10);
-					if (playlist.tiny) {
-						return (
-							<button
-								type="button"
-								key={playlist.tag}
-								className="release-chip"
-								onClick={() => onOpenRelease(playlist.tag)}
-							>
-								<span className="release-chip-tag">{playlist.tag}</span>
-								<span className="release-chip-meta">
-									{label} · {playlist.storyIds.length} {playlist.storyIds.length === 1 ? "story" : "stories"}
-								</span>
-							</button>
-						);
-					}
-
 					const overview = playlist.overviewId ? byId.get(playlist.overviewId) : undefined;
 					const fallbackStory = overview ? undefined : byId.get(playlist.storyIds[0] ?? "");
 					const posterReel = overview ?? fallbackStory;

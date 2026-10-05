@@ -52,6 +52,29 @@ describe("parseHash", () => {
 	test("a trailing segment other than 'deep' is ignored, staying a plain reel route", () => {
 		expect(parseHash("#/draht-mono/reel/abc123/whatever")).toEqual({ kind: "reel", repo: "draht-mono", reelId: "abc123" });
 	});
+
+	test("playlist-scoped reel route", () => {
+		expect(parseHash("#/draht-mono/release/v1.2.0/reel/abc123")).toEqual({
+			kind: "reel",
+			repo: "draht-mono",
+			reelId: "abc123",
+			releaseTag: "v1.2.0",
+		});
+	});
+
+	test("playlist-scoped deep dive reel route", () => {
+		expect(parseHash("#/draht-mono/release/v1.2.0/reel/abc123/deep")).toEqual({
+			kind: "reel",
+			repo: "draht-mono",
+			reelId: "abc123",
+			releaseTag: "v1.2.0",
+			deep: true,
+		});
+	});
+
+	test("release segment without a trailing reel id falls back to release route", () => {
+		expect(parseHash("#/draht-mono/release/v1.2.0/reel")).toEqual({ kind: "release", repo: "draht-mono", tag: "v1.2.0" });
+	});
 });
 
 describe("routeToHash", () => {
@@ -63,6 +86,12 @@ describe("routeToHash", () => {
 		expect(routeToHash({ kind: "reel", repo: "draht-mono", reelId: "abc123", deep: true })).toBe(
 			"#/draht-mono/reel/abc123/deep",
 		);
+		expect(routeToHash({ kind: "reel", repo: "draht-mono", reelId: "abc123", releaseTag: "v1.2.0" })).toBe(
+			"#/draht-mono/release/v1.2.0/reel/abc123",
+		);
+		expect(
+			routeToHash({ kind: "reel", repo: "draht-mono", reelId: "abc123", releaseTag: "v1.2.0", deep: true }),
+		).toBe("#/draht-mono/release/v1.2.0/reel/abc123/deep");
 	});
 
 	test("encodes special characters", () => {
@@ -76,6 +105,8 @@ describe("routeToHash", () => {
 			{ kind: "reel" as const, repo: "a/b c", reelId: "d e" },
 			{ kind: "release" as const, repo: "a/b c", tag: "v1/2 0" },
 			{ kind: "reel" as const, repo: "a/b c", reelId: "d e", deep: true as const },
+			{ kind: "reel" as const, repo: "a/b c", reelId: "d e", releaseTag: "v1/2 0" },
+			{ kind: "reel" as const, repo: "a/b c", reelId: "d e", releaseTag: "v1/2 0", deep: true as const },
 		];
 		for (const route of routes) {
 			expect(parseHash(routeToHash(route))).toEqual(route);

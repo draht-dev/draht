@@ -175,10 +175,32 @@ describe("AgentSession codemode tool", () => {
 		expect(requestPrompts[1]).not.toContain("\n- read: ");
 		expect(requestPrompts[1]).toContain("\n- codemode: ");
 		expect(harness.session.systemPrompt).not.toContain("\n- read: ");
+		// Hidden tools' guidelines move from the rules to their codemode sections (badlogic/pi-mono#10343).
+		expect(requestPrompts[1]).not.toContain("Use read to examine files");
+		expect(description("codemode")).toContain("- Use read to examine files instead of cat or sed.");
 
 		// Without codemode, tools keep their plain descriptions.
 		harness.session.setActiveToolsByName(["echo"]);
 		expect(description("echo")).toBe("Echo text back.\n\nSecond paragraph.");
+	});
+
+	// badlogic/pi-mono#10343
+	it("shows the guidelines of tools that do not fit the inline budget through describeTool()", async () => {
+		const harness = await setup();
+		harness.settingsManager.applyOverrides({ codemode: { mode: "only", inlineBudget: 0 } });
+		harness.session.setActiveToolsByName(["read", "codemode"]);
+		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "codemode");
+		expect(codemode?.description).not.toContain("### `read`");
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("codemode", { code: 'text(await describeTool("read"))' })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage("done"),
+		]);
+
+		await harness.session.prompt("go");
+
+		expect(resultText(codemodeResult(harness))).toContain("- Use read to examine files instead of cat or sed.");
 	});
 
 	it("runs nested calls in parallel and returns only the script result", async () => {

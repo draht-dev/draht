@@ -383,7 +383,10 @@ export async function executeCodemode(
 
 	const callable = ctx ? getCodemodeCallableTools(ctx.tools) : [];
 	// ALL_TOOLS entries carry the declaration.
-	const samples = new Map(callable.map((tool) => [tool.name, renderToolSample(toCodemodeDeclaration(tool))]));
+	const guidelines = options.getToolGuidelines?.();
+	const samples = new Map(
+		callable.map((tool) => [tool.name, renderToolSample(toCodemodeDeclaration(tool, guidelines?.get(tool.name)))]),
+	);
 	const sandboxTools: CodemodeTool[] = callable.map((tool) => ({
 		name: tool.name,
 		description: samples.get(tool.name),

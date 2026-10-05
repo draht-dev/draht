@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import type { ReelEntry } from "../../../src/contract.js";
+import type { Beat, ReelMedia } from "../../../src/contract.js";
 import { resolveAutoplayGesture } from "../lib/autoplayFallback.js";
+import { type CaptionChunk, currentCaptionChunk } from "../lib/captions.js";
 import { cacheMediaInBackground } from "../lib/mediaCache.js";
-import { activeSceneIndex } from "../lib/transcript.js";
+import { activeBeatIndex, activeSegment } from "../lib/transcript.js";
 import { SceneView } from "./SceneView.js";
 
 export function AudioPlayer({
@@ -12,16 +13,21 @@ export function AudioPlayer({
 	preload,
 	onEnded,
 	onProgress,
+	onActiveBeatChange,
 }: {
-	reel: ReelEntry;
+	reel: ReelMedia;
 	active: boolean;
 	muted: boolean;
 	preload: "auto" | "metadata" | "none";
 	onEnded: () => void;
 	onProgress: (fraction: number) => void;
+	/** Lifted for the sources sheet, which highlights the beat's cited sources. */
+	onActiveBeatChange?: (beat: Beat | undefined) => void;
 }) {
 	const audioRef = useRef<HTMLAudioElement>(null);
 	const [sceneIndex, setSceneIndex] = useState(0);
+	const [beatIndex, setBeatIndex] = useState(-1);
+	const [captionChunk, setCaptionChunk] = useState<CaptionChunk | undefined>(undefined);
 	const [gesture, setGesture] = useState<"play" | "unmute" | null>(null);
 	const cacheAbortRef = useRef<AbortController | null>(null);
 
@@ -86,8 +92,14 @@ export function AudioPlayer({
 		const audio = audioRef.current;
 		if (!audio) return;
 		const currentMs = audio.currentTime * 1000;
-		const index = activeSceneIndex(reel.transcript, currentMs);
-		if (index !== undefined) setSceneIndex(index);
+		const segment = activeSegment(reel.transcript, currentMs);
+		if (segment) {
+			setSceneIndex(segment.sceneIndex);
+			const beat = activeBeatIndex(segment, currentMs);
+			setBeatIndex(beat);
+			setCaptionChunk(currentCaptionChunk(segment, currentMs));
+			onActiveBeatChange?.(beat >= 0 ? reel.scenes[segment.sceneIndex]?.beats?.[beat] : undefined);
+		}
 		if (audio.duration > 0) onProgress(audio.currentTime / audio.duration);
 	};
 
@@ -111,8 +123,24 @@ export function AudioPlayer({
 					preload={preload}
 				/>
 			)}
-			<div className="audio-scene">{activeScene && !isTitleScene && <SceneView scene={activeScene} />}</div>
-			{!isTitleScene && <p className="audio-caption">{reel.transcript[sceneIndex]?.text}</p>}
+			<div className="audio-scene">{activeScene && !isTitleScene && <SceneView scene={activeScene} beatIndex={beatIndex} />}</div>
+			{!isTitleScene &&
+				(captionChunk ? (
+					<p className="audio-caption">
+						{captionChunk.words.map((word, index) => (
+							// biome-ignore lint/suspicious/noArrayIndexKey: a caption chunk's words have no stable identity beyond position
+							<span
+								key={index}
+								className={index === captionChunk.activeIndexInChunk ? "caption-word caption-word-active" : "caption-word"}
+							>
+								{word.text}
+								{index < captionChunk.words.length - 1 ? " " : ""}
+							</span>
+						))}
+					</p>
+				) : (
+					<p className="audio-caption">{reel.transcript[sceneIndex]?.text}</p>
+				))}
 			{gesture && (
 				<button type="button" className="audio-player-gesture" onClick={handleGestureTap}>
 					{gesture === "unmute" ? "Tap to unmute" : "Tap to play"}

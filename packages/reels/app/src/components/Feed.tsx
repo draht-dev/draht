@@ -2,27 +2,36 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Feed as FeedData } from "../../../src/contract.js";
 import { DEFAULT_APP_KEYBINDINGS } from "../lib/keybindings.js";
 import { matchesKeyBinding } from "../lib/matchesKeyBinding.js";
+import { publishedReels, reelsByIds } from "../lib/playlists.js";
 import { pickMostVisible } from "../lib/visibility.js";
 import { ReelCard } from "./ReelCard.js";
 import type { usePlaybackPreference } from "../hooks/usePlaybackPreference.js";
 
 export function Feed({
 	feed,
+	reelIds,
 	initialReelId,
+	initialDeepDive,
 	onActiveReelChange,
 	playback,
 }: {
 	feed: FeedData;
+	/** Scopes and orders the feed to a release playlist's reels; absent plays every published reel, newest first. */
+	reelIds?: string[];
 	initialReelId: string | undefined;
+	initialDeepDive?: boolean;
 	onActiveReelChange: (reelId: string) => void;
 	playback: ReturnType<typeof usePlaybackPreference>;
 }) {
+	// Drafts (owner decision 2026-10-05: LLM-written reels are drafts until approved)
+	// are never shown, in any feed view.
+	const reels = useMemo(() => (reelIds ? reelsByIds(feed, reelIds) : publishedReels(feed)), [feed, reelIds]);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const sectionRefs = useRef<Map<string, HTMLElement>>(new Map());
 	const initialIndex = useMemo(() => {
-		const index = feed.reels.findIndex((reel) => reel.id === initialReelId);
+		const index = reels.findIndex((reel) => reel.id === initialReelId);
 		return index >= 0 ? index : 0;
-	}, [feed.reels, initialReelId]);
+	}, [reels, initialReelId]);
 	const [activeIndex, setActiveIndex] = useState(initialIndex);
 	// The reel id this component itself last reported up via
 	// onActiveReelChange. App.tsx echoes that id straight back as the next
@@ -34,9 +43,9 @@ export function Feed({
 
 	useEffect(() => {
 		if (initialReelId !== undefined && initialReelId === lastReportedReelId.current) return;
-		const target = sectionRefs.current.get(feed.reels[initialIndex]?.id ?? "");
+		const target = sectionRefs.current.get(reels[initialIndex]?.id ?? "");
 		target?.scrollIntoView({ block: "start" });
-	}, [feed.reels, initialIndex, initialReelId]);
+	}, [reels, initialIndex, initialReelId]);
 
 	useEffect(() => {
 		const container = containerRef.current;
@@ -57,7 +66,7 @@ export function Feed({
 				}
 				const bestId = pickMostVisible(ratios);
 				if (!bestId) return;
-				const index = feed.reels.findIndex((reel) => reel.id === bestId);
+				const index = reels.findIndex((reel) => reel.id === bestId);
 				if (index >= 0) setActiveIndex(index);
 			},
 			{ root: container, threshold: [0, 0.5, 0.75, 1] },
@@ -65,19 +74,19 @@ export function Feed({
 
 		for (const element of sectionRefs.current.values()) observer.observe(element);
 		return () => observer.disconnect();
-	}, [feed.reels]);
+	}, [reels]);
 
 	useEffect(() => {
-		const reel = feed.reels[activeIndex];
+		const reel = reels[activeIndex];
 		if (reel) {
 			lastReportedReelId.current = reel.id;
 			onActiveReelChange(reel.id);
 		}
-	}, [activeIndex, feed.reels, onActiveReelChange]);
+	}, [activeIndex, reels, onActiveReelChange]);
 
 	const goToIndex = (index: number) => {
-		const clamped = Math.min(Math.max(index, 0), feed.reels.length - 1);
-		const target = sectionRefs.current.get(feed.reels[clamped]?.id ?? "");
+		const clamped = Math.min(Math.max(index, 0), reels.length - 1);
+		const target = sectionRefs.current.get(reels[clamped]?.id ?? "");
 		target?.scrollIntoView({ behavior: "smooth", block: "start" });
 	};
 
@@ -93,7 +102,7 @@ export function Feed({
 		};
 		window.addEventListener("keydown", handler);
 		return () => window.removeEventListener("keydown", handler);
-	}, [activeIndex, feed.reels]);
+	}, [activeIndex, reels]);
 
 	useEffect(() => {
 		if (!("mediaSession" in navigator)) return;
@@ -103,11 +112,11 @@ export function Feed({
 			navigator.mediaSession.setActionHandler("nexttrack", null);
 			navigator.mediaSession.setActionHandler("previoustrack", null);
 		};
-	}, [activeIndex, feed.reels]);
+	}, [activeIndex, reels]);
 
 	return (
 		<div ref={containerRef} className="feed">
-			{feed.reels.map((reel, index) => (
+			{reels.map((reel, index) => (
 				<div
 					key={reel.id}
 					data-reel-id={reel.id}
@@ -130,6 +139,7 @@ export function Feed({
 						// incrementally and stops when the user scrolls away. Offline
 						// caching is triggered by the players on `canplaythrough`.
 						preload={index === activeIndex ? "auto" : index === activeIndex + 1 ? "metadata" : "none"}
+						initialDeepDive={reel.id === initialReelId ? initialDeepDive : undefined}
 					/>
 				</div>
 			))}

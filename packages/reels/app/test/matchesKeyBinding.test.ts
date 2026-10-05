@@ -24,4 +24,9 @@ describe("matchesKeyBinding", () => {
 	test("a modified chord does not match the unmodified binding", () => {
 		expect(matchesKeyBinding(keyEvent({ key: "j", ctrlKey: true }), DEFAULT_APP_KEYBINDINGS.nextReel)).toBe(false);
 	});
+
+	test("matches d for openDeepDive", () => {
+		expect(matchesKeyBinding(keyEvent({ key: "d" }), DEFAULT_APP_KEYBINDINGS.openDeepDive)).toBe(true);
+		expect(matchesKeyBinding(keyEvent({ key: "d", metaKey: true }), DEFAULT_APP_KEYBINDINGS.openDeepDive)).toBe(false);
+	});
 });

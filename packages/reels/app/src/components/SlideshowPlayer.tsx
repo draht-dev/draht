@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { ReelEntry } from "../../../src/contract.js";
+import type { ReelMedia } from "../../../src/contract.js";
 import { SceneView } from "./SceneView.js";
 
 /** Silent fallback for reels with neither video nor audio: advances scenes by transcript timing. */
@@ -9,7 +9,7 @@ export function SlideshowPlayer({
 	onEnded,
 	onProgress,
 }: {
-	reel: ReelEntry;
+	reel: ReelMedia;
 	active: boolean;
 	onEnded: () => void;
 	onProgress: (fraction: number) => void;

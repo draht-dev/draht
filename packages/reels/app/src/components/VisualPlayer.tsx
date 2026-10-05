@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { ReelEntry } from "../../../src/contract.js";
+import type { ReelMedia } from "../../../src/contract.js";
 import { resolveAutoplayGesture } from "../lib/autoplayFallback.js";
 import { cacheMediaInBackground } from "../lib/mediaCache.js";
 
@@ -11,7 +11,7 @@ export function VisualPlayer({
 	onEnded,
 	onProgress,
 }: {
-	reel: ReelEntry;
+	reel: ReelMedia;
 	active: boolean;
 	muted: boolean;
 	preload: "auto" | "metadata" | "none";

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { TranscriptSegment } from "../../src/contract.js";
-import { activeSceneIndex, activeSegment } from "../src/lib/transcript.js";
+import { activeBeatIndex, activeSceneIndex, activeSegment, activeWordIndex } from "../src/lib/transcript.js";
 
 const transcript: TranscriptSegment[] = [
 	{ sceneIndex: 0, text: "a", startMs: 0, endMs: 1000 },
@@ -28,5 +28,52 @@ describe("activeSegment", () => {
 describe("activeSceneIndex", () => {
 	test("maps time to the owning scene index", () => {
 		expect(activeSceneIndex(transcript, 1500)).toBe(1);
+	});
+});
+
+const segmentWithBeats: TranscriptSegment = {
+	sceneIndex: 1,
+	text: "b",
+	startMs: 1000,
+	endMs: 3000,
+	beatStartsMs: [1000, 1800, 2500],
+};
+
+describe("activeBeatIndex", () => {
+	test("returns the beat active at the given time", () => {
+		expect(activeBeatIndex(segmentWithBeats, 1000)).toBe(0);
+		expect(activeBeatIndex(segmentWithBeats, 1799)).toBe(0);
+		expect(activeBeatIndex(segmentWithBeats, 1800)).toBe(1);
+		expect(activeBeatIndex(segmentWithBeats, 2999)).toBe(2);
+	});
+
+	test("returns -1 before the first beat, and when there is no beat timing", () => {
+		expect(activeBeatIndex(segmentWithBeats, 999)).toBe(-1);
+		expect(activeBeatIndex(transcript[0], 500)).toBe(-1);
+		expect(activeBeatIndex(undefined, 500)).toBe(-1);
+	});
+});
+
+const segmentWithWords: TranscriptSegment = {
+	sceneIndex: 0,
+	text: "hello there",
+	startMs: 0,
+	endMs: 2000,
+	words: [
+		{ text: "hello", startMs: 0, endMs: 900 },
+		{ text: "there", startMs: 900, endMs: 2000 },
+	],
+};
+
+describe("activeWordIndex", () => {
+	test("returns the word active at the given time", () => {
+		expect(activeWordIndex(segmentWithWords, 0)).toBe(0);
+		expect(activeWordIndex(segmentWithWords, 899)).toBe(0);
+		expect(activeWordIndex(segmentWithWords, 900)).toBe(1);
+	});
+
+	test("falls back to -1 before the first word, and when there is no word timing", () => {
+		expect(activeWordIndex(transcript[0], 0)).toBe(-1);
+		expect(activeWordIndex(undefined, 0)).toBe(-1);
 	});
 });

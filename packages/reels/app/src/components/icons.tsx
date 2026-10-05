@@ -30,6 +30,26 @@ export function MuteIcon({ className }: IconProps) {
 	);
 }
 
+export function DeepDiveIcon({ className }: IconProps) {
+	return (
+		<svg viewBox="0 0 24 24" width="20" height="20" className={className} aria-hidden="true">
+			<circle cx="10" cy="10" r="6" fill="none" stroke="currentColor" strokeWidth="1.8" />
+			<path d="M14.5 14.5L20 20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+			<path d="M10 7v6M7 10h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+		</svg>
+	);
+}
+
+export function SourcesIcon({ className }: IconProps) {
+	return (
+		<svg viewBox="0 0 24 24" width="20" height="20" className={className} aria-hidden="true">
+			<rect x="4" y="4" width="16" height="4" rx="1" fill="none" stroke="currentColor" strokeWidth="1.8" />
+			<rect x="4" y="10" width="16" height="4" rx="1" fill="none" stroke="currentColor" strokeWidth="1.8" />
+			<rect x="4" y="16" width="10" height="4" rx="1" fill="none" stroke="currentColor" strokeWidth="1.8" />
+		</svg>
+	);
+}
+
 export function UnmuteIcon({ className }: IconProps) {
 	return (
 		<svg viewBox="0 0 24 24" width="20" height="20" className={className} aria-hidden="true">

@@ -1,5 +1,5 @@
 {
-	"schemaVersion": 1,
+	"schemaVersion": 2,
 	"repo": {
 		"name": "draht-mono",
 		"url": "https://github.com/draht/draht-mono",
@@ -7,6 +7,320 @@
 	},
 	"generatedAt": "2026-09-30T14:12:00Z",
 	"reels": [
+		{
+			"id": "release-v1.2.0-overview",
+			"commits": ["aaa1111"],
+			"title": "v1.2.0: beat-synced reels and the explainer writer",
+			"authors": ["Oskar Freye"],
+			"date": "2026-10-03T09:00:00Z",
+			"durationMs": 14000,
+			"poster": "release-v1.2.0-overview/poster.jpg",
+			"audio": "release-v1.2.0-overview/audio.mp3",
+			"kind": "release",
+			"release": "v1.2.0",
+			"writer": "llm",
+			"sources": [
+				{ "id": "st:story-beat-sync", "kind": "story", "label": "Beat-synced audio mode" },
+				{ "id": "st:story-docs-rewrite", "kind": "story", "label": "Rewrite the evidence-rule docs" },
+				{ "id": "cl:reels@1.2.0#1", "kind": "changelog", "label": "CHANGELOG: @draht/reels 1.2.0" }
+			],
+			"scenes": [
+				{
+					"kind": "title",
+					"title": "v1.2.0: beat-synced reels and the explainer writer",
+					"subtitle": "draht-mono",
+					"narration": "Two features landed in v1.2.0."
+				},
+				{
+					"kind": "diagram",
+					"section": "theme",
+					"mermaid": "graph TD\n  a[story-beat-sync] --> app[app/]\n  b[story-docs-rewrite] --> docs[README.md]",
+					"narration": "A beat-synced audio mode, and a docs rewrite to match it.",
+					"beats": [
+						{ "text": "A beat-synced audio mode.", "focus": { "nodes": ["a"] }, "cites": ["st:story-beat-sync"] },
+						{ "text": "And a docs rewrite to match it.", "focus": { "nodes": ["b"] }, "cites": ["st:story-docs-rewrite"] }
+					]
+				},
+				{ "kind": "outro", "narration": "Also: upstream sync through v0.99.2, 365 commits." }
+			],
+			"transcript": [
+				{ "sceneIndex": 0, "text": "Two features landed in v1.2.0.", "startMs": 0, "endMs": 3000 },
+				{
+					"sceneIndex": 1,
+					"text": "A beat-synced audio mode, and a docs rewrite to match it.",
+					"startMs": 3000,
+					"endMs": 11000,
+					"beatStartsMs": [3000, 7000]
+				},
+				{ "sceneIndex": 2, "text": "Also: upstream sync through v0.99.2, 365 commits.", "startMs": 11000, "endMs": 14000 }
+			],
+			"stats": { "files": 0, "additions": 0, "deletions": 0 }
+		},
+		{
+			"id": "story-beat-sync",
+			"commits": ["bbb2222", "bbb2223"],
+			"title": "Sync captions and diagram focus to narration beats",
+			"authors": ["Oskar Freye"],
+			"date": "2026-10-02T16:40:00Z",
+			"durationMs": 22000,
+			"video": "story-beat-sync/video.mp4",
+			"audio": "story-beat-sync/audio.mp3",
+			"poster": "story-beat-sync/poster.jpg",
+			"kind": "story",
+			"release": "v1.2.0",
+			"writer": "llm",
+			"story": {
+				"origin": "branch",
+				"base": "aaa0000",
+				"commitCount": 2,
+				"branch": "feat/beat-sync",
+				"theme": "reels",
+				"summary": "Audio mode now highlights the focused code lines and diagram nodes per beat.",
+				"deepDive": "rendered"
+			},
+			"sources": [
+				{ "id": "c:bbb2222", "kind": "commit", "label": "feat(reels): sync captions and focus to beats" },
+				{ "id": "pr:42", "kind": "pr", "label": "PR #42: beat-synced audio mode", "url": "https://github.com/draht/draht-mono/pull/42" },
+				{ "id": "doc:readme", "kind": "doc", "label": "packages/reels/README.md" },
+				{ "id": "f:app/src/lib/transcript.ts", "kind": "file", "label": "app/src/lib/transcript.ts" }
+			],
+			"scenes": [
+				{
+					"kind": "title",
+					"title": "Sync captions and diagram focus to narration beats",
+					"subtitle": "draht-mono",
+					"narration": "Audio mode used to highlight only per scene. Now it highlights per beat."
+				},
+				{
+					"kind": "code",
+					"section": "mechanism",
+					"path": "app/src/lib/transcript.ts",
+					"language": "ts",
+					"hunkHeader": "@@ -17,0 +18,26 @@",
+					"origin": "diff",
+					"lines": [
+						"+export function activeBeatIndex(segment, currentMs) {",
+						"+\tconst starts = segment?.beatStartsMs;",
+						"+\tif (!starts || starts.length === 0) return -1;",
+						"+\tlet index = -1;",
+						"+\tfor (let i = 0; i < starts.length; i++) {",
+						"+\t\tif (currentMs >= starts[i]) index = i;",
+						"+\t\telse break;",
+						"+\t}",
+						"+\treturn index;",
+						"+}"
+					],
+					"narration": "A small ms-based lookup finds which beat is active right now.",
+					"beats": [
+						{
+							"text": "A small ms-based lookup finds which beat is active right now.",
+							"focus": { "lines": [1, 9] },
+							"claim": "how",
+							"cites": ["c:bbb2222", "f:app/src/lib/transcript.ts"]
+						}
+					]
+				},
+				{
+					"kind": "diagram",
+					"section": "idea",
+					"mermaid": "graph LR\n  seg[TranscriptSegment] --> beat[activeBeatIndex] --> focus[Scene focus]\n  beat --> word[activeWordIndex] --> caption[Caption chunk]",
+					"narration": "Beat index drives scene focus; word index drives the caption chunk.",
+					"beats": [
+						{ "text": "The beat index drives which lines or nodes light up.", "focus": { "nodes": ["beat", "focus"] }, "cites": ["c:bbb2222"] },
+						{ "text": "The word index drives which caption chunk is current.", "focus": { "nodes": ["word", "caption"] }, "cites": ["c:bbb2222"] }
+					]
+				},
+				{ "kind": "outro", "narration": "Reviewed in PR #42, with a deep dive on the caption chunking rules." }
+			],
+			"transcript": [
+				{ "sceneIndex": 0, "text": "Audio mode used to highlight only per scene. Now it highlights per beat.", "startMs": 0, "endMs": 6000 },
+				{
+					"sceneIndex": 1,
+					"text": "A small ms-based lookup finds which beat is active right now.",
+					"startMs": 6000,
+					"endMs": 12000,
+					"beatStartsMs": [6000],
+					"words": [
+						{ "text": "A", "startMs": 6000, "endMs": 6150 },
+						{ "text": "small", "startMs": 6150, "endMs": 6500 },
+						{ "text": "ms-based", "startMs": 6500, "endMs": 7000 },
+						{ "text": "lookup", "startMs": 7000, "endMs": 7400 },
+						{ "text": "finds", "startMs": 7400, "endMs": 7700 },
+						{ "text": "which", "startMs": 7700, "endMs": 8000 },
+						{ "text": "beat", "startMs": 8000, "endMs": 8300 },
+						{ "text": "is", "startMs": 8300, "endMs": 8450 },
+						{ "text": "active", "startMs": 8450, "endMs": 8900 },
+						{ "text": "right", "startMs": 8900, "endMs": 9200 },
+						{ "text": "now.", "startMs": 9200, "endMs": 9700 }
+					]
+				},
+				{
+					"sceneIndex": 2,
+					"text": "Beat index drives scene focus; word index drives the caption chunk.",
+					"startMs": 12000,
+					"endMs": 19000,
+					"beatStartsMs": [12000, 15500]
+				},
+				{ "sceneIndex": 3, "text": "Reviewed in PR #42, with a deep dive on the caption chunking rules.", "startMs": 19000, "endMs": 22000 }
+			],
+			"stats": { "files": 6, "additions": 184, "deletions": 12 },
+			"deepDive": {
+				"durationMs": 18000,
+				"audio": "story-beat-sync/deep/audio.mp3",
+				"poster": "story-beat-sync/deep/poster.jpg",
+				"scenes": [
+					{
+						"kind": "title",
+						"title": "Deep dive: caption chunking",
+						"subtitle": "Why chunks break on sentence and clause boundaries",
+						"narration": "A deeper look at how the caption text is grouped."
+					},
+					{
+						"kind": "code",
+						"section": "code",
+						"path": "src/remotion/scenes/caption-logic.ts",
+						"language": "ts",
+						"origin": "head",
+						"startLine": 40,
+						"ref": "bbb222200aa",
+						"hunkHeader": "src/remotion/scenes/caption-logic.ts:40-47 @ bbb222200aa",
+						"lines": [
+							" export function chunkWords(words) {",
+							" \tconst chunks = [];",
+							" \tlet current = [];",
+							" \tfor (const word of words) {",
+							"+\t\tconst overflowsWords = current.length >= MAX_CHUNK_WORDS;",
+							"+\t\tconst overflowsBudget = current.length > 0 && textLength([...current, word]) > CAPTION_CHAR_BUDGET;",
+							"+\t\tif (overflowsWords || overflowsBudget) { chunks.push(current); current = []; }",
+							" \t\tcurrent.push(word);"
+						],
+						"narration": "A chunk breaks once it would overflow the caption box, never mid-sentence.",
+						"beats": [
+							{
+								"text": "A chunk breaks once it would overflow the caption box, never mid-sentence.",
+								"focus": { "lines": [5, 7] },
+								"claim": "why",
+								"quote": "a chunk never overflows the caption box at its own font size",
+								"cites": ["f:src/remotion/scenes/caption-logic.ts"]
+							}
+						]
+					},
+					{ "kind": "outro", "narration": "Same rules, reused by audio mode's captions in the app." }
+				],
+				"transcript": [
+					{ "sceneIndex": 0, "text": "A deeper look at how the caption text is grouped.", "startMs": 0, "endMs": 4000 },
+					{
+						"sceneIndex": 1,
+						"text": "A chunk breaks once it would overflow the caption box, never mid-sentence.",
+						"startMs": 4000,
+						"endMs": 13000,
+						"beatStartsMs": [4000]
+					},
+					{ "sceneIndex": 2, "text": "Same rules, reused by audio mode's captions in the app.", "startMs": 13000, "endMs": 18000 }
+				]
+			}
+		},
+		{
+			"id": "story-docs-rewrite",
+			"commits": ["ccc3333"],
+			"title": "Rewrite the evidence-rule docs for v2",
+			"authors": ["Oskar Freye"],
+			"date": "2026-10-02T11:00:00Z",
+			"durationMs": 9000,
+			"poster": "story-docs-rewrite/poster.jpg",
+			"audio": "story-docs-rewrite/audio.mp3",
+			"kind": "story",
+			"release": "v1.2.0",
+			"writer": "template",
+			"story": {
+				"origin": "commit",
+				"base": "ccc3332",
+				"commitCount": 1,
+				"theme": "docs",
+				"summary": "README now documents head-line origins and anchored diagrams.",
+				"deepDive": "not-warranted"
+			},
+			"sources": [{ "id": "c:ccc3333", "kind": "commit", "label": "docs(reels): document the v2 evidence rule" }],
+			"scenes": [
+				{
+					"kind": "title",
+					"title": "Rewrite the evidence-rule docs for v2",
+					"subtitle": "draht-mono",
+					"narration": "The README now matches the v2 contract."
+				},
+				{
+					"kind": "stats",
+					"files": [{ "path": "packages/reels/README.md", "status": "modified", "additions": 48, "deletions": 6 }],
+					"narration": "One file, mostly additions."
+				},
+				{ "kind": "outro", "narration": "No code or diagram changes to show." }
+			],
+			"transcript": [
+				{ "sceneIndex": 0, "text": "The README now matches the v2 contract.", "startMs": 0, "endMs": 3500 },
+				{ "sceneIndex": 1, "text": "One file, mostly additions.", "startMs": 3500, "endMs": 6000 },
+				{ "sceneIndex": 2, "text": "No code or diagram changes to show.", "startMs": 6000, "endMs": 9000 }
+			],
+			"stats": { "files": 1, "additions": 48, "deletions": 6 }
+		},
+		{
+			"id": "recap-upstream-v0.99",
+			"commits": ["ddd4444"],
+			"title": "Upstream sync through v0.99.2",
+			"authors": ["Oskar Freye"],
+			"date": "2026-10-01T08:00:00Z",
+			"durationMs": 10000,
+			"poster": "recap-upstream-v0.99/poster.jpg",
+			"audio": "recap-upstream-v0.99/audio.mp3",
+			"kind": "recap",
+			"release": "v1.2.0",
+			"writer": "llm",
+			"recap": {
+				"fromRef": "v0.99.1",
+				"toRef": "v0.99.2",
+				"commitCount": 365,
+				"themes": [{ "name": "agent runtime", "sourceIds": ["cl:upstream@0.99.2#1", "cl:upstream@0.99.2#2"] }]
+			},
+			"sources": [
+				{ "id": "cl:upstream@0.99.2#1", "kind": "changelog", "label": "upstream CHANGELOG: 0.99.2" },
+				{ "id": "cl:upstream@0.99.2#2", "kind": "changelog", "label": "upstream CHANGELOG: 0.99.2 (cont.)" }
+			],
+			"scenes": [
+				{
+					"kind": "title",
+					"title": "Upstream sync through v0.99.2",
+					"subtitle": "draht-mono",
+					"narration": "365 commits came in from the upstream fork."
+				},
+				{ "kind": "outro", "narration": "Grouped here by theme rather than as individual feature reels." }
+			],
+			"transcript": [
+				{ "sceneIndex": 0, "text": "365 commits came in from the upstream fork.", "startMs": 0, "endMs": 5000 },
+				{ "sceneIndex": 1, "text": "Grouped here by theme rather than as individual feature reels.", "startMs": 5000, "endMs": 10000 }
+			],
+			"stats": { "files": 0, "additions": 0, "deletions": 0 }
+		},
+		{
+			"id": "story-unreviewed-change",
+			"commits": ["eee5555"],
+			"title": "Draft: rework the TTS retry loop",
+			"authors": ["Oskar Freye"],
+			"date": "2026-10-03T12:00:00Z",
+			"durationMs": 8000,
+			"kind": "story",
+			"release": "v1.2.0",
+			"writer": "llm",
+			"status": "draft",
+			"story": { "origin": "commit", "base": "eee5554", "commitCount": 1, "theme": "reels", "summary": "Not yet approved." },
+			"scenes": [
+				{ "kind": "title", "title": "Draft: rework the TTS retry loop", "subtitle": "draht-mono", "narration": "This reel is a draft." },
+				{ "kind": "outro", "narration": "Drafts are never published until approved." }
+			],
+			"transcript": [
+				{ "sceneIndex": 0, "text": "This reel is a draft.", "startMs": 0, "endMs": 4000 },
+				{ "sceneIndex": 1, "text": "Drafts are never published until approved.", "startMs": 4000, "endMs": 8000 }
+			],
+			"stats": { "files": 1, "additions": 20, "deletions": 4 }
+		},
 		{
 			"id": "full-reel",
 			"commits": ["a1b2c3d"],
@@ -145,6 +459,36 @@
 				{ "sceneIndex": 4, "text": "That wraps up the merge.", "startMs": 18000, "endMs": 20000 }
 			],
 			"stats": { "files": 3, "additions": 94, "deletions": 42 }
+		}
+	],
+	"playlists": [
+		{
+			"tag": "v1.2.0",
+			"sha": "aaa1111",
+			"date": "2026-10-03T09:00:00Z",
+			"previousTag": "v1.1.0",
+			"title": "v1.2.0",
+			"overviewId": "release-v1.2.0-overview",
+			"storyIds": ["story-beat-sync", "story-docs-rewrite", "story-unreviewed-change"],
+			"themes": [
+				{ "name": "reels", "storyIds": ["story-beat-sync", "story-unreviewed-change"] },
+				{ "name": "docs", "storyIds": ["story-docs-rewrite"] }
+			],
+			"syncs": [{ "title": "Upstream sync through v0.99.2", "commitCount": 365, "recapId": "recap-upstream-v0.99" }],
+			"changeCount": 4,
+			"tiny": false
+		},
+		{
+			"tag": "v1.1.1",
+			"sha": "zzz9999",
+			"date": "2026-09-25T09:00:00Z",
+			"previousTag": "v1.1.0",
+			"title": "v1.1.1",
+			"storyIds": ["story-docs-rewrite"],
+			"themes": [{ "name": "docs", "storyIds": ["story-docs-rewrite"] }],
+			"syncs": [],
+			"changeCount": 1,
+			"tiny": true
 		}
 	]
 }

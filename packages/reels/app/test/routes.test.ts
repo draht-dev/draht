@@ -23,6 +23,35 @@ describe("parseHash", () => {
 	test("repo segment without a trailing reel id falls back to repo route", () => {
 		expect(parseHash("#/draht-mono/reel")).toEqual({ kind: "repo", repo: "draht-mono" });
 	});
+
+	test("release route", () => {
+		expect(parseHash("#/draht-mono/release/v1.2.0")).toEqual({ kind: "release", repo: "draht-mono", tag: "v1.2.0" });
+	});
+
+	test("repo segment without a trailing tag falls back to repo route", () => {
+		expect(parseHash("#/draht-mono/release")).toEqual({ kind: "repo", repo: "draht-mono" });
+	});
+
+	test("decodes an encoded release tag", () => {
+		expect(parseHash("#/draht-mono/release/v1.2.0%2Fbeta")).toEqual({
+			kind: "release",
+			repo: "draht-mono",
+			tag: "v1.2.0/beta",
+		});
+	});
+
+	test("deep dive reel route", () => {
+		expect(parseHash("#/draht-mono/reel/abc123/deep")).toEqual({
+			kind: "reel",
+			repo: "draht-mono",
+			reelId: "abc123",
+			deep: true,
+		});
+	});
+
+	test("a trailing segment other than 'deep' is ignored, staying a plain reel route", () => {
+		expect(parseHash("#/draht-mono/reel/abc123/whatever")).toEqual({ kind: "reel", repo: "draht-mono", reelId: "abc123" });
+	});
 });
 
 describe("routeToHash", () => {
@@ -30,6 +59,10 @@ describe("routeToHash", () => {
 		expect(routeToHash({ kind: "home" })).toBe("#/");
 		expect(routeToHash({ kind: "repo", repo: "draht-mono" })).toBe("#/draht-mono");
 		expect(routeToHash({ kind: "reel", repo: "draht-mono", reelId: "abc123" })).toBe("#/draht-mono/reel/abc123");
+		expect(routeToHash({ kind: "release", repo: "draht-mono", tag: "v1.2.0" })).toBe("#/draht-mono/release/v1.2.0");
+		expect(routeToHash({ kind: "reel", repo: "draht-mono", reelId: "abc123", deep: true })).toBe(
+			"#/draht-mono/reel/abc123/deep",
+		);
 	});
 
 	test("encodes special characters", () => {
@@ -41,6 +74,8 @@ describe("routeToHash", () => {
 			{ kind: "home" as const },
 			{ kind: "repo" as const, repo: "a/b c" },
 			{ kind: "reel" as const, repo: "a/b c", reelId: "d e" },
+			{ kind: "release" as const, repo: "a/b c", tag: "v1/2 0" },
+			{ kind: "reel" as const, repo: "a/b c", reelId: "d e", deep: true as const },
 		];
 		for (const route of routes) {
 			expect(parseHash(routeToHash(route))).toEqual(route);

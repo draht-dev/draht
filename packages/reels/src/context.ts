@@ -43,7 +43,7 @@ import {
 	type SourceRecord,
 	type SourceRegistry,
 } from "./sources.ts";
-import { extractIdentifiers } from "./stories.ts";
+import { extractIdentifiers, storyIdSha } from "./stories.ts";
 
 /** Token estimate used only for display/logging; the budget itself is char-based. */
 export const CHARS_PER_TOKEN = 4;
@@ -95,6 +95,15 @@ export interface AssembledStoryContext {
 	headFiles: ReadonlyMap<string, HeadFileContent>;
 	/** Anchors `validateAndEmitDiagram` may check a diagram node against. */
 	anchors: AnchorContext;
+	/**
+	 * The story's files after {@link applyContentPolicy} (M1): the only
+	 * `FileChange[]` a validator may resolve a `code.path` against, so a
+	 * denied path's hunk is withheld there exactly as it was withheld in the
+	 * prompt the model actually saw.
+	 */
+	files: FileChange[];
+	/** M1/M2: true when `path` may never back a validated code scene (code deny, `docs.deny`, or the unlisted `.planning/**` rule), independent of whether its hunk already happens to be withheld. */
+	isBlocked: (path: string) => boolean;
 }
 
 export interface AssembleStoryContextOptions {
@@ -254,18 +263,33 @@ export interface KeyFileDenyOptions {
 	allowGlobs?: readonly string[];
 	/** `docs.deny`: also kept out of key files and the hunk index, even though it is a doc-only list. */
 	docsDenyGlobs?: readonly string[];
+	/** `docs.allow`: only its `.planning/`-prefixed entries matter here (see below). */
+	docsAllowGlobs?: readonly string[];
 }
 
 /**
- * True when `path` is blocked from ever reaching the writer as a key file or
- * a hunk-index entry: a denied path (`applyContentPolicy`'s own deny-list)
- * still carries a withheld-but-present hunk, which {@link isKeyFileCandidate}
- * alone does not reject, and `docs.deny` paths are never withheld by
- * `applyContentPolicy` at all (it only knows about code deny globs).
+ * True when `path` is blocked from ever reaching the writer as a key file, a
+ * hunk-index entry, or (D7/M1) a validated code scene's `code.path`: a
+ * denied path (`applyContentPolicy`'s own deny-list) still carries a
+ * withheld-but-present hunk, which {@link isKeyFileCandidate} alone does not
+ * reject, and `docs.deny` paths are never withheld by `applyContentPolicy`
+ * at all (it only knows about code deny globs).
+ *
+ * `.planning/**` is blocked outright unless `docsAllowGlobs` contains a glob
+ * that itself starts with `".planning/"` and matches `path`: a generic allow
+ * glob like `**\/README.md` must never admit a `.planning/**` file by
+ * accident (mirrors {@link listDocCandidates}'s own guard, but this is the
+ * one place that gates a *code* reference into that directory too, not just
+ * the docs bucket).
  */
-function isContextBlocked(path: string, deny: Required<KeyFileDenyOptions>): boolean {
+export function isContextBlocked(path: string, deny: Required<KeyFileDenyOptions>): boolean {
 	if (isPathDenied(path, deny.denyGlobs, deny.allowGlobs)) return true;
-	return isPathDenied(path, deny.docsDenyGlobs, []);
+	if (isPathDenied(path, deny.docsDenyGlobs, [])) return true;
+	if (path.startsWith(".planning/")) {
+		const planningAllowGlobs = deny.docsAllowGlobs.filter((g) => g.startsWith(".planning/"));
+		if (!isDocAllowed(path, { allowGlobs: planningAllowGlobs, denyGlobs: [] })) return true;
+	}
+	return false;
 }
 
 function isKeyFileCandidate(file: FileChange, deny: Required<KeyFileDenyOptions>): boolean {
@@ -305,6 +329,7 @@ export function rankKeyFiles(
 		denyGlobs: deny.denyGlobs ?? [],
 		allowGlobs: deny.allowGlobs ?? [],
 		docsDenyGlobs: deny.docsDenyGlobs ?? [],
+		docsAllowGlobs: deny.docsAllowGlobs ?? [],
 	};
 	const candidates = files.filter((f) => isKeyFileCandidate(f, resolvedDeny));
 	const scored = candidates.map((file) => ({
@@ -502,7 +527,7 @@ async function collectMatchingChangelogEntries(
 		if (match?.[1]) packages.add(match[1]);
 	}
 	const version = story.release ?? "Unreleased";
-	const sha = story.release === undefined ? story.id : await resolveRefToSha(git, repo, story.release);
+	const sha = story.release === undefined ? storyIdSha(story.id) : await resolveRefToSha(git, repo, story.release);
 	if (sha === undefined) return [];
 	const normalizedDescriptions = descriptions.map((d) => stripConventionalPrefix(d).toLowerCase().trim());
 
@@ -687,7 +712,7 @@ async function readPolicedDocText(
 ): Promise<string | undefined> {
 	if (!isDocAllowed(path, { allowGlobs: docsConfig.allow, denyGlobs: docsConfig.deny })) return undefined;
 	if (isPathDenied(path, denyGlobs)) return undefined;
-	return readTextFile(git, repo, story.id, path);
+	return readTextFile(git, repo, storyIdSha(story.id), path);
 }
 
 /** Every candidate doc chunk (docs/**, allowlisted .planning/**, and one README intro per touched package), unranked. */
@@ -728,7 +753,7 @@ async function collectRawDocChunks(
 		raw.push({ path, slug, heading: redactedHeading, text });
 	};
 
-	for (const path of await listDocCandidates(git, repo, story.id, docsConfig.allow)) {
+	for (const path of await listDocCandidates(git, repo, storyIdSha(story.id), docsConfig.allow)) {
 		const content = await readPolicedDocText(git, repo, story, path, docsConfig, denyGlobs);
 		if (content === undefined) continue;
 		for (const chunk of splitMarkdownIntoChunks(content)) policeAndPush(path, chunk.heading, chunk.text);
@@ -805,7 +830,7 @@ async function buildKeyFileChunks(
 	const selectedPaths = new Set<string>();
 	const headFiles = new Map<string, HeadFileContent>();
 	for (const file of ranked) {
-		const lines = await readHeadFile(git, repo, story.id, file.path);
+		const lines = await readHeadFile(git, repo, storyIdSha(story.id), file.path);
 		if (!lines) continue;
 		const policed = policeHeadFile(lines);
 		// A withheld head file is left out of `selectedPaths` too, so it falls
@@ -912,7 +937,7 @@ export async function assembleStoryContext(
 
 	const policedStory: Story = { ...story, files: applyContentPolicy(story, { denyGlobs, allowGlobs }).files };
 
-	const headCommit = await fetchCommitMetadata(git, repo, story.id);
+	const headCommit = await fetchCommitMetadata(git, repo, storyIdSha(story.id));
 	const identifierSource = [headCommit.subject, headCommit.body, story.pr?.title ?? "", story.pr?.body ?? ""].join(
 		"\n",
 	);
@@ -949,6 +974,7 @@ export async function assembleStoryContext(
 		denyGlobs,
 		allowGlobs,
 		docsDenyGlobs: config.docs.deny,
+		docsAllowGlobs: config.docs.allow,
 	};
 	const {
 		chunks: keyFileChunks,
@@ -1007,5 +1033,7 @@ export async function assembleStoryContext(
 		nonce,
 		headFiles,
 		anchors: buildAnchorContext(policedStory, headFiles),
+		files: policedStory.files,
+		isBlocked: (path: string) => isContextBlocked(path, keyFileDeny),
 	};
 }

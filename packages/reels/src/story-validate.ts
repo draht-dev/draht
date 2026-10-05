@@ -22,7 +22,7 @@ import {
 	quoteIsWellFormed,
 	quoteOccursIn,
 } from "./sources.ts";
-import type { ClaimKind, RawBeat, RawCode, RawScene, RawWriterResponse } from "./story-protocol.ts";
+import type { RawBeat, RawCode, RawScene, RawWriterResponse } from "./story-protocol.ts";
 import { normalizeBeats } from "./tts.ts";
 
 export interface ValidationError {
@@ -32,6 +32,7 @@ export interface ValidationError {
 }
 
 export interface ValidationContext {
+	/** M1: must be the story's *policed* files (`AssembledStoryContext.files`), never the raw, unpoliced `Story.files` — a code ref is resolved against exactly what the model was allowed to see. */
 	files: FileChange[];
 	headFiles: ReadonlyMap<string, HeadFileContent>;
 	sources: SourceRegistry;
@@ -42,6 +43,8 @@ export interface ValidationContext {
 	maxCodeLines: number;
 	/** `prose.denyPatterns` (customer names, internal codenames); matches reject the whole script. */
 	denyPatterns?: RegExp[];
+	/** M1/M2: `AssembledStoryContext.isBlocked` — true when a path may never back a code scene (code deny, `docs.deny`, or the unlisted `.planning/**` rule), even if its hunk happens not to be withheld. */
+	isBlocked: (path: string) => boolean;
 }
 
 export interface ValidateStoryScriptResult {
@@ -88,12 +91,101 @@ interface SceneValidation {
 const MAX_BEATS_PER_SCENE = 8;
 const MAX_BEAT_WORDS = 40;
 const MAX_BEAT_CHARS = 280;
+/** M4: a scene heading is published prose too (cleaned and deny-checked like any other), with its own length cap. */
+const MAX_HEADING_CHARS = 80;
+
+function capHeading(text: string): string {
+	return text.length > MAX_HEADING_CHARS ? text.slice(0, MAX_HEADING_CHARS) : text;
+}
+
+/** What grounds a `what`/`how` beat without a cite: the scene's own shown code lines or diagram labels. */
+export type GroundedSceneKind = "code" | "diagram" | "other";
+
+const GROUNDING_STOPWORDS = new Set([
+	"the",
+	"and",
+	"that",
+	"this",
+	"with",
+	"from",
+	"have",
+	"your",
+	"here",
+	"into",
+	"line",
+	"lines",
+]);
+
+function groundingWords(text: string): Set<string> {
+	const words = text.toLowerCase().match(/[a-z0-9_]{3,}/g) ?? [];
+	return new Set(words.filter((w) => !GROUNDING_STOPWORDS.has(w)));
+}
+
+function groundingIdentifiers(text: string): string[] {
+	return text.match(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)?.filter((id) => id.length >= 3 && /[A-Z_]/.test(id)) ?? [];
+}
+
+/** M3: true when `beatText` shares a content word (>=3 chars, after a tiny stopword list) or an identifier-shaped token with `groundingText`. */
+export function sharesGroundingWord(beatText: string, groundingText: string): boolean {
+	if (groundingText.trim().length === 0) return false;
+	const haystack = groundingWords(groundingText);
+	for (const word of groundingWords(beatText)) {
+		if (haystack.has(word)) return true;
+	}
+	const lowerGrounding = groundingText.toLowerCase();
+	return groundingIdentifiers(beatText).some((id) => lowerGrounding.includes(id.toLowerCase()));
+}
+
+/** M3: a `meta` beat may only be a short, fact-free transition — never a vehicle for an uncited claim. */
+const META_MAX_WORDS = 12;
+const META_FORBIDDEN_VERBS = [
+	"ships",
+	"fixes",
+	"adds",
+	"removes",
+	"certified",
+	"encrypts",
+	"uploads",
+	"disables",
+	"enables",
+];
+const META_FORBIDDEN_VERB_RE = new RegExp(`\\b(${META_FORBIDDEN_VERBS.join("|")})\\b`, "i");
+
+function titleWordSet(title: string): ReadonlySet<string> {
+	return new Set((title.match(/[A-Za-z0-9_]+/g) ?? []).map((w) => w.toLowerCase()));
+}
+
+/** A word is a "proper noun beyond the title" when it is capitalized, not the beat's first word (sentence-initial capitals are not proper nouns), and absent from the story title's own words. */
+function hasExtraProperNoun(text: string, titleWords: ReadonlySet<string>): boolean {
+	const words = text.match(/[A-Za-z0-9_]+/g) ?? [];
+	return words.some((word, i) => {
+		if (i === 0) return false;
+		if (!/^[A-Z]/.test(word)) return false;
+		return !titleWords.has(word.toLowerCase());
+	});
+}
+
+function validateMetaBeat(text: string, titleWords: ReadonlySet<string>): string | undefined {
+	if (isReasonNotRecorded(text)) return undefined;
+	const words = text.trim().split(/\s+/).filter(Boolean);
+	if (words.length > META_MAX_WORDS)
+		return `a "meta" beat must be at most ${META_MAX_WORDS} words, got ${words.length}`;
+	if (/\d/.test(text)) return 'a "meta" beat must not contain a digit (it may not carry a number as a fact)';
+	if (META_FORBIDDEN_VERB_RE.test(text)) {
+		return `a "meta" beat must not use a claim verb (${META_FORBIDDEN_VERBS.join(", ")})`;
+	}
+	if (hasExtraProperNoun(text, titleWords)) {
+		return 'a "meta" beat must not name a proper noun beyond the story title\'s own words';
+	}
+	return undefined;
+}
 
 function validateCitations(
 	beat: RawBeat,
 	beatPath: string,
 	sources: SourceRegistry,
-	sceneIsGrounded: boolean,
+	sceneKind: GroundedSceneKind,
+	groundingText: string,
 ): { errors: ValidationError[] } {
 	const errors: ValidationError[] = [];
 	for (const id of beat.cites) {
@@ -106,8 +198,12 @@ function validateCitations(
 		}
 	}
 
-	const needsQuoteGrounding: ClaimKind[] = ["why", "effect"];
-	if (needsQuoteGrounding.includes(beat.claim)) {
+	if (beat.claim === "meta") return { errors };
+
+	const isWhatHow = beat.claim === "what" || beat.claim === "how";
+	const needsQuoteGrounding = beat.claim === "why" || beat.claim === "effect" || (isWhatHow && sceneKind === "other");
+
+	if (needsQuoteGrounding) {
 		if (isReasonNotRecorded(beat.text)) return { errors };
 		if (beat.cites.length === 0) {
 			errors.push({ path: beatPath, rule: "citations", detail: `a "${beat.claim}" beat needs at least one cite` });
@@ -133,8 +229,16 @@ function validateCitations(
 				});
 			}
 		}
-	} else if (beat.claim !== "meta" && beat.cites.length === 0 && !sceneIsGrounded) {
-		errors.push({ path: beatPath, rule: "citations", detail: `a "${beat.claim}" beat needs at least one cite` });
+		return { errors };
+	}
+
+	// what/how in a code or diagram scene: no cite required, but the text must be about what is actually shown.
+	if (!sharesGroundingWord(beat.text, groundingText)) {
+		errors.push({
+			path: beatPath,
+			rule: "citations",
+			detail: `a "${beat.claim}" beat in a ${sceneKind} scene must share a content word or identifier with the scene's shown ${sceneKind === "code" ? "code lines" : "diagram labels"}`,
+		});
 	}
 
 	return { errors };
@@ -176,13 +280,24 @@ function resolveFocus(
 	return undefined;
 }
 
-function validateScene(raw: RawScene, index: number, ctx: ValidationContext): SceneValidation {
+function validateScene(
+	raw: RawScene,
+	index: number,
+	ctx: ValidationContext,
+	titleWords: ReadonlySet<string>,
+): SceneValidation {
 	const scenePath = `scenes[${index}]`;
 	const errors: ValidationError[] = [];
 	const dropped: string[] = [];
 
 	let codeScene: CodeScene | undefined;
-	if (raw.code) {
+	if (raw.code && ctx.isBlocked(raw.code.path)) {
+		errors.push({
+			path: `${scenePath}.code`,
+			rule: "code",
+			detail: `code: path is blocked by the context's privacy policy: ${raw.code.path}`,
+		});
+	} else if (raw.code) {
 		const codeRef = toCodeRef(raw.code);
 		const resolveCtx: ResolveCodeRefContext = { files: ctx.files, headFiles: ctx.headFiles };
 		const result = resolveCodeRef(
@@ -237,12 +352,23 @@ function validateScene(raw: RawScene, index: number, ctx: ValidationContext): Sc
 	}
 
 	const impliedCiteId = codeScene ? impliedCodeSourceId(raw.code) : undefined;
-	const sceneIsGrounded = Boolean(codeScene) || Boolean(diagramScene);
+
+	const sceneKind: GroundedSceneKind = codeScene ? "code" : diagramScene ? "diagram" : "other";
+	const groundingText =
+		sceneKind === "code"
+			? (codeScene?.lines.map((l) => l.slice(1)).join(" ") ?? "")
+			: sceneKind === "diagram" && raw.diagram && diagramIdMap
+				? raw.diagram.nodes
+						.filter((n) => diagramIdMap?.has(n.id))
+						.map((n) => `${n.caption} ${n.anchor.value}`)
+						.join(" ")
+				: "";
 
 	const beats: Beat[] = [];
 	raw.beats.forEach((rawBeat, beatIndex) => {
 		const beatPath = `${scenePath}.beats[${beatIndex}]`;
-		if (proseViolatesDenyPatterns(cleanProse(rawBeat.text), ctx.denyPatterns)) {
+		const cleanedText = cleanProse(rawBeat.text);
+		if (proseViolatesDenyPatterns(cleanedText, ctx.denyPatterns)) {
 			errors.push({ path: beatPath, rule: "prose", detail: "beat text matches a deny pattern" });
 			return;
 		}
@@ -256,7 +382,14 @@ function validateScene(raw: RawScene, index: number, ctx: ValidationContext): Sc
 			});
 		}
 
-		const { errors: citeErrors } = validateCitations(rawBeat, beatPath, ctx.sources, sceneIsGrounded);
+		if (rawBeat.claim === "meta") {
+			// Checked against the cleaned (redacted) text: a secret-shaped value that happens to contain a digit is
+			// never a real "fact" the meta rule needs to catch — it becomes "[redacted]" before this check runs.
+			const metaError = validateMetaBeat(cleanedText, titleWords);
+			if (metaError) errors.push({ path: beatPath, rule: "citations", detail: metaError });
+		}
+
+		const { errors: citeErrors } = validateCitations(rawBeat, beatPath, ctx.sources, sceneKind, groundingText);
 		errors.push(...citeErrors);
 
 		const focus = resolveFocus(
@@ -273,13 +406,13 @@ function validateScene(raw: RawScene, index: number, ctx: ValidationContext): Sc
 				? [impliedCiteId]
 				: rawBeat.cites;
 
-		beats.push({ text: cleanProse(rawBeat.text), ...(focus ? { focus } : {}), cites });
+		beats.push({ text: cleanedText, ...(focus ? { focus } : {}), cites });
 	});
 
 	if (errors.length > 0) return { errors, dropped };
 
 	const baseScene: Scene = codeScene ??
-		diagramScene ?? { kind: "title", title: raw.heading ?? "", subtitle: "", narration: "" };
+		diagramScene ?? { kind: "title", title: capHeading(cleanProse(raw.heading ?? "")), subtitle: "", narration: "" };
 	const withBeats = { ...baseScene, beats, section: raw.section, narration: "" } as Scene;
 	const normalized = normalizeBeats(withBeats);
 
@@ -423,9 +556,10 @@ export function validateStoryScript(
 		}
 	}
 
+	const titleWords = titleWordSet(raw.title);
 	const scenes: Scene[] = [];
 	raw.scenes.forEach((rawScene, index) => {
-		const result = validateScene(rawScene, index, ctx);
+		const result = validateScene(rawScene, index, ctx, titleWords);
 		dropped.push(...result.dropped);
 		errors.push(...result.errors);
 		if (result.scene) scenes.push(result.scene);

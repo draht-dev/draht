@@ -90,10 +90,26 @@ function fail(detail: string): never {
 	throw new ShapeError(`story writer: ${detail}`);
 }
 
-/** Models often wrap JSON in a Markdown code fence despite being told not to. */
+const OPENING_FENCE_RE = /^```[a-zA-Z]*$/;
+const FENCE = "```";
+
+/**
+ * Models often wrap JSON in a Markdown code fence despite being told not
+ * to. Rewritten to scan with `indexOf`/`lastIndexOf` instead of a regex
+ * whose lazy `[\s\S]*?` body, re-anchored against a `$`-terminated
+ * alternation, backtracked cubically on an opening fence followed by many
+ * blank lines and no real closing fence.
+ */
 export function stripCodeFence(raw: string): string {
-	const fenced = /^\s*```[a-zA-Z]*\s*\n([\s\S]*?)\n\s*```\s*$/.exec(raw);
-	return fenced ? fenced[1] : raw;
+	const trimmed = raw.trim();
+	if (!trimmed.startsWith(FENCE) || !trimmed.endsWith(FENCE)) return raw;
+	const firstNewline = trimmed.indexOf("\n");
+	if (firstNewline === -1) return raw;
+	if (!OPENING_FENCE_RE.test(trimmed.slice(0, firstNewline).trimEnd())) return raw;
+	const closeIdx = trimmed.lastIndexOf(FENCE);
+	if (closeIdx <= firstNewline) return raw;
+	const body = trimmed.slice(firstNewline + 1, closeIdx);
+	return body.endsWith("\n") ? body.slice(0, -1) : body;
 }
 
 function asRecord(value: unknown, where: string): Record<string, unknown> {

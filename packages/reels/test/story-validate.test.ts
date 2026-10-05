@@ -1,11 +1,23 @@
 import { describe, expect, test } from "bun:test";
 import type { AnchorContext, RawDiagram } from "../src/anchored-diagram.ts";
 import type { HeadFileContent } from "../src/code-ref.ts";
+import { isContextBlocked } from "../src/context.ts";
 import type { FileChange, Section } from "../src/contract.ts";
+import { DEFAULT_DENY_GLOBS } from "../src/privacy.ts";
+import { DEFAULT_REELS_CONFIG } from "../src/reels-config.ts";
 import { createSourceRegistry } from "../src/sources.ts";
 import type { RawBeat, RawScene, RawWriterResponse } from "../src/story-protocol.ts";
 import type { ValidationContext } from "../src/story-validate.ts";
 import { REASON_NOT_RECORDED_TEXT, validateStoryScript } from "../src/story-validate.ts";
+
+/** The exact `isBlocked` shape `assembleStoryContext` builds (M1/M2), with the repo's default config. */
+const realIsBlocked = (path: string): boolean =>
+	isContextBlocked(path, {
+		denyGlobs: DEFAULT_DENY_GLOBS,
+		allowGlobs: [],
+		docsDenyGlobs: DEFAULT_REELS_CONFIG.docs.deny,
+		docsAllowGlobs: DEFAULT_REELS_CONFIG.docs.allow,
+	});
 
 const HEAD_SHA = "0123456789abcdef0123456789abcdef01234567";
 
@@ -22,11 +34,27 @@ const files: FileChange[] = [
 			},
 		],
 	},
+	// M1 regression fixtures: the hunk is deliberately present and NOT withheld, so a rejection here can only come
+	// from `ctx.isBlocked`, never from `resolveCodeRef`'s own "path not in files"/"hunk withheld" checks.
+	{
+		path: ".env",
+		status: "modified",
+		additions: 1,
+		deletions: 0,
+		hunks: [{ header: "@@ -0,0 +1 @@", lines: ["+OPENAI=topsecretvalue_abcdefgh"] }],
+	},
+	{
+		path: ".planning/STATE.md",
+		status: "modified",
+		additions: 1,
+		deletions: 0,
+		hunks: [{ header: "@@ -0,0 +1 @@", lines: ["+internal planning notes"] }],
+	},
 ];
 
 const headFiles = new Map<string, HeadFileContent>([
 	["src/foo.ts", { path: "src/foo.ts", lines: Array.from({ length: 12 }, (_, i) => `line ${i + 1}`) }],
-	["src/context-only.ts", { path: "src/context-only.ts", lines: ["a", "b", "c"] }],
+	["src/context-only.ts", { path: "src/context-only.ts", lines: ["context alpha", "context beta", "context gamma"] }],
 ]);
 
 const anchors: AnchorContext = {
@@ -62,6 +90,7 @@ function baseCtx(overrides: Partial<ValidationContext> = {}): ValidationContext 
 		headSha: HEAD_SHA,
 		isDeepDive: false,
 		maxCodeLines: 18,
+		isBlocked: () => false,
 		...overrides,
 	};
 }
@@ -134,7 +163,7 @@ describe("validateStoryScript: code", () => {
 				code: {
 					section: "code",
 					code: { path: "src/foo.ts", ref: "diff", hunk: 0, lines: [1, 2] },
-					beats: [{ text: "Here is the fix.", claim: "what", cites: [] }],
+					beats: [{ text: "Here is line eleven, the fix.", claim: "what", cites: [] }],
 				},
 			}),
 		);
@@ -207,7 +236,7 @@ describe("validateStoryScript: diagrams and focus", () => {
 						],
 						edges: [],
 					},
-					beats: [{ text: "See the diagram.", claim: "what", cites: [] }],
+					beats: [{ text: "See how resolveCodeRef connects here.", claim: "what", cites: [] }],
 				},
 			}),
 		);
@@ -246,7 +275,7 @@ describe("validateStoryScript: diagrams and focus", () => {
 				code: {
 					section: "code",
 					code: { path: "src/foo.ts", ref: "diff", hunk: 0, lines: [1, 2] },
-					beats: [{ text: "Here.", claim: "what", cites: [], focus: { lines: [1, 99] } }],
+					beats: [{ text: "Here is line eleven.", claim: "what", cites: [], focus: { lines: [1, 99] } }],
 				},
 			}),
 		);
@@ -270,7 +299,7 @@ describe("validateStoryScript: diagrams and focus", () => {
 						],
 						edges: [],
 					},
-					beats: [{ text: "See it.", claim: "what", cites: [], focus: { nodes: ["c"] } }],
+					beats: [{ text: "See how resolveCodeRef works.", claim: "what", cites: [], focus: { nodes: ["c"] } }],
 				},
 			}),
 		);
@@ -369,7 +398,7 @@ describe("validateStoryScript: citations", () => {
 				code: {
 					section: "code",
 					code: { path: "src/foo.ts", ref: "diff", hunk: 0, lines: [1, 2] },
-					beats: [{ text: "This is how it works.", claim: "how", cites: [] }],
+					beats: [{ text: "This is how line eleven works.", claim: "how", cites: [] }],
 				},
 			}),
 		);
@@ -558,5 +587,150 @@ describe("validateStoryScript: arc", () => {
 		const result = validateStoryScript(raw, baseCtx({ denyPatterns: [/acme corp/i] }), HEAD_SHA);
 		expect(result.script).toBeUndefined();
 		expect(result.errors.some((e) => e.rule === "prose" && e.detail.includes("deny pattern"))).toBe(true);
+	});
+});
+
+describe("validateStoryScript: security re-audit 2, M1 — a blocked code.path is rejected regardless of ctx.files", () => {
+	function codeRefTo(path: string): RawScene["code"] {
+		return { path, ref: "diff", hunk: 0, lines: [1, 1] };
+	}
+
+	test(".env is rejected even though its hunk is present and not withheld in ctx.files", () => {
+		const raw = response(
+			fullArc({
+				code: {
+					section: "code",
+					code: codeRefTo(".env"),
+					beats: [{ text: "Here is the key.", claim: "what", cites: [] }],
+				},
+			}),
+		);
+		const result = validateStoryScript(raw, baseCtx({ isBlocked: realIsBlocked }), HEAD_SHA);
+		expect(result.script).toBeUndefined();
+		expect(result.errors.some((e) => e.rule === "code" && e.detail.includes(".env"))).toBe(true);
+	});
+
+	test("a code.exclude path is rejected", () => {
+		const raw = response(
+			fullArc({
+				code: {
+					section: "code",
+					code: codeRefTo("private/notes.ts"),
+					beats: [{ text: "Here is the note.", claim: "what", cites: [] }],
+				},
+			}),
+		);
+		const isBlocked = (path: string) =>
+			isContextBlocked(path, {
+				denyGlobs: [...DEFAULT_DENY_GLOBS, "private/**"],
+				allowGlobs: [],
+				docsDenyGlobs: DEFAULT_REELS_CONFIG.docs.deny,
+				docsAllowGlobs: DEFAULT_REELS_CONFIG.docs.allow,
+			});
+		const result = validateStoryScript(raw, baseCtx({ isBlocked }), HEAD_SHA);
+		expect(result.script).toBeUndefined();
+		expect(result.errors.some((e) => e.rule === "code")).toBe(true);
+	});
+
+	test(".planning/STATE.md (a docs.deny path, and a diff-scene reference) is rejected under the default config", () => {
+		const raw = response(
+			fullArc({
+				code: {
+					section: "code",
+					code: codeRefTo(".planning/STATE.md"),
+					beats: [{ text: "Here are the notes.", claim: "what", cites: [] }],
+				},
+			}),
+		);
+		const result = validateStoryScript(raw, baseCtx({ isBlocked: realIsBlocked }), HEAD_SHA);
+		expect(result.script).toBeUndefined();
+		expect(result.errors.some((e) => e.rule === "code" && e.detail.includes(".planning/STATE.md"))).toBe(true);
+	});
+});
+
+describe("validateStoryScript: security re-audit 2, M3 — meta beats and what/how grounding", () => {
+	test('a meta beat may not smuggle a claim: "This release is FIPS 140-3 certified and fixes CVE-2026-0001." is rejected', () => {
+		const raw = response(
+			fullArc({
+				impact: {
+					section: "impact",
+					beats: [metaBeat("This release is FIPS 140-3 certified and fixes CVE-2026-0001.")],
+				},
+			}),
+		);
+		const result = validateStoryScript(raw, baseCtx(), HEAD_SHA);
+		expect(result.script).toBeUndefined();
+		expect(result.errors.some((e) => e.rule === "citations")).toBe(true);
+	});
+
+	test('a legitimate meta transition, "Now the code.", passes', () => {
+		const raw = response(fullArc({ impact: { section: "impact", beats: [metaBeat("Now the code.")] } }));
+		const result = validateStoryScript(raw, baseCtx(), HEAD_SHA);
+		expect(result.errors).toEqual([]);
+	});
+
+	test('an uncited claim in a code scene, "It uploads your keys to a third party.", shares no word with the shown lines and is rejected', () => {
+		const raw = response(
+			fullArc({
+				code: {
+					section: "code",
+					code: validCodeRef(),
+					beats: [{ text: "It uploads your keys to a third party.", claim: "what", cites: [] }],
+				},
+			}),
+		);
+		const result = validateStoryScript(raw, baseCtx(), HEAD_SHA);
+		expect(result.script).toBeUndefined();
+		expect(result.errors.some((e) => e.rule === "citations")).toBe(true);
+	});
+
+	test('"Telemetry is now fully disabled for everyone." citing an unrelated commit with no quote is rejected', () => {
+		const raw = response(
+			fullArc({
+				impact: {
+					section: "impact",
+					beats: [
+						{ text: "Telemetry is now fully disabled for everyone.", claim: "effect", cites: ["c:abcdef123456"] },
+					],
+				},
+			}),
+		);
+		const result = validateStoryScript(raw, baseCtx(), HEAD_SHA);
+		expect(result.script).toBeUndefined();
+		expect(result.errors.some((e) => e.rule === "citations" && e.path.includes(".quote") === false)).toBe(true);
+	});
+
+	test("a what/how beat outside a code or diagram scene now needs a quote too, not just a cite", () => {
+		const raw = response(
+			fullArc({
+				problem: {
+					section: "problem",
+					beats: [{ text: "This is what changed.", claim: "what", cites: ["c:abcdef123456"] }],
+				},
+			}),
+		);
+		const result = validateStoryScript(raw, baseCtx(), HEAD_SHA);
+		expect(result.script).toBeUndefined();
+		expect(result.errors.some((e) => e.rule === "citations" && e.detail.includes("quote"))).toBe(true);
+	});
+});
+
+describe("validateStoryScript: security re-audit 2, M4 — scene headings are cleaned and length-capped", () => {
+	test("a heading with a URL and over the 80-char cap is cleaned and truncated in the published title", () => {
+		const raw = response([
+			{
+				section: "problem",
+				heading: `Visit https://evil.example/x now${"x".repeat(100)}`,
+				beats: [metaBeat("Problem.")],
+			},
+			...fullArc().slice(1),
+		]);
+		const result = validateStoryScript(raw, baseCtx(), HEAD_SHA);
+		const scene = sceneFor(result, "problem");
+		expect(scene?.kind).toBe("title");
+		if (scene?.kind === "title") {
+			expect(scene.title).not.toContain("https://");
+			expect(scene.title.length).toBeLessThanOrEqual(80);
+		}
 	});
 });

@@ -5,6 +5,7 @@ import {
 	assembleStoryContext,
 	type ContextBudget,
 	extractReadmeIntro,
+	isContextBlocked,
 	isPathMentioned,
 	rankDocChunks,
 	rankKeyFiles,
@@ -644,6 +645,88 @@ describe("assembleStoryContext: doc headings go through redaction and prose-deny
 			const config = configWith({ prose: { denyPatterns: ["nightjar"] } });
 			const { sources } = await assembleStoryContext(story, repo.dir, config, BUDGET);
 			expect(Array.from(sources.keys()).some((id) => id.startsWith("doc:docs/codename.md"))).toBe(false);
+		}),
+	);
+});
+
+describe("isContextBlocked (security re-audit 2, M1/M2): the one rule a validated code.path must also pass", () => {
+	const deny = {
+		denyGlobs: [".env", ".env.*", "*.env"],
+		allowGlobs: [] as string[],
+		docsDenyGlobs: DEFAULT_REELS_CONFIG.docs.deny,
+		docsAllowGlobs: DEFAULT_REELS_CONFIG.docs.allow,
+	};
+
+	test("a code-deny path (.env) is blocked", () => {
+		expect(isContextBlocked(".env", deny)).toBe(true);
+	});
+
+	test("a docs.deny .planning file (STATE.md) is blocked even though no code.exclude glob names it", () => {
+		expect(isContextBlocked(".planning/STATE.md", deny)).toBe(true);
+	});
+
+	test("an unlisted .planning file (ROADMAP.md) is blocked by default, since no allow glob starts with '.planning/'", () => {
+		expect(isContextBlocked(".planning/ROADMAP.md", deny)).toBe(true);
+	});
+
+	test("the same ROADMAP.md is admitted once docs.allow has a '.planning/'-prefixed glob", () => {
+		const allowlisted = { ...deny, docsAllowGlobs: [...deny.docsAllowGlobs, ".planning/ROADMAP.md"] };
+		expect(isContextBlocked(".planning/ROADMAP.md", allowlisted)).toBe(false);
+	});
+
+	test("a generic '**/README.md' allow glob never admits a .planning/** path (mirrors listDocCandidates's own guard)", () => {
+		const genericAllow = { ...deny, docsAllowGlobs: ["**/README.md"] };
+		expect(isContextBlocked(".planning/geist/README.md", genericAllow)).toBe(true);
+	});
+
+	test("an ordinary changed source path is never blocked", () => {
+		expect(isContextBlocked("src/index.ts", deny)).toBe(false);
+	});
+});
+
+describe("assembleStoryContext: returns the policed files and an isBlocked check (M1)", () => {
+	test(
+		"files is the policed changeset: a denied path's hunk is withheld there, not the raw story.files",
+		withRepo(async (repo) => {
+			const story = await buildStory(repo, [
+				{ path: "src/a.ts", content: "export const a = 1;\n" },
+				{ path: ".env", content: "OPENAI=topsecretvalue_abcdefgh\n" },
+			]);
+			const { files, isBlocked } = await assembleStoryContext(story, repo.dir, DEFAULT_REELS_CONFIG, BUDGET);
+			const envFile = files.find((f) => f.path === ".env");
+			expect(envFile?.hunks.every((h) => h.withheld)).toBe(true);
+			expect(isBlocked(".env")).toBe(true);
+			expect(isBlocked(".planning/ROADMAP.md")).toBe(true);
+			expect(isBlocked("src/a.ts")).toBe(false);
+		}),
+	);
+
+	test(
+		"isBlocked flags a .planning file even when its hunk was never withheld by the code deny-list alone",
+		withRepo(async (repo) => {
+			const story = await buildStory(repo, [
+				{ path: "src/a.ts", content: "export const a = 1;\n" },
+				{ path: ".planning/STATE.md", content: "## Status\n\ninternal planning notes\n" },
+			]);
+			const { files, isBlocked } = await assembleStoryContext(story, repo.dir, DEFAULT_REELS_CONFIG, BUDGET);
+			const planningFile = files.find((f) => f.path === ".planning/STATE.md");
+			// applyContentPolicy only knows the code deny-list, so this hunk is NOT withheld by `files` alone —
+			// `isBlocked` is the rule that must still stop a validated code scene from showing it.
+			expect(planningFile?.hunks.some((h) => h.withheld)).toBe(false);
+			expect(isBlocked(".planning/STATE.md")).toBe(true);
+		}),
+	);
+});
+
+describe("assembleStoryContext: a suffixed story id is resolved to its real sha before any git read (regression)", () => {
+	test(
+		"a story id with a '-<hash8>' disambiguation suffix still assembles context from the real commit",
+		withRepo(async (repo) => {
+			const story = await buildStory(repo, [{ path: "src/a.ts", content: "export const a = 1;\n" }]);
+			const suffixed: Story = { ...story, id: `${story.id}-aabbccdd` };
+			const { promptContext } = await assembleStoryContext(suffixed, repo.dir, DEFAULT_REELS_CONFIG, BUDGET);
+			expect(promptContext).toContain(story.id.slice(0, 12));
+			expect(promptContext).toContain("feat: the new thing");
 		}),
 	);
 });

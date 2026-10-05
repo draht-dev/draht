@@ -83,6 +83,8 @@ function ctx(overrides: Partial<AssembledStoryContext> = {}): AssembledStoryCont
 		nonce: "n",
 		headFiles,
 		anchors,
+		files,
+		isBlocked: () => false,
 		...overrides,
 	};
 }
@@ -253,6 +255,47 @@ describe("CostMeter / writeStories cost cap", () => {
 			},
 		});
 		expect(results).toHaveLength(2);
+		expect(capReachedWith).toBe(1);
+		expect(costMeter.hasBudget()).toBe(false);
+	});
+
+	// L4 (security re-audit 2): `hasBudget()` is checked before EVERY model call, the repair included, not just
+	// once per story — a cap that runs out between the initial call and the repair must still stop mid-story.
+	test("stops mid-story: the budget runs out between the initial call and its repair", async () => {
+		const queue = queueCompleter([{ text: uncitedWhyResponse(), usage: { input: 0, output: 0, costUsd: 1 } }]);
+		const costMeter = new CostMeter(1);
+		const fallbacks: string[] = [];
+		const result = await writeOneScript(story(), ctx(), queue.complete, costMeter, {
+			isDeepDive: false,
+			maxTokens: 1000,
+			maxCodeLines: 18,
+			onFallback: (reason) => fallbacks.push(reason),
+		});
+		expect(queue.calls).toBe(1);
+		expect(result.writer).toBe("template");
+		expect(fallbacks).toEqual(["cost cap reached before the repair call"]);
+	});
+
+	// L4: an unpriced model (costUsd always 0, e.g. a faux completer or a model missing from the catalog) never
+	// trips a USD cap, so a token cap must bound it independently.
+	test("an unpriced (costUsd: 0) model is still capped via the token cap", async () => {
+		const queue = queueCompleter([
+			{ text: VALID_RESPONSE, usage: { input: 500, output: 500, costUsd: 0 } },
+			{ text: VALID_RESPONSE, usage: { input: 500, output: 500, costUsd: 0 } },
+		]);
+		const costMeter = new CostMeter(100, 1000);
+		const jobs = [
+			{ story: story({ id: HEAD_SHA }), ctx: ctx() },
+			{ story: story({ id: `${HEAD_SHA.slice(0, -1)}1` }), ctx: ctx() },
+		];
+		let capReachedWith: number | undefined;
+		const results = await writeStories(jobs, queue.complete, costMeter, {
+			deepDive: "never",
+			onCapReached: (remaining) => {
+				capReachedWith = remaining.length;
+			},
+		});
+		expect(results).toHaveLength(1);
 		expect(capReachedWith).toBe(1);
 		expect(costMeter.hasBudget()).toBe(false);
 	});

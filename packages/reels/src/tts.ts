@@ -9,14 +9,84 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { Beat, Scene, TimedWord, TranscriptSegment } from "./contract.ts";
+import type { Beat, ReelEntry, Scene, TimedWord, TranscriptSegment } from "./contract.ts";
 import { mp3DurationMs } from "./mp3.ts";
 
 const execFileAsync = promisify(execFile);
 
 export const DEFAULT_VOICE = "JBFqnCBsd6RMkjVDRZzb"; // George — multilingual narrative
 export const DEFAULT_TTS_MODEL = "eleven_flash_v2_5";
+/** Default for story, release, and recap reels (D10). Overridable with `--tts-model` / config (T12). */
+export const DEFAULT_STORY_TTS_MODEL = "eleven_v4";
+/**
+ * Explicit on every ElevenLabs request so every scene in a reel (always one
+ * model per reel) produces frames that {@link concatenateMp3} can paste
+ * together raw: same sample rate and bitrate, regardless of model. Confirmed
+ * against `eleven_v4` in the G2 probe (see PR description): the returned
+ * frames are MPEG-1 Layer III, 44.1 kHz, 128 kbit/s, matching what
+ * `packages/draht-claude/scripts/speak.cjs` already requests for
+ * `eleven_flash_v2_5`.
+ */
+const OUTPUT_FORMAT = "mp3_44100_128";
 const WORDS_PER_SECOND = 2.6;
+
+const AUDIO_TAG_MODEL_RE = /^eleven_v[34](?:$|[_-])/;
+
+/** v3/v4 models treat `[...]` spans as audio-tag directives (e.g. `[laughs]`); earlier models do not. */
+function usesAudioTags(model: string): boolean {
+	return AUDIO_TAG_MODEL_RE.test(model);
+}
+
+/**
+ * Neutralizes square-bracket spans for v3/v4 models so they can never be
+ * read as audio-tag directives: `redactText` itself inserts `[redacted]`,
+ * and a model-authored `[x]` would otherwise risk being swallowed or spoken
+ * oddly as a tag (G2: ElevenLabs's own alignment echoed bracket text back
+ * verbatim and produced *more* audio per character than bracket-free text,
+ * i.e. it was read as literal words, not suppressed — still not what a
+ * caption should show).
+ *
+ * Only the `[` and `]` characters are removed, never the text between them:
+ * this keeps every whitespace-delimited token exactly as it was (brackets
+ * are never whitespace, so removing them can't merge or split a word),
+ * which is what keeps {@link beatStartsMsFromWords}'s word-count invariant
+ * intact without any separate position mapping. Nested (`[[x]]`) and
+ * unbalanced (`[oops`) brackets are handled the same way, with no pairing
+ * logic to get wrong.
+ */
+export function sanitizeForV4(text: string, model: string): string {
+	if (!usesAudioTags(model)) return text;
+	return text.replace(/[[\]]/g, "");
+}
+
+/**
+ * Applies {@link sanitizeForV4} to everything that will reach ElevenLabs and
+ * the transcript for a scene: the beat texts (so captions show the sanitized
+ * words) and, for a scene with no beats, `narration` directly. Sanitizing
+ * before the beats are joined — rather than sanitizing the already-sent
+ * request text and mapping positions back — is what lets the timed `words`
+ * ElevenLabs returns match the same text {@link beatStartsMsFromWords} counts
+ * against, with no separate alignment step that could drift.
+ */
+function sanitizeSceneForTts<S extends Scene>(scene: S, model: string): S {
+	if (!usesAudioTags(model)) return scene;
+	if (scene.beats && scene.beats.length > 0) {
+		const beats: Beat[] = scene.beats.map((beat) => ({ ...beat, text: sanitizeForV4(beat.text, model) }));
+		return { ...scene, beats, narration: beats.map((beat) => beat.text).join(" ") };
+	}
+	return { ...scene, narration: sanitizeForV4(scene.narration, model) };
+}
+
+/**
+ * Per-unit default model (D10): story, release, and recap reels default to
+ * {@link DEFAULT_STORY_TTS_MODEL}; the legacy per-commit unit (`kind`
+ * absent or `"change"`) keeps {@link DEFAULT_TTS_MODEL}. `override` (from
+ * `--tts-model` or repo config; CLI wiring is T12) always wins.
+ */
+export function resolveTtsModel(kind: ReelEntry["kind"] | undefined, override?: string): string {
+	if (override) return override;
+	return kind === "story" || kind === "release" || kind === "recap" ? DEFAULT_STORY_TTS_MODEL : DEFAULT_TTS_MODEL;
+}
 
 export interface SceneAudio {
 	/** Absent in silent mode. */
@@ -231,7 +301,7 @@ export function elevenLabsProvider(options: ElevenLabsOptions): TtsProvider {
 
 	return {
 		async synthesize(rawScenes, outDir) {
-			const scenes = rawScenes.map(normalizeBeats);
+			const scenes = rawScenes.map(normalizeBeats).map((scene) => sanitizeSceneForTts(scene, model));
 			// Per-scene MP3s are scratch files, not published output: keep them
 			// in a temp dir (removed before returning) so the reel's media
 			// directory only ever contains the one final audio.mp3, not every
@@ -243,7 +313,7 @@ export function elevenLabsProvider(options: ElevenLabsOptions): TtsProvider {
 
 				for (let i = 0; i < scenes.length; i++) {
 					const scene = scenes[i];
-					const url = `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voice)}/with-timestamps`;
+					const url = `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voice)}/with-timestamps?output_format=${OUTPUT_FORMAT}`;
 					const res = await fetchImpl(url, {
 						method: "POST",
 						headers: { "xi-api-key": options.apiKey, "Content-Type": "application/json" },

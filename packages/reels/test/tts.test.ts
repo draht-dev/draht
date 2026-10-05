@@ -8,6 +8,8 @@ import {
 	elevenLabsProvider,
 	estimateWordTimings,
 	normalizeBeats,
+	resolveTtsModel,
+	sanitizeForV4,
 	silentProvider,
 	wordsFromAlignment,
 } from "../src/tts.ts";
@@ -271,6 +273,120 @@ describe("beatStartsMsFromWords", () => {
 		const beats: Beat[] = [{ text: "One two" }, { text: "three four" }];
 		const words = estimateWordTimings("One two three four five", 5000); // 5 words, beats expect 4
 		expect(beatStartsMsFromWords(beats, words)).toBeUndefined();
+	});
+});
+
+describe("sanitizeForV4", () => {
+	test("neutralizes [redacted] only for v3/v4 models", () => {
+		expect(sanitizeForV4("Before [redacted] after.", "eleven_v4")).toBe("Before redacted after.");
+		expect(sanitizeForV4("Before [redacted] after.", "eleven_v3")).toBe("Before redacted after.");
+		expect(sanitizeForV4("Before [redacted] after.", "eleven_flash_v2_5")).toBe("Before [redacted] after.");
+		expect(sanitizeForV4("Before [redacted] after.", "eleven_multilingual_v2")).toBe("Before [redacted] after.");
+	});
+
+	test("strips other bracket spans down to their contents", () => {
+		expect(sanitizeForV4("Say [x] now.", "eleven_v4")).toBe("Say x now.");
+	});
+
+	test("removes nested and unbalanced brackets safely, without deleting any word", () => {
+		expect(sanitizeForV4("a [[nested]] b", "eleven_v4")).toBe("a nested b");
+		expect(sanitizeForV4("a [oops b", "eleven_v4")).toBe("a oops b");
+		expect(sanitizeForV4("a oops] b", "eleven_v4")).toBe("a oops b");
+	});
+
+	test("never changes the whitespace token count", () => {
+		const text = "Before [redacted] after [[nested]] and [oops one more] end.";
+		const before = text.split(/\s+/).filter(Boolean).length;
+		const after = sanitizeForV4(text, "eleven_v4").split(/\s+/).filter(Boolean).length;
+		expect(after).toBe(before);
+	});
+});
+
+describe("resolveTtsModel", () => {
+	test("story, release, and recap reels default to eleven_v4", () => {
+		expect(resolveTtsModel("story")).toBe("eleven_v4");
+		expect(resolveTtsModel("release")).toBe("eleven_v4");
+		expect(resolveTtsModel("recap")).toBe("eleven_v4");
+	});
+
+	test("the legacy per-commit unit (kind absent or 'change') keeps eleven_flash_v2_5", () => {
+		expect(resolveTtsModel(undefined)).toBe("eleven_flash_v2_5");
+		expect(resolveTtsModel("change")).toBe("eleven_flash_v2_5");
+	});
+
+	test("an explicit override always wins", () => {
+		expect(resolveTtsModel("story", "eleven_turbo_v2_5")).toBe("eleven_turbo_v2_5");
+		expect(resolveTtsModel("change", "eleven_v4")).toBe("eleven_v4");
+	});
+});
+
+describe("elevenLabsProvider with eleven_v4", () => {
+	test("sanitizes bracket text before sending it, and beat starts stay monotonic and inside the segment", async () => {
+		const beats: Beat[] = [{ text: "Before [redacted] middle." }, { text: "After the secret." }];
+		const scenes: Scene[] = [
+			{ kind: "title", title: "t", subtitle: "s", narration: "ignored", beats },
+			{ kind: "outro", narration: "Plain [tail] text." },
+		];
+		const requestBodies: Array<{ text: string; model_id: string }> = [];
+		const fetchStub = (async (_url: string | URL, init?: RequestInit) => {
+			const body = JSON.parse(String(init?.body)) as { text: string; model_id: string };
+			requestBodies.push(body);
+			return fauxElevenLabsResponse(body.text, body.text.length / 10) as unknown as Response;
+		}) as typeof fetch;
+
+		const outDir = mkdtempSync(join(tmpdir(), "reels-tts-v4-"));
+		try {
+			const provider = elevenLabsProvider({ apiKey: "fake-key", model: "eleven_v4", fetch: fetchStub });
+			const result = await provider.synthesize(scenes, outDir);
+
+			expect(requestBodies.map((b) => b.text)).toEqual([
+				"Before redacted middle. After the secret.",
+				"Plain tail text.",
+			]);
+			expect(requestBodies.every((b) => b.model_id === "eleven_v4")).toBe(true);
+
+			const [scene1] = result.transcript;
+			expect(scene1.beatStartsMs).toHaveLength(2);
+			const starts = scene1.beatStartsMs ?? [];
+			expect(starts[0]).toBeGreaterThanOrEqual(scene1.startMs);
+			expect(starts[1]).toBeGreaterThan(starts[0]);
+			expect(starts[1]).toBeLessThan(scene1.endMs);
+		} finally {
+			rmSync(outDir, { recursive: true, force: true });
+		}
+	});
+
+	test("requests output_format=mp3_44100_128 explicitly on every scene's URL", async () => {
+		const calls: string[] = [];
+		const fetchStub = (async (url: string | URL, init?: RequestInit) => {
+			calls.push(String(url));
+			const body = JSON.parse(String(init?.body)) as { text: string };
+			return fauxElevenLabsResponse(body.text, 1) as unknown as Response;
+		}) as typeof fetch;
+
+		const outDir = mkdtempSync(join(tmpdir(), "reels-tts-format-"));
+		try {
+			const provider = elevenLabsProvider({ apiKey: "fake-key", fetch: fetchStub });
+			await provider.synthesize(SCENES, outDir);
+			expect(calls.length).toBeGreaterThan(0);
+			expect(calls.every((url) => url.includes("output_format=mp3_44100_128"))).toBe(true);
+		} finally {
+			rmSync(outDir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("silentProvider with bracket text", () => {
+	test("silent estimates line up with beats even when the text has bracket spans (no sanitization needed: no word count changes)", async () => {
+		const beats: Beat[] = [{ text: "Before [redacted] middle." }, { text: "After the secret." }];
+		const scenes: Scene[] = [{ kind: "title", title: "t", subtitle: "s", narration: "ignored", beats }];
+		const result = await silentProvider.synthesize(scenes, "/unused");
+		const [scene] = result.transcript;
+		expect(scene.beatStartsMs).toHaveLength(2);
+		const starts = scene.beatStartsMs ?? [];
+		expect(starts[0]).toBe(scene.startMs);
+		expect(starts[1]).toBeGreaterThan(starts[0]);
+		expect(starts[1]).toBeLessThan(scene.endMs);
 	});
 });
 

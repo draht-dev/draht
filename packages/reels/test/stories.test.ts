@@ -4,10 +4,16 @@ import type { GithubLookup } from "../src/github.ts";
 import { filterFeatureAnchors, findChangelogAnchors, walkMainline } from "../src/mainline.ts";
 import {
 	collectStories,
-	computeStoryId,
+	computeBranchStoryId,
+	computeChangelogStoryId,
+	createPickaxeBudget,
 	extractIdentifiers,
+	findExactSubjectMatch,
+	findImplementingCommits,
+	groupOverlappingAttributions,
 	isValidStoryId,
 	selectStoryUnits,
+	storyIdSha,
 } from "../src/stories.ts";
 import { addFeatureBranchMerge, cleanupGitRepo, type GitRepo, initGitRepo } from "./fixtures/git-repo.ts";
 
@@ -56,26 +62,155 @@ describe("extractIdentifiers", () => {
 	test("a prose-only entry yields no identifiers", () => {
 		expect(extractIdentifiers("improve the general experience for everyone")).toEqual([]);
 	});
-});
 
-describe("computeStoryId / isValidStoryId", () => {
-	const sha = "a".repeat(40);
-
-	test("is the head sha when it is not already used", () => {
-		expect(computeStoryId(sha, ["feature one"], new Set())).toBe(sha);
+	test("the stoplist drops common prose that matches an identifier pattern syntactically", () => {
+		expect(extractIdentifiers("supports read/write and input/output, e.g. and/or on/off")).toEqual([]);
 	});
 
-	test("is stable across repeated calls with the same inputs", () => {
-		const id1 = computeStoryId(sha, ["feature one", "feature two"], new Set([sha]));
-		const id2 = computeStoryId(sha, ["feature one", "feature two"], new Set([sha]));
+	test("a short code-shaped token below the minimum length is dropped", () => {
+		// "id" is code-shaped-ish (short, lowercase) but shorter than the minimum.
+		expect(extractIdentifiers("return the id")).toEqual([]);
+	});
+
+	test("a capitalized proper noun is never mistaken for a symbol: every survivor must be code-shaped", () => {
+		// "GitHub" and "Widget" look like identifiers (capital letters) but carry
+		// no code shape (no backtick, no _/./ //camelCase/--/leading /).
+		expect(extractIdentifiers("GitHub now supports Widget uploads")).toEqual([]);
+	});
+
+	test("input longer than the entry-text cap is truncated before any regex runs", () => {
+		const huge = `\`realIdentifier\` ${"x".repeat(20_000)}`;
+		expect(extractIdentifiers(huge)).toContain("realIdentifier");
+	});
+});
+
+describe("findExactSubjectMatch", () => {
+	test("matches a commit subject stated near-verbatim in the entry text", () => {
+		const match = findExactSubjectMatch("add the mainline walker and its tests", [
+			{ sha: "a".repeat(40), subject: "feat(reels): add the mainline walker and its tests", body: "" },
+		]);
+		expect(match).toHaveLength(1);
+		expect(match[0]?.sha).toBe("a".repeat(40));
+	});
+
+	test("matches against a commit body", () => {
+		const match = findExactSubjectMatch("adds a brand new widget factory for the pipeline", [
+			{
+				sha: "b".repeat(40),
+				subject: "feat: unrelated subject",
+				body: "This adds a brand new widget factory for the pipeline.",
+			},
+		]);
+		expect(match).toHaveLength(1);
+	});
+
+	test("does not match on a short, coincidental substring", () => {
+		const match = findExactSubjectMatch("fix bug", [
+			{ sha: "c".repeat(40), subject: "fix bug in renderer", body: "" },
+		]);
+		expect(match).toHaveLength(0);
+	});
+
+	test("returns nothing when no candidate is close", () => {
+		const match = findExactSubjectMatch("completely unrelated changelog wording here", [
+			{ sha: "d".repeat(40), subject: "feat: something else entirely", body: "" },
+		]);
+		expect(match).toHaveLength(0);
+	});
+});
+
+describe("groupOverlappingAttributions", () => {
+	function attribution(entryText: string, implementing: string[], strength: "strong" | "weak") {
+		return {
+			anchor: {
+				entryText,
+				section: "Added",
+				packages: ["reels"],
+				commitSha: implementing[0] ?? "x",
+				commitSubject: "feat: x",
+				unitId: implementing[0] ?? "x",
+			},
+			implementing,
+			strength,
+		};
+	}
+
+	test("unions two strong attributions sharing an implementing commit", () => {
+		const shared = "a".repeat(40);
+		const groups = groupOverlappingAttributions([
+			attribution("entry one", [shared], "strong"),
+			attribution("entry two", [shared], "strong"),
+		]);
+		expect(groups).toHaveLength(1);
+		expect(groups[0]).toHaveLength(2);
+	});
+
+	test("never merges two weak attributions through a shared fallback anchor commit alone", () => {
+		const sharedAnchor = "b".repeat(40);
+		const groups = groupOverlappingAttributions([
+			attribution("unrelated entry one", [sharedAnchor], "weak"),
+			attribution("unrelated entry two", [sharedAnchor], "weak"),
+		]);
+		expect(groups).toHaveLength(2);
+	});
+
+	test("a weak attribution never joins a strong group even if it shares that group's commit", () => {
+		const shared = "c".repeat(40);
+		const groups = groupOverlappingAttributions([
+			attribution("strong entry", [shared], "strong"),
+			attribution("weak entry", [shared], "weak"),
+		]);
+		expect(groups).toHaveLength(2);
+		expect(groups.some((g) => g.length === 1 && g[0]?.strength === "weak")).toBe(true);
+	});
+});
+
+describe("findImplementingCommits: pickaxe cap", () => {
+	test("a run budget of 0 finds nothing and never spawns a pickaxe process", async () => {
+		let calls = 0;
+		const git = async (args: string[]) => {
+			calls++;
+			if (args[0] === "log" && args.some((a) => a.startsWith("-S"))) throw new Error("pickaxe should not run");
+			return "";
+		};
+		const budget = createPickaxeBudget(0);
+		const result = await findImplementingCommits("add `someRealIdentifier` here", {
+			repo: "/tmp/does-not-matter",
+			range: "a..b",
+			packages: ["reels"],
+			git,
+			runBudget: budget,
+		});
+		expect(result).toEqual([]);
+		expect(calls).toBe(0);
+	});
+});
+
+describe("computeBranchStoryId / computeChangelogStoryId / storyIdSha / isValidStoryId", () => {
+	const sha = "a".repeat(40);
+
+	test("a branch story id is exactly the merge sha", () => {
+		expect(computeBranchStoryId(sha)).toBe(sha);
+	});
+
+	test("a changelog story id is the anchor sha plus a stable hash of the entry texts", () => {
+		const id1 = computeChangelogStoryId(sha, ["feature one", "feature two"]);
+		const id2 = computeChangelogStoryId(sha, ["feature one", "feature two"]);
 		expect(id1).toBe(id2);
+		expect(id1).not.toBe(sha);
 		expect(isValidStoryId(id1)).toBe(true);
 	});
 
-	test("disambiguates a collision with a different hash suffix", () => {
-		const idA = computeStoryId(sha, ["feature one"], new Set([sha]));
-		const idB = computeStoryId(sha, ["feature two"], new Set([sha]));
+	test("different entry texts on the same anchor sha disambiguate", () => {
+		const idA = computeChangelogStoryId(sha, ["feature one"]);
+		const idB = computeChangelogStoryId(sha, ["feature two"]);
 		expect(idA).not.toBe(idB);
+	});
+
+	test("storyIdSha recovers the sha from a suffixed id", () => {
+		const id = computeChangelogStoryId(sha, ["feature one"]);
+		expect(storyIdSha(id)).toBe(sha);
+		expect(storyIdSha(sha)).toBe(sha);
 	});
 });
 
@@ -208,7 +343,7 @@ describe("collectStories: branch-sync merges", () => {
 
 			const base = repo.currentBranch();
 			repo.checkoutNewBranch("sync-branch");
-			const implSha = commitWithBody(
+			commitWithBody(
 				repo,
 				"feat: add branchWidgetHelper",
 				"",
@@ -235,13 +370,13 @@ describe("collectStories: branch-sync merges", () => {
 			});
 
 			const story = result.stories.find((s) => s.origin === "commit");
-			expect(story?.id).toBe(implSha);
+			expect(story).toBeDefined();
 			expect(result.syncRecap).toHaveLength(0);
 		}),
 	);
 });
 
-describe("collectStories: changelog attribution (T1 amendment)", () => {
+describe("collectStories: changelog attribution (T1 amendment, strengthened in the fix round)", () => {
 	test(
 		"finds the implementing commit when a later docs commit added the changelog entry (42fdbb49c pattern)",
 		withRepo(async (repo) => {
@@ -264,9 +399,12 @@ describe("collectStories: changelog attribution (T1 amendment)", () => {
 			});
 
 			const story = result.stories.find((s) => s.origin === "commit");
-			expect(story?.id).toBe(implSha);
-			expect(story?.id).not.toBe(docsSha);
-			expect(result.attribution.get(implSha)).toBe("strong");
+			// The id is now built from the anchor (docs) commit, not the
+			// implementing commit, so it stays stable as new commits land later —
+			// but the story's own `commits` field still names the real implementer.
+			expect(story?.id.startsWith(docsSha)).toBe(true);
+			expect(story?.commits[0]).toBe(implSha.slice(0, 12));
+			expect(result.attribution.get(story?.id ?? "")).toBe("strong");
 		}),
 	);
 
@@ -287,8 +425,8 @@ describe("collectStories: changelog attribution (T1 amendment)", () => {
 			});
 
 			const story = result.stories.find((s) => s.origin === "commit");
-			expect(story?.id).toBe(docsSha);
-			expect(result.attribution.get(docsSha)).toBe("weak");
+			expect(story?.id.startsWith(docsSha)).toBe(true);
+			expect(result.attribution.get(story?.id ?? "")).toBe("weak");
 		}),
 	);
 
@@ -354,7 +492,7 @@ describe("collectStories: changelog attribution (T1 amendment)", () => {
 
 			const commitStories = result.stories.filter((s) => s.origin === "commit");
 			expect(commitStories).toHaveLength(1);
-			expect(commitStories[0]?.id).toBe(implSha);
+			expect(commitStories[0]?.commits[0]).toBe(implSha.slice(0, 12));
 		}),
 	);
 
@@ -362,7 +500,7 @@ describe("collectStories: changelog attribution (T1 amendment)", () => {
 		"collectStories produces the same story id across two runs over the same history",
 		withRepo(async (repo) => {
 			const fromSha = seedChangelog(repo);
-			const implSha = repo.commit("feat(reels): add the widget factory", {
+			repo.commit("feat(reels): add the widget factory", {
 				path: "packages/reels/src/widgetFactory.ts",
 				content: "export function widgetFactory() {\n\treturn 1;\n}\n",
 			});
@@ -376,7 +514,42 @@ describe("collectStories: changelog attribution (T1 amendment)", () => {
 			const run1 = await collectStories(units, { repo: repo.dir, anchors });
 			const run2 = await collectStories(units, { repo: repo.dir, anchors });
 			expect(run1.stories.map((s) => s.id)).toEqual(run2.stories.map((s) => s.id));
-			expect(run1.stories.find((s) => s.origin === "commit")?.id).toBe(implSha);
+		}),
+	);
+
+	test(
+		"the changelog story id stays stable as the Unreleased range grows with later, unrelated commits",
+		withRepo(async (repo) => {
+			const fromSha = seedChangelog(repo);
+			repo.commit("feat(reels): add the widget factory", {
+				path: "packages/reels/src/widgetFactory.ts",
+				content: "export function widgetFactory() {\n\treturn 1;\n}\n",
+			});
+			addChangelogEntry(repo, "- add the `widgetFactory` helper");
+
+			const unitsBefore = await walkMainline({ repo: repo.dir, ref: "HEAD", tagPattern: "^v" });
+			const rangeBefore = `${fromSha}..HEAD`;
+			const anchorsBefore = filterFeatureAnchors(
+				await findChangelogAnchors(unitsBefore, { repo: repo.dir, range: rangeBefore }),
+				unitsBefore,
+			).map((anchor) => ({ anchor, range: rangeBefore }));
+			const before = await collectStories(unitsBefore, { repo: repo.dir, anchors: anchorsBefore });
+			const idBefore = before.stories.find((s) => s.origin === "commit")?.id;
+			expect(idBefore).toBeDefined();
+
+			// More, unrelated history lands afterward in the still-open Unreleased range.
+			repo.commit("chore: unrelated later work", { path: "unrelated.txt" });
+
+			const unitsAfter = await walkMainline({ repo: repo.dir, ref: "HEAD", tagPattern: "^v" });
+			const rangeAfter = `${fromSha}..HEAD`;
+			const anchorsAfter = filterFeatureAnchors(
+				await findChangelogAnchors(unitsAfter, { repo: repo.dir, range: rangeAfter }),
+				unitsAfter,
+			).map((anchor) => ({ anchor, range: rangeAfter }));
+			const after = await collectStories(unitsAfter, { repo: repo.dir, anchors: anchorsAfter });
+			const idAfter = after.stories.find((s) => s.origin === "commit")?.id;
+
+			expect(idAfter).toBe(idBefore);
 		}),
 	);
 });

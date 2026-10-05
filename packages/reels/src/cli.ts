@@ -8,12 +8,18 @@ import { randomUUID } from "node:crypto";
 import { access, copyFile, mkdir, rename, rm } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { elevenLabsKeyFilePath, resolveElevenLabsApiKey } from "./api-key.ts";
-import { assertValidSha, collectChangeSetsForShas, type GitRunner, selectBuildShas } from "./collect.ts";
+import {
+	assertValidSha,
+	collectChangeSetsForShas,
+	type GitRunner,
+	listShas,
+	runGit,
+	selectBuildShas,
+} from "./collect.ts";
 import type { ChangeSet, ReelEntry, ReelScript } from "./contract.ts";
-import { walkMainline } from "./mainline.ts";
 import { applyContentPolicy, DEFAULT_DENY_GLOBS, redactText } from "./privacy.ts";
 import { pruneFeed, publishFeed, publishSite, readFeed } from "./publish.ts";
-import { DEFAULT_REELS_CONFIG } from "./reels-config.ts";
+import { DEFAULT_REELS_CONFIG, loadReelsConfig, type ReelsConfig } from "./reels-config.ts";
 import { listReleaseTags } from "./releases.ts";
 import { createBundle, publishAudioForRender, renderReel } from "./render.ts";
 import {
@@ -60,6 +66,7 @@ interface BuildArgs {
 	concurrency?: number;
 	excludeGlobs: string[];
 	includeGlobs: string[];
+	config?: string;
 }
 
 function fail(message: string): never {
@@ -165,6 +172,9 @@ function parseBuildArgs(argv: string[]): BuildArgs {
 				break;
 			case "--include":
 				args.includeGlobs.push(takeValue(argv, ++i, a));
+				break;
+			case "--config":
+				args.config = takeValue(argv, ++i, a);
 				break;
 			default:
 				fail(`unknown option "${a}"`);
@@ -486,28 +496,38 @@ async function runSite(argv: string[]): Promise<void> {
 	console.log(`draht-reels: published site to ${outDir}`);
 }
 
+/**
+ * Loads `.reels.json`: an explicit `--config` path, else `<repo>/.reels.json`
+ * when present, else {@link DEFAULT_REELS_CONFIG}. Same path rule the build
+ * command will use (not yet runner-controlled — see the README once T13's
+ * sibling tasks land).
+ */
+async function resolveReelsConfig(args: Pick<BuildArgs, "repo" | "config">): Promise<ReelsConfig> {
+	const path = args.config ?? join(args.repo, ".reels.json");
+	try {
+		return await loadReelsConfig(path);
+	} catch (error) {
+		if (args.config) throw error; // an explicit --config must exist and parse
+		const message = error instanceof Error ? error.message : String(error);
+		if (/ENOENT/.test(message)) return DEFAULT_REELS_CONFIG;
+		throw error;
+	}
+}
+
 /** Removes feed entries (and media) no longer reachable from `--ref`, for retraction after a force-push. */
 export async function runPrune(argv: string[], overrides: { git?: GitRunner } = {}): Promise<void> {
 	const args = parseBuildArgs(argv);
 	const name = repoName(args);
 	const outDir = resolve(args.out);
+	const config = await resolveReelsConfig(args);
 
 	const reachable = await collectOrFail(
 		async () => {
-			const units = await walkMainline({
-				repo: args.repo,
-				ref: args.ref,
-				allHistory: true,
-				tagPattern: DEFAULT_REELS_CONFIG.tagPattern,
-				config: DEFAULT_REELS_CONFIG,
-				git: overrides.git,
-			});
-			const shas = new Set<string>();
-			for (const unit of units) {
-				shas.add(unit.sha);
-				for (const branchSha of unit.branchShas ?? []) shas.add(branchSha);
-			}
-			const allTags = await listReleaseTags(args.repo, DEFAULT_REELS_CONFIG.tagPattern, overrides.git);
+			// `rev-list ref` follows every parent by default (no `--first-parent`),
+			// so every commit reachable through any merge side is covered without
+			// any mainline-walk or classification step.
+			const shas = new Set(await listShas(overrides.git ?? runGit, args.repo, args.ref, {}));
+			const allTags = await listReleaseTags(args.repo, config.tagPattern, overrides.git);
 			const tags = new Set(allTags.filter((tag) => shas.has(tag.sha)).map((tag) => tag.name));
 			return { shas, tags };
 		},

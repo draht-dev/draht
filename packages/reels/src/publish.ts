@@ -193,12 +193,17 @@ function releaseEntryTag(entry: ReelEntry): string | undefined {
 	return entry.release ?? entry.id.replace(/^release-/, "");
 }
 
+/** A changelog story's id (stories.ts's `computeChangelogStoryId`) is `<anchorSha>-<hash8>`, never itself a sha, so reachability must compare against the sha part only. */
+const STORY_ID_SHA_RE = /^[0-9a-f]{40}([0-9a-f]{24})?/;
+
 function isEntryReachable(entry: ReelEntry, reachable: MainlineReachability): boolean {
 	if (entry.kind === "release") {
 		const tag = releaseEntryTag(entry);
 		return tag !== undefined && SAFE_TAG_RE.test(tag) && reachable.tags.has(tag);
 	}
-	return reachable.shas.has(entry.id);
+	if (reachable.shas.has(entry.id)) return true;
+	const sha = STORY_ID_SHA_RE.exec(entry.id)?.[0];
+	return sha !== undefined && reachable.shas.has(sha);
 }
 
 /**

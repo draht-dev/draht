@@ -97,16 +97,59 @@ const IDENTIFIER_PATTERNS: RegExp[] = [
 	/\b[\w.-]+\/[\w./-]+\b/g, // file paths
 ];
 
+/** Entry text, subjects, and bodies the identifier/exact-match stage ever looks at are capped here, before any regex runs on them. */
+export const MAX_ENTRY_TEXT_BYTES = 16 * 1024;
+
+/** Common English words and abbreviations that match an identifier pattern syntactically (slash, dots) but never name real code. */
+const IDENTIFIER_STOPLIST: ReadonlySet<string> = new Set([
+	"e.g",
+	"e.g.",
+	"i.e",
+	"i.e.",
+	"and/or",
+	"read/write",
+	"input/output",
+	"on/off",
+	"true",
+	"false",
+	"null",
+	"undefined",
+	"id",
+	"node.js",
+]);
+
+const MIN_IDENTIFIER_LENGTH = 4;
+
+/** Whether `raw` itself carries code shape, independent of which pattern matched it (a backtick always counts). */
+function isCodeShaped(raw: string, backticked: boolean): boolean {
+	if (backticked) return true;
+	if (/^--/.test(raw)) return true;
+	if (/^\//.test(raw)) return true;
+	if (/[_./]/.test(raw)) return true;
+	return /[a-z][A-Z]/.test(raw); // camelCase
+}
+
 /**
  * Extracts candidate identifiers from one changelog entry's text (T1
- * amendment). Pure, order-stable, deduped, capped at `max`.
+ * amendment, strengthened in the fix round): a stoplist drops common prose
+ * that matches an identifier pattern syntactically, a minimum length of
+ * {@link MIN_IDENTIFIER_LENGTH} drops noise like `"id"`, and every survivor
+ * must independently look code-shaped ({@link isCodeShaped}) — otherwise a
+ * capitalized proper noun or a two-word slash phrase could pass as a
+ * "symbol" and send the pickaxe search chasing prose. Pure, order-stable,
+ * deduped, capped at `max`. `entryText` is capped at {@link
+ * MAX_ENTRY_TEXT_BYTES} before any regex runs on it.
  */
 export function extractIdentifiers(entryText: string, max: number = DEFAULT_MAX_IDENTIFIERS): string[] {
+	const text = entryText.slice(0, MAX_ENTRY_TEXT_BYTES);
 	const seen = new Set<string>();
 	for (const pattern of IDENTIFIER_PATTERNS) {
-		for (const match of entryText.matchAll(pattern)) {
+		const backticked = pattern.source.startsWith("`");
+		for (const match of text.matchAll(pattern)) {
 			const raw = (match[1] ?? match[0]).trim();
-			if (raw.length < 2) continue;
+			if (raw.length < MIN_IDENTIFIER_LENGTH) continue;
+			if (IDENTIFIER_STOPLIST.has(raw.toLowerCase())) continue;
+			if (!isCodeShaped(raw, backticked)) continue;
 			seen.add(raw);
 		}
 	}
@@ -138,6 +181,11 @@ function packagePathspecs(packages: readonly string[]): string[] {
 	return [...(includes.length > 0 ? includes : ["."]), ...excludes];
 }
 
+/** `range` may be a single `a..b` token or several space-separated revision args (e.g. `"tagSha ^prevTagSha ^floorSha"`, as `releases.ts` builds it); every token is a sha or a `^`-prefixed sha, never attacker-controlled text. */
+function splitRevisionArgs(range: string): string[] {
+	return range.split(/\s+/).filter(Boolean);
+}
+
 async function searchIdentifier(
 	git: GitRunner,
 	repo: string,
@@ -146,7 +194,16 @@ async function searchIdentifier(
 	identifier: string,
 ): Promise<ImplementingCommit[]> {
 	const out = await git(
-		["log", "--reverse", `-S${identifier}`, "--format=%H%x00%s", "--end-of-options", range, "--", ...pathspecs],
+		[
+			"log",
+			"--reverse",
+			`-S${identifier}`,
+			"--format=%H%x00%s",
+			"--end-of-options",
+			...splitRevisionArgs(range),
+			"--",
+			...pathspecs,
+		],
 		repo,
 	);
 	return out
@@ -159,28 +216,97 @@ async function searchIdentifier(
 		});
 }
 
+function normalizeForExactMatch(text: string): string {
+	return text.toLowerCase().replace(/[`*_]/g, "").replace(/\s+/g, " ").trim();
+}
+
+/** Strips a conventional-commit `type(scope): ` prefix, since that prefix is never part of a changelog entry's own wording. */
+function stripConventionalPrefix(subject: string): string {
+	return subject.replace(/^[a-z]+(?:\([^)]*\))?!?:\s*/i, "");
+}
+
+const MIN_EXACT_MATCH_LENGTH = 12;
+
+/** True when `entryText` and `candidateText` are the same sentence, ignoring markdown emphasis/case/whitespace, or one contains the other verbatim (both sides long enough to rule out a coincidental short match). */
+function isExactOrNearMatch(entryText: string, candidateText: string): boolean {
+	const a = normalizeForExactMatch(entryText);
+	const b = normalizeForExactMatch(candidateText);
+	if (a.length < MIN_EXACT_MATCH_LENGTH || b.length < MIN_EXACT_MATCH_LENGTH) return false;
+	if (a === b) return true;
+	return a.includes(b) || b.includes(a);
+}
+
+export interface ExactMatchCandidate {
+	sha: string;
+	subject: string;
+	body: string;
+}
+
+/**
+ * Looks for a release-range commit whose subject or body already states the
+ * changelog entry's own wording near-verbatim (fix round: tried before any
+ * pickaxe process is spawned). A hit here is unambiguous enough to skip
+ * identifier extraction and pickaxe search entirely.
+ */
+export function findExactSubjectMatch(
+	entryText: string,
+	candidates: readonly ExactMatchCandidate[],
+): ImplementingCommit[] {
+	const text = entryText.slice(0, MAX_ENTRY_TEXT_BYTES);
+	for (const candidate of candidates) {
+		if (
+			isExactOrNearMatch(text, stripConventionalPrefix(candidate.subject)) ||
+			isExactOrNearMatch(text, candidate.body)
+		) {
+			return [{ sha: candidate.sha, subject: candidate.subject }];
+		}
+	}
+	return [];
+}
+
+export const DEFAULT_MAX_PICKAXE_PER_RUN = 200;
+
+/** Shared, mutable pickaxe-process budget across one `collectStories` run, independent of the per-story {@link FindImplementingCommitsOptions.maxProcesses} cap. */
+export interface PickaxeBudget {
+	remaining: number;
+}
+
+export function createPickaxeBudget(max: number = DEFAULT_MAX_PICKAXE_PER_RUN): PickaxeBudget {
+	return { remaining: max };
+}
+
 export interface FindImplementingCommitsOptions {
 	repo: string;
 	/** A `git log` revision range covering the entry's release, e.g. `"<fromSha>..<toSha>"`. */
 	range: string;
 	packages: readonly string[];
+	/** The release range's own commits (subject + body), tried for an exact/near-exact match before any pickaxe search. */
+	rangeCommits?: readonly ExactMatchCandidate[];
 	git?: GitRunner;
 	maxIdentifiers?: number;
+	/** Pickaxe processes spawned for this one entry. */
 	maxProcesses?: number;
+	/** Shared across every entry in the current `collectStories` run; decremented as pickaxe processes run, never exceeded even mid-entry. */
+	runBudget?: PickaxeBudget;
 }
 
 /**
  * Finds the commits that likely implemented a changelog entry (T1
- * amendment): one `git log -S<id>` per extracted identifier (bounded by
- * `maxProcesses`), restricted to `range` and the entry's package paths.
- * Returns the top-ranked commits (most identifier hits, capped at
- * {@link MAX_IMPLEMENTING_COMMITS}, oldest first on a tie), or `[]` when
- * nothing is found.
+ * amendment): first an exact/near-exact match against `rangeCommits`
+ * ({@link findExactSubjectMatch}), then (only if that finds nothing) one
+ * `git log -S<id>` per extracted identifier, bounded by both `maxProcesses`
+ * (this entry) and `runBudget` (the whole run), restricted to `range` and
+ * the entry's package paths. Returns the top-ranked commits (most
+ * identifier hits, capped at {@link MAX_IMPLEMENTING_COMMITS}, oldest first
+ * on a tie), or `[]` when nothing is found.
  */
 export async function findImplementingCommits(
 	entryText: string,
 	opts: FindImplementingCommitsOptions,
 ): Promise<ImplementingCommit[]> {
+	const exact = findExactSubjectMatch(entryText, opts.rangeCommits ?? []);
+	if (exact.length > 0) return exact;
+
 	const git = opts.git ?? runGit;
 	const identifiers = extractIdentifiers(entryText, opts.maxIdentifiers ?? DEFAULT_MAX_IDENTIFIERS).slice(
 		0,
@@ -193,6 +319,8 @@ export async function findImplementingCommits(
 	let order = 0;
 
 	for (const identifier of identifiers) {
+		if (opts.runBudget && opts.runBudget.remaining <= 0) break;
+		if (opts.runBudget) opts.runBudget.remaining--;
 		const commits = await searchIdentifier(git, opts.repo, opts.range, pathspecs, identifier);
 		for (const commit of commits) {
 			const existing = candidates.get(commit.sha);
@@ -233,45 +361,71 @@ interface AnchorAttribution {
  * Unions anchors whose implementing sets share at least one commit, so a
  * feature with several changelog lines yields one story, not several. Pure
  * union-find over plain arrays; group order follows first appearance.
+ *
+ * Fix round: only `"strong"` attributions ever union through a shared
+ * commit. A `"weak"` attribution's "implementing" set is just its anchor
+ * commit, a fallback, not real evidence — on draht-mono a single later
+ * docs/release commit can anchor many unrelated upstream-carried entries
+ * (the T1 amendment's `42fdbb49c`), and merging every entry that commit
+ * touches into one story would be wrong. Each weak attribution is therefore
+ * always its own singleton group.
  */
 export function groupOverlappingAttributions(attributions: readonly AnchorAttribution[]): AnchorAttribution[][] {
-	const parent = attributions.map((_, i) => i);
+	const strongIndices: number[] = [];
+	const groups: AnchorAttribution[][] = [];
+	attributions.forEach((attribution, index) => {
+		if (attribution.strength === "strong") strongIndices.push(index);
+		else groups.push([attribution]);
+	});
+
+	const parent = new Map(strongIndices.map((i) => [i, i]));
 	const find = (i: number): number => {
-		while (parent[i] !== i) i = parent[i] as number;
-		return i;
+		let root = i;
+		while (parent.get(root) !== root) root = parent.get(root) as number;
+		return root;
 	};
 	const union = (a: number, b: number) => {
 		const ra = find(a);
 		const rb = find(b);
-		if (ra !== rb) parent[ra] = rb;
+		if (ra !== rb) parent.set(ra, rb);
 	};
 
 	const byCommit = new Map<string, number>();
-	attributions.forEach((attribution, index) => {
-		for (const sha of attribution.implementing) {
+	for (const index of strongIndices) {
+		for (const sha of attributions[index]?.implementing ?? []) {
 			const existing = byCommit.get(sha);
 			if (existing !== undefined) union(existing, index);
 			else byCommit.set(sha, index);
 		}
-	});
+	}
 
-	const groups = new Map<number, AnchorAttribution[]>();
-	attributions.forEach((attribution, index) => {
+	const strongGroups = new Map<number, AnchorAttribution[]>();
+	for (const index of strongIndices) {
 		const root = find(index);
-		const group = groups.get(root);
+		const attribution = attributions[index];
+		if (!attribution) continue;
+		const group = strongGroups.get(root);
 		if (group) group.push(attribution);
-		else groups.set(root, [attribution]);
-	});
-	return Array.from(groups.values());
+		else strongGroups.set(root, [attribution]);
+	}
+	return [...groups, ...Array.from(strongGroups.values())];
 }
 
 // --- Story id ----------------------------------------------------------------
 
 const STORY_ID_RE = /^[0-9a-f]{40}([0-9a-f]{24})?(-[0-9a-f]{8})?$/;
+const STORY_ID_SHA_RE = /^[0-9a-f]{40}([0-9a-f]{24})?/;
 
 /** Validates a story id where it becomes a path component or an `assertValidSha`-compatible media id. */
 export function isValidStoryId(id: string): boolean {
 	return STORY_ID_RE.test(id);
+}
+
+/** The sha a story id is built from, stripping any `-<hash8>` disambiguation suffix — the part every `git`/`fetchCommitMetadata` call must use instead of the raw id. */
+export function storyIdSha(id: string): string {
+	const match = STORY_ID_SHA_RE.exec(id);
+	if (!match) throw new Error(`"${id}" is not a valid story id`);
+	return match[0];
 }
 
 function hash8(text: string): string {
@@ -284,16 +438,24 @@ function hash8(text: string): string {
 }
 
 /**
- * The stable story id (point 4 of T6): the head sha of the implementing set
- * for a changelog story, or the merge sha for a branch story — both already
- * valid `assertValidSha` ids, so the common case keeps today's `id = head
- * sha` media-path convention (D9). A `-<hash>` suffix is appended only to
- * disambiguate two distinct stories that would otherwise collapse onto the
- * same head sha (`usedIds` tracks ids already assigned this run).
+ * The stable story id for a branch/PR story: the merge sha, already a valid
+ * `assertValidSha` id (D9's `id = head sha` media-path convention).
  */
-export function computeStoryId(headSha: string, anchorTexts: readonly string[], usedIds: ReadonlySet<string>): string {
-	if (!usedIds.has(headSha)) return headSha;
-	return `${headSha}-${hash8(anchorTexts.join("\u0000"))}`;
+export function computeBranchStoryId(mergeSha: string): string {
+	return mergeSha;
+}
+
+/**
+ * The stable story id for a changelog story (fix round): the *anchor*
+ * commit sha (never the implementing commits, which can change as new
+ * commits land in a still-open Unreleased range) plus a hash of the
+ * grouped entry texts, so the id never changes across runs purely because a
+ * later pickaxe search finds a different implementing commit. Always
+ * suffixed (not just on collision): stability matters more than a shorter
+ * id for this origin.
+ */
+export function computeChangelogStoryId(anchorSha: string, anchorTexts: readonly string[]): string {
+	return `${anchorSha}-${hash8(anchorTexts.join("\u0000"))}`;
 }
 
 // --- Story collection ----------------------------------------------------------
@@ -330,6 +492,30 @@ export interface CollectStoriesOptions {
 	anchors?: readonly AnchorWithRange[];
 	maxIdentifiers?: number;
 	maxProcesses?: number;
+	/** Shared pickaxe-process budget for this run; a fresh {@link createPickaxeBudget} is used when omitted. */
+	pickaxeBudget?: PickaxeBudget;
+}
+
+// `execFile` rejects a literal NUL byte in argv, so the `--format` string
+// spells the trailing record separator with git's `%x00` escape (plain
+// ASCII text in argv, a real NUL only in git's output) — the same pattern
+// as `mainline.ts`'s `METADATA_RECORD_SEP_FORMAT`.
+const RANGE_COMMIT_RECORD_SEP = "\x00\x00RECORD\x00\x00";
+
+/** One `git log` call per distinct range, reused by every anchor in that range for the exact/near-exact match pass. */
+async function fetchRangeCommits(git: GitRunner, repo: string, range: string): Promise<ExactMatchCandidate[]> {
+	const out = await git(
+		["log", "--format=%H%x00%s%x00%b%x00%x00RECORD%x00%x00", "--end-of-options", ...splitRevisionArgs(range)],
+		repo,
+	);
+	return out
+		.split(RANGE_COMMIT_RECORD_SEP)
+		.map((block) => block.trim())
+		.filter(Boolean)
+		.map((block) => {
+			const [sha, subject, ...bodyParts] = block.split("\x00");
+			return { sha: assertValidSha((sha ?? "").trim()), subject: subject ?? "", body: bodyParts.join("\x00") };
+		});
 }
 
 function buildUnitOwnerMap(units: readonly MainlineUnit[]): Map<string, MainlineUnit> {
@@ -369,7 +555,7 @@ async function buildBranchStory(
 	const base = unit.parents[0] ?? unit.sha;
 
 	return {
-		id: unit.sha,
+		id: computeBranchStoryId(unit.sha),
 		commits: [unit.sha, ...(unit.branchShas ?? [])].map((s) => s.slice(0, 12)),
 		title: unit.subject,
 		body: branchCommits
@@ -389,8 +575,8 @@ async function buildBranchStory(
 
 async function buildCommitStory(
 	headSha: string,
+	anchorSha: string,
 	anchorTexts: readonly string[],
-	usedIds: ReadonlySet<string>,
 	opts: { repo: string; git: GitRunner },
 ): Promise<Story> {
 	const head = await fetchCommitMetadata(opts.git, opts.repo, headSha);
@@ -398,7 +584,7 @@ async function buildCommitStory(
 	const base = head.parents[0] ?? headSha;
 
 	return {
-		id: computeStoryId(headSha, anchorTexts, usedIds),
+		id: computeChangelogStoryId(anchorSha, anchorTexts),
 		commits: [headSha.slice(0, 12)],
 		title: anchorTexts[0] ?? head.subject,
 		body: head.body,
@@ -450,19 +636,29 @@ export async function collectStories(
 
 	const subjectBySha = new Map<string, string>();
 	const attributions: AnchorAttribution[] = [];
+	const rangeCommitsByRange = new Map<string, Promise<ExactMatchCandidate[]>>();
+	const pickaxeBudget = opts.pickaxeBudget ?? createPickaxeBudget();
 	for (const { anchor, range } of opts.anchors ?? []) {
 		const owningUnit = ownerByCommit.get(anchor.unitId);
 		// A changelog entry that documents a feature merge's own branch is not a
 		// second story: the merge already produced one in the loop above.
 		if (owningUnit?.class === "feature") continue;
 
+		let rangeCommits = rangeCommitsByRange.get(range);
+		if (!rangeCommits) {
+			rangeCommits = fetchRangeCommits(git, opts.repo, range);
+			rangeCommitsByRange.set(range, rangeCommits);
+		}
+
 		const found = await findImplementingCommits(anchor.entryText, {
 			repo: opts.repo,
 			range,
 			packages: anchor.packages,
+			rangeCommits: await rangeCommits,
 			git,
 			maxIdentifiers: opts.maxIdentifiers,
 			maxProcesses: opts.maxProcesses,
+			runBudget: pickaxeBudget,
 		});
 		for (const commit of found) subjectBySha.set(commit.sha, commit.subject);
 		const implementing = found.length > 0 ? found.map((c) => c.sha) : [anchor.commitSha];
@@ -473,7 +669,7 @@ export async function collectStories(
 		const implementing = Array.from(new Set(group.flatMap((a) => a.implementing)));
 		const owningUnits = implementing.map((sha) => ownerByCommit.get(sha));
 		const upstreamCarried =
-			owningUnits.some((unit) => unit?.class === "upstream-sync" || unit?.side === "side") ||
+			owningUnits.some((unit) => unit?.class === "upstream-sync") ||
 			implementing.some((sha) => isUpstreamCarriedSubject(subjectBySha.get(sha) ?? ""));
 
 		if (upstreamCarried) {
@@ -484,12 +680,12 @@ export async function collectStories(
 		}
 		if (owningUnits.some((unit) => unit?.class === "feature")) continue;
 
-		const headSha = group[0]?.implementing[0] ?? group[0]?.anchor.commitSha;
-		if (!headSha) continue;
+		const anchorSha = group[0]?.anchor.commitSha;
+		const headSha = group[0]?.implementing[0] ?? anchorSha;
+		if (!headSha || !anchorSha) continue;
 
 		const anchorTexts = group.map((a) => a.anchor.entryText);
-		const usedIds = new Set(stories.map((s) => s.id));
-		const story = await buildCommitStory(headSha, anchorTexts, usedIds, { repo: opts.repo, git });
+		const story = await buildCommitStory(headSha, anchorSha, anchorTexts, { repo: opts.repo, git });
 		stories.push(story);
 
 		const strength: AttributionStrength = group.every((a) => a.strength === "strong") ? "strong" : "weak";

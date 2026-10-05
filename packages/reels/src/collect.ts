@@ -32,10 +32,14 @@ export function assertValidSha(sha: string): string {
 
 export type GitRunner = (args: string[], cwd: string) => Promise<string>;
 
+/** A hung `git log -S`/pickaxe search (or any other call) is killed rather than wedging the whole run. */
+export const DEFAULT_GIT_TIMEOUT_MS = 30_000;
+
 export const runGit: GitRunner = async (args, cwd) => {
 	const { stdout } = await execFileAsync("git", ["-c", "core.quotePath=false", ...args], {
 		cwd,
 		maxBuffer: 1024 * 1024 * 256,
+		timeout: DEFAULT_GIT_TIMEOUT_MS,
 	});
 	return stdout;
 };

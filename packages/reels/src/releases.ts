@@ -1,20 +1,30 @@
 /**
- * Maps a {@link walkMainline} unit list to release tags, in the walk's own
- * topological order (never `git tag --contains` per unit, and never one
- * process per unit): a unit's position in the walked array already encodes
- * "how far back from the walk's start" it is, and `MainlineUnit.position`
- * equals its index, so release boundaries fall out of a single linear scan
- * once tags are located in that same array. Units after the newest tag have
- * no release ("unreleased"). Tags not reachable on the walk (off-mainline,
- * or not matching `tagPattern`) are ignored.
+ * Builds one {@link ReleaseGroup} per release tag (plus "unreleased"), each
+ * from its own exact revision range (redesign, 2026-10-05): `prevTag..tag`
+ * where `prevTag` is the nearest older ancestor tag matching `tagPattern`,
+ * and `lastTag..ref` for unreleased. `historyFloor` additionally excludes
+ * its own ancestors (`^floor`) from every range it touches.
  *
- * Changelog anchors are attached per release with one `findChangelogAnchors`
- * call per release's own commit range (bounded by the number of releases,
- * not the number of units).
+ * The scan budget counts releases, not commits or units: by default the
+ * newest {@link DEFAULT_RELEASE_SCAN} releases plus unreleased are built;
+ * `allHistory` builds every release back to `historyFloor` (or the root,
+ * when no floor is configured). One `git log --simplify-by-decoration` call
+ * finds every `tagPattern`-matching tag that is an ancestor of `ref`,
+ * already in ancestor order, so locating `prevTag` costs no extra `git`
+ * call per tag; one {@link buildRangeUnits} call (itself two `git`
+ * processes) per release is the only further git cost, bounded by the
+ * number of releases actually built.
  */
 
-import { assertValidSha, type GitRunner, runGit } from "./collect.ts";
-import { type ChangelogAnchor, filterFeatureAnchors, findChangelogAnchors, type MainlineUnit } from "./mainline.ts";
+import { assertValidSha, type GitRunner, listShas, runGit } from "./collect.ts";
+import {
+	buildRangeUnits,
+	type ChangelogAnchor,
+	filterFeatureAnchors,
+	findChangelogAnchors,
+	type MainlineUnit,
+} from "./mainline.ts";
+import { DEFAULT_REELS_CONFIG, type ReelsConfig } from "./reels-config.ts";
 
 export interface ReleaseTag {
 	name: string;
@@ -49,15 +59,162 @@ export async function listReleaseTags(
 	return tags;
 }
 
-/** One release's grouping of mainline units, before changelog anchors are attached. */
-export interface ReleaseGroup {
-	/** Absent for the "unreleased" group (units newer than the newest tag). */
+/**
+ * Lists `tagPattern`-matching tags that are ancestors of `ref`, newest
+ * first, in ancestor order: one `git log --simplify-by-decoration`
+ * traversal of `ref`'s history (a bounded method per the redesign note —
+ * the walk is one process regardless of history size, and the per-release
+ * scan budget is spent later, by {@link listReleaseRanges}, not here).
+ * Order follows `--topo-order`'s parent-after-child guarantee, so for
+ * ordinary release-tag topologies each entry's nearest older match is
+ * simply the next one in this list.
+ */
+async function listAncestorTags(repo: string, ref: string, tagPattern: RegExp, git: GitRunner): Promise<ReleaseTag[]> {
+	const out = await git(
+		[
+			"log",
+			"--simplify-by-decoration",
+			"--topo-order",
+			"--decorate=full",
+			"--format=%H%x00%ai%x00%D",
+			"--end-of-options",
+			ref,
+		],
+		repo,
+	);
+	const tags: ReleaseTag[] = [];
+	const seen = new Set<string>();
+	for (const line of out.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		const [sha, date, decorations] = trimmed.split("\x00");
+		if (!sha || !decorations) continue;
+		for (const raw of decorations.split(",")) {
+			const decoration = raw.trim();
+			const match = decoration.match(/^tag:\s*refs\/tags\/(.+)$/);
+			if (!match) continue;
+			const name = match[1] ?? "";
+			if (!name || !tagPattern.test(name) || seen.has(name)) continue;
+			seen.add(name);
+			tags.push({ name, sha: assertValidSha(sha), date: date ?? "" });
+		}
+	}
+	return tags;
+}
+
+export interface ReleaseRange {
+	/** Absent for the "unreleased" range (newer than the newest matching tag). */
 	tag?: string;
 	tagSha?: string;
 	date?: string;
-	/** Name of the next-older release on the walk, absent for the oldest one. */
+	/** Name of the nearest older matching tag, absent for the oldest release built. */
 	previousTag?: string;
-	/** This release's own units, newest first (matching the walk order). */
+	/** `git rev-list`/`git log` revision arguments for this release's exact set, e.g. `[tagSha, "^" + prevTagSha]`. */
+	revisions: string[];
+}
+
+export const DEFAULT_RELEASE_SCAN = 6;
+
+export interface ListReleaseRangesOptions {
+	repo: string;
+	ref: string;
+	tagPattern: string | RegExp;
+	/** Overrides `config.historyFloor`. A tag or sha; resolved the same way `ref` is. */
+	historyFloor?: string;
+	/** Number of released (tagged) ranges to build, newest first. Ignored when `allHistory`. Defaults to {@link DEFAULT_RELEASE_SCAN}. */
+	scan?: number;
+	/** Build every release back to `historyFloor` (or the root). */
+	allHistory?: boolean;
+	config?: ReelsConfig;
+	git?: GitRunner;
+}
+
+/**
+ * Computes the exact revision range for each release to build: the newest
+ * `scan` tagged ranges (or all of them, back to `historyFloor`, when
+ * `allHistory`) plus one "unreleased" range for everything newer than the
+ * newest tag. Pure revision-range arithmetic over one `git` discovery call;
+ * {@link buildRangeUnits} does the actual classification per range.
+ */
+export async function listReleaseRanges(opts: ListReleaseRangesOptions): Promise<ReleaseRange[]> {
+	const git = opts.git ?? runGit;
+	const config = opts.config ?? DEFAULT_REELS_CONFIG;
+	const tagPattern = typeof opts.tagPattern === "string" ? new RegExp(opts.tagPattern) : opts.tagPattern;
+	const historyFloorRef = opts.historyFloor ?? config.historyFloor;
+
+	const [refSha] = await listShas(git, opts.repo, opts.ref, { limit: 1 });
+	if (!refSha) return [];
+	const historyFloorSha = historyFloorRef
+		? (await listShas(git, opts.repo, historyFloorRef, { limit: 1 }))[0]
+		: undefined;
+
+	const ancestorTags = await listAncestorTags(opts.repo, refSha, tagPattern, git);
+
+	// historyFloor excludes its own ancestors: a tag that is itself an
+	// ancestor of the floor sits entirely below it, so it is dropped rather
+	// than producing an empty (or negative) range.
+	const floorExclusions = historyFloorSha ? [`^${historyFloorSha}`] : [];
+	const tags: ReleaseTag[] = [];
+	for (const tag of ancestorTags) {
+		tags.push(tag);
+		if (!opts.allHistory && tags.length >= (opts.scan ?? DEFAULT_RELEASE_SCAN) + 1) break;
+	}
+
+	const ranges: ReleaseRange[] = [];
+	const lastTag = tags[0];
+	ranges.push({
+		tag: undefined,
+		revisions: [refSha, ...(lastTag ? [`^${lastTag.sha}`] : []), ...floorExclusions],
+	});
+
+	const scanCount = opts.allHistory ? tags.length : Math.min(tags.length, opts.scan ?? DEFAULT_RELEASE_SCAN);
+	for (let i = 0; i < scanCount; i++) {
+		const tag = tags[i];
+		if (!tag) continue;
+		const prevTag = tags[i + 1];
+		if (prevTag && historyFloorSha) {
+			const isPrevAncestorOfFloor = await isAncestor(git, opts.repo, prevTag.sha, historyFloorSha);
+			if (isPrevAncestorOfFloor) {
+				ranges.push({
+					tag: tag.name,
+					tagSha: tag.sha,
+					date: tag.date,
+					previousTag: undefined,
+					revisions: [tag.sha, ...floorExclusions],
+				});
+				continue;
+			}
+		}
+		ranges.push({
+			tag: tag.name,
+			tagSha: tag.sha,
+			date: tag.date,
+			previousTag: prevTag?.name,
+			revisions: [tag.sha, ...(prevTag ? [`^${prevTag.sha}`] : []), ...floorExclusions],
+		});
+	}
+
+	return ranges;
+}
+
+async function isAncestor(git: GitRunner, repo: string, maybeAncestor: string, descendant: string): Promise<boolean> {
+	try {
+		await git(["merge-base", "--is-ancestor", "--end-of-options", maybeAncestor, descendant], repo);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/** One release's grouping of mainline units, with changelog anchors attached. */
+export interface ReleaseGroup {
+	/** Absent for the "unreleased" group (newer than the newest tag). */
+	tag?: string;
+	tagSha?: string;
+	date?: string;
+	/** Name of the next-older release, absent for the oldest one built. */
+	previousTag?: string;
+	/** This release's own units, newest first. */
 	units: MainlineUnit[];
 	/** Unit shas that are feature-branch merges, or (once anchors are attached) own a changelog anchor. */
 	featureUnitIds: string[];
@@ -104,123 +261,53 @@ function bucketUnits(
 	return { featureUnitIds, syncUnitIds, otherUnitIds };
 }
 
-/**
- * Partitions `units` (as returned by {@link walkMainline}, so `position`
- * already equals the array index) into release groups: a unit belongs to the
- * nearest tag at or above its position (D1's walk order, not calendar time
- * or `git tag --contains`). Pure: no git access, and tags not found among
- * `units` (off-mainline, or already filtered by `tagPattern`) are ignored.
- */
-export function mapUnitsToReleases(units: readonly MainlineUnit[], tags: readonly ReleaseTag[]): ReleaseGroup[] {
-	const positionBySha = new Map(units.map((unit) => [unit.sha, unit.position]));
-	const onMainline = tags
-		.map((tag) => ({ tag, position: positionBySha.get(tag.sha) }))
-		.filter((entry): entry is { tag: ReleaseTag; position: number } => entry.position !== undefined)
-		.sort((a, b) => a.position - b.position);
-
-	const makeGroup = (
-		tagEntry: { tag: ReleaseTag; position: number } | undefined,
-		previousTagEntry: { tag: ReleaseTag; position: number } | undefined,
-		rangeUnits: MainlineUnit[],
-	): ReleaseGroup => {
-		const buckets = bucketUnits(rangeUnits);
-		return {
-			tag: tagEntry?.tag.name,
-			tagSha: tagEntry?.tag.sha,
-			date: tagEntry?.tag.date,
-			previousTag: previousTagEntry?.tag.name,
-			units: rangeUnits,
-			...buckets,
-			anchors: [],
-			tiny: isTinyRelease({ ...buckets, anchors: [] }),
-		};
-	};
-
-	if (onMainline.length === 0) {
-		return units.length > 0 ? [makeGroup(undefined, undefined, [...units])] : [];
-	}
-
-	const groups: ReleaseGroup[] = [];
-	const firstTag = onMainline[0] as { tag: ReleaseTag; position: number };
-	if (firstTag.position > 0) {
-		groups.push(makeGroup(undefined, undefined, units.slice(0, firstTag.position)));
-	}
-	for (let i = 0; i < onMainline.length; i++) {
-		const tagEntry = onMainline[i] as { tag: ReleaseTag; position: number };
-		const nextTagEntry = onMainline[i + 1];
-		const end = nextTagEntry ? nextTagEntry.position : units.length;
-		groups.push(makeGroup(tagEntry, nextTagEntry, units.slice(tagEntry.position, end)));
-	}
-	return groups;
-}
-
-export interface AttachChangelogAnchorsOptions {
-	repo: string;
-	/** The full mainline unit list (not just one group's slice), so folded branch commits still resolve to their owning unit. */
-	units: readonly MainlineUnit[];
-	git?: GitRunner;
+export interface BuildReleaseGroupsOptions extends ListReleaseRangesOptions {
 	thresholds?: TinyReleaseThresholds;
 }
 
 /**
- * Attaches changelog anchors to each group with one `findChangelogAnchors`
- * call per group (bounded by release count, never by unit count), using each
- * group's own oldest/newest unit as the commit range. A direct commit that
- * owns a feature anchor (owner decision Q1) is promoted from `otherUnitIds`
- * into `featureUnitIds`, since it is a story even without being a feature
- * merge. `tiny` is recomputed from the attached anchors.
+ * Builds one {@link ReleaseGroup} per {@link listReleaseRanges} entry: units
+ * from {@link buildRangeUnits}, then changelog anchors from one {@link
+ * findChangelogAnchors} call over that same exact range (bounded by release
+ * count, never by unit count). A direct commit that owns a feature anchor
+ * (owner decision Q1) is promoted from `otherUnitIds` into `featureUnitIds`,
+ * since it is a story even without being a feature merge.
  */
-export async function attachChangelogAnchors(
-	groups: readonly ReleaseGroup[],
-	opts: AttachChangelogAnchorsOptions,
-): Promise<ReleaseGroup[]> {
+export async function buildReleaseGroups(opts: BuildReleaseGroupsOptions): Promise<ReleaseGroup[]> {
 	const git = opts.git ?? runGit;
-	const result: ReleaseGroup[] = [];
+	const config = opts.config ?? DEFAULT_REELS_CONFIG;
+	const ranges = await listReleaseRanges(opts);
+	const groups: ReleaseGroup[] = [];
 
-	for (const group of groups) {
-		if (group.units.length === 0) {
-			result.push(group);
-			continue;
+	for (const range of ranges) {
+		const units = await buildRangeUnits({ repo: opts.repo, revisions: range.revisions, config, git });
+		const buckets = bucketUnits(units);
+
+		let anchors: ChangelogAnchor[] = [];
+		if (units.length > 0) {
+			const rangeArg = range.revisions.join(" ");
+			const rawAnchors = await findChangelogAnchors(units, { repo: opts.repo, range: rangeArg, git });
+			anchors = filterFeatureAnchors(rawAnchors, units);
 		}
 
-		const newest = group.units[0] as MainlineUnit;
-		const oldest = group.units[group.units.length - 1] as MainlineUnit;
-		const lowerParent = oldest.parents[0];
-		const range = lowerParent ? `${lowerParent}..${newest.sha}` : newest.sha;
-
-		const rawAnchors = await findChangelogAnchors(opts.units, { repo: opts.repo, range, git });
-		const anchors = filterFeatureAnchors(rawAnchors, opts.units);
-
-		const groupShas = new Set(group.units.map((unit) => unit.sha));
+		const groupShas = new Set(units.map((unit) => unit.sha));
 		const anchorUnitIds = new Set(anchors.map((anchor) => anchor.unitId).filter((id) => groupShas.has(id)));
+		const featureUnitIds = Array.from(new Set([...buckets.featureUnitIds, ...anchorUnitIds]));
+		const otherUnitIds = buckets.otherUnitIds.filter((id) => !anchorUnitIds.has(id));
 
-		const featureUnitIds = Array.from(new Set([...group.featureUnitIds, ...anchorUnitIds]));
-		const otherUnitIds = group.otherUnitIds.filter((id) => !anchorUnitIds.has(id));
-
-		result.push({
-			...group,
+		groups.push({
+			tag: range.tag,
+			tagSha: range.tagSha,
+			date: range.date,
+			previousTag: range.previousTag,
+			units,
 			featureUnitIds,
+			syncUnitIds: buckets.syncUnitIds,
 			otherUnitIds,
 			anchors,
 			tiny: isTinyRelease({ featureUnitIds, anchors }, opts.thresholds),
 		});
 	}
 
-	return result;
-}
-
-export interface BuildReleaseGroupsOptions {
-	repo: string;
-	units: readonly MainlineUnit[];
-	tagPattern: string | RegExp;
-	git?: GitRunner;
-	thresholds?: TinyReleaseThresholds;
-}
-
-/** Convenience wrapper: lists tags, maps units to releases, and attaches changelog anchors in one call. */
-export async function buildReleaseGroups(opts: BuildReleaseGroupsOptions): Promise<ReleaseGroup[]> {
-	const git = opts.git ?? runGit;
-	const tags = await listReleaseTags(opts.repo, opts.tagPattern, git);
-	const groups = mapUnitsToReleases(opts.units, tags);
-	return attachChangelogAnchors(groups, { repo: opts.repo, units: opts.units, git, thresholds: opts.thresholds });
+	return groups;
 }

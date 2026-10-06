@@ -112,11 +112,12 @@ for platform in "${PLATFORMS[@]}"; do
     # for the worker specifiers in the runtime to resolve.
     #
     # Disable cwd bunfig.toml autoload so project preload scripts cannot crash the
-    # standalone binary before draht starts (see upstream #7684).
+    # standalone binary before draht starts (see badlogic/pi-mono#7684). Disable cwd
+    # .env autoload so project files cannot populate its environment (badlogic/pi-mono#10473).
     if [[ "$platform" == "windows-x64" ]]; then
-        bun build --compile --external koffi --no-compile-autoload-bunfig --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile binaries/$platform/draht.exe
+        bun build --compile --external koffi --no-compile-autoload-bunfig --no-compile-autoload-dotenv --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile binaries/$platform/draht.exe
     else
-        bun build --compile --external koffi --no-compile-autoload-bunfig --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile binaries/$platform/draht
+        bun build --compile --external koffi --no-compile-autoload-bunfig --no-compile-autoload-dotenv --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile binaries/$platform/draht
     fi
 done
 

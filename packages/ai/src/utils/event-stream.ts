@@ -112,11 +112,6 @@ export class AssistantMessageEventStream extends EventStream<AssistantMessageEve
 		);
 	}
 
-	/** Wall-clock start of this stream, for messages created before the response could start. */
-	get startedAt(): number {
-		return this.#startedAt;
-	}
-
 	override push(event: AssistantMessageEvent): void {
 		if (event.type === "done") this.#time(event.message);
 		else if (event.type === "error") this.#time(event.error);

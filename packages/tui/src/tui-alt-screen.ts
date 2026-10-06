@@ -313,6 +313,12 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		return this.copyTextToClipboard(text);
 	}
 
+	/** Drop the text selection and multi-click history, e.g. before the host replaces the transcript. */
+	resetTextSelection(): void {
+		this.clearTextSelection();
+		this.lastClick = undefined;
+	}
+
 	setLayoutRoot(component: Component | undefined): void {
 		if (this.layoutRoot === component) return;
 		this.layoutRoot = component;

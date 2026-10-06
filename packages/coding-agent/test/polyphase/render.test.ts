@@ -118,6 +118,7 @@ function makeContext<TArgs>(
 		expanded: false,
 		showImages: true,
 		isError: false,
+		outputPad: 1,
 		...overrides,
 	};
 }

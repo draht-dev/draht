@@ -104,7 +104,7 @@ The top-level `usage` is the latest cumulative provider-reported usage for the a
 |---|---|---|
 | `tool_execution_start` | `toolCallId`, `toolName`, `args` | Tool execution started. |
 | `tool_execution_update` | `toolCallId`, `toolName`, `args`, `partialResult` | The tool reported a partial result. |
-| `tool_execution_end` | `toolCallId`, `toolName`, `result`, `isError` | Tool execution finished. |
+| `tool_execution_end` | `toolCallId`, `toolName`, `result`, `isError`, `durationMs` | Tool execution finished. `durationMs` is how long the tool's `execute()` took, measured with a monotonic clock; absent when the tool did not run. |
 
 Use `toolCallId` to correlate the lifecycle. `partialResult` is the latest partial result supplied by the tool. Whether it replaces or extends an earlier update depends on that tool's result contract.
 

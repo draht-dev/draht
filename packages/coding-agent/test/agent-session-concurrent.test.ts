@@ -9,8 +9,7 @@ import { join } from "node:path";
 import { Agent } from "@draht/agent-core";
 import {
 	type AssistantMessage,
-	type AssistantMessageEvent,
-	EventStream,
+	createAssistantMessageEventStream,
 	getModel,
 	type ImageContent,
 	type TextContent,
@@ -27,20 +26,6 @@ import {
 	normalizeBuildSystemPromptOptions,
 } from "../src/core/system-prompt.ts";
 import { createTestExtensionsResult, createTestResourceLoader } from "./utilities.ts";
-
-// Mock stream that mimics AssistantMessageEventStream
-class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
-	constructor() {
-		super(
-			(event) => event.type === "done" || event.type === "error",
-			(event) => {
-				if (event.type === "done") return event.message;
-				if (event.type === "error") return event.error;
-				throw new Error("Unexpected event type");
-			},
-		);
-	}
-}
 
 function createAssistantMessage(text: string): AssistantMessage {
 	return {
@@ -96,7 +81,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			},
 			streamFn: (_model, _context, options) => {
 				abortSignal = options?.signal;
-				const stream = new MockAssistantStream();
+				const stream = createAssistantMessageEventStream();
 				queueMicrotask(() => {
 					stream.push({ type: "start", partial: createAssistantMessage("") });
 					const checkAbort = () => {
@@ -201,7 +186,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			},
 			streamFn: (_model, context, options) => {
 				abortSignal = options?.signal;
-				const stream = new MockAssistantStream();
+				const stream = createAssistantMessageEventStream();
 				queueMicrotask(() => {
 					const userTexts = context.messages
 						.filter((message) => message.role === "user")
@@ -306,7 +291,7 @@ describe("AgentSession concurrent prompt guard", () => {
 				tools: [],
 			},
 			streamFn: () => {
-				const stream = new MockAssistantStream();
+				const stream = createAssistantMessageEventStream();
 				queueMicrotask(() => {
 					stream.push({ type: "start", partial: createAssistantMessage("") });
 					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("Done") });
@@ -367,7 +352,7 @@ describe("AgentSession concurrent prompt guard", () => {
 				tools: [tool],
 			},
 			streamFn: async (_model, context) => {
-				const stream = new MockAssistantStream();
+				const stream = createAssistantMessageEventStream();
 				queueMicrotask(() => {
 					const toolResultCount = context.messages.filter((message) => message.role === "toolResult").length;
 					if (toolResultCount > 0) {
@@ -515,7 +500,7 @@ describe("AgentSession concurrent prompt guard", () => {
 				tools: [tool],
 			},
 			streamFn: async (_model, context) => {
-				const stream = new MockAssistantStream();
+				const stream = createAssistantMessageEventStream();
 				queueMicrotask(() => {
 					const hasToolResult = context.messages.some((message) => message.role === "toolResult");
 

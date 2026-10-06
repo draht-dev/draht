@@ -19,7 +19,13 @@ import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
 import type { ResourceLoader } from "./resource-loader.ts";
 import { DefaultResourceLoader } from "./resource-loader.ts";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.ts";
-import { DEFAULT_TOOL_NAMES, SettingsManager } from "./settings-manager.ts";
+import {
+	applyToolModifiers,
+	DEFAULT_TOOL_NAMES,
+	getToolListError,
+	isToolModifier,
+	SettingsManager,
+} from "./settings-manager.ts";
 import { time } from "./timings.ts";
 import {
 	createBashTool,
@@ -75,6 +81,10 @@ export interface CreateAgentSessionOptions {
 	 * enabled. MCP tools stay registered for codemode and tool search unless an
 	 * entry starts with `mcp__`; then only matching MCP tools are kept. An empty
 	 * list, like `noTools: "all"`, disables MCP tools too.
+	 *
+	 * A list of only `+name` and `-name` entries is not an allowlist: it adds tools
+	 * to or removes them from the default selection, like the `defaultTools` setting.
+	 * These entries take exact names. Mixing them with plain entries throws.
 	 */
 	tools?: string[];
 	/**
@@ -276,13 +286,21 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		thinkingLevel = clampThinkingLevel(model, thinkingLevel) as ThinkingLevel;
 	}
 
-	const configuredDefaultToolNames = settingsManager.getDefaultTools();
-	const allowedToolNames = options.tools ?? (options.noTools === "all" ? [] : undefined);
+	const toolListError = options.tools ? getToolListError(options.tools) : undefined;
+	if (toolListError) throw new Error(`Invalid tools option: ${toolListError}`);
+	const defaultToolNames = options.noTools ? [] : (settingsManager.getDefaultTools() ?? DEFAULT_TOOL_NAMES);
+	// A `tools` list of only `+name`/`-name` entries changes the default selection instead of
+	// replacing it, like the `defaultTools` setting.
+	const toolModifiers = options.tools?.some(isToolModifier) ? options.tools : undefined;
+	const selectedToolNames = toolModifiers ? applyToolModifiers(defaultToolNames, toolModifiers) : options.tools;
+	const allowedToolNames = toolModifiers
+		? options.noTools === "all"
+			? selectedToolNames
+			: undefined
+		: (options.tools ?? (options.noTools === "all" ? [] : undefined));
 	const excludedToolNames = options.excludeTools;
 	const isExcludedTool = excludedToolNames ? createToolNameMatcher(excludedToolNames) : undefined;
-	const initialActiveToolNames = (
-		options.tools ?? (options.noTools ? [] : (configuredDefaultToolNames ?? DEFAULT_TOOL_NAMES))
-	).filter((name) => !isExcludedTool?.(name));
+	const initialActiveToolNames = (selectedToolNames ?? defaultToolNames).filter((name) => !isExcludedTool?.(name));
 
 	// Create convertToLlm wrapper that filters images if blockImages is enabled (defense-in-depth)
 	const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
@@ -460,7 +478,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		modelRuntime,
 		cacheWarmer,
 		initialActiveToolNames,
-		usesDefaultTools: options.tools === undefined && !options.noTools,
+		usesDefaultTools: (options.tools === undefined || toolModifiers !== undefined) && !options.noTools,
+		defaultToolModifiers: toolModifiers,
 		allowedToolNames,
 		excludedToolNames,
 		extensionRunnerRef,

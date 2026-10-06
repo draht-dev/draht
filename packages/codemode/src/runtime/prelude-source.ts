@@ -10,7 +10,7 @@
  * Output helpers: `text(value)` appends a text item (non-strings are
  * JSON-stringified), `image(urlOrItem)` appends an image from a base64 `data:` URL, an
  * `{ image_url }` object, or an MCP `ImageContent` block, and `exit()` ends the script
- * successfully. `console.*` appends text items like `text()`.
+ * successfully. `console.*` appends text items marked as console output.
  *
  * `store(key, value)` and `load(key)` are synchronous: they work on a snapshot of
  * JSON text passed in as `storeJson`, and the keys the script wrote are reported
@@ -23,7 +23,7 @@
  * or I/O in the VM, nothing can ever resume it.
  * `globalsJson` lists `{ name, spread }`; `a.b` names are grouped into a frozen `a` object.
  * `bridge(kind, a, b, c)` with kind "call" or "global" (id, name, argsJson),
- * "output" ("text", text) or ("image", data, mimeType), or "done" (ok, valueJsonOrErrorJson, writesJson).
+ * "output" ("text" or "console", text) or ("image", data, mimeType), or "done" (ok, valueJsonOrErrorJson, writesJson).
  *
  * Before anything else the prelude freezes the built-ins and makes the built-in globals read-only.
  * The prelude shares them with the script, so a script that patched one (for example
@@ -441,7 +441,7 @@ export const PRELUDE_SOURCE: string = `(function (bridge, toolsJson, globalsJson
 	const console = {};
 	for (const level of ["log", "info", "warn", "error", "debug"]) {
 		console[level] = (...args) => {
-			output("text", args.map(format).join(" "));
+			output("console", args.map(format).join(" "));
 		};
 	}
 	Object.freeze(console);

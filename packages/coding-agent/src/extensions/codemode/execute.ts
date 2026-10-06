@@ -15,6 +15,7 @@ import type {
 	Usage,
 } from "@draht/ai";
 import {
+	type CodemodeOutputItem,
 	type CodemodeResult,
 	CodemodeSandbox,
 	type CodemodeTool,
@@ -238,6 +239,48 @@ function valueText(value: unknown): string {
 	return JSON.stringify(value) ?? String(value);
 }
 
+/**
+ * Lay out the script's output so the model can tell items apart: providers join adjacent text
+ * blocks with a newline or with nothing. With more than one text item (`text()` or the returned
+ * value), each starts with a `==> text N/M <==` line. `console.*` lines follow all other output in
+ * one `<console_output>` block.
+ */
+function formatOutput(output: readonly CodemodeOutputItem[]): (TextContent | ImageContent)[] {
+	const total = output.filter((item) => item.type === "text" && !item.console).length;
+	const items: (TextContent | ImageContent)[] = [];
+	const consoleLines: string[] = [];
+	let index = 0;
+	for (const item of output) {
+		if (item.type === "image") {
+			items.push(item);
+		} else if (item.console) {
+			consoleLines.push(item.text);
+		} else {
+			index++;
+			items.push({ type: "text", text: total > 1 ? `==> text ${index}/${total} <==\n${item.text}` : item.text });
+		}
+	}
+	if (consoleLines.length > 0) {
+		items.push({ type: "text", text: `<console_output>\n${consoleLines.join("\n")}\n</console_output>` });
+	}
+	return items;
+}
+
+/** Join adjacent text items into one, each part starting on its own line. */
+function joinAdjacentText(items: (TextContent | ImageContent)[]): (TextContent | ImageContent)[] {
+	const joined: (TextContent | ImageContent)[] = [];
+	for (const item of items) {
+		const last = joined.at(-1);
+		if (item.type === "text" && last?.type === "text") {
+			const separator = last.text === "" || last.text.endsWith("\n") ? "" : "\n";
+			joined[joined.length - 1] = { type: "text", text: `${last.text}${separator}${item.text}` };
+		} else {
+			joined.push(item);
+		}
+	}
+	return joined;
+}
+
 function formatCallSummary(calls: readonly CodemodeNestedCall[]): string {
 	if (calls.length === 0) return "No tool calls were made.";
 	return `Tool calls made before the failure (they are not undone): ${calls.map((call) => `${call.name} (${call.status})`).join(", ")}`;
@@ -442,19 +485,17 @@ export async function executeCodemode(
 		if (call.status === "running") call.status = "cancelled";
 	}
 
-	const items: (TextContent | ImageContent)[] = result.output.map((item) =>
-		item.type === "text" ? { type: "text", text: item.text } : item,
-	);
+	const scriptOutput = [...result.output];
 	if (result.ok) {
 		const { set, delete: deleted } = result.storeWrites;
 		if (Object.keys(set).length > 0 || deleted.length > 0) {
 			options.appendEntry?.(CODEMODE_STORE_ENTRY_TYPE, { set, delete: deleted });
 		}
 		// pi extension: a returned value is appended like text().
-		if (result.value !== undefined) items.push({ type: "text", text: valueText(result.value) });
-	} else {
-		items.push({ type: "text", text: `Script error:\n${formatError(result, calls)}` });
+		if (result.value !== undefined) scriptOutput.push({ type: "text", text: valueText(result.value) });
 	}
+	const items = formatOutput(scriptOutput);
+	if (!result.ok) items.push({ type: "text", text: `Script error:\n${formatError(result, calls)}` });
 	if (generatedImages > 0 && !items.some((item) => item.type === "image")) {
 		items.push({
 			type: "text",
@@ -462,10 +503,13 @@ export async function executeCodemode(
 		});
 	}
 
-	const truncated = await truncateOutput(items, sourceOptions.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS);
+	const truncated = await truncateOutput(
+		joinAdjacentText(items),
+		sourceOptions.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+	);
 	// After truncation, which joins the text items and moves images after them, so each path stays
 	// next to its image and is never cut.
-	const output = await saveImages(truncated.items);
+	const output = joinAdjacentText(await saveImages(truncated.items));
 	const wallTime = ((performance.now() - startedAt) / 1000).toFixed(1);
 	const header = `${result.ok ? "Script completed" : "Script failed"}\nWall time ${wallTime} seconds\nOutput:\n`;
 	const details = snapshot();

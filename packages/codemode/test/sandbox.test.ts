@@ -66,7 +66,7 @@ describe("script execution", () => {
 		`);
 		expect(result.ok).toBe(true);
 		expect(result.output.slice(0, -1)).toEqual([
-			{ type: "text", text: 'hello 1 {"a":1}' },
+			{ type: "text", text: 'hello 1 {"a":1}', console: true },
 			{ type: "text", text: '{"json":true}' },
 			{ type: "text", text: "undefined" },
 			{ type: "text", text: "7" },
@@ -77,7 +77,11 @@ describe("script execution", () => {
 			{ type: "image", data: WEBP, mimeType: "image/webp" },
 			{ type: "image", data: PNG, mimeType: "image/png" },
 		]);
-		expect(result.output.at(-1)).toMatchObject({ type: "text", text: expect.stringMatching(/^Error: bad/) });
+		expect(result.output.at(-1)).toMatchObject({
+			type: "text",
+			text: expect.stringMatching(/^Error: bad/),
+			console: true,
+		});
 	});
 
 	it("rejects invalid text() and image() arguments", async () => {

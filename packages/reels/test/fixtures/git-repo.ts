@@ -178,6 +178,10 @@ export function initGitRepo(prefix = "reels-fixture-"): GitRepo {
 	const dir = mkdtempSync(join(tmpdir(), prefix));
 	const repo = new GitRepo(dir);
 	repo.git(["init", "-q"]);
+	// CI runners have no global git identity; annotated tags and raw `repo.git(["merge", ...])` calls need one.
+	// Per-commit `-c user.*` overrides still take precedence over this repo-local default.
+	repo.git(["config", "user.name", "Test"]);
+	repo.git(["config", "user.email", "test@example.com"]);
 	repo.git([
 		"-c",
 		"user.name=Test",

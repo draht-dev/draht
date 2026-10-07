@@ -907,9 +907,18 @@ describe("codemode models", () => {
 			`
 			const model = await models.getModelOfType("classifier", "scorer", "judge");
 			const failed = await models.classify(model, { state: { text: "explode" }, questions: ${questions} });
+			const textOnly = await models.classify(model, {
+				state: { text: "good" },
+				images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+				questions: ${questions},
+			});
 			const attempt = async (fn) => { try { await fn(); return "ok"; } catch (error) { return error.message; } };
 			return {
 				failed: [failed.stopReason, failed.errorMessage],
+				textOnly: [textOnly.stopReason, textOnly.errorMessage],
+				badClassifierImage: await attempt(() =>
+					models.classify(model, { state: {}, images: [{ data: "aW1hZ2U=" }], questions: ${questions} }),
+				),
 				badType: await attempt(() => models.getModelsOfType("video")),
 				unknown: await attempt(() => models.classify({ provider: "scorer", id: "nope" }, {})),
 				noModel: await attempt(() => models.classify("judge", {})),
@@ -926,6 +935,10 @@ describe("codemode models", () => {
 		expect(result.isError).toBe(false);
 		const value = JSON.parse(resultText(result));
 		expect(value.failed).toEqual(["error", "classifier exploded"]);
+		expect(value.textOnly).toEqual(["error", "Model scorer/judge does not accept image input"]);
+		expect(value.badClassifierImage).toContain(
+			"models.classify() context.images[0] must be an image block, got { data }.",
+		);
 		expect(value.badType).toContain('Unknown model type "video"');
 		expect(value.unknown).toBe(
 			'Unknown classifier model "scorer/nope". List the classifier models you can use with models.getAvailableOfType("classifier").',
@@ -948,6 +961,7 @@ describe("codemode models", () => {
 		const details = result.details as unknown as CodemodeToolDetails;
 		expect(details.calls.map((call) => [call.name, call.status, call.error])).toEqual([
 			["models.classify", "error", "classifier exploded"],
+			["models.classify", "error", "Model scorer/judge does not accept image input"],
 		]);
 		expect(result.usage).toBeUndefined();
 	});

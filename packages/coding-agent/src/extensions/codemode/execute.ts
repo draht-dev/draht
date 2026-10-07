@@ -116,7 +116,7 @@ function describeValue(value: unknown): string {
 }
 
 const CLASSIFIER_CONTEXT_SHAPE =
-	'{ state: { ... }, questions: { <id>: { type: "choice", instructions, criteria: { <label>: <meaning> } } | { type: "score", instructions, criteria: [<lowest level>, ..., <highest level>] } | { type: "bool", instructions, criteria: { true: <meaning>, false: <meaning> } } } }';
+	'{ state: { ... }, images?: [{ type: "image", data: <base64>, mimeType }], questions: { <id>: { type: "choice", instructions, criteria: { <label>: <meaning> } } | { type: "score", instructions, criteria: [<lowest level>, ..., <highest level>] } | { type: "bool", instructions, criteria: { true: <meaning>, false: <meaning> } } } }';
 
 /** Check a script's classifier context, so mistakes fail with the expected shape instead of a provider error. */
 function checkClassifierContext(context: unknown): ClassifierContext {
@@ -126,6 +126,20 @@ function checkClassifierContext(context: unknown): ClassifierContext {
 		);
 	if (!isRecord(context)) throw fail(`expects a context object as its second argument, got ${describeValue(context)}`);
 	if (!isRecord(context.state)) throw fail(`context.state must be an object, got ${describeValue(context.state)}`);
+	const { images } = context;
+	if (images !== undefined) {
+		if (!Array.isArray(images)) throw fail(`context.images must be an array, got ${describeValue(images)}`);
+		images.forEach((image: unknown, index) => {
+			if (
+				!isRecord(image) ||
+				image.type !== "image" ||
+				typeof image.data !== "string" ||
+				typeof image.mimeType !== "string"
+			) {
+				throw fail(`context.images[${index}] must be an image block, got ${describeValue(image)}`);
+			}
+		});
+	}
 	const { questions } = context;
 	if (!isRecord(questions) || Object.keys(questions).length === 0) {
 		throw fail(`context.questions must map question IDs to questions, got ${describeValue(questions)}`);

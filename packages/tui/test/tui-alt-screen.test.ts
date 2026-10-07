@@ -20,7 +20,7 @@ import {
 	resetCapabilitiesCache,
 	setCapabilities,
 } from "../src/terminal-image.ts";
-import type { TuiMouseEvent } from "../src/tui.ts";
+import { renderFakeCursor, type TuiMouseEvent } from "../src/tui.ts";
 import { TuiAltScreen } from "../src/tui-alt-screen.ts";
 import { stripTerminalSequences, visibleWidth } from "../src/utils.ts";
 import { VirtualTerminal } from "./virtual-terminal.ts";
@@ -1358,6 +1358,26 @@ describe("TuiAltScreen", () => {
 			"selection inverse must be reapplied after a reset inside the selection",
 		);
 		assert.ok(terminal.getViewport().some((line) => line.includes("Copied!")));
+
+		tui.stop();
+	});
+
+	it("keeps the selection highlight after a fake cursor cell", async () => {
+		const terminal = new RecordingTerminal(20, 4);
+		const tui = new TuiAltScreen(terminal);
+		tui.addChild(new Text(`> ${renderFakeCursor("a")}bcd`, 0, 0));
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<0;1;1M");
+		terminal.sendInput("\x1b[<32;6;1M");
+		terminal.sendInput("\x1b[<3;6;1m");
+		await terminal.waitForRender();
+
+		assert.ok(
+			terminal.events.some((event) => event.type === "write" && event.data.includes("\x1b[27m\x1b[7mbcd")),
+			"selection inverse must be reapplied after the fake cursor ends",
+		);
 
 		tui.stop();
 	});

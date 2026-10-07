@@ -44,7 +44,7 @@ jobs:
         run: ./scripts/build-binaries.sh
 
       - name: Upload immutable runtime build output
-        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
         with:
           name: draht-runtime-${{ env.RELEASE_TAG }}
           path: |
@@ -80,7 +80,7 @@ jobs:
         run: ./scripts/build-graph-binaries.sh
 
       - name: Upload immutable graph build output
-        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
         with:
           name: draht-graph-${{ env.RELEASE_TAG }}
           path: |

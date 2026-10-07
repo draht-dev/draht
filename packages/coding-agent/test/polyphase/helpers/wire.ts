@@ -196,7 +196,7 @@ export function thinkingLevelChanged(level: ThinkingLevel): ChildWireRecord {
 }
 
 export function settled(): ChildWireRecord {
-	return { type: "agent_settled" };
+	return { type: "agent_settled", aborted: false };
 }
 
 /** `record` serialized exactly as the child writes it: compact JSON plus a trailing newline. */

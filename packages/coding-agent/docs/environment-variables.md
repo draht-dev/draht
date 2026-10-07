@@ -105,6 +105,7 @@ These variables are read by draht itself:
 | `DRAHT_NO_ATTACHABLE` | Set to `1`/`true`/`yes` to stop sessions from registering an attach socket; overridden by `--attachable` |
 | `DRAHT_HARDWARE_CURSOR` | Set to `1` to show the hardware cursor; see [Terminal setup](terminal-setup.md) |
 | `DRAHT_HYPERLINKS` | Override OSC 8 hyperlink detection with `1`, `0`, or `auto` |
+| `DRAHT_PROGRAM_STATUS` | Override OSC 7501 program status detection: `1` always reports, `0` never reports; otherwise draht reports only after the terminal confirms support. See [Terminal setup](terminal-setup.md#program-status) |
 | `DRAHT_IMAGE_PROTOCOL` | Override inline image detection with `kitty`, `iterm2`, `none`, or `auto` |
 | `DRAHT_TRUE_COLOR` | Override truecolor detection with `1`, `0`, or `auto` |
 | `DRAHT_TUI_ESC_TIMEOUT` | How long to wait after a lone ESC before treating it as Escape, in milliseconds; defaults to `100` over SSH and `10` otherwise. Increase if Alt-key input is misread as Escape |

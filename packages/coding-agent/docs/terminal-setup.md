@@ -236,3 +236,17 @@ draht automatically detects OSC 8 hyperlinks, inline image protocols, and trueco
 Settings take precedence over environment variables. An unset value or `auto` preserves automatic detection.
 
 Only force a capability supported by the complete terminal path. Unsupported escape sequences can corrupt rendering. See [Environment Variables](environment-variables.md#draht-process-configuration) and [Settings](settings.md) for the canonical value definitions.
+
+## Program status
+
+draht reports its state with the [Program Status Protocol (OSC 7501)](https://www.superlogical.com/rex/docs/build/program-status), so terminals and agent dashboards can show whether it is working, waiting for you, done, or failed:
+
+| State | When |
+|---|---|
+| `working` | An agent run or compaction is in progress. The message is the session name. |
+| `blocked` | An extension dialog or login waits for you. The message is the dialog title. |
+| `done` | A run finished. The message is the session name. |
+| `error` | A run ended with an error that is not retried. The message is the first line of the error. |
+| `idle` | draht started, or you cancelled the run. |
+
+Reports never contain prompts or model output. draht sends them only after the terminal answers the protocol's support query; tmux and screen do not forward them. Set `DRAHT_PROGRAM_STATUS=1` to send reports without asking, or `DRAHT_PROGRAM_STATUS=0` to turn them off.

@@ -13,13 +13,14 @@
  *  - a second dialog overwrote the first one's slot and stranded its promise forever.
  */
 
-import { setKeybindings, visibleWidth } from "@draht/tui";
+import { type ProgramStatus, setKeybindings, type Terminal, visibleWidth } from "@draht/tui";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PermissionAskDetail } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { formatMissingSessionCwdPrompt } from "../src/core/session-cwd.ts";
 import { ExtensionSelectorComponent, MAX_DETAIL_ROWS } from "../src/modes/interactive/components/extension-selector.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import { type BlockedStatus, ProgramStatusReporter } from "../src/modes/interactive/program-status-reporter.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
@@ -237,6 +238,8 @@ describe("ExtensionSelectorComponent detail rows", () => {
 type DialogOpts = { signal?: AbortSignal; timeout?: number; detail?: PermissionAskDetail };
 
 type DialogHost = {
+	programStatus: ProgramStatusReporter;
+	statusReports: ProgramStatus[];
 	extensionSelector: ExtensionSelectorComponent | undefined;
 	extensionSelectorSettle: ((value: string | undefined) => void) | undefined;
 	extensionDialogDecidedBy: string | undefined;
@@ -251,6 +254,7 @@ type DialogHost = {
 		options: string[],
 		opts?: DialogOpts,
 		detailRows?: readonly string[],
+		blocked?: BlockedStatus,
 	): Promise<string | undefined>;
 	showExtensionConfirm(title: string, message: string, opts?: DialogOpts): Promise<boolean>;
 	hideExtensionSelector(): void;
@@ -274,7 +278,16 @@ type DialogPrototype = { [K in keyof DialogHost]: DialogHost[K] };
 const prototype = InteractiveMode.prototype as unknown as DialogPrototype;
 
 function createHost(columns = RENDER_WIDTH): DialogHost {
+	const statusReports: ProgramStatus[] = [];
+	const statusTerminal = {
+		setProgramStatus: (status: ProgramStatus) => statusReports.push(status),
+	} as unknown as Terminal;
 	const host = {
+		statusReports,
+		programStatus: new ProgramStatusReporter(
+			() => statusTerminal,
+			() => undefined,
+		),
 		extensionSelector: undefined,
 		extensionSelectorSettle: undefined,
 		extensionDialogDecidedBy: undefined,
@@ -521,9 +534,17 @@ describe("InteractiveMode permission dialog", () => {
 		});
 		expect(host.extensionSelector).toBeDefined();
 
+		expect(host.statusReports.at(-1)).toEqual({
+			state: "blocked",
+			kind: "permission",
+			message: "Approve tool call?",
+			app: "draht",
+		});
+		expect(stripAnsi(host.extensionSelector!.render(RENDER_WIDTH).join("\n"))).toContain("npm install");
 		host.resetExtensionUI();
 
 		expect(await settledValueOf(confirm)).toBe(false);
+		expect(host.statusReports.at(-1)).toEqual({ state: "idle", app: "draht" });
 		expect(host.extensionSelector).toBeUndefined();
 		expect(host.extensionSelectorSettle).toBeUndefined();
 	});

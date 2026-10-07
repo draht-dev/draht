@@ -37,6 +37,10 @@ function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+function outputItemChars(item: CodemodeOutputItem): number {
+	return item.type === "text" ? item.text.length : item.data.length;
+}
+
 function serializeStore(store: Readonly<Record<string, unknown>> | undefined): Record<string, string> {
 	const serialized: Record<string, string> = {};
 	for (const [key, value] of Object.entries(store ?? {})) {
@@ -73,6 +77,7 @@ interface ExecutionOptions {
 	timeoutMs: number;
 	signal: AbortSignal | undefined;
 	memoryLimitBytes: number | undefined;
+	maxOutputChars: number | undefined;
 	store: Record<string, string>;
 	wasm: Promise<CodemodeWasmModule>;
 	workerUrl: string | URL;
@@ -95,6 +100,8 @@ class Execution {
 	private readonly output: CodemodeOutputItem[] = [];
 	private readonly calls: CodemodeCall[] = [];
 	private readonly pending = new Map<number, PendingCall>();
+	private readonly maxOutputChars: number | undefined;
+	private outputChars = 0;
 	private finished = false;
 
 	constructor(options: ExecutionOptions) {
@@ -104,6 +111,7 @@ class Execution {
 		this.tools = options.tools;
 		this.globals = options.globals;
 		this.signal = options.signal;
+		this.maxOutputChars = options.maxOutputChars;
 
 		if (Number.isFinite(options.timeoutMs)) {
 			this.timer = setTimeout(() => {
@@ -185,6 +193,13 @@ class Execution {
 		switch (message.type) {
 			case "output":
 				this.output.push(message.item);
+				this.outputChars += outputItemChars(message.item);
+				if (this.maxOutputChars !== undefined && this.outputChars > this.maxOutputChars) {
+					this.finish({
+						kind: "sandbox",
+						message: `Script output exceeded ${this.maxOutputChars} characters and was stopped`,
+					});
+				}
 				break;
 			case "call":
 				void this.handleCall(message);
@@ -287,6 +302,7 @@ export class CodemodeSandbox {
 	private readonly globalsByName = new Map<string, CodemodeTool>();
 	private readonly timeoutMs: number;
 	private readonly memoryLimitBytes: number | undefined;
+	private readonly maxOutputChars: number | undefined;
 	private readonly wasm: CodemodeWasmModule | Promise<CodemodeWasmModule> | undefined;
 	private readonly workerUrl: string | URL;
 	private readonly running = new Set<Execution>();
@@ -295,6 +311,7 @@ export class CodemodeSandbox {
 	constructor(options: CodemodeSandboxOptions = {}) {
 		this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 		this.memoryLimitBytes = options.memoryLimitBytes;
+		this.maxOutputChars = options.maxOutputChars;
 		this.wasm = options.wasm;
 		this.workerUrl = options.workerUrl ?? defaultWorkerUrl();
 		for (const tool of options.tools ?? []) this.registerTool(tool);
@@ -345,6 +362,7 @@ export class CodemodeSandbox {
 			timeoutMs: options.timeoutMs ?? this.timeoutMs,
 			signal: options.signal,
 			memoryLimitBytes: this.memoryLimitBytes,
+			maxOutputChars: this.maxOutputChars,
 			store: serializeStore(options.store),
 			wasm: this.wasm === undefined ? loadQuickJSWasm() : Promise.resolve(this.wasm),
 			workerUrl: this.workerUrl,

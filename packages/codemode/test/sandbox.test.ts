@@ -467,6 +467,15 @@ describe("limits and lifetime", () => {
 		expect(performance.now() - started).toBeLessThan(5_000);
 	});
 
+	it("stops a script whose combined output exceeds maxOutputChars", async () => {
+		const sandbox = new CodemodeSandbox({ maxOutputChars: 50, timeoutMs: 5_000 });
+		sandboxes.push(sandbox);
+		const result = await sandbox.execute('for (let i = 0; i < 100000; i++) console.log("x".repeat(20));');
+		expect(result).toMatchObject({ ok: false, error: { kind: "sandbox", message: expect.stringContaining("50") } });
+		// Bounded by the limit, not by how many lines the loop managed to log before being stopped.
+		expect(result.output.length).toBeLessThan(10);
+	});
+
 	it("runs without a deadline when timeoutMs is Infinity", async () => {
 		const sandbox = createSandbox([
 			{ name: "wait", execute: () => new Promise((r) => setTimeout(() => r("late"), 50)) },

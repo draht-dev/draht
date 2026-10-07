@@ -112,6 +112,33 @@ export interface CodemodeSettings {
 	inlineBudget?: number;
 }
 
+export interface PolyphaseSettings {
+	/** Child agent processes at once across the session (subagent, workflow, duet). Default clamp(availableParallelism() - 2, 2, 8); range 1-16. */
+	maxConcurrency?: number;
+	/** agent() calls per workflow run. Default 200; range 1-1000. */
+	maxAgentsPerRun?: number;
+	/** Items per parallel()/pipeline() call. Default 1024; range 1-4096. */
+	maxItemsPerCall?: number;
+	/** When the workflow tool is available: on the keyword (default), always, or never. */
+	workflowTool?: "keyword" | "always" | "off";
+	/** Keyword that enables the workflow tool for one prompt. Default "polyphase"; must match /^[A-Za-z][A-Za-z0-9_-]{2,31}$/. */
+	keyword?: string;
+	/** Token budget for workflows that set none. Default: unlimited. Minimum 1000. */
+	defaultBudgetTokens?: number;
+	/** Characters of agent output returned to the parent model per subagent call (split across agents). Default 64000; range 8000-400000. */
+	resultChars?: number;
+	/** Show the running-agents dock above the editor. Default true. */
+	dock?: boolean;
+	/** Delegation depth. A child at this depth gets no subagent tool. Default 2; range 1-4. */
+	maxDepth?: number;
+	/** Live update interval for tool rows in milliseconds. Default 250; range 100-2000. */
+	liveUpdateMs?: number;
+	/** Finished runs kept in memory for the inspector. Default 20; range 1-100. */
+	retainRuns?: number;
+	/** Workflow script deadline in milliseconds. 0 (default) means no deadline. */
+	workflowTimeoutMs?: number;
+}
+
 export type DefaultProjectTrust = "ask" | "always" | "never";
 
 export type TransportSetting = Transport;
@@ -181,6 +208,7 @@ export interface Settings {
 	markdown?: MarkdownSettings;
 	warnings?: WarningSettings;
 	codemode?: CodemodeSettings;
+	polyphase?: PolyphaseSettings;
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	httpProxy?: string; // Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it

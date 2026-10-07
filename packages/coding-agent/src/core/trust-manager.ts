@@ -49,6 +49,8 @@ const TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES = [
 const TRUST_REQUIRING_ANCESTOR_PROJECT_RESOURCES = [
 	join(".agents", "skills"),
 	join(CONFIG_DIR_NAME, "agents"),
+	// Saved workflows spawn agents and are loaded from ancestors like .draht/agents.
+	join(CONFIG_DIR_NAME, "workflows"),
 ] as const;
 
 // The key is the spelling resolved through the filesystem; the settings/extensions/skills loaders
@@ -200,8 +202,9 @@ function withTrustFileLock<T>(path: string, fn: () => T): T {
 /**
  * Returns true when cwd has project-local resources that must be gated by
  * project trust: trust-requiring entries under the cwd's config dir, or an
- * ancestor-loaded resource (.agents/skills, <config dir>/agents) in cwd or one
- * of its ancestors, or when the real cwd cannot be determined.
+ * ancestor-loaded resource (.agents/skills, <config dir>/agents, <config
+ * dir>/workflows) in cwd or one of its ancestors, or when the real cwd
+ * cannot be determined.
  * Returns false when no such project resources exist. The user/global
  * ~/.agents/skills directory is always treated as a trusted user resource and
  * is ignored here, even when cwd is $HOME.

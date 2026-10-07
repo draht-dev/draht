@@ -110,6 +110,15 @@ export interface CodemodeSandboxOptions {
 	 */
 	memoryLimitBytes?: number;
 	/**
+	 * Maximum combined character count across every `text()`, `console.*`, and `image()` output
+	 * item. The VM's memory limit only bounds its own heap; output is copied into the host process
+	 * and kept there for the life of the execution (`result.output`), so a script that only calls
+	 * `console.log` in a loop would otherwise grow the host's memory without bound. Crossing it ends
+	 * the execution with a `sandbox` error; `result.output` keeps the items received up to and
+	 * including the one that crossed the limit. Default: no limit.
+	 */
+	maxOutputChars?: number;
+	/**
 	 * Compiled `quickjs-wasi/quickjs.wasm`, usually from {@link loadQuickJSWasm}. Default:
 	 * `loadQuickJSWasm()`, the file in the installed `quickjs-wasi` package. Pass it when that file
 	 * is not on disk, for example in a Bun compiled executable.

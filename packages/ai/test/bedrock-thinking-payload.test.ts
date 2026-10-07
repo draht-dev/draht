@@ -67,6 +67,21 @@ async function capturePayload(
 }
 
 describe("Bedrock thinking payload", () => {
+	it.each([
+		["global.anthropic.claude-haiku-5-5", "Claude Haiku 5.5"],
+		["arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-profile", "Claude Haiku 5.5"],
+	])("supports Haiku 5.5 adaptive xhigh thinking for %s", async (id, name) => {
+		const model: Model<"bedrock-converse-stream"> = {
+			...getModel("amazon-bedrock", "global.anthropic.claude-haiku-5-5"),
+			id,
+			name,
+		};
+		const payload = await capturePayload(model, { reasoning: "xhigh" });
+		expect(payload.additionalModelRequestFields?.thinking).toEqual(ADAPTIVE_WITH_BINDING);
+		expect(payload.additionalModelRequestFields?.output_config).toEqual({ effort: "xhigh" });
+		expect(payload.additionalModelRequestFields?.anthropic_beta).toEqual([THINKING_BINDING_CONTROLS_BETA]);
+	});
+
 	it("uses adaptive thinking for Claude Opus 4.8 when reasoning is enabled", async () => {
 		const baseModel = getModel("amazon-bedrock", "global.anthropic.claude-opus-4-6-v1");
 		const model: Model<"bedrock-converse-stream"> = {

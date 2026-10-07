@@ -143,10 +143,16 @@ export function getShellEnv(): NodeJS.ProcessEnv {
 	const hasBinDir = pathEntries.includes(binDir);
 	const updatedPath = hasBinDir ? currentPath : [binDir, currentPath].filter(Boolean).join(delimiter);
 
-	return {
+	const env = {
 		...process.env,
 		[pathKey]: updatedPath,
 	};
+	// A draht started from a shell command must never inherit the parent's subagent/workflow
+	// child markers (src/core/polyphase/types.ts POLYPHASE_DEPTH_ENV/POLYPHASE_SCHEMA_FILE_ENV):
+	// otherwise it would run in restricted child mode even though it is the user's own session.
+	delete env.DRAHT_POLYPHASE_DEPTH;
+	delete env.DRAHT_POLYPHASE_SCHEMA_FILE;
+	return env;
 }
 
 /**

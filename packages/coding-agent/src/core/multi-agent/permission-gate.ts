@@ -107,8 +107,11 @@ const READ_ONLY_PATH_TOOLS = new Set(["grep", "find", "ls"]);
  * call they actually make. Explicit rules can still `deny`/`approve` these.
  * Duet delegation is deliberately not included because it fans out paid model
  * requests; unmatched duet batches require explicit approval.
+ *
+ * `polyphase_result` is also allowed by default: it returns a value to the parent workflow; no
+ * side effects; children have no UI to approve it.
  */
-const DEFAULT_ALLOWED_TOOLS = new Set(["subagent"]);
+const DEFAULT_ALLOWED_TOOLS = new Set(["subagent", "polyphase_result"]);
 
 function isPermissionAction(value: unknown): value is PermissionAction {
 	return typeof value === "string" && (VALID_ACTIONS as readonly string[]).includes(value);

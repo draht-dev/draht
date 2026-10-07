@@ -1,6 +1,7 @@
 import type { InlineExtension } from "../extensions/types.ts";
 import checkpointsBuiltin from "./checkpoints.ts";
 import duetBuiltin from "./duet.ts";
+import polyphaseBuiltin from "./polyphase.ts";
 import subagentBuiltin from "./subagent.ts";
 
 /**
@@ -15,4 +16,5 @@ export const CORE_BUILTIN_EXTENSIONS: InlineExtension[] = [
 	{ name: "multi-agent", factory: subagentBuiltin },
 	{ name: "duet", factory: duetBuiltin },
 	{ name: "checkpoints", factory: checkpointsBuiltin },
+	{ name: "polyphase", factory: polyphaseBuiltin },
 ];

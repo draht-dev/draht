@@ -552,6 +552,46 @@ describe("MCP OAuth", () => {
 		expect(await exchange("omitted", undefined, false)).toBe("AUTHORIZED");
 		expect(codes).toEqual(["matching", "omitted"]);
 	});
+
+	// #10565
+	it("stops when its signal aborts, without falling back to a redirect", async () => {
+		const stalled: string[] = [];
+		// Accepts every request and never answers.
+		const origin = await listen(async (request, _response, serverOrigin) => {
+			stalled.push(new URL(request.url ?? "/", serverOrigin).pathname);
+		});
+		const run = async (provider: TestOAuthProvider) => {
+			const controller = new AbortController();
+			const count = stalled.length;
+			const flow = authorizeMcp(provider, { serverUrl: `${origin}/mcp`, signal: controller.signal });
+			const settled = flow.catch((error: unknown) => error);
+			await expect.poll(() => stalled.length).toBe(count + 1);
+			controller.abort();
+			expect(await settled).toMatchObject({ name: "AbortError" });
+			expect(provider.authorizationUrl).toBeUndefined();
+			return stalled.at(-1);
+		};
+
+		// Discovery.
+		expect(await run(new TestOAuthProvider("http://127.0.0.1/callback"))).toBe(
+			"/.well-known/oauth-protected-resource/mcp",
+		);
+
+		// A failed refresh otherwise falls back to a new authorization.
+		const refreshing = new TestOAuthProvider("http://127.0.0.1/callback");
+		refreshing.client = { client_id: "client" };
+		refreshing.tokenSet = { access_token: "a1", refresh_token: "r1", token_type: "Bearer" };
+		refreshing.discovery = {
+			authorizationServerUrl: origin,
+			authorizationServerMetadata: {
+				issuer: origin,
+				authorization_endpoint: `${origin}/authorize`,
+				token_endpoint: `${origin}/token`,
+				response_types_supported: ["code"],
+			},
+		};
+		expect(await run(refreshing)).toBe("/token");
+	});
 });
 
 describe("OAuthCallbackServer pages", () => {

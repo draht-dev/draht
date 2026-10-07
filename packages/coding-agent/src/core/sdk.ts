@@ -150,7 +150,7 @@ function getDefaultAgentDir(): string {
  * // With explicit model
  * import { getModel } from '@draht/ai';
  * const { session } = await createAgentSession({
- *   model: getModel('anthropic', 'claude-opus-4-5'),
+ *   model: getModel('anthropic', 'claude-opus-5-5'),
  *   thinkingLevel: 'high',
  * });
  *

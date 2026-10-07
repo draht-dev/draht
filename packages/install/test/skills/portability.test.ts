@@ -11,9 +11,10 @@ import { listCanonicalSkills, relativeToSkillsRoot } from "./skill-tree.ts";
 const DIALECT_MARKER_RE = /Task tool|subagent_type|spawn_agent|\$draht|\/draht:|\bClaude\b|\bCodex\b/g;
 
 // Model brand names are allowed everywhere — they name a model, not a host or
-// a dispatch mechanism, and the same names appear identically in both the
-// claude and codex renderings.
-const BRAND_NAME_ALLOWLIST = ["Claude Fable 5", "Claude Sonnet 5", "Claude API"];
+// a dispatch mechanism. The codex rendering may swap a canonical Claude brand
+// name for its GPT-6 counterpart (see scripts/skills-dialect-table.mjs), so
+// the two renderings are not required to show identical brand names.
+const BRAND_NAME_ALLOWLIST = ["Claude Fable 5.1", "Claude Sonnet 5", "Claude API"];
 
 // skills/draht/SKILL.md is the one skill whose job is to describe every
 // host's invocation surface, so its "## Host Invocation" table is allowed to

@@ -252,7 +252,7 @@ jobs:
       group: issue-analysis-draht-auth
       cancel-in-progress: false
     env:
-      ISSUE_ANALYSIS_MODEL: openai-codex/gpt-5.5
+      ISSUE_ANALYSIS_MODEL: openai-codex/gpt-6.1-sol
       ISSUE_ANALYSIS_THINKING: high
     steps:
       - name: Create high-entropy working directory name

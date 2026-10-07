@@ -7,8 +7,8 @@ Duet mode lets multiple authenticated models collaborate in one Draht session. C
 Pass two to eight comma-separated models. Optional role names use `role=model`; optional thinking levels use `model:level`.
 
 ```text
-/duet turns implementer=openai-codex/gpt-5.5:high,reviewer=anthropic/claude-opus-4-8:high
-/duet triage lead=openai-codex/gpt-5.5:high,reviewer=anthropic/claude-opus-4-8,tester=google/gemini-3.1-pro-preview
+/duet turns implementer=openai-codex/gpt-6.1-sol:high,reviewer=anthropic/claude-opus-5-5:high
+/duet triage lead=openai-codex/gpt-6.1-sol:high,reviewer=anthropic/claude-opus-5-5,tester=google/gemini-3.1-pro-preview
 /duet status
 /duet off
 ```
@@ -19,7 +19,7 @@ Duet can also start from CLI flags:
 
 ```bash
 draht \
-  --duet "lead=openai-codex/gpt-5.5,reviewer=anthropic/claude-opus-4-8" \
+  --duet "lead=openai-codex/gpt-6.1-sol,reviewer=anthropic/claude-opus-5-5" \
   --duet-strategy triage
 ```
 

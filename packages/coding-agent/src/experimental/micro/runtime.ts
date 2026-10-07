@@ -40,7 +40,7 @@ import { createPicoModels, readModelsView } from "./models.ts";
 import { selectSession } from "./sessions.ts";
 import { createMicroTools } from "./tools.ts";
 
-const DEFAULT_MODEL = { provider: "openai-codex", modelId: "gpt-5.6-sol" } as const;
+const DEFAULT_MODEL = { provider: "openai-codex", modelId: "gpt-6.1-sol" } as const;
 
 const SYSTEM_PROMPT = [
 	"You are an expert coding assistant working in a terminal.",

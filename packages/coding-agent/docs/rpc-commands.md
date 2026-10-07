@@ -212,7 +212,7 @@ Messages are `AgentMessage` objects (see [Message Types](message-types.md)).
 Switch to a specific model.
 
 ```json
-{"type": "set_model", "provider": "anthropic", "modelId": "claude-sonnet-4-20250514"}
+{"type": "set_model", "provider": "anthropic", "modelId": "claude-sonnet-5"}
 ```
 
 Response contains the full [Model](#model-object) object:
@@ -839,20 +839,20 @@ Model commands return the complete configured model definition. Costs are in US 
 
 ```json
 {
-  "id": "claude-sonnet-4-20250514",
-  "name": "Claude Sonnet 4",
+  "id": "claude-sonnet-5",
+  "name": "Claude Sonnet 5",
   "api": "anthropic-messages",
   "provider": "anthropic",
   "baseUrl": "https://api.anthropic.com",
   "reasoning": true,
   "input": ["text", "image"],
-  "contextWindow": 200000,
-  "maxTokens": 16384,
+  "contextWindow": 1000000,
+  "maxTokens": 128000,
   "cost": {
-    "input": 3.0,
-    "output": 15.0,
-    "cacheRead": 0.3,
-    "cacheWrite": 3.75
+    "input": 2.0,
+    "output": 10.0,
+    "cacheRead": 0.2,
+    "cacheWrite": 2.5
   }
 }
 ```

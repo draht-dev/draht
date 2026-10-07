@@ -254,7 +254,6 @@ Each specialist subagent ships with a default model tuned to its workload:
 | `investigator` | `sonnet` | `/why` — parallel single-category evidence gathering |
 | `speaker` | `haiku` | `/speak` — voice output via ElevenLabs |
 | `git-committer` | `inherit` | `/atomic-commit` — commit staging |
-| `advisor` | `fable` | any command — rare high-leverage strategic consults |
 
 You can override any agent with the `configure` command:
 
@@ -264,7 +263,7 @@ npx draht-claude configure --agent architect --model opus
 npx draht-claude configure --agent implementer --model sonnet
 
 # Use a full model ID
-npx draht-claude configure --agent verifier --model claude-opus-4-7
+npx draht-claude configure --agent verifier --model claude-opus-5-5
 
 # List current assignments
 npx draht-claude configure --list
@@ -276,7 +275,7 @@ npx draht-claude configure --agent architect --reset
 npx draht-claude configure --reset
 ```
 
-Supported values: `opus`, `sonnet`, `haiku`, a full model ID (e.g. `claude-sonnet-4-6`), or `inherit`.
+Supported values: `fable`, `opus`, `sonnet`, `haiku`, a full model ID (e.g. `claude-sonnet-5`), or `inherit`.
 
 ### Hooks
 

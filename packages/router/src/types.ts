@@ -52,13 +52,13 @@ export interface CostEntry {
  */
 export const DEFAULT_CONFIG: RouterConfig = {
 	architect: {
-		primary: { provider: "anthropic", model: "claude-opus-4-6" },
+		primary: { provider: "anthropic", model: "claude-opus-5-5" },
 		fallbacks: [{ provider: "google", model: "gemini-2.5-pro" }],
 	},
 	implement: {
-		primary: { provider: "anthropic", model: "claude-sonnet-4-6" },
+		primary: { provider: "anthropic", model: "claude-sonnet-5" },
 		fallbacks: [
-			{ provider: "openai", model: "gpt-5.2" },
+			{ provider: "openai", model: "gpt-6.1-sol" },
 			{ provider: "openrouter", model: "deepseek/deepseek-v3.2" },
 		],
 	},
@@ -71,15 +71,15 @@ export const DEFAULT_CONFIG: RouterConfig = {
 		fallbacks: [{ provider: "openrouter", model: "deepseek/deepseek-v3.2" }],
 	},
 	review: {
-		primary: { provider: "anthropic", model: "claude-sonnet-4-6" },
+		primary: { provider: "anthropic", model: "claude-sonnet-5" },
 		fallbacks: [],
 	},
 	docs: {
-		primary: { provider: "openai", model: "gpt-5.2" },
-		fallbacks: [{ provider: "anthropic", model: "claude-sonnet-4-6" }],
+		primary: { provider: "openai", model: "gpt-6.1-sol" },
+		fallbacks: [{ provider: "anthropic", model: "claude-sonnet-5" }],
 	},
 	"rlm-root": {
-		primary: { provider: "anthropic", model: "claude-opus-4-6" },
+		primary: { provider: "anthropic", model: "claude-opus-5-5" },
 		fallbacks: [{ provider: "google", model: "gemini-2.5-pro" }],
 	},
 	"rlm-sub": {

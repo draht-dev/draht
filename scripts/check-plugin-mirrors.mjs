@@ -3,9 +3,13 @@
  * Drift gate for the hand-maintained plugin mirrors.
  *
  * draht-claude and draht-codex ship the same agents, scripts, and hooks,
- * differing only in two mechanical dimensions:
+ * differing only in three mechanical dimensions:
  *   1. plugin-root path token (CLAUDE_PLUGIN_ROOT vs PLUGIN_ROOT fallback chain)
  *   2. subagent dispatch phrasing (Task tool / subagent_type vs Codex subagent)
+ *   3. the frontmatter `model:` line in agents/*.md (each plugin picks its own
+ *      model per host; Codex treats it as reference metadata, Claude Code as
+ *      a live alias) — the line is stripped from both sides before comparing,
+ *      so every other byte of an agent file must still match.
  *
  * commands/ and generated skills/ are NOT checked here anymore: they are
  * generated from the single provider-neutral tree at repo-root skills/ by
@@ -21,7 +25,7 @@
  * file equal byte-for-byte. No dialect tolerance applies to them.
  *
  * This script fails when the remaining mirrors (agents/, scripts/, hooks/,
- * hand-mirrored skills) diverge in any OTHER way than the two dimensions
+ * hand-mirrored skills) diverge in any OTHER way than the three dimensions
  * above, so an edit to one plugin that is not ported to the other is caught
  * by `npm run check` (and therefore the pre-commit hook) instead of at
  * publish or never.
@@ -57,6 +61,21 @@ function normalizeCodex(content) {
 	let out = content;
 	for (const token of CODEX_PATH_TOKENS) out = out.split(token).join(CLAUDE_PATH_TOKEN);
 	return out;
+}
+
+/**
+ * Drop the `model:` line from the leading frontmatter block only (between
+ * the first `---` and the next `---`), leaving every other line untouched.
+ * Each plugin picks its own model per agent, so the two sides may legitimately
+ * differ there while everything else must still match byte-for-byte.
+ */
+export function stripFrontmatterModelLine(content) {
+	const lines = content.split("\n");
+	if (lines[0] !== "---") return content;
+	const end = lines.indexOf("---", 1);
+	if (end === -1) return content;
+	const frontmatter = lines.slice(0, end + 1).filter((line) => !/^model:/.test(line));
+	return [...frontmatter, ...lines.slice(end + 1)].join("\n");
 }
 
 function listFiles(dir, ext) {
@@ -191,11 +210,12 @@ function main() {
 		}
 	}
 
-	// ── 1. agents/ — byte-identical ────────────────────────────────────────────
+	// ── 1. agents/ — byte-identical except the per-plugin frontmatter model: line ─
 	for (const f of checkFileSets("agents", ".md")) {
-		const a = readFileSync(join(CLAUDE, "agents", f), "utf-8");
-		const b = readFileSync(join(CODEX, "agents", f), "utf-8");
-		if (a !== b) problems.push(`agents/${f}: content differs (agents must be byte-identical)`);
+		const a = stripFrontmatterModelLine(readFileSync(join(CLAUDE, "agents", f), "utf-8"));
+		const b = stripFrontmatterModelLine(readFileSync(join(CODEX, "agents", f), "utf-8"));
+		if (a !== b)
+			problems.push(`agents/${f}: content differs (agents must be byte-identical apart from the frontmatter model: line)`);
 	}
 
 	// ── 2. scripts/ — identical modulo platform-name comment lines ──────────────
@@ -220,7 +240,7 @@ function main() {
 		console.error(`Plugin mirror drift (${problems.length} problem(s)):\n`);
 		for (const p of problems) console.error(`  ✗ ${p}`);
 		console.error(
-			"\ndraht-claude is the source of truth — port the change to draht-codex (path token + dispatch phrasing only; hand-mirrored skills byte-identical), or vice versa.",
+			"\ndraht-claude is the source of truth — port the change to draht-codex (path token + dispatch phrasing + agents/*.md frontmatter model: line only; hand-mirrored skills byte-identical), or vice versa.",
 		);
 		process.exit(1);
 	}

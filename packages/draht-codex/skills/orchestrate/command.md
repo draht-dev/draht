@@ -52,7 +52,7 @@ Match orchestration weight to the task — over-orchestration burns tokens witho
 
 Bill volume tokens at the cheaper rate — see the `model-tiering` skill:
 
-- **Orchestrator pattern** — run this command on the strongest tier (e.g. Claude Fable 5) and let workers execute on the executor tier (e.g. Claude Sonnet 5): planning quality where it matters, volume tokens at worker rates.
+- **Orchestrator pattern** — run this command on the strongest tier (e.g. GPT-6 Astra) and let workers execute on the executor tier (e.g. GPT-6.1 Sol): planning quality where it matters, volume tokens at worker rates.
 - **Advisor pattern** — when the session runs on the executor tier, dispatch `advisor` sparingly: once after orientation before committing to an approach, again when stuck or before declaring a hard task done. ~1–3 consults per task; treat its guidance with serious weight.
 
 ## Orchestration Modes

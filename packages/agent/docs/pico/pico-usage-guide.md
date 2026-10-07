@@ -340,7 +340,7 @@ const { model, thinking } = await c.config(generationKind).get(call);
 await c.config(generationKind).set({ thinking: 'low' }, call);
 
 // `settings` is config(generationKind), because that is what every UI touches
-await c.settings.set({ model: { provider: 'openai', modelId: 'gpt-5.6' } }, call);
+await c.settings.set({ model: { provider: 'openai', modelId: 'gpt-6.1-sol' } }, call);
 
 // one value, one point read, by its declared address
 const tools = await c.value(generationKind.config.selectedTools).get(call);

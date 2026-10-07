@@ -17,7 +17,7 @@ import { getModel } from "@draht/ai";
 const agent = new Agent({
   initialState: {
     systemPrompt: "You are a helpful assistant.",
-    model: getModel("anthropic", "claude-sonnet-4-20250514"),
+    model: getModel("anthropic", "claude-sonnet-5"),
   },
 });
 
@@ -245,7 +245,7 @@ await agent.continue();
 
 ```typescript
 agent.state.systemPrompt = "New prompt";
-agent.state.model = getModel("openai", "gpt-4o");
+agent.state.model = getModel("openai", "gpt-6.1-sol");
 agent.state.thinkingLevel = "medium";
 agent.state.tools = [myTool];
 agent.toolExecution = "sequential";
@@ -430,7 +430,7 @@ const context: AgentContext = {
 };
 
 const config: AgentLoopConfig = {
-  model: getModel("openai", "gpt-4o"),
+  model: getModel("openai", "gpt-6.1-sol"),
   convertToLlm: (msgs) => msgs.filter(m => ["user", "assistant", "toolResult"].includes(m.role)),
   toolExecution: "parallel",
   beforeToolCall: async ({ toolCall, args, context }) => undefined,

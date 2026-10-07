@@ -39,7 +39,7 @@ export class TicketDecomposer {
 	private client: Anthropic;
 	private model: string;
 
-	constructor(apiKey: string, model = "claude-sonnet-4-20250514") {
+	constructor(apiKey: string, model = "claude-sonnet-5") {
 		this.client = new Anthropic({ apiKey });
 		this.model = model;
 	}

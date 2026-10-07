@@ -118,7 +118,7 @@ const description = "Install Draht, choose a provider, manage sessions, and exte
 				<div class="code-line cmd">Ctrl+P / Shift+Ctrl+P</div>
 				<div class="code-line spacer"></div>
 				<div class="code-line comment">From CLI</div>
-				<div class="code-line cmd">draht --model openai/gpt-4o "Help me refactor"</div>
+				<div class="code-line cmd">draht --model openai/gpt-6.1-sol "Help me refactor"</div>
 				<div class="code-line cmd">draht --model sonnet:high "Complex problem"</div>
 			</div>
 
@@ -365,10 +365,10 @@ const description = "Install Draht, choose a provider, manage sessions, and exte
 		<!-- 13. Model Router -->
 		<section id="model-router" class="doc-section">
 			<h2>13. Model router</h2>
-			<p>Role-based model selection with ordered fallback chains. Direct API calls — no OpenRouter in the hot path.</p>
+			<p>Role-based model selection with ordered fallback chains. Direct provider API calls; OpenRouter only for the models it hosts.</p>
 			<div class="code-block">
 				<div class="code-line cmd">draht router show</div>
-				<div class="code-line cmd">draht router set implement anthropic/claude-sonnet-4-6 --fallback openai/gpt-5.2,deepseek/deepseek-v3</div>
+				<div class="code-line cmd">draht router set implement anthropic/claude-sonnet-5 --fallback openai/gpt-6.1-sol,openrouter/deepseek/deepseek-v3.2</div>
 				<div class="code-line cmd">draht router test</div>
 				<div class="code-line cmd">draht router cost</div>
 			</div>

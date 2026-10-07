@@ -8,7 +8,7 @@ describe("ModelRouter", () => {
 	test("resolve returns primary model for role", () => {
 		const model = router.resolve("architect");
 		expect(model.provider).toBe("anthropic");
-		expect(model.model).toBe("claude-opus-4-6");
+		expect(model.model).toBe("claude-opus-5-5");
 	});
 
 	test("resolve throws for unknown role", () => {
@@ -27,7 +27,7 @@ describe("ModelRouter", () => {
 		const result = await router.route("architect", async (model) => {
 			return `${model.provider}/${model.model}`;
 		});
-		expect(result).toBe("anthropic/claude-opus-4-6");
+		expect(result).toBe("anthropic/claude-opus-5-5");
 	});
 
 	test("route falls back on retryable error", async () => {
@@ -37,7 +37,7 @@ describe("ModelRouter", () => {
 			if (attempt === 1) throw new Error("429 rate limit exceeded");
 			return `${model.provider}/${model.model}`;
 		});
-		expect(result).toBe("openai/gpt-5.2");
+		expect(result).toBe("openai/gpt-6.1-sol");
 		expect(attempt).toBe(2);
 	});
 

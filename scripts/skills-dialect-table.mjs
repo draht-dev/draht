@@ -27,14 +27,18 @@ export const PLUGIN_ROOT_RENDER = {
 	codex: "${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$HOME/.draht/codex-marketplace/plugins/draht}}",
 };
 
-// ── 14 discipline skills — line-scoped dialect spans ────────────────────────
-// Only 5 of the 14 discipline skills have any host-specific span; the other 9
-// (blast-radius, brainstorming, ddd-workflow, epistemics, loop-workflow,
-// model-tiering, tdd-workflow, typescript-discipline, unslop)
+// ── 17 discipline skills — line-scoped dialect spans ────────────────────────
+// 6 of the 17 discipline skills have any host-specific span; the other 11
+// (blast-radius, brainstorming, ddd-workflow, draht, epistemics, explainers,
+// judge, loop-workflow, tdd-workflow, typescript-discipline, unslop)
 // render identically for every host and have no entry here. saga-spawner
-// carries the table's one asymmetric pair: the canonical "strongest tier"
-// line renders with a Claude model example on the claude side but a generic
-// "strongest available Codex reasoning tier" on the codex side.
+// carries an asymmetric pair: the canonical "strongest tier" line renders
+// with a Claude model example on the claude side but a generic "strongest
+// available Codex reasoning tier" on the codex side. model-tiering's
+// canonical tier names are Claude model names (the skill's own defaults);
+// codex-only entries rename them to GPT-6 so Codex users see a model that
+// actually exists in that host — claude is left unset so the canonical line
+// (already Claude wording) renders unchanged.
 export const DISCIPLINE_DIALECT = {
 	"atomic-reasoning": [
 		{
@@ -59,6 +63,16 @@ export const DISCIPLINE_DIALECT = {
 			canonical: "The plugin distributions ship workflow hooks under the plugin root's `scripts/` directory:",
 			claude: "The plugin ships workflow hooks under `${CLAUDE_PLUGIN_ROOT}/scripts/`:",
 			codex: "The plugin ships workflow hooks under `${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/`:",
+		},
+	],
+	"model-tiering": [
+		{
+			canonical: "- **Advisor tier** — the strongest model available (Claude Fable 5.1)",
+			codex: "- **Advisor tier** — the strongest model available (GPT-6 Astra)",
+		},
+		{
+			canonical: "- **Executor tier** — a fast, capable model (Claude Sonnet 5)",
+			codex: "- **Executor tier** — a fast, capable model (GPT-6.1 Sol)",
 		},
 	],
 	"saga-spawner": [
@@ -87,7 +101,7 @@ export const DISCIPLINE_DIALECT = {
 			canonical:
 				"Run this command's session on the strongest tier and let workers execute on the executor tier — the spawner is pure steering, its tokens are the ones that decide where all the volume tokens go (`model-tiering`).",
 			claude:
-				"Run this command's session on the strongest tier (e.g. Claude Fable 5) and let workers execute on the executor tier — the spawner is pure steering, its tokens are the ones that decide where all the volume tokens go (`model-tiering`).",
+				"Run this command's session on the strongest tier (e.g. Claude Fable 5.1) and let workers execute on the executor tier — the spawner is pure steering, its tokens are the ones that decide where all the volume tokens go (`model-tiering`).",
 			codex: "Run this command's session on the strongest available Codex reasoning tier and let workers execute on the executor tier — the spawner is pure steering, its tokens are the ones that decide where all the volume tokens go (`model-tiering`).",
 		},
 	],
@@ -227,6 +241,11 @@ export const COMMAND_DIALECT = {
 		},
 	],
 	orchestrate: [
+		{
+			canonical:
+				"- **Orchestrator pattern** — run this command on the strongest tier (e.g. Claude Fable 5.1) and let workers execute on the executor tier (e.g. Claude Sonnet 5): planning quality where it matters, volume tokens at worker rates.",
+			codex: "- **Orchestrator pattern** — run this command on the strongest tier (e.g. GPT-6 Astra) and let workers execute on the executor tier (e.g. GPT-6.1 Sol): planning quality where it matters, volume tokens at worker rates.",
+		},
 		{
 			canonical:
 				"> **Tool note**: Dispatch subagents using the matching Draht agent role: `architect`, `implementer`, `spec-reviewer`, `reviewer`, `debugger`, `verifier`, `git-committer`, `security-auditor`, `advisor`. Dispatch multiple tasks in the same assistant turn for parallel execution.",

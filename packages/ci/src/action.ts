@@ -14,7 +14,7 @@ async function main(): Promise<void> {
 	// Read inputs
 	const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
 	const githubToken = process.env.GITHUB_TOKEN;
-	const model = process.env.INPUT_MODEL ?? "claude-sonnet-4-20250514";
+	const model = process.env.INPUT_MODEL ?? "claude-sonnet-5";
 	const agentsMdPath = process.env.INPUT_AGENTS_MD_PATH ?? "AGENTS.md";
 	const severityThreshold = (process.env.INPUT_SEVERITY_THRESHOLD ?? "critical") as Severity;
 	const _maxFiles = Number.parseInt(process.env.INPUT_MAX_FILES ?? "0", 10);

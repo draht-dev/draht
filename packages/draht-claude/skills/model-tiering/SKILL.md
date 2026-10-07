@@ -7,10 +7,10 @@ description: Cost-efficient model tiering — the advisor pattern (a cheap execu
 
 Two tiers, two directions of pull. Bill the volume tokens at the cheaper rate and spend the strongest model only where a single decision changes the outcome.
 
-- **Advisor tier** — the strongest model available (Claude Fable 5)
+- **Advisor tier** — the strongest model available (Claude Fable 5.1)
 - **Executor tier** — a fast, capable model (Claude Sonnet 5)
 
-Reference numbers (SWE-bench Pro): a Sonnet 5 executor with a Fable 5 advisor reaches ~92% of Fable 5's solo score at ~63% of the price, with the advisor consulted roughly once per task. Official reference: <https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool>
+Reference numbers (SWE-bench Pro, measured with the Fable 5 / Sonnet 5 generation): a Sonnet 5 executor with a Fable 5 advisor reaches ~92% of Fable 5's solo score at ~63% of the price, with the advisor consulted roughly once per task. Official reference: <https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool>
 
 ## Pattern 1 — Advisor: the executor pulls intelligence down
 

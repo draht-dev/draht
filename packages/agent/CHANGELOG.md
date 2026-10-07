@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- update the README's stale `claude-sonnet-4-20250514` and `gpt-4o` examples to `claude-sonnet-5` and `gpt-6.1-sol`
+- update the stale `claude-sonnet-4-6` example in `examples/mcp-codemode/main.ts` to `claude-sonnet-5`
+
+### Fixed
+
+- pico docs (`docs/pico/pico-usage-v2.md`, `docs/pico/pico-usage-guide.md`) referenced the retired `gpt-5.6` id; switched to `gpt-6.1-sol`
+
 ## [2026.10.4-1] - 2026-10-04
 
 ### Added

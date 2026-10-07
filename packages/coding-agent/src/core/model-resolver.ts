@@ -12,10 +12,10 @@ import type { ModelRuntime } from "./model-runtime.ts";
 
 /** Default chat model IDs for providers with built-in chat models. */
 export const defaultModelPerProvider: Partial<Record<KnownProvider, string>> = {
-	"amazon-bedrock": "us.anthropic.claude-opus-4-6-v1",
+	"amazon-bedrock": "us.anthropic.claude-opus-5-5",
 	"ant-ling": "Ring-2.6-1T",
-	anthropic: "claude-opus-4-8",
-	openai: "gpt-5.5",
+	anthropic: "claude-opus-5-5",
+	openai: "gpt-6.1-sol",
 	"azure-openai-responses": "gpt-5.4",
 	"openai-codex": "gpt-6.1-sol",
 	radius: "balanced",
@@ -23,7 +23,7 @@ export const defaultModelPerProvider: Partial<Record<KnownProvider, string>> = {
 	deepseek: "deepseek-v4-pro",
 	google: "gemini-3.1-pro-preview",
 	"google-vertex": "gemini-3.1-pro-preview",
-	"github-copilot": "gpt-5.4",
+	"github-copilot": "gpt-6.1-sol",
 	openrouter: "moonshotai/kimi-k2.6",
 	"vercel-ai-gateway": "zai/glm-5.1",
 	xai: "grok-4.7",

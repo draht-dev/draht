@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { checkHandMirroredSkills } from "../../../../scripts/check-plugin-mirrors.mjs";
+import { checkHandMirroredSkills, stripFrontmatterModelLine } from "../../../../scripts/check-plugin-mirrors.mjs";
 import { HAND_MIRRORED_SKILL_DIRS } from "../../../../scripts/hand-mirrored-skills.mjs";
 import { REPO_ROOT } from "./skill-tree.ts";
 
@@ -13,6 +13,24 @@ import { REPO_ROOT } from "./skill-tree.ts";
 // across the two plugin packages, file-set equality both ways. This is
 // deliberately STRICTER than the retired dialect-tolerant mirror check —
 // a hand-mirrored skill has no host-specific spans at all.
+
+describe("stripFrontmatterModelLine", () => {
+	it("drops the model: line from the leading frontmatter block only", () => {
+		const content = "---\nname: advisor\nmodel: opus\ndescription: x\n---\n\nmodel: not frontmatter\nbody\n";
+		expect(stripFrontmatterModelLine(content)).toBe(
+			"---\nname: advisor\ndescription: x\n---\n\nmodel: not frontmatter\nbody\n",
+		);
+	});
+
+	it("leaves content without a model: line unchanged", () => {
+		const content = "---\nname: debugger\ndescription: x\n---\nbody\n";
+		expect(stripFrontmatterModelLine(content)).toBe(content);
+	});
+
+	it("leaves content without frontmatter unchanged", () => {
+		expect(stripFrontmatterModelLine("no frontmatter here\n")).toBe("no frontmatter here\n");
+	});
+});
 
 describe("hand-mirrored skills: allowlist", () => {
 	it("contains exactly cinematic-continuation (adding a hand-mirrored skill is an explicit decision)", () => {

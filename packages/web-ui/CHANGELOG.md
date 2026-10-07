@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- update the README's stale `claude-sonnet-4-5-20250929` examples to `claude-sonnet-5`, including the example app
+
+### Fixed
+
+- `scripts/count-prompt-tokens.ts` called Anthropic's `count_tokens` with the retired `claude-3-5-sonnet-20241022` id; switched to `claude-sonnet-5`
+- `ProviderKeyInput`'s key-test models for xAI and Z.AI (`grok-4-fast-non-reasoning`, `glm-4.5-air`) no longer existed in the catalog, so valid keys for those providers were reported as invalid; switched to `grok-4.3` and `glm-5.3-flash`
+
 ## [2026.10.4-1] - 2026-10-04
 
 ### Changed

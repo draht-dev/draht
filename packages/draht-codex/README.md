@@ -57,7 +57,7 @@ Use the wrappers for picker-driven invocation, and keep the `commands/*.md` file
 
 ### Specialist agent prompts
 
-The plugin ships 9 reference prompts in `agents/`:
+The plugin ships 11 reference prompts in `agents/`:
 
 - `advisor`
 - `architect`
@@ -69,9 +69,27 @@ The plugin ships 9 reference prompts in `agents/`:
 - `git-committer`
 - `security-auditor`
 - `spec-reviewer`
-- `advisor`
+- `speaker`
 
 Codex subagent availability depends on the active Codex feature/configuration. When named Draht agent roles are not registered directly, the command templates can still use generic Codex subagents by pasting the relevant Draht agent prompt into the delegated task.
+
+Each prompt's frontmatter `model:` names a default GPT-6 model by price tier:
+
+| Agent | Default |
+|---|---|
+| `advisor` | `gpt-6-astra` |
+| `architect` | `gpt-6.1-sol` |
+| `reviewer` | `gpt-6.1-sol` |
+| `security-auditor` | `gpt-6.1-sol` |
+| `spec-reviewer` | `gpt-6.1-sol` |
+| `implementer` | `gpt-6.1-sol` |
+| `investigator` | `gpt-6.1-sol` |
+| `verifier` | `gpt-6.1-sol` |
+| `speaker` | `gpt-6-luna` |
+| `debugger` | `inherit` |
+| `git-committer` | `inherit` |
+
+Codex treats agent `model:` as reference metadata — `configure --list` shows it, but Codex does not read it to route a subagent to that model unless you wire the role yourself in `~/.codex/config.toml`.
 
 ### Command prompt wrappers
 
@@ -205,13 +223,13 @@ node "${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$HOME/.draht/codex-marketplace/plugin
 Reference agent model metadata can be edited in the installed plugin copy:
 
 ```bash
-npx draht-codex configure --agent architect --model gpt-5.5
+npx draht-codex configure --agent architect --model gpt-6-astra
 npx draht-codex configure --list
 npx draht-codex configure --agent architect --reset
 npx draht-codex configure --reset
 ```
 
-This updates the bundled Markdown frontmatter. Codex-native custom agent routing may require user-level `~/.codex/config.toml` agent role configuration.
+This updates the bundled Markdown frontmatter. `--reset` removes the `model:` line, so `--list` then shows `inherit`; `draht-codex update` restores the shipped defaults. Codex-native custom agent routing may require user-level `~/.codex/config.toml` agent role configuration.
 
 ## Relationship to draht-claude
 

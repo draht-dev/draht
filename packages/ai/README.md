@@ -83,7 +83,7 @@ TypeBox exports are re-exported from `@draht/ai`: `Type`, `Static`, and `TSchema
 import { Type, getModel, stream, complete, Context, Tool, StringEnum } from '@draht/ai';
 
 // Fully typed with auto-complete support for both providers and models
-const model = getModel('openai', 'gpt-4o-mini');
+const model = getModel('openai', 'gpt-6-luna');
 
 // Define tools with TypeBox schemas for type safety and validation
 const tools: Tool[] = [{
@@ -388,7 +388,7 @@ Models with vision capabilities can process images. You can check if a model sup
 import { readFileSync } from 'fs';
 import { getModel, complete } from '@draht/ai';
 
-const model = getModel('openai', 'gpt-4o-mini');
+const model = getModel('openai', 'gpt-6-luna');
 
 // Check if model supports images
 if (model.input.includes('image')) {
@@ -426,10 +426,10 @@ Many models support thinking/reasoning capabilities where they can show their in
 import { getModel, streamSimple, completeSimple } from '@draht/ai';
 
 // Many models across providers support thinking/reasoning
-const model = getModel('anthropic', 'claude-sonnet-4-20250514');
+const model = getModel('anthropic', 'claude-sonnet-5');
 // or getModel('openai', 'gpt-5-mini');
 // or getModel('google', 'gemini-2.5-flash');
-// or getModel('xai', 'grok-code-fast-1');
+// or getModel('xai', 'grok-4.7');
 // or getModel('groq', 'openai/gpt-oss-20b');
 // or getModel('cerebras', 'gpt-oss-120b');
 // or getModel('openrouter', 'z-ai/glm-4.5v');
@@ -470,11 +470,11 @@ await complete(openaiModel, context, {
   reasoningSummary: 'detailed'  // OpenAI Responses API only
 });
 
-// Anthropic Thinking (Claude Sonnet 4)
-const anthropicModel = getModel('anthropic', 'claude-sonnet-4-20250514');
+// Anthropic Thinking (Claude Sonnet 5)
+const anthropicModel = getModel('anthropic', 'claude-sonnet-5');
 await complete(anthropicModel, context, {
   thinkingEnabled: true,
-  thinkingBudgetTokens: 8192  // Optional token limit
+  effort: 'medium'  // Adaptive thinking models ignore thinkingBudgetTokens
 });
 
 // Google Gemini Thinking
@@ -552,7 +552,7 @@ The abort signal allows you to cancel in-progress requests. Aborted requests hav
 ```typescript
 import { getModel, stream } from '@draht/ai';
 
-const model = getModel('openai', 'gpt-4o-mini');
+const model = getModel('openai', 'gpt-6-luna');
 const controller = new AbortController();
 
 // Abort after 2 seconds
@@ -751,7 +751,7 @@ for (const model of anthropicModels) {
 }
 
 // Get a specific model (both provider and model ID are auto-completed in IDEs)
-const model = getModel('openai', 'gpt-4o-mini');
+const model = getModel('openai', 'gpt-6-luna');
 console.log(`Using ${model.name} via ${model.api} API`);
 ```
 
@@ -879,11 +879,11 @@ Models are typed by their API, which keeps the model metadata accurate. Provider
 import { streamAnthropic, type AnthropicOptions } from '@draht/ai';
 
 // TypeScript knows this is an Anthropic model
-const claude = getModel('anthropic', 'claude-sonnet-4-20250514');
+const claude = getModel('anthropic', 'claude-sonnet-5');
 
 const options: AnthropicOptions = {
   thinkingEnabled: true,
-  thinkingBudgetTokens: 2048
+  effort: 'medium'
 };
 
 await streamAnthropic(claude, context, options);
@@ -908,7 +908,7 @@ When messages from one provider are sent to a different provider, the library au
 import { getModel, complete, Context } from '@draht/ai';
 
 // Start with Claude
-const claude = getModel('anthropic', 'claude-sonnet-4-20250514');
+const claude = getModel('anthropic', 'claude-sonnet-5');
 const context: Context = {
   messages: []
 };
@@ -960,7 +960,7 @@ const context: Context = {
   ]
 };
 
-const model = getModel('openai', 'gpt-4o-mini');
+const model = getModel('openai', 'gpt-6-luna');
 const response = await complete(model, context);
 context.messages.push(response);
 
@@ -976,7 +976,7 @@ const restored: Context = JSON.parse(localStorage.getItem('conversation')!);
 restored.messages.push({ role: 'user', content: 'Tell me more about its type system' });
 
 // Continue with any model
-const newModel = getModel('anthropic', 'claude-3-5-haiku-20241022');
+const newModel = getModel('anthropic', 'claude-haiku-4-5');
 const continuation = await complete(newModel, restored);
 ```
 
@@ -990,7 +990,7 @@ The library supports browser environments. You must pass the API key explicitly 
 import { getModel, complete } from '@draht/ai';
 
 // API key must be passed explicitly in browser
-const model = getModel('anthropic', 'claude-3-5-haiku-20241022');
+const model = getModel('anthropic', 'claude-haiku-4-5');
 
 const response = await complete(model, {
   messages: [{ role: 'user', content: 'Hello!' }]
@@ -1035,7 +1035,7 @@ When set, the library automatically uses these keys:
 
 ```typescript
 // Uses OPENAI_API_KEY from environment
-const model = getModel('openai', 'gpt-4o-mini');
+const model = getModel('openai', 'gpt-6-luna');
 const response = await complete(model, context);
 
 // Or override with explicit key
@@ -1205,7 +1205,7 @@ auth['github-copilot'] = { type: 'oauth', ...result.newCredentials };
 writeFileSync('auth.json', JSON.stringify(auth, null, 2));
 
 // Use the API key
-const model = getModel('github-copilot', 'gpt-4o');
+const model = getModel('github-copilot', 'gpt-6.1-sol');
 const response = await complete(model, {
   messages: [{ role: 'user', content: 'Hello!' }]
 }, { apiKey: result.apiKey });

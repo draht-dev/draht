@@ -9,7 +9,7 @@ inputs:
   model:
     description: "Claude model to use"
     required: false
-    default: "claude-sonnet-4-20250514"
+    default: "claude-sonnet-5"
   agents-md-path:
     description: "Path to AGENTS.md file relative to repo root"
     required: false

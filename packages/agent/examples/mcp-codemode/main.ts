@@ -21,7 +21,7 @@ if (!command) {
 
 const models = createModels();
 models.setProvider(anthropicProvider());
-const model = models.getModel("anthropic", "claude-sonnet-4-6");
+const model = models.getModel("anthropic", "claude-sonnet-5");
 if (!model) throw new Error("Model not found");
 
 const client = new McpClient({ name: "pi-agent-example", version: "1.0.0" });

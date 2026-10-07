@@ -82,7 +82,7 @@ const result = await input.wait(ctx);
 if (result.status === 'done' && result.answer) console.log(result.answer.message);
 
 // Change settings any time; the next request uses them.
-await c.config.model.set({ provider: 'openai', modelId: 'gpt-5.6' }, ctx);
+await c.config.model.set({ provider: 'openai', modelId: 'gpt-6.1-sol' }, ctx);
 
 w.unsubscribe();
 await h.close(ctx);
@@ -198,7 +198,7 @@ await h.abortTask(id, ctx); // one task; queued input is kept
 Built-in configuration is a set of typed properties on `c.config`, one per value, plus a batched setter:
 
 ```typescript
-await c.config.model.set({ provider: 'openai', modelId: 'gpt-5.6' }, ctx);
+await c.config.model.set({ provider: 'openai', modelId: 'gpt-6.1-sol' }, ctx);
 await c.config.thinkingLevel.set('high', ctx);
 await c.config.selectedTools.set(['read', 'grep'], ctx);
 await c.config.followUpMode.set('all', ctx);
@@ -208,7 +208,7 @@ const then  = await c.config.model.get(entryId, ctx);        // as of an entry (
 const mode  = await c.config.followUpMode.get(ctx);          // sticky: current only
 
 // several at once, one commit; keys and value types are exact
-await c.config.set({ model: { provider: 'openai', modelId: 'gpt-5.6' }, thinkingLevel: 'low', followUpMode: 'all' }, ctx);
+await c.config.set({ model: { provider: 'openai', modelId: 'gpt-6.1-sol' }, thinkingLevel: 'low', followUpMode: 'all' }, ctx);
 const all = await c.config.get(ctx);
 ```
 

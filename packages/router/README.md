@@ -4,7 +4,7 @@ Role-based model routing with direct API calls, automatic fallback, and cost tra
 
 ## Overview
 
-The router maps task roles to LLM provider/model combinations with ordered fallback chains. No OpenRouter — direct API calls only for minimal latency.
+The router maps task roles to LLM provider/model combinations with ordered fallback chains. Calls go directly to each provider API; OpenRouter is used only for models it hosts (the DeepSeek fallbacks below).
 
 ## Configuration
 
@@ -18,14 +18,14 @@ Config is loaded from (in priority order):
 ```json
 {
   "architect": {
-    "primary": { "provider": "anthropic", "model": "claude-opus-4-6" },
+    "primary": { "provider": "anthropic", "model": "claude-opus-5-5" },
     "fallbacks": [{ "provider": "google", "model": "gemini-2.5-pro" }]
   },
   "implement": {
-    "primary": { "provider": "anthropic", "model": "claude-sonnet-4-6" },
+    "primary": { "provider": "anthropic", "model": "claude-sonnet-5" },
     "fallbacks": [
-      { "provider": "openai", "model": "gpt-5.2" },
-      { "provider": "deepseek", "model": "deepseek-v3" }
+      { "provider": "openai", "model": "gpt-6.1-sol" },
+      { "provider": "openrouter", "model": "deepseek/deepseek-v3.2" }
     ]
   }
 }
@@ -35,12 +35,14 @@ Config is loaded from (in priority order):
 
 | Role | Primary | Fallbacks |
 |------|---------|-----------|
-| architect | anthropic/claude-opus-4-6 | google/gemini-2.5-pro |
-| implement | anthropic/claude-sonnet-4-6 | openai/gpt-5.2 → deepseek/deepseek-v3 |
-| boilerplate | deepseek/deepseek-v3 | google/gemini-2.5-flash |
-| quick | google/gemini-2.5-flash | deepseek/deepseek-v3 |
-| review | anthropic/claude-sonnet-4-6 | — |
-| docs | openai/gpt-5.2 | anthropic/claude-sonnet-4-6 |
+| architect | anthropic/claude-opus-5-5 | google/gemini-2.5-pro |
+| implement | anthropic/claude-sonnet-5 | openai/gpt-6.1-sol → openrouter/deepseek/deepseek-v3.2 |
+| boilerplate | openrouter/deepseek/deepseek-v3.2 | google/gemini-2.5-flash |
+| quick | google/gemini-2.5-flash | openrouter/deepseek/deepseek-v3.2 |
+| review | anthropic/claude-sonnet-5 | — |
+| docs | openai/gpt-6.1-sol | anthropic/claude-sonnet-5 |
+| rlm-root | anthropic/claude-opus-5-5 | google/gemini-2.5-pro |
+| rlm-sub | google/gemini-2.5-flash | openrouter/deepseek/deepseek-v3.2 |
 
 ## CLI Usage
 
@@ -49,7 +51,7 @@ Config is loaded from (in priority order):
 draht router show
 
 # Set model for a role
-draht router set implement anthropic/claude-sonnet-4-6 --fallback openai/gpt-5.2,deepseek/deepseek-v3
+draht router set implement anthropic/claude-sonnet-5 --fallback openai/gpt-6.1-sol,openrouter/deepseek/deepseek-v3.2
 
 # Test resolution (dry-run)
 draht router test
@@ -77,7 +79,7 @@ Every API call is logged to `.draht/cost-log.jsonl` with:
 import { createRouterExtension } from "@draht/router/extension";
 
 const ext = createRouterExtension();
-const model = ext.selectModel("implementation"); // → anthropic/claude-sonnet-4-6
+const model = ext.selectModel("implementation"); // → anthropic/claude-sonnet-5
 const chain = ext.selectModelWithFallbacks("architecture"); // → full fallback chain
 ```
 

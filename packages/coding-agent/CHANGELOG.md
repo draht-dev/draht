@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- update default models for the `anthropic`, `amazon-bedrock`, `openai`, and `github-copilot` providers to `claude-opus-5-5`, `us.anthropic.claude-opus-5-5`, `gpt-6.1-sol`, and `gpt-6.1-sol`
+- rename the `/orchestrate` model-tiering example from Claude Fable 5 to Claude Fable 5.1
+- update stale model IDs in the README, `docs/duet.md`, `docs/rpc-commands.md`, and extension examples to current models
+- update the micro mode default model to `gpt-6.1-sol`
+- update the bundled `examples/extensions/subagent` agents to `claude-sonnet-5` / `claude-haiku-4-5`
+
 ## [2026.10.4-3] - 2026-10-04
 
 ### Fixed

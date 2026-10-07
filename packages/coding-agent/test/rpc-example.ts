@@ -14,7 +14,7 @@ async function main() {
 	const client = new RpcClient({
 		cliPath: join(__dirname, "../dist/cli.js"),
 		provider: "anthropic",
-		model: "claude-sonnet-4-20250514",
+		model: "claude-sonnet-5",
 		args: ["--no-session"],
 	});
 

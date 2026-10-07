@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- rename the model-tiering, orchestrate, and saga-spawner skill text's advisor-tier example from Claude Fable 5 to Claude Fable 5.1
+- fix the README's subagent model table (drop the duplicate `advisor` row), update the `configure` example ID, and list `fable` as a supported value
+
 ## [2026.10.4-1] - 2026-10-04
 
 ### Added

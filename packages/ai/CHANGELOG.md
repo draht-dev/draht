@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- update stale `claude-sonnet-4-20250514`, `claude-3-5-haiku-20241022`, `gpt-4o`, `gpt-4o-mini`, and `grok-code-fast-1` README examples to current model IDs, and switch the Anthropic thinking examples from `thinkingBudgetTokens` to `effort`, since adaptive-thinking models such as Claude Sonnet 5 ignore `thinkingBudgetTokens`
+
 ### Fixed
 
 - OAuth callback pages now show the draht logo instead of the upstream pi mark

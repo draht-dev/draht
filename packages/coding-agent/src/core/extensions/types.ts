@@ -1917,8 +1917,8 @@ export interface ExtensionAPI {
 	 *   api: "anthropic-messages",
 	 *   models: [
 	 *     {
-	 *       id: "claude-sonnet-4-20250514",
-	 *       name: "Claude 4 Sonnet (proxy)",
+	 *       id: "claude-sonnet-5",
+	 *       name: "Claude Sonnet 5 (proxy)",
 	 *       reasoning: false,
 	 *       input: ["text", "image"],
 	 *       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

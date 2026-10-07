@@ -13,3 +13,9 @@
  * exits, so tests can drive it against fixture roots.
  */
 export declare function checkHandMirroredSkills(root: string): string[];
+
+/**
+ * Drop the `model:` line from the leading frontmatter block only (between
+ * the first `---` and the next `---`), leaving every other line untouched.
+ */
+export declare function stripFrontmatterModelLine(content: string): string;

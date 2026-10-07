@@ -113,8 +113,8 @@ See [docs/providers.md](docs/providers.md) for detailed setup instructions.
 Use two or more authenticated models in one session:
 
 ```text
-/duet turns implementer=openai-codex/gpt-5.5,reviewer=anthropic/claude-opus-4-8
-/duet triage lead=openai-codex/gpt-5.5,reviewer=anthropic/claude-opus-4-8
+/duet turns implementer=openai-codex/gpt-6.1-sol,reviewer=anthropic/claude-opus-5-5
+/duet triage lead=openai-codex/gpt-6.1-sol,reviewer=anthropic/claude-opus-5-5
 /duet off
 ```
 
@@ -582,19 +582,19 @@ draht -p "Summarize this codebase"
 cat README.md | draht -p "Summarize this text"
 
 # Different model
-draht --provider openai --model gpt-4o "Help me refactor"
+draht --provider openai --model gpt-6-luna "Help me refactor"
 
 # Model with provider prefix (no --provider needed)
-draht --model openai/gpt-4o "Help me refactor"
+draht --model openai/gpt-6.1-sol "Help me refactor"
 
 # Model with thinking level shorthand
 draht --model sonnet:high "Solve this complex problem"
 
 # Limit model cycling
-draht --models "claude-*,gpt-4o"
+draht --models "claude-*,gpt-6.1-sol"
 
 # Start a triage duet
-draht --duet "lead=openai-codex/gpt-5.5,reviewer=anthropic/claude-opus-4-8"
+draht --duet "lead=openai-codex/gpt-6.1-sol,reviewer=anthropic/claude-opus-5-5"
 
 # Read-only mode
 draht --tools read,grep,find,ls -p "Review the code"

@@ -707,8 +707,17 @@ describe("resolveCliModel", () => {
 
 describe("default model selection", () => {
 	test("openai defaults track current models", () => {
-		expect(defaultModelPerProvider.openai).toBe("gpt-5.5");
+		expect(defaultModelPerProvider.openai).toBe("gpt-6.1-sol");
 		expect(defaultModelPerProvider["openai-codex"]).toBe("gpt-6.1-sol");
+	});
+
+	test("github-copilot default tracks current model", () => {
+		expect(defaultModelPerProvider["github-copilot"]).toBe("gpt-6.1-sol");
+	});
+
+	test("anthropic and amazon-bedrock defaults track current models", () => {
+		expect(defaultModelPerProvider.anthropic).toBe("claude-opus-5-5");
+		expect(defaultModelPerProvider["amazon-bedrock"]).toBe("us.anthropic.claude-opus-5-5");
 	});
 
 	test("zai, minimax, cerebras, and ant-ling defaults track current models", () => {

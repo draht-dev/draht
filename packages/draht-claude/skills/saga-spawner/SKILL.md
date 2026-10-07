@@ -111,7 +111,7 @@ One routine, three triggers combined:
 - **GitHub trigger** — on merged PRs targeting main: a merged `beat/*` PR is precisely the moment dependents unblock; the run picks them up immediately instead of waiting for the next tick. Merges of reconcile PRs activate newly approved audit beats the same way.
 - **API trigger** — the per-routine endpoint for manual pokes: a Herdr session that just merged something, an n8n flow, a deploy hook.
 
-Run this command's session on the strongest tier (e.g. Claude Fable 5) and let workers execute on the executor tier — the spawner is pure steering, its tokens are the ones that decide where all the volume tokens go (`model-tiering`).
+Run this command's session on the strongest tier (e.g. Claude Fable 5.1) and let workers execute on the executor tier — the spawner is pure steering, its tokens are the ones that decide where all the volume tokens go (`model-tiering`).
 
 ## Interaction with other disciplines
 

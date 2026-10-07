@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- update default model from `claude-sonnet-4-5` to `claude-sonnet-5`
+- correct the README's context note to the new default's 1M token window (was documented as 200k for Sonnet 4.5)
+
 ## [2026.10.4-1] - 2026-10-04
 
 ### Changed

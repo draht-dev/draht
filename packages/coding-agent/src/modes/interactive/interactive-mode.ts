@@ -2812,6 +2812,14 @@ export class InteractiveMode {
 	 * controls and DEL, so any width budget computed over raw text is a fiction.
 	 */
 	private buildPermissionDetailRows(detail: PermissionAskDetail): string[] {
+		const columns = this.ui?.terminal?.columns ?? 80;
+		// `summary` (an ApprovalDescription's own message, e.g. a workflow's phases/source/limits)
+		// comes first and unlabeled: it already reads as prose, with any "Label: " it needs baked in
+		// by its producer. Rendering it ahead of Tool/Directory/etc. is what stops it being silently
+		// dropped for callers that pass both a description AND a typed detail (§15).
+		const summaryBudget = Math.max(16, columns - 2);
+		const summaryRows = (detail.summary ?? []).map((line) => boundedSafeText(line, summaryBudget).value);
+
 		const labels: [string, string | undefined][] = [
 			["Tool", detail.toolName],
 			["Directory", detail.cwd],
@@ -2827,9 +2835,11 @@ export class InteractiveMode {
 		const labelWidth = present.reduce((max, [label]) => Math.max(max, label.length), 0);
 		// Terminal width minus the row margins, the label column and its ": " separator. The floor
 		// keeps a narrow terminal from producing a zero or negative budget.
-		const columns = this.ui?.terminal?.columns ?? 80;
 		const budget = Math.max(16, columns - 2 - labelWidth - 2);
-		return present.map(([label, value]) => `${label.padEnd(labelWidth)}: ${boundedSafeText(value, budget).value}`);
+		const labeledRows = present.map(
+			([label, value]) => `${label.padEnd(labelWidth)}: ${boundedSafeText(value, budget).value}`,
+		);
+		return [...summaryRows, ...labeledRows];
 	}
 
 	private async promptForMissingSessionCwd(error: MissingSessionCwdError): Promise<string | undefined> {
@@ -7096,6 +7106,7 @@ export class InteractiveMode {
 		const followUp = this.getAppKeyDisplay("app.message.followUp");
 		const dequeue = this.getAppKeyDisplay("app.message.dequeue");
 		const pasteImage = this.getAppKeyDisplay("app.clipboard.pasteImage");
+		const polyphaseInspector = this.getAppKeyDisplay("app.polyphase.inspector");
 
 		let hotkeys = `
 **Navigation**
@@ -7134,6 +7145,7 @@ export class InteractiveMode {
 ${cycleContextWindow ? `| \`${cycleContextWindow}\` | Cycle context window |\n` : ""}| \`${cycleModelForward}\` / \`${cycleModelBackward}\` | Cycle models |
 | \`${selectModel}\` | Open model selector |
 | \`${expandTools}\` | Toggle tool output expansion |
+| \`${polyphaseInspector}\` | Open the agent inspector |
 | \`${toggleThinking}\` | Toggle thinking block visibility |
 | \`${externalEditor}\` | Edit message in external editor |
 | \`${copyMessage}\` | Copy selection or last assistant message |

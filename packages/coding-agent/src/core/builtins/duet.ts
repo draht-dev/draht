@@ -4,9 +4,11 @@ import { Text } from "@draht/tui";
 import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI, ExtensionContext } from "../extensions/types.ts";
 import { parseModelPattern } from "../model-resolver.ts";
+import { resolveChildModel } from "../polyphase/model-selection.ts";
+import { getPolyphaseSession } from "../polyphase/session.ts";
 import type { SessionEntry } from "../session-manager.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "../tools/truncate.ts";
-import { type AgentConfig, type RunResult, runParallelTasks } from "./subagent.ts";
+import { type AgentConfig, type AgentRunner, type RunResult, runParallelTasks } from "./subagent.ts";
 
 export type DuetStrategy = "turns" | "triage";
 
@@ -338,7 +340,9 @@ const DuetDelegateParams = Type.Object({
 	}),
 });
 
-export default function duetBuiltin(pi: ExtensionAPI) {
+/** `options.runner` lets tests inject a scripted `AgentRunner` for `duet_delegate`'s teammates. */
+export default function duetBuiltin(pi: ExtensionAPI, options: { runner?: AgentRunner } = {}) {
+	const runnerOverride = options.runner;
 	let state: DuetState | undefined;
 	let activeTurnParticipant: DuetParticipant | undefined;
 	let pendingTurnParticipant: DuetParticipant | undefined;
@@ -533,7 +537,7 @@ export default function duetBuiltin(pi: ExtensionAPI) {
 					visible.push(`... (${lines.length - visible.length} more lines)`);
 				return new Text(theme.fg("toolOutput", visible.join("\n")), 0, 0);
 			},
-			async execute(_toolCallId, params, signal, onUpdate, ctx) {
+			async execute(toolCallId, params, signal, onUpdate, ctx) {
 				if (!state || state.strategy !== "triage") {
 					return {
 						content: [
@@ -589,33 +593,68 @@ export default function duetBuiltin(pi: ExtensionAPI) {
 				}
 				delegatedForPrompt = true;
 
-				const activity = new Map<string, string>();
-				const results = await runParallelTasks(ctx.cwd, items, {
-					signal,
-					makeOnProgress: (role) => (message) => {
-						activity.set(role, message);
-						onUpdate?.({
-							content: [
-								{
-									type: "text" as const,
-									text: [...activity].map(([name, text]) => `${name}: ${text}`).join("\n"),
-								},
-							],
-							details: {
-								results: [],
-								status: `${activity.size}/${items.length} teammates active`,
-							},
-						});
-					},
+				const session = getPolyphaseSession(ctx.sessionManager, pi.getSettings().polyphase);
+				const run = session.store.createRun({
+					id: `duet:${toolCallId}`,
+					kind: "duet",
+					origin: "tool",
+					title: `duet delegate · ${items.length} teammates`,
+					budgetTokens: null,
+					parentSignal: signal,
 				});
+				try {
+					const available = ctx.modelRegistry.getAvailable();
+					const live = items.map((item) => {
+						const choice = resolveChildModel({ agentModel: item.agent.model, available });
+						return run.addAgent({
+							label: item.agent.name,
+							agentType: item.agent.name,
+							task: item.task,
+							model: choice.info,
+						});
+					});
+					const perItem = (i: number) => ({ signal: live[i].signal, run: live[i].createRunContext() });
 
-				return {
-					content: [{ type: "text" as const, text: formatDelegateResults(results) }],
-					usage: combineDuetUsage(results),
-					details: {
-						results: results.map((result) => ({ participant: result.agent, exitCode: result.exitCode })),
-					},
-				};
+					const activity = new Map<string, string>();
+					const results = await runParallelTasks(ctx.cwd, items, {
+						signal,
+						runner: runnerOverride,
+						limiter: session.limiter,
+						perItem,
+						makeOnProgress: (role) => (message) => {
+							activity.set(role, message);
+							onUpdate?.({
+								content: [
+									{
+										type: "text" as const,
+										text: [...activity].map(([name, text]) => `${name}: ${text}`).join("\n"),
+									},
+								],
+								details: {
+									results: [],
+									status: `${activity.size}/${items.length} teammates active`,
+								},
+							});
+						},
+					});
+
+					const succeeded = results.some((r) => r.exitCode === 0);
+					const allCancelled = results.every((r) => r.cancelled);
+					run.finish(succeeded ? "done" : allCancelled ? "cancelled" : "failed");
+
+					return {
+						content: [{ type: "text" as const, text: formatDelegateResults(results) }],
+						usage: combineDuetUsage(results),
+						details: {
+							results: results.map((result) => ({ participant: result.agent, exitCode: result.exitCode })),
+						},
+					};
+				} catch (error) {
+					if (run.status === "running") {
+						run.finish("failed", error instanceof Error ? error.message : String(error));
+					}
+					throw error;
+				}
 			},
 		});
 		duetDelegateToolRegistered = true;

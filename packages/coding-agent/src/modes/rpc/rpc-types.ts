@@ -285,6 +285,15 @@ export interface RpcPermissionDetail {
 	 * mention it — a hand-mirror one field behind is how a client learns to distrust the type.
 	 */
 	truncated?: boolean;
+	/**
+	 * Free-form lines describing what this call does (e.g. a workflow run's approval description).
+	 *
+	 * Mirrors `PermissionAskDetail.summary`. `rpc-mode.ts` threads `detail` through to the RPC wire
+	 * by reference, unlike `socket-server/permission-relay.ts`'s `buildRequestFrame`, which hand-
+	 * builds the attach/geist wire frame field by field and never copies this one — summary rows
+	 * reach an RPC client (same as the TUI) but not an attached or geist client.
+	 */
+	summary?: readonly string[];
 }
 
 /** Emitted when an extension needs user input */

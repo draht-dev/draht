@@ -57,6 +57,12 @@ export interface AppKeybindings {
 	"app.tree.filter.all": true;
 	"app.tree.filter.cycleForward": true;
 	"app.tree.filter.cycleBackward": true;
+	"app.polyphase.inspector": true;
+	"app.polyphase.cancelAgent": true;
+	"app.polyphase.cancelRun": true;
+	"app.polyphase.follow": true;
+	"app.polyphase.nextAgent": true;
+	"app.polyphase.previousAgent": true;
 }
 
 export type AppKeybinding = keyof AppKeybindings;
@@ -241,6 +247,30 @@ export const KEYBINDINGS = {
 	"app.tree.filter.cycleBackward": {
 		defaultKeys: "shift+ctrl+o",
 		description: "Tree filter: cycle backward",
+	},
+	"app.polyphase.inspector": {
+		defaultKeys: "alt+a",
+		description: "Open or close the agent inspector",
+	},
+	"app.polyphase.cancelAgent": {
+		defaultKeys: "x",
+		description: "Agent inspector: cancel the selected agent (press twice)",
+	},
+	"app.polyphase.cancelRun": {
+		defaultKeys: "shift+x",
+		description: "Agent inspector: cancel the selected run (press twice)",
+	},
+	"app.polyphase.follow": {
+		defaultKeys: "f",
+		description: "Agent inspector: follow the live output",
+	},
+	"app.polyphase.nextAgent": {
+		defaultKeys: "tab",
+		description: "Agent inspector: next agent",
+	},
+	"app.polyphase.previousAgent": {
+		defaultKeys: "shift+tab",
+		description: "Agent inspector: previous agent",
 	},
 } as const satisfies KeybindingDefinitions;
 

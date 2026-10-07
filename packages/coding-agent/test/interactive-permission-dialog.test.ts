@@ -423,6 +423,27 @@ describe("InteractiveMode permission dialog", () => {
 		for (const row of rows) expect(row.includes("\n")).toBe(false);
 	});
 
+	it("renders summary lines ahead of the typed Tool/Directory/Reason rows", () => {
+		// A workflow approval's description (Phases/Source/Args/Limits/warning) used to be dropped
+		// outright: `showExtensionConfirm` only read `detail`, never the positional `message` a
+		// description was folded into. `summary` is how the description reaches the same rows.
+		const host = createHost();
+		const detail: PermissionAskDetail = {
+			...detailFor("npm install"),
+			summary: ["Two phase demo workflow", "Phases: 1 Scan · 2 Check (model)", "Source: inline script (3 lines)"],
+		};
+
+		const rows = host.buildPermissionDetailRows(detail);
+
+		expect(rows.slice(0, 3)).toEqual([
+			"Two phase demo workflow",
+			"Phases: 1 Scan · 2 Check (model)",
+			"Source: inline script (3 lines)",
+		]);
+		expect(rows.some((row) => row.startsWith("Tool"))).toBe(true);
+		expect(rows.indexOf("Two phase demo workflow")).toBeLessThan(rows.findIndex((row) => row.startsWith("Tool")));
+	});
+
 	it("neutralizes a locally raised ask before it reaches the renderer", () => {
 		const host = createHost();
 		const rows = host.buildPermissionDetailRows(detailFor(`echo ${ESC}[2J\u202ehi`)).join("\n");

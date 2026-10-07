@@ -609,6 +609,10 @@ function buildRequestFrame(ask: RelayAsk, sessionCwd: string, registryExpiryMs: 
 	if (detail?.command !== undefined) frame.command = bound(detail.command, FIELD_BUDGET.command);
 	if (detail?.path !== undefined) frame.path = bound(detail.path, FIELD_BUDGET.path);
 	if (detail?.operation !== undefined) frame.operation = bound(detail.operation, FIELD_BUDGET.operation);
+	// `detail.summary` (a workflow approval's description rows) is deliberately NOT copied onto this
+	// frame: `PermissionRequestMessage`/`PermissionRequestFrameSchema` (packages/geist-protocol/src/
+	// wire.ts) have no field for it. It reaches the TUI and an RPC client (same object, by
+	// reference) but not an attached or geist client. See `PermissionAskDetail.summary`'s doc.
 	// Set last: every `bound` call above contributes to it, on top of the producer's own verdict.
 	frame.truncated = truncated;
 

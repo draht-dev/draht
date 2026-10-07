@@ -163,6 +163,21 @@ export interface PermissionAskDetail {
 	 */
 	truncated?: boolean;
 	/**
+	 * Free-form lines describing what this call does, bounded the same way the fields above are.
+	 *
+	 * Populated when the caller supplies an {@link ApprovalDescription} (e.g. a `workflow` run):
+	 * its `message` is split on newline into this array so a renderer can show it as rows ahead of
+	 * `toolName`/`cwd`/`reason`, instead of being silently dropped because `detail` and `message`
+	 * used to be mutually exclusive on the TUI's confirm path.
+	 *
+	 * Hand-mirrored in `RpcPermissionDetail` (`modes/rpc/rpc-types.ts`): `rpc-mode.ts` forwards
+	 * `detail` to an RPC client by reference, the same way it does for the TUI. It is deliberately
+	 * NOT part of the attach/geist wire: `socket-server/permission-relay.ts`'s `buildRequestFrame`
+	 * builds that frame field by field and has no `summary` field, and neither does
+	 * `packages/geist-protocol/src/wire.ts`'s `PermissionRequestFrameSchema` that mirrors it.
+	 */
+	summary?: readonly string[];
+	/**
 	 * The immutable set of options offered for this request, each stating its OWN semantics.
 	 *
 	 * `decision` is what makes this a permission vocabulary rather than a list of words: it says,

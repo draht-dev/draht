@@ -861,3 +861,59 @@ describe("the advertised deadline is the EARLIER of the caller's timeout and the
 		expect(Date.parse(String(shown.deadline)) - Date.now()).toBeLessThanOrEqual(20_000);
 	});
 });
+
+describe("detail.summary stays TUI/RPC-local: the socket wire frame never carries it", () => {
+	it("omits summary from the broadcast frame even when the detail carries it", () => {
+		const requests: PermissionRequestMessage[] = [];
+		const registry = new PermissionRegistry({ sessionId: SESSION_ID });
+		const delivery = new PermissionDelivery<PermissionEntry>({ pending: () => registry.pending() });
+		const server: PermissionSocketServer = {
+			permissionCapableClientCount: 1,
+			broadcastPermissionRequest(message) {
+				requests.push(message);
+				return ["phone"];
+			},
+			sendPermissionRequest() {},
+			broadcastPermissionResolved() {},
+			sendErrorToClient() {},
+		};
+		const recorder: PermissionRecorder = { appendPermissionResolution: () => "id" };
+		const relay = createSocketPermissionRelay({
+			registry,
+			delivery,
+			server: () => server,
+			recorder: () => recorder,
+			sessionId: SESSION_ID,
+			cwd: "/tmp/project",
+			onWarning: () => {},
+		});
+
+		const detail: PermissionAskDetail = {
+			kind: "tool_permission",
+			toolCallId: "call-1",
+			toolName: "workflow",
+			cwd: "/tmp/project",
+			reason: "workflow approval",
+			options: [
+				{ id: "allow", label: "Allow", decision: "approve" },
+				{ id: "deny-once", label: "Deny once", decision: "deny" },
+			],
+			summary: ["Plan: do the thing", "Step 1: do it"],
+		};
+
+		void relay.raise({
+			requestId: "req-summary",
+			method: "confirm",
+			title: "Approve tool call?",
+			detail,
+			options: TOOL_VOCABULARY.map((option) => ({ ...option })),
+			requestedAt: new Date().toISOString(),
+			deadline: null,
+		});
+		relay.cancelAll();
+
+		const frame = requests[0];
+		if (frame === undefined) throw new Error("nothing was broadcast");
+		expect("summary" in frame).toBe(false);
+	});
+});

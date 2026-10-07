@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- children can no longer start workflows or duet triage, and subagent nesting is limited by `polyphase.maxDepth`
+
+### Added
+
+- add polyphase: live per-agent subagent view (model, state, activity) in the tool row
+- add the polyphase agent inspector (`alt+a`)
+- add the running-agents dock above the editor
+- add the `workflow` tool, enabled by the `polyphase` keyword
+- add saved workflows with `/workflow`, `/workflows`, and `/<name>` (project workflows under `.draht/workflows` require project trust, like `.draht/agents`)
+- add `polyphase` settings
+- add `app.polyphase.*` keybindings
+
 ### Changed
 
 - update default models for the `anthropic`, `amazon-bedrock`, `openai`, and `github-copilot` providers to `claude-opus-5-5`, `us.anthropic.claude-opus-5-5`, `gpt-6.1-sol`, and `gpt-6.1-sol`
@@ -9,6 +23,19 @@
 - update stale model IDs in the README, `docs/duet.md`, `docs/rpc-commands.md`, and extension examples to current models
 - update the micro mode default model to `gpt-6.1-sol`
 - update the bundled `examples/extensions/subagent` agents to `claude-sonnet-5` / `claude-haiku-4-5`
+- subagents without a `model:` now inherit the session model and thinking level instead of the child's own default
+- parallel subagent results keep head and tail per agent (including `STATUS:` lines) and include a stderr tail on failure
+- subagent and workflow agent usage counts toward session cost
+- unify subagent, workflow, and duet triage under one session-wide child concurrency limit
+
+### Fixed
+
+- parse streaming text and thinking from subagents, which was previously dropped
+- fix UTF-8 characters split across child-process stdout chunks
+- fix FSM/mailbox/worktree leaks when a subagent run throws
+- fix queued parallel subagent items spawning after the run was aborted
+- fix `$&` and `$1` being interpreted as regex replacement patterns in chain `{previous}` substitution
+- kill subagent child processes on emergency exit instead of leaving them running
 
 ## [2026.10.4-3] - 2026-10-04
 

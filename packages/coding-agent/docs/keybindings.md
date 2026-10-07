@@ -166,6 +166,26 @@ On native Windows, `app.suspend` has no default because Windows terminals do not
 | `app.message.copy` | `ctrl+x` | Copy the selected message in `/tree`; in fullscreen mode, copy the active selection when `fullscreenCopyOnSelect` is `false`; otherwise copy the last assistant message |
 | `app.message.followUp` | `alt+enter` (`ctrl+q` on Windows and WSL) | Queue follow-up message |
 | `app.message.dequeue` | `alt+up` (`alt+q` on Windows and WSL) | Restore queued messages to editor |
+| `app.polyphase.inspector` | `alt+a` | Open or close the agent inspector |
+
+### Agent Inspector
+
+Used inside the agent inspector overlay (opened with `app.polyphase.inspector`). See
+[Orchestrate Agents with Polyphase](polyphase.md#the-agent-inspector).
+
+| Keybinding id | Default | Description |
+|--------|---------|-------------|
+| `app.polyphase.cancelAgent` | `x` | Cancel the selected agent (press twice) |
+| `app.polyphase.cancelRun` | `shift+x` | Cancel the selected run (press twice) |
+| `app.polyphase.follow` | `f` | Follow the live output |
+| `app.polyphase.nextAgent` | `tab` | Select the next agent |
+| `app.polyphase.previousAgent` | `shift+tab` | Select the previous agent |
+| `tui.select.up` / `tui.select.down` | `up` / `down` | Move selection |
+| `tui.select.pageUp` / `tui.select.pageDown` | `pageUp` / `pageDown` | Page the selection |
+| `tui.select.confirm` | `enter` | Open / drill into the selection |
+| `tui.select.cancel` | `escape`, `ctrl+c` | Back, or close from the runs view |
+| `app.thinking.toggle` | `ctrl+t` | Show or hide thinking text in the agent detail view |
+| `app.tools.expand` | `ctrl+o` | Show or hide tool-result previews in the agent detail view |
 
 ### Tree Navigation
 

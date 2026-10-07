@@ -114,6 +114,13 @@ Use `toolCallId` to correlate the lifecycle. `partialResult` is the latest parti
 {"type":"tool_execution_end","toolCallId":"call_abc123","toolName":"bash","result":{"content":[{"type":"text","text":"complete output"}],"details":{}},"isError":false}
 ```
 
+`subagent` and `workflow` tool results carry a `details` object shaped `{v: 1, ...}` (see
+[Orchestrate Agents with Polyphase](polyphase.md#non-tui-behavior-and-the-details-schema)).
+Final details are capped at 16 KiB; partial details (`tool_execution_update`'s `partialResult.details`,
+throttled to about once per second per run, with state transitions emitted promptly) are capped at
+8 KiB and additionally carry a `now` field per agent that final details omit. Other tools use
+their own `details` shapes; sessions recorded before polyphase existed have no `v` field.
+
 ## Queue and state events
 
 | Event | Fields | Meaning |

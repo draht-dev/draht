@@ -22,6 +22,7 @@ Draht runs in four modes: interactive, print or JSON, RPC for process integratio
 - [Quick Start](#quick-start)
 - [Providers & Models](#providers--models)
 - [Duet Mode](#duet-mode)
+- [Polyphase](#polyphase)
 - [Interactive Mode](#interactive-mode)
   - [Editor](#editor)
   - [Commands](#commands)
@@ -124,6 +125,29 @@ Omit the model list to use models selected by `/scoped-models`. See [docs/duet.m
 
 ---
 
+## Polyphase
+
+Polyphase gives you live oversight of fanned-out agents: `subagent` calls and model-written
+`workflow` scripts get a live line per agent in the tool row, and all three — `subagent` calls,
+duet triage, and `workflow` scripts — share a one-line dock above the editor and a popup inspector
+(`alt+a` by default).
+
+Say the keyword (`polyphase` by default) in a prompt to let the model write and run a
+multi-phase `workflow` script — a plain async function using `agent()`, `parallel()`, `pipeline()`,
+`phase()`, and `log()`. Save a script under `.draht/workflows/<name>.js` (project, trusted) or
+`<agent-dir>/workflows/<name>.js` (user) to run it directly:
+
+```text
+/review-pr #1234
+/workflow review-pr #1234
+/workflows
+```
+
+See [docs/polyphase.md](docs/polyphase.md) for the script API, model inheritance, budgets, and
+permissions.
+
+---
+
 ## Interactive Mode
 
 <p align="center"><img src="docs/images/interactive-mode.png" alt="Interactive Mode" width="600"></p>
@@ -159,6 +183,8 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/model` | Switch models |
 | `/scoped-models` | Enable/disable models for Ctrl+P cycling |
 | `/duet [turns\|triage] [models]` | Configure multi-model collaboration |
+| `/workflow [name] [args]` | Run a saved polyphase workflow, or describe a new one |
+| `/workflows [list]` | Open the agent inspector, or list workflow runs and saved workflows |
 | `/settings` | Thinking level, theme, message delivery, transport |
 | `/resume` | Pick from previous sessions |
 | `/new` | Start a new session |

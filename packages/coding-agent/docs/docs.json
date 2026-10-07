@@ -44,6 +44,10 @@
               "path": "duet.md"
             },
             {
+              "title": "Orchestrate Agents with Polyphase",
+              "path": "polyphase.md"
+            },
+            {
               "title": "Run draht Safely",
               "path": "security.md"
             },

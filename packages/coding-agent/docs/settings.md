@@ -41,6 +41,18 @@ See [Choose a Model](models.md) for model selection and thinking controls.
 | `defaultTools` | `string[]` | `read`, `bash`, `edit`, `write` | Tools enabled at startup. Plain names replace the defaults; `+name` adds a tool and `-name` removes one. An empty array disables all built-in tools but not extension or SDK tools. |
 | `codemode.mode` | `"on"` \| `"only"` | `"on"` | How the `codemode` tool presents tools while it is active. `on`: declared tools get their `codemode` declaration appended to their description, and `codemode` lists only tools that are not declared. `only`: `codemode` lists every tool scripts can call, and active built-in and extension tools are hidden from the model, so it reaches them through `codemode`. |
 | `codemode.inlineBudget` | number | `3000` | Estimated tokens (characters / 4) the `codemode` tool's description may spend on tool declarations. Tools that do not fit are left out and found with `searchTools()`. `0` lists only namespaces. |
+| `polyphase.maxConcurrency` | number | `clamp(availableParallelism() - 2, 2, 8)` | Child agent processes at once across the session (`subagent`, `workflow`, duet). Range 1-16. |
+| `polyphase.maxAgentsPerRun` | number | `200` | `agent()` calls allowed per workflow run. Range 1-1000. |
+| `polyphase.maxItemsPerCall` | number | `1024` | Items allowed per `parallel()`/`pipeline()` call. Range 1-4096. |
+| `polyphase.workflowTool` | `"keyword"` \| `"always"` \| `"off"` | `"keyword"` | When the `workflow` tool is available: on the keyword, always, or never. |
+| `polyphase.keyword` | string | `"polyphase"` | Keyword that enables the `workflow` tool for one prompt. Must match `/^[A-Za-z][A-Za-z0-9_-]{2,31}$/`. |
+| `polyphase.defaultBudgetTokens` | number | Unlimited | Token budget for workflow runs that set none. Minimum `1000`. |
+| `polyphase.resultChars` | number | `64000` | Characters of agent output returned to the parent model for a parallel `subagent` call, split across agents (2,000-16,000 each). Single, chain, and `workflow` calls use fixed caps instead. Range 8000-400000. |
+| `polyphase.dock` | boolean | `true` | Show the running-agents dock above the editor. |
+| `polyphase.maxDepth` | number | `2` | Delegation depth. A child spawned at this depth gets no `subagent` tool. Range 1-4. |
+| `polyphase.liveUpdateMs` | number | `250` | Live update interval for tool rows, in milliseconds. Range 100-2000. |
+| `polyphase.retainRuns` | number | `20` | Finished runs kept in memory for the agent inspector. Range 1-100. |
+| `polyphase.workflowTimeoutMs` | number | `0` | Wall-clock deadline for a workflow run, in milliseconds, including time spent waiting on agents. `0` means no deadline. |
 
 Available built-in tools are `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, and `ls`. `defaultTools` can also name `codemode` and `tool_search`, which built-in extensions register inactive, and other extension tools registered inactive.
 

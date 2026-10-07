@@ -72,6 +72,17 @@ const powershellTool = createPowerShellTool(cwd, {
 
 When disabled, draht removes inherited values for these variables so nested draht processes do not expose stale parent-session metadata.
 
+## Polyphase Child Coordination
+
+These two variables are internal: draht sets them on a subagent/workflow child process it spawns
+and reads them back in that child; they are not meant to be set by hand. See
+[Orchestrate Agents with Polyphase](polyphase.md).
+
+| Variable | Description |
+|----------|-------------|
+| `DRAHT_POLYPHASE_DEPTH` | Nesting depth of this process: unset or `0` for the user's session, `n` in a child spawned by a process at depth `n-1`. Used to enforce `polyphase.maxDepth` and to exclude the `subagent` tool once the limit is reached. |
+| `DRAHT_POLYPHASE_SCHEMA_FILE` | Path to a JSON Schema file for this agent's structured result. When set, the child registers a `polyphase_result` tool matching that schema; unset in every other process, including a child whose parent did not request structured output. |
+
 ## draht Process Configuration
 
 These variables are read by draht itself:

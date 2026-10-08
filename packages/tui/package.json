@@ -1,6 +1,6 @@
 {
 	"name": "@draht/tui",
-	"version": "2026.10.4-3",
+	"version": "2026.10.8-1",
 	"description": "Terminal User Interface library with differential rendering for efficient text-based applications",
 	"type": "module",
 	"main": "dist/index.js",

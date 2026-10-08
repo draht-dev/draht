@@ -1,11 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2026.10.8-1] - 2026-10-08
 
 ### Changed
 
-- rename the model-tiering, orchestrate, and saga-spawner skill text's advisor-tier example from Claude Fable 5 to Claude Fable 5.1
-- fix the README's subagent model table (drop the duplicate `advisor` row), update the `configure` example ID, and list `fable` as a supported value
+- refresh model ids to Opus 5.5, Sonnet 5, Fable 5.1 and GPT-6
 
 ## [2026.10.4-1] - 2026-10-04
 

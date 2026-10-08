@@ -1,12 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2026.10.8-1] - 2026-10-08
 
 ### Changed
 
-- move reference agent prompts to the GPT-6 series by price tier (`advisor` -> `gpt-6-astra`; `architect`, `reviewer`, `security-auditor`, `spec-reviewer`, `implementer`, `investigator`, `verifier` -> `gpt-6.1-sol`; `speaker` -> `gpt-6-luna`), and stop `check-plugin-mirrors.mjs` from flagging `agents/*.md` as drifted when only the frontmatter `model:` line differs between the two plugins
-- render the model-tiering and orchestrate skill text with GPT-6 model names instead of Claude's
-- update the README's configure example, per-agent model table, and stale agent count/list
+- refresh model ids to Opus 5.5, Sonnet 5, Fable 5.1 and GPT-6
 
 ## [2026.10.4-1] - 2026-10-04
 

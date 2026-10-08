@@ -1,6 +1,6 @@
 {
 	"name": "@draht/infra",
-	"version": "2026.10.4-3",
+	"version": "2026.10.8-1",
 	"private": true,
 	"description": "SST v4 infrastructure hosting the radius.draht.dev bug-report intake, plus example Lambda, API Gateway, and DynamoDB resources",
 	"type": "module",

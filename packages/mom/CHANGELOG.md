@@ -1,11 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2026.10.8-1] - 2026-10-08
 
 ### Changed
 
-- update default model from `claude-sonnet-4-5` to `claude-sonnet-5`
-- correct the README's context note to the new default's 1M token window (was documented as 200k for Sonnet 4.5)
+- refresh model ids to Opus 5.5, Sonnet 5, Fable 5.1 and GPT-6
 
 ## [2026.10.4-1] - 2026-10-04
 

@@ -1,6 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [2026.10.8-1] - 2026-10-08
+
+### Changed
+
+- refresh model ids to Opus 5.5, Sonnet 5, Fable 5.1 and GPT-6
+- stamp versions by UTC day and promote at 02:00 UTC
 
 ## [2026.10.4-1] - 2026-10-04
 

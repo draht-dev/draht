@@ -1,6 +1,6 @@
 {
 	"name": "@draht/chord",
-	"version": "2026.10.4-3",
+	"version": "2026.10.8-1",
 	"description": "Application composition runtime for services, replicated state, RPC, and plugins",
 	"type": "module",
 	"main": "./dist/index.js",

@@ -1,6 +1,6 @@
 {
 	"name": "@draht/web-ui",
-	"version": "2026.10.4-3",
+	"version": "2026.10.8-1",
 	"description": "Reusable web UI components for AI chat interfaces powered by @draht/ai",
 	"type": "module",
 	"main": "dist/index.js",

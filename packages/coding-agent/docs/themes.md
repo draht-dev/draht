@@ -58,7 +58,7 @@ See [CLI resources](cli.md#resources) for the command-line option.
 
 ## Create a custom theme
 
-Copy one of the [built-in themes](https://github.com/draht-dev/draht/tree/main/packages/coding-agent/src/modes/interactive/theme) or create a new JSON file conforming to the [schema](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json). The built-in themes use OKHSL colors, with variables for colors that several roles share, so you can adjust a hue, saturation, or lightness directly.
+Copy one of the [built-in themes](https://github.com/draht-dev/draht/tree/main/packages/coding-agent/src/modes/interactive/theme) or create a new JSON file conforming to the [schema](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/schemas/theme.schema.json). The built-in themes use OKHSL colors, with variables for colors that several roles share, so you can adjust a hue, saturation, or lightness directly.
 
 1. Save the file as `<agent-dir>/themes/my-theme.json`. The agent directory defaults to `~/.draht/agent`.
 2. Set its `name` to `my-theme`.
@@ -78,6 +78,8 @@ Use the theme name as the filename. draht hot-reloads the active user theme only
 | `colors` | Yes | Assigns colors to terminal UI roles. The schema identifies required and optional roles. |
 | `export` | No | Overrides page and panel backgrounds in HTML exports. |
 
+Theme objects are strict: only documented top-level fields and color tokens are accepted. Define reusable custom colors under `vars`; custom keys under `colors` or `export` and additional top-level metadata are rejected.
+
 A color can be written in six forms:
 
 | Form | Example | Meaning |
@@ -93,7 +95,7 @@ Terminal default colors render as the terminal's own colors. Where draht needs a
 
 draht resolves chained variable references. A missing variable or circular reference makes the theme invalid. draht uses truecolor when available, gamut-maps OKLCH to sRGB, and approximates colors for 256-color terminals. HTML exports convert OKHSL values to hexadecimal because CSS does not support them. If colors differ from their source values, check your terminal's truecolor detection and contrast settings. See [Configure Your Terminal](terminal-setup.md#override-detected-capabilities).
 
-Use the [theme JSON schema](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json) for the exact properties, required colors, and accepted value types.
+Use the [theme JSON schema](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/schemas/theme.schema.json) for the exact properties, required colors, and accepted value types.
 
 draht reports invalid theme files during startup and `/reload`.
 

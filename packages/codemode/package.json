@@ -1,6 +1,6 @@
 {
 	"name": "@draht/codemode",
-	"version": "2026.10.8-1",
+	"version": "2026.10.8",
 	"description": "Sandboxed JavaScript execution where the only capability is calling injected tools",
 	"type": "module",
 	"main": "./dist/index.js",

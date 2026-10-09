@@ -1,6 +1,6 @@
 {
 	"name": "@draht/compliance",
-	"version": "2026.10.8-1",
+	"version": "2026.10.8",
 	"private": true,
 	"description": "Private reference scanner and templates for GDPR and EU AI Act review",
 	"type": "module",

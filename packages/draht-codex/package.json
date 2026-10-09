@@ -1,6 +1,6 @@
 {
 	"name": "draht-codex",
-	"version": "2026.10.8-1",
+	"version": "2026.10.8",
 	"description": "Draht GSD, multi-agent, TDD and DDD workflows as a Codex plugin. Install with `npx draht-codex install`.",
 	"type": "module",
 	"bin": {

@@ -1257,6 +1257,32 @@ export default function(pi: ExtensionAPI) {
 			expect(files.map((f) => f.content)).toEqual(["worktree instructions"]);
 		});
 
+		// Deliberate divergence from upstream #10681: GSEC-13/R36-SPAWN.6 forbids
+		// following context-file symlinks, including links within the same repository.
+		it("should refuse the worktree symlink and inherit the main repo's regular context file", () => {
+			const { main, worktree, worktreeSrc } = setupNestedWorktree();
+			writeFileSync(join(main, "AGENTS.md"), "main repo instructions");
+			symlinkSync(join(main, "AGENTS.md"), join(worktree, "AGENTS.md"));
+
+			const files = loadProjectContextFiles({ cwd: worktreeSrc, agentDir });
+
+			expect(files).toEqual([{ path: join(main, "AGENTS.md"), content: "main repo instructions" }]);
+			expect(loadProjectContextFiles({ cwd: worktreeSrc, agentDir, contextRoot: worktree })).toEqual([]);
+		});
+
+		it("should refuse both worktree and main repo context symlinks", () => {
+			const { outer, main, worktree, worktreeSrc } = setupNestedWorktree();
+			const shared = join(outer, "shared-agents.md");
+			writeFileSync(shared, "shared instructions");
+			symlinkSync(shared, join(main, "AGENTS.md"));
+			symlinkSync(shared, join(worktree, "AGENTS.md"));
+
+			const files = loadProjectContextFiles({ cwd: worktreeSrc, agentDir });
+
+			expect(files).toEqual([]);
+			expect(loadProjectContextFiles({ cwd: worktreeSrc, agentDir, contextRoot: worktree })).toEqual([]);
+		});
+
 		it("should still inherit the main repo's context when the worktree root has none", () => {
 			const { main, worktreeSrc } = setupNestedWorktree();
 			writeFileSync(join(main, "AGENTS.md"), "main repo instructions");

@@ -336,10 +336,12 @@ export function loadProjectContextFiles(options: {
 			}
 		}
 		const contextFile = loadContextFileFromDir(currentDir, canonicalRoot);
+		// Shadowing compares directory identity and filename. Context-file symlinks
+		// remain refused by the GSEC-13/R36-SPAWN.6 no-follow gate above.
 		const isShadowed =
 			shadowedContextFile !== undefined &&
 			contextFile !== null &&
-			comparablePath(contextFile.path) === shadowedContextFile;
+			join(comparablePath(currentDir), basename(contextFile.path)) === shadowedContextFile;
 		if (contextFile && !isShadowed && !seenPaths.has(contextFile.path)) {
 			ancestorContextFiles.unshift(contextFile);
 			seenPaths.add(contextFile.path);

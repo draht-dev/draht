@@ -35,7 +35,16 @@ function workerLauncher(
 		} catch (error) {
 			throw new Error(`Failed to start worker: ${errorMessage(error)}`);
 		}
-		worker.on("message", (message: unknown) => events.message(message));
+		worker.on("message", (message: unknown) => {
+			// Node 24/26 --watch leaks dependency reports onto the worker channel (nodejs/node#65044).
+			if (
+				typeof message === "object" &&
+				message !== null &&
+				("watch:import" in message || "watch:require" in message)
+			)
+				return;
+			events.message(message);
+		});
 		worker.on("error", (error: unknown) => {
 			events.failure({
 				kind: "sandbox",

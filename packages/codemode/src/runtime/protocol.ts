@@ -7,17 +7,25 @@ import type { CodemodeWasmModule } from "../wasm.ts";
  * out of the QuickJS VM as strings and never builds structured values itself.
  */
 
-export interface WorkerData {
+/**
+ * Everything a VM needs to run one script, independent of where it runs. Plain data, so it can
+ * cross a `postMessage` or a Workers RPC call unchanged.
+ */
+export interface VmStartData {
+	/** Trusted host source only; never derived from the script or its store. */
 	preLockdownSource?: string;
 	code: string;
 	/** `jsName` is the identifier the script uses; `description` is listed in `ALL_TOOLS`. */
 	tools: { name: string; jsName: string; description: string }[];
 	globals: { name: string; spread: boolean }[];
-	/** Compiled `quickjs-wasi` module. Structured clone shares the compiled code with the worker. */
-	wasm: CodemodeWasmModule;
 	memoryLimitBytes: number | undefined;
 	/** Snapshot for `load()`: key to JSON text. */
 	store: Record<string, string>;
+}
+
+export interface WorkerData extends VmStartData {
+	/** Compiled `quickjs-wasi` module. Structured clone shares the compiled code with the worker. */
+	wasm: CodemodeWasmModule;
 	/**
 	 * One Int32 the host sets to non-zero before terminating the worker. The VM's interrupt handler
 	 * polls it, because Bun's `worker.terminate()` cannot stop a thread that is spinning in wasm.

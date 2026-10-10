@@ -59,11 +59,17 @@ export interface CodemodeCall {
 export type CodemodeErrorKind =
 	/** The script threw or failed to parse. `name` and `stack` come from the script's error. */
 	| "script"
-	/** The overall deadline expired. The worker was terminated. */
+	/**
+	 * The overall deadline expired, or a VM on the calling thread used up its interrupt budget. The VM
+	 * was stopped.
+	 */
 	| "timeout"
-	/** The caller's signal fired or the sandbox was closed. The worker was terminated. */
+	/** The caller's signal fired or the sandbox was closed. The VM was stopped. */
 	| "aborted"
-	/** The worker or VM failed outside the script's control (for example a wasm trap or a missing worker file). */
+	/**
+	 * The VM or its transport failed outside the script's control (for example a wasm trap, a missing
+	 * worker file, or a remote sandbox that failed).
+	 */
 	| "sandbox";
 
 export interface CodemodeError {
@@ -91,12 +97,23 @@ export type CodemodeResult =
 	  }
 	| { ok: false; error: CodemodeError; output: CodemodeOutputItem[]; calls: CodemodeCall[] };
 
-export interface CodemodeSandboxOptions {
+/** Options every sandbox accepts, wherever its VM runs. */
+export interface CodemodeSandboxBaseOptions {
 	/**
 	 * Trusted host code evaluated in the VM before built-ins are frozen. Never populate this
 	 * from script input. Runs once per execution and is not exposed to the script.
 	 */
 	preLockdownSource?: string;
+	/**
+	 * Maximum combined character count across every `text()`, `console.*`, and `image()` output
+	 * item. The VM's memory limit only bounds its own heap; output is copied into the host process
+	 * and kept there for the life of the execution (`result.output`), so a script that only calls
+	 * `console.log` in a loop would otherwise grow the host's memory without bound. Crossing it ends
+	 * the execution with a `sandbox` error; `result.output` keeps the items received up to and
+	 * including the one that crossed the limit. Default: no limit.
+	 */
+	maxOutputChars?: number;
+
 	tools?: CodemodeTool[];
 	/**
 	 * Functions exposed as top-level identifiers instead of on `tools`, for host helpers such as
@@ -116,15 +133,10 @@ export interface CodemodeSandboxOptions {
 	 * `InternalError: out of memory`. Default: no limit beyond wasm32's 4 GiB address space.
 	 */
 	memoryLimitBytes?: number;
-	/**
-	 * Maximum combined character count across every `text()`, `console.*`, and `image()` output
-	 * item. The VM's memory limit only bounds its own heap; output is copied into the host process
-	 * and kept there for the life of the execution (`result.output`), so a script that only calls
-	 * `console.log` in a loop would otherwise grow the host's memory without bound. Crossing it ends
-	 * the execution with a `sandbox` error; `result.output` keeps the items received up to and
-	 * including the one that crossed the limit. Default: no limit.
-	 */
-	maxOutputChars?: number;
+}
+
+/** Options of `CodemodeSandbox`, which runs each VM in a Node or Bun worker thread. */
+export interface CodemodeSandboxOptions extends CodemodeSandboxBaseOptions {
 	/**
 	 * Compiled `quickjs-wasi/quickjs.wasm`, usually from {@link loadQuickJSWasm}. Default:
 	 * `loadQuickJSWasm()`, the file in the installed `quickjs-wasi` package. Pass it when that file

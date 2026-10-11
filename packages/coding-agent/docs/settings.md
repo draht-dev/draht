@@ -2,6 +2,8 @@
 
 This reference lists user-configurable settings, their types, defaults, and purposes. Project settings override agent-directory settings. Resource lists are combined. See [Configuration](configuration.md) for file locations and trust behavior.
 
+Add `"$schema": "https://raw.githubusercontent.com/draht-dev/draht/main/packages/coding-agent/schemas/settings.schema.json"` to `settings.json` for editor validation and completion.
+
 ## Model and thinking
 
 <a id="model-cycling"></a>

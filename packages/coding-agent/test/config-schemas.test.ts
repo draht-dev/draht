@@ -89,6 +89,7 @@ describe("generated configuration schemas", () => {
 			"schemas/theme.schema.json",
 		]);
 		for (const [relativePath, expected] of rendered) {
+			expect(JSON.parse(expected).$id).toBe(`${schemaBaseUrl}/${relativePath.slice("schemas/".length)}`);
 			expect(
 				readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf-8"),
 				`${relativePath} is stale; run npm run generate:schemas`,

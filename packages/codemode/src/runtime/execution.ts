@@ -204,7 +204,8 @@ class Execution {
 	private readonly pending = new Map<number, PendingCall>();
 	private readonly maxOutputChars: number | undefined;
 	private outputChars = 0;
-	private finished = false;
+	/** Whether the execution has its outcome. */
+	finished = false;
 
 	constructor(options: ExecutionOptions) {
 		this.promise = new Promise<CodemodeResult>((resolve) => {
@@ -576,7 +577,13 @@ export class CodemodeSandboxBase {
 		});
 		this.running.add(execution);
 		const result = execution.promise.finally(() => this.running.delete(execution));
-		return { result, deliver: (seq, now, id, outcome) => execution.deliver(seq, now, id, outcome) };
+		return {
+			result,
+			deliver: (seq, now, id, outcome) => execution.deliver(seq, now, id, outcome),
+			get finished() {
+				return execution.finished;
+			},
+		};
 	}
 
 	/** Aborts in-flight executions (they resolve with `kind: "aborted"`) and rejects new ones. */

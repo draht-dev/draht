@@ -16,11 +16,6 @@ const banner = {
 	js: 'import { createRequire as __drahtCreateRequire } from "node:module"; const require = __drahtCreateRequire(import.meta.url);',
 };
 const allowedExternalPackages = new Set([
-	"@draht/chord",
-	"@draht/chord/bundler",
-	"@draht/chord/context",
-	"@draht/chord/delta",
-	"@draht/chord/node",
 	"@silvia-odwyer/photon-node",
 	// Loaded through the @mariozechner/jiti external rewrite below.
 	"@mariozechner/jiti",
@@ -92,7 +87,7 @@ function commonBuildOptions() {
 		banner,
 		bundle: true,
 		define: { DRAHT_BUNDLED_NODE: "true" },
-		external: ["@draht/chord", "@silvia-odwyer/photon-node", "@draht/rlm"],
+		external: ["@silvia-odwyer/photon-node", "@draht/rlm"],
 		format: "esm",
 		legalComments: "none",
 		logLevel: "warning",

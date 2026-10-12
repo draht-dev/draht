@@ -113,7 +113,6 @@
       "dependencies": {
         "@draht/agent-core": "workspace:*",
         "@draht/ai": "workspace:*",
-        "@draht/chord": "workspace:*",
         "@draht/codemode": "workspace:*",
         "@draht/mcp": "workspace:*",
         "@draht/rlm": "workspace:*",

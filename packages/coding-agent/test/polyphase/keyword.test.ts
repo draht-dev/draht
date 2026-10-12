@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext, InputEvent } from "../../src/core/extensions/types.ts";
 import { createKeywordHooks, type KeywordHooksDeps } from "../../src/core/polyphase/keyword.ts";
 import type { ResolvedPolyphaseSettings } from "../../src/core/polyphase/settings.ts";
+import { normalizeBuildSystemPromptOptions } from "../../src/core/system-prompt.ts";
 
 function fakeSettings(overrides: Partial<ResolvedPolyphaseSettings> = {}): ResolvedPolyphaseSettings {
 	return {
@@ -48,6 +49,33 @@ function buildDeps(overrides: Partial<KeywordHooksDeps> = {}): {
 }
 
 describe("createKeywordHooks", () => {
+	it("does not activate a keyword-armed tool for a custom-message run", () => {
+		const activate = vi.fn();
+		const { deps } = buildDeps({ activate });
+		const hooks = createKeywordHooks(deps);
+		const ctx = fakeCtx();
+		hooks.onInput({ type: "input", text: "polyphase help", source: "interactive" }, ctx);
+		expect(
+			hooks.onBeforeAgentStart(
+				{
+					type: "before_agent_start",
+					messageType: "custom",
+					message: {
+						role: "custom",
+						customType: "notification",
+						content: "polyphase help",
+						display: false,
+						timestamp: 0,
+					},
+					systemPrompt: "",
+					systemPromptOptions: normalizeBuildSystemPromptOptions({ cwd: "/tmp" }),
+				},
+				ctx,
+			),
+		).toBeUndefined();
+		expect(activate).not.toHaveBeenCalled();
+	});
+
 	it("queues the authoring guide only once across a burst of keyword steers before it is delivered", () => {
 		const { deps, sendMessage } = buildDeps();
 		const hooks = createKeywordHooks(deps);

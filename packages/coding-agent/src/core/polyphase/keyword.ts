@@ -106,7 +106,7 @@ export function createKeywordHooks(deps: KeywordHooksDeps): KeywordHooks {
 			// The armed input and this turn's prompt should be the same text, but a handler earlier
 			// in the chain (or a turn that never reached `input`, e.g. a triggered `sendMessage`) can
 			// start a turn that never matched the keyword; re-check instead of trusting the stale arm.
-			if (!detectKeyword(event.prompt, deps.settings().keyword)) return undefined;
+			if (event.messageType !== "user" || !detectKeyword(event.prompt, deps.settings().keyword)) return undefined;
 			if (!deps.ensureTool()) return undefined;
 			deps.activate();
 			if (hasGuidanceInContext(ctx.sessionManager.getBranch())) return undefined;

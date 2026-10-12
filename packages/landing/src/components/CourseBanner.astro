@@ -1,0 +1,54 @@
+<aside class="course-banner" aria-label="Courses at draht uni">
+	<div class="course-copy">
+		<span class="course-label">Neu · draht uni</span>
+		<p>My courses are now live at draht uni. <span>— Oskar Freye</span></p>
+	</div>
+	<a href="https://uni.draht.dev">Browse courses <span aria-hidden="true">↗</span></a>
+</aside>
+
+<style>
+	.course-banner {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: 16px 24px;
+		margin-top: 24px;
+		padding: 20px 24px;
+		border: 1px solid var(--copper-dim);
+		background: var(--ink-2);
+	}
+	.course-copy {
+		flex: 1 1 280px;
+		min-width: 0;
+	}
+	.course-label {
+		font-family: var(--f-mono);
+		font-size: 10px;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		color: var(--copper);
+	}
+	.course-copy p {
+		margin: 6px 0 0;
+		font-size: 15px;
+		line-height: 1.5;
+		color: var(--paper);
+	}
+	.course-copy p span {
+		color: var(--paper-dim);
+	}
+	.course-banner a {
+		font-family: var(--f-mono);
+		font-size: 12px;
+		color: var(--copper);
+		padding: 8px 0;
+	}
+	.course-banner a:hover {
+		color: var(--paper);
+	}
+	.course-banner a:focus-visible {
+		outline: 1px solid var(--copper);
+		outline-offset: 4px;
+	}
+</style>

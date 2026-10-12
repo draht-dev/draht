@@ -1,6 +1,7 @@
 ---
 import Atelier from "../layouts/Atelier.astro";
 import Navbar from "../components/Navbar.astro";
+import CourseBanner from "../components/CourseBanner.astro";
 
 const title = "draht - coding agents that ship for less";
 const description = "Draht routes coding tasks by capability and cost, writes the failing test first, reads your domain model, and logs each model call. Use it in Claude Code or from the CLI.";
@@ -23,6 +24,7 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 	<div class="wrap">
 		<!-- ===================== TOP ===================== -->
 		<Navbar />
+		<CourseBanner />
 
 		<!-- ===================== HERO ===================== -->
 		<section class="hero">
@@ -352,12 +354,12 @@ const description = "Draht routes coding tasks by capability and cost, writes th
 					<span class="door-cta">Read the docs →</span>
 				</a>
 
-				<a class="door" href="/uni">
+				<a class="door" href="https://uni.draht.dev">
 					<div class="door-num">ii.</div>
 					<div class="door-name">the uni<em>.</em></div>
-					<div class="door-tag">draht uni — building in public</div>
-					<p>Follow the university's build one episode at a time. Episode 1 is live.</p>
-					<span class="door-cta">Join the waitlist →</span>
+					<div class="door-tag">draht uni — courses by Oskar Freye</div>
+					<p>My courses are now available at draht uni. Learn from the work behind the tools.</p>
+					<span class="door-cta">Browse courses →</span>
 				</a>
 			</div>
 		</section>

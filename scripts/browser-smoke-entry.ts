@@ -1,3 +1,4 @@
+import { createHost, memoryLinkPair, replicatedState } from "@draht/chord";
 import { createAssistantMessageEventStream, Type } from "@draht/ai";
 import { complete, getModel, getProviders, streamSimple } from "@draht/ai/compat";
 import { Agent, streamProxy } from "@draht/agent-core";
@@ -19,4 +20,7 @@ console.log(
 	typeof stream.push,
 	agent.hasQueuedMessages(),
 	typeof streamProxy,
+	typeof createHost,
+	typeof memoryLinkPair,
+	replicatedState({ browser: true }).value.browser,
 );

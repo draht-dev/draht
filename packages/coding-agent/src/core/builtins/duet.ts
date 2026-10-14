@@ -3,7 +3,7 @@ import type { Api, Model } from "@draht/ai";
 import { type AutocompleteItem, fuzzyFilter, Text } from "@draht/tui";
 import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI, ExtensionContext } from "../extensions/types.ts";
-import { parseModelPattern } from "../model-resolver.ts";
+import { resolveModelReference } from "../model-resolver.ts";
 import { resolveChildModel } from "../polyphase/model-selection.ts";
 import { getPolyphaseSession } from "../polyphase/session.ts";
 import type { SessionEntry } from "../session-manager.ts";
@@ -121,10 +121,16 @@ export function parseDuetParticipantSpecs(specs: string, availableModels: Model<
 		if (explicitRole !== undefined) validateExplicitRole(explicitRole);
 		if (!modelSpec) throw new Error(`Missing model in duet participant "${rawSpec}".`);
 
-		const resolved = parseModelPattern(modelSpec, availableModels, {
-			allowInvalidThinkingLevelFallback: false,
-		});
-		if (!resolved.model) {
+		const resolved = resolveModelReference(
+			{ text: modelSpec, thinkingSuffix: "strict", fuzzy: true },
+			availableModels,
+			() => true,
+		);
+		if (resolved.status === "ambiguous") {
+			const candidates = resolved.candidates.map((model) => modelKey(model)).join(", ");
+			throw new Error(`Duet model "${modelSpec}" matches several providers: use provider/id (${candidates}).`);
+		}
+		if (resolved.status !== "resolved") {
 			throw new Error(`Duet model "${modelSpec}" is unavailable. Authenticate it or use /scoped-models.`);
 		}
 

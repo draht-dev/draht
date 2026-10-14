@@ -8,7 +8,7 @@
 
 import type { ThinkingLevel } from "@draht/agent-core";
 import type { Api, Model } from "@draht/ai";
-import { parseModelPattern } from "../model-resolver.ts";
+import { type ModelReferenceResult, resolveModelReference } from "../model-resolver.ts";
 import { type AgentModelInfo, isThinkingLevel, type ModelSource } from "./types.ts";
 
 export class ModelSelectionError extends Error {}
@@ -47,17 +47,26 @@ interface ParsedPattern {
 	thinkingLevel?: ThinkingLevel;
 }
 
-/** Strict resolution (no invalid-thinking-level fallback): throws when the pattern matches nothing. */
+/** `provider/id`, bare id or fuzzy match with an optional `:<thinking>` suffix; an invalid suffix stays part of the id. */
+function resolvePattern(pattern: string, available: Model<Api>[]): ModelReferenceResult {
+	return resolveModelReference({ text: pattern, thinkingSuffix: "strict", fuzzy: true }, available, () => true);
+}
+
+/** Strict resolution: throws when the pattern matches nothing or several providers' models. */
 function resolveStrict(pattern: string, available: Model<Api>[]): ParsedPattern {
-	const result = parseModelPattern(pattern, available, { allowInvalidThinkingLevelFallback: false });
-	if (!result.model) throw new ModelSelectionError(`unknown model "${pattern}"`);
+	const result = resolvePattern(pattern, available);
+	if (result.status === "ambiguous") {
+		const candidates = result.candidates.map((model) => `${model.provider}/${model.id}`).join(", ");
+		throw new ModelSelectionError(`ambiguous model "${pattern}": use provider/id (${candidates})`);
+	}
+	if (result.status !== "resolved") throw new ModelSelectionError(`unknown model "${pattern}"`);
 	return { provider: result.model.provider, id: result.model.id, thinkingLevel: result.thinkingLevel };
 }
 
-/** Best-effort resolution for display only: never throws, leaves provider/id undefined when unresolved. */
+/** Best-effort resolution for display only: never throws, leaves provider/id undefined when unresolved or ambiguous. */
 function resolveForDisplay(pattern: string, available: Model<Api>[]): ParsedPattern {
-	const result = parseModelPattern(pattern, available, { allowInvalidThinkingLevelFallback: false });
-	return result.model
+	const result = resolvePattern(pattern, available);
+	return result.status === "resolved"
 		? { provider: result.model.provider, id: result.model.id, thinkingLevel: result.thinkingLevel }
 		: {};
 }

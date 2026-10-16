@@ -98,8 +98,9 @@ export interface AgentRunContext {
 	extraTools?: readonly string[];
 	/** Appended to the agent system prompt in the same temp file. */
 	extraSystemPrompt?: string;
-	/** Extra environment for the child. */
-	env?: Readonly<Record<string, string>>;
+	/** Extra environment for the child. A thunk is resolved once, at actual spawn time
+	 * (`child-process.ts`'s `buildChildInvocation`), not when the caller builds this context. */
+	env?: Readonly<Record<string, string>> | (() => Readonly<Record<string, string>>);
 	/** Object JSON Schema for polyphase_result. The runner writes it to a 0600 temp file. */
 	schema?: JsonObject;
 	/** Live state sink. When absent the runner uses a private reducer. */

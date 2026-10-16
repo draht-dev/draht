@@ -342,12 +342,19 @@ because a saved workflow can start subagents just like a saved agent definition 
 own (there is no UI in a non-interactive child), so by default any of its tool calls that would
 otherwise need approval are blocked instead, and surfaced with a warning line, a `⚠` glyph in the
 row, and a note in the parent-model result text listing a few blocked samples. The note's own hint
-names `/permissions auto` and `/yolo` as remedies, but typing either into the parent session only
-changes that session's own permission mode — it never reaches an already-running or future
-subagent, which reads its mode from the `DRAHT_PERMISSION_MODE` environment variable at startup
-(inherited from whatever started the parent draht process; unset means `default`, the most
-restrictive mode). The remedies that actually work are an explicit `allow` rule in
-`permissions.yml`, or setting `DRAHT_PERMISSION_MODE` before launching draht.
+names switching the parent with `/permissions auto` or `/yolo` *before starting the run* as a
+remedy, since every child spawned for the session — a `subagent` call, a workflow's `agent()`
+call, or a duet teammate — gets `DRAHT_PERMISSION_MODE` in its environment set, at spawn time, to
+the session's *current* permission mode (whatever `/permissions` or `/yolo` last set in the
+parent). Changing the mode later never affects a child already running — only children spawned
+afterward see the new mode — so a blocked call inside an already-running subagent cannot be
+unblocked in place; it needs `/permissions auto`/`/yolo` on the parent *and* a fresh run. The
+session's mode starts as the parent process's own `DRAHT_PERMISSION_MODE` environment variable
+(unset means `default`, the most restrictive mode) and is then changed only by `/permissions` or
+`/yolo`; children always receive that current session mode explicitly, so a stale
+`DRAHT_PERMISSION_MODE` left in the parent's process environment can never silently escalate a
+child past what the parent session currently uses. Deny rules in `permissions.yml` still apply in
+the child regardless of mode, since the child loads and evaluates them itself.
 
 ## Nesting depth
 

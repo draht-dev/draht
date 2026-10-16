@@ -483,6 +483,7 @@ describe("formatBlockedNote", () => {
 		expect(note).toContain("permissions.yml");
 		expect(note).toContain("/permissions auto");
 		expect(note).toContain("/yolo");
+		expect(note).toContain("inherit the mode at spawn time");
 	});
 
 	it("is undefined for a zero count", () => {

@@ -101,7 +101,8 @@ export function buildChildInvocation(
 	if (files.systemPromptFile) args.push("--append-system-prompt", files.systemPromptFile);
 
 	const baseEnv = spec.baseEnv ?? process.env;
-	const env: NodeJS.ProcessEnv = { ...baseEnv, ...(run?.env ?? {}) };
+	const resolvedRunEnv = typeof run?.env === "function" ? run.env() : run?.env;
+	const env: NodeJS.ProcessEnv = { ...baseEnv, ...(resolvedRunEnv ?? {}) };
 	env[POLYPHASE_DEPTH_ENV] = String(currentPolyphaseDepth(baseEnv) + 1);
 	if (files.schemaFile) {
 		env[POLYPHASE_SCHEMA_FILE_ENV] = files.schemaFile;

@@ -71,6 +71,25 @@ const MAX_CONCURRENCY = 4;
 /** Mailbox address subagent runs deliver their `TaskResult`/`Abort` message to by default. */
 export const SUBAGENT_RESULT_MAILBOX = "subagent-results";
 
+/** Env var a child reads its permission mode from at startup (loaded once, before any gate). */
+export const PERMISSION_MODE_ENV = "DRAHT_PERMISSION_MODE";
+
+/**
+ * Env for a spawned child: the session's permission mode AT SPAWN TIME, always set (so a stale
+ * `DRAHT_PERMISSION_MODE` in the parent's own process env can never silently escalate a child
+ * beyond what the parent session currently uses). Every subagent/workflow/duet child goes through
+ * this so `/permissions`/`/yolo` changes in the parent reach children spawned afterwards —
+ * changing the mode later does not affect a child already running.
+ *
+ * Returns a thunk rather than reading the mode immediately: callers build `AgentRunContext.env`
+ * before a limiter slot is free (`perItem`, runs ahead of `limiter.acquire`), so reading eagerly
+ * here would freeze a queued agent's mode at queue time instead of its actual spawn time.
+ * `child-process.ts`'s `buildChildInvocation` calls it only once the child is about to spawn.
+ */
+export function permissionEnv(session: { permissionMode(): PermissionMode }): () => Readonly<Record<string, string>> {
+	return () => ({ [PERMISSION_MODE_ENV]: session.permissionMode() });
+}
+
 const mailboxSystem = new MailboxSystem();
 const taskBoard = new TaskBoard();
 const worktreeIsolator = new WorktreeIsolator();
@@ -1039,6 +1058,7 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 								modelInfo: choices[i].info,
 								fallbackToChildDefaultModel: choices[i].info.source === "inherited",
 								excludeTools: exclude,
+								env: permissionEnv(session),
 							}),
 						});
 
@@ -1163,6 +1183,7 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 								modelInfo: choices[i].info,
 								fallbackToChildDefaultModel: choices[i].info.source === "inherited",
 								excludeTools: exclude,
+								env: permissionEnv(session),
 							}),
 						});
 
@@ -1269,6 +1290,7 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 							modelInfo: choice.info,
 							fallbackToChildDefaultModel: choice.info.source === "inherited",
 							excludeTools: exclude,
+							env: permissionEnv(session),
 						});
 
 						const result = await runSingleTask(ctx.cwd, agent, params.task, {
@@ -1339,8 +1361,8 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 		// The session permission mode (default/auto/yolo) is session-scoped state,
 		// settable via /permissions and /yolo below and seeded from
 		// DRAHT_PERMISSION_MODE. It relaxes prompting, never `deny` rules.
-		let permissionMode: PermissionMode = isPermissionMode(process.env.DRAHT_PERMISSION_MODE)
-			? process.env.DRAHT_PERMISSION_MODE
+		let permissionMode: PermissionMode = isPermissionMode(process.env[PERMISSION_MODE_ENV])
+			? process.env[PERMISSION_MODE_ENV]
 			: "default";
 
 		function updatePermissionStatus(ctx: { ui: { setStatus: (key: string, text: string | undefined) => void } }) {

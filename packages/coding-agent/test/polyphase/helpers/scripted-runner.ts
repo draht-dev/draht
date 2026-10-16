@@ -65,7 +65,18 @@ export function createScriptedRunner(script: (call: RecordedCall) => ScriptResul
 	let maxConcurrent = 0;
 
 	const runner: AgentRunner = async (cwd, agent, task, signal, step, onProgress, run) => {
-		const call: RecordedCall = { cwd, agent, task, step, run, signal, onProgress };
+		// Mirrors child-process.ts's buildChildInvocation: a thunk `env` is resolved here, at the
+		// runner's actual invocation (after the caller's limiter lease is acquired), not earlier.
+		const resolvedEnv = typeof run?.env === "function" ? run.env() : run?.env;
+		const call: RecordedCall = {
+			cwd,
+			agent,
+			task,
+			step,
+			run: run ? { ...run, env: resolvedEnv } : run,
+			signal,
+			onProgress,
+		};
 		calls.push(call);
 		active++;
 		maxConcurrent = Math.max(maxConcurrent, active);

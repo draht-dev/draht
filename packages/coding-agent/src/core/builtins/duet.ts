@@ -8,7 +8,7 @@ import { resolveChildModel } from "../polyphase/model-selection.ts";
 import { getPolyphaseSession } from "../polyphase/session.ts";
 import type { SessionEntry } from "../session-manager.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "../tools/truncate.ts";
-import { type AgentConfig, type AgentRunner, type RunResult, runParallelTasks } from "./subagent.ts";
+import { type AgentConfig, type AgentRunner, permissionEnv, type RunResult, runParallelTasks } from "./subagent.ts";
 
 export type DuetStrategy = "turns" | "triage";
 
@@ -613,7 +613,10 @@ export default function duetBuiltin(pi: ExtensionAPI, options: { runner?: AgentR
 							model: choice.info,
 						});
 					});
-					const perItem = (i: number) => ({ signal: live[i].signal, run: live[i].createRunContext() });
+					const perItem = (i: number) => ({
+						signal: live[i].signal,
+						run: live[i].createRunContext({ env: permissionEnv(session) }),
+					});
 
 					const activity = new Map<string, string>();
 					const results = await runParallelTasks(ctx.cwd, items, {

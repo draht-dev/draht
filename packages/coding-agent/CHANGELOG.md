@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- subagent, workflow, and duet children now inherit the parent session's current permission mode (set via `/permissions` or `/yolo`) at spawn time, instead of only the parent process's own `DRAHT_PERMISSION_MODE`
+
 ## [2026.10.8-1] - 2026-10-08
 
 ### Added

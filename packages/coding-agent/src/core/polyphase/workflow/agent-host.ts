@@ -3,7 +3,7 @@
  * `WorkflowHost` per run, created by `launch.ts` and handed to `runWorkflowScript`.
  */
 
-import { discoverAgents, runSingleTask } from "../../builtins/subagent.ts";
+import { discoverAgents, permissionEnv, runSingleTask } from "../../builtins/subagent.ts";
 import type { ExtensionContext } from "../../extensions/types.ts";
 import { type ChildModelChoice, ModelSelectionError, resolveChildModel } from "../model-selection.ts";
 import type { PolyphaseSession } from "../session.ts";
@@ -191,6 +191,7 @@ export function createWorkflowAgentHost(deps: WorkflowAgentHostDeps): WorkflowAg
 				schema: schemaPrep?.toolSchema,
 				extraTools: schemaPrep ? [POLYPHASE_RESULT_TOOL_NAME] : undefined,
 				extraSystemPrompt: schemaPrep ? STRUCTURED_OUTPUT_INSTRUCTION : undefined,
+				env: permissionEnv(deps.session),
 			}),
 		});
 		inFlight.add(resultPromise);

@@ -1,0 +1,428 @@
+/**
+ * Every child spawned for a session gets DRAHT_PERMISSION_MODE set to the
+ * session's current permission mode at spawn time, via `AgentRunContext.env` (the seam
+ * `child-process.ts` already merges into the child's environment).
+ */
+
+import type { Api, Model } from "@draht/ai";
+import { fauxAssistantMessage, fauxToolCall } from "@draht/ai";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import duetBuiltin from "../../src/core/builtins/duet.ts";
+import {
+	createSubagentExtension,
+	PERMISSION_MODE_ENV,
+	permissionEnv,
+	runParallelTasks,
+} from "../../src/core/builtins/subagent.ts";
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
+	RegisteredCommand,
+	ToolDefinition,
+} from "../../src/core/extensions/types.ts";
+import { AgentLimiter } from "../../src/core/polyphase/limiter.ts";
+import type { PolyphaseRenderDeps } from "../../src/core/polyphase/render/renderers.ts";
+import { getPolyphaseSession, type PolyphaseSession } from "../../src/core/polyphase/session.ts";
+import type { AgentRunner } from "../../src/core/polyphase/types.ts";
+import { WORKFLOW_TOOL_NAME } from "../../src/core/polyphase/types.ts";
+import { createWorkflowToolDefinition } from "../../src/core/polyphase/workflow/tool.ts";
+import { createHarness, createTestUiContext, type Harness } from "../suite/harness.ts";
+import { createScriptedRunner, type RecordedCall } from "./helpers/scripted-runner.ts";
+import * as wire from "./helpers/wire.ts";
+
+function agentScript(call: RecordedCall) {
+	return {
+		records: [
+			wire.sessionHeader(),
+			wire.agentStart(),
+			wire.assistantStart("faux", "faux-1"),
+			wire.assistantEnd({ text: `done: ${call.task}`, usage: wire.usage(5, 5, 0) }),
+			wire.settled(),
+		],
+	};
+}
+
+function modeOf(call: RecordedCall | undefined): string | undefined {
+	const env = call?.run?.env;
+	const resolved = typeof env === "function" ? env() : env;
+	return resolved?.[PERMISSION_MODE_ENV];
+}
+
+const harnesses: Harness[] = [];
+
+// A developer's or CI's own shell can export DRAHT_PERMISSION_MODE; the subagent extension seeds
+// its session mode from it at factory-creation time, so a stale "yolo" would make the "default"
+// assertions below fail for a reason unrelated to the behaviour under test.
+beforeEach(() => {
+	vi.stubEnv(PERMISSION_MODE_ENV, "");
+});
+
+afterEach(() => {
+	while (harnesses.length > 0) harnesses.pop()?.cleanup();
+	vi.unstubAllEnvs();
+});
+
+describe("subagent tool inherits the session's permission mode", () => {
+	async function createSubagentHarness(runner: AgentRunner): Promise<Harness> {
+		const harness = await createHarness({ extensionFactories: [createSubagentExtension({ runner })] });
+		await harness.session.bindExtensions({ uiContext: createTestUiContext(), mode: "tui" });
+		return harness;
+	}
+
+	it("passes default mode to a single-mode run when neither /yolo nor /permissions was used", async () => {
+		const scripted = createScriptedRunner(agentScript);
+		const harness = await createSubagentHarness(scripted.runner);
+		harnesses.push(harness);
+
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("subagent", { agent: "reviewer", task: "look at auth.ts" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage("done"),
+		]);
+		await harness.session.prompt("review please");
+
+		expect(scripted.calls).toHaveLength(1);
+		expect(modeOf(scripted.calls[0])).toBe("default");
+	});
+
+	it("passes yolo mode to a single-mode run after /yolo", async () => {
+		const scripted = createScriptedRunner(agentScript);
+		const harness = await createSubagentHarness(scripted.runner);
+		harnesses.push(harness);
+
+		await harness.session.prompt("/yolo");
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("subagent", { agent: "reviewer", task: "look at auth.ts" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage("done"),
+		]);
+		await harness.session.prompt("review please");
+
+		expect(scripted.calls).toHaveLength(1);
+		expect(modeOf(scripted.calls[0])).toBe("yolo");
+	});
+
+	it("passes auto mode to every parallel task after /permissions auto", async () => {
+		const scripted = createScriptedRunner(agentScript);
+		const harness = await createSubagentHarness(scripted.runner);
+		harnesses.push(harness);
+
+		await harness.session.prompt("/permissions auto");
+		harness.setResponses([
+			fauxAssistantMessage(
+				[
+					fauxToolCall("subagent", {
+						tasks: [
+							{ agent: "reviewer", task: "look at a.ts" },
+							{ agent: "reviewer", task: "look at b.ts" },
+						],
+					}),
+				],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("done"),
+		]);
+		await harness.session.prompt("review please");
+
+		expect(scripted.calls).toHaveLength(2);
+		for (const call of scripted.calls) expect(modeOf(call)).toBe("auto");
+	});
+
+	it("passes auto mode to every chain step after /permissions auto", async () => {
+		const scripted = createScriptedRunner(agentScript);
+		const harness = await createSubagentHarness(scripted.runner);
+		harnesses.push(harness);
+
+		await harness.session.prompt("/permissions auto");
+		harness.setResponses([
+			fauxAssistantMessage(
+				[
+					fauxToolCall("subagent", {
+						chain: [
+							{ agent: "reviewer", task: "look at a.ts" },
+							{ agent: "reviewer", task: "look at b.ts" },
+						],
+					}),
+				],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("done"),
+		]);
+		await harness.session.prompt("review please");
+
+		expect(scripted.calls).toHaveLength(2);
+		for (const call of scripted.calls) expect(modeOf(call)).toBe("auto");
+	});
+
+	it("passes explicit default mode after /permissions default, even with a stale yolo env var", async () => {
+		vi.stubEnv(PERMISSION_MODE_ENV, "yolo");
+		const scripted = createScriptedRunner(agentScript);
+		const harness = await createSubagentHarness(scripted.runner);
+		harnesses.push(harness);
+
+		await harness.session.prompt("/permissions default");
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("subagent", { agent: "reviewer", task: "look at auth.ts" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage("done"),
+		]);
+		await harness.session.prompt("review please");
+
+		expect(scripted.calls).toHaveLength(1);
+		expect(modeOf(scripted.calls[0])).toBe("default");
+	});
+});
+
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((r) => {
+		resolve = r;
+	});
+	return { promise, resolve };
+}
+
+describe("permissionEnv resolves at spawn time, not queue time", () => {
+	it("gives a queued agent the mode current when its slot is granted, not when it was queued", async () => {
+		const limiter = new AgentLimiter(1);
+		let mode: "default" | "auto" | "yolo" = "yolo";
+		const session = { permissionMode: () => mode };
+		const items = [
+			{ agent: { name: "first", description: "d", systemPrompt: "s", source: "user" as const }, task: "t1" },
+			{ agent: { name: "second", description: "d", systemPrompt: "s", source: "user" as const }, task: "t2" },
+		];
+		const gate = createDeferred<void>();
+		const seenModes: Record<string, string | undefined> = {};
+
+		const runner: AgentRunner = async (_cwd, agent, task, _signal, _step, _onProgress, run) => {
+			const resolvedEnv = typeof run?.env === "function" ? run.env() : run?.env;
+			seenModes[agent.name] = resolvedEnv?.[PERMISSION_MODE_ENV];
+			if (agent.name === "first") await gate.promise;
+			return { agent: agent.name, task, exitCode: 0, output: "ok", stderr: "" };
+		};
+
+		const resultPromise = runParallelTasks("/fake/cwd", items, {
+			runner,
+			limiter,
+			perItem: () => ({ run: { env: permissionEnv(session) } }),
+		});
+
+		// `acquire()`'s fast path still returns a promise, so "first"'s runner only runs once the
+		// pending microtasks drain, even though the lease itself was granted synchronously above.
+		await new Promise((resolve) => setImmediate(resolve));
+
+		// Capacity 1: "first" acquired its lease and is parked on `gate.promise` inside the runner
+		// (seenModes.first already set); "second" is still queued, its env thunk unread.
+		expect(limiter.stats().queued).toBe(1);
+		expect(seenModes.first).toBe("yolo");
+		expect(seenModes.second).toBeUndefined();
+
+		// The session's mode changes while "second" is still queued. A mode baked in at queue time
+		// would freeze it at "yolo"; the fix reads it only once "second" is actually granted a slot.
+		mode = "default";
+		gate.resolve();
+		await resultPromise;
+
+		expect(seenModes.second).toBe("default");
+	});
+});
+
+// ── duet ─────────────────────────────────────────────────────────────────────
+
+function makeModel(provider: string, id: string): Model<Api> {
+	return {
+		id,
+		name: id,
+		api: "openai-responses",
+		provider,
+		baseUrl: "https://example.test",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128_000,
+		maxTokens: 16_384,
+	};
+}
+
+const leadModel = makeModel("openai", "lead-model");
+const helperModel = makeModel("anthropic", "helper-model");
+const duetAvailableModels = [leadModel, helperModel];
+
+interface FakeDuetPiState {
+	tools: Map<string, ToolDefinition>;
+	commands: Map<string, Omit<RegisteredCommand, "name" | "sourceInfo">>;
+	activeTools: string[];
+}
+
+function createDuetFakePi(runner: AgentRunner): { pi: ExtensionAPI; state: FakeDuetPiState } {
+	const state: FakeDuetPiState = { tools: new Map(), commands: new Map(), activeTools: [] };
+	const pi = {
+		registerFlag: () => {},
+		getFlag: () => undefined,
+		registerTool: (definition: ToolDefinition) => {
+			state.tools.set(definition.name, definition);
+		},
+		registerCommand: (name: string, definition: Omit<RegisteredCommand, "name" | "sourceInfo">) => {
+			state.commands.set(name, definition);
+		},
+		on: () => {},
+		getAllTools: () => [...state.tools.values()].map((tool) => ({ name: tool.name })),
+		getActiveTools: () => state.activeTools,
+		setActiveTools: (names: string[]) => {
+			state.activeTools = names;
+		},
+		setModel: async () => true,
+		setThinkingLevel: () => {},
+		appendEntry: () => {},
+		getSettings: () => ({}),
+	} as unknown as ExtensionAPI;
+
+	duetBuiltin(pi, { runner });
+	return { pi, state };
+}
+
+function fakeDuetContext(sessionManager: object, overrides: Partial<ExtensionContext> = {}): ExtensionContext {
+	return {
+		cwd: "/fake/cwd",
+		hasUI: false,
+		isIdle: () => true,
+		isProjectTrusted: () => true,
+		sessionManager,
+		model: leadModel,
+		thinkingLevel: undefined,
+		scopedModels: [],
+		modelRegistry: { getAvailable: () => duetAvailableModels, getRegisteredProviderIds: () => [] },
+		signal: undefined,
+		mode: "print",
+		ui: { notify: () => {}, setStatus: () => {} },
+		...overrides,
+	} as unknown as ExtensionContext;
+}
+
+describe("duet teammates inherit the session's permission mode", () => {
+	it("defaults to default mode when nothing set the session's permission-mode provider", async () => {
+		const scripted = createScriptedRunner(agentScript);
+		const { state } = createDuetFakePi(scripted.runner);
+		const ctx = fakeDuetContext({});
+
+		const duetCommand = state.commands.get("duet");
+		if (!duetCommand) throw new Error("duet command was not registered");
+		await duetCommand.handler(
+			"triage lead=openai/lead-model,helper=anthropic/helper-model",
+			ctx as unknown as ExtensionCommandContext,
+		);
+
+		const delegate = state.tools.get("duet_delegate");
+		if (!delegate) throw new Error("duet_delegate tool was not registered");
+		const result = await delegate.execute(
+			"call-1",
+			{ assignments: [{ participant: "helper", task: "investigate X" }] },
+			undefined,
+			undefined,
+			ctx as unknown as Parameters<NonNullable<typeof delegate>["execute"]>[4],
+		);
+
+		expect(result.isError).toBeFalsy();
+		expect(scripted.calls).toHaveLength(1);
+		expect(modeOf(scripted.calls[0])).toBe("default");
+	});
+
+	it("passes yolo mode to teammates once the session's permission mode is yolo", async () => {
+		const scripted = createScriptedRunner(agentScript);
+		const { state } = createDuetFakePi(scripted.runner);
+		const sessionManager = {};
+		const ctx = fakeDuetContext(sessionManager);
+
+		const duetCommand = state.commands.get("duet");
+		if (!duetCommand) throw new Error("duet command was not registered");
+		await duetCommand.handler(
+			"triage lead=openai/lead-model,helper=anthropic/helper-model",
+			ctx as unknown as ExtensionCommandContext,
+		);
+
+		getPolyphaseSession(sessionManager, undefined).setPermissionModeProvider(() => "yolo");
+
+		const delegate = state.tools.get("duet_delegate");
+		if (!delegate) throw new Error("duet_delegate tool was not registered");
+		const result = await delegate.execute(
+			"call-1",
+			{ assignments: [{ participant: "helper", task: "investigate X" }] },
+			undefined,
+			undefined,
+			ctx as unknown as Parameters<NonNullable<typeof delegate>["execute"]>[4],
+		);
+
+		expect(result.isError).toBeFalsy();
+		expect(scripted.calls).toHaveLength(1);
+		expect(modeOf(scripted.calls[0])).toBe("yolo");
+	});
+});
+
+// ── workflow agent() ─────────────────────────────────────────────────────────
+
+async function createWorkflowHarness(
+	runner: AgentRunner,
+	configureSession?: (session: PolyphaseSession) => void,
+): Promise<Harness> {
+	const renderDeps: PolyphaseRenderDeps = { getStore: () => undefined, viewportRows: () => 24 };
+	const harness = await createHarness({
+		extensionFactories: [
+			(pi) => {
+				pi.on("session_start", async (_event, ctx) => {
+					const session = getPolyphaseSession(ctx.sessionManager, pi.getSettings().polyphase);
+					renderDeps.getStore = () => session.store;
+					configureSession?.(session);
+					pi.registerTool(createWorkflowToolDefinition({ getSession: () => session, runner, renderDeps }));
+					pi.setActiveTools([...pi.getActiveTools(), WORKFLOW_TOOL_NAME]);
+				});
+			},
+		],
+	});
+	await harness.session.bindExtensions({ uiContext: createTestUiContext(), mode: "tui" });
+	return harness;
+}
+
+const WORKFLOW_SCRIPT = `export const meta = { name: "demo", description: "Demo workflow", phases: [{ title: "Only" }] };
+	const result = await agent("task one");
+	return { result };`;
+
+describe("workflow agent() inherits the session's permission mode", () => {
+	it("defaults to default mode when nothing set the session's permission-mode provider", async () => {
+		const scripted = createScriptedRunner(agentScript);
+		const harness = await createWorkflowHarness(scripted.runner);
+		harnesses.push(harness);
+
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall(WORKFLOW_TOOL_NAME, { script: WORKFLOW_SCRIPT }, { id: "wf-1" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage("acknowledged", { stopReason: "stop" }),
+		]);
+		await harness.session.prompt("run the workflow");
+
+		expect(scripted.calls).toHaveLength(1);
+		expect(modeOf(scripted.calls[0])).toBe("default");
+	});
+
+	it("passes auto mode to agent() once the session's permission mode is auto", async () => {
+		const scripted = createScriptedRunner(agentScript);
+		const harness = await createWorkflowHarness(scripted.runner, (session) =>
+			session.setPermissionModeProvider(() => "auto"),
+		);
+		harnesses.push(harness);
+
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall(WORKFLOW_TOOL_NAME, { script: WORKFLOW_SCRIPT }, { id: "wf-1" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage("acknowledged", { stopReason: "stop" }),
+		]);
+		await harness.session.prompt("run the workflow");
+
+		expect(scripted.calls).toHaveLength(1);
+		expect(modeOf(scripted.calls[0])).toBe("auto");
+	});
+});

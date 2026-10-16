@@ -77,6 +77,7 @@ import {
 	WORKFLOW_TOOL_NAME,
 } from "../polyphase/types.ts";
 import { boundedSafeText } from "../socket-server/safe-text.js";
+import { resolveToCwd } from "../tools/path-utils.ts";
 
 const MAX_PARALLEL = 8;
 const MAX_CONCURRENCY = 4;
@@ -861,15 +862,16 @@ async function promptForApproval(
 const CWD_DEFAULT_PATH_TOOLS: ReadonlySet<string> = new Set(["grep", "find", "ls"]);
 
 /**
- * A child's request as it goes one level further up: paths made absolute against the cwd this
- * process spawned the child in, because the parent above evaluates them against its own direct
- * child's cwd, where a relative path names a different file. A read-only tool's missing path means
- * "the child's cwd", so it is spelled out for the same reason.
+ * A child's request as it goes one level further up: paths resolved, the way the tools resolve them
+ * (`~`, a leading `@`, `file://`), against the cwd this process spawned the child in, because the
+ * parent above evaluates them against its own direct child's cwd, where a relative path names a
+ * different file. A read-only tool's missing path means "the child's cwd", so it is spelled out for
+ * the same reason.
  */
 function forwardableInput(request: ChildPermissionRequest): ChildPermissionInput {
 	const entries = Object.entries(request.input).map(([key, value]): [string, ChildPermissionInput[string]] =>
-		(key === "path" || key === "file_path") && typeof value === "string" && !path.isAbsolute(value)
-			? [key, path.resolve(request.cwd, value)]
+		(key === "path" || key === "file_path") && typeof value === "string"
+			? [key, resolveToCwd(value, request.cwd)]
 			: [key, value],
 	);
 	const hasPath = entries.some(([key, value]) => (key === "path" || key === "file_path") && typeof value === "string");

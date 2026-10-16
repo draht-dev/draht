@@ -51,6 +51,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { minimatch } from "minimatch";
 import { parse } from "yaml";
 import { CONFIG_DIR_NAME, getAgentDir } from "../../config.ts";
+import { resolveToCwd } from "../tools/path-utils.ts";
 
 /** The three permission tiers a rule (or default) can resolve to. */
 export type PermissionAction = "deny" | "allow" | "approve";
@@ -1128,38 +1129,50 @@ export function findDangerousPattern(command: string): string | undefined {
 	return DANGEROUS_COMMAND_PATTERNS.find((pattern) => matchDenyPattern(command, pattern));
 }
 
-/** Normalize a (possibly relative or absolute) path into a forward-slash path relative to `cwd`, for glob matching. */
-function toMatchablePath(filePath: string, cwd: string): string {
-	const resolved = isAbsolute(filePath) ? filePath : resolve(cwd, filePath);
-	const rel = relative(cwd, resolved);
-	return rel.split(sep).join("/");
+/**
+ * `filePath` relative to `cwd`, resolved EXACTLY as the built-in tools resolve it (`resolveToCwd`:
+ * `~` expansion, a leading `@`, `file://` URLs). The gate must judge the file the tool will open:
+ * resolved naively, `~/.ssh/id_rsa` read as `<cwd>/~/.ssh/id_rsa`, inside the project, while the
+ * read tool opened the real key.
+ */
+function relativeToProject(filePath: string, cwd: string): string {
+	return relative(resolve(cwd), resolveToCwd(filePath, cwd));
 }
 
-/** Whether `filePath` (relative or absolute) resolves to a location inside `cwd`. */
+/** A path argument as a forward-slash path relative to `cwd`, for glob matching. */
+function toMatchablePath(filePath: string, cwd: string): string {
+	return relativeToProject(filePath, cwd).split(sep).join("/");
+}
+
+/** Whether `filePath` names a location inside `cwd`, as the tool will resolve it. */
 function isWithinProject(filePath: string, cwd: string): boolean {
-	const resolved = isAbsolute(filePath) ? filePath : resolve(cwd, filePath);
-	const rel = relative(cwd, resolved);
+	const rel = relativeToProject(filePath, cwd);
 	return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 /**
  * NOTE: this assumes the tool-call args carry a `command` string under the
- * exact key `command`. If/when this gate is wired into actual tool
- * dispatch, verify every gated tool's argument shape matches these
- * hardcoded key names — a mismatch doesn't error, it just silently fails to
- * match any `pattern`/`paths` rule and falls through to the (fail-safe)
- * default decision. Not currently exploitable: nothing outside this module
- * and its test calls `PermissionGate`/`loadRules` yet.
+ * exact key `command`. Verify every gated tool's argument shape matches
+ * these hardcoded key names — a mismatch doesn't error, it just silently
+ * fails to match any `pattern`/`paths` rule and falls through to the
+ * (fail-safe) default decision.
  */
 function getCommandArg(args: Record<string, unknown>): string | undefined {
 	return typeof args.command === "string" ? args.command : undefined;
 }
 
-/** Prefers `file_path` over `path` when both are present; see the note on `getCommandArg` above. */
-function getPathArg(args: Record<string, unknown>): string | undefined {
-	if (typeof args.file_path === "string") return args.file_path;
-	if (typeof args.path === "string") return args.path;
-	return undefined;
+/**
+ * Every path argument the call carries. Both keys count, whichever the tool reads: the built-in
+ * tools read `path`, others `file_path`. Judging only one of them (`file_path` used to win) let a
+ * call name an outside path in the key its tool reads and an inside one in the key the gate read.
+ */
+function getPathArgs(args: Record<string, unknown>): string[] {
+	const paths: string[] = [];
+	for (const key of ["file_path", "path"] as const) {
+		const value = args[key];
+		if (typeof value === "string" && !paths.includes(value)) paths.push(value);
+	}
+	return paths;
 }
 
 function describeMatch(rule: PermissionRule): string {
@@ -1195,10 +1208,16 @@ function ruleMatches(rule: PermissionRule, toolName: string, args: Record<string
 	}
 
 	if (rule.paths !== undefined) {
-		const filePath = getPathArg(args);
-		if (filePath === undefined) return false;
-		const matchable = toMatchablePath(filePath, cwd);
-		if (!rule.paths.some((pattern) => minimatch(matchable, pattern, { dot: true }))) return false;
+		const filePaths = getPathArgs(args);
+		if (filePaths.length === 0) return false;
+		const globs = rule.paths;
+		const covered = (filePath: string) => {
+			const matchable = toMatchablePath(filePath, cwd);
+			return globs.some((pattern) => minimatch(matchable, pattern, { dot: true }));
+		};
+		// The same asymmetry as `pattern`: a deny rule fires on ANY path it names; an allow/approve
+		// rule only when it covers EVERY path the call names, so it never authorizes one it does not.
+		if (rule.action === "deny" ? !filePaths.some(covered) : !filePaths.every(covered)) return false;
 	}
 
 	return true;
@@ -1330,8 +1349,8 @@ export class PermissionGate {
 		}
 
 		if (PATH_SCOPED_TOOLS.has(toolName)) {
-			const filePath = getPathArg(args);
-			if (filePath !== undefined && isWithinProject(filePath, this.cwd)) {
+			const filePaths = getPathArgs(args);
+			if (filePaths.length > 0 && filePaths.every((filePath) => isWithinProject(filePath, this.cwd))) {
 				return { action: "allow", reason: "no rule matched; allowed by default within the project" };
 			}
 			return {
@@ -1343,8 +1362,9 @@ export class PermissionGate {
 		if (READ_ONLY_PATH_TOOLS.has(toolName)) {
 			// Unlike read/write/edit, these tools treat a missing `path` as the
 			// cwd, so an absent path arg is within the project by definition.
-			const filePath = getPathArg(args) ?? ".";
-			if (isWithinProject(filePath, this.cwd)) {
+			const filePaths = getPathArgs(args);
+			const searched = filePaths.length > 0 ? filePaths : ["."];
+			if (searched.every((filePath) => isWithinProject(filePath, this.cwd))) {
 				return { action: "allow", reason: "no rule matched; read-only tool allowed by default within the project" };
 			}
 			return {

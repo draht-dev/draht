@@ -522,6 +522,44 @@ describe("PermissionGate.evaluate", () => {
 		const gate = new PermissionGate([]);
 		expect(gate.evaluate("frobnicate", {}).action).toBe("approve");
 	});
+
+	it("resolves a path the way the tools do: ~, a leading @ and file:// never read as inside the project", () => {
+		const gate = new PermissionGate([], { cwd: "/repo" });
+		// The tools expand these to the home directory, /etc and /etc: none of them is under /repo.
+		expect(gate.evaluate("read", { path: "~/.ssh/id_rsa" }).action).toBe("approve");
+		expect(gate.evaluate("write", { path: "~/.bashrc" }).action).toBe("approve");
+		expect(gate.evaluate("ls", { path: "~" }).action).toBe("approve");
+		expect(gate.evaluate("read", { path: "@/etc/passwd" }).action).toBe("approve");
+		expect(gate.evaluate("read", { path: "file:///etc/passwd" }).action).toBe("approve");
+		// The same spellings naming a file inside the project still allow.
+		expect(gate.evaluate("read", { path: "@src/index.ts" }).action).toBe("allow");
+		expect(gate.evaluate("read", { path: "file:///repo/src/index.ts" }).action).toBe("allow");
+	});
+
+	it("judges every path argument, not just file_path, which no built-in tool reads", () => {
+		const gate = new PermissionGate([], { cwd: "/repo" });
+		expect(gate.evaluate("read", { path: "/etc/shadow", file_path: "README.md" }).action).toBe("approve");
+		expect(gate.evaluate("read", { path: "README.md", file_path: "/etc/shadow" }).action).toBe("approve");
+		expect(gate.evaluate("grep", { pattern: "x", path: "/etc", file_path: "src" }).action).toBe("approve");
+		expect(gate.evaluate("read", { path: "README.md", file_path: "src/a.ts" }).action).toBe("allow");
+	});
+
+	it("matches a paths rule against every path argument: all of them for allow, any of them for deny", () => {
+		const gate = new PermissionGate(
+			[
+				{ tool: "read", paths: ["secrets/**"], action: "deny" },
+				{ tool: "write", paths: ["src/**"], action: "allow" },
+				{ tool: "write", action: "approve" },
+			],
+			{ cwd: "/repo" },
+		);
+		// Either argument order: which one the tool reads must not decide whether the rule sees it.
+		expect(gate.evaluate("read", { path: "README.md", file_path: "secrets/key" }).action).toBe("deny");
+		expect(gate.evaluate("read", { path: "secrets/key", file_path: "README.md" }).action).toBe("deny");
+		expect(gate.evaluate("write", { path: "src/a.ts", file_path: "/etc/cron.d/x" }).action).toBe("approve");
+		expect(gate.evaluate("write", { path: "/etc/cron.d/x", file_path: "src/a.ts" }).action).toBe("approve");
+		expect(gate.evaluate("write", { path: "src/a.ts" }).action).toBe("allow");
+	});
 });
 
 describe("isPermissionMode", () => {

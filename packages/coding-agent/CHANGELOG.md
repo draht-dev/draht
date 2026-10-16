@@ -13,6 +13,7 @@
 ### Fixed
 
 - subagent, workflow, and duet children now inherit the parent session's current permission mode (set via `/permissions` or `/yolo`) at spawn time, instead of only the parent process's own `DRAHT_PERMISSION_MODE`
+- the permission gate resolves a path the way the tools do (`~`, a leading `@`, `file://`) and checks both `path` and `file_path`, so `read ~/.ssh/id_rsa` or an outside `path` next to an inside `file_path` no longer passes as a file inside the project
 
 ## [2026.10.8-1] - 2026-10-08
 

@@ -5,7 +5,7 @@
  */
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ENV_AGENT_DIR } from "../../src/config.ts";
@@ -243,6 +243,21 @@ describe("createChildPermissionAsker", () => {
 		});
 		// A pathless read-only tool searches the child's cwd, so the forwarded ask says so.
 		expect(forwarded[1]?.input).toEqual({ pattern: "x", path: childCwd });
+	});
+
+	it("forwards a home-relative path as the file the tool would open, not as one inside the child's cwd", async () => {
+		const forwarded: ParentPermissionAsk[] = [];
+		const upstream: ParentPermissionBridge = {
+			ask: async (ask): Promise<ChildPermissionVerdict> => {
+				forwarded.push(ask);
+				return { kind: "approved" };
+			},
+		};
+		const { asker, request } = setup({ mode: "default", hasUI: false, upstream });
+
+		await asker(request({ toolName: "read", input: { path: "~/.ssh/id_rsa" }, cwd: "/somewhere/child" }), live());
+
+		expect(forwarded[0]?.input.path).toBe(join(homedir(), ".ssh", "id_rsa"));
 	});
 
 	it("does not forward what this session's own policy already decides", async () => {

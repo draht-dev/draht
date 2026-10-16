@@ -505,6 +505,46 @@ describe("polyphase core builtin", () => {
 		expect(scripted.calls[0]?.task).toContain("#9");
 	});
 
+	it("in auto mode, a workflow tool call starts without a confirm dialog", async () => {
+		const scripted = createScriptedRunner(textOutput);
+		const confirm = vi.fn(async () => true);
+		const harness = await createPolyphaseHarness(
+			scripted.runner,
+			{ settings: { polyphase: { workflowTool: "always" } } },
+			{ confirm },
+		);
+		await harness.session.prompt("/permissions auto");
+
+		const script = `export const meta = { name: "demo", description: "Demo workflow",
+			phases: [{ title: "Only" }] };
+		return await agent("task one");`;
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall(WORKFLOW_TOOL_NAME, { script }, { id: "wf-1" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage("acknowledged", { stopReason: "stop" }),
+		]);
+		await harness.session.prompt("polyphase review this");
+
+		expect(confirm).not.toHaveBeenCalled();
+		expect(getToolResult(harness, WORKFLOW_TOOL_NAME).isError).toBeFalsy();
+		expect(scripted.calls[0]?.task).toBe("task one");
+	});
+
+	it("an approve rule for workflows still asks in auto mode", async () => {
+		writeWorkflow(agentDir, "review-pr", reviewPrScript);
+		writeFileSync(join(agentDir, "permissions.yml"), "rules:\n  - tool: workflow\n    action: approve\n");
+		const scripted = createScriptedRunner(textOutput);
+		const confirm = vi.fn(async () => false);
+		const harness = await createPolyphaseHarness(scripted.runner, undefined, { confirm });
+		await harness.session.prompt("/permissions auto");
+
+		await harness.session.prompt("/workflow review-pr #12");
+
+		expect(confirm).toHaveBeenCalledTimes(1);
+		expect(scripted.calls).toHaveLength(0);
+	});
+
 	it("declining the confirm dialog does not run the workflow", async () => {
 		writeWorkflow(agentDir, "review-pr", reviewPrScript);
 		const scripted = createScriptedRunner(textOutput);

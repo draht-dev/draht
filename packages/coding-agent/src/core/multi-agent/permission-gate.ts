@@ -66,6 +66,7 @@ export type PermissionAction = "deny" | "allow" | "approve";
  *   requires approval. `powershell` is excluded from this auto-allow — the
  *   danger filter is bash-shaped and has no powershell-specific coverage, so
  *   unmatched powershell calls always require approval, even in auto mode.
+ *   Unmatched `AUTO_ALLOWED_DELEGATION_TOOLS` calls are auto-allowed too.
  *   Explicit `deny`/`approve` rules behave as authored.
  * - `yolo`: every `approve` (rule-based or default) is downgraded to
  *   `allow`. Explicit `deny` rules still block — yolo is "stop asking",
@@ -106,13 +107,20 @@ const READ_ONLY_PATH_TOOLS = new Set(["grep", "find", "ls"]);
  * Tools that are safe to run without confirmation because the call itself
  * only delegates: spawned child processes run this same gate over every tool
  * call they actually make. Explicit rules can still `deny`/`approve` these.
- * Duet delegation is deliberately not included because it fans out paid model
- * requests; unmatched duet batches require explicit approval.
+ * Workflows and duet batches are deliberately not included because they fan
+ * out paid model requests; see `AUTO_ALLOWED_DELEGATION_TOOLS`.
  *
  * `polyphase_result` is also allowed by default: it returns a value to the parent workflow; no
  * side effects; children have no UI to approve it.
  */
 const DEFAULT_ALLOWED_TOOLS = new Set(["subagent", "polyphase_result"]);
+/**
+ * Delegating tools that fan out paid model requests: a workflow run and a duet batch. Like
+ * `DEFAULT_ALLOWED_TOOLS`, they only start child processes that run this same gate over every
+ * tool call they make, so `auto` mode starts them without asking; `default` mode asks first,
+ * for the spend. Explicit rules can still `deny`/`approve` these.
+ */
+const AUTO_ALLOWED_DELEGATION_TOOLS = new Set(["workflow", "duet_delegate"]);
 
 function isPermissionAction(value: unknown): value is PermissionAction {
 	return typeof value === "string" && (VALID_ACTIONS as readonly string[]).includes(value);
@@ -1288,6 +1296,13 @@ export class PermissionGate {
 	private defaultDecision(toolName: string, args: Record<string, unknown>): PermissionDecision {
 		if (DEFAULT_ALLOWED_TOOLS.has(toolName)) {
 			return { action: "allow", reason: `no rule matched; "${toolName}" is allowed by default` };
+		}
+
+		if (this.mode === "auto" && AUTO_ALLOWED_DELEGATION_TOOLS.has(toolName)) {
+			return {
+				action: "allow",
+				reason: `auto mode: no rule matched; "${toolName}" only starts agents that run this gate themselves`,
+			};
 		}
 
 		if (toolName === "bash") {

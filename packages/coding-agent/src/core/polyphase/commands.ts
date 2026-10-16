@@ -174,7 +174,10 @@ export async function runSavedWorkflowFromCommand(
 
 	if (decision.action === "approve") {
 		if (!ctx.hasUI) {
-			ctx.ui.notify(`Workflow ${name} needs approval but no UI is available; use /yolo or an allow rule`, "error");
+			ctx.ui.notify(
+				`Workflow ${name} needs approval but no UI is available (${decision.reason}); add an allow rule to permissions.yml, or start with DRAHT_PERMISSION_MODE=auto (yolo if a rule asks for approval)`,
+				"error",
+			);
 			return;
 		}
 		session.notifyParentPrompt();

@@ -799,6 +799,38 @@ describe("PermissionGate modes", () => {
 		const gate = new PermissionGate([], { cwd: "/repo", mode: "default" });
 		expect(gate.evaluate("bash", { command: "echo hi" }).action).toBe("approve");
 	});
+
+	describe("paid delegation (workflow, duet_delegate)", () => {
+		const workflowCall = { script: 'export const meta = { name: "x" };' };
+		const duetCall = { assignments: [{ participant: "helper", task: "investigate X" }] };
+
+		it("auto mode starts them without asking", () => {
+			const gate = new PermissionGate([], { cwd: "/repo", mode: "auto" });
+			expect(gate.evaluate("workflow", workflowCall).action).toBe("allow");
+			expect(gate.evaluate("duet_delegate", duetCall).action).toBe("allow");
+		});
+
+		it("default mode asks first", () => {
+			const gate = new PermissionGate([], { cwd: "/repo", mode: "default" });
+			expect(gate.evaluate("workflow", workflowCall).action).toBe("approve");
+			expect(gate.evaluate("duet_delegate", duetCall).action).toBe("approve");
+		});
+
+		it("auto mode still honors explicit deny and approve rules", () => {
+			const denyGate = new PermissionGate([{ tool: "workflow", action: "deny" }], { cwd: "/repo", mode: "auto" });
+			expect(denyGate.evaluate("workflow", workflowCall).action).toBe("deny");
+			const approveGate = new PermissionGate([{ tool: "duet_delegate", action: "approve" }], {
+				cwd: "/repo",
+				mode: "auto",
+			});
+			expect(approveGate.evaluate("duet_delegate", duetCall).action).toBe("approve");
+		});
+
+		it("auto mode keeps asking for other tools no rule covers", () => {
+			const gate = new PermissionGate([], { cwd: "/repo", mode: "auto" });
+			expect(gate.evaluate("mcp_server_tool", { query: "x" }).action).toBe("approve");
+		});
+	});
 });
 
 describe("loadRules", () => {

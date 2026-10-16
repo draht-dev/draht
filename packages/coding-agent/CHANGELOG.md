@@ -10,6 +10,10 @@
 - a workflow time limit is graceful: past the limit, running and queued agents are cancelled (`cancelled (time limit)`) and `agent()` returns `null`, but the script keeps running to return partial results; a hard sandbox deadline 60s later is the backstop
 - a tool call a subagent, workflow agent, or duet teammate needs approval for is now asked in the parent session (decided under its current mode first, so `/permissions auto` and `/yolo` also cover running agents) instead of being blocked unasked; asks from parallel agents queue instead of displacing each other into silent denials
 
+### Changed
+
+- `auto` mode starts a workflow (`workflow` tool, `/<name>`, `/workflow <name>`) or a duet batch without the approval prompt; `default` mode still asks first, and an explicit `allow`, `deny`, or `approve` rule in `permissions.yml` still applies
+
 ### Fixed
 
 - subagent, workflow, and duet children now inherit the parent session's current permission mode (set via `/permissions` or `/yolo`) at spawn time, instead of only the parent process's own `DRAHT_PERMISSION_MODE`

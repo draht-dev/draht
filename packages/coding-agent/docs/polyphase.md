@@ -369,16 +369,19 @@ twice.
 ## Permissions
 
 Each `workflow` tool call and each `/<name>`/`/workflow` command run goes through the same
-permission gate as every other tool call: an explicit `allow`/`deny` rule in `.draht/permissions.yml`
-applies as written; otherwise the call needs approval, shown with the workflow's name, phases
+permission gate as every other tool call: an explicit `allow` or `deny` rule in
+`.draht/permissions.yml` applies as written, and an `approve` rule asks in every mode but `yolo`.
+Without a matching rule the session's permission mode decides. In `auto` and `yolo` the run
+starts without asking: every agent it starts runs the gate over its own tool calls. In `default` the call needs approval, shown with the workflow's name, phases
 (with any per-phase model), source, truncated args, and limits (concurrency, max agents, token
 budget and time limit, each with its source — see [Token budget and time
-limit](#token-budget-and-time-limit)).
-A `workflow` tool call with an invalid `meta` block still needs approval, but is described as such
-and fails immediately once approved; a `/<name>`/`/workflow` command run instead rejects an
-invalid `meta` block up front, before the gate. With no UI available (print or JSON, or any other
-headless caller) and no matching rule, the call is blocked rather than left waiting; RPC mode has
-a UI context, so it forwards the approval to the client as a `confirm` request instead.
+limit](#token-budget-and-time-limit)). A duet batch (`duet_delegate`) is gated the same way.
+A `workflow` tool call with an invalid `meta` block is gated like any other and fails immediately
+once it starts (in `default`, the approval prompt describes it as invalid); a `/<name>`/`/workflow`
+command run instead rejects an invalid `meta` block up front, before the gate. With no UI
+available (print or JSON, or any other headless caller), a call that still needs approval is
+blocked rather than left waiting; RPC mode has a UI context, so it forwards the approval to the
+client as a `confirm` request instead.
 
 Saved workflows under `.draht/workflows` require project trust, the same as `.draht/agents`: a
 project that only contains a `workflows` directory under `.draht` still triggers the trust prompt,

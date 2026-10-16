@@ -1542,7 +1542,7 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 
 		const MODE_DESCRIPTIONS: Record<PermissionMode, string> = {
 			default: "rules as authored; unmatched bash commands require approval",
-			auto: "auto-approve bash unless the command looks dangerous (deny rules still block)",
+			auto: "auto-approve bash unless the command looks dangerous, and start workflows and duet batches without asking (deny rules still block)",
 			yolo: "no approval prompts this session (deny rules still block)",
 		};
 

@@ -70,6 +70,7 @@ const extensionActions: ExtensionActions = {
 	sendMessage: () => {},
 	sendUserMessage: () => {},
 	appendEntry: () => {},
+	appendUsage: () => {},
 	setSessionName: () => {},
 	getSessionName: () => undefined,
 	setLabel: () => {},

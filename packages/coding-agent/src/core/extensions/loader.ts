@@ -21,6 +21,7 @@ import { type McpServerConfig, McpServerRegistry, mcpNamespace, validateMcpServe
 import { readPiManifest } from "../pi-manifest.ts";
 import { createSyntheticSourceInfo, getSyntheticPathSource, isSyntheticPath } from "../source-info.ts";
 import { time } from "../timings.ts";
+import { isValidUsage } from "../usage-totals.ts";
 import type { ModelRouteRequest, VirtualModelDefinition } from "../virtual-models.ts";
 import type {
 	EntryRenderer,
@@ -166,6 +167,7 @@ export function createExtensionRuntime(): ExtensionRuntime {
 		sendMessage: notInitialized,
 		sendUserMessage: notInitialized,
 		appendEntry: notInitialized,
+		appendUsage: notInitialized,
 		setSessionName: notInitialized,
 		getSessionName: notInitialized,
 		setLabel: notInitialized,
@@ -388,6 +390,27 @@ function createExtensionAPI(
 		appendEntry(customType: string, data?: unknown): void {
 			assertActive();
 			runtime.appendEntry(customType, data);
+		},
+
+		appendUsage(kind, provider, model, usage, note): void {
+			assertActive();
+			// Validated here, at the API boundary: a usage entry is persisted and re-summed on every
+			// resume, so one malformed value (a NaN, a missing `cost`) would corrupt the session's
+			// totals for good. Extensions are plain JS at runtime; the declared types prove nothing.
+			for (const [name, value] of [
+				["kind", kind],
+				["provider", provider],
+				["model", model],
+			] as const) {
+				if (typeof value !== "string" || value.length === 0) {
+					throw new Error(`pi.appendUsage: ${name} must be a non-empty string`);
+				}
+			}
+			if (note !== undefined && typeof note !== "string") throw new Error("pi.appendUsage: note must be a string");
+			if (!isValidUsage(usage)) {
+				throw new Error("pi.appendUsage: usage must carry finite token counts and a finite cost breakdown");
+			}
+			runtime.appendUsage(kind, provider, model, usage, note);
 		},
 
 		setSessionName(name: string): void {

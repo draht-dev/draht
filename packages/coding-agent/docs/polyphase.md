@@ -319,8 +319,13 @@ process's stdout output: the final text a `draht -p` invocation prints is the mo
 response, not a background command-run result that may finish after (or without) a model turn.
 
 Command-run token and dollar cost are shown in the dock, the inspector, and the result message,
-but are **not** added to the session footer's running totals (the footer has no API for an
-extension to append usage outside a model turn).
+and are also added to the session footer's running totals and cost breakdown: once the run
+finishes, one usage entry (kind `polyphase`, note `/<name> <label>`) is recorded per agent that
+reported any usage, attributed to that agent's confirmed provider and model — or provider
+`unknown` with the requested model string, for an agent whose model was never confirmed by the
+child. `subagent` and `workflow` tool calls keep reporting usage through their tool result as
+before, so a command run is the only path that goes through this extra entry; nothing is counted
+twice.
 
 ## Permissions
 

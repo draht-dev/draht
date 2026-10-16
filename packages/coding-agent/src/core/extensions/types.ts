@@ -1854,6 +1854,17 @@ export interface ExtensionAPI {
 	/** Append a custom entry to the session for state persistence (not sent to LLM). */
 	appendEntry<T = unknown>(customType: string, data?: T): void;
 
+	/**
+	 * Record model-attributed usage that is not tied to an assistant message (e.g. a host-side
+	 * command run), so it is included in the session's usage totals and cost breakdown. `note` is
+	 * shown alongside the usage entry (e.g. `/<name> <label>`).
+	 *
+	 * Throws if this ctx is stale (session replaced or extension reloaded), same as every other
+	 * `pi.*` action; a caller recording usage after an async run settles should treat that as a
+	 * safe no-op and not let it fail the run.
+	 */
+	appendUsage(kind: string, provider: string, model: string, usage: Usage, note?: string): void;
+
 	// =========================================================================
 	// Session Metadata
 	// =========================================================================
@@ -2260,6 +2271,8 @@ export type SendUserMessageHandler = (
 
 export type AppendEntryHandler = <T = unknown>(customType: string, data?: T) => void;
 
+export type AppendUsageHandler = (kind: string, provider: string, model: string, usage: Usage, note?: string) => void;
+
 export type SetSessionNameHandler = (name: string) => void;
 
 export type GetSessionNameHandler = () => string | undefined;
@@ -2351,6 +2364,7 @@ export interface ExtensionActions {
 	sendMessage: SendMessageHandler;
 	sendUserMessage: SendUserMessageHandler;
 	appendEntry: AppendEntryHandler;
+	appendUsage: AppendUsageHandler;
 	setSessionName: SetSessionNameHandler;
 	getSessionName: GetSessionNameHandler;
 	setLabel: SetLabelHandler;

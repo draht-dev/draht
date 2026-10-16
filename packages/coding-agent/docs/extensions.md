@@ -78,6 +78,7 @@ Automatic retries, recovery, compaction, or queued work can continue afterward.
 | Add a shortcut or CLI flag | `pi.registerShortcut()` or `pi.registerFlag()` |
 | Send user or custom messages | `pi.sendUserMessage()` or `pi.sendMessage()` |
 | Persist non-context session data | `pi.appendEntry()` |
+| Record model-attributed usage outside a tool result | `pi.appendUsage()` |
 | Change active tools, model, or thinking level | Session control methods on `pi` |
 | Read or restore working-tree checkpoints | `pi.checkpoints` |
 | Add a model provider | `pi.registerProvider()` |
@@ -136,7 +137,7 @@ A `user_bash` handler that returns `undefined` passes the command to the next ha
 
 A custom tool defines a name, model-facing description, TypeBox parameter schema, and `execute()` function.
 Its result requires model-facing `content` and a `details` field for rendering or state reconstruction.
-Use `details: undefined` when there are no structured details. If the tool makes nested model calls, include their `usage` in the result so session totals remain accurate.
+Use `details: undefined` when there are no structured details. If the tool makes nested model calls, include their `usage` in the result so session totals remain accurate. For model-attributed usage that happens outside any tool result — a host-side run reported only through a later custom message, for example — call `pi.appendUsage(kind, provider, model, usage, note?)` instead; it records a usage entry directly in the session's totals and cost breakdown. Record each unit of usage exactly once, and never for usage already reported through a tool result, and treat a throw (a stale ctx after the session ended) as a safe no-op.
 
 Throw from `execute()` to produce a failed tool result.
 Returning an object does not mark it as an error.

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- add `pi.appendUsage()` for extensions to record model-attributed usage outside a tool result
+- command runs (`/<name>`, `/workflow <name>`) now record one usage entry per finished agent, so their cost appears in the session footer's totals and cost breakdown
+
 ### Fixed
 
 - subagent, workflow, and duet children now inherit the parent session's current permission mode (set via `/permissions` or `/yolo`) at spawn time, instead of only the parent process's own `DRAHT_PERMISSION_MODE`

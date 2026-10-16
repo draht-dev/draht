@@ -11,9 +11,11 @@ import { loadPermissionRules } from "../builtins/subagent.ts";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "../extensions/types.ts";
 import { PermissionGate } from "../multi-agent/index.ts";
 import type { SlashCommandInfo } from "../slash-commands.ts";
+import { isValidUsage } from "../usage-totals.ts";
 import { type ApprovalContext, describeToolCallForApproval } from "./approval.ts";
 import { collectArchivedRuns } from "./details.ts";
 import type { PolyphaseSession } from "./session.ts";
+import type { PolyphaseRun } from "./store.ts";
 import type { AgentRunner } from "./types.ts";
 import type { PolyphaseUiController } from "./ui/controller.ts";
 import { startWorkflowRun, type WorkflowRunCompletion } from "./workflow/launch.ts";
@@ -202,6 +204,7 @@ export async function runSavedWorkflowFromCommand(
 
 	const reportCompletion = (completion: WorkflowRunCompletion): void => {
 		if (session.disposed) return;
+		recordCommandRunUsage(deps.pi, name, handle.run);
 		try {
 			deps.pi.sendMessage(
 				{
@@ -232,6 +235,29 @@ export async function runSavedWorkflowFromCommand(
 	}
 
 	void handle.done.then(reportCompletion);
+}
+
+/**
+ * Attributes a finished command-run's cost to its agents' models. One usage
+ * entry per agent that reported any usage, kind `"polyphase"`, note `/<name> <label>`. An agent
+ * whose model was never confirmed by the child is recorded as provider `"unknown"` with the
+ * requested model string, rather than the parent's unconfirmed guess. Tool-origin runs report
+ * their own usage through the tool result and must not reach this function (no double counting).
+ */
+function recordCommandRunUsage(pi: ExtensionAPI, workflowName: string, run: PolyphaseRun): void {
+	for (const agent of run.agents) {
+		const usage = agent.state.usage;
+		if (!usage || !isValidUsage(usage)) continue;
+		const model = agent.state.model;
+		const provider = model.confirmed && model.provider ? model.provider : "unknown";
+		const modelId = model.confirmed && model.id ? model.id : (model.requested ?? "unknown");
+		try {
+			pi.appendUsage("polyphase", provider, modelId, usage, `/${workflowName} ${agent.label}`);
+		} catch {
+			// The extension ctx can go stale concurrently (e.g. a session shutdown that raced this
+			// report); the run already finished, so dropping the usage entry here is safe.
+		}
+	}
 }
 
 /** `/workflow` and `/workflows` (factory body, registered once per extension instance). */

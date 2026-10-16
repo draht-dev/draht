@@ -9,6 +9,27 @@ export interface UsageTotals {
 	cost: number;
 }
 
+/** Finite-number guard for a `Usage` value from an untrusted source (e.g. a child process):
+ * `addUsageToTotals`/`combineUsage` add these fields with no validation of their own, so a
+ * malformed value (missing `cost`, a `NaN` field) corrupts every totals computation it touches
+ * from then on, including a persisted session's totals on every future resume. */
+export function isValidUsage(value: unknown): value is Usage {
+	if (typeof value !== "object" || value === null) return false;
+	const u = value as Record<string, unknown>;
+	if (
+		![u.input, u.output, u.cacheRead, u.cacheWrite, u.totalTokens].every(
+			(n) => typeof n === "number" && Number.isFinite(n),
+		)
+	) {
+		return false;
+	}
+	if (typeof u.cost !== "object" || u.cost === null) return false;
+	const cost = u.cost as Record<string, unknown>;
+	return [cost.input, cost.output, cost.cacheRead, cost.cacheWrite, cost.total].every(
+		(n) => typeof n === "number" && Number.isFinite(n),
+	);
+}
+
 export function createUsageTotals(): UsageTotals {
 	return {
 		input: 0,

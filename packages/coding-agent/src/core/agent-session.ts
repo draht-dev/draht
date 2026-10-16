@@ -3454,6 +3454,10 @@ export class AgentSession {
 						this._emit({ type: "entry_appended", entry });
 					}
 				},
+				appendUsage: (kind, provider, model, usage, note) => {
+					const entry = this.sessionManager.appendUsage(kind, provider, model, usage, note);
+					this._emit({ type: "entry_appended", entry });
+				},
 				setSessionName: (name) => {
 					this.setSessionName(name);
 				},

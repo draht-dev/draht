@@ -14,7 +14,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { ENV_AGENT_DIR } from "../../src/config.ts";
 import duetBuiltin from "../../src/core/builtins/duet.ts";
 import { createPolyphaseExtension } from "../../src/core/builtins/polyphase.ts";
-import { createSubagentExtension } from "../../src/core/builtins/subagent.ts";
+import { createSubagentExtension, PERMISSION_MODE_ENV } from "../../src/core/builtins/subagent.ts";
 import { KEYBINDINGS } from "../../src/core/keybindings.ts";
 import { isPolyphaseDetails } from "../../src/core/polyphase/details.ts";
 import { createWorkflowRenderers, type PolyphaseRenderDeps } from "../../src/core/polyphase/render/renderers.ts";
@@ -91,6 +91,9 @@ describe("polyphase end-to-end flows", () => {
 		mkdirSync(join(agentDir, "workflows"), { recursive: true });
 		vi.stubEnv(ENV_AGENT_DIR, agentDir);
 		vi.stubEnv(POLYPHASE_DEPTH_ENV, "");
+		// These flows go through the approval dialog, which only `default` shows before a workflow
+		// starts; a session otherwise starts in auto, and a developer's shell may export any mode.
+		vi.stubEnv(PERMISSION_MODE_ENV, "default");
 	});
 
 	afterEach(() => {

@@ -85,9 +85,10 @@
  *
  * ─── HARNESS HYGIENE, EACH ITEM PAID FOR BY A PROBE THAT PASSED WHILE PROVING NOTHING ──────────
  *
- *  - `DRAHT_PERMISSION_MODE` is DELETED from every child env. This repo's interactive shell exports
- *    `auto`, under which `bash` is auto-allowed and the danger filter decides; `yolo` downgrades
- *    every approve to allow and raises ZERO prompts.
+ *  - `DRAHT_PERMISSION_MODE` is pinned to `default` in every draht child env. Under `auto`, the
+ *    mode a session starts in and the one this repo's interactive shell exports, `bash` is
+ *    auto-allowed and the danger filter decides; `yolo` downgrades every approve to allow and
+ *    raises ZERO prompts.
  *  - Agent dirs sit directly under /tmp with short names: a Unix socket path over ~104 bytes fails
  *    to bind with EINVAL, and macOS `os.tmpdir()` spends ~50 characters before a uuid.
  *  - `dist/cli.js` is rebuilt first. The artifact under test is emitted, not committed.
@@ -481,8 +482,8 @@ async function startSession(vector: Vector, options: SessionOptions = {}): Promi
 	const script = JSON.stringify([{ toolCalls: [{ id: CALL_ID, name: call.name, arguments: call.arguments }] }]);
 	const stderr = { text: "" };
 
-	// Built from scratch, never inherited: this repo's shell exports DRAHT_PERMISSION_MODE=auto and
-	// a permission test run under it passes while proving nothing.
+	// Built from scratch rather than inherited, with the mode pinned to `default`: in `auto` (an
+	// unset variable, or this repo's shell) the scripted call runs unasked and no ask ever comes.
 	const proc = Bun.spawn(
 		[
 			"node",
@@ -508,6 +509,7 @@ async function startSession(vector: Vector, options: SessionOptions = {}): Promi
 				DRAHT_CODING_AGENT_DIR: agentDir,
 				DRAHT_STUB_PROVIDER: "1",
 				DRAHT_STUB_TOOL_CALLS: script,
+				DRAHT_PERMISSION_MODE: "default",
 				...options.env,
 			},
 			stdin: "pipe",

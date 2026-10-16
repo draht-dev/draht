@@ -131,8 +131,8 @@ function runDraht(fixture: Fixture, extraArgs: string[], recordPath: string): st
 			cwd: fixture.root,
 			env: {
 				...process.env,
-				// This repo's shell exports `auto`; an inherited auto-approving mode would
-				// make the tripwire prove nothing.
+				// Kept out of the ambient shell, though the mode plays no part here: the
+				// tripwire is an extension load, and nothing here scripts a tool call.
 				DRAHT_PERMISSION_MODE: undefined,
 				HOME: fixture.home,
 				TMPDIR: fixture.tmp,

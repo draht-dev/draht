@@ -371,8 +371,9 @@ twice.
 Each `workflow` tool call and each `/<name>`/`/workflow` command run goes through the same
 permission gate as every other tool call: an explicit `allow` or `deny` rule in
 `.draht/permissions.yml` applies as written, and an `approve` rule asks in every mode but `yolo`.
-Without a matching rule the session's permission mode decides. In `auto` and `yolo` the run
-starts without asking: every agent it starts runs the gate over its own tool calls. In `default` the call needs approval, shown with the workflow's name, phases
+Without a matching rule the session's permission mode decides. In `auto`, the mode a session
+starts in, and in `yolo` the run starts without asking: every agent it starts runs the gate over
+its own tool calls. In `default` the call needs approval, shown with the workflow's name, phases
 (with any per-phase model), source, truncated args, and limits (concurrency, max agents, token
 budget and time limit, each with its source — see [Token budget and time
 limit](#token-budget-and-time-limit)). A duet batch (`duet_delegate`) is gated the same way.
@@ -391,7 +392,7 @@ because a saved workflow can start subagents just like a saved agent definition 
 workflow's `agent()` call, or a duet teammate — gets `DRAHT_PERMISSION_MODE` in its environment
 set, at spawn time, to the session's *current* permission mode (whatever `/permissions` or
 `/yolo` last set; before either, the parent process's own `DRAHT_PERMISSION_MODE`, and unset means
-`default`, the most restrictive mode). A stale `DRAHT_PERMISSION_MODE` left in the parent's process
+`auto`). A stale `DRAHT_PERMISSION_MODE` left in the parent's process
 environment therefore never escalates a child past what the session currently uses. Deny rules in
 `permissions.yml` still apply in the child regardless of mode, since the child loads and evaluates
 them itself.
@@ -410,7 +411,7 @@ JSON) passes the ask on to its own polyphase parent, if it has one.
 Only when nobody can be asked is the call blocked: it is surfaced with a warning line, a `⚠` glyph
 in the row, and a note in the parent-model result text listing a few blocked samples. Allow such
 calls with an `allow` rule in `permissions.yml`, or start the run in a less strict mode
-(`/permissions auto`, `/yolo`, or `DRAHT_PERMISSION_MODE` for a headless parent).
+(`/permissions auto` from `default`, `/yolo`, or `DRAHT_PERMISSION_MODE` for a headless parent).
 
 ## Nesting depth
 

@@ -10,9 +10,9 @@
  *
  * These tests drive the EMITTED BINARY, never an in-process import: an
  * in-process test would pass while the product a child process sees stayed
- * broken. `DRAHT_PERMISSION_MODE` is deleted from every child environment
- * because this repo's interactive shell exports `auto`; a test that inherited it
- * would prove nothing about permissions.
+ * broken. `DRAHT_PERMISSION_MODE` is pinned to `default` in every child
+ * environment: under `auto`, the mode a session starts in and the one this repo's
+ * interactive shell exports, a test would prove nothing about permissions.
  */
 
 import { spawn } from "node:child_process";
@@ -49,12 +49,12 @@ interface RunResult {
 }
 
 /**
- * The child environment: inherited (the binary needs PATH and HOME), minus the
- * two variables that would let ambient shell state decide the outcome.
+ * The child environment: inherited (the binary needs PATH and HOME), with the
+ * two variables that would let ambient shell state decide the outcome pinned.
  */
 function childEnv(agentDir: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = { ...process.env };
-	delete env.DRAHT_PERMISSION_MODE;
+	env.DRAHT_PERMISSION_MODE = "default";
 	delete env.DRAHT_STUB_TOOL_CALLS;
 	env.DRAHT_STUB_PROVIDER = "1";
 	env.DRAHT_CODING_AGENT_DIR = agentDir;

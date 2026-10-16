@@ -26,7 +26,8 @@ const dirs: string[] = [];
 
 beforeEach(() => {
 	// A developer's exported mode, or their global permissions.yml, must not decide these asks.
-	vi.stubEnv(PERMISSION_MODE_ENV, "");
+	// `default`, because a session otherwise starts in auto, which allows `npm test` unasked.
+	vi.stubEnv(PERMISSION_MODE_ENV, "default");
 	const agentDir = mkdtempSync(join(tmpdir(), "relay-wiring-agent-"));
 	dirs.push(agentDir);
 	vi.stubEnv(ENV_AGENT_DIR, agentDir);

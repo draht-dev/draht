@@ -27,6 +27,7 @@ import type {
 import {
 	AgentFSM,
 	type AgentFSMTransitionEvent,
+	DEFAULT_SESSION_PERMISSION_MODE,
 	isPermissionMode,
 	loadRules,
 	type Message as MailboxMessage,
@@ -36,6 +37,7 @@ import {
 	type PermissionMode,
 	type PermissionRule,
 	parseRules,
+	stricterPermissionMode,
 	TaskBoard,
 	WorktreeIsolator,
 } from "../multi-agent/index.ts";
@@ -109,6 +111,26 @@ export const PERMISSION_MODE_ENV = "DRAHT_PERMISSION_MODE";
  */
 export function permissionEnv(session: { permissionMode(): PermissionMode }): () => Readonly<Record<string, string>> {
 	return () => ({ [PERMISSION_MODE_ENV]: session.permissionMode() });
+}
+
+/** The mode a session starts in, and the raw `DRAHT_PERMISSION_MODE` value when it named none. */
+export interface SeededPermissionMode {
+	mode: PermissionMode;
+	/** Set when the variable held something other than a mode name; the mode is then `default`. */
+	unrecognized?: string;
+}
+
+/**
+ * The mode `DRAHT_PERMISSION_MODE` starts a session in. Unset or blank means
+ * `DEFAULT_SESSION_PERMISSION_MODE`; a mode name counts whatever its case or surrounding
+ * whitespace; anything else means `default`, the strictest. Someone who set the variable at all
+ * most likely meant to opt out of auto, so a typo must not quietly opt them back in.
+ */
+export function seedPermissionMode(value: string | undefined): SeededPermissionMode {
+	const normalized = value?.trim().toLowerCase() ?? "";
+	if (normalized === "") return { mode: DEFAULT_SESSION_PERMISSION_MODE };
+	if (isPermissionMode(normalized)) return { mode: normalized };
+	return { mode: "default", unrecognized: value };
 }
 
 const mailboxSystem = new MailboxSystem();
@@ -1078,6 +1100,11 @@ export function describeMergeFailure(result: RunResult): string | undefined {
 /** `createSubagentExtension(options?)`; the default export is `createSubagentExtension()` (§10.5). */
 export function createSubagentExtension(options: { runner?: AgentRunner } = {}): (pi: ExtensionAPI) => void {
 	const runnerOverride = options.runner;
+	// The mode last chosen with /permissions or /yolo. A runtime rebuild (/new, /resume, /fork,
+	// /reload) runs the factory below again, and seeding from the environment alone would turn a
+	// chosen `default` back into auto. Only applied where it asks more than the seed, so it never
+	// relaxes a session.
+	let chosenPermissionMode: PermissionMode | undefined;
 
 	return (pi: ExtensionAPI) => {
 		// Autocomplete gets no ctx, so the last trust answer a ctx gave for this cwd stands in; unseen cwds count as untrusted.
@@ -1531,13 +1558,32 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 		//
 		// The session permission mode (default/auto/yolo) is session-scoped state,
 		// settable via /permissions and /yolo below and seeded from
-		// DRAHT_PERMISSION_MODE. It relaxes prompting, never `deny` rules.
-		let permissionMode: PermissionMode = isPermissionMode(process.env[PERMISSION_MODE_ENV])
-			? process.env[PERMISSION_MODE_ENV]
-			: "default";
+		// DRAHT_PERMISSION_MODE (see `seedPermissionMode`). It relaxes prompting,
+		// never `deny` rules.
+		const seededPermissionMode = seedPermissionMode(process.env[PERMISSION_MODE_ENV]);
+		let permissionMode: PermissionMode =
+			chosenPermissionMode === undefined
+				? seededPermissionMode.mode
+				: stricterPermissionMode(seededPermissionMode.mode, chosenPermissionMode);
+		// Where `/yolo` switches back to: the last mode other than yolo.
+		let modeBeforeYolo: Exclude<PermissionMode, "yolo"> =
+			permissionMode === "yolo" ? DEFAULT_SESSION_PERMISSION_MODE : permissionMode;
 
-		function updatePermissionStatus(ctx: { ui: { setStatus: (key: string, text: string | undefined) => void } }) {
-			ctx.ui.setStatus("permissions", permissionMode === "default" ? undefined : `perms: ${permissionMode}`);
+		type StatusContext = { ui: { setStatus: (key: string, text: string | undefined) => void } };
+
+		// Only a mode other than the one sessions start in gets a footer entry.
+		function updatePermissionStatus(ctx: StatusContext) {
+			ctx.ui.setStatus(
+				"permissions",
+				permissionMode === DEFAULT_SESSION_PERMISSION_MODE ? undefined : `perms: ${permissionMode}`,
+			);
+		}
+
+		function setPermissionMode(mode: PermissionMode, ctx: StatusContext) {
+			permissionMode = mode;
+			chosenPermissionMode = mode;
+			if (mode !== "yolo") modeBeforeYolo = mode;
+			updatePermissionStatus(ctx);
 		}
 
 		const MODE_DESCRIPTIONS: Record<PermissionMode, string> = {
@@ -1597,8 +1643,7 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 					ctx.ui.notify(`Unknown mode "${requested}". Available: ${PERMISSION_MODES.join(", ")}`, "warning");
 					return;
 				}
-				permissionMode = requested;
-				updatePermissionStatus(ctx);
+				setPermissionMode(requested, ctx);
 				ctx.ui.notify(`Permission mode: ${permissionMode} — ${MODE_DESCRIPTIONS[permissionMode]}`, "info");
 			},
 		});
@@ -1607,12 +1652,11 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 		pi.registerCommand("yolo", {
 			description: "Toggle yolo permission mode for this session (skip approval prompts; deny rules still block)",
 			handler: async (_args, ctx) => {
-				permissionMode = permissionMode === "yolo" ? "default" : "yolo";
-				updatePermissionStatus(ctx);
+				setPermissionMode(permissionMode === "yolo" ? modeBeforeYolo : "yolo", ctx);
 				ctx.ui.notify(
 					permissionMode === "yolo"
 						? "yolo mode ON — no approval prompts this session (deny rules still block)"
-						: "yolo mode OFF — back to default permissions",
+						: `yolo mode OFF — back to ${permissionMode} mode: ${MODE_DESCRIPTIONS[permissionMode]}`,
 					"info",
 				);
 			},
@@ -1695,6 +1739,14 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 		});
 
 		pi.on("session_start", (_event, ctx) => {
+			// A mode seeded from DRAHT_PERMISSION_MODE is shown before any command changes it.
+			updatePermissionStatus(ctx);
+			if (seededPermissionMode.unrecognized !== undefined) {
+				ctx.ui.notify(
+					`${PERMISSION_MODE_ENV}=${JSON.stringify(seededPermissionMode.unrecognized)} names no permission mode (${PERMISSION_MODES.join(", ")}); starting in default`,
+					"warning",
+				);
+			}
 			if (!ctx.sessionManager) return;
 			currentSession = getPolyphaseSession(ctx.sessionManager, pi.getSettings().polyphase);
 			currentSession.setPermissionModeProvider(() => permissionMode);

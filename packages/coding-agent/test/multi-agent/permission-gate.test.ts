@@ -3,12 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+	DEFAULT_SESSION_PERMISSION_MODE,
 	findDangerousPattern,
 	isPermissionMode,
 	loadRules,
 	PermissionGate,
 	type PermissionRule,
 	parseRules,
+	stricterPermissionMode,
 } from "../../src/core/multi-agent/permission-gate.ts";
 
 /** Backslash-escapes `"` and `\` for embedding `inner` inside another `"..."`-quoted shell -c wrapper. */
@@ -830,6 +832,20 @@ describe("PermissionGate modes", () => {
 			const gate = new PermissionGate([], { cwd: "/repo", mode: "auto" });
 			expect(gate.evaluate("mcp_server_tool", { query: "x" }).action).toBe("approve");
 		});
+	});
+
+	it("orders modes by how much they ask: default, then auto, then yolo", () => {
+		expect(stricterPermissionMode("auto", "default")).toBe("default");
+		expect(stricterPermissionMode("default", "yolo")).toBe("default");
+		expect(stricterPermissionMode("yolo", "auto")).toBe("auto");
+		expect(stricterPermissionMode("yolo", "yolo")).toBe("yolo");
+	});
+
+	it("a session starts in auto, while a gate given no mode stays at the strictest", () => {
+		expect(DEFAULT_SESSION_PERMISSION_MODE).toBe("auto");
+		const gate = new PermissionGate([], { cwd: "/repo" });
+		expect(gate.evaluate("bash", { command: "echo hi" }).action).toBe("approve");
+		expect(gate.evaluate("workflow", {}).action).toBe("approve");
 	});
 });
 

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- a session now starts in the `auto` permission mode instead of `default` when `DRAHT_PERMISSION_MODE` is unset, in the TUI, print, JSON, and RPC modes and in sessions the gateway resumes: an unmatched bash command runs unasked unless it trips the danger filter, and a workflow or duet batch starts without the approval prompt. Set `DRAHT_PERMISSION_MODE=default` to keep asking; a gateway passes it on to a session it resumes only when its `DRAHT_RESUME_ENV_ALLOW` lists it
+
 ### Added
 
 - add `pi.appendUsage()` for extensions to record model-attributed usage outside a tool result
@@ -13,6 +17,9 @@
 ### Changed
 
 - `auto` mode starts a workflow (`workflow` tool, `/<name>`, `/workflow <name>`) or a duet batch without the approval prompt; `default` mode still asks first, and an explicit `allow`, `deny`, or `approve` rule in `permissions.yml` still applies
+- `/yolo` switched off returns to the mode it replaced instead of always `default`, and the footer names every mode other than `auto`, including one set by `DRAHT_PERMISSION_MODE` at startup
+- a mode chosen with `/permissions` or `/yolo` outlasts `/new`, `/resume`, `/fork`, and `/reload` when it asks more than the mode the session would start in
+- `DRAHT_PERMISSION_MODE` is read regardless of letter case and surrounding whitespace, and a value that names no mode starts the session in `default` with a warning
 
 ### Fixed
 

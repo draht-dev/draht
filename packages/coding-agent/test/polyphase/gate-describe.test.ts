@@ -1,5 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
-import { createPermissionGateToolCallHandler, createSubagentExtension } from "../../src/core/builtins/subagent.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	createPermissionGateToolCallHandler,
+	createSubagentExtension,
+	PERMISSION_MODE_ENV,
+} from "../../src/core/builtins/subagent.ts";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -103,6 +107,16 @@ describe("createPermissionGateToolCallHandler", () => {
 });
 
 describe("subagent factory tool_call wiring", () => {
+	// The mode that asks before a workflow starts; a session otherwise starts in auto, and a
+	// developer's shell may export any mode.
+	beforeEach(() => {
+		vi.stubEnv(PERMISSION_MODE_ENV, "default");
+	});
+
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
 	function captureToolCallHandler(getSettings: ReturnType<typeof vi.fn>) {
 		let handler: ((event: ToolCallEvent, ctx: ExtensionContext) => Promise<unknown>) | undefined;
 		const fakePi = {

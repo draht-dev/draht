@@ -13,6 +13,7 @@ import {
 	PERMISSION_MODE_ENV,
 	permissionEnv,
 	runParallelTasks,
+	seedPermissionMode,
 } from "../../src/core/builtins/subagent.ts";
 import type {
 	ExtensionAPI,
@@ -52,7 +53,7 @@ function modeOf(call: RecordedCall | undefined): string | undefined {
 const harnesses: Harness[] = [];
 
 // A developer's or CI's own shell can export DRAHT_PERMISSION_MODE; the subagent extension seeds
-// its session mode from it at factory-creation time, so a stale "yolo" would make the "default"
+// its session mode from it at factory-creation time, so a stale "yolo" would make the mode
 // assertions below fail for a reason unrelated to the behaviour under test.
 beforeEach(() => {
 	vi.stubEnv(PERMISSION_MODE_ENV, "");
@@ -70,7 +71,7 @@ describe("subagent tool inherits the session's permission mode", () => {
 		return harness;
 	}
 
-	it("passes default mode to a single-mode run when neither /yolo nor /permissions was used", async () => {
+	it("passes auto mode to a single-mode run when neither /yolo nor /permissions was used", async () => {
 		const scripted = createScriptedRunner(agentScript);
 		const harness = await createSubagentHarness(scripted.runner);
 		harnesses.push(harness);
@@ -84,7 +85,46 @@ describe("subagent tool inherits the session's permission mode", () => {
 		await harness.session.prompt("review please");
 
 		expect(scripted.calls).toHaveLength(1);
+		expect(modeOf(scripted.calls[0])).toBe("auto");
+	});
+
+	it("switches /yolo off to the mode it replaced, not to a fixed one", async () => {
+		const scripted = createScriptedRunner(agentScript);
+		const harness = await createSubagentHarness(scripted.runner);
+		harnesses.push(harness);
+
+		await harness.session.prompt("/permissions default");
+		await harness.session.prompt("/yolo");
+		await harness.session.prompt("/yolo");
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("subagent", { agent: "reviewer", task: "look at auth.ts" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage("done"),
+		]);
+		await harness.session.prompt("review please");
+
+		expect(scripted.calls).toHaveLength(1);
 		expect(modeOf(scripted.calls[0])).toBe("default");
+	});
+
+	it("switches /yolo off to auto when the session started in yolo", async () => {
+		vi.stubEnv(PERMISSION_MODE_ENV, "yolo");
+		const scripted = createScriptedRunner(agentScript);
+		const harness = await createSubagentHarness(scripted.runner);
+		harnesses.push(harness);
+
+		await harness.session.prompt("/yolo");
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("subagent", { agent: "reviewer", task: "look at auth.ts" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage("done"),
+		]);
+		await harness.session.prompt("review please");
+
+		expect(scripted.calls).toHaveLength(1);
+		expect(modeOf(scripted.calls[0])).toBe("auto");
 	});
 
 	it("passes yolo mode to a single-mode run after /yolo", async () => {
@@ -105,12 +145,12 @@ describe("subagent tool inherits the session's permission mode", () => {
 		expect(modeOf(scripted.calls[0])).toBe("yolo");
 	});
 
-	it("passes auto mode to every parallel task after /permissions auto", async () => {
+	it("passes default mode to every parallel task after /permissions default", async () => {
 		const scripted = createScriptedRunner(agentScript);
 		const harness = await createSubagentHarness(scripted.runner);
 		harnesses.push(harness);
 
-		await harness.session.prompt("/permissions auto");
+		await harness.session.prompt("/permissions default");
 		harness.setResponses([
 			fauxAssistantMessage(
 				[
@@ -128,15 +168,15 @@ describe("subagent tool inherits the session's permission mode", () => {
 		await harness.session.prompt("review please");
 
 		expect(scripted.calls).toHaveLength(2);
-		for (const call of scripted.calls) expect(modeOf(call)).toBe("auto");
+		for (const call of scripted.calls) expect(modeOf(call)).toBe("default");
 	});
 
-	it("passes auto mode to every chain step after /permissions auto", async () => {
+	it("passes default mode to every chain step after /permissions default", async () => {
 		const scripted = createScriptedRunner(agentScript);
 		const harness = await createSubagentHarness(scripted.runner);
 		harnesses.push(harness);
 
-		await harness.session.prompt("/permissions auto");
+		await harness.session.prompt("/permissions default");
 		harness.setResponses([
 			fauxAssistantMessage(
 				[
@@ -154,7 +194,7 @@ describe("subagent tool inherits the session's permission mode", () => {
 		await harness.session.prompt("review please");
 
 		expect(scripted.calls).toHaveLength(2);
-		for (const call of scripted.calls) expect(modeOf(call)).toBe("auto");
+		for (const call of scripted.calls) expect(modeOf(call)).toBe("default");
 	});
 
 	it("passes explicit default mode after /permissions default, even with a stale yolo env var", async () => {
@@ -184,6 +224,96 @@ function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void
 	});
 	return { promise, resolve };
 }
+
+describe("the footer names a permission mode other than the one sessions start in", () => {
+	async function createStatusHarness(
+		factory = createSubagentExtension({ runner: createScriptedRunner(agentScript).runner }),
+	) {
+		const statuses: (string | undefined)[] = [];
+		const warnings: string[] = [];
+		const setStatus = (key: string, text: string | undefined) => {
+			if (key === "permissions") statuses.push(text);
+		};
+		const notify = (message: string, type?: "info" | "warning" | "error") => {
+			if (type === "warning") warnings.push(message);
+		};
+		const harness = await createHarness({ extensionFactories: [factory] });
+		harnesses.push(harness);
+		await harness.session.bindExtensions({ uiContext: createTestUiContext({ setStatus, notify }), mode: "tui" });
+		return { harness, statuses, warnings };
+	}
+
+	it("shows nothing in auto and names every other mode", async () => {
+		const { harness, statuses } = await createStatusHarness();
+		expect(statuses).toEqual([undefined]);
+
+		await harness.session.prompt("/permissions default");
+		expect(statuses.at(-1)).toBe("perms: default");
+		await harness.session.prompt("/yolo");
+		expect(statuses.at(-1)).toBe("perms: yolo");
+		await harness.session.prompt("/yolo");
+		expect(statuses.at(-1)).toBe("perms: default");
+		await harness.session.prompt("/permissions auto");
+		expect(statuses.at(-1)).toBeUndefined();
+	});
+
+	it("names a mode seeded from DRAHT_PERMISSION_MODE before any command runs", async () => {
+		vi.stubEnv(PERMISSION_MODE_ENV, "default");
+		const { statuses, warnings } = await createStatusHarness();
+		expect(statuses).toEqual(["perms: default"]);
+		expect(warnings).toEqual([]);
+	});
+
+	it("starts a mistyped DRAHT_PERMISSION_MODE in default, and says so", async () => {
+		vi.stubEnv(PERMISSION_MODE_ENV, "defualt");
+		const { statuses, warnings } = await createStatusHarness();
+		expect(statuses).toEqual(["perms: default"]);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain('DRAHT_PERMISSION_MODE="defualt"');
+	});
+
+	it("keeps a chosen mode across a runtime rebuild only where it asks more than the start mode", async () => {
+		// The same factory run again is what /new, /resume, /fork and /reload do.
+		const factory = createSubagentExtension({ runner: createScriptedRunner(agentScript).runner });
+		const first = await createStatusHarness(factory);
+		await first.harness.session.prompt("/permissions default");
+		const rebuilt = await createStatusHarness(factory);
+		expect(rebuilt.statuses).toEqual(["perms: default"]);
+
+		await rebuilt.harness.session.prompt("/yolo");
+		const rebuiltAgain = await createStatusHarness(factory);
+		expect(rebuiltAgain.statuses).toEqual([undefined]);
+	});
+
+	it("never lets a chosen mode relax a stricter DRAHT_PERMISSION_MODE on a rebuild", async () => {
+		vi.stubEnv(PERMISSION_MODE_ENV, "default");
+		const factory = createSubagentExtension({ runner: createScriptedRunner(agentScript).runner });
+		const first = await createStatusHarness(factory);
+		await first.harness.session.prompt("/permissions auto");
+		expect(first.statuses.at(-1)).toBeUndefined();
+		const rebuilt = await createStatusHarness(factory);
+		expect(rebuilt.statuses).toEqual(["perms: default"]);
+	});
+});
+
+describe("seedPermissionMode", () => {
+	it("starts in auto when the variable is unset or blank", () => {
+		expect(seedPermissionMode(undefined)).toEqual({ mode: "auto" });
+		expect(seedPermissionMode("")).toEqual({ mode: "auto" });
+		expect(seedPermissionMode("  ")).toEqual({ mode: "auto" });
+	});
+
+	it("reads a mode name in any letter case and with surrounding whitespace", () => {
+		expect(seedPermissionMode("Default")).toEqual({ mode: "default" });
+		expect(seedPermissionMode(" AUTO ")).toEqual({ mode: "auto" });
+		expect(seedPermissionMode("yolo\n")).toEqual({ mode: "yolo" });
+	});
+
+	it("starts in default, the strictest, when the value names no mode", () => {
+		expect(seedPermissionMode("defualt")).toEqual({ mode: "default", unrecognized: "defualt" });
+		expect(seedPermissionMode("strict")).toEqual({ mode: "default", unrecognized: "strict" });
+	});
+});
 
 describe("permissionEnv resolves at spawn time, not queue time", () => {
 	it("gives a queued agent the mode current when its slot is granted, not when it was queued", async () => {

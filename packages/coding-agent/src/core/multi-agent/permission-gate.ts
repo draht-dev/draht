@@ -74,10 +74,24 @@ export type PermissionAction = "deny" | "allow" | "approve";
  */
 export type PermissionMode = "default" | "auto" | "yolo";
 
+/** Strictest first: `stricterPermissionMode` relies on this order. */
 export const PERMISSION_MODES: readonly PermissionMode[] = ["default", "auto", "yolo"];
+
+/**
+ * The mode a session starts in when `DRAHT_PERMISSION_MODE` names none. A `PermissionGate`
+ * constructed without a mode still uses `default`, the strictest, so a caller that forgets to
+ * pass the session's mode never gets a laxer gate than the session has. Never `yolo`: `/yolo`
+ * switches back to this mode when nothing else was chosen.
+ */
+export const DEFAULT_SESSION_PERMISSION_MODE: Exclude<PermissionMode, "yolo"> = "auto";
 
 export function isPermissionMode(value: unknown): value is PermissionMode {
 	return typeof value === "string" && (PERMISSION_MODES as readonly string[]).includes(value);
+}
+
+/** Whichever of the two modes asks more. */
+export function stricterPermissionMode(a: PermissionMode, b: PermissionMode): PermissionMode {
+	return PERMISSION_MODES.indexOf(a) <= PERMISSION_MODES.indexOf(b) ? a : b;
 }
 
 /** A single permission rule as authored in `permissions.yml`. */

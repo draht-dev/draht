@@ -7,7 +7,7 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ENV_AGENT_DIR } from "../../src/config.ts";
 import { createPolyphaseExtension } from "../../src/core/builtins/polyphase.ts";
-import { createSubagentExtension } from "../../src/core/builtins/subagent.ts";
+import { createSubagentExtension, PERMISSION_MODE_ENV } from "../../src/core/builtins/subagent.ts";
 import type { LoadExtensionsResult } from "../../src/core/extensions/types.ts";
 import { isPolyphaseDetails } from "../../src/core/polyphase/details.ts";
 import { disposePolyphaseSession } from "../../src/core/polyphase/session.ts";
@@ -119,6 +119,9 @@ describe("polyphase core builtin", () => {
 		mkdirSync(join(agentDir, "workflows"), { recursive: true });
 		vi.stubEnv(ENV_AGENT_DIR, agentDir);
 		vi.stubEnv(POLYPHASE_DEPTH_ENV, "");
+		// The approval-dialog tests need the mode that asks before a workflow starts. A session
+		// otherwise starts in auto, and a developer's shell may export any mode.
+		vi.stubEnv(PERMISSION_MODE_ENV, "default");
 	});
 
 	afterEach(() => {
@@ -503,6 +506,20 @@ describe("polyphase core builtin", () => {
 
 		expect(customMessages(harness, "polyphase-workflow")).toHaveLength(1);
 		expect(scripted.calls[0]?.task).toContain("#9");
+	});
+
+	it("a session started without DRAHT_PERMISSION_MODE runs /workflow <name> without a confirm dialog", async () => {
+		writeWorkflow(agentDir, "review-pr", reviewPrScript);
+		vi.stubEnv(PERMISSION_MODE_ENV, "");
+		const scripted = createScriptedRunner(textOutput);
+		const confirm = vi.fn(async () => true);
+		const harness = await createPolyphaseHarness(scripted.runner, undefined, { confirm });
+
+		await harness.session.prompt("/workflow review-pr #12");
+
+		await waitFor(() => customMessages(harness, "polyphase-workflow").length > 0);
+		expect(confirm).not.toHaveBeenCalled();
+		expect(scripted.calls[0]?.task).toContain("#12");
 	});
 
 	it("in auto mode, a workflow tool call starts without a confirm dialog", async () => {

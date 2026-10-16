@@ -539,9 +539,9 @@ beforeAll(async () => {
 
 	const port = freeLoopbackPort();
 	daemonStderr = { text: "" };
-	// Built from scratch rather than inherited: this repo's shell exports
-	// DRAHT_PERMISSION_MODE=auto, and a permission-answering test run under it
-	// passes while proving nothing.
+	// Built from scratch rather than inherited, and the resumed session's mode
+	// declared as `default`: in `auto` (an unset variable, or this repo's shell)
+	// its scripted call runs unasked and the ask this test answers never comes.
 	const daemon = Bun.spawn(["bun", GATEWAY_CLI, "--port", String(port), "--auth", TOKEN], {
 		env: {
 			// The shim first, so a bare `draht` lookup CAN succeed. A test that made
@@ -551,13 +551,16 @@ beforeAll(async () => {
 			TMPDIR: home,
 			DRAHT_CODING_AGENT_DIR: agentDir,
 			// Declared, and therefore expected to cross. The stub provider is how a
-			// resumed session answers with no API key, and the scripted tool call is
-			// how it is made to report its own environment.
+			// resumed session answers with no API key, the scripted tool call is how
+			// it is made to report its own environment, and the mode is how that
+			// call is made to ask first.
 			DRAHT_STUB_PROVIDER: "1",
 			DRAHT_STUB_TOOL_CALLS: JSON.stringify([
 				{ toolCalls: [{ id: "call-1", name: "bash", arguments: { command: `env > ${childEnvFile}` } }] },
 			]),
-			DRAHT_RESUME_ENV_ALLOW: "DRAHT_STUB_PROVIDER,DRAHT_STUB_TOOL_CALLS,DYLD_LIBRARY_PATH,LD_PRELOAD",
+			DRAHT_PERMISSION_MODE: "default",
+			DRAHT_RESUME_ENV_ALLOW:
+				"DRAHT_STUB_PROVIDER,DRAHT_STUB_TOOL_CALLS,DRAHT_PERMISSION_MODE,DYLD_LIBRARY_PATH,LD_PRELOAD",
 			...CANARIES,
 		},
 		stdin: "ignore",
@@ -779,6 +782,7 @@ describe("session_resume (R35-ALWAYS.9)", () => {
 
 		// ── POSITIVE: what was declared did cross, and PATH was CONSTRUCTED ──────
 		expect(child.DRAHT_STUB_PROVIDER).toBe("1");
+		expect(child.DRAHT_PERMISSION_MODE).toBe("default");
 		expect(child.DRAHT_CODING_AGENT_DIR).toBe(agentDir);
 		// The tail is the absolute trusted PATH the primitive constructs, NOT the
 		// daemon's — which begins with the shim directory and does not appear here

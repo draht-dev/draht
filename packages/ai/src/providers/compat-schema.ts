@@ -258,7 +258,7 @@ export const OpenAICompletionsCompatSchema = Type.Object(
 				],
 				{
 					description:
-						'Format for reasoning or thinking parameters. When omitted, Pi auto-detects the format from the provider URL. "openai" uses reasoning_effort, "openrouter" uses reasoning.effort, "deepseek" uses thinking.type plus reasoning_effort when supported, "together" uses reasoning.enabled plus reasoning_effort when supported, "baseten" uses configurable chat_template_args plus reasoning_effort when supported, "zai" uses thinking.type, "qwen" uses top-level enable_thinking, "qwen-chat-template" uses chat_template_kwargs.enable_thinking and preserve_thinking, "chat-template" uses configurable chat_template_kwargs, "string-thinking" uses top-level thinking, and "ant-ling" uses reasoning.effort only when the mapped effort is non-null.',
+						'Format for reasoning or thinking parameters. When omitted, draht auto-detects the format from the provider URL. "openai" uses reasoning_effort, "openrouter" uses reasoning.effort, "deepseek" uses thinking.type plus reasoning_effort when supported, "together" uses reasoning.enabled plus reasoning_effort when supported, "baseten" uses configurable chat_template_args plus reasoning_effort when supported, "zai" uses thinking.type, "qwen" uses top-level enable_thinking, "qwen-chat-template" uses chat_template_kwargs.enable_thinking and preserve_thinking, "chat-template" uses configurable chat_template_kwargs, "string-thinking" uses top-level thinking, and "ant-ling" uses reasoning.effort only when the mapped effort is non-null.',
 				},
 			),
 		),
@@ -600,16 +600,19 @@ function mergeCompatProperties<
 	return { ...merged, ...overrides } as MergedCompatProperties<PropertyGroups, Overrides>;
 }
 
-const CompatSchemasByApi = {
+/** Compatibility schema for each API whose models accept compat. Mirrors the compat type of Model. */
+export const CompatSchemasByApi = {
 	"openai-completions": OpenAICompletionsCompatSchema,
 	"openai-responses": OpenAIResponsesCompatSchema,
+	"azure-openai-responses": OpenAIResponsesCompatSchema,
+	"openai-codex-responses": OpenAIResponsesCompatSchema,
 	"anthropic-messages": AnthropicMessagesCompatSchema,
 	"bedrock-converse-stream": BedrockCompatSchema,
 	"mistral-conversations": MistralConversationsCompatSchema,
 } as const;
 
 const ProviderCompatProperties = mergeCompatProperties(
-	Object.values(CompatSchemasByApi).map((schema) => schema.properties),
+	[...new Set(Object.values(CompatSchemasByApi))].map((schema) => schema.properties),
 	ProviderCompatPropertyOverrides,
 );
 

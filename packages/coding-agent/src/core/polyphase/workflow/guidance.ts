@@ -31,7 +31,7 @@ export const WORKFLOW_PROMPT_SNIPPET =
 export const WORKFLOW_PROMPT_GUIDELINES: readonly string[] = [
 	"Use the workflow tool for multi-phase tasks that benefit from several subagents running in parallel or in a pipeline, with live oversight in the TUI.",
 	"Write `export const meta = {...}` first, as a plain literal (no identifiers, calls, or template-literal interpolation), then an async body using agent, parallel, pipeline, phase, log, args and budget.",
-	"Each agent() call is a separate paid model session that cannot ask for permissions; give it a self-contained task and ask it to end with a STATUS line.",
+	"Each agent() call is a separate paid model session that cannot see this conversation; give it a self-contained task and ask it to end with a STATUS line. Its tool calls run under this session's permission mode; one that still needs approval is asked in this session, or blocked when nobody can answer.",
 	"agent() returns null on failure, cancellation, or budget exhaustion; always check for null before using the result.",
 ];
 
@@ -98,9 +98,10 @@ new Date(value) still works. Never redeclare: agent, parallel, pipeline, phase, 
 
 ## 4. Each agent is a separate paid session
 
-Every agent() call spawns an independent subagent process. It cannot ask for permissions or see
-anything outside its own prompt, so give it a self-contained task and ask it to end with a
-STATUS: line you can look for in its output.
+Every agent() call spawns an independent subagent process. It cannot see anything outside its own
+prompt, so give it a self-contained task and ask it to end with a STATUS: line you can look for in
+its output. Its tool calls run under this session's permission mode; one that still needs approval
+is asked in this session (the agent waits for the answer), or blocked when nobody can answer.
 
 ## 5. Limits
 

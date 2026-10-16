@@ -182,7 +182,7 @@ describe("layoutRun fragments (§11.4)", () => {
 		const snapshot = makeSnapshot({ agents });
 		const text = stripAnsi(layoutRun(snapshot, 78, theme, opts({ expanded: true })).join("\n"));
 		expect(text).toContain("⚠");
-		expect(text).toContain("blocked: needs approval (subagents cannot ask)");
+		expect(text).toContain("blocked: needs approval, nobody could be asked");
 		expect(text).not.toContain("no rule matched");
 	});
 

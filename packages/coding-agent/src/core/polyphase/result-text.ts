@@ -141,7 +141,7 @@ function totalBlockedToolCalls(run: RunView): number {
 export function formatBlockedNote(count: number, samples: readonly string[]): string | undefined {
 	if (count <= 0) return undefined;
 	const suffix = samples.length > 0 ? `: ${samples.join(", ")}` : "";
-	return `${count} tool call(s) inside subagents were blocked because subagents cannot ask for approval${suffix}. Allow them with rules in permissions.yml, or switch this session with /permissions auto or /yolo and re-run (children inherit the mode at spawn time, so this already-finished run cannot be unblocked in place).`;
+	return `${count} tool call(s) inside subagents were blocked because they needed approval and nobody could be asked${suffix}. Allow them with rules in permissions.yml, or switch this session with /permissions auto or /yolo and re-run (children inherit the mode at spawn time, so this already-finished run cannot be unblocked in place).`;
 }
 
 function appendBlockedNote(parts: string[], run: RunView): void {

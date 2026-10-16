@@ -150,8 +150,11 @@ export function getShellEnv(): NodeJS.ProcessEnv {
 	// A draht started from a shell command must never inherit the parent's subagent/workflow
 	// child markers (src/core/polyphase/types.ts POLYPHASE_DEPTH_ENV/POLYPHASE_SCHEMA_FILE_ENV):
 	// otherwise it would run in restricted child mode even though it is the user's own session.
+	// Nor the permission-bridge marker (permission-bridge.ts POLYPHASE_PERMISSION_BRIDGE_ENV): under
+	// some other IPC parent (a test runner's worker, say) it would send its asks there and wait.
 	delete env.DRAHT_POLYPHASE_DEPTH;
 	delete env.DRAHT_POLYPHASE_SCHEMA_FILE;
+	delete env.DRAHT_POLYPHASE_PERMISSION_BRIDGE;
 	return env;
 }
 

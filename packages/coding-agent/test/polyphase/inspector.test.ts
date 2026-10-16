@@ -60,6 +60,7 @@ function testSession(sample: { store: PolyphaseStore; dispose(): void }, capacit
 		clearPendingDirectives: () => {},
 		onParentPrompt: () => () => {},
 		notifyParentPrompt: () => {},
+		runPermissionPrompt: (prompt) => prompt(),
 		setInspectorOpen: () => {},
 		disposed: false,
 		dispose: () => sample.dispose(),

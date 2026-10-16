@@ -384,23 +384,30 @@ Saved workflows under `.draht/workflows` require project trust, the same as `.dr
 project that only contains a `workflows` directory under `.draht` still triggers the trust prompt,
 because a saved workflow can start subagents just like a saved agent definition can.
 
-**Blocked tool calls inside subagents.** A subagent process cannot show an approval prompt of its
-own (there is no UI in a non-interactive child), so by default any of its tool calls that would
-otherwise need approval are blocked instead, and surfaced with a warning line, a `⚠` glyph in the
-row, and a note in the parent-model result text listing a few blocked samples. The note's own hint
-names switching the parent with `/permissions auto` or `/yolo` *before starting the run* as a
-remedy, since every child spawned for the session — a `subagent` call, a workflow's `agent()`
-call, or a duet teammate — gets `DRAHT_PERMISSION_MODE` in its environment set, at spawn time, to
-the session's *current* permission mode (whatever `/permissions` or `/yolo` last set in the
-parent). Changing the mode later never affects a child already running — only children spawned
-afterward see the new mode — so a blocked call inside an already-running subagent cannot be
-unblocked in place; it needs `/permissions auto`/`/yolo` on the parent *and* a fresh run. The
-session's mode starts as the parent process's own `DRAHT_PERMISSION_MODE` environment variable
-(unset means `default`, the most restrictive mode) and is then changed only by `/permissions` or
-`/yolo`; children always receive that current session mode explicitly, so a stale
-`DRAHT_PERMISSION_MODE` left in the parent's process environment can never silently escalate a
-child past what the parent session currently uses. Deny rules in `permissions.yml` still apply in
-the child regardless of mode, since the child loads and evaluates them itself.
+**Permission mode inside subagents.** Every child spawned for the session — a `subagent` call, a
+workflow's `agent()` call, or a duet teammate — gets `DRAHT_PERMISSION_MODE` in its environment
+set, at spawn time, to the session's *current* permission mode (whatever `/permissions` or
+`/yolo` last set; before either, the parent process's own `DRAHT_PERMISSION_MODE`, and unset means
+`default`, the most restrictive mode). A stale `DRAHT_PERMISSION_MODE` left in the parent's process
+environment therefore never escalates a child past what the session currently uses. Deny rules in
+`permissions.yml` still apply in the child regardless of mode, since the child loads and evaluates
+them itself.
+
+**Approvals inside subagents.** A subagent process has no UI of its own, so a tool call its gate
+still holds for approval is asked in the parent session instead, over a private IPC channel to the
+parent. The parent first decides it under its *own* current rules and mode — so switching the
+session to `/permissions auto` or `/yolo` also covers asks from children that are already running
+— and shows a dialog only when the call still needs a human. The dialog names the agent
+(`Approve bash for subagent reviewer#1?`) and shows the call like any other permission ask; asks
+from parallel agents are queued and shown one at a time, and the agent waits for the answer. A
+`No` fails just that tool call inside the child, which is told it was denied in the parent session;
+cancelling the agent or the run takes the dialog down. A parent without a UI of its own (print,
+JSON) passes the ask on to its own polyphase parent, if it has one.
+
+Only when nobody can be asked is the call blocked: it is surfaced with a warning line, a `⚠` glyph
+in the row, and a note in the parent-model result text listing a few blocked samples. Allow such
+calls with an `allow` rule in `permissions.yml`, or start the run in a less strict mode
+(`/permissions auto`, `/yolo`, or `DRAHT_PERMISSION_MODE` for a headless parent).
 
 ## Nesting depth
 

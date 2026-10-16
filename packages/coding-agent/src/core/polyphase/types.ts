@@ -23,6 +23,41 @@ export const POLYPHASE_RESULT_TOOL_NAME = "polyphase_result";
 /** Suffix of the permission gate's block reason when no UI can answer (builtins/subagent.ts). */
 export const NO_UI_APPROVAL_SUFFIX = "(no UI available to request approval)";
 
+// ── Permission asks a child forwards to its parent (permission-bridge.ts) ──────
+
+/** One argument of a tool call as it crosses to the parent: scalars only. */
+export type ChildPermissionValue = string | number | boolean | null;
+
+/** A tool call's arguments as the parent receives them: the gate's own keys (`command`, `path`,
+ * `file_path`) verbatim, everything else reduced to a bounded scalar that only feeds the dialog. */
+export type ChildPermissionInput = Record<string, ChildPermissionValue>;
+
+/** A permission ask a child's own gate could not answer, as its parent receives it. */
+export interface ChildPermissionRequest {
+	toolName: string;
+	toolCallId: string;
+	input: ChildPermissionInput;
+	/** Labels of the agents the ask came up through below the parent's direct child, outermost
+	 * first. Empty when the direct child raised it. */
+	via: readonly string[];
+	/** Where the child was spawned. Supplied by the parent's own runner, never by the child. */
+	cwd: string;
+}
+
+export type ChildPermissionVerdict =
+	| { kind: "approved" }
+	| { kind: "denied"; reason: string }
+	/** Nobody could be asked: the child blocks the call exactly as it did before asks were forwarded. */
+	| { kind: "unavailable" }
+	/** The ask ended unanswered: the child's turn was aborted, or the child went away. */
+	| { kind: "cancelled" };
+
+/** Decides a child's permission ask in the parent. Must settle once `signal` aborts. */
+export type ChildPermissionAsker = (
+	request: ChildPermissionRequest,
+	signal: AbortSignal,
+) => Promise<ChildPermissionVerdict>;
+
 export const FINAL_DETAILS_MAX_BYTES = 16_384;
 export const PARTIAL_DETAILS_MAX_BYTES = 8_192;
 
@@ -101,6 +136,10 @@ export interface AgentRunContext {
 	/** Extra environment for the child. A thunk is resolved once, at actual spawn time
 	 * (`child-process.ts`'s `buildChildInvocation`), not when the caller builds this context. */
 	env?: Readonly<Record<string, string>> | (() => Readonly<Record<string, string>>);
+	/** Answers the permission asks the child's own gate cannot (it has no UI). When set, the child
+	 * is spawned with an IPC channel and `DRAHT_POLYPHASE_PERMISSION_BRIDGE=1`; when absent, the
+	 * child blocks such calls as before. */
+	onPermissionAsk?: ChildPermissionAsker;
 	/** Object JSON Schema for polyphase_result. The runner writes it to a 0600 temp file. */
 	schema?: JsonObject;
 	/** Live state sink. When absent the runner uses a private reducer. */

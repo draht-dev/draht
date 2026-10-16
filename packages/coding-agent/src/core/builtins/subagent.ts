@@ -45,11 +45,31 @@ import { buildDetails, sumRunUsage } from "../polyphase/details.ts";
 import { createPartialUpdateEmitter } from "../polyphase/emitter.ts";
 import { type AgentLimiter, LimiterAbortedError, type LimiterLease } from "../polyphase/limiter.ts";
 import { resolveChildModel } from "../polyphase/model-selection.ts";
+import {
+	getParentPermissionBridge,
+	type ParentPermissionBridge,
+	toChildPermissionInput,
+} from "../polyphase/permission-bridge.ts";
 import { createSubagentRenderers, type PolyphaseRenderDeps } from "../polyphase/render/renderers.ts";
 import { capHeadTail, formatSubagentResultText } from "../polyphase/result-text.ts";
-import { disposePolyphaseSession, getPolyphaseSession, peekPolyphaseSession } from "../polyphase/session.ts";
+import {
+	disposePolyphaseSession,
+	getPolyphaseSession,
+	type PolyphaseSession,
+	peekPolyphaseSession,
+} from "../polyphase/session.ts";
 import { resolvePolyphaseSettings } from "../polyphase/settings.ts";
-import type { AgentConfig, AgentRunContext, AgentRunner, ProgressFn, RunResult } from "../polyphase/types.ts";
+import type {
+	AgentConfig,
+	AgentRunContext,
+	AgentRunner,
+	ChildPermissionAsker,
+	ChildPermissionInput,
+	ChildPermissionRequest,
+	ChildPermissionVerdict,
+	ProgressFn,
+	RunResult,
+} from "../polyphase/types.ts";
 import {
 	currentPolyphaseDepth,
 	NO_UI_APPROVAL_SUFFIX,
@@ -642,30 +662,29 @@ function safeField(raw: string, verdict: ElisionVerdict): string {
  * `PermissionAskDetail.summary`'s doc).
  */
 function buildPermissionAskDetail(
-	event: ToolCallEvent,
-	ctx: ExtensionContext,
+	call: PermissionAskCall,
+	cwd: string,
 	reason: string,
-	description?: ApprovalDescription,
+	extras: { description?: ApprovalDescription; summary?: readonly string[] } = {},
 ): PermissionAskDetail {
-	const input = (event.input ?? {}) as Record<string, unknown>;
+	const { description } = extras;
+	const input = (call.input ?? {}) as Record<string, unknown>;
 	const verdict: ElisionVerdict = { truncated: false };
 	const detail: PermissionAskDetail = {
 		kind: "tool_permission",
-		toolCallId: safeField(event.toolCallId, verdict),
-		toolName: safeField(event.toolName, verdict),
+		toolCallId: safeField(call.toolCallId, verdict),
+		toolName: safeField(call.toolName, verdict),
 		// `ctx.cwd` is the raw, un-normalised `config.cwd`; a symlinked worktree would otherwise
 		// read as a different project on the answering surface.
-		cwd: safeField(comparablePath(ctx.cwd), verdict),
+		cwd: safeField(comparablePath(cwd), verdict),
 		reason: safeField(reason, verdict),
 		options: TOOL_PERMISSION_OPTIONS,
 		truncated: false,
 	};
 
-	if (description !== undefined) {
-		detail.summary = description.message
-			.split("\n")
-			.slice(0, MAX_SUMMARY_LINES)
-			.map((line) => safeField(line, verdict));
+	const summary = description?.message.split("\n") ?? extras.summary;
+	if (summary !== undefined) {
+		detail.summary = summary.slice(0, MAX_SUMMARY_LINES).map((line) => safeField(line, verdict));
 	}
 
 	if (description?.operation !== undefined) {
@@ -692,6 +711,13 @@ function buildPermissionAskDetail(
 	detail.truncated = verdict.truncated;
 
 	return detail;
+}
+
+/** The parts of a tool call a permission ask shows: a `ToolCallEvent`, or a child's forwarded ask. */
+interface PermissionAskCall {
+	toolCallId: string;
+	toolName: string;
+	input: unknown;
 }
 
 /** JSON-serialize a tool's argument object, degrading to a readable form rather than throwing. */
@@ -721,6 +747,11 @@ export interface PermissionGateHandlerOptions {
 	describe?: (event: ToolCallEvent, ctx: ExtensionContext) => ApprovalDescription | undefined;
 	/** Called right before `ctx.ui.confirm` (so an open inspector can close first). */
 	beforePrompt?: (ctx: ExtensionContext) => void;
+	/** Where an `approve` goes when this process has no UI: the polyphase parent that spawned it. */
+	parentBridge?: ParentPermissionBridge;
+	/** Runs the dialog in turn with every other permission dialog of the session, so none of them
+	 * displaces another (see `PolyphaseSession.runPermissionPrompt`). */
+	runPrompt?: <T>(prompt: () => Promise<T>) => Promise<T>;
 }
 
 /**
@@ -736,57 +767,195 @@ export function createPermissionGateToolCallHandler(
 	options?: PermissionGateHandlerOptions,
 ): (event: ToolCallEvent, ctx: ExtensionContext) => Promise<ToolCallEventResult | undefined> {
 	return async (event, ctx) => {
-		const decision = gate.evaluate(event.toolName, event.input as Record<string, unknown>);
+		const input = event.input as Record<string, unknown>;
+		const decision = gate.evaluate(event.toolName, input);
 
 		if (decision.action === "deny") {
 			return { block: true, reason: decision.reason };
 		}
 
 		if (decision.action === "approve") {
-			// No answering surface at all: keep today's loud, operator-facing block verbatim rather
-			// than letting a no-op UI resolve `false` and be recorded as a user's denial.
 			if (!ctx.hasUI) {
-				return { block: true, reason: `${decision.reason} ${NO_UI_APPROVAL_SUFFIX}` };
-			}
-
-			const description = options?.describe?.(event, ctx);
-			// Called right before the prompt, so an open inspector closes and the parent dialog
-			// stays reachable.
-			options?.beforePrompt?.(ctx);
-
-			const detail = buildPermissionAskDetail(event, ctx, decision.reason, description);
-			const title = description?.title ?? "Approve tool call?";
-			const message = description
-				? `${description.message}\n\n${decision.reason}`
-				: `${event.toolName}: ${decision.reason}`;
-
-			// Both positional strings are unchanged so every existing renderer keeps working; the
-			// canonical facts ride alongside them for surfaces that can render structure.
-			//
-			// `signal` is the turn's OWN abort signal, read live off the context (it is the active
-			// run's controller, minted fresh per run, so it is never a stale aborted one). A
-			// permission ask that inherits "wait forever" with no way to be dismissed is its own
-			// hazard: this ask parks the agent loop inside `beforeToolCall`, and before this the
-			// only things that could end it were a human answering and the relay's own backstop
-			// clock. Aborting the turn now takes the dialog down on every surface, and — because
-			// nobody answered — it is recorded as `cancelled` by the system rather than as this
-			// human's refusal.
-			const approved = await ctx.ui.confirm(title, message, { detail, signal: ctx.signal });
-			if (!approved) {
-				// The turn being aborted is NOT a refusal, and saying so in the transcript would put the
-				// same fabrication in front of the model that the durable record was just cleared of:
-				// the JSONL reads `cancelled` by `system`, so the reason the model sees must not read
-				// `User denied approval`. This branch became reachable the moment `signal` started being
-				// passed above — before that, an abort could not end an ask at all.
-				if (ctx.signal?.aborted) {
-					return { block: true, reason: "the turn was aborted before this call was approved" };
+				// No surface of its own. A polyphase child hands the ask to the session that spawned it;
+				// only when nobody can be asked does the call get today's loud, operator-facing block,
+				// rather than a no-op UI resolving `false` and being recorded as a user's denial.
+				const verdict = await options?.parentBridge?.ask(
+					{
+						toolName: event.toolName,
+						toolCallId: event.toolCallId,
+						input: toChildPermissionInput(input),
+						via: [],
+					},
+					ctx.signal,
+				);
+				switch (verdict?.kind) {
+					case "approved":
+						return undefined;
+					case "denied":
+						return { block: true, reason: verdict.reason };
+					case "cancelled":
+						return { block: true, reason: "the turn was aborted before this call was approved" };
+					default:
+						return { block: true, reason: `${decision.reason} ${NO_UI_APPROVAL_SUFFIX}` };
 				}
-				return { block: true, reason: "User denied approval" };
 			}
-			return undefined;
+
+			const prompt = () => promptForApproval(event, ctx, decision.reason, options);
+			return options?.runPrompt ? options.runPrompt(prompt) : prompt();
 		}
 
 		return undefined;
+	};
+}
+
+/** The `approve` dialog of `createPermissionGateToolCallHandler`, for a process with a UI. */
+async function promptForApproval(
+	event: ToolCallEvent,
+	ctx: ExtensionContext,
+	reason: string,
+	options: PermissionGateHandlerOptions | undefined,
+): Promise<ToolCallEventResult | undefined> {
+	// Queued behind another dialog, the turn may have ended before this one's turn came.
+	if (ctx.signal?.aborted) {
+		return { block: true, reason: "the turn was aborted before this call was approved" };
+	}
+
+	const description = options?.describe?.(event, ctx);
+	// Called right before the prompt, so an open inspector closes and the parent dialog
+	// stays reachable.
+	options?.beforePrompt?.(ctx);
+
+	const detail = buildPermissionAskDetail(event, ctx.cwd, reason, { description });
+	const title = description?.title ?? "Approve tool call?";
+	const message = description ? `${description.message}\n\n${reason}` : `${event.toolName}: ${reason}`;
+
+	// Both positional strings are unchanged so every existing renderer keeps working; the
+	// canonical facts ride alongside them for surfaces that can render structure.
+	//
+	// `signal` is the turn's OWN abort signal, read live off the context (it is the active
+	// run's controller, minted fresh per run, so it is never a stale aborted one). A
+	// permission ask that inherits "wait forever" with no way to be dismissed is its own
+	// hazard: this ask parks the agent loop inside `beforeToolCall`, and before this the
+	// only things that could end it were a human answering and the relay's own backstop
+	// clock. Aborting the turn now takes the dialog down on every surface, and — because
+	// nobody answered — it is recorded as `cancelled` by the system rather than as this
+	// human's refusal.
+	const approved = await ctx.ui.confirm(title, message, { detail, signal: ctx.signal });
+	if (!approved) {
+		// The turn being aborted is NOT a refusal, and saying so in the transcript would put the
+		// same fabrication in front of the model that the durable record was just cleared of:
+		// the JSONL reads `cancelled` by `system`, so the reason the model sees must not read
+		// `User denied approval`. This branch became reachable the moment `signal` started being
+		// passed above — before that, an abort could not end an ask at all.
+		if (ctx.signal?.aborted) {
+			return { block: true, reason: "the turn was aborted before this call was approved" };
+		}
+		return { block: true, reason: "User denied approval" };
+	}
+	return undefined;
+}
+
+// ─── Permission asks from children ──────────────────────────────────────────
+
+/** Tools whose missing `path` means the cwd (READ_ONLY_PATH_TOOLS in permission-gate.ts). */
+const CWD_DEFAULT_PATH_TOOLS: ReadonlySet<string> = new Set(["grep", "find", "ls"]);
+
+/**
+ * A child's request as it goes one level further up: paths made absolute against the cwd this
+ * process spawned the child in, because the parent above evaluates them against its own direct
+ * child's cwd, where a relative path names a different file. A read-only tool's missing path means
+ * "the child's cwd", so it is spelled out for the same reason.
+ */
+function forwardableInput(request: ChildPermissionRequest): ChildPermissionInput {
+	const entries = Object.entries(request.input).map(([key, value]): [string, ChildPermissionInput[string]] =>
+		(key === "path" || key === "file_path") && typeof value === "string" && !path.isAbsolute(value)
+			? [key, path.resolve(request.cwd, value)]
+			: [key, value],
+	);
+	const hasPath = entries.some(([key, value]) => (key === "path" || key === "file_path") && typeof value === "string");
+	if (!hasPath && CWD_DEFAULT_PATH_TOOLS.has(request.toolName.toLowerCase())) entries.push(["path", request.cwd]);
+	return Object.fromEntries(entries);
+}
+
+export interface ChildPermissionAskerOptions {
+	/** The asking agent's label in this session (`reviewer#1`). */
+	agentLabel: string;
+	/** Where an ask goes when this session has no UI: its own polyphase parent, if it has one. */
+	upstream?: ParentPermissionBridge;
+}
+
+/**
+ * Decides a permission ask a child could not decide itself, in THIS session. First under the
+ * session's current rules and mode, so a `/permissions auto` or `/yolo` typed after the child
+ * started still covers what it asks. Then, if a human is still needed, with this session's own
+ * dialog: one at a time, so asks from parallel agents queue instead of displacing each other into
+ * silent denials. Without a UI the ask goes one level further up; when nobody can be asked the
+ * verdict is `unavailable` and the child blocks the call exactly as it did before.
+ */
+export function createChildPermissionAsker(
+	ctx: ExtensionContext,
+	session: PolyphaseSession,
+	options: ChildPermissionAskerOptions,
+): ChildPermissionAsker {
+	return async (request, signal): Promise<ChildPermissionVerdict> => {
+		try {
+			const gate = new PermissionGate(loadPermissionRules(ctx.cwd, ctx.isProjectTrusted()), {
+				cwd: request.cwd,
+				mode: session.permissionMode(),
+			});
+			const decision = gate.evaluate(request.toolName, request.input);
+			if (decision.action === "deny") return { kind: "denied", reason: decision.reason };
+			if (decision.action === "allow") return { kind: "approved" };
+
+			const via = [options.agentLabel, ...request.via];
+			if (!ctx.hasUI) {
+				if (!options.upstream) return { kind: "unavailable" };
+				return await options.upstream.ask(
+					{ toolName: request.toolName, toolCallId: request.toolCallId, input: forwardableInput(request), via },
+					signal,
+				);
+			}
+
+			return await session.runPermissionPrompt(async (): Promise<ChildPermissionVerdict> => {
+				if (signal.aborted) return { kind: "cancelled" };
+				session.notifyParentPrompt();
+				const requester = via.join(" › ");
+				// The id names the agent too: the call is not in this session's transcript, and a bare
+				// child id (`call-1`) would collide with this session's own in a durable permission record.
+				const call = { ...request, toolCallId: `${via.join("/")}/${request.toolCallId}` };
+				const detail = buildPermissionAskDetail(call, request.cwd, decision.reason, {
+					summary: [`Requested by subagent ${requester}`],
+				});
+				const approved = await ctx.ui.confirm(
+					`Approve ${request.toolName} for subagent ${requester}?`,
+					`${requester} wants to run ${request.toolName}: ${decision.reason}`,
+					{ detail, signal },
+				);
+				if (signal.aborted) return { kind: "cancelled" };
+				return approved
+					? { kind: "approved" }
+					: { kind: "denied", reason: "Denied by the user in the parent session" };
+			}, signal);
+		} catch {
+			// A context gone stale (session replaced or reloaded) or an unreadable permissions.yml:
+			// nobody can answer, so the child blocks the call as it always did.
+			return { kind: "unavailable" };
+		}
+	};
+}
+
+/**
+ * What a spawned child takes from this session's permissions: the mode it starts in, and who
+ * answers the asks its own gate cannot.
+ */
+export function childPermissionContext(
+	ctx: ExtensionContext,
+	session: PolyphaseSession,
+	agentLabel: string,
+): Pick<AgentRunContext, "env" | "onPermissionAsk"> {
+	return {
+		env: permissionEnv(session),
+		onPermissionAsk: createChildPermissionAsker(ctx, session, { agentLabel, upstream: getParentPermissionBridge() }),
 	};
 }
 
@@ -1058,7 +1227,7 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 								modelInfo: choices[i].info,
 								fallbackToChildDefaultModel: choices[i].info.source === "inherited",
 								excludeTools: exclude,
-								env: permissionEnv(session),
+								...childPermissionContext(ctx, session, live[i].label),
 							}),
 						});
 
@@ -1183,7 +1352,7 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 								modelInfo: choices[i].info,
 								fallbackToChildDefaultModel: choices[i].info.source === "inherited",
 								excludeTools: exclude,
-								env: permissionEnv(session),
+								...childPermissionContext(ctx, session, live[i].label),
 							}),
 						});
 
@@ -1290,7 +1459,7 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 							modelInfo: choice.info,
 							fallbackToChildDefaultModel: choice.info.source === "inherited",
 							excludeTools: exclude,
-							env: permissionEnv(session),
+							...childPermissionContext(ctx, session, live.label),
 						});
 
 						const result = await runSingleTask(ctx.cwd, agent, params.task, {
@@ -1404,6 +1573,11 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 						}
 					},
 					beforePrompt: (c) => peekPolyphaseSession(c.sessionManager)?.notifyParentPrompt(),
+					parentBridge: getParentPermissionBridge(),
+					runPrompt: (prompt) => {
+						const session = peekPolyphaseSession(ctx.sessionManager);
+						return session ? session.runPermissionPrompt(prompt, ctx.signal) : prompt();
+					},
 				},
 			)(event, ctx);
 		});

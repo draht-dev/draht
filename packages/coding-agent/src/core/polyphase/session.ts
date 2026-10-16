@@ -30,6 +30,14 @@ export interface PolyphaseSession {
 	onParentPrompt(listener: () => void): () => void;
 	/** The inspector closes so a parent dialog stays reachable. */
 	notifyParentPrompt(): void;
+	/**
+	 * Runs `prompt` once every permission dialog queued before it has settled. The TUI has a single
+	 * dialog slot and a newer dialog displaces the open one, settling it as a refusal, so permission
+	 * asks from parallel agents must take turns or all but the last would be denied unseen. Once
+	 * `signal` aborts, `prompt` runs at once instead of waiting its turn, and must then settle
+	 * without showing anything.
+	 */
+	runPermissionPrompt<T>(prompt: () => Promise<T>, signal?: AbortSignal): Promise<T>;
 	/** Pump interval: `min(100, liveUpdateMs)` while open. */
 	setInspectorOpen(open: boolean): void;
 	readonly disposed: boolean;
@@ -45,6 +53,7 @@ class PolyphaseSessionImpl implements PolyphaseSession {
 	private permissionModeProvider: () => PermissionMode = () => "default";
 	private pendingDirectivesValue: ParsedDirectives | undefined;
 	private readonly parentPromptListeners = new Set<() => void>();
+	private permissionPromptTail: Promise<void> = Promise.resolve();
 	private inspectorOpen = false;
 	private disposedValue = false;
 
@@ -100,6 +109,16 @@ class PolyphaseSessionImpl implements PolyphaseSession {
 		}
 	}
 
+	runPermissionPrompt<T>(prompt: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+		const ahead = this.permissionPromptTail;
+		const turn = settledOrAborted(ahead, signal).then(prompt);
+		// The next prompt waits for BOTH the dialogs ahead and this one: a prompt that left the queue
+		// early because it was aborted must not let the next dialog open over one still showing. A
+		// rejection stays with its own caller.
+		this.permissionPromptTail = Promise.allSettled([ahead, turn]).then(() => undefined);
+		return turn;
+	}
+
 	setInspectorOpen(open: boolean): void {
 		this.inspectorOpen = open;
 		this.applyPumpInterval();
@@ -124,6 +143,20 @@ class PolyphaseSessionImpl implements PolyphaseSession {
 				: this.resolved.liveUpdateMs,
 		);
 	}
+}
+
+/** Resolves once `promise` settles, or as soon as `signal` aborts, whichever is first. */
+function settledOrAborted(promise: Promise<void>, signal: AbortSignal | undefined): Promise<void> {
+	if (!signal) return promise;
+	if (signal.aborted) return Promise.resolve();
+	return new Promise<void>((resolve) => {
+		const onAbort = () => resolve();
+		signal.addEventListener("abort", onAbort, { once: true });
+		void promise.then(() => {
+			signal.removeEventListener("abort", onAbort);
+			resolve();
+		});
+	});
 }
 
 const sessions = new WeakMap<object, PolyphaseSession>();

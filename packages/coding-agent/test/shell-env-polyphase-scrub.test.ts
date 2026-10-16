@@ -9,11 +9,13 @@ describe("getShellEnv", () => {
 	it("scrubs the polyphase child-mode markers so a nested draht never inherits them", () => {
 		vi.stubEnv("DRAHT_POLYPHASE_DEPTH", "1");
 		vi.stubEnv("DRAHT_POLYPHASE_SCHEMA_FILE", "/tmp/schema.json");
+		vi.stubEnv("DRAHT_POLYPHASE_PERMISSION_BRIDGE", "1");
 
 		const env = getShellEnv();
 
 		expect(env).not.toHaveProperty("DRAHT_POLYPHASE_DEPTH");
 		expect(env).not.toHaveProperty("DRAHT_POLYPHASE_SCHEMA_FILE");
+		expect(env).not.toHaveProperty("DRAHT_POLYPHASE_PERMISSION_BRIDGE");
 	});
 
 	it("leaves other environment variables untouched", () => {

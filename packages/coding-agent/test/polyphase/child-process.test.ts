@@ -14,6 +14,7 @@ import {
 	validateStructuredOutput,
 } from "../../src/core/polyphase/child-process.ts";
 import * as jsonlReader from "../../src/core/polyphase/jsonl-reader.ts";
+import { POLYPHASE_PERMISSION_BRIDGE_ENV } from "../../src/core/polyphase/permission-bridge.ts";
 import {
 	DEFAULT_CHILD_STATE_LIMITS,
 	POLYPHASE_DEPTH_ENV,
@@ -832,6 +833,15 @@ describe("buildChildInvocation", () => {
 		const { env } = buildChildInvocation(spec({ baseEnv: { A: "1" }, run: { env: { A: "2", B: "3" } } }), {});
 		expect(env.A).toBe("2");
 		expect(env.B).toBe("3");
+	});
+
+	it("marks the permission bridge only for a child whose asks this process answers", () => {
+		const served = buildChildInvocation(spec({ run: { onPermissionAsk: async () => ({ kind: "approved" }) } }), {});
+		expect(served.env[POLYPHASE_PERMISSION_BRIDGE_ENV]).toBe("1");
+
+		// Inherited from this process's own bridged parent: it must not reach a child nobody serves.
+		const unserved = buildChildInvocation(spec({ baseEnv: { [POLYPHASE_PERMISSION_BRIDGE_ENV]: "1" } }), {});
+		expect(unserved.env[POLYPHASE_PERMISSION_BRIDGE_ENV]).toBeUndefined();
 	});
 });
 

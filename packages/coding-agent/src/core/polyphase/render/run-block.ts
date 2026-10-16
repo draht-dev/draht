@@ -221,7 +221,7 @@ export function sanitizeSnapshot(snapshot: RunSnapshot): RunSnapshot {
 /** The fixed §11.4 mockup wording: a blocked tool's real gate reason (child-events.ts keeps it in
  * full, `NO_UI_APPROVAL_SUFFIX` included) is never shown on the tool row, only in the inspector's
  * expanded detail, so a long or sensitive rule description can never widen or leak onto this line. */
-const BLOCKED_TOOL_TEXT = "blocked: needs approval (subagents cannot ask)";
+const BLOCKED_TOOL_TEXT = "blocked: needs approval, nobody could be asked";
 
 /** The run's true agent count, including any dropped before this snapshot was built (a degraded
  * archived/final `details` with `agentsOmitted` set). `snapshot.counts` already covers every agent

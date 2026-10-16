@@ -713,7 +713,7 @@ export class ChildEventReducer {
 			this.state.blockedCount++;
 			const entry: BlockedToolCall = { toolName: event.toolName, summary: item.summary, reason: text };
 			this.state.blocked = [...this.state.blocked, entry].slice(-20);
-			this.pushNotice("warning", `${event.toolName} blocked: needs approval (subagents cannot ask)`);
+			this.pushNotice("warning", `${event.toolName} blocked: needs approval, nobody could be asked`);
 			this.blockedPending = event.toolName;
 		}
 		if (event.toolName === POLYPHASE_RESULT_TOOL_NAME) {

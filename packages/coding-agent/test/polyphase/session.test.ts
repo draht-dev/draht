@@ -154,6 +154,80 @@ describe("notifyParentPrompt", () => {
 	});
 });
 
+describe("runPermissionPrompt", () => {
+	it("runs one prompt at a time, in the order they were queued", async () => {
+		const session = getPolyphaseSession(trackedKey(), undefined);
+		const events: string[] = [];
+		const release: (() => void)[] = [];
+		const prompt = (name: string) => () =>
+			new Promise<string>((resolve) => {
+				events.push(`start ${name}`);
+				release.push(() => {
+					events.push(`end ${name}`);
+					resolve(name);
+				});
+			});
+
+		const first = session.runPermissionPrompt(prompt("a"));
+		const second = session.runPermissionPrompt(prompt("b"));
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(events).toEqual(["start a"]);
+
+		release[0]?.();
+		await expect(first).resolves.toBe("a");
+		await new Promise((resolve) => setImmediate(resolve));
+		expect(events).toEqual(["start a", "end a", "start b"]);
+
+		release[1]?.();
+		await expect(second).resolves.toBe("b");
+	});
+
+	it("lets a prompt aborted while queued leave at once, without letting the next one displace the open dialog", async () => {
+		const session = getPolyphaseSession(trackedKey(), undefined);
+		const events: string[] = [];
+		let releaseOpen: (() => void) | undefined;
+		const open = session.runPermissionPrompt(
+			() =>
+				new Promise<string>((resolve) => {
+					events.push("open shown");
+					releaseOpen = () => resolve("open");
+				}),
+		);
+		const controller = new AbortController();
+		const withdrawn = session.runPermissionPrompt(async () => {
+			events.push(controller.signal.aborted ? "withdrawn skipped" : "withdrawn shown");
+			return "withdrawn";
+		}, controller.signal);
+		const next = session.runPermissionPrompt(async () => {
+			events.push("next shown");
+			return "next";
+		});
+		await new Promise((resolve) => setImmediate(resolve));
+
+		controller.abort();
+		await expect(withdrawn).resolves.toBe("withdrawn");
+		await new Promise((resolve) => setImmediate(resolve));
+		// The withdrawn prompt did not wait for the open dialog, but the next one still does.
+		expect(events).toEqual(["open shown", "withdrawn skipped"]);
+
+		releaseOpen?.();
+		await expect(open).resolves.toBe("open");
+		await expect(next).resolves.toBe("next");
+		expect(events).toEqual(["open shown", "withdrawn skipped", "next shown"]);
+	});
+
+	it("keeps a rejection with its own caller and lets the next prompt run", async () => {
+		const session = getPolyphaseSession(trackedKey(), undefined);
+		const failing = session.runPermissionPrompt(async () => {
+			throw new Error("dialog failed");
+		});
+		const next = session.runPermissionPrompt(async () => "ran");
+		await expect(failing).rejects.toThrow("dialog failed");
+		await expect(next).resolves.toBe("ran");
+	});
+});
+
 describe("disposePolyphaseSession", () => {
 	it("is idempotent and removes the entry", () => {
 		const key = trackedKey();

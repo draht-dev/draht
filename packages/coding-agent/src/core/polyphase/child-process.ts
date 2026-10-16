@@ -5,7 +5,7 @@
  * side effect (temp files, spawn, line reading, abort escalation) and never rejects.
  */
 
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcess, type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -25,9 +25,16 @@ import {
 } from "./child-events.ts";
 import { attachChildLineReader } from "./jsonl-reader.ts";
 import {
+	type ChildPermissionServer,
+	POLYPHASE_PERMISSION_BRIDGE_ENV,
+	serveChildPermissionAsks,
+} from "./permission-bridge.ts";
+import {
 	type AgentConfig,
 	type AgentRunContext,
 	type AgentRunner,
+	type ChildPermissionRequest,
+	type ChildPermissionVerdict,
 	currentPolyphaseDepth,
 	DUET_DELEGATE_TOOL_NAME,
 	POLYPHASE_DEPTH_ENV,
@@ -44,6 +51,7 @@ const LEGACY_TOOL_SUMMARY_MAX_CHARS = 60;
 const LEGACY_TEXT_PROGRESS_MAX_CHARS = 80;
 const INSPECT_OR_DEBUG_FLAG = /^--(?:inspect|debug)/;
 const STRUCTURED_OUTPUT_NOTICE_MAX_CHARS = 200;
+const PERMISSION_NOTICE_MAX_CHARS = 200;
 
 export interface ChildCommand {
 	bin: string;
@@ -109,8 +117,59 @@ export function buildChildInvocation(
 	} else {
 		delete env[POLYPHASE_SCHEMA_FILE_ENV];
 	}
+	// Set only for a child whose asks this process will answer. A copy inherited from our own bridged
+	// parent must not reach a child we do not serve: it would write asks to a channel nobody reads.
+	if (run?.onPermissionAsk) {
+		env[POLYPHASE_PERMISSION_BRIDGE_ENV] = "1";
+	} else {
+		delete env[POLYPHASE_PERMISSION_BRIDGE_ENV];
+	}
 
 	return { args, env };
+}
+
+function hasPipedStdio(proc: ChildProcess): proc is ChildProcessWithoutNullStreams {
+	return proc.stdin !== null && proc.stdout !== null && proc.stderr !== null;
+}
+
+/** Spawns with piped stdio, plus the IPC channel the permission bridge runs over when `ipc` is set. */
+function spawnChild(
+	command: ChildCommand,
+	args: readonly string[],
+	options: { cwd: string; env: NodeJS.ProcessEnv; ipc: boolean },
+): ChildProcessWithoutNullStreams {
+	const proc = spawn(command.bin, [...command.argsPrefix, ...args], {
+		cwd: options.cwd,
+		env: options.env,
+		shell: false,
+		stdio: options.ipc ? ["pipe", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "pipe"],
+	});
+	if (!hasPipedStdio(proc)) {
+		proc.kill("SIGKILL");
+		throw new Error("child process started without piped stdio");
+	}
+	return proc;
+}
+
+/** The transcript line an agent's run shows for one of its permission asks, or none. */
+function permissionNotice(
+	request: ChildPermissionRequest,
+	verdict?: ChildPermissionVerdict,
+): { level: "info" | "warning"; text: string } | undefined {
+	const summary = summarizeToolArgs(request.toolName, request.input);
+	const call = summary ? `${request.toolName} ${summary}` : request.toolName;
+	const line = (text: string) => truncateProgress(text, PERMISSION_NOTICE_MAX_CHARS);
+	if (verdict === undefined) return { level: "info", text: line(`approval requested: ${call}`) };
+	switch (verdict.kind) {
+		case "approved":
+			return { level: "info", text: line(`approved: ${call}`) };
+		case "denied":
+			return { level: "warning", text: line(`denied: ${call} (${verdict.reason})`) };
+		case "unavailable":
+		case "cancelled":
+			// The child itself reports what became of the call: a blocked tool, or an aborted turn.
+			return undefined;
+	}
 }
 
 function truncateProgress(text: string, max: number): string {
@@ -158,17 +217,21 @@ function spawnAttempt(
 ): Promise<SpawnAttemptResult> {
 	const killGraceMs = spec.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
 	const { args, env } = buildChildInvocation(spec, files, options);
+	const asker = spec.run?.onPermissionAsk;
 
 	return new Promise<SpawnAttemptResult>((resolve) => {
 		let settled = false;
 		let closed = false;
 		let killTimer: NodeJS.Timeout | undefined;
 		let proc: ChildProcessWithoutNullStreams;
+		let permissionServer: ChildPermissionServer | undefined;
 
 		const finishOnce = (exit: ChildExit) => {
 			if (settled) return;
 			settled = true;
 			if (killTimer) clearTimeout(killTimer);
+			// Takes down any dialog still open for this child: nobody is left to receive the answer.
+			permissionServer?.dispose();
 			if (spec.signal) spec.signal.removeEventListener("abort", onAbort);
 			resolve({ exit, finish: reducer.finish(exit) });
 		};
@@ -185,12 +248,7 @@ function spawnAttempt(
 		}
 
 		try {
-			proc = spawn(command.bin, [...command.argsPrefix, ...args], {
-				cwd: spec.cwd,
-				env,
-				shell: false,
-				stdio: ["pipe", "pipe", "pipe"],
-			});
+			proc = spawnChild(command, args, { cwd: spec.cwd, env, ipc: asker !== undefined });
 		} catch (error) {
 			finishOnce({
 				code: null,
@@ -217,6 +275,18 @@ function spawnAttempt(
 		const forward = (change: ReturnType<ChildEventReducer["apply"]>) => {
 			if (change !== "none") spec.run?.onChange?.(change);
 		};
+		const notePermission = (request: ChildPermissionRequest, verdict?: ChildPermissionVerdict) => {
+			const notice = permissionNotice(request, verdict);
+			if (notice && !settled) forward(recordReducerNotice(reducer, notice.level, notice.text));
+		};
+		if (asker) {
+			permissionServer = serveChildPermissionAsks(proc, asker, {
+				cwd: spec.cwd,
+				signal: spec.signal,
+				onAsk: (request) => notePermission(request),
+				onVerdict: (request, verdict) => notePermission(request, verdict),
+			});
+		}
 		const pendingFirstDelta = new Set<number>();
 		attachChildLineReader(
 			proc.stdout,

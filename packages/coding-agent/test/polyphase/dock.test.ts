@@ -34,6 +34,7 @@ function testSession(store: PolyphaseStore, dock = true): PolyphaseSession {
 		clearPendingDirectives: () => {},
 		onParentPrompt: () => () => {},
 		notifyParentPrompt: () => {},
+		runPermissionPrompt: (prompt) => prompt(),
 		setInspectorOpen: () => {},
 		disposed: false,
 		dispose: () => store.dispose(),

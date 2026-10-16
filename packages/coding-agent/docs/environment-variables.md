@@ -74,7 +74,7 @@ When disabled, draht removes inherited values for these variables so nested drah
 
 ## Polyphase Child Coordination
 
-These two variables are internal: draht sets them on a subagent/workflow child process it spawns
+These variables are internal: draht sets them on a subagent/workflow child process it spawns
 and reads them back in that child; they are not meant to be set by hand. See
 [Orchestrate Agents with Polyphase](polyphase.md).
 
@@ -82,6 +82,7 @@ and reads them back in that child; they are not meant to be set by hand. See
 |----------|-------------|
 | `DRAHT_POLYPHASE_DEPTH` | Nesting depth of this process: unset or `0` for the user's session, `n` in a child spawned by a process at depth `n-1`. Used to enforce `polyphase.maxDepth` and to exclude the `subagent` tool once the limit is reached. |
 | `DRAHT_POLYPHASE_SCHEMA_FILE` | Path to a JSON Schema file for this agent's structured result. When set, the child registers a `polyphase_result` tool matching that schema; unset in every other process, including a child whose parent did not request structured output. |
+| `DRAHT_POLYPHASE_PERMISSION_BRIDGE` | `1` when the parent answers this child's permission asks over the IPC channel it spawned the child with, so a tool call the child's own gate holds for approval is asked in the parent session instead of blocked. Unset in every other process, including a child whose parent does not serve its asks. |
 
 ## draht Process Configuration
 
@@ -100,6 +101,7 @@ These variables are read by draht itself:
 | `DRAHT_SHARE_VIEWER_URL` | Base URL of a share viewer for `/share`; when unset, `/share` prints the gist URL |
 | `DRAHT_RADIUS_GATEWAY` | Not consulted by the builtin Radius model provider (which always uses `https://radius.pi.dev`, or a per-provider `baseUrl` from provider config) or by `/bug`; currently has no effect on behavior |
 | `DRAHT_BUG_REPORT_GATEWAY` | Override the `/bug` upload destination; default is `https://radius.draht.dev` |
+| `DRAHT_PERMISSION_MODE` | Initial permission mode of the session: `default`, `auto`, or `yolo`; `/permissions` and `/yolo` change it afterwards. Polyphase children receive the session's current mode in this variable; see [Orchestrate Agents with Polyphase](polyphase.md#permissions) |
 | `DRAHT_NO_ATTACHABLE` | Set to `1`/`true`/`yes` to stop sessions from registering an attach socket; overridden by `--attachable` |
 | `DRAHT_HARDWARE_CURSOR` | Set to `1` to show the hardware cursor; see [Terminal setup](terminal-setup.md) |
 | `DRAHT_HYPERLINKS` | Override OSC 8 hyperlink detection with `1`, `0`, or `auto` |

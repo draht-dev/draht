@@ -358,6 +358,8 @@ describe("duet teammates inherit the session's permission mode", () => {
 		expect(result.isError).toBeFalsy();
 		expect(scripted.calls).toHaveLength(1);
 		expect(modeOf(scripted.calls[0])).toBe("yolo");
+		// A teammate's asks go to this session like any other child's.
+		expect(typeof scripted.calls[0]?.run?.onPermissionAsk).toBe("function");
 	});
 });
 

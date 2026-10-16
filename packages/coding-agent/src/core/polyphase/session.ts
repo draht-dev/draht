@@ -9,6 +9,7 @@ import { AgentLimiter } from "./limiter.ts";
 import { type ResolvedPolyphaseSettings, resolvePolyphaseSettings } from "./settings.ts";
 import { PolyphaseStore } from "./store.ts";
 import { createUpdatePump, type UpdatePump } from "./update-pump.ts";
+import type { ParsedDirectives } from "./workflow/limits.ts";
 
 const INSPECTOR_INTERVAL_CAP_MS = 100;
 
@@ -21,6 +22,11 @@ export interface PolyphaseSession {
 	/** "default" until a provider is set. */
 	permissionMode(): PermissionMode;
 	setPermissionModeProvider(provider: () => PermissionMode): void;
+	/** The latest user prompt's `+500k`/`+30min`-style directives (D-B), kept until the turn
+	 * settles (`clearPendingDirectives`). `undefined` when the current/last turn's prompt had none. */
+	pendingDirectives(): ParsedDirectives | undefined;
+	setPendingDirectives(directives: ParsedDirectives | undefined): void;
+	clearPendingDirectives(): void;
 	onParentPrompt(listener: () => void): () => void;
 	/** The inspector closes so a parent dialog stays reachable. */
 	notifyParentPrompt(): void;
@@ -37,6 +43,7 @@ class PolyphaseSessionImpl implements PolyphaseSession {
 	private readonly pump: UpdatePump;
 	private resolved: ResolvedPolyphaseSettings;
 	private permissionModeProvider: () => PermissionMode = () => "default";
+	private pendingDirectivesValue: ParsedDirectives | undefined;
 	private readonly parentPromptListeners = new Set<() => void>();
 	private inspectorOpen = false;
 	private disposedValue = false;
@@ -64,6 +71,18 @@ class PolyphaseSessionImpl implements PolyphaseSession {
 
 	setPermissionModeProvider(provider: () => PermissionMode): void {
 		this.permissionModeProvider = provider;
+	}
+
+	pendingDirectives(): ParsedDirectives | undefined {
+		return this.pendingDirectivesValue;
+	}
+
+	setPendingDirectives(directives: ParsedDirectives | undefined): void {
+		this.pendingDirectivesValue = directives;
+	}
+
+	clearPendingDirectives(): void {
+		this.pendingDirectivesValue = undefined;
 	}
 
 	onParentPrompt(listener: () => void): () => void {

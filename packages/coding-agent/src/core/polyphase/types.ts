@@ -135,7 +135,11 @@ export type AgentStatus =
 	| "skipped"; // never started because its run ended (e.g. chain stopped)
 export type AgentActivity = "idle" | "waiting" | "thinking" | "writing" | "tool" | "retrying" | "compacting";
 export type ModelSource = "override" | "phase" | "frontmatter" | "inherited" | "child-default";
-export type CancelReason = "user" | "budget" | "run" | "parent" | "shutdown";
+export type CancelReason = "user" | "budget" | "time" | "run" | "parent" | "shutdown";
+
+/** Where a resolved workflow limit (token budget or time limit) came from: the user's own prompt,
+ * a tool/command parameter the model or user set, config, or nowhere ("none"). */
+export type LimitSource = "prompt" | "tool" | "config" | "none";
 
 export interface AgentModelInfo {
 	source: ModelSource;
@@ -268,6 +272,11 @@ export interface WorkflowRunInfo {
 	source: WorkflowSource;
 	path?: string;
 	args: string;
+	/** Where the run's token budget and time limit came from (D-B precedence: prompt > tool >
+	 * config > none). Absent (treated as "none") only for a `RunView`/`PolyphaseDetails` built
+	 * before this field existed. */
+	budgetSource?: LimitSource;
+	timeLimitSource?: LimitSource;
 }
 
 export interface LogLine {
@@ -310,6 +319,9 @@ export interface RunView {
 	readonly log: readonly LogLine[];
 	readonly logDropped: number;
 	readonly budget: Readonly<{ totalTokens: number | null; spentTokens: number; exhausted: boolean }>;
+	/** Absent (treated as "no time limit, not reached") for a fixture/snapshot built before this
+	 * field existed. */
+	readonly timeLimit?: Readonly<{ totalMs: number | null; reached: boolean }>;
 	readonly resultPreview?: string;
 	readonly error?: string;
 	readonly version: number;
@@ -329,7 +341,15 @@ export interface PolyphaseDetails {
 	status: RunStatus;
 	startedAt: number;
 	endedAt?: number;
-	workflow?: { name: string; description: string; source: WorkflowSource; path?: string; args?: string };
+	workflow?: {
+		name: string;
+		description: string;
+		source: WorkflowSource;
+		path?: string;
+		args?: string;
+		budgetSource?: LimitSource;
+		timeLimitSource?: LimitSource;
+	};
 	phases?: PhaseDetails[];
 	currentPhase?: number;
 	agents: AgentDetails[];
@@ -346,6 +366,7 @@ export interface PolyphaseDetails {
 		blockedToolCalls: number;
 	};
 	budget?: { totalTokens: number; spentTokens: number; exhausted: boolean };
+	timeLimit?: { totalMs: number; reached: boolean };
 	resultPreview?: string;
 	error?: string;
 	/** Degradation level applied to fit the byte cap (§9.2). */

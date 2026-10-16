@@ -22,7 +22,7 @@ const KEYWORD_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{2,31}$/;
 const WORKFLOW_TOOL_VALUES = new Set(["keyword", "always", "off"]);
 const MIN_DEFAULT_BUDGET_TOKENS = 1000;
 // Node's setTimeout silently truncates any larger delay to 1ms (TimeoutOverflowWarning).
-const MAX_SET_TIMEOUT_MS = 2_147_483_647;
+export const MAX_SET_TIMEOUT_MS = 2_147_483_647;
 
 // Settings files are untyped JSON at runtime; a field declared `number` in PolyphaseSettings can
 // still arrive as a string, null or NaN from a hand-edited settings.json.

@@ -23,6 +23,7 @@ import { resolvePolyphaseSettings } from "../polyphase/settings.ts";
 import { type AgentRunner, currentPolyphaseDepth, WORKFLOW_TOOL_NAME } from "../polyphase/types.ts";
 import { installPolyphaseUi, type PolyphaseUiController } from "../polyphase/ui/controller.ts";
 import { buildAuthoringGuide } from "../polyphase/workflow/guidance.ts";
+import { mergePromptDirectives, parsePromptDirectives } from "../polyphase/workflow/limits.ts";
 import { discoverSavedWorkflows, type SavedWorkflow, type SavedWorkflowSummary } from "../polyphase/workflow/saved.ts";
 import { registerChildResultTool } from "../polyphase/workflow/structured-output.ts";
 import { createWorkflowToolDefinition } from "../polyphase/workflow/tool.ts";
@@ -165,9 +166,29 @@ export function createPolyphaseExtension(options: PolyphaseExtensionOptions = {}
 			buildGuide,
 		});
 
-		pi.on("input", (event, ctx) => keywordHooks.onInput(event, ctx));
+		pi.on("input", (event, ctx) => {
+			// D-B: captures the latest user prompt's `+500k`/`+30min`-style directives for this turn,
+			// regardless of whether the keyword matched (the workflow tool may already be active via
+			// `workflowTool: "always"` or a resumed session) — kept until `agent_settled` below.
+			// A prompt that starts a turn replaces them. A steer or follow-up typed while the turn runs
+			// only adds what it states: "skip the e2e tests" must not wipe the `+500k` the turn began
+			// with and leave a paid run uncapped.
+			if (event.source !== "extension") {
+				const session = getPolyphaseSession(ctx.sessionManager, pi.getSettings().polyphase);
+				const directives = parsePromptDirectives(event.text);
+				session.setPendingDirectives(
+					event.streamingBehavior === undefined
+						? directives
+						: mergePromptDirectives(session.pendingDirectives(), directives),
+				);
+			}
+			return keywordHooks.onInput(event, ctx);
+		});
 		pi.on("before_agent_start", (event, ctx) => keywordHooks.onBeforeAgentStart(event, ctx));
-		pi.on("agent_settled", (_event, ctx) => keywordHooks.onAgentSettled(ctx));
+		pi.on("agent_settled", (_event, ctx) => {
+			getPolyphaseSession(ctx.sessionManager, pi.getSettings().polyphase).clearPendingDirectives();
+			keywordHooks.onAgentSettled(ctx);
+		});
 
 		pi.on("session_start", (_event, ctx) => {
 			const session = getPolyphaseSession(ctx.sessionManager, pi.getSettings().polyphase);

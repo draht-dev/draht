@@ -227,6 +227,34 @@ describe("workflow tool", () => {
 		expect(text).toContain('"billing"');
 	});
 
+	it("shows the no-limits disclaimer in the start narrator line and the final result's Limits line", async () => {
+		const scripted = createScriptedRunner((call) => textOutput(call));
+		const harness = await createWorkflowHarness(scripted.runner);
+		harnesses.push(harness);
+
+		const script = `export const meta = { name: "no-limits-demo", description: "No limits demo", phases: [{ title: "Only" }] };
+			return await agent("task");`;
+
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall(WORKFLOW_TOOL_NAME, { script }, { id: "wf-no-limits" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage("ok", { stopReason: "stop" }),
+		]);
+
+		await harness.session.prompt("run the no limits demo");
+
+		const result = getToolResult(harness, WORKFLOW_TOOL_NAME);
+		const details = result.details;
+		expect(isPolyphaseDetails(details)).toBe(true);
+		if (!isPolyphaseDetails(details)) throw new Error("expected valid polyphase details");
+		expect(details.log?.some((line) => line.startsWith("Limits: no token budget and no time limit"))).toBe(true);
+
+		const text = toolResultText(result);
+		expect(text).toContain("Limits: no token budget and no time limit");
+		expect(text).toContain("polyphase.defaultBudgetTokens");
+	});
+
 	it("exhausts the budget: later agent() calls return null and details.budget is exhausted", async () => {
 		const scripted = createScriptedRunner((call) => textOutput(call, wire.usage(2000, 0, 0)));
 		const harness = await createWorkflowHarness(scripted.runner);
@@ -258,6 +286,45 @@ describe("workflow tool", () => {
 		expect(text.toLowerCase()).toContain("budget");
 		expect(text).toMatch(/"second":\s*null/);
 	});
+
+	it("reaches a time limit from the tool's timeLimit param: later agent() calls return null and details.timeLimit is reached", async () => {
+		// The first call's records are paced past the 1s time limit, so the limit has already fired
+		// by the time the script reaches its second `agent()` call.
+		const scripted = createScriptedRunner((call) => ({ ...textOutput(call), stepDelayMs: 350 }));
+		const harness = await createWorkflowHarness(scripted.runner);
+		harnesses.push(harness);
+
+		const script = `export const meta = { name: "time-limit-demo", description: "Time limit demo", phases: [{ title: "Only" }] };
+			const first = await agent("first task");
+			const second = await agent("second task");
+			return { first, second };`;
+
+		harness.setResponses([
+			fauxAssistantMessage(
+				[fauxToolCall(WORKFLOW_TOOL_NAME, { script, timeLimit: "1s" }, { id: "wf-time-limit" })],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("ok", { stopReason: "stop" }),
+		]);
+
+		await harness.session.prompt("run the time limit demo");
+
+		const result = getToolResult(harness, WORKFLOW_TOOL_NAME);
+		const details = result.details;
+		expect(isPolyphaseDetails(details)).toBe(true);
+		if (!isPolyphaseDetails(details)) throw new Error("expected valid polyphase details");
+		expect(details.timeLimit?.reached).toBe(true);
+		expect(details.log?.some((line) => line.includes("agent(...) returns null"))).toBe(true);
+		// The second agent() call never reaches the runner at all.
+		expect(scripted.calls).toHaveLength(1);
+
+		const text = toolResultText(result);
+		expect(text).toContain("cancelled (time limit)");
+		expect(text).toMatch(/"first":\s*null/);
+		expect(text).toMatch(/"second":\s*null/);
+		expect(text).toContain("Limits:");
+		expect(text).toContain("time limit 1s (set by the model)");
+	}, 10_000);
 
 	it("cancelling one agent mid-run makes agent() return null without failing the run", async () => {
 		const scripted = createScriptedRunner(() => ({ records: [], hangUntilAbort: true }));

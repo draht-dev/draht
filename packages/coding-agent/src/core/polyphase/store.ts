@@ -24,6 +24,7 @@ import {
 	type WorkflowRunInfo,
 } from "./types.ts";
 import type { UpdatePump } from "./update-pump.ts";
+import { formatLimitDuration } from "./workflow/limits.ts";
 
 export interface RunInit {
 	id: string;
@@ -34,6 +35,8 @@ export interface RunInit {
 	workflow?: WorkflowRunInfo;
 	phases?: readonly { title: string; detail?: string; model?: string }[];
 	budgetTokens: number | null;
+	/** `null`/`<= 0` disables the graceful time-limit timer (store.ts §D-B). */
+	timeLimitMs?: number | null;
 	parentSignal?: AbortSignal;
 }
 
@@ -225,6 +228,7 @@ export class PolyphaseRun implements RunView {
 	private readonly logList: LogLine[] = [];
 	private readonly flushListeners = new Set<(run: PolyphaseRun, coarse: boolean) => void>();
 	private readonly budgetTotal: number | null;
+	private readonly timeLimitTotal: number | null;
 	private readonly parentSignal: AbortSignal | undefined;
 	private readonly parentAbortHandler: (() => void) | undefined;
 
@@ -236,6 +240,8 @@ export class PolyphaseRun implements RunView {
 	private errorValue: string | undefined;
 	private logDroppedValue = 0;
 	private budgetExhausted = false;
+	private timeLimitReachedValue = false;
+	private timeLimitTimer: ReturnType<typeof setTimeout> | undefined;
 	private warnedDynamicPhase = false;
 	private warnedPhaseCap = false;
 	private cancelReasonValue: CancelReason | undefined;
@@ -251,9 +257,15 @@ export class PolyphaseRun implements RunView {
 		this.workflow = init.workflow;
 		this.phasesList = (init.phases ?? []).map((phase) => ({ ...phase, dynamic: false }));
 		this.budgetTotal = init.budgetTokens;
+		this.timeLimitTotal =
+			init.timeLimitMs !== undefined && init.timeLimitMs !== null && init.timeLimitMs > 0 ? init.timeLimitMs : null;
 		this.startedAt = deps.now();
 		this.createSeq = deps.nextSeq();
 		this.signal = this.controller.signal;
+
+		if (this.timeLimitTotal !== null) {
+			this.timeLimitTimer = setTimeout(() => this.triggerTimeLimit(), this.timeLimitTotal);
+		}
 
 		if (init.parentSignal) {
 			this.parentSignal = init.parentSignal;
@@ -301,6 +313,10 @@ export class PolyphaseRun implements RunView {
 
 	get budget(): Readonly<{ totalTokens: number | null; spentTokens: number; exhausted: boolean }> {
 		return { totalTokens: this.budgetTotal, spentTokens: this.spentTokens(), exhausted: this.budgetExhausted };
+	}
+
+	get timeLimit(): Readonly<{ totalMs: number | null; reached: boolean }> {
+		return { totalMs: this.timeLimitTotal, reached: this.timeLimitReachedValue };
 	}
 
 	get resultPreview(): string | undefined {
@@ -396,6 +412,7 @@ export class PolyphaseRun implements RunView {
 	}
 
 	cancel(reason: CancelReason): void {
+		this.clearTimeLimitTimer();
 		if (this.cancelReasonValue === undefined) this.cancelReasonValue = reason;
 		for (const agent of this.agentsList) agent.cancel(reason);
 		if (!this.controller.signal.aborted) this.controller.abort();
@@ -405,6 +422,7 @@ export class PolyphaseRun implements RunView {
 	/** Pending agents become skipped; the heartbeat stops; retention runs. */
 	finish(status: RunStatus, error?: string): void {
 		if (this.statusValue !== "running") return;
+		this.clearTimeLimitTimer();
 		for (const agent of this.agentsList) {
 			if (agent.status === "pending") agent.markSkipped();
 		}
@@ -470,6 +488,33 @@ export class PolyphaseRun implements RunView {
 		this.budgetExhausted = true;
 		for (const agent of this.agentsList) agent.cancel("budget");
 		this.appendLog(`budget of ${this.budgetTotal} tokens reached; remaining agents are skipped`, "warning");
+	}
+
+	/** Mirrors `checkBudget`: cancels every running/queued agent with reason "time" (an already
+	 * terminal agent's `cancel()` is a no-op) and marks the run so `agent-host.ts` can refuse every
+	 * later `agent()` call. Unlike `cancel()`, this never aborts the run's own signal — the script
+	 * keeps running so it can still return partial results. */
+	private triggerTimeLimit(): void {
+		this.timeLimitTimer = undefined;
+		if (this.timeLimitReachedValue || this.statusValue !== "running") return;
+		this.timeLimitReachedValue = true;
+		for (const agent of this.agentsList) agent.cancel("time");
+		this.appendLog(
+			`time limit of ${formatLimitDuration(this.timeLimitTotal ?? 0)} reached; running and queued agents are cancelled`,
+			"warning",
+		);
+	}
+
+	/** The script returned: a time limit elapsing while its last agents wind down must not mark a
+	 * run that finished in time as time-limited. No-op once the limit has been reached. */
+	disarmTimeLimit(): void {
+		this.clearTimeLimitTimer();
+	}
+
+	private clearTimeLimitTimer(): void {
+		if (this.timeLimitTimer === undefined) return;
+		clearTimeout(this.timeLimitTimer);
+		this.timeLimitTimer = undefined;
 	}
 }
 

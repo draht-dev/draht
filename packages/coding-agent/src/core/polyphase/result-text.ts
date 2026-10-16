@@ -1,6 +1,7 @@
 import type { JsonValue } from "@draht/ai";
 import { billableTokens, extractStatusLine } from "./child-events.ts";
 import type { AgentView, RunView, SubagentMode } from "./types.ts";
+import { formatLimitDuration, formatWorkflowLimitsLine, type ResolvedWorkflowLimits } from "./workflow/limits.ts";
 
 /**
  * Text handed back to the parent model for subagent and workflow tool calls (D3). Bounded by
@@ -149,10 +150,14 @@ function appendBlockedNote(parts: string[], run: RunView): void {
 	if (note) parts.push(note);
 }
 
+function cancelReasonWord(reason: string | undefined): string {
+	return reason === "time" ? "time limit" : (reason ?? "user");
+}
+
 function formatSingleAgent(agent: AgentView | undefined, now: number): string {
 	if (!agent) return "";
 	if (agent.status === "cancelled") {
-		const base = `CANCELLED by ${agent.cancelReason ?? "user"} after ${formatElapsedAgent(agent, now)}`;
+		const base = `CANCELLED by ${cancelReasonWord(agent.cancelReason)} after ${formatElapsedAgent(agent, now)}`;
 		const output = agentOutput(agent);
 		return output.length > 0 ? `${base}\n${capHeadTail(output, 8000).text}` : base;
 	}
@@ -321,7 +326,9 @@ function formatWorkflowAgents(run: RunView): string {
 	const lines = run.agents.slice(0, 100).map((agent) => {
 		const output = agentOutput(agent);
 		const info =
-			extractStatusLine(output) ?? firstNonBlankLine(agent.result?.stderr || agent.state.errorMessage || "");
+			agent.status === "cancelled"
+				? `cancelled (${cancelReasonWord(agent.cancelReason)})`
+				: (extractStatusLine(output) ?? firstNonBlankLine(agent.result?.stderr || agent.state.errorMessage || ""));
 		return truncateLine(`${agent.label} ${agent.status} ${modelLabel(agent)} ${info}`.trimEnd(), 200);
 	});
 	return ["Agents:", ...lines].join("\n");
@@ -330,6 +337,19 @@ function formatWorkflowAgents(run: RunView): string {
 function formatBudgetNotice(run: RunView): string {
 	const total = run.budget.totalTokens ?? 0;
 	return `Budget exhausted: ${formatTokensPlain(run.budget.spentTokens)} / ${formatTokensPlain(total)} tokens; remaining agents were skipped.`;
+}
+
+function formatTimeLimitNotice(run: RunView): string {
+	return `Time limit of ${formatLimitDuration(run.timeLimit?.totalMs ?? 0)} reached; running and queued agents were cancelled.`;
+}
+
+/** Reconstructs the run's resolved limits (value + source) from the persisted/live view, for the
+ * `Limits:` line every workflow result shows (D-B). */
+function runWorkflowLimits(run: RunView): ResolvedWorkflowLimits {
+	return {
+		budgetTokens: { value: run.budget.totalTokens, source: run.workflow?.budgetSource ?? "none" },
+		timeLimitMs: { value: run.timeLimit?.totalMs ?? null, source: run.workflow?.timeLimitSource ?? "none" },
+	};
 }
 
 function formatScriptError(outcome: WorkflowOutcomeSummary): string | undefined {
@@ -354,9 +374,11 @@ export function formatWorkflowResultText(run: RunView, outcome: WorkflowOutcomeS
 
 	const trailer: string[] = [];
 	if (run.budget.exhausted) trailer.push(formatBudgetNotice(run));
+	if (run.timeLimit?.reached) trailer.push(formatTimeLimitNotice(run));
 	const scriptError = formatScriptError(outcome);
 	if (scriptError) trailer.push(scriptError);
 	appendBlockedNote(trailer, run);
+	trailer.push(`Limits: ${formatWorkflowLimitsLine(runWorkflowLimits(run))}`);
 	if (trailer.length > 0) sections.push(trailer.join("\n"));
 
 	return sections.join("\n\n");

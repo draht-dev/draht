@@ -442,7 +442,7 @@ describe("formatWorkflowResultText", () => {
 		});
 
 		const text = formatWorkflowResultText(run, { ok: true, consoleOutput: [] });
-		const agentsSection = text.slice(text.indexOf("Agents:"));
+		const agentsSection = text.slice(text.indexOf("Agents:")).split("\n\n")[0] ?? "";
 		const agentLines = agentsSection.split("\n").filter((l) => l.length > 0);
 
 		expect(agentLines).toHaveLength(2); // "Agents:" plus exactly one line for the one agent

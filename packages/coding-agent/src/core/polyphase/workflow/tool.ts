@@ -18,6 +18,7 @@ import {
 } from "../types.ts";
 import { WORKFLOW_PROMPT_GUIDELINES, WORKFLOW_PROMPT_SNIPPET, WORKFLOW_TOOL_DESCRIPTION } from "./guidance.ts";
 import { startWorkflowRun } from "./launch.ts";
+import { parseDurationMs, resolveWorkflowLimits } from "./limits.ts";
 import { extractWorkflowMeta } from "./meta.ts";
 import { discoverSavedWorkflows, findSavedWorkflow, readSavedWorkflowSource } from "./saved.ts";
 
@@ -38,7 +39,17 @@ const WorkflowParams = Type.Object({
 	budgetTokens: Type.Optional(
 		Type.Integer({
 			minimum: 1000,
-			description: "Hard ceiling on billable tokens (input + output + cache writes) across all agents of this run",
+			description:
+				"Hard ceiling on billable tokens across all agents of this run. Set this ONLY when the user stated a " +
+				'limit in words (e.g. "at most 300k tokens"); never invent one.',
+		}),
+	),
+	timeLimit: Type.Optional(
+		Type.String({
+			description:
+				'Wall-clock time limit for this run, e.g. "30min", "2h", "1h30min". Set this ONLY when the user stated ' +
+				'a limit in words (e.g. "stop after 20 minutes"); never invent one. Past the limit, the run cancels ' +
+				"running/queued agents and finishes with partial results.",
 		}),
 	),
 });
@@ -80,9 +91,25 @@ export function createWorkflowToolDefinition(
 			if (currentPolyphaseDepth() >= 1) {
 				return errorResult("The workflow tool is not available to subagents.");
 			}
+			if (params.timeLimit !== undefined && parseDurationMs(params.timeLimit) === undefined) {
+				return errorResult(
+					`timeLimit "${params.timeLimit}" is not a valid duration. Use e.g. "30min", "2h", "90s", "1h30min".`,
+				);
+			}
 
 			const session = deps.getSession(ctx);
 			const settings = session.settings();
+			const limits = resolveWorkflowLimits({
+				prompt: session.pendingDirectives(),
+				tool: {
+					budgetTokens: params.budgetTokens,
+					timeLimitMs: params.timeLimit !== undefined ? parseDurationMs(params.timeLimit) : undefined,
+				},
+				config: {
+					budgetTokens: settings.defaultBudgetTokens,
+					timeLimitMs: settings.workflowTimeoutMs > 0 ? settings.workflowTimeoutMs : null,
+				},
+			});
 
 			let source: string;
 			let sourceInfo: { kind: WorkflowSource; path?: string };
@@ -129,7 +156,7 @@ export function createWorkflowToolDefinition(
 				body: extraction.body,
 				args: params.args ?? "",
 				source: sourceInfo,
-				budgetTokens: params.budgetTokens ?? settings.defaultBudgetTokens,
+				limits,
 				runner: deps.runner,
 			});
 			// §13.1: unknown meta keys (e.g. a typo'd phase field) produce warnings instead of

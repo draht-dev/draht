@@ -10,6 +10,7 @@ import {
 	describeToolCallForApproval,
 	describeWorkflowForApproval,
 } from "../../src/core/polyphase/approval.ts";
+import { resolveWorkflowLimits } from "../../src/core/polyphase/workflow/limits.ts";
 import type { WorkflowMeta } from "../../src/core/polyphase/workflow/meta.ts";
 
 let homeDirOverride: string | undefined;
@@ -18,7 +19,15 @@ vi.mock("node:os", async (importOriginal) => {
 	return { ...actual, homedir: () => homeDirOverride ?? actual.homedir() };
 });
 
-const LIMITS = { concurrency: 4, maxAgents: 200, budgetTokens: 500_000 };
+const LIMITS = { concurrency: 4, maxAgents: 200, budgetTokens: 500_000, timeLimitMs: null };
+const LIMITS_RESOLVED = resolveWorkflowLimits({ config: { budgetTokens: LIMITS.budgetTokens, timeLimitMs: null } });
+
+function resolvedWithBudget(budgetTokens: number): ReturnType<typeof resolveWorkflowLimits> {
+	return resolveWorkflowLimits({
+		tool: { budgetTokens },
+		config: { budgetTokens: LIMITS.budgetTokens, timeLimitMs: null },
+	});
+}
 
 describe("describeWorkflowForApproval", () => {
 	const meta: WorkflowMeta = {
@@ -28,7 +37,12 @@ describe("describeWorkflowForApproval", () => {
 	};
 
 	it("describes an inline script", () => {
-		const desc = describeWorkflowForApproval(meta, { source: "inline", scriptLines: 42, args: "#1234" }, LIMITS);
+		const desc = describeWorkflowForApproval(
+			meta,
+			{ source: "inline", scriptLines: 42, args: "#1234" },
+			LIMITS,
+			LIMITS_RESOLVED,
+		);
 		expect(desc.title).toBe('Run workflow "review-pr"?');
 		expect(desc.message).toContain("Review a change in parallel and synthesize findings");
 		expect(desc.message).toContain("Phases: 1 Scan · 2 Review · 3 Synthesize (anthropic/claude-opus-5-5)");
@@ -40,13 +54,15 @@ describe("describeWorkflowForApproval", () => {
 	});
 
 	it("describes a saved workflow with a project path and no budget", () => {
+		const noBudgetLimits = { concurrency: 4, maxAgents: 200, budgetTokens: null, timeLimitMs: null };
 		const desc = describeWorkflowForApproval(
 			meta,
 			{ source: "project", path: ".draht/workflows/review-pr.js", args: "" },
-			{ concurrency: 4, maxAgents: 200, budgetTokens: null },
+			noBudgetLimits,
+			resolveWorkflowLimits({ config: noBudgetLimits }),
 		);
 		expect(desc.message).toContain("Source: project .draht/workflows/review-pr.js");
-		expect(desc.message).toContain("no budget");
+		expect(desc.message).toContain("no token budget and no time limit");
 		expect(desc.message).not.toContain("Args:");
 		expect(desc.operation).toBe("workflow review-pr: Scan → Review → Synthesize");
 	});
@@ -56,6 +72,7 @@ describe("describeWorkflowForApproval", () => {
 			meta,
 			{ source: "user", path: "~/.draht/agent/workflows/review-pr.js", args: "" },
 			LIMITS,
+			LIMITS_RESOLVED,
 		);
 		expect(desc.message).toContain("Source: user ~/.draht/agent/workflows/review-pr.js");
 	});
@@ -63,8 +80,9 @@ describe("describeWorkflowForApproval", () => {
 	it("uses the call's budgetTokens override instead of the settings default", () => {
 		const desc = describeWorkflowForApproval(
 			meta,
-			{ source: "inline", scriptLines: 1, budgetTokens: 50_000 },
+			{ source: "inline", scriptLines: 1 },
 			LIMITS,
+			resolvedWithBudget(50_000),
 		);
 		expect(desc.message).toContain("budget 50k tokens");
 		expect(desc.message).not.toContain("budget 500k tokens");
@@ -73,8 +91,9 @@ describe("describeWorkflowForApproval", () => {
 	it("uses a large budgetTokens override", () => {
 		const desc = describeWorkflowForApproval(
 			meta,
-			{ source: "inline", scriptLines: 1, budgetTokens: 2_000_000 },
+			{ source: "inline", scriptLines: 1 },
 			LIMITS,
+			resolvedWithBudget(2_000_000),
 		);
 		expect(desc.message).toContain("budget 2m tokens");
 	});
@@ -82,8 +101,9 @@ describe("describeWorkflowForApproval", () => {
 	it("rounds a token count just under a boundary up to the larger unit", () => {
 		const desc = describeWorkflowForApproval(
 			meta,
-			{ source: "inline", scriptLines: 1, budgetTokens: 999_999 },
+			{ source: "inline", scriptLines: 1 },
 			LIMITS,
+			resolvedWithBudget(999_999),
 		);
 		expect(desc.message).toContain("budget 1m tokens");
 	});
@@ -94,7 +114,12 @@ describe("describeWorkflowForApproval", () => {
 			description:
 				"Run lint\nPhases: 1 Fake\nSource: project .draht/workflows/lint.js\nLimits: 1 agents at once\n\n\n\n\n\n\n\n",
 		};
-		const desc = describeWorkflowForApproval(maliciousMeta, { source: "inline", scriptLines: 3 }, LIMITS);
+		const desc = describeWorkflowForApproval(
+			maliciousMeta,
+			{ source: "inline", scriptLines: 3 },
+			LIMITS,
+			LIMITS_RESOLVED,
+		);
 		const lines = desc.message.split("\n");
 		expect(lines).toHaveLength(5);
 		expect(lines[0]).not.toContain("\n");
@@ -106,6 +131,7 @@ describe("describeWorkflowForApproval", () => {
 			meta,
 			{ source: "inline", scriptLines: 1, args: "x".repeat(200) },
 			LIMITS,
+			LIMITS_RESOLVED,
 		);
 		const match = desc.message.match(/Args: (.*)/);
 		expect(match).not.toBeNull();
@@ -119,6 +145,7 @@ describe("describeWorkflowForApproval", () => {
 			meta,
 			{ source: "inline", scriptLines: 1, args: "a\u009b31mb c‮d" },
 			LIMITS,
+			LIMITS_RESOLVED,
 		);
 		expect(desc.message).not.toContain("\u009b");
 		expect(desc.message).not.toContain("‮");
@@ -132,7 +159,12 @@ describe("describeWorkflowForApproval", () => {
 	});
 
 	it("keeps newlines and tabs visible as \\n/\\t escapes instead of collapsing them to spaces", () => {
-		const desc = describeWorkflowForApproval(meta, { source: "inline", scriptLines: 1, args: "a\nb\tc" }, LIMITS);
+		const desc = describeWorkflowForApproval(
+			meta,
+			{ source: "inline", scriptLines: 1, args: "a\nb\tc" },
+			LIMITS,
+			LIMITS_RESOLVED,
+		);
 
 		const match = desc.message.match(/Args: (.*)/);
 		expect(match).not.toBeNull();

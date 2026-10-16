@@ -50,9 +50,12 @@ function failureDetail(stderr: string, errorMessage: string | undefined, exitCod
 	return `exit code ${exitCode}`;
 }
 
-/** `cancelReason "user"` reads as "you" in the log line; every other reason reads verbatim. */
+/** `cancelReason "user"` reads as "you", "time" reads as "time limit" (matching the §D-B wording
+ * used elsewhere), every other reason reads verbatim. */
 function cancelReasonText(reason: CancelReason | undefined): string {
-	return reason === "user" ? "you" : (reason ?? "run");
+	if (reason === "user") return "you";
+	if (reason === "time") return "time limit";
+	return reason ?? "run";
 }
 
 export interface WorkflowAgentHost extends WorkflowHost {
@@ -65,6 +68,7 @@ export interface WorkflowAgentHost extends WorkflowHost {
 export function createWorkflowAgentHost(deps: WorkflowAgentHostDeps): WorkflowAgentHost {
 	let cachedAgents: Map<string, AgentConfig> | undefined;
 	let budgetNoticeLogged = false;
+	let timeLimitNoticeLogged = false;
 	const agentTypeCounts = new Map<string, number>();
 	const usedLabels = new Set<string>();
 	const inFlight = new Set<Promise<unknown>>();
@@ -112,6 +116,13 @@ export function createWorkflowAgentHost(deps: WorkflowAgentHostDeps): WorkflowAg
 				deps.run.appendLog("budget exhausted; agent(...) returns null", "warning");
 			}
 			return { kind: "null", reason: "budget" };
+		}
+		if (deps.run.timeLimit.reached) {
+			if (!timeLimitNoticeLogged) {
+				timeLimitNoticeLogged = true;
+				deps.run.appendLog("time limit reached; agent(...) returns null", "warning");
+			}
+			return { kind: "null", reason: "time" };
 		}
 
 		let agentTypeDisplay: string;

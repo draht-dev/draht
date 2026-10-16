@@ -266,7 +266,7 @@ function agentRowRightText(row: AgentSnapshotRow, showThinking: boolean): string
 		case "skipped":
 			return "not run";
 		case "cancelled":
-			return "cancelled";
+			return row.cancelReason === "time" ? "cancelled (time limit)" : "cancelled";
 		case "done":
 			// A finished agent with no `now` and no `STATUS:` line still has output worth showing
 			// (§11.3's tool-row fallback does the same): the first line beats a blank column.

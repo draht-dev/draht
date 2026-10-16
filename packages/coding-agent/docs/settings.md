@@ -46,13 +46,13 @@ See [Choose a Model](models.md) for model selection and thinking controls.
 | `polyphase.maxItemsPerCall` | number | `1024` | Items allowed per `parallel()`/`pipeline()` call. Range 1-4096. |
 | `polyphase.workflowTool` | `"keyword"` \| `"always"` \| `"off"` | `"keyword"` | When the `workflow` tool is available: on the keyword, always, or never. |
 | `polyphase.keyword` | string | `"polyphase"` | Keyword that enables the `workflow` tool for one prompt. Must match `/^[A-Za-z][A-Za-z0-9_-]{2,31}$/`. |
-| `polyphase.defaultBudgetTokens` | number | Unlimited | Token budget for workflow runs that set none. Minimum `1000`. |
+| `polyphase.defaultBudgetTokens` | number | Unlimited | Token budget for a workflow run, used only when the user's own prompt (e.g. `+500k`) and the `budgetTokens` tool/command parameter are both absent. Minimum `1000`. |
 | `polyphase.resultChars` | number | `64000` | Characters of agent output returned to the parent model for a parallel `subagent` call, split across agents (2,000-16,000 each). Single, chain, and `workflow` calls use fixed caps instead. Range 8000-400000. |
 | `polyphase.dock` | boolean | `true` | Show the running-agents dock above the editor. |
 | `polyphase.maxDepth` | number | `2` | Delegation depth. A child spawned at this depth gets no `subagent` tool. Range 1-4. |
 | `polyphase.liveUpdateMs` | number | `250` | Live update interval for tool rows, in milliseconds. Range 100-2000. |
 | `polyphase.retainRuns` | number | `20` | Finished runs kept in memory for the agent inspector. Range 1-100. |
-| `polyphase.workflowTimeoutMs` | number | `0` | Wall-clock deadline for a workflow run, in milliseconds, including time spent waiting on agents. `0` means no deadline. |
+| `polyphase.workflowTimeoutMs` | number | `0` | Graceful time limit for a workflow run, in milliseconds, used only when the user's own prompt (e.g. `+30min`) and the `timeLimit` tool/command parameter are both absent. `0` means no limit. Past the limit, running/queued agents are cancelled and the script finishes with partial results; a hard sandbox deadline 60s later is the backstop. |
 
 Available built-in tools are `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, and `ls`. `defaultTools` can also name `codemode` and `tool_search`, which built-in extensions register inactive, and other extension tools registered inactive.
 

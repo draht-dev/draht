@@ -390,6 +390,8 @@ function buildAtLevel(
 			source: run.workflow.source,
 			...(run.workflow.path !== undefined ? { path: truncateChars(run.workflow.path, plan.workflowPathMax) } : {}),
 			args: truncateChars(run.workflow.args, plan.workflowArgsMax),
+			budgetSource: run.workflow.budgetSource,
+			timeLimitSource: run.workflow.timeLimitSource,
 		};
 	}
 	if (run.phases.length > 0) {
@@ -405,6 +407,9 @@ function buildAtLevel(
 			spentTokens: run.budget.spentTokens,
 			exhausted: run.budget.exhausted,
 		};
+	}
+	if (run.timeLimit?.totalMs !== null && run.timeLimit?.totalMs !== undefined) {
+		details.timeLimit = { totalMs: run.timeLimit.totalMs, reached: run.timeLimit.reached };
 	}
 	if (run.resultPreview !== undefined) {
 		details.resultPreview = truncateChars(

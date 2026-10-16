@@ -90,6 +90,7 @@ export interface RunSnapshot {
 	tokens: number;
 	cost: number;
 	budget?: { totalTokens: number; spentTokens: number; exhausted: boolean };
+	timeLimit?: { totalMs: number; reached: boolean };
 	workflow?: { name: string; description: string; source: WorkflowSource; args?: string };
 	phases: PhaseSnapshot[];
 	currentPhase?: number;
@@ -273,6 +274,10 @@ export function snapshotFromRun(
 		tokens,
 		cost,
 		budget: run.budget.totalTokens === null ? undefined : { ...run.budget, totalTokens: run.budget.totalTokens },
+		timeLimit:
+			run.timeLimit?.totalMs === null || run.timeLimit?.totalMs === undefined
+				? undefined
+				: { totalMs: run.timeLimit.totalMs, reached: run.timeLimit.reached },
 		workflow: run.workflow
 			? {
 					name: run.workflow.name,
@@ -391,6 +396,7 @@ export function snapshotFromDetails(details: PolyphaseDetails, options?: { now?:
 		tokens: details.totals.tokens,
 		cost: details.totals.cost,
 		budget: details.budget,
+		timeLimit: details.timeLimit,
 		workflow: details.workflow
 			? {
 					name: details.workflow.name,

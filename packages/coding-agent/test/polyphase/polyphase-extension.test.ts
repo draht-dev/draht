@@ -21,7 +21,7 @@ import {
 import type { ResourceLoader } from "../../src/core/resource-loader.ts";
 import type { SessionEntry } from "../../src/core/session-manager.ts";
 import { createSyntheticSourceInfo } from "../../src/core/source-info.ts";
-import { createHarness, createTestUiContext, type Harness } from "../suite/harness.ts";
+import { createHarness, createTestUiContext, getToolResult, type Harness } from "../suite/harness.ts";
 import { createTestExtensionsResult } from "../utilities.ts";
 import { createScriptedRunner, type RecordedCall } from "./helpers/scripted-runner.ts";
 import * as wire from "./helpers/wire.ts";
@@ -318,6 +318,125 @@ describe("polyphase core builtin", () => {
 		expect(harness.getPendingResponseCount()).toBe(pendingBefore);
 		expect(scripted.calls.length).toBeGreaterThan(0);
 		expect(scripted.calls[0]?.task).toContain("#12");
+	});
+
+	it("/workflow <name> <args> parses and strips a +500k budget directive from the args", async () => {
+		writeWorkflow(agentDir, "review-pr", reviewPrScript);
+		const scripted = createScriptedRunner(textOutput);
+		const confirm = vi.fn(async (_title: string, _message: string) => true);
+		const harness = await createPolyphaseHarness(scripted.runner, undefined, { confirm });
+
+		await harness.session.prompt("/workflow review-pr +500k #12");
+
+		expect(confirm).toHaveBeenCalledTimes(1);
+		const [, message] = confirm.mock.calls[0];
+		expect(message).toContain("budget 500k tokens (from your prompt)");
+
+		await waitFor(() => customMessages(harness, "polyphase-workflow").length > 0);
+		const [entry] = customMessages(harness, "polyphase-workflow");
+		if (entry?.type === "custom_message" && isPolyphaseDetails(entry.details)) {
+			expect(entry.details.workflow?.args).toBe("#12");
+			expect(entry.details.workflow?.budgetSource).toBe("prompt");
+			expect(entry.details.budget?.totalTokens).toBe(500_000);
+		} else {
+			throw new Error("expected a polyphase-workflow custom message with valid details");
+		}
+		// The directive never reaches the script's own `args`.
+		expect(scripted.calls[0]?.task).not.toContain("+500k");
+		expect(scripted.calls[0]?.task).toContain("#12");
+	});
+
+	it("the input hook captures a prompt's +500k/+30min directives for a direct workflow tool call, and clears them once the turn settles", async () => {
+		const scripted = createScriptedRunner(textOutput);
+		const confirm = vi.fn(async (_title: string, _message: string) => true);
+		// "always": the second turn below is started by an extension, which never arms the keyword.
+		const harness = await createPolyphaseHarness(
+			scripted.runner,
+			{ settings: { polyphase: { workflowTool: "always" } } },
+			{ confirm },
+		);
+
+		const script = `export const meta = { name: "demo", description: "Demo workflow",
+			phases: [{ title: "Only" }] };
+		return await agent("task one");`;
+
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall(WORKFLOW_TOOL_NAME, { script, budgetTokens: 50_000 }, { id: "wf-1" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage("acknowledged", { stopReason: "stop" }),
+		]);
+
+		await harness.session.prompt("polyphase review this +500k +30min");
+
+		expect(confirm).toHaveBeenCalledTimes(1);
+		const [, firstMessage] = confirm.mock.calls[0];
+		// Prompt beats the tool's own budgetTokens:50_000: the directive wins precedence.
+		expect(firstMessage).toContain("budget 500k tokens (from your prompt)");
+		expect(firstMessage).toContain("time limit 30min (from your prompt)");
+
+		const firstResult = getToolResult(harness, WORKFLOW_TOOL_NAME);
+		const firstDetails = firstResult.details;
+		if (isPolyphaseDetails(firstDetails)) {
+			expect(firstDetails.budget?.totalTokens).toBe(500_000);
+			expect(firstDetails.workflow?.budgetSource).toBe("prompt");
+			expect(firstDetails.workflow?.timeLimitSource).toBe("prompt");
+		} else {
+			throw new Error("expected a workflow tool result with valid polyphase details");
+		}
+
+		// A second turn started by an extension: its input never reaches the directive capture, so
+		// nothing but agent_settled's clear stands between this run and the first turn's "prompt".
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall(WORKFLOW_TOOL_NAME, { script }, { id: "wf-2" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage("acknowledged again", { stopReason: "stop" }),
+		]);
+
+		await harness.session.prompt("run it again, no limits this time", { source: "extension" });
+
+		const secondResult = getToolResult(harness, WORKFLOW_TOOL_NAME);
+		const secondDetails = secondResult.details;
+		if (isPolyphaseDetails(secondDetails)) {
+			expect(secondDetails.workflow?.budgetSource).toBe("none");
+			expect(secondDetails.workflow?.timeLimitSource).toBe("none");
+			expect(secondDetails.budget).toBeUndefined();
+		} else {
+			throw new Error("expected a second workflow tool result with valid polyphase details");
+		}
+	});
+
+	it("a steer typed mid-turn keeps the turn's directives and only adds the limits it states", async () => {
+		const scripted = createScriptedRunner(textOutput);
+		const confirm = vi.fn(async (_title: string, _message: string) => true);
+		const harness = await createPolyphaseHarness(scripted.runner, undefined, { confirm });
+
+		const script = `export const meta = { name: "demo", description: "Demo workflow",
+			phases: [{ title: "Only" }] };
+		return await agent("task one");`;
+
+		harness.setResponses([
+			async () => {
+				// Typed while the turn streams: a steer, and it states a time limit but no budget.
+				await harness.session.prompt("skip the e2e tests +1h", { streamingBehavior: "steer" });
+				return fauxAssistantMessage([fauxToolCall(WORKFLOW_TOOL_NAME, { script }, { id: "wf-1" })], {
+					stopReason: "toolUse",
+				});
+			},
+			fauxAssistantMessage("acknowledged", { stopReason: "stop" }),
+			fauxAssistantMessage("acknowledged the steer", { stopReason: "stop" }),
+		]);
+
+		await harness.session.prompt("polyphase review this +500k +30min");
+
+		const details = getToolResult(harness, WORKFLOW_TOOL_NAME).details;
+		if (!isPolyphaseDetails(details)) throw new Error("expected a workflow tool result with valid polyphase details");
+		// Replacing instead of merging would leave the budget at "none": an uncapped paid run.
+		expect(details.budget?.totalTokens).toBe(500_000);
+		expect(details.workflow?.budgetSource).toBe("prompt");
+		expect(details.timeLimit?.totalMs).toBe(3_600_000);
+		expect(details.workflow?.timeLimitSource).toBe("prompt");
 	});
 
 	it("/workflow <name> <args> splits on the first whitespace, not just a literal space", async () => {

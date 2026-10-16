@@ -20,7 +20,10 @@ export const WORKFLOW_TOOL_DESCRIPTION =
 	"args, budget, meta. Math.random, Date.now, Date() and new Date() throw; new Date(value) works. " +
 	"No workflow can start another workflow.\n\n" +
 	"Call this tool with either `script` (a new script) or `name` (a saved workflow). Set `args` " +
-	"for the script's input string and `budgetTokens` to cap total billable tokens.";
+	"for the script's input string. Set `budgetTokens` (a token count) and/or `timeLimit` (a " +
+	'duration string, e.g. "30min", "2h") ONLY when the user stated a limit in words (e.g. "at ' +
+	'most 300k tokens", "stop after 20 minutes"); never invent one. Without a stated limit, leave ' +
+	"both unset and write the script to stop on its own once the goal is met.";
 
 export const WORKFLOW_PROMPT_SNIPPET =
 	"Run a multi-agent workflow script (phases, parallel agents, pipelines) with live oversight";
@@ -104,6 +107,13 @@ STATUS: line you can look for in its output.
 - Up to ${input.limits.concurrency} agents run at once in this session.
 - Up to ${input.limits.maxAgents} agent() calls total in one workflow run.
 - Up to ${input.limits.maxItems} items per parallel()/pipeline() call.
+- The token budget and time limit come from the user's own prompt (e.g. "+500k", "+30min" as a
+  standalone word), else the tool's \`budgetTokens\`/\`timeLimit\` parameters (set these only when
+  the user stated a limit in words), else config, else no limit at all: the run keeps going until
+  the script returns. Design scripts with no stated limit to stop on their own once the goal is
+  met (e.g. loop until a verifier agent reports success), not on an arbitrary iteration count.
+  \`agent()\` also returns \`null\` once the time limit is reached (in addition to failure,
+  cancellation, and budget exhaustion) -- the same null check for all of them is enough.
 
 ## 6. Available agent types
 

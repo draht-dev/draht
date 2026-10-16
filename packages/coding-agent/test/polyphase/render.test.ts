@@ -609,6 +609,21 @@ describe("workflow final summary (§11.4 alternatives)", () => {
 		expect(text).toContain("2 agents cancelled");
 	});
 
+	it("a time-limit-reached run shows the time limit summary with the cancelled-agent count", () => {
+		const agents = [
+			makeRow({ i: 0, label: "a", status: "cancelled", cancelReason: "time" }),
+			makeRow({ i: 1, label: "b", status: "cancelled", cancelReason: "time" }),
+		];
+		const snapshot = workflowSnapshot({
+			agents,
+			status: "failed",
+			timeLimit: { totalMs: 30 * 60 * 1000, reached: true },
+		});
+		const text = stripAnsi(layoutRun(snapshot, 78, theme, opts({ partial: false })).join("\n"));
+		expect(text).toContain("time limit of 30min reached");
+		expect(text).toContain("2 agents cancelled");
+	});
+
 	it("a plain done run with one cancelled agent still shows the done glyph (workflow-specific)", () => {
 		const agents = [
 			makeRow({ i: 0, label: "a", status: "done" }),

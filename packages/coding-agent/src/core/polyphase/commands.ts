@@ -19,6 +19,7 @@ import type { PolyphaseRun } from "./store.ts";
 import type { AgentRunner } from "./types.ts";
 import type { PolyphaseUiController } from "./ui/controller.ts";
 import { startWorkflowRun, type WorkflowRunCompletion } from "./workflow/launch.ts";
+import { parsePromptDirectives, resolveWorkflowLimits, stripPromptDirectives } from "./workflow/limits.ts";
 import { extractWorkflowMeta } from "./workflow/meta.ts";
 import {
 	discoverSavedWorkflows,
@@ -147,11 +148,24 @@ export async function runSavedWorkflowFromCommand(
 	const session = deps.getSession(ctx);
 	const settings = session.settings();
 
+	// D-B: a `+500k`/`+30min`-style directive is parsed straight from this command's own args (the
+	// user's literal input), not the session's pending-prompt state, and stripped before the rest
+	// of this handler (gate, approval, the script) ever sees it.
+	const promptDirectives = parsePromptDirectives(args);
+	const strippedArgs = stripPromptDirectives(args);
+	const limits = resolveWorkflowLimits({
+		prompt: promptDirectives,
+		config: {
+			budgetTokens: settings.defaultBudgetTokens,
+			timeLimitMs: settings.workflowTimeoutMs > 0 ? settings.workflowTimeoutMs : null,
+		},
+	});
+
 	const gate = new PermissionGate(loadPermissionRules(ctx.cwd, ctx.isProjectTrusted()), {
 		cwd: ctx.cwd,
 		mode: session.permissionMode(),
 	});
-	const decision = gate.evaluate("workflow", { name, args });
+	const decision = gate.evaluate("workflow", { name, args: strippedArgs });
 
 	if (decision.action === "deny") {
 		ctx.ui.notify(decision.reason, "error");
@@ -172,9 +186,11 @@ export async function runSavedWorkflowFromCommand(
 				concurrency: settings.maxConcurrency,
 				maxAgents: settings.maxAgentsPerRun,
 				budgetTokens: settings.defaultBudgetTokens,
+				timeLimitMs: settings.workflowTimeoutMs > 0 ? settings.workflowTimeoutMs : null,
 			},
+			promptDirectives,
 		};
-		const description = describeToolCallForApproval("workflow", { name, args }, approvalContext);
+		const description = describeToolCallForApproval("workflow", { name, args: strippedArgs }, approvalContext);
 		const title = description?.title ?? `Run workflow "${name}"?`;
 		const message = description?.message ?? extraction.meta.description;
 		const approved = await ctx.ui.confirm(title, message);
@@ -196,9 +212,9 @@ export async function runSavedWorkflowFromCommand(
 		parentSignal: undefined,
 		meta: extraction.meta,
 		body: extraction.body,
-		args,
+		args: strippedArgs,
 		source: { kind: workflow.source, path: workflow.path },
-		budgetTokens: settings.defaultBudgetTokens,
+		limits,
 		runner: deps.runner,
 	});
 

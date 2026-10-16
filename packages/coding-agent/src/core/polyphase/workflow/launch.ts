@@ -12,6 +12,7 @@ import type { PolyphaseSession } from "../session.ts";
 import type { PolyphaseRun } from "../store.ts";
 import type { AgentRunner, PolyphaseDetails, RunOrigin, WorkflowSource } from "../types.ts";
 import { createWorkflowAgentHost } from "./agent-host.ts";
+import { formatWorkflowLimitsLine, hardSandboxTimeoutMs, type ResolvedWorkflowLimits } from "./limits.ts";
 import type { WorkflowMeta } from "./meta.ts";
 import { loadWorkflowRuntime } from "./runtime.lazy.ts";
 import type { WorkflowOutcome, WorkflowScriptError } from "./runtime.ts";
@@ -26,7 +27,7 @@ export interface StartWorkflowRunOptions {
 	body: string;
 	args: string;
 	source: { kind: WorkflowSource; path?: string };
-	budgetTokens: number | null;
+	limits: ResolvedWorkflowLimits;
 	runner?: AgentRunner;
 }
 
@@ -152,19 +153,35 @@ function minimalFailedCompletion(run: PolyphaseRun, meta: WorkflowMeta, message:
 }
 
 export function startWorkflowRun(options: StartWorkflowRunOptions): WorkflowRunHandle {
-	const { ctx, session, id, origin, parentSignal, meta, body, args, source, budgetTokens, runner } = options;
+	const { ctx, session, id, origin, parentSignal, meta, body, args, source, limits, runner } = options;
 	const settings = session.settings();
+	const budgetTokens = limits.budgetTokens.value;
+	const timeLimitMs = limits.timeLimitMs.value;
 
 	const run = session.store.createRun({
 		id,
 		kind: "workflow",
 		origin,
 		title: meta.name,
-		workflow: { name: meta.name, description: meta.description, source: source.kind, path: source.path, args },
+		workflow: {
+			name: meta.name,
+			description: meta.description,
+			source: source.kind,
+			path: source.path,
+			args,
+			budgetSource: limits.budgetTokens.source,
+			timeLimitSource: limits.timeLimitMs.source,
+		},
 		phases: meta.phases,
 		budgetTokens,
+		timeLimitMs,
 		parentSignal,
 	});
+
+	// One narrator line at start naming every applied limit and its source, or the disclaimer when
+	// one or both are absent (D-B): shows in the tool row, dock and inspector, same wording as the
+	// approval prompt's `Limits:` line and the final result text's `Limits:` line.
+	run.appendLog(`Limits: ${formatWorkflowLimitsLine(limits)}`, "info");
 
 	const mailbox = createRunMailbox("workflow-run");
 
@@ -180,10 +197,13 @@ export function startWorkflowRun(options: StartWorkflowRunOptions): WorkflowRunH
 				budgetTokens,
 				maxAgents: settings.maxAgentsPerRun,
 				maxItemsPerCall: settings.maxItemsPerCall,
-				timeoutMs: settings.workflowTimeoutMs,
+				timeoutMs: hardSandboxTimeoutMs(timeLimitMs),
 				signal: run.signal,
 				host,
 			});
+			// The script is done: its remaining agents are only being torn down from here on, so the
+			// limit elapsing now must not mark a run that finished in time as time-limited.
+			run.disarmTimeLimit();
 			// The sandbox may finish (abort, timeout, script error, script return) while an agent it
 			// abandoned mid-call is still being torn down (DESIGN.md §14.2 step 4); wait for every
 			// `runSingleTask` this host started before snapshotting the run as final.

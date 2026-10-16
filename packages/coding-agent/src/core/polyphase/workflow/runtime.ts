@@ -34,7 +34,7 @@ export interface WorkflowAgentRequest {
 
 export type WorkflowAgentReply =
 	| { kind: "value"; value: JsonValue }
-	| { kind: "null"; reason: "failed" | "cancelled" | "budget" | "no-structured-output"; message?: string }
+	| { kind: "null"; reason: "failed" | "cancelled" | "budget" | "time" | "no-structured-output"; message?: string }
 	| { kind: "error"; message: string };
 
 export interface WorkflowHost {

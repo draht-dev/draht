@@ -8,6 +8,13 @@ import * as path from "node:path";
 import { realPathStrict } from "../../utils/canonical-path.ts";
 import type { WorkflowSource } from "./types.ts";
 import { WORKFLOW_TOOL_NAME } from "./types.ts";
+import {
+	formatWorkflowLimitsLine,
+	type ParsedDirectives,
+	parseDurationMs,
+	type ResolvedWorkflowLimits,
+	resolveWorkflowLimits,
+} from "./workflow/limits.ts";
 import { extractWorkflowMeta, type WorkflowMeta, type WorkflowPhaseMeta } from "./workflow/meta.ts";
 import { findSavedWorkflow } from "./workflow/saved.ts";
 
@@ -20,7 +27,9 @@ export interface ApprovalDescription {
 export interface ApprovalLimits {
 	concurrency: number;
 	maxAgents: number;
+	/** Config fallback for the token budget / time limit precedence (D-B): prompt > tool > this. */
 	budgetTokens: number | null;
+	timeLimitMs: number | null;
 }
 
 export interface ApprovalContext {
@@ -28,6 +37,8 @@ export interface ApprovalContext {
 	projectTrusted: boolean;
 	agentDir: string;
 	limits: ApprovalLimits;
+	/** The enabling/requesting prompt's directives, when known (D-B precedence's top tier). */
+	promptDirectives?: ParsedDirectives;
 }
 
 export interface WorkflowApprovalInfo {
@@ -36,7 +47,6 @@ export interface WorkflowApprovalInfo {
 	path?: string;
 	scriptLines?: number;
 	args?: string;
-	budgetTokens?: number | null;
 }
 
 const MAX_ARG_CHARS = 120;
@@ -57,21 +67,6 @@ function truncateArgs(args: string): string {
  */
 function quoteArgs(args: string): string {
 	return JSON.stringify(sanitizeArgsForQuoting(truncateArgs(args)));
-}
-
-function formatApproxTokens(tokens: number): string {
-	if (tokens >= 1_000_000) return `${trimDecimal(tokens / 1_000_000)}m`;
-	if (tokens >= 1_000) {
-		const kilos = trimDecimal(tokens / 1_000);
-		// toFixed(1) can round up to "1000.0", which would display as "1000k" instead of "1m".
-		if (Number(kilos) >= 1000) return `${trimDecimal(tokens / 1_000_000)}m`;
-		return `${kilos}k`;
-	}
-	return `${tokens}`;
-}
-
-function trimDecimal(value: number): string {
-	return Number(value.toFixed(1)).toString();
 }
 
 // C0/C1 controls, the Unicode line/paragraph separators, and the bidi embedding/override/isolate
@@ -102,12 +97,8 @@ function oneLine(value: string): string {
 	return sanitizeInline(value).replace(/ {2,}/g, " ").trim();
 }
 
-function formatBudgetText(budgetTokens: number | null): string {
-	return budgetTokens === null ? "no budget" : `budget ${formatApproxTokens(budgetTokens)} tokens`;
-}
-
-function formatLimitsLine(limits: ApprovalLimits, budgetTokens: number | null): string {
-	return `Limits: ${limits.concurrency} agents at once · up to ${limits.maxAgents} agents · ${formatBudgetText(budgetTokens)}`;
+function formatLimitsLine(limits: ApprovalLimits, resolved: ResolvedWorkflowLimits): string {
+	return `Limits: ${limits.concurrency} agents at once · up to ${limits.maxAgents} agents · ${formatWorkflowLimitsLine(resolved)}`;
 }
 
 function countScriptLines(script: string): number {
@@ -117,9 +108,20 @@ function countScriptLines(script: string): number {
 	return script.endsWith("\n") ? newlineCount : newlineCount + 1;
 }
 
-function resolveBudgetTokens(input: Record<string, unknown>, limits: ApprovalLimits): number | null {
-	const budget = input.budgetTokens;
-	return typeof budget === "number" && Number.isFinite(budget) ? budget : limits.budgetTokens;
+/** D-B precedence (prompt directive > tool parameter > config > none), from the raw tool-call
+ * input (or the `/<name>`/`/workflow` command's `{name, args}` input, which never carries
+ * `budgetTokens`/`timeLimit` of its own). */
+function resolveApprovalLimits(input: Record<string, unknown>, context: ApprovalContext): ResolvedWorkflowLimits {
+	const toolBudget = input.budgetTokens;
+	const toolTimeLimit = input.timeLimit;
+	return resolveWorkflowLimits({
+		prompt: context.promptDirectives,
+		tool: {
+			budgetTokens: typeof toolBudget === "number" && Number.isFinite(toolBudget) ? toolBudget : undefined,
+			timeLimitMs: typeof toolTimeLimit === "string" ? parseDurationMs(toolTimeLimit) : undefined,
+		},
+		config: { budgetTokens: context.limits.budgetTokens, timeLimitMs: context.limits.timeLimitMs },
+	});
 }
 
 function formatMessagePhases(phases: readonly WorkflowPhaseMeta[]): string {
@@ -144,6 +146,7 @@ export function describeWorkflowForApproval(
 	meta: WorkflowMeta,
 	info: WorkflowApprovalInfo,
 	limits: ApprovalLimits,
+	resolvedLimits: ResolvedWorkflowLimits,
 ): ApprovalDescription {
 	const lines = [
 		oneLine(meta.description),
@@ -151,8 +154,7 @@ export function describeWorkflowForApproval(
 		`Source: ${formatSourceText(info)}`,
 	];
 	if (info.args) lines.push(`Args: ${quoteArgs(info.args)}`);
-	const budgetTokens = info.budgetTokens !== undefined ? info.budgetTokens : limits.budgetTokens;
-	lines.push(formatLimitsLine(limits, budgetTokens));
+	lines.push(formatLimitsLine(limits, resolvedLimits));
 	lines.push("Each agent is a separate paid model session. Tool calls inside agents still follow permission rules.");
 
 	const operation = `workflow ${meta.name}: ${formatOperationPhases(meta.phases)}${
@@ -196,19 +198,15 @@ export function describeToolCallForApproval(
 		if (toolName !== WORKFLOW_TOOL_NAME) return undefined;
 
 		const args = readStringField(input, "args") ?? "";
+		const resolvedLimits = resolveApprovalLimits(input, context);
 		const script = readStringField(input, "script");
 		if (script !== undefined) {
-			const info: WorkflowApprovalInfo = {
-				source: "inline",
-				scriptLines: countScriptLines(script),
-				args,
-				budgetTokens: resolveBudgetTokens(input, context.limits),
-			};
+			const info: WorkflowApprovalInfo = { source: "inline", scriptLines: countScriptLines(script), args };
 			const extraction = extractWorkflowMeta(script);
 			if (!extraction.ok) {
 				return describeInvalidWorkflow(`${extraction.error.message} (line ${extraction.error.line})`, info);
 			}
-			return describeWorkflowForApproval(extraction.meta, info, context.limits);
+			return describeWorkflowForApproval(extraction.meta, info, context.limits, resolvedLimits);
 		}
 
 		const name = readStringField(input, "name");
@@ -225,13 +223,12 @@ export function describeToolCallForApproval(
 			source: workflow.source,
 			path: formatSavedWorkflowPath(workflow.path, workflow.source, context.cwd),
 			args,
-			budgetTokens: resolveBudgetTokens(input, context.limits),
 		};
 		if (!workflow.valid) return describeInvalidWorkflow(workflow.error ?? "invalid meta block", info);
 
 		const meta: WorkflowMeta = { name: workflow.name, description: workflow.description, phases: workflow.phases };
 		if (workflow.whenToUse !== undefined) meta.whenToUse = workflow.whenToUse;
-		return describeWorkflowForApproval(meta, info, context.limits);
+		return describeWorkflowForApproval(meta, info, context.limits, resolvedLimits);
 	} catch {
 		return undefined;
 	}

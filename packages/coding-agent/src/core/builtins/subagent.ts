@@ -1395,7 +1395,9 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 									concurrency: limits.maxConcurrency,
 									maxAgents: limits.maxAgentsPerRun,
 									budgetTokens: limits.defaultBudgetTokens,
+									timeLimitMs: limits.workflowTimeoutMs > 0 ? limits.workflowTimeoutMs : null,
 								},
+								promptDirectives: peekPolyphaseSession(c.sessionManager)?.pendingDirectives(),
 							});
 						} catch {
 							return undefined;

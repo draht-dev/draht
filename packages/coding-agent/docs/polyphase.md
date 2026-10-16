@@ -170,7 +170,9 @@ capped and shaped so it stays informative without flooding context:
 - **Workflow:** a header line (status, agent counts, elapsed, tokens, cost), a `Phases:` tally,
   the returned value as pretty JSON (or text) capped at 32,000 characters, the last 30 `log(...)`
   lines, up to 8,000 characters of console output, and up to 100 per-agent summary lines, followed
-  by any budget notice, script error (with its source line), and blocked-call note.
+  by any budget/time-limit notice, script error (with its source line), blocked-call note, and a
+  final `Limits:` line naming the token budget and time limit that applied (and their source), or
+  the disclaimer when one or both are absent.
 
 Every mode appends, when applicable, a note about tool calls blocked inside subagents — see
 [Permissions](#permissions) below.
@@ -224,9 +226,10 @@ The async body after `meta` uses:
 
 - `agent(prompt, opts)` — starts one subagent and returns its final text, or (with `opts.schema`
   set) the schema-validated object. Returns `null` when the agent failed, was cancelled (by the
-  user or the token budget), the budget was already exhausted, or produced no valid structured
-  output when a schema was requested — always check for `null`. Throws for invalid options, an
-  unknown `agentType`/model, an invalid `effort`, or the per-run agent cap.
+  user, the token budget, or the time limit), the budget was already exhausted, the time limit was
+  already reached, or produced no valid structured output when a schema was requested — always
+  check for `null`. Throws for invalid options, an unknown `agentType`/model, an invalid `effort`,
+  or the per-run agent cap.
   `opts`: `{ label, phase, schema, model, effort, isolation: "worktree", agentType }`.
 - `parallel(thunks)` — runs an array of zero-argument thunks (each should call `agent()`) and
   waits for all of them (a barrier). A throwing thunk becomes `null` in the result array, with a
@@ -260,17 +263,53 @@ inside an `agent()` call is fine — only the script around it is restricted.
 - Up to `polyphase.maxConcurrency` (default `clamp(cpuCount - 2, 2, 8)`) child processes running
   at once across the whole session — shared with `subagent` and duet triage, so a workflow and a
   concurrent `subagent` call compete for the same slots.
-- A token budget (`budgetTokens` on the tool call, or `polyphase.defaultBudgetTokens`) is counted
-  in billable tokens. Once spent tokens reach the budget, every unfinished agent in the run is
-  cancelled and `agent()` starts returning `null`; a warning is logged once. Because output tokens
-  for an in-flight response often only arrive at that response's end, the actual spend can
-  overshoot the budget by up to one response per agent that was running at the moment the budget
-  was reached — this is a bound, not a guarantee of an exact stop.
 - A workflow cannot start another workflow, and a workflow's agents are excluded from the
   `duet_delegate` tool. See [Nesting depth](#nesting-depth).
-- `polyphase.workflowTimeoutMs` (default `0`, no deadline) is a wall-clock deadline over the
-  whole run, including time spent waiting on `agent()` calls. On expiry the script fails with a
-  timeout and every agent still in flight is cancelled.
+
+#### Token budget and time limit
+
+A workflow run's token budget and time limit each come from the first of these that applies,
+independently of each other:
+
+1. **The user's own prompt** — the prompt that enabled or requested the workflow (the keyword
+   turn, or a `/workflow <name> args`/`/<name> args` command's own `args`), parsed deterministically:
+   a `+` immediately followed by a number, standing alone as a word (bounded by whitespace or the
+   start/end of the text):
+   - token budget: `+500k`, `+1.5M`, `+200000` (optional `k`/`M` suffix, case-insensitive; minimum
+     1000 tokens — `+1`, `+2`, `+30` do not match).
+   - time limit: `+30min`, `+2h`, `+90s`, `+1h30min` (units `s`/`sec`, `min`, `h`/`hr`). A bare `m`
+     suffix always means million tokens, never minutes (`+2m` is a 2,000,000-token budget). A zero
+     duration is not a limit, and anything longer than about 24.8 days (the longest a single timer
+     can wait, less the backstop below) is capped to it.
+   For a command run, the matched directive is stripped from the `args` the script receives. A
+   steer or follow-up typed while the turn is still running only adds the limits it states itself;
+   it never clears the ones the turn started with.
+2. **A tool/command parameter** — `budgetTokens` (a token count) and `timeLimit` (a duration
+   string, same grammar without the `+`) on the `workflow` tool call. The model is instructed to
+   set these only when the user stated a limit in words ("at most 300k tokens", "stop after 20
+   minutes"), never to invent one.
+3. **Config** — `polyphase.defaultBudgetTokens` and `polyphase.workflowTimeoutMs`.
+4. **None** — the run has no budget and no time limit at all; it runs until the script returns.
+   Author scripts with no stated limit to stop on their own once the goal is met (e.g. loop until
+   a verifier agent reports success), not on an arbitrary iteration count.
+
+Whichever limits are missing get a disclaimer, consistently worded in three places: the approval
+prompt's `Limits:` line, one narrator log line at the run's start (visible in the tool row, dock
+and inspector), and the final result text's `Limits:` line. An applied limit's line also names its
+source, e.g. `budget 500k tokens (from your prompt)`.
+
+**Token budget.** Counted in billable tokens. Once spent tokens reach the budget, every unfinished
+agent in the run is cancelled (`cancelReason: "budget"`) and `agent()` starts returning `null`; a
+warning is logged once. Because output tokens for an in-flight response often only arrive at that
+response's end, the actual spend can overshoot the budget by up to one response per agent that was
+running at the moment the budget was reached — this is a bound, not a guarantee of an exact stop.
+
+**Time limit.** Graceful, and mirrors the budget: once the limit elapses, the run is marked
+reached (`timeLimit.reached` in its details), every running and queued agent is cancelled (`cancelReason: "time"`, shown as
+`cancelled (time limit)`), and `agent()` starts returning `null` with a log line — but the script
+itself keeps running, so it can still return partial results from whatever already finished. A
+hard sandbox deadline 60 seconds past the time limit is the backstop, in case the script never
+returns on its own.
 
 ### Structured output
 
@@ -332,7 +371,9 @@ twice.
 Each `workflow` tool call and each `/<name>`/`/workflow` command run goes through the same
 permission gate as every other tool call: an explicit `allow`/`deny` rule in `.draht/permissions.yml`
 applies as written; otherwise the call needs approval, shown with the workflow's name, phases
-(with any per-phase model), source, truncated args, and limits (concurrency, max agents, budget).
+(with any per-phase model), source, truncated args, and limits (concurrency, max agents, token
+budget and time limit, each with its source — see [Token budget and time
+limit](#token-budget-and-time-limit)).
 A `workflow` tool call with an invalid `meta` block still needs approval, but is described as such
 and fails immediately once approved; a `/<name>`/`/workflow` command run instead rejects an
 invalid `meta` block up front, before the gate. With no UI available (print or JSON, or any other

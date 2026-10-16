@@ -256,6 +256,110 @@ describe("budget", () => {
 	});
 });
 
+/** The store's own time-limit `setTimeout` handle, read off a spy installed before `createRun`. */
+function timeLimitTimerHandle(setSpy: { mock: { calls: unknown[][]; results: { value: unknown }[] } }, ms: number) {
+	const index = setSpy.mock.calls.findIndex((call) => call[1] === ms);
+	if (index < 0) throw new Error(`no setTimeout(..., ${ms}) was scheduled`);
+	return setSpy.mock.results[index]?.value;
+}
+
+describe("time limit", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+		vi.useRealTimers();
+	});
+
+	it("elapsing cancels every unfinished agent once with reason 'time', with a single warning log line, without aborting the run signal", () => {
+		vi.useFakeTimers();
+		const { store } = makeStore();
+		const run = store.createRun(baseRunInit({ timeLimitMs: 1000 }));
+		const a1 = run.addAgent({ label: "a1", agentType: "w", task: "t", model: model() });
+		const a2 = run.addAgent({ label: "a2", agentType: "w", task: "t", model: model() });
+
+		vi.advanceTimersByTime(1000);
+
+		expect(run.timeLimit.reached).toBe(true);
+		expect(a1.cancelReason).toBe("time");
+		expect(a2.cancelReason).toBe("time");
+		// The script must be able to keep running and return partial results past the time limit.
+		expect(run.signal.aborted).toBe(false);
+
+		const warnings = run.log.filter((line) => line.level === "warning" && line.text.includes("time limit"));
+		expect(warnings).toHaveLength(1);
+
+		// Elapsing further, or any later dirty signal, must not re-trigger the warning.
+		run.markDirty("fine");
+		vi.advanceTimersByTime(10_000);
+		expect(run.log.filter((line) => line.level === "warning" && line.text.includes("time limit"))).toHaveLength(1);
+	});
+
+	it("never fires when timeLimitMs is null", () => {
+		vi.useFakeTimers();
+		const { store } = makeStore();
+		const run = store.createRun(baseRunInit({ timeLimitMs: null }));
+		vi.advanceTimersByTime(10_000);
+		expect(run.timeLimit.reached).toBe(false);
+		expect(run.timeLimit.totalMs).toBeNull();
+	});
+
+	it("finish() clears the timer: elapsing afterwards has no effect", () => {
+		vi.useFakeTimers();
+		const { store } = makeStore();
+		const setSpy = vi.spyOn(globalThis, "setTimeout");
+		const clearSpy = vi.spyOn(globalThis, "clearTimeout");
+		const run = store.createRun(baseRunInit({ timeLimitMs: 1000 }));
+		const handle = timeLimitTimerHandle(setSpy, 1000);
+
+		run.finish("done");
+		// The status guard in triggerTimeLimit would hide a leaked timer below; this cannot.
+		expect(clearSpy).toHaveBeenCalledWith(handle);
+		vi.advanceTimersByTime(10_000);
+
+		expect(run.timeLimit.reached).toBe(false);
+		expect(run.log.some((line) => line.text.includes("time limit"))).toBe(false);
+	});
+
+	it("cancel() clears the timer: elapsing afterwards has no effect", () => {
+		vi.useFakeTimers();
+		const { store } = makeStore();
+		const setSpy = vi.spyOn(globalThis, "setTimeout");
+		const clearSpy = vi.spyOn(globalThis, "clearTimeout");
+		const run = store.createRun(baseRunInit({ timeLimitMs: 1000 }));
+		const handle = timeLimitTimerHandle(setSpy, 1000);
+
+		run.cancel("user");
+		expect(clearSpy).toHaveBeenCalledWith(handle);
+		vi.advanceTimersByTime(10_000);
+
+		expect(run.timeLimit.reached).toBe(false);
+		expect(run.log.some((line) => line.text.includes("time limit"))).toBe(false);
+	});
+
+	it("disarmTimeLimit() keeps a run whose script already returned from being marked time-limited", () => {
+		vi.useFakeTimers();
+		const { store } = makeStore();
+		const run = store.createRun(baseRunInit({ timeLimitMs: 1000 }));
+
+		run.disarmTimeLimit();
+		vi.advanceTimersByTime(10_000);
+
+		// Still running (its last agents winding down), so only the disarm stands between it and the limit.
+		expect(run.status).toBe("running");
+		expect(run.timeLimit.reached).toBe(false);
+		expect(run.log.some((line) => line.text.includes("time limit"))).toBe(false);
+	});
+
+	it("store.dispose() leaves no pending timer at all", () => {
+		vi.useFakeTimers();
+		const { store } = makeStore();
+		store.createRun(baseRunInit({ timeLimitMs: 60_000 }));
+
+		store.dispose();
+
+		expect(vi.getTimerCount()).toBe(0);
+	});
+});
+
 describe("focusRunId", () => {
 	it("picks the newest running run with origin tool and kind subagent or workflow", () => {
 		const { store } = makeStore({ now: counter() });

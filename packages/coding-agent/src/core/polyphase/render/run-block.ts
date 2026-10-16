@@ -12,6 +12,7 @@ import { stripAnsi } from "../../../utils/ansi.ts";
 import { sanitizeBinaryOutput } from "../../../utils/shell.ts";
 import { normalizeDisplayText, replaceTabs } from "../../tools/render-utils.ts";
 import type { AgentStatus, CancelReason, TranscriptItem } from "../types.ts";
+import { formatLimitDuration } from "../workflow/limits.ts";
 import {
 	type ColumnCell,
 	columns,
@@ -141,11 +142,14 @@ function cancelledByText(agents: readonly AgentSnapshotRow[]): string {
 	return byUser ? "cancelled by you" : "cancelled";
 }
 
-/** A single agent's cancel wording: `cancelled by you` for the user, else `cancelled by <reason>`
- * (budget/run/parent/shutdown), matching §11.4's mockup wording for the user case. */
+/** A single agent's cancel wording: `cancelled by you` for the user, `cancelled (time limit)` for
+ * the workflow time limit (D-B), else `cancelled by <reason>` (budget/run/parent/shutdown),
+ * matching §11.4's mockup wording for the user case. */
 function cancelReasonText(reason: CancelReason | undefined): string {
 	if (!reason) return "cancelled";
-	return reason === "user" ? "cancelled by you" : `cancelled by ${reason}`;
+	if (reason === "user") return "cancelled by you";
+	if (reason === "time") return "cancelled (time limit)";
+	return `cancelled by ${reason}`;
 }
 
 /** Child-sourced text (output, error, status/now lines, task, tool summaries, labels, log lines,
@@ -630,6 +634,9 @@ function workflowFinalSummaryLeft(snapshot: RunSnapshot, theme: Theme): string {
 	const note = agentsOmittedNote(snapshot);
 	if (snapshot.budget?.exhausted) {
 		return `${theme.fg("warning", "⚠")} budget of ${formatTokens(snapshot.budget.totalTokens)} tokens reached · ${cancelled} agent${cancelled === 1 ? "" : "s"} cancelled${note}`;
+	}
+	if (snapshot.timeLimit?.reached) {
+		return `${theme.fg("warning", "⚠")} time limit of ${formatLimitDuration(snapshot.timeLimit.totalMs)} reached · ${cancelled} agent${cancelled === 1 ? "" : "s"} cancelled${note}`;
 	}
 	if (snapshot.status === "cancelled") {
 		return `${statusGlyph("cancelled", theme, { now: 0, animate: false })} ${cancelledByText(snapshot.agents)} after ${total} agent${total === 1 ? "" : "s"}${note}`;

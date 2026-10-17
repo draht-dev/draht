@@ -1359,7 +1359,9 @@ function visParseImports(content, language) {
 	// star re-exports: export * from "./x" or export * as Foo from "./x"
 	const starReExportRe = /export\s+\*(?:\s+as\s+([A-Za-z_$][\w$]*))?\s+from\s+["']([^"']+)["']/g;
 	while ((m = starReExportRe.exec(content)) !== null) {
-		out.push({ specifier: m[2], default: null, namespace: m[1] || "*", names: [], reExport: true });
+		let line = 1;
+		for (let i = 0; i < m.index; i++) if (content.charCodeAt(i) === 10) line++;
+		out.push({ specifier: m[2], default: null, namespace: m[1] || "*", names: [], reExport: true, line });
 	}
 	return out;
 }
@@ -1426,26 +1428,48 @@ function visExtractExports(rawContent, language) {
 
 	if (language === "typescript" || language === "javascript") {
 		const exportRe = /^\s*export\s+(?:default\s+)?(?:async\s+)?(class|interface|type|function|const|let|enum|var)\s+([A-Za-z_$][\w$]*)/;
-		const namedExportRe = /^\s*export\s*\{([^}]+)\}(?!\s+from)/;
 		const defaultRe = /^\s*export\s+default\s/;
 		const commandRe = /^\s*commands\s*\[\s*["']([^"']+)["']\s*\]\s*=/;
 		for (let i = 0; i < lines.length; i++) {
 			let m;
 			if ((m = exportRe.exec(lines[i]))) {
 				out.push({ name: m[2], kind: m[1], line: i + 1, doc: findLeadingDoc(i) });
-			} else if ((m = namedExportRe.exec(lines[i]))) {
-				const doc = findLeadingDoc(i);
-				for (const part of m[1].split(",")) {
-					const t = part.trim().replace(/^type\s+/, "");
-					const asMatch = t.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
-					if (asMatch) out.push({ name: asMatch[2] || asMatch[1], kind: "named", line: i + 1, doc });
-				}
 			} else if (defaultRe.test(lines[i]) && !out.some((e) => e.name === "default")) {
 				out.push({ name: "default", kind: "default", line: i + 1, doc: findLeadingDoc(i) });
 			} else if ((m = commandRe.exec(lines[i]))) {
 				out.push({ name: m[1], kind: "command", line: i + 1, doc: findLeadingDoc(i) });
 			}
 			if (out.length > 200) break;
+		}
+		// Named export lists — content-level so multi-line `export {\n a,\n b\n}` blocks (with or
+		// without `from`) are captured. Barrels are pure re-export lists; without this every
+		// package index.ts reports exports(0) and its public API is invisible to graph-query.
+		const lineOf = (charIdx) => {
+			let pos = 0;
+			for (let i = 0; i < lines.length; i++) {
+				if (pos + lines[i].length + 1 > charIdx) return i + 1;
+				pos += lines[i].length + 1;
+			}
+			return lines.length;
+		};
+		const namedBlockRe = /export\s+(?:type\s+)?\{([^}]*)\}(\s*from\s*["'][^"']+["'])?/g;
+		let nb;
+		while ((nb = namedBlockRe.exec(rawContent)) !== null && out.length <= 200) {
+			const isReExport = Boolean(nb[2]);
+			const line = lineOf(nb.index);
+			const doc = findLeadingDoc(line - 1);
+			for (const part of nb[1].split(",")) {
+				const t = part.trim().replace(/^type\s+/, "");
+				if (!t) continue;
+				const asMatch = t.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+				if (asMatch) out.push({ name: asMatch[2] || asMatch[1], kind: isReExport ? "re-export" : "named", line, doc });
+			}
+		}
+		// `export * as NS from "./x"` exposes NS as a named export of this module.
+		const starAsRe = /export\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*["'][^"']+["']/g;
+		let sa;
+		while ((sa = starAsRe.exec(rawContent)) !== null && out.length <= 200) {
+			out.push({ name: sa[1], kind: "re-export", line: lineOf(sa.index), doc: null });
 		}
 	} else if (language === "python") {
 		const re = /^(class|def)\s+([A-Za-z_][A-Za-z0-9_]*)/;
@@ -2007,6 +2031,10 @@ function visComputeClusters(modules, edges, moduleByRel, containerOf) {
 		if (prefix) {
 			cid = "cluster:" + prefix;
 			clabel = prefix.split("/").slice(-2).join("/");
+			// A bare top-level dir ("packages") says nothing — prefer the package name when unambiguous.
+			if (!prefix.includes("/") && dominantPackage && packages.length === 1) {
+				clabel = String(dominantPackage).replace(/^@[^/]+\//, "");
+			}
 		} else {
 			const base = "cluster:" + (dominantPackage || "root");
 			const n = (fallbackOrdinal.get(base) || 0) + 1;
@@ -2025,6 +2053,29 @@ function visComputeClusters(modules, edges, moduleByRel, containerOf) {
 		clusters.push({ id: cid, label: clabel, size: sorted.length, members: sorted, dominantPackage, dominantLayer, packages });
 	}
 	clusters.sort((a, b) => b.size - a.size || (a.id < b.id ? -1 : 1));
+	// Disambiguate duplicate labels: recursive splitting of oversized communities yields several
+	// groups sharing one directory prefix, so graph-clusters printed six indistinguishable
+	// "packages/ai" rows. Append the dominant layer, then a stable ordinal. Iteration order is
+	// the sorted clusters array, so the suffixes are deterministic across rebuilds.
+	{
+		const dupes = new Set();
+		const seenOnce = new Set();
+		for (const c of clusters) {
+			if (seenOnce.has(c.label)) dupes.add(c.label);
+			seenOnce.add(c.label);
+		}
+		const used = new Set();
+		for (const c of clusters) {
+			let label = dupes.has(c.label) ? c.label + " · " + c.dominantLayer : c.label;
+			if (used.has(label)) {
+				let n = 2;
+				while (used.has(label + " · " + n)) n++;
+				label = label + " · " + n;
+			}
+			used.add(label);
+			c.label = label;
+		}
+	}
 	return { clusters, clusterOf };
 }
 
@@ -2060,7 +2111,7 @@ function visComputeSurprising(edges, callEdges, moduleByRel, clusterOf, groupOfC
 		if (score <= 0) continue;
 		out.push({ from: e.from, to: e.to, score, reason: reasons.join(", "), sampleSymbols: callSym.get(e.from + "|" + e.to) || [] });
 	}
-	out.sort((x, y) => y.score - x.score || (x.from < y.from ? -1 : x.from > y.from ? 1 : 0));
+	out.sort((x, y) => y.score - x.score || (x.from < y.from ? -1 : x.from > y.from ? 1 : 0) || (x.to < y.to ? -1 : x.to > y.to ? 1 : 0));
 	return out.slice(0, 20);
 }
 
@@ -2181,7 +2232,7 @@ function visBuildMap(root) {
 			loc,
 			isTest,
 			package: pkg,
-			exports: exports.slice(0, 30),
+			exports: exports.slice(0, 60),
 			symbols,
 			sinks,
 			sinkSites: sinkSites.slice(0, 10),
@@ -2255,6 +2306,8 @@ function visBuildMap(root) {
 		} catch { /* empty */ }
 	}
 
+	const starReExports = new Map(); // barrel module id -> [{ target, line }] for `export * from`
+
 	const resolveSpec = (fromDir, spec) => {
 		// Relative path
 		if (spec.startsWith(".") || spec.startsWith("/")) {
@@ -2301,7 +2354,13 @@ function visBuildMap(root) {
 			edges.push({ from: m.id, to: resolved, kind: imp.reExport ? "re-export" : "import", confidence: "EXTRACTED" });
 			// Re-exports don't introduce local usage — they pass the symbol through to the
 			// importer of THIS module. We capture them separately for re-export traversal in flow BFS.
-			if (imp.reExport) continue;
+			if (imp.reExport) {
+				if (imp.namespace === "*") {
+					if (!starReExports.has(m.id)) starReExports.set(m.id, []);
+					starReExports.get(m.id).push({ target: resolved, line: imp.line || 1 });
+				}
+				continue;
+			}
 			if (imp.default) usedLocals.set(imp.default, { resolved, importedName: "default" });
 			if (imp.namespace) usedLocals.set(imp.namespace, { resolved, importedName: "*" });
 			for (const n of imp.names || []) {
@@ -2323,6 +2382,49 @@ function visBuildMap(root) {
 					const confidence = directRe.test(text) ? "INFERRED" : "AMBIGUOUS";
 					callEdges.push({ from: m.id, to: ref.resolved, symbol: ref.importedName, count, confidence });
 				}
+			}
+		}
+	}
+
+	// Star re-export expansion: `export * from './x'` declares no names, so without this pass
+	// a star barrel's public API is invisible to graph-context/graph-query/MAP.html search.
+	// Copy the resolved target's exported names in as kind "re-export" (with `via` = the real
+	// defining module). Iterated to the true fixpoint over sorted barrel ids — termination is
+	// guaranteed without a pass cap (each pass appends ≥1 export, bounded by 60 × #barrels,
+	// or stops); the 60-per-module cap bounds MAP.json growth.
+	if (starReExports.size > 0) {
+		const EXPANSION_CAP = 60;
+		const sortedBarrels = [...starReExports.keys()].sort();
+		for (;;) {
+			let changed = false;
+			for (const barrelId of sortedBarrels) {
+				const barrel = moduleByRel.get(barrelId);
+				if (!barrel) continue;
+				const have = new Set(barrel.exports.map((e) => e.name));
+				for (const star of starReExports.get(barrelId)) {
+					const target = moduleByRel.get(star.target);
+					if (!target) continue;
+					for (const e of target.exports) {
+						if (barrel.exports.length >= EXPANSION_CAP) break;
+						if (have.has(e.name)) continue;
+						have.add(e.name);
+						barrel.exports.push({ name: e.name, kind: "re-export", line: star.line, doc: e.doc, via: e.via || target.id });
+						changed = true;
+					}
+				}
+			}
+			if (!changed) break;
+		}
+		// Mirror expanded names into symbols so graph-query and the HTML viewer see them.
+		for (const barrelId of sortedBarrels) {
+			const barrel = moduleByRel.get(barrelId);
+			if (!barrel) continue;
+			const seen = new Set(barrel.symbols.map((s) => s.name));
+			for (const e of barrel.exports) {
+				if (barrel.symbols.length >= EXPANSION_CAP) break;
+				if (seen.has(e.name)) continue;
+				seen.add(e.name);
+				barrel.symbols.push({ name: e.name, kind: "re-export", line: e.line, exported: true });
 			}
 		}
 	}
@@ -3194,6 +3296,16 @@ svg, canvas { display:block; user-select:none; position:absolute; inset:0; width
 .ctrl-checkbox { display:inline-flex; align-items:center; gap:5px; color:var(--muted);
   font-size:11px; cursor:pointer; padding:4px 8px; border:1px solid var(--border); border-radius:6px; background:var(--panel); }
 .ctrl-checkbox input { margin:0; cursor:pointer; }
+#insights { position:absolute; inset:0; overflow:auto; padding:18px 24px; background:var(--bg); }
+#insights h2 { font-size:13px; text-transform:uppercase; letter-spacing:0.08em; color:var(--muted); margin:18px 0 8px; }
+#insights table { border-collapse:collapse; width:100%; max-width:1100px; font-size:12px; }
+#insights th { text-align:left; color:var(--muted); font-weight:500; padding:4px 10px 4px 0; border-bottom:1px solid var(--border); }
+#insights td { padding:4px 10px 4px 0; border-bottom:1px solid var(--border); vertical-align:top; }
+#insights .num { text-align:right; font-variant-numeric:tabular-nums; }
+#insights .tag { display:inline-block; padding:1px 6px; border-radius:4px; font-size:10px; background:var(--panel); border:1px solid var(--border); color:var(--muted); margin-right:6px; }
+#insights .tag.hot { color:#f85149; border-color:#f85149; }
+#insights .ins-link { cursor:pointer; color:#58a6ff; }
+#insights .ins-link:hover { text-decoration:underline; }
 </style>
 </head>
 <body>
@@ -3204,6 +3316,7 @@ svg, canvas { display:block; user-select:none; position:absolute; inset:0; width
     <button id="tab-graph" class="active">Graph</button>
     <button id="tab-architecture">Architecture</button>
     <button id="tab-flows">Flows</button>
+    <button id="tab-insights">Insights</button>
   </div>
   <div class="live dead" id="live-indicator">● static snapshot</div>
 </header>
@@ -3234,6 +3347,7 @@ svg, canvas { display:block; user-select:none; position:absolute; inset:0; width
     <div id="error-banner"></div>
     <svg id="svg" width="100%" height="100%" style="display:none"></svg>
     <canvas id="canvas"></canvas>
+    <div id="insights" style="display:none"></div>
     <div id="overlay-left">
       <div id="graph-controls">
         <label class="ctrl-checkbox"><input type="checkbox" id="show-tests-cb"/> show tests</label>
@@ -3461,13 +3575,18 @@ function connectLive() {
 // ====================== view routing ======================
 function setView(v) {
   state.view = v;
-  ["tab-graph","tab-architecture","tab-flows"].forEach(function (id) {
+  ["tab-graph","tab-architecture","tab-flows","tab-insights"].forEach(function (id) {
     $(id).classList.toggle("active", id === "tab-" + v);
   });
   svg.style.display = (v === "architecture" || v === "flows") ? "block" : "none";
   canvas.style.display = (v === "graph") ? "block" : "none";
+  $("insights").style.display = (v === "insights") ? "block" : "none";
   $("graph-controls").style.display = (v === "graph") ? "flex" : "none";
   $("flows-sidebar").style.display = (v === "flows") ? "block" : "none";
+  // Insights is a document, not a canvas — the legend/camera/export overlays don't apply.
+  $("overlay-left").style.display = (v === "insights") ? "none" : "block";
+  var ctrls = document.querySelector(".controls");
+  if (ctrls) ctrls.style.display = (v === "insights") ? "none" : "flex";
   // B3: re-measure the canvas's backing-store size whenever it becomes visible. A resize while
   // the Graph tab was hidden left canvas.width/height stale (clientWidth/height reflow correctly
   // even for display:none, but resizeCanvas() only ran on the debounced window "resize" handler
@@ -3483,6 +3602,8 @@ function render() {
   if (state.view === "graph") {
     ensureGraphModel();
     requestDraw();
+  } else if (state.view === "insights") {
+    renderInsights();
   } else {
     var W = svg.clientWidth, H = svg.clientHeight;
     svg.innerHTML = "";
@@ -3734,6 +3855,66 @@ function svgToWorld(ev) {
   var rect = svg.getBoundingClientRect();
   var sx = ev.clientX - rect.left, sy = ev.clientY - rect.top;
   return { x: (sx - state.pan.x) / state.zoom, y: (sy - state.pan.y) / state.zoom };
+}
+
+// ====================== Insights view ======================
+// Skimmable clusters / hotspots / surprising-connections / rationale panel (the graphify-style
+// "read this first" view). All map fields are optional (|| []) so a stale pre-v6 MAP.json served
+// by map-serve still renders the other tabs without breaking this one.
+function renderInsights() {
+  var map = state.map;
+  var box = $("insights");
+  var h = "";
+  var mod = function (id) { return linkBtn(id.split("/").slice(-2).join("/"), "module", id); };
+
+  var clusters = (map.clusters || []).slice().sort(function (a, b) { return b.size - a.size; });
+  h += "<h2>Clusters (" + clusters.length + ") — structural import neighborhoods</h2>";
+  if (clusters.length) {
+    h += '<table><tr><th>label</th><th class="num">modules</th><th>layer</th><th>packages</th><th>sample members</th></tr>';
+    clusters.slice(0, 30).forEach(function (c) {
+      var sample = (c.members || []).slice(0, 3).map(mod).join(", ");
+      h += "<tr><td>" + linkBtn(c.label, "cluster", c.id) + '</td><td class="num">' + c.size + "</td><td>" + escapeHtml(c.dominantLayer || "-") + "</td><td>" + escapeHtml((c.packages || []).slice(0, 3).join(", ")) + "</td><td>" + sample + "</td></tr>";
+    });
+    h += "</table>";
+    if (clusters.length > 30) h += '<div class="tag">+' + (clusters.length - 30) + " more</div>";
+  } else h += '<div class="tag">no cluster data — rebuild with map-graph</div>';
+
+  var hs = map.hotspots || {};
+  var hsSection = function (title, arr) {
+    h += "<h2>" + title + "</h2>";
+    if (!arr || !arr.length) { h += '<div class="tag">none</div>'; return; }
+    h += '<table><tr><th>module</th><th class="num">in</th><th class="num">out</th><th class="num">loc</th><th>why</th></tr>';
+    arr.slice(0, 10).forEach(function (g) {
+      h += "<tr><td>" + linkBtn(g.path, "module", g.id || g.path) + '</td><td class="num">' + g.inDegree + '</td><td class="num">' + g.outDegree + '</td><td class="num">' + g.loc + "</td><td>" + escapeHtml(g.reason || "") + "</td></tr>";
+    });
+    h += "</table>";
+  };
+  hsSection("God nodes (most connected)", hs.godNodes);
+  hsSection("Most depended-on", hs.mostDependedOn);
+  hsSection("Orchestrators (most dependencies)", hs.orchestrators);
+
+  var sc = map.surprisingConnections || [];
+  h += "<h2>Surprising connections (" + sc.length + ") — bridges, cross-group and layer-violating edges</h2>";
+  if (sc.length) {
+    h += '<table><tr><th>from</th><th>to</th><th>reason</th><th class="num">score</th><th>symbols</th></tr>';
+    sc.slice(0, 20).forEach(function (x) {
+      h += "<tr><td>" + mod(x.from) + "</td><td>" + mod(x.to) + "</td><td>" + escapeHtml(x.reason || "") + '</td><td class="num">' + x.score + "</td><td>" + escapeHtml((x.sampleSymbols || []).slice(0, 3).join(", ")) + "</td></tr>";
+    });
+    h += "</table>";
+  } else h += '<div class="tag">none detected</div>';
+
+  var rat = (map.rationaleIndex || []).filter(function (r) { return ["SECURITY", "BUG", "FIXME", "HACK"].indexOf(r.tag) !== -1; });
+  h += "<h2>Rationale highlights (" + rat.length + ") — SECURITY / BUG / FIXME / HACK notes in source</h2>";
+  if (rat.length) {
+    h += '<table><tr><th>tag</th><th>where</th><th>note</th></tr>';
+    rat.slice(0, 25).forEach(function (r) {
+      var hot = r.tag === "SECURITY" || r.tag === "BUG";
+      h += '<tr><td><span class="tag' + (hot ? " hot" : "") + '">' + escapeHtml(r.tag) + "</span></td><td>" + linkBtn(r.file + ":" + r.line, "module", r.file) + "</td><td>" + escapeHtml(r.text || "") + "</td></tr>";
+    });
+    h += "</table>";
+  } else h += '<div class="tag">none</div>';
+
+  box.innerHTML = h;
 }
 
 function renderArchitecture(g, W, H) {
@@ -4795,7 +4976,13 @@ function applySearch(q) {
     var needle = q.toLowerCase();
     var set = new Set();
     (state.map.modules || []).forEach(function (m) {
-      if (m.path.toLowerCase().indexOf(needle) !== -1) set.add(m.id);
+      if (m.path.toLowerCase().indexOf(needle) !== -1) { set.add(m.id); return; }
+      // modules[*].symbols covers non-exported decls and barrel re-exports that the
+      // exported-only symbolIndex misses.
+      (m.symbols || []).some(function (s) {
+        if (s.name.toLowerCase().indexOf(needle) !== -1) { set.add(m.id); return true; }
+        return false;
+      });
     });
     (state.map.symbolIndex || []).forEach(function (s) {
       if (s.name.toLowerCase().indexOf(needle) !== -1) set.add(s.file);
@@ -4948,11 +5135,13 @@ window.addEventListener("keydown", function (e) {
   if (e.key === "g") setView("graph");
   if (e.key === "a") setView("architecture");
   if (e.key === "F") setView("flows");
+  if (e.key === "i") setView("insights");
 });
 
 $("tab-graph").onclick = function () { setView("graph"); };
 $("tab-architecture").onclick = function () { setView("architecture"); };
 $("tab-flows").onclick = function () { setView("flows"); };
+$("tab-insights").onclick = function () { setView("insights"); };
 $("fit").onclick = fit;
 $("clear").onclick = function () { clearFlow(); state.collapsedGroups = {}; render(); };
 $("reload").onclick = function () { refreshFromServer(); };
@@ -5855,7 +6044,15 @@ commands["graph-impact"] = function (...args) {
 	const epLabel = (e) => e.kind === "cli" ? "cli:" + (e.name || "") : e.kind === "http" ? "http:" + ((e.routes && e.routes[0] && (e.routes[0].method + " " + e.routes[0].path)) || "") : "lib:" + (e.name || e.path.split("/").pop());
 	const L = [];
 	if (notes.length) L.push(...notes);
-	L.push(`impact ${targets.map((t) => t.split("/").pop()).join(", ")} — ${impacted.length} modules · ${Object.keys(byPkg).length} packages · ${eps.length} entry points · sinks: ${[...sinkKinds].join(", ") || "none"}`);
+	L.push(`impact ${targets.join(", ")} — ${impacted.length} modules · ${Object.keys(byPkg).length} packages · ${eps.length} entry points · sinks: ${[...sinkKinds].join(", ") || "none"}`);
+	// A barrel with no importers still fronts a public API — say so instead of a bare zero.
+	if (!impacted.length) {
+		for (const t of targets) {
+			const tm = modById.get(t);
+			const reexp = (tm.exports || []).filter((e) => e.kind === "re-export");
+			if (reexp.length) L.push(`note: ${t} is a barrel (re-exports ${reexp.length} symbols) with no direct importers — changes only affect external consumers of ${tm.package || "this package"}`);
+		}
+	}
 	if (eps.length) L.push(`entry points reaching it (${eps.length}): ${eps.slice(0, 8).map(epLabel).join(", ")}${eps.length > 8 ? " …" : ""}`);
 	const pkgs = Object.entries(byPkg).sort((a, b) => b[1].length - a[1].length || (a[0] < b[0] ? -1 : 1));
 	if (pkgs.length) L.push("by package:");
@@ -5890,7 +6087,7 @@ function graphCallDir(args, direction) {
 		const arr = byHop[d] || []; if (!arr.length) continue;
 		console.log(`  hop ${d}:`);
 		const seen = new Set();
-		for (const h of arr) { const node = direction === "callers" ? h.to : h.to; if (seen.has(node)) continue; seen.add(node); const syms = arr.filter((x) => x.to === node && x.symbol).map((x) => x.symbol); console.log(`    ${node}${syms.length ? "  [" + [...new Set(syms)].slice(0, 4).join(", ") + "]" : ""}`); }
+		for (const h of arr) { const node = h.to; if (seen.has(node)) continue; seen.add(node); const syms = arr.filter((x) => x.to === node && x.symbol).map((x) => x.symbol); console.log(`    ${node}${syms.length ? "  [" + [...new Set(syms)].slice(0, 4).join(", ") + "]" : ""}`); }
 	}
 };
 commands["graph-callers"] = function (...args) { return graphCallDir(args, "callers"); };
@@ -5924,34 +6121,71 @@ commands["graph-query"] = function (...args) {
 	if (!terms.length) { console.log("usage: graph-query <term...> [--json]  (terms ≥3 chars)"); return; }
 	const stem = (s) => s.replace(/(ing|tion|ed|s)$/, "");
 	const clusterLabel = new Map((map.clusters || []).map((c) => [c.id, (c.label || "").toLowerCase()]));
-	const deg = new Map(); for (const e of map.edges) { if (e.kind !== "import") continue; deg.set(e.from, (deg.get(e.from) || 0) + 1); deg.set(e.to, (deg.get(e.to) || 0) + 1); }
+	const deg = new Map(); for (const e of map.edges) { if (e.kind !== "import" && e.kind !== "re-export") continue; deg.set(e.from, (deg.get(e.from) || 0) + 1); deg.set(e.to, (deg.get(e.to) || 0) + 1); }
+	// Term coverage is satisfied at the MODULE level (any symbol/path/doc/cluster hit), scaled by
+	// coverage² — graphify's scheme. The old per-symbol AND required every term to hit the same
+	// symbol, so "auth session" only matched files that packed both words into one identifier.
 	const cands = [];
 	for (const m of map.modules) {
 		const expDoc = new Map((m.exports || []).map((e) => [e.name, e.doc || ""]));
 		const baseLow = m.path.split("/").pop().toLowerCase();
+		const pathLow = m.path.toLowerCase();
 		const clab = clusterLabel.get(m.cluster) || "";
-		for (const s of (m.symbols || [])) {
-			const nameLow = s.name.toLowerCase(), doc = expDoc.get(s.name) || "", docLow = doc.toLowerCase();
-			let total = 0, ok = true;
-			for (const t of terms) {
+		const allDocsLow = (m.exports || []).map((e) => e.doc || "").filter(Boolean).join(" ").toLowerCase();
+		const symScores = new Map(); // symbol name -> summed per-term score, for display pick
+		let matched = 0, sum = 0;
+		for (const t of terms) {
+			let best = 0;
+			for (const s of (m.symbols || [])) {
+				const nameLow = s.name.toLowerCase();
 				let sc = 0;
 				if (nameLow === t) sc = 400; else if (nameLow.startsWith(t)) sc = 200; else if (nameLow.includes(t)) sc = 100;
-				if (sc < 60 && baseLow.includes(t)) sc = 60;
-				if (sc < 40 && (docLow.includes(t) || docLow.includes(stem(t)))) sc = 40;
-				if (sc < 30 && clab.includes(t)) sc = 30;
-				if (sc === 0) { ok = false; break; }
-				total += sc;
+				if (sc < 40) {
+					const dl = (expDoc.get(s.name) || "").toLowerCase();
+					if (dl && (dl.includes(t) || dl.includes(stem(t)))) sc = 40;
+				}
+				if (sc > 0) symScores.set(s.name, (symScores.get(s.name) || 0) + sc);
+				if (sc > best) best = sc;
 			}
-			if (!ok) continue;
-			let mult = 1; if (s.exported) mult *= 1.5; if (m.entryPoint) mult *= 1.3;
-			cands.push({ score: +(total * mult).toFixed(1), deg: deg.get(m.id) || 0, path: m.path, line: s.line, kind: s.kind, name: s.name, exported: !!s.exported, doc });
+			if (best < 60 && baseLow.includes(t)) best = 60;
+			if (best < 50 && pathLow.includes(t)) best = 50;
+			if (best < 40 && allDocsLow && (allDocsLow.includes(t) || allDocsLow.includes(stem(t)))) best = 40;
+			if (best < 30 && clab.includes(t)) best = 30;
+			if (best > 0) matched++;
+			sum += best;
 		}
+		if (!matched) continue;
+		const coverage = matched / terms.length;
+		let mult = coverage * coverage;
+		if (m.entryPoint) mult *= 1.3;
+		if (m.isTest) mult *= 0.7; // tests match everything; keep them below the code they test
+		// Display anchor: best-scoring symbol (exported preferred, first-in-file on ties), else the module itself.
+		let bestSym = null, bestVal = 0;
+		for (const s of (m.symbols || [])) {
+			const v = (symScores.get(s.name) || 0) * (s.exported ? 1.5 : 1);
+			if (v > bestVal) { bestVal = v; bestSym = s; }
+		}
+		if (bestSym && bestSym.exported) mult *= 1.5;
+		cands.push({
+			score: +(sum * mult).toFixed(1),
+			matched, terms: terms.length,
+			deg: deg.get(m.id) || 0,
+			path: m.path,
+			line: bestSym ? bestSym.line : 1,
+			kind: bestSym ? bestSym.kind : "module",
+			name: bestSym ? bestSym.name : m.path.split("/").pop(),
+			exported: !!(bestSym && bestSym.exported),
+			doc: bestSym ? (expDoc.get(bestSym.name) || "") : "",
+		});
 	}
 	cands.sort((a, b) => b.score - a.score || b.deg - a.deg || a.path.length - b.path.length || (a.path < b.path ? -1 : 1));
 	const top = cands.slice(0, 15);
 	if (flags.json) { console.log(JSON.stringify(top, null, 2)); return; }
 	console.log(`query "${terms.join(" ")}" — ${top.length}/${cands.length} hits`);
-	for (const c of top) console.log(`${c.path}:${c.line}  ${c.kind} ${c.name}${c.doc ? "  — " + c.doc.slice(0, 60) : ""}${c.exported ? "  [exported]" : ""}`);
+	for (const c of top) {
+		const partial = c.matched < c.terms ? `  (${c.matched}/${c.terms} terms)` : "";
+		console.log(`${c.path}:${c.line}  ${c.kind} ${c.name}${c.doc ? "  — " + c.doc.slice(0, 60) : ""}${c.exported ? "  [exported]" : ""}${partial}`);
+	}
 	if (cands.length > 15) console.log(`(${cands.length - 15} more: --json for all)`);
 };
 
@@ -5985,6 +6219,21 @@ commands["graph-clusters"] = function (...args) {
 };
 
 // graph-hook — install/uninstall a git post-commit hook that refreshes MAP.json (graphify-style).
+// --- kg — graphify-parity symbol-level knowledge graph (second engine, draht-kg.cjs) ---
+// Nodes are symbols (files/classes/functions/methods/types) with graphify's relation set
+// and confidence rubric; graph.json is node-link format loadable by graphify's own tools.
+commands.kg = function (...args) {
+	let kg;
+	try {
+		kg = require(path.join(__dirname, "draht-kg.cjs"));
+	} catch (err) {
+		console.error(`kg engine not found next to draht-tools.cjs (${err.message}) — reinstall the package.`);
+		process.exit(1);
+	}
+	const code = kg.kgMain(args);
+	if (code) process.exitCode = code;
+};
+
 commands["graph-hook"] = function (...args) {
 	const sub = args[0] || "status";
 	const gitDir = path.join(process.cwd(), ".git");
@@ -6060,6 +6309,16 @@ Knowledge Graph (query MAP.json instead of grepping — run map-graph first):
   passed through, not an error) when the JS engine handles it instead — so a
   script using them works either way. Install the binary with
   \`npx draht-claude install-graph-engine\` (or draht-codex).
+
+Symbol-level knowledge graph (graphify-parity engine; nodes = functions/classes/types):
+  kg build [--quiet]            Deterministic symbol graph → .planning/codebase/graph.json + KG_REPORT.md
+  kg query "<question>"         BFS/DFS subgraph traversal from scored seeds (NODE/EDGE output)
+                                [--dfs] [--depth N] [--budget N] [--context call|import]
+  kg explain "<node>"           Node dump: id, source, community, degree, top connections
+  kg path "<a>" "<b>"           Shortest path with directed relation arrows + confidence
+  kg affected "<node>"          Reverse blast-radius over calls/imports/inherits/… [--depth N]
+  kg stats | report             Counts / regenerate KG_REPORT.md
+  kg export tree|wiki|graphml   GRAPH_TREE.html / kg-wiki/ articles / graph.graphml
   create-project [name]         Create PROJECT.md
   create-requirements           Create REQUIREMENTS.md
   create-domain-model           Generate DOMAIN-MODEL.md from PROJECT.md

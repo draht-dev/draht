@@ -213,6 +213,11 @@ func Compute(modules []model.Module, edges []model.Edge) Result {
 				segs = segs[len(segs)-2:]
 			}
 			clabel = strings.Join(segs, "/")
+			// A bare top-level dir ("packages") says nothing — prefer the
+			// package name when unambiguous (CJS parity).
+			if !strings.Contains(prefix, "/") && dominantPackage != nil && len(packages) == 1 {
+				clabel = stripScope(*dominantPackage)
+			}
 		} else {
 			rawPkg := "root"
 			if dominantPackage != nil {
@@ -270,6 +275,36 @@ func Compute(modules []model.Module, edges []model.Edge) Result {
 		}
 		return clusters[i].ID < clusters[j].ID
 	})
+
+	// Disambiguate duplicate labels (CJS parity): recursive splitting of
+	// oversized communities yields several groups sharing one directory
+	// prefix, so graph-clusters printed six indistinguishable "packages/ai"
+	// rows. Append the dominant layer, then a stable ordinal. Iteration
+	// order is the sorted clusters slice, so suffixes are deterministic.
+	dupes := make(map[string]bool)
+	seenOnce := make(map[string]bool)
+	for i := range clusters {
+		if seenOnce[clusters[i].Label] {
+			dupes[clusters[i].Label] = true
+		}
+		seenOnce[clusters[i].Label] = true
+	}
+	used := make(map[string]bool)
+	for i := range clusters {
+		label := clusters[i].Label
+		if dupes[label] {
+			label = label + " · " + clusters[i].DominantLayer
+		}
+		if used[label] {
+			n := 2
+			for used[label+" · "+strconv.Itoa(n)] {
+				n++
+			}
+			label = label + " · " + strconv.Itoa(n)
+		}
+		used[label] = true
+		clusters[i].Label = label
+	}
 
 	return Result{Clusters: clusters, ClusterOf: clusterOf}
 }

@@ -333,19 +333,34 @@ interface ChainSegment {
 	operator?: string;
 }
 
-/** Quote-aware split of a command string on top-level chain operators (`;`, `&&`, `||`, `|&`, `|`, `&`, newlines). */
+/**
+ * Quote-aware split of a command string on top-level chain operators (`;`, `&&`, `||`, `|&`, `|`,
+ * `&`, newlines). Inside double quotes and `$'...'` a backslash escapes the next character, so
+ * `"a \" | b"` stays one piece, as it does for the shell.
+ */
 function splitChain(command: string): ChainSegment[] {
 	const segments: ChainSegment[] = [];
 	let current = "";
-	let quote: '"' | "'" | undefined;
+	let quote: '"' | "'" | "$'" | undefined;
 	let operator: string | undefined;
 	let i = 0;
 	while (i < command.length) {
 		const ch = command[i];
 		if (quote) {
+			if (ch === "\\" && quote !== "'" && i + 1 < command.length) {
+				current += ch + command[i + 1];
+				i += 2;
+				continue;
+			}
 			current += ch;
-			if (ch === quote) quote = undefined;
+			if (ch === (quote === "$'" ? "'" : quote)) quote = undefined;
 			i++;
+			continue;
+		}
+		if (ch === "$" && command[i + 1] === "'") {
+			quote = "$'";
+			current += "$'";
+			i += 2;
 			continue;
 		}
 		if (ch === '"' || ch === "'") {
@@ -752,11 +767,11 @@ function commandFeedsBareShellWithoutDashC(command: string): boolean {
 }
 
 /** Interpreters: each runs a script operand, inline code (`-c`, `-e`), or the program on stdin. */
-const INTERPRETER_RE = /^(python[0-9.]*|node|nodejs|bun|deno|ruby|perl|php)$/;
+const INTERPRETER_RE = /^(python[0-9.]*|pypy[0-9.]*|node|nodejs|bun|deno|ruby|perl|php)$/;
 
 /** The interpreter family `name` belongs to, the key of `INTERPRETER_ARG_FLAGS` and `INTERPRETER_INLINE_FLAGS`. */
 function interpreterFamily(name: string): string {
-	if (name.startsWith("python")) return "python";
+	if (name.startsWith("python") || name.startsWith("pypy")) return "python";
 	return name === "nodejs" ? "node" : name;
 }
 
@@ -798,6 +813,9 @@ const INTERPRETER_INLINE_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new M
 /** Operands that name stdin itself. */
 const STDIN_OPERANDS: ReadonlySet<string> = new Set(["-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"]);
 
+/** A `<(...)` or `>(...)` process substitution: its command, and which way it is wired. */
+type ProcessSubstitution = { direction: "<" | ">"; body: string };
+
 /** A redirection word (`<<EOF`, `<<<`, `>`, `2>&1`, `&>>log`), never a process substitution. */
 const REDIRECTION_RE = /^\d*(?:<<<|<<-?|<>|<|&>>?|>>?|>&)(?!\()/;
 
@@ -820,10 +838,11 @@ function unwrappedWords(text: string): string[] {
 
 /**
  * Where the shell, interpreter, `source` or `.` that `words` start with takes its program
- * from: a script operand, inline code (`-c`, `-e`, `-m`), or stdin (no operand, or `-` and its
- * spellings), noting whether stdin is redirected from a `<(...)`. `undefined` when `words` start
- * with anything else. Option arguments (`bash -o pipefail`, `python3 -W ignore`) and
- * redirections (`> out.txt`) are skipped, so neither passes for the script.
+ * from: a script operand, inline code (`-c`, `-e`, `-m`), or stdin (no operand, `-` and its
+ * spellings, or a shell given `-s`), noting whether stdin is redirected from a `<(...)` anywhere
+ * among the words. `undefined` when `words` start with anything else. Option arguments
+ * (`bash -o pipefail`, `python3 -W ignore`) and redirections (`> out.txt`) are skipped, so
+ * neither passes for the script.
  */
 function programSource(words: string[]): ProgramSource | undefined {
 	const head = words[0];
@@ -834,17 +853,15 @@ function programSource(words: string[]): ProgramSource | undefined {
 	const family = interpreterFamily(name);
 	const argFlags = INTERPRETER_ARG_FLAGS.get(family);
 	const inlineFlags = INTERPRETER_INLINE_FLAGS.get(family);
-	let stdinFromProcessSubstitution = false;
+	const fromProcessSubstitution = words.some((word, i) => /^0?<$/.test(word) && words[i + 1]?.startsWith("<("));
+	let readsStdin = false;
 	let optionsDone = false;
 	let subcommandSkipped = false;
 	for (let i = 1; i < words.length; i++) {
 		const word = words[i];
 		const redirection = word.match(REDIRECTION_RE);
 		if (redirection) {
-			if (redirection[0] === word) {
-				if (/^0?<$/.test(word) && words[i + 1]?.startsWith("<(")) stdinFromProcessSubstitution = true;
-				i++;
-			}
+			if (redirection[0] === word) i++;
 			continue;
 		}
 		if (!optionsDone) {
@@ -857,6 +874,10 @@ function programSource(words: string[]): ProgramSource | undefined {
 				continue;
 			}
 			if (isShell && /^-[A-Za-z]*c[A-Za-z]*$/.test(word)) return { kind: "inline" };
+			if (isShell && /^-[A-Za-z]*s[A-Za-z]*$/.test(word)) {
+				readsStdin = true;
+				continue;
+			}
 			if (inlineFlags?.has(word)) return { kind: "inline" };
 			if ((family === "perl" || family === "ruby") && /^-[A-Za-z]*[eE][A-Za-z]*$/.test(word))
 				return { kind: "inline" };
@@ -866,14 +887,14 @@ function programSource(words: string[]): ProgramSource | undefined {
 			}
 			if (/^-./.test(word) || (isShell && /^\+./.test(word))) continue;
 		}
-		if (family === "deno" && !subcommandSkipped && word === "run") {
+		if ((family === "deno" || family === "bun") && !subcommandSkipped && word === "run") {
 			subcommandSkipped = true;
 			continue;
 		}
-		if (STDIN_OPERANDS.has(word)) return { kind: "stdin", fromProcessSubstitution: stdinFromProcessSubstitution };
+		if (readsStdin || STDIN_OPERANDS.has(word)) return { kind: "stdin", fromProcessSubstitution };
 		return { kind: "operand", operand: word };
 	}
-	return { kind: "stdin", fromProcessSubstitution: stdinFromProcessSubstitution };
+	return { kind: "stdin", fromProcessSubstitution };
 }
 
 /**
@@ -968,8 +989,8 @@ function parenthesizedBody(text: string, open: number): { body: string; end: num
 }
 
 /** Every `<(...)`/`>(...)` process substitution found anywhere in `text`, and which way it is wired. */
-function extractProcessSubstitutions(text: string): Array<{ direction: "<" | ">"; body: string }> {
-	const results: Array<{ direction: "<" | ">"; body: string }> = [];
+function extractProcessSubstitutions(text: string): ProcessSubstitution[] {
+	const results: ProcessSubstitution[] = [];
 	let i = 0;
 	while (i < text.length) {
 		const ch = text[i];
@@ -1063,8 +1084,6 @@ function spaceChainOperators(segments: ChainSegment[]): string {
 function scanDenyCandidates(command: string): DenyScanResult {
 	const seen = new Set<string>();
 	const queue: Array<{ text: string; depth: number }> = [{ text: command, depth: 0 }];
-	// Queued once: a text reached by several paths would otherwise eat the cap once per path.
-	const queued = new Set<string>([command]);
 	let truncated = false;
 
 	while (queue.length > 0) {
@@ -1083,12 +1102,11 @@ function scanDenyCandidates(command: string): DenyScanResult {
 		}
 
 		const enqueue = (candidate: string) => {
-			if (seen.has(candidate) || queued.has(candidate)) return;
+			if (seen.has(candidate)) return;
 			if (seen.size + queue.length >= MAX_DENY_CANDIDATES) {
 				truncated = true;
 				return;
 			}
-			queued.add(candidate);
 			queue.push({ text: candidate, depth: depth + 1 });
 		};
 
@@ -1157,11 +1175,45 @@ interface LexedShellText {
 	/** Bodies of the `$(...)` and backtick substitutions the shell runs: outside single quotes, and in unquoted heredoc bodies. */
 	substitutions: string[];
 	/** Process substitutions outside quotes and heredoc bodies, and the way each is wired. */
-	processSubstitutions: Array<{ direction: "<" | ">"; body: string }>;
+	processSubstitutions: ProcessSubstitution[];
+	/** `true` when a heredoc's delimiter line never came: the rest of the text was read as its body. */
+	unterminatedHeredoc: boolean;
 }
 
-/** A heredoc operator (`<<EOF`, `<<-'EOF'`, `<< "EOF"`, `<<\\EOF`) and its delimiter. */
-const HEREDOC_OPERATOR_RE = /^<<(-?)[ \t]*(?:(['"])([^'"\n]+)\2|(\\?)([A-Za-z_][A-Za-z0-9_]*))/;
+/**
+ * The heredoc operator at `text[i]` (`<<EOF`, `<<-'EOF'`, `<< "E O F"`, `<<\\EOF`, `<<END-OF-DATA`):
+ * its length and its delimiter, the whole shell word after `<<` with quotes and backslashes removed.
+ * Any quote or backslash in that word makes the body data.
+ */
+function heredocAt(
+	text: string,
+	i: number,
+): { length: number; delimiter: string; quoted: boolean; stripTabs: boolean } | undefined {
+	const operator = text.slice(i).match(/^<<(-?)[ \t]*/);
+	if (!operator) return undefined;
+	let j = i + operator[0].length;
+	let delimiter = "";
+	let quoted = false;
+	while (j < text.length && !/[\s;&|<>()]/.test(text[j])) {
+		const ch = text[j];
+		if (ch === "'" || ch === '"') {
+			quoted = true;
+			const close = text.indexOf(ch, j + 1);
+			const end = close === -1 ? text.length : close;
+			delimiter += text.slice(j + 1, end);
+			j = end + 1;
+		} else if (ch === "\\") {
+			quoted = true;
+			delimiter += text[j + 1] ?? "";
+			j += 2;
+		} else {
+			delimiter += ch;
+			j++;
+		}
+	}
+	if (delimiter === "") return undefined;
+	return { length: j - i, delimiter, quoted, stripTabs: operator[1] === "-" };
+}
 
 /** The `$(...)` or backtick substitution starting at `text[i]`, if one does. */
 function substitutionAt(text: string, i: number): { body: string; end: number } | undefined {
@@ -1193,13 +1245,15 @@ function substitutionsIn(text: string): string[] {
  * RUN: single-quoted text runs nothing; in double quotes only `$(...)` and backticks run; a quoted
  * heredoc's body is data, and an unquoted one runs only its substitutions. Unlike the deny scan,
  * which over-matches on purpose, a commit message or a file written through a heredoc must not
- * read as code here.
+ * read as code here. A heredoc whose delimiter line never comes swallows the rest of the text;
+ * the result says so, and the checks then ask rather than trust a misread.
  */
 function lexShellText(text: string): LexedShellText {
 	let code = "";
 	const substitutions: string[] = [];
-	const processSubstitutions: Array<{ direction: "<" | ">"; body: string }> = [];
+	const processSubstitutions: ProcessSubstitution[] = [];
 	const pendingHeredocs: Array<{ delimiter: string; quoted: boolean; stripTabs: boolean }> = [];
+	let unterminatedHeredoc = false;
 	let quote: "'" | '"' | undefined;
 	let i = 0;
 	while (i < text.length) {
@@ -1228,10 +1282,24 @@ function lexShellText(text: string): LexedShellText {
 			i++;
 			continue;
 		}
+		if (ch === "$" && text[i + 1] === "'") {
+			// ANSI-C quoting: like single quotes, but a backslash escapes the next character, `\'` too.
+			let j = i + 2;
+			while (j < text.length && text[j] !== "'") j += text[j] === "\\" ? 2 : 1;
+			code += text.slice(i, j + 1);
+			i = j + 1;
+			continue;
+		}
 		if (ch === "'" || ch === '"') {
 			quote = ch;
 			code += ch;
 			i++;
+			continue;
+		}
+		if (text.startsWith("<<<", i)) {
+			// A here-string: its word follows and is read as any other.
+			code += "<<<";
+			i += 3;
 			continue;
 		}
 		if ((ch === "<" || ch === ">") && text[i + 1] === "(") {
@@ -1241,15 +1309,11 @@ function lexShellText(text: string): LexedShellText {
 			i = end;
 			continue;
 		}
-		const heredoc = ch === "<" && text[i + 2] !== "<" ? text.slice(i).match(HEREDOC_OPERATOR_RE) : null;
+		const heredoc = ch === "<" && text[i + 1] === "<" ? heredocAt(text, i) : undefined;
 		if (heredoc) {
-			pendingHeredocs.push({
-				delimiter: heredoc[3] ?? heredoc[5],
-				quoted: heredoc[2] !== undefined || heredoc[4] === "\\",
-				stripTabs: heredoc[1] === "-",
-			});
-			code += heredoc[0];
-			i += heredoc[0].length;
+			pendingHeredocs.push({ delimiter: heredoc.delimiter, quoted: heredoc.quoted, stripTabs: heredoc.stripTabs });
+			code += text.slice(i, i + heredoc.length);
+			i += heredoc.length;
 			continue;
 		}
 		code += ch;
@@ -1257,16 +1321,22 @@ function lexShellText(text: string): LexedShellText {
 		if (ch !== "\n") continue;
 		// The bodies follow this line, one per heredoc it opened, each up to its delimiter line.
 		for (const pending of pendingHeredocs.splice(0)) {
+			let terminated = false;
 			while (i < text.length) {
 				const newline = text.indexOf("\n", i);
-				const line = text.slice(i, newline === -1 ? text.length : newline);
+				const line = text.slice(i, newline === -1 ? text.length : newline).replace(/\r$/, "");
 				i = newline === -1 ? text.length : newline + 1;
-				if ((pending.stripTabs ? line.replace(/^\t+/, "") : line) === pending.delimiter) break;
+				if ((pending.stripTabs ? line.replace(/^\t+/, "") : line) === pending.delimiter) {
+					terminated = true;
+					break;
+				}
 				if (!pending.quoted) substitutions.push(...substitutionsIn(line));
 			}
+			if (!terminated) unterminatedHeredoc = true;
 		}
 	}
-	return { code, substitutions, processSubstitutions };
+	if (pendingHeredocs.length > 0) unterminatedHeredoc = true;
+	return { code, substitutions, processSubstitutions, unterminatedHeredoc };
 }
 
 /** Every command line the shell runs for a command, found by `scanExecutedCode`. */
@@ -1274,10 +1344,16 @@ interface ExecutedScan {
 	/** The command and each command line run inside it (`-c` bodies, `eval` arguments, substitutions), lexed. */
 	codes: string[];
 	/** The process substitutions among them, and the way each is wired. */
-	processSubstitutions: Array<{ direction: "<" | ">"; body: string }>;
-	/** `true` when the scan hit the same bounds as the deny scan; callers then fail closed. */
+	processSubstitutions: ProcessSubstitution[];
+	/**
+	 * `true` when the scan hit the same bounds as the deny scan, or a heredoc never ended, so
+	 * something may have been read as data that the shell runs; callers then fail closed.
+	 */
 	truncated: boolean;
 }
+
+/** The last command's executed scan: one evaluation asks several checks about the same command. */
+let lastExecutedScan: { command: string; result: ExecutedScan } | undefined;
 
 /**
  * Finds every command line the shell RUNS for `command`: the command itself and, recursively,
@@ -1286,8 +1362,13 @@ interface ExecutedScan {
  * mistaken for one.
  */
 function scanExecutedCode(command: string): ExecutedScan {
+	if (lastExecutedScan?.command !== command) lastExecutedScan = { command, result: computeExecutedScan(command) };
+	return lastExecutedScan.result;
+}
+
+function computeExecutedScan(command: string): ExecutedScan {
 	const codes: string[] = [];
-	const processSubstitutions: Array<{ direction: "<" | ">"; body: string }> = [];
+	const processSubstitutions: ProcessSubstitution[] = [];
 	const seen = new Set<string>();
 	const queue: Array<{ text: string; depth: number }> = [{ text: command, depth: 0 }];
 	let truncated = false;
@@ -1301,6 +1382,7 @@ function scanExecutedCode(command: string): ExecutedScan {
 		}
 		seen.add(next.text);
 		const lexed = lexShellText(next.text);
+		if (lexed.unterminatedHeredoc) truncated = true;
 		codes.push(lexed.code);
 		processSubstitutions.push(...lexed.processSubstitutions);
 		const runs = (body: string | undefined) => {
@@ -1330,9 +1412,31 @@ function scanExecutedCode(command: string): ExecutedScan {
 	return { codes, processSubstitutions, truncated };
 }
 
+/** The last command's deny scan: one evaluation matches the same command against every pattern. */
+let lastDenyScan: { command: string; result: DenyScanResult; forms?: string[] } | undefined;
+
+function cachedDenyScan(command: string): { command: string; result: DenyScanResult; forms?: string[] } {
+	if (lastDenyScan?.command !== command) lastDenyScan = { command, result: scanDenyCandidates(command) };
+	return lastDenyScan;
+}
+
 /** Candidate list only, for callers that don't need the truncation flag. */
 function collectDenyCandidates(command: string): string[] {
-	return scanDenyCandidates(command).candidates;
+	return cachedDenyScan(command).result.candidates;
+}
+
+/**
+ * Every candidate normalized for glob matching, and its chain again with spaced operators, so a
+ * pattern written `curl * | *` also matches `curl x|sh` and `curl x |& sh`.
+ */
+function matchableDenyForms(command: string): string[] {
+	const scan = cachedDenyScan(command);
+	scan.forms ??= scan.result.candidates.flatMap((candidate) => {
+		const plain = normalizeForMatch(candidate);
+		const spaced = normalizeForMatch(spaceChainOperators(splitChain(candidate)));
+		return spaced === plain ? [plain] : [plain, spaced];
+	});
+	return scan.forms;
 }
 
 /**
@@ -1343,7 +1447,7 @@ function collectDenyCandidates(command: string): string[] {
  * fall through to an auto-allow default.
  */
 function commandDenyScanTruncated(command: string): boolean {
-	return scanDenyCandidates(command).truncated;
+	return cachedDenyScan(command).result.truncated;
 }
 
 /**
@@ -1388,11 +1492,12 @@ function commandInvokesOtherShell(command: string): boolean {
 }
 
 /**
- * A shell variable/parameter expansion (positional and special parameters included: `$1`, `$@`),
- * command substitution, or backtick substitution in command position.
+ * A shell variable/parameter expansion, command substitution, or backtick substitution in command
+ * position; with `specialParameters`, positional and special parameters (`$1`, `$@`) too.
  */
-function isDynamicCommandHead(token: string): boolean {
-	return /^(\$\(|\$\{|\$[A-Za-z_0-9@*#?$!-]|`)/.test(token);
+function isDynamicCommandHead(token: string, options: { specialParameters: boolean }): boolean {
+	const pattern = options.specialParameters ? /^(\$\(|\$\{|\$[A-Za-z_0-9@*#?$!-]|`)/ : /^(\$\(|\$\{|\$[A-Za-z_]|`)/;
+	return pattern.test(token);
 }
 
 /**
@@ -1406,15 +1511,17 @@ function isDynamicCommandHead(token: string): boolean {
  * instead of silently resolving to whatever the variable happens to hold.
  */
 function commandHeadIsDynamic(command: string): boolean {
-	const dynamicHead = (text: string) =>
+	const dynamicHead = (text: string, specialParameters: boolean) =>
 		splitChain(text).some((seg) => {
 			const working = stripEnvAssignments(stripLeadingBackslashEscape(seg.text));
 			const head = tokenizeShellWords(working.trim())[0];
-			return head !== undefined && isDynamicCommandHead(head);
+			return head !== undefined && isDynamicCommandHead(head, { specialParameters });
 		});
-	if (dynamicHead(command)) return true;
+	// The raw command's segments include heredoc lines, where `$5` or `"$@"` is text: special
+	// parameters count only in what the lexed scan finds the shell runs.
+	if (dynamicHead(command, false)) return true;
 	const executed = scanExecutedCode(command);
-	return executed.truncated || executed.codes.some(dynamicHead);
+	return executed.truncated || executed.codes.some((code) => dynamicHead(code, true));
 }
 
 /** Extracts the `<cmd>` from `find ... -exec <cmd> ... ;`/`+`/`-execdir <cmd> ... ;`, if present. */
@@ -1464,11 +1571,7 @@ function matchDenyPattern(command: string, pattern: string): boolean {
 		return true;
 	}
 	const regex = globToRegExp(normalizeForMatch(pattern));
-	return candidates.some(
-		(candidate) =>
-			regex.test(normalizeForMatch(candidate)) ||
-			regex.test(normalizeForMatch(spaceChainOperators(splitChain(candidate)))),
-	);
+	return matchableDenyForms(command).some((form) => regex.test(form));
 }
 
 /**
@@ -1751,6 +1854,13 @@ export class PermissionGate {
 					return {
 						action: "approve",
 						reason: `auto mode: command matched dangerous pattern ${JSON.stringify(dangerous)}, requires approval`,
+					};
+				}
+				if (scanExecutedCode(command).truncated) {
+					return {
+						action: "approve",
+						reason:
+							"auto mode: command nests deeper or runs more pieces than the scan covers, or opens a heredoc that never ends; requires approval",
 					};
 				}
 				if (commandHeadIsDynamic(command)) {

@@ -1164,8 +1164,11 @@ interface LexedShellText {
 	substitutions: string[];
 	/** Process substitutions outside quotes and heredoc bodies, and the way each is wired. */
 	processSubstitutions: ProcessSubstitution[];
-	/** `true` when a heredoc's delimiter line never came, or its delimiter could not be read. */
-	unterminatedHeredoc: boolean;
+	/**
+	 * `true` when part of the text could not be read: a heredoc whose delimiter line never came or
+	 * whose delimiter could not be read, or substitutions nested past `MAX_LEX_NESTING`.
+	 */
+	unreadable: boolean;
 	/** Where reading stopped: the end of the text, or just past the `)` that closes a `$(`, `<(` or `>(`. */
 	end: number;
 }
@@ -1223,13 +1226,21 @@ function arithmeticEnd(text: string, open: number): number {
 	return text.length;
 }
 
+/**
+ * How deep `lexShellText` follows `$(`, `<(` and `>(` inside one another. Deeper text is reported
+ * unreadable, so the checks ask instead of recursing until the stack overflows.
+ */
+const MAX_LEX_NESTING = 32;
+
 /** The `$(...)` and backtick substitutions in arithmetic or an unquoted heredoc body, which runs them all. */
-function substitutionsIn(text: string): string[] {
+function substitutionsIn(text: string, nesting: number): { bodies: string[]; unreadable: boolean } {
 	const bodies: string[] = [];
+	let unreadable = false;
 	let i = 0;
 	while (i < text.length) {
 		if (text[i] === "$" && text[i + 1] === "(" && text[i + 2] !== "(") {
-			const inner = lexShellText(text, i + 2, true);
+			const inner = lexShellText(text, i + 2, true, nesting + 1);
+			if (inner.unreadable) unreadable = true;
 			bodies.push(text.slice(i + 2, Math.max(i + 2, inner.end - 1)));
 			i = inner.end;
 		} else if (text[i] === "`") {
@@ -1241,7 +1252,7 @@ function substitutionsIn(text: string): string[] {
 			i += text[i] === "\\" ? 2 : 1;
 		}
 	}
-	return bodies;
+	return { bodies, unreadable };
 }
 
 /**
@@ -1251,15 +1262,18 @@ function substitutionsIn(text: string): string[] {
  * only its substitutions; `$((...))` and `((...))` are arithmetic. A `$(`, `<(` or `>(` is read to
  * the `)` that really closes it, past quotes and heredocs (`untilCloseParen`). Unlike the deny scan,
  * which over-matches on purpose, a commit message or a file written through a heredoc must not
- * read as code here. A heredoc that never ends, or whose delimiter this reader cannot follow, is
- * reported, and the checks then ask rather than trust a misread.
+ * read as code here. A heredoc that never ends, a delimiter this reader cannot follow, or nesting
+ * past `MAX_LEX_NESTING` is reported, and the checks then ask rather than trust a misread.
  */
-function lexShellText(text: string, start = 0, untilCloseParen = false): LexedShellText {
+function lexShellText(text: string, start = 0, untilCloseParen = false, nesting = 0): LexedShellText {
+	if (nesting > MAX_LEX_NESTING) {
+		return { segments: [], substitutions: [], processSubstitutions: [], unreadable: true, end: text.length };
+	}
 	const segments: ChainSegment[] = [];
 	const substitutions: string[] = [];
 	const processSubstitutions: ProcessSubstitution[] = [];
 	const pendingHeredocs: HeredocOperator[] = [];
-	let unterminatedHeredoc = false;
+	let unreadable = false;
 	let current = "";
 	let operator: string | undefined;
 	let quote: "'" | '"' | undefined;
@@ -1268,6 +1282,18 @@ function lexShellText(text: string, start = 0, untilCloseParen = false): LexedSh
 		segments.push({ text: current, operator });
 		current = "";
 		operator = next;
+	};
+	/** Reads the `$(`, `<(` or `>(` body that starts at `open` to its closing `)`; returns the index after it. */
+	const readNested = (open: number): number => {
+		const inner = lexShellText(text, open, true, nesting + 1);
+		if (inner.unreadable) unreadable = true;
+		return inner.end;
+	};
+	// Element by element: spreading 100k substitutions into `push` overflows the stack.
+	const collectSubstitutionsIn = (body: string) => {
+		const found = substitutionsIn(body, nesting);
+		for (const substitution of found.bodies) substitutions.push(substitution);
+		if (found.unreadable) unreadable = true;
 	};
 	let i = start;
 	while (i < text.length) {
@@ -1286,15 +1312,15 @@ function lexShellText(text: string, start = 0, untilCloseParen = false): LexedSh
 		if (ch === "$" && text[i + 1] === "(") {
 			if (text[i + 2] === "(") {
 				const end = arithmeticEnd(text, i + 1);
-				substitutions.push(...substitutionsIn(text.slice(i + 3, end)));
+				collectSubstitutionsIn(text.slice(i + 3, end));
 				current += text.slice(i, end);
 				i = end;
 				continue;
 			}
-			const inner = lexShellText(text, i + 2, true);
-			substitutions.push(text.slice(i + 2, Math.max(i + 2, inner.end - 1)));
-			current += text.slice(i, inner.end);
-			i = inner.end;
+			const end = readNested(i + 2);
+			substitutions.push(text.slice(i + 2, Math.max(i + 2, end - 1)));
+			current += text.slice(i, end);
+			i = end;
 			continue;
 		}
 		if (ch === "`") {
@@ -1332,15 +1358,15 @@ function lexShellText(text: string, start = 0, untilCloseParen = false): LexedSh
 			continue;
 		}
 		if ((ch === "<" || ch === ">") && text[i + 1] === "(") {
-			const inner = lexShellText(text, i + 2, true);
-			processSubstitutions.push({ direction: ch, body: text.slice(i + 2, Math.max(i + 2, inner.end - 1)) });
+			const end = readNested(i + 2);
+			processSubstitutions.push({ direction: ch, body: text.slice(i + 2, Math.max(i + 2, end - 1)) });
 			current += `${ch}(_)`;
-			i = inner.end;
+			i = end;
 			continue;
 		}
 		if (ch === "(" && text[i + 1] === "(") {
 			const end = arithmeticEnd(text, i);
-			substitutions.push(...substitutionsIn(text.slice(i + 2, end)));
+			collectSubstitutionsIn(text.slice(i + 2, end));
 			current += text.slice(i, end);
 			i = end;
 			continue;
@@ -1369,7 +1395,7 @@ function lexShellText(text: string, start = 0, untilCloseParen = false): LexedSh
 		}
 		const heredoc = ch === "<" && text[i + 1] === "<" ? heredocAt(text, i) : undefined;
 		if (heredoc) {
-			if (heredoc.unreadable) unterminatedHeredoc = true;
+			if (heredoc.unreadable) unreadable = true;
 			pendingHeredocs.push(heredoc);
 			current += text.slice(i, i + heredoc.length);
 			i += heredoc.length;
@@ -1381,8 +1407,9 @@ function lexShellText(text: string, start = 0, untilCloseParen = false): LexedSh
 			i += 2;
 			continue;
 		}
-		// `&>file`, `2>&1` and `<&3` are redirections, not a background `&`.
-		if (ch === "&" && (text[i + 1] === ">" || /[<>]$/.test(current))) {
+		// `&>file`, `2>&1` and `<&3` are redirections, not a background `&`. The character before
+		// is the one `current` ends with (testing `current` itself would copy it on every `&`).
+		if (ch === "&" && (text[i + 1] === ">" || text[i - 1] === "<" || text[i - 1] === ">")) {
 			current += ch;
 			i++;
 			continue;
@@ -1399,24 +1426,29 @@ function lexShellText(text: string, start = 0, untilCloseParen = false): LexedSh
 		}
 		endSegment(";");
 		i++;
-		// The bodies follow this line, one per heredoc it opened, each up to its delimiter line.
+		// The bodies follow this line, one per heredoc it opened, each up to its delimiter line. An
+		// unquoted body is expanded as a whole once it ends, so a substitution may span its lines.
 		for (const pending of pendingHeredocs.splice(0)) {
+			const bodyStart = i;
+			let bodyEnd = text.length;
 			let terminated = false;
 			while (i < text.length) {
 				const newline = text.indexOf("\n", i);
+				const lineStart = i;
 				const line = text.slice(i, newline === -1 ? text.length : newline).replace(/\r$/, "");
 				i = newline === -1 ? text.length : newline + 1;
 				if ((pending.stripTabs ? line.replace(/^\t+/, "") : line) === pending.delimiter) {
+					bodyEnd = lineStart;
 					terminated = true;
 					break;
 				}
-				if (!pending.quoted) substitutions.push(...substitutionsIn(line));
 			}
-			if (!terminated) unterminatedHeredoc = true;
+			if (!terminated) unreadable = true;
+			if (!pending.quoted) collectSubstitutionsIn(text.slice(bodyStart, bodyEnd));
 		}
 	}
 	segments.push({ text: current, operator });
-	return { segments, substitutions, processSubstitutions, unterminatedHeredoc, end: i };
+	return { segments, substitutions, processSubstitutions, unreadable, end: i };
 }
 
 /** Every command line the shell runs for a command, found by `scanExecutedCode`. */
@@ -1426,8 +1458,9 @@ interface ExecutedScan {
 	/** The process substitutions among them, and the way each is wired. */
 	readonly processSubstitutions: readonly ProcessSubstitution[];
 	/**
-	 * `true` when the scan hit the same bounds as the deny scan, or a heredoc never ended, so
-	 * something may have been read as data that the shell runs; callers then fail closed.
+	 * `true` when the scan hit the same bounds as the deny scan, or some text was unreadable (a
+	 * heredoc that never ended, nesting too deep), so something may have been read as data that the
+	 * shell runs; callers then fail closed.
 	 */
 	readonly truncated: boolean;
 }
@@ -1452,9 +1485,9 @@ function computeExecutedScan(command: string): ExecutedScan {
 	const seen = new Set<string>();
 	const queue: Array<{ text: string; depth: number }> = [{ text: command, depth: 0 }];
 	let truncated = false;
-	while (queue.length > 0) {
-		const next = queue.shift();
-		if (!next) break;
+	// Read by index, not `shift()`: a command with 100k identical substitutions queues every one.
+	for (let head = 0; head < queue.length; head++) {
+		const next = queue[head];
 		if (seen.has(next.text)) continue;
 		if (seen.size >= MAX_DENY_CANDIDATES || next.depth >= MAX_DENY_DEPTH) {
 			truncated = true;
@@ -1462,9 +1495,10 @@ function computeExecutedScan(command: string): ExecutedScan {
 		}
 		seen.add(next.text);
 		const lexed = lexShellText(next.text);
-		if (lexed.unterminatedHeredoc) truncated = true;
-		segments.push(...lexed.segments);
-		processSubstitutions.push(...lexed.processSubstitutions);
+		if (lexed.unreadable) truncated = true;
+		// Element by element: a long script spread into `push` overflows the stack.
+		for (const seg of lexed.segments) segments.push(seg);
+		for (const substitution of lexed.processSubstitutions) processSubstitutions.push(substitution);
 		const runs = (body: string | undefined) => {
 			if (body !== undefined && !seen.has(body)) queue.push({ text: body, depth: next.depth + 1 });
 		};

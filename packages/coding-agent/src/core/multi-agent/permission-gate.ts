@@ -36,8 +36,9 @@
  * `pattern` matching against bash commands is textual (no real shell
  * parser), so `deny` and `allow`/`approve` patterns are matched with
  * deliberately asymmetric strategies to stay fail-safe: `deny` scans every
- * chained/wrapped/unwrapped piece of the command it can find (paranoid,
- * over-matching is safe), while `allow`/`approve` require an exact
+ * chained/wrapped/unwrapped piece of the command it can find, plus every
+ * command a shell-aware read finds the shell runs (`collectDenyCandidates`;
+ * paranoid, over-matching is safe), while `allow`/`approve` require an exact
  * chain-shape match and reject anything containing `$(...)`, backticks, or
  * redirection (strict, under-matching just falls through to the default
  * decision instead of silently authorizing more than intended). See the
@@ -305,6 +306,25 @@ const PASSTHROUGH_PREFIXES = new Set([
 
 /** Shells whose `-c <command>` argument is itself a full command line to unwrap and re-check. */
 const SHELL_C_WRAPPERS = new Set(["bash", "sh", "zsh", "ksh", "dash", "fish"]);
+
+/**
+ * Every shell the run checks know: the `-c` wrappers and other shells that equally run a script,
+ * stdin, or `-c`. The deny scan keeps to `SHELL_C_WRAPPERS`.
+ */
+const SCRIPT_SHELLS: ReadonlySet<string> = new Set([
+	...SHELL_C_WRAPPERS,
+	"ash",
+	"mksh",
+	"pdksh",
+	"oksh",
+	"yash",
+	"posh",
+	"csh",
+	"tcsh",
+	"elvish",
+	"nu",
+	"xonsh",
+]);
 
 /**
  * Non-POSIX shells whose command-line argument is itself a full command line
@@ -811,15 +831,16 @@ type ProcessSubstitution = { direction: "<" | ">"; body: string };
 /** A redirection word (`<<EOF`, `<<<`, `>`, `2>&1`, `&>>log`), never a process substitution. */
 const REDIRECTION_RE = /^\d*(?:<<<|<<-?|<>|<|&>>?|>>?|>&)(?!\()/;
 
-/** Where a code runner takes the program it runs from. */
+/** Where a code runner takes the program it runs from; `code` is the command line a shell's `-c` runs. */
 type ProgramSource =
 	| { kind: "operand"; operand: string }
-	| { kind: "inline" }
+	| { kind: "inline"; code?: string }
 	| { kind: "stdin"; fromDescriptor: boolean };
 
 /**
  * `true` when `words` redirect stdin from a process substitution or another descriptor
- * (`< <(...)`, `0</dev/fd/3`, `<&3`), never from a file or stdin itself.
+ * (`< <(...)`, `0</dev/fd/3`, `<&3`), or from a connection bash opens itself
+ * (`< /dev/tcp/host/port`), never from a file or stdin itself.
  */
 function stdinFromDescriptor(words: string[]): boolean {
 	return words.some((word, i) => {
@@ -827,40 +848,120 @@ function stdinFromDescriptor(words: string[]): boolean {
 		if (!redirection) return false;
 		const target = redirection[2] === "" ? (words[i + 1] ?? "") : redirection[2];
 		if (redirection[1] === "&") return /^[1-9]\d*$/.test(target);
-		return target.startsWith("<(") || DESCRIPTOR_PATH_RE.test(target);
+		return target.startsWith("<(") || DESCRIPTOR_PATH_RE.test(target) || /^\/dev\/(?:tcp|udp)\//.test(target);
 	});
 }
 
-/** `text`'s words once leading assignments and passthrough wrappers (`env`, `nice`, ...) are gone. */
-function unwrappedWords(text: string): string[] {
-	let working = stripEnvAssignments(stripLeadingBackslashEscape(text));
-	for (let guard = 0; guard < 5; guard++) {
-		const { stripped, changed } = stripPassthroughPrefix(working);
-		if (!changed) break;
-		working = stripped;
+/**
+ * What can open a command without being its name: `{` and `!`, a subshell's `(`, `coproc`, the
+ * head of a loop that runs its body on the same line (`for x do`, `for ((...)) do`), the reserved
+ * words before a command (`if`, `then`, `do`, ...) and `builtin`, a function header (`f() {`,
+ * `function f {`), a case statement's head (`case $x in`), and a case pattern followed by its
+ * command (`start|stop) ...`, `"a b") ...`). A word and `)` followed by a redirection or nothing
+ * is the end of a subshell, not a case pattern: `(cd x && make) > log`.
+ */
+const COMPOUND_OPENERS: readonly RegExp[] = [
+	/^\s*[{!](?=\s)/,
+	/^\s*\(+/,
+	/^\s*coproc\s+[A-Za-z_]\w*\s+\{(?=\s)/,
+	/^\s*(?:for|select)\s+[A-Za-z_]\w*\s+do(?=\s)/,
+	/^\s*for\s*\(\([\s\S]*?\)\)\s*do(?=\s)/,
+	/^\s*(?:if|then|else|elif|while|until|do|coproc|builtin)(?=\s)/,
+	/^\s*function\s+[^\s(){}]+(?:\s*\(\s*\))?(?:\s*\{(?=\s))?/,
+	/^\s*[A-Za-z_][\w.:-]*\s*\(\s*\)(?:\s*\{(?=\s))?/,
+	/^\s*case\s+\S+\s+in(?=\s|$)/,
+	/^\s*\(?(?:"[^"]*"|'[^']*'|\\.|[^\s()|;&<>"'\\])+(?:\s*\|\s*(?:"[^"]*"|'[^']*'|\\.|[^\s()|;&<>"'\\])+)*\)(?=\s+[^\s<>|&;)])/,
+];
+
+/**
+ * `text` without the `)` that close a subshell around its command (`rm -rf ~)`,
+ * `bash) < <(...)`): every `)` outside quotes with no `(` of its own before it.
+ */
+function stripUnbalancedClosers(text: string): string {
+	let out = "";
+	let depth = 0;
+	let quote: "'" | '"' | undefined;
+	for (let i = 0; i < text.length; i++) {
+		const ch = text[i];
+		if (ch === "\\" && quote !== "'" && i + 1 < text.length) {
+			out += ch + text[i + 1];
+			i++;
+			continue;
+		}
+		if (quote !== undefined) {
+			if (ch === quote) quote = undefined;
+		} else if (ch === "'" || ch === '"') {
+			quote = ch;
+		} else if (ch === "(") {
+			depth++;
+		} else if (ch === ")") {
+			if (depth === 0) continue;
+			depth--;
+		}
+		out += ch;
 	}
-	return tokenizeShellWords(working.trim());
+	return out;
+}
+
+/**
+ * `text` without the compound-command syntax in front of its command (`COMPOUND_OPENERS`), and
+ * without the `)` that closes a subshell after it: `if x; then rm -rf ~; fi` runs `rm -rf ~`,
+ * `(rm -rf ~)` too.
+ */
+function stripCompoundOpeners(text: string): string {
+	let stripped = text;
+	for (let guard = 0; guard < 16; guard++) {
+		const opener = COMPOUND_OPENERS.find((re) => re.test(stripped));
+		if (opener === undefined) break;
+		stripped = stripped.replace(opener, "");
+	}
+	return stripUnbalancedClosers(stripped);
+}
+
+/**
+ * `text` as the command it runs: compound-command syntax, leading assignments and passthrough
+ * wrappers (`env`, `nice`, `time`, ...) stripped in whatever order they come. `beforeWrappers`
+ * keeps the first wrapper, for `env -S`.
+ */
+function unwrapCommand(text: string): { working: string; beforeWrappers: string } {
+	let working = text;
+	let beforeWrappers: string | undefined;
+	for (let guard = 0; guard < 8; guard++) {
+		const opened = stripEnvAssignments(stripLeadingBackslashEscape(stripCompoundOpeners(working)));
+		beforeWrappers ??= opened;
+		const { stripped, changed } = stripPassthroughPrefix(opened);
+		const next = changed ? stripped : opened;
+		if (next === working) break;
+		working = next;
+	}
+	return { working, beforeWrappers: beforeWrappers ?? working };
+}
+
+/** `text`'s words once `unwrapCommand` has stripped what runs it without being it. */
+function unwrappedWords(text: string): string[] {
+	return tokenizeShellWords(unwrapCommand(text).working.trim());
 }
 
 /**
  * Where the shell, interpreter, `source` or `.` that `words` start with takes its program
- * from: a script operand, inline code (`-c`, `-e`, `-m`), or stdin (no operand, `-` and its
- * spellings, or a shell given `-s`), noting whether stdin is redirected from a `<(...)` or another
- * descriptor anywhere among the words. `undefined` when `words` start with anything else. Option arguments
- * (`bash -o pipefail`, `python3 -W ignore`) and redirections (`> out.txt`) are skipped, so
- * neither passes for the script.
+ * from: a script operand, inline code (`-c`, `-e`, `-m`; for a shell, with the command line its
+ * `-c` runs), or stdin (no operand, `-` and its spellings, or a shell given `-s`), noting whether
+ * stdin is redirected from a `<(...)` or another descriptor anywhere among the words. `undefined`
+ * when `words` start with anything else. Option arguments (`bash -euo pipefail`,
+ * `python3 -W ignore`) and redirections (`> out.txt`) are skipped, so neither passes for the script.
  */
 function programSource(words: string[]): ProgramSource | undefined {
 	const head = words[0];
 	if (head === undefined) return undefined;
 	const name = basenameOfHeadToken(head);
-	const isShell = SHELL_C_WRAPPERS.has(name);
+	const isShell = SCRIPT_SHELLS.has(name);
 	if (!isShell && !INTERPRETER_RE.test(name) && name !== "source" && name !== ".") return undefined;
 	const family = interpreterFamily(name);
 	const argFlags = INTERPRETER_ARG_FLAGS.get(family);
 	const inlineFlags = INTERPRETER_INLINE_FLAGS.get(family);
 	const fromDescriptor = stdinFromDescriptor(words);
 	let readsStdin = false;
+	let inlineShell = false;
 	let optionsDone = false;
 	let subcommandSkipped = false;
 	for (let i = 1; i < words.length; i++) {
@@ -875,13 +976,16 @@ function programSource(words: string[]): ProgramSource | undefined {
 				optionsDone = true;
 				continue;
 			}
-			if (isShell && (SHELL_DASH_O_FLAGS.has(word) || /^[-+][A-Za-z]*[oO]$/.test(word))) {
+			if (isShell && SHELL_DASH_O_FLAGS.has(word) && !/^[-+][oO]$/.test(word)) {
 				i++;
 				continue;
 			}
-			if (isShell && /^-[A-Za-z]*c[A-Za-z]*$/.test(word)) return { kind: "inline" };
-			if (isShell && /^-[A-Za-z]*s[A-Za-z]*$/.test(word)) {
-				readsStdin = true;
+			if (isShell && /^[-+][A-Za-z]+$/.test(word)) {
+				// A cluster: `c` runs the first operand as a command line, `s` the program on stdin,
+				// and each `o` takes the next word as an option name (`-euo pipefail`).
+				if (word.startsWith("-") && word.includes("c")) inlineShell = true;
+				else if (word.startsWith("-") && word.includes("s")) readsStdin = true;
+				i += (word.match(/[oO]/g) ?? []).length;
 				continue;
 			}
 			if (inlineFlags?.has(word)) return { kind: "inline" };
@@ -897,10 +1001,11 @@ function programSource(words: string[]): ProgramSource | undefined {
 			subcommandSkipped = true;
 			continue;
 		}
+		if (inlineShell) return { kind: "inline", code: word };
 		if (readsStdin || STDIN_OPERANDS.has(word)) return { kind: "stdin", fromDescriptor };
 		return { kind: "operand", operand: word };
 	}
-	return { kind: "stdin", fromDescriptor };
+	return inlineShell ? { kind: "inline" } : { kind: "stdin", fromDescriptor };
 }
 
 /**
@@ -981,53 +1086,25 @@ function extractEvalArg(text: string): string | undefined {
 	return unquoted ? unquoted[1] : undefined;
 }
 
-/** The text inside the parenthesis that opens at `text[open]`, up to its match (or the end), and the index after it. */
-function parenthesizedBody(text: string, open: number): { body: string; end: number } {
-	let depth = 1;
-	let j = open + 1;
-	while (j < text.length && depth > 0) {
-		if (text[j] === "(") depth++;
-		else if (text[j] === ")") depth--;
-		j++;
-	}
-	return { body: text.slice(open + 1, depth === 0 ? j - 1 : j), end: j };
-}
-
-/** Every `<(...)`/`>(...)` process substitution found anywhere in `text`, and which way it is wired. */
-function extractProcessSubstitutions(text: string): ProcessSubstitution[] {
-	const results: ProcessSubstitution[] = [];
-	let i = 0;
-	while (i < text.length) {
-		const ch = text[i];
-		if ((ch === "<" || ch === ">") && text[i + 1] === "(") {
-			const { body, end } = parenthesizedBody(text, i + 1);
-			results.push({ direction: ch, body });
-			i = end;
-			continue;
-		}
-		i++;
-	}
-	return results;
-}
-
-/**
- * Extracts the contents of every `$(...)` and `` `...` `` command substitution found anywhere in
- * `text`, and with `processSubstitutions` every `<(...)`/`>(...)` one: each runs as a command.
- */
-function extractSubstitutions(text: string, processSubstitutions: boolean): string[] {
+/** Extracts the contents of every `$(...)` and `` `...` `` command substitution found anywhere in `text`. */
+function extractSubstitutions(text: string): string[] {
 	const results: string[] = [];
 	let i = 0;
 	while (i < text.length) {
 		if (text[i] === "$" && text[i + 1] === "(") {
-			const { body, end } = parenthesizedBody(text, i + 1);
-			results.push(body);
-			i = end;
+			let depth = 1;
+			let j = i + 2;
+			while (j < text.length && depth > 0) {
+				if (text[j] === "(") depth++;
+				else if (text[j] === ")") depth--;
+				j++;
+			}
+			results.push(text.slice(i + 2, depth === 0 ? j - 1 : j));
+			i = j;
 			continue;
 		}
 		i++;
 	}
-
-	if (processSubstitutions) for (const { body } of extractProcessSubstitutions(text)) results.push(body);
 	const backtickMatches = text.match(/`([^`]*)`/g);
 	if (backtickMatches) {
 		for (const m of backtickMatches) results.push(m.slice(1, -1));
@@ -1091,11 +1168,8 @@ function spaceChainOperators(segments: readonly ChainSegment[]): string {
  * The bound is itself a fail-safe surface: a command with more pieces or
  * wrapper layers than the cap allows must not be treated as "scanned clean".
  * `truncated` on the result flags exactly that case.
- *
- * With `processSubstitutions`, the bodies of `<(...)`/`>(...)` count as
- * pieces too; see `combinedDenyScan` for why both scans run.
  */
-function scanDenyCandidates(command: string, processSubstitutions: boolean): DenyScanResult {
+function scanDenyCandidates(command: string): DenyScanResult {
 	const seen = new Set<string>();
 	const queue: Array<{ text: string; depth: number }> = [{ text: command, depth: 0 }];
 	let truncated = false;
@@ -1171,7 +1245,7 @@ function scanDenyCandidates(command: string, processSubstitutions: boolean): Den
 			const envSplitStringArg = extractEnvSplitStringArg(beforeWrapperStrip);
 			if (envSplitStringArg !== undefined) enqueue(envSplitStringArg);
 
-			for (const sub of extractSubstitutions(piece, processSubstitutions)) {
+			for (const sub of extractSubstitutions(piece)) {
 				enqueue(sub);
 				const echoOutput = extractSimpleEchoOutput(sub);
 				if (echoOutput !== undefined) enqueue(echoOutput);
@@ -1307,6 +1381,10 @@ function lexShellText(text: string, start = 0, untilCloseParen = false, nesting 
 	let operator: string | undefined;
 	let quote: "'" | '"' | undefined;
 	let depth = 0;
+	// Where an escape or a substitution just ended: a `#` there still belongs to that word.
+	let glued = -1;
+	// Open `${` expansions: a `#` inside one (`${x#prefix}`, `${x:- #}`) is never a comment.
+	let braces = 0;
 	const endSegment = (next: string) => {
 		segments.push({ text: current, operator });
 		current = "";
@@ -1336,6 +1414,7 @@ function lexShellText(text: string, start = 0, untilCloseParen = false, nesting 
 		if (ch === "\\" && i + 1 < text.length) {
 			current += ch + text[i + 1];
 			i += 2;
+			glued = i;
 			continue;
 		}
 		if (ch === "$" && text[i + 1] === "(") {
@@ -1344,12 +1423,14 @@ function lexShellText(text: string, start = 0, untilCloseParen = false, nesting 
 				collectSubstitutionsIn(text.slice(i + 3, end));
 				current += text.slice(i, end);
 				i = end;
+				glued = i;
 				continue;
 			}
 			const end = readNested(i + 2);
 			substitutions.push(text.slice(i + 2, Math.max(i + 2, end - 1)));
 			current += text.slice(i, end);
 			i = end;
+			glued = i;
 			continue;
 		}
 		if (ch === "`") {
@@ -1364,6 +1445,24 @@ function lexShellText(text: string, start = 0, untilCloseParen = false, nesting 
 			if (ch === '"') quote = undefined;
 			current += ch;
 			i++;
+			continue;
+		}
+		if (ch === "$" && text[i + 1] === "{") {
+			braces++;
+			current += "${";
+			i += 2;
+			continue;
+		}
+		if (ch === "}" && braces > 0) {
+			braces--;
+			current += ch;
+			i++;
+			continue;
+		}
+		if (ch === "#" && braces === 0 && i !== glued && (i === start || /[\s;&|()<>]/.test(text[i - 1]))) {
+			// A comment runs to the end of its line, and an apostrophe in it opens no quote.
+			const newline = text.indexOf("\n", i);
+			i = newline === -1 ? text.length : newline;
 			continue;
 		}
 		if (ch === "$" && text[i + 1] === "$") {
@@ -1391,6 +1490,7 @@ function lexShellText(text: string, start = 0, untilCloseParen = false, nesting 
 			processSubstitutions.push({ direction: ch, body: text.slice(i + 2, Math.max(i + 2, end - 1)) });
 			current += `${ch}(_)`;
 			i = end;
+			glued = i;
 			continue;
 		}
 		if (ch === "(" && text[i + 1] === "(") {
@@ -1486,13 +1586,19 @@ interface ExecutedScan {
 	readonly segments: readonly ChainSegment[];
 	/** The process substitutions among them, and the way each is wired. */
 	readonly processSubstitutions: readonly ProcessSubstitution[];
+	/** Each segment's text, and the command it runs once `unwrapCommand` has stripped what leads it, for deny matching. */
+	readonly commands: readonly string[];
 	/**
-	 * `true` when the scan hit the same bounds as the deny scan, or some text was unreadable (a
-	 * heredoc that never ended, nesting too deep), so something may have been read as data that the
-	 * shell runs; callers then fail closed.
+	 * `true` when the scan hit the same bounds as the deny scan, ran into more than
+	 * `MAX_EXECUTED_SEGMENTS` segments, or some text was unreadable (a heredoc that never ended,
+	 * nesting too deep), so something may have been read as data that the shell runs; callers then
+	 * fail closed.
 	 */
 	readonly truncated: boolean;
 }
+
+/** How many segments the executed scan reads before it stops and reports itself truncated. */
+const MAX_EXECUTED_SEGMENTS = 1000;
 
 /** The last command's executed scan: one evaluation asks several checks about the same command. */
 let lastExecutedScan: { command: string; result: ExecutedScan } | undefined;
@@ -1511,6 +1617,7 @@ function scanExecutedCode(command: string): ExecutedScan {
 function computeExecutedScan(command: string): ExecutedScan {
 	const segments: ChainSegment[] = [];
 	const processSubstitutions: ProcessSubstitution[] = [];
+	const commands = new Set<string>();
 	const seen = new Set<string>();
 	const queue: Array<{ text: string; depth: number }> = [{ text: command, depth: 0 }];
 	let truncated = false;
@@ -1525,6 +1632,10 @@ function computeExecutedScan(command: string): ExecutedScan {
 		seen.add(next.text);
 		const lexed = lexShellText(next.text);
 		if (lexed.unreadable) truncated = true;
+		if (segments.length + lexed.segments.length > MAX_EXECUTED_SEGMENTS) {
+			truncated = true;
+			break;
+		}
 		// Element by element: a long script spread into `push` overflows the stack.
 		for (const seg of lexed.segments) segments.push(seg);
 		for (const substitution of lexed.processSubstitutions) processSubstitutions.push(substitution);
@@ -1534,56 +1645,47 @@ function computeExecutedScan(command: string): ExecutedScan {
 		for (const body of lexed.substitutions) runs(body);
 		for (const { body } of lexed.processSubstitutions) runs(body);
 		for (const seg of lexed.segments) {
-			const beforeWrapperStrip = stripEnvAssignments(stripLeadingBackslashEscape(seg.text));
-			let working = beforeWrapperStrip;
-			for (let guard = 0; guard < 5; guard++) {
-				const { stripped, changed } = stripPassthroughPrefix(working);
-				if (!changed) break;
-				working = stripped;
-			}
+			const { working, beforeWrappers } = unwrapCommand(seg.text);
 			const basenameResolved = resolveBasenameOfFirstToken(working);
+			for (const text of [seg.text, working, basenameResolved]) if (text.trim() !== "") commands.add(text.trim());
 			runs(
-				extractShellBodyAfterDashC(working, SHELL_C_WRAPPERS) ??
-					extractShellBodyAfterDashC(basenameResolved, SHELL_C_WRAPPERS),
+				extractShellBodyAfterDashC(working, SCRIPT_SHELLS) ??
+					extractShellBodyAfterDashC(basenameResolved, SCRIPT_SHELLS),
 			);
 			runs(extractOtherShellWrapperArg(working) ?? extractOtherShellWrapperArg(basenameResolved));
 			runs(extractEvalArg(working) ?? extractEvalArg(basenameResolved));
 			runs(extractFindExecArg(working) ?? extractFindExecArg(basenameResolved));
-			runs(extractEnvSplitStringArg(beforeWrapperStrip));
+			runs(extractEnvSplitStringArg(beforeWrappers));
+			// Past clustered options `extractShellBodyAfterDashC` stops at: `bash -euo pipefail -c '...'`.
+			const source = programSource(tokenizeShellWords(working.trim()));
+			if (source?.kind === "inline") runs(source.code);
 		}
 	}
-	return { segments, processSubstitutions, truncated };
+	return { segments, processSubstitutions, commands: [...commands], truncated };
 }
 
 /** The last command's deny scan: one evaluation matches the same command against every pattern. */
-let lastDenyScan: { command: string; result: DenyScanResult; forms?: readonly string[] } | undefined;
+let lastDenyScan:
+	| { command: string; result: DenyScanResult; candidates?: readonly string[]; forms?: readonly string[] }
+	| undefined;
 
-function cachedDenyScan(command: string): { command: string; result: DenyScanResult; forms?: readonly string[] } {
-	if (lastDenyScan?.command !== command) lastDenyScan = { command, result: combinedDenyScan(command) };
+function cachedDenyScan(command: string): NonNullable<typeof lastDenyScan> {
+	if (lastDenyScan?.command !== command) lastDenyScan = { command, result: scanDenyCandidates(command) };
 	return lastDenyScan;
 }
 
 /**
- * The deny scan without process substitutions, and, when a candidate has one, again with them:
- * the candidates of both, truncated when either scan is. Following a `<(...)` reaches some
- * text sooner and leaves room in the budget differently, which must never spare a command the
- * bounds the plain scan holds it to.
+ * What deny rules and the danger filter match: the deny scan's candidates, and the command each
+ * segment the executed scan finds the shell runs. The deny scan over-reads on purpose, but it
+ * loses its place at an apostrophe in a heredoc or a comment, at `\"` or `$'...'`, never looks
+ * inside `<(...)`, and keeps `if ...; then`, `{ ...; }` or `( ... )` in front of a command; the
+ * executed scan reads all of those as the shell does. Only the deny scan's own bounds make a
+ * command truncated.
  */
-function combinedDenyScan(command: string): DenyScanResult {
-	const plain = scanDenyCandidates(command, false);
-	// Truncated, the scan decides alone; without a `<(` or `>(` in any candidate, the scan with
-	// process substitutions would read exactly the same pieces.
-	if (plain.truncated || !plain.candidates.some((candidate) => /[<>]\(/.test(candidate))) return plain;
-	const withProcessSubstitutions = scanDenyCandidates(command, true);
-	return {
-		candidates: [...new Set([...plain.candidates, ...withProcessSubstitutions.candidates])],
-		truncated: withProcessSubstitutions.truncated,
-	};
-}
-
-/** Candidate list only, for callers that don't need the truncation flag. */
 function collectDenyCandidates(command: string): readonly string[] {
-	return cachedDenyScan(command).result.candidates;
+	const scan = cachedDenyScan(command);
+	scan.candidates ??= [...new Set([...scan.result.candidates, ...scanExecutedCode(command).commands])];
+	return scan.candidates;
 }
 
 /**
@@ -1592,7 +1694,7 @@ function collectDenyCandidates(command: string): readonly string[] {
  */
 function matchableDenyForms(command: string): readonly string[] {
 	const scan = cachedDenyScan(command);
-	scan.forms ??= scan.result.candidates.flatMap((candidate) => {
+	scan.forms ??= collectDenyCandidates(command).flatMap((candidate) => {
 		const plain = normalizeForMatch(candidate);
 		const spaced = normalizeForMatch(spaceChainOperators(splitChain(candidate)));
 		return spaced === plain ? [plain] : [plain, spaced];
@@ -1672,16 +1774,24 @@ function isDynamicCommandHead(token: string, options: { specialParameters: boole
  * instead of silently resolving to whatever the variable happens to hold.
  */
 function commandHeadIsDynamic(command: string): boolean {
-	const dynamicHead = (seg: ChainSegment, specialParameters: boolean) => {
-		const working = stripEnvAssignments(stripLeadingBackslashEscape(seg.text));
-		const head = tokenizeShellWords(working.trim())[0];
-		return head !== undefined && isDynamicCommandHead(head, { specialParameters });
-	};
 	// The raw command's segments include heredoc lines, where `$5` or `"$@"` is text: special
-	// parameters count only in what the lexed scan finds the shell runs.
-	if (splitChain(command).some((seg) => dynamicHead(seg, false))) return true;
+	// parameters count only in what the lexed scan finds the shell runs, past `then`, `{` or `nohup`.
+	const rawHeadIsDynamic = splitChain(command).some((seg) => {
+		const head = tokenizeShellWords(stripEnvAssignments(stripLeadingBackslashEscape(seg.text)).trim())[0];
+		return head !== undefined && isDynamicCommandHead(head, { specialParameters: false });
+	});
+	if (rawHeadIsDynamic) return true;
 	const executed = scanExecutedCode(command);
-	return executed.truncated || executed.segments.some((seg) => dynamicHead(seg, true));
+	return (
+		executed.truncated ||
+		executed.segments.some((seg) => {
+			const heads = [
+				tokenizeShellWords(stripEnvAssignments(stripLeadingBackslashEscape(seg.text)).trim())[0],
+				unwrappedWords(seg.text)[0],
+			];
+			return heads.some((head) => head !== undefined && isDynamicCommandHead(head, { specialParameters: true }));
+		})
+	);
 }
 
 /** Extracts the `<cmd>` from `find ... -exec <cmd> ... ;`/`+`/`-execdir <cmd> ... ;`, if present. */

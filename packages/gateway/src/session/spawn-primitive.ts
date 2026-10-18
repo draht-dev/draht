@@ -177,12 +177,13 @@ export const DECLARED_CREDENTIAL_ENV: readonly string[] = [
 const BASE_ENV_NAMES: readonly string[] = ["HOME", "LANG", "LC_ALL", "LC_CTYPE", "LOGNAME", "TMPDIR", "TZ", "USER"];
 
 /**
- * Draht's own policy for what a session may do unasked, passed on so the operator's
- * `DRAHT_PERMISSION_MODE` reaches the sessions this daemon starts the same way it reaches the ones
- * started in a terminal. Unset on the daemon, it stays unset, and the session starts in auto like
- * any other.
+ * Draht's permission mode, passed on so the operator's `DRAHT_PERMISSION_MODE` reaches the
+ * sessions this daemon starts the same way it reaches the ones started in a terminal. Unset on the
+ * daemon, it stays unset, and the session starts in auto like any other. `yolo` is the exception:
+ * a session started from the board runs with nobody watching it, so dropping every approval there
+ * takes the operator listing the name in `DRAHT_RESUME_ENV_ALLOW`.
  */
-export const FORWARDED_POLICY_ENV_NAMES: readonly string[] = ["DRAHT_PERMISSION_MODE"];
+const FORWARDED_PERMISSION_MODE_ENV = "DRAHT_PERMISSION_MODE";
 
 /**
  * Names that are refused even when an operator declares them.
@@ -564,9 +565,18 @@ export function buildChildEnvironment(options: ChildEnvironmentOptions): Record<
 		: DEFAULT_RESUME_PATH;
 	child.PATH = path;
 
-	for (const name of [...BASE_ENV_NAMES, ...FORWARDED_POLICY_ENV_NAMES]) {
+	for (const name of BASE_ENV_NAMES) {
 		const value = env[name];
 		if (typeof value === "string" && value.length > 0) child[name] = value;
+	}
+
+	const permissionMode = env[FORWARDED_PERMISSION_MODE_ENV];
+	if (
+		typeof permissionMode === "string" &&
+		permissionMode.length > 0 &&
+		permissionMode.trim().toLowerCase() !== "yolo"
+	) {
+		child[FORWARDED_PERMISSION_MODE_ENV] = permissionMode;
 	}
 
 	// Set, never copied: the daemon's own agent directory is what makes the

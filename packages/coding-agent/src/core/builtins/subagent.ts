@@ -13,7 +13,7 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getKeybindings } from "@draht/tui";
+import { getKeybindings, isKeyRelease, isKeyRepeat } from "@draht/tui";
 import { Type } from "@sinclair/typebox";
 import { CONFIG_DIR_NAME, getAgentDir, getPackageDir } from "../../config.js";
 import { comparablePath, realPathStrict } from "../../utils/canonical-path.js";
@@ -115,12 +115,13 @@ export function permissionEnv(session: { permissionMode(): PermissionMode }): ()
 }
 
 /**
- * The order `app.permissions.cycle` steps through. From the mode a session starts in, the first
- * press only ever asks more; `yolo` takes a second one.
+ * Where `app.permissions.cycle` switches to. It alternates `auto` and `ask` and never enters
+ * `yolo`, so no single key press drops every approval; that takes `/yolo`. From `yolo` it goes back
+ * to `auto`.
  */
 const NEXT_PERMISSION_MODE: Readonly<Record<PermissionMode, PermissionMode>> = {
 	auto: "ask",
-	ask: "yolo",
+	ask: "auto",
 	yolo: "auto",
 };
 
@@ -1764,6 +1765,9 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 			if (ctx.mode === "tui" && ctx.hasUI) {
 				unsubscribeModeKey = ctx.ui.onTerminalInput((data) => {
 					if (!getKeybindings().matches(data, "app.permissions.cycle")) return undefined;
+					// A terminal reporting key releases (kitty protocol) or repeats sends the key again; one
+					// press switches once.
+					if (isKeyRelease(data) || isKeyRepeat(data)) return { consume: true };
 					setPermissionMode(NEXT_PERMISSION_MODE[permissionMode], ctx);
 					ctx.ui.notify(`Permission mode: ${permissionMode} — ${MODE_DESCRIPTIONS[permissionMode]}`, "info");
 					return { consume: true };

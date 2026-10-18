@@ -7143,7 +7143,7 @@ export class InteractiveMode {
 | \`${exit}\` | Exit (when editor is empty) |
 | \`${suspend}\` | Suspend to background |
 | \`${cycleThinkingLevel}\` | Cycle thinking level |
-| \`${cyclePermissionMode}\` | Cycle permission mode (auto, ask, yolo) |
+| \`${cyclePermissionMode}\` | Switch permission mode (auto, ask) |
 ${cycleContextWindow ? `| \`${cycleContextWindow}\` | Cycle context window |\n` : ""}| \`${cycleModelForward}\` / \`${cycleModelBackward}\` | Cycle models |
 | \`${selectModel}\` | Open model selector |
 | \`${expandTools}\` | Toggle tool output expansion |

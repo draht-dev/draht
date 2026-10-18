@@ -6,8 +6,8 @@
 
 import type { Api, Model } from "@draht/ai";
 import { fauxAssistantMessage, fauxToolCall } from "@draht/ai";
-import { KeybindingsManager, setKeybindings } from "@draht/tui";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { getKeybindings, KeybindingsManager, setKeybindings } from "@draht/tui";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import duetBuiltin from "../../src/core/builtins/duet.ts";
 import {
 	createSubagentExtension,
@@ -299,9 +299,16 @@ describe("the footer names a permission mode other than the one sessions start i
 	});
 });
 
-describe("app.permissions.cycle steps the session's permission mode", () => {
+describe("app.permissions.cycle switches the session's permission mode", () => {
+	let previousKeybindings: ReturnType<typeof getKeybindings>;
+
 	beforeAll(() => {
+		previousKeybindings = getKeybindings();
 		setKeybindings(new KeybindingsManager(KEYBINDINGS));
+	});
+
+	afterAll(() => {
+		setKeybindings(previousKeybindings);
 	});
 
 	async function createKeyHarness(mode: "tui" | "rpc") {
@@ -326,20 +333,39 @@ describe("app.permissions.cycle steps the session's permission mode", () => {
 		harnesses.push(harness);
 		await harness.session.bindExtensions({ uiContext, mode });
 		const press = (data: string) => handlers.map((handler) => handler(data)).find((result) => result !== undefined);
-		return { handlers, statuses, notices, press };
+		return { harness, handlers, statuses, notices, press };
 	}
 
-	it("goes from auto to ask to yolo and back on alt+m, and leaves other keys alone", async () => {
+	it("switches between auto and ask on alt+m, and leaves other keys alone", async () => {
 		const { statuses, notices, press } = await createKeyHarness("tui");
 
 		expect(press("m")).toBeUndefined();
 		expect(press("\x1bm")).toEqual({ consume: true });
 		expect(statuses.at(-1)).toBe("perms: ask");
 		expect(press("\x1bm")).toEqual({ consume: true });
-		expect(statuses.at(-1)).toBe("perms: yolo");
-		expect(press("\x1bm")).toEqual({ consume: true });
 		expect(statuses.at(-1)).toBeUndefined();
 		expect(notices.at(-1)).toContain("Permission mode: auto");
+	});
+
+	it("never enters yolo, and leaves it for auto", async () => {
+		const { harness, statuses, press } = await createKeyHarness("tui");
+
+		await harness.session.prompt("/yolo");
+		expect(statuses.at(-1)).toBe("perms: yolo");
+		press("\x1bm");
+		expect(statuses.at(-1)).toBeUndefined();
+		press("\x1bm");
+		expect(statuses.at(-1)).toBe("perms: ask");
+	});
+
+	it("switches once per press when the terminal also reports the release and repeats", async () => {
+		const { statuses, press } = await createKeyHarness("tui");
+
+		// kitty keyboard protocol: `m` (109) with alt (modifier 3); event type 2 is a repeat, 3 a release.
+		expect(press("\x1b[109;3u")).toEqual({ consume: true });
+		expect(press("\x1b[109;3:2u")).toEqual({ consume: true });
+		expect(press("\x1b[109;3:3u")).toEqual({ consume: true });
+		expect(statuses).toEqual([undefined, "perms: ask"]);
 	});
 
 	it("listens for the key only in the TUI", async () => {

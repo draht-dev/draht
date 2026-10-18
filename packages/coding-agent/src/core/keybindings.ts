@@ -112,7 +112,7 @@ export const KEYBINDINGS = {
 	},
 	"app.permissions.cycle": {
 		defaultKeys: "alt+m",
-		description: "Cycle permission mode",
+		description: "Switch permission mode between auto and ask",
 	},
 	"app.context.cycle": {
 		defaultKeys: "ctrl+shift+l",

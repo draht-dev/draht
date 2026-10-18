@@ -322,13 +322,18 @@ function isOtherShellWrapperName(basename: string): boolean {
 /** Constructs that make a command dynamic/opaque enough that allow/approve patterns must never match it. */
 const DANGEROUS_CONSTRUCT_RE = /\$\(|`|<|>/;
 
+/** `true` for the operators that feed one command's output into the next: `|` and `|&`. */
+function isPipeOperator(operator: string | undefined): boolean {
+	return operator === "|" || operator === "|&";
+}
+
 interface ChainSegment {
 	text: string;
 	/** The operator immediately preceding this segment; `undefined` for the first segment. */
 	operator?: string;
 }
 
-/** Quote-aware split of a command string on top-level chain operators (`;`, `&&`, `||`, `|`, `&`, newlines). */
+/** Quote-aware split of a command string on top-level chain operators (`;`, `&&`, `||`, `|&`, `|`, `&`, newlines). */
 function splitChain(command: string): ChainSegment[] {
 	const segments: ChainSegment[] = [];
 	let current = "";
@@ -355,7 +360,7 @@ function splitChain(command: string): ChainSegment[] {
 			continue;
 		}
 		const two = command.slice(i, i + 2);
-		if (two === "&&" || two === "||") {
+		if (two === "&&" || two === "||" || two === "|&") {
 			segments.push({ text: current, operator });
 			current = "";
 			operator = two;
@@ -719,7 +724,7 @@ function feedsBareShellViaHereDocOrString(text: string): boolean {
 /** `true` when any `|`-joined segment pipes into a known shell with no `-c` (`echo ... | bash`). */
 function pipedIntoBareShell(segments: ChainSegment[]): boolean {
 	return segments.some((seg) => {
-		if (seg.operator !== "|") return false;
+		if (!isPipeOperator(seg.operator)) return false;
 		const trimmed = seg.text.trim();
 		const tokens = tokenizeShellWords(trimmed);
 		const head = tokens[0];
@@ -731,26 +736,76 @@ function pipedIntoBareShell(segments: ChainSegment[]): boolean {
 /**
  * `true` when `command` feeds a bare shell interpreter (`bash`, `sh`, `zsh`,
  * `dash`, `ksh`, `fish`) via a pipe, here-string, or heredoc, with no `-c`
- * flag, at any layer the shell runs (see `executedTexts`). The deny scan can
- * extract and check the piped/here-doc text (see `scanDenyCandidates`), but
- * can't prove the absence of danger the way a plain unwrapped command can — so
- * auto mode must never silently allow it.
+ * flag — in the command itself or in any command line it runs (see
+ * `scanExecutedCode`). The deny scan can extract and check the piped/here-doc
+ * text (see `scanDenyCandidates`), but can't prove the absence of danger the
+ * way a plain unwrapped command can — so auto mode must never silently allow it.
  */
 function commandFeedsBareShellWithoutDashC(command: string): boolean {
-	return executedTexts(command).some((text) => {
+	const feedsShell = (text: string) => {
 		const segments = splitChain(text);
-		if (pipedIntoBareShell(segments)) return true;
-		return segments.some((seg) => feedsBareShellViaHereDocOrString(seg.text));
-	});
+		return pipedIntoBareShell(segments) || segments.some((seg) => feedsBareShellViaHereDocOrString(seg.text));
+	};
+	if (feedsShell(command)) return true;
+	const executed = scanExecutedCode(command);
+	return executed.truncated || executed.codes.some(feedsShell);
 }
 
-/** Interpreters that run the program their first operand names, or the one on stdin without one. */
+/** Interpreters: each runs a script operand, inline code (`-c`, `-e`), or the program on stdin. */
 const INTERPRETER_RE = /^(python[0-9.]*|node|nodejs|bun|deno|ruby|perl|php)$/;
 
-/** Shells, interpreters, and `source`/`.`: commands whose operand is code they run. */
-function isCodeRunnerName(basename: string): boolean {
-	return SHELL_C_WRAPPERS.has(basename) || INTERPRETER_RE.test(basename) || basename === "source" || basename === ".";
+/** The interpreter family `name` belongs to, the key of `INTERPRETER_ARG_FLAGS` and `INTERPRETER_INLINE_FLAGS`. */
+function interpreterFamily(name: string): string {
+	if (name.startsWith("python")) return "python";
+	return name === "nodejs" ? "node" : name;
 }
+
+/** Interpreter flags that take the next word as their own argument (`python3 -W ignore`, `node -r ./x`). */
+const INTERPRETER_ARG_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+	["python", new Set(["-W", "-X", "--check-hash-based-pycs"])],
+	[
+		"node",
+		new Set([
+			"-r",
+			"--require",
+			"--import",
+			"--loader",
+			"--experimental-loader",
+			"-C",
+			"--conditions",
+			"--input-type",
+			"--env-file",
+			"--title",
+		]),
+	],
+	["bun", new Set(["-r", "--require", "--preload", "--cwd", "--env-file", "--tsconfig-override"])],
+	["deno", new Set(["--config", "--import-map", "--location", "--seed", "--v8-flags", "--env-file", "--cert"])],
+	["ruby", new Set(["-I", "-r", "-C", "-E", "-F", "--encoding"])],
+	["perl", new Set(["-I"])],
+	["php", new Set(["-d", "-c", "-z"])],
+]);
+
+/** Interpreter flags that give the program inline or as a module, so it is no script operand and not stdin. */
+const INTERPRETER_INLINE_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+	["python", new Set(["-c", "-m"])],
+	["node", new Set(["-e", "--eval", "-p", "--print"])],
+	["bun", new Set(["-e", "--eval", "-p", "--print"])],
+	["ruby", new Set(["-e"])],
+	["perl", new Set(["-e", "-E"])],
+	["php", new Set(["-r"])],
+]);
+
+/** Operands that name stdin itself. */
+const STDIN_OPERANDS: ReadonlySet<string> = new Set(["-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"]);
+
+/** A redirection word (`<<EOF`, `<<<`, `>`, `2>&1`, `&>>log`), never a process substitution. */
+const REDIRECTION_RE = /^\d*(?:<<<|<<-?|<>|<|&>>?|>>?|>&)(?!\()/;
+
+/** Where a code runner takes the program it runs from. */
+type ProgramSource =
+	| { kind: "operand"; operand: string }
+	| { kind: "inline" }
+	| { kind: "stdin"; fromProcessSubstitution: boolean };
 
 /** `text`'s words once leading assignments and passthrough wrappers (`env`, `nice`, ...) are gone. */
 function unwrappedWords(text: string): string[] {
@@ -763,75 +818,108 @@ function unwrappedWords(text: string): string[] {
 	return tokenizeShellWords(working.trim());
 }
 
-/** A redirection word (`<<EOF`, `<<<`, `>`, `2>&1`, `&>>log`), never a process substitution. */
-const REDIRECTION_RE = /^\d*(?:<<<|<<-?|<>|<|&>>?|>>?|>&)(?!\()/;
-
 /**
- * The first word after the command that is neither a flag nor a redirection; `-` alone counts,
- * it means stdin. A redirection operator standing alone (`> out.txt`) takes the next word with it.
+ * Where the shell, interpreter, `source` or `.` that `words` start with takes its program
+ * from: a script operand, inline code (`-c`, `-e`, `-m`), or stdin (no operand, or `-` and its
+ * spellings), noting whether stdin is redirected from a `<(...)`. `undefined` when `words` start
+ * with anything else. Option arguments (`bash -o pipefail`, `python3 -W ignore`) and
+ * redirections (`> out.txt`) are skipped, so neither passes for the script.
  */
-function firstOperand(words: string[]): string | undefined {
+function programSource(words: string[]): ProgramSource | undefined {
+	const head = words[0];
+	if (head === undefined) return undefined;
+	const name = basenameOfHeadToken(head);
+	const isShell = SHELL_C_WRAPPERS.has(name);
+	if (!isShell && !INTERPRETER_RE.test(name) && name !== "source" && name !== ".") return undefined;
+	const family = interpreterFamily(name);
+	const argFlags = INTERPRETER_ARG_FLAGS.get(family);
+	const inlineFlags = INTERPRETER_INLINE_FLAGS.get(family);
+	let stdinFromProcessSubstitution = false;
+	let optionsDone = false;
+	let subcommandSkipped = false;
 	for (let i = 1; i < words.length; i++) {
 		const word = words[i];
-		if (/^-./.test(word)) continue;
 		const redirection = word.match(REDIRECTION_RE);
 		if (redirection) {
-			if (redirection[0] === word) i++;
+			if (redirection[0] === word) {
+				if (/^0?<$/.test(word) && words[i + 1]?.startsWith("<(")) stdinFromProcessSubstitution = true;
+				i++;
+			}
 			continue;
 		}
-		return word;
+		if (!optionsDone) {
+			if (word === "--") {
+				optionsDone = true;
+				continue;
+			}
+			if (isShell && SHELL_DASH_O_FLAGS.has(word)) {
+				i++;
+				continue;
+			}
+			if (isShell && /^-[A-Za-z]*c[A-Za-z]*$/.test(word)) return { kind: "inline" };
+			if (inlineFlags?.has(word)) return { kind: "inline" };
+			if ((family === "perl" || family === "ruby") && /^-[A-Za-z]*[eE][A-Za-z]*$/.test(word))
+				return { kind: "inline" };
+			if (argFlags?.has(word)) {
+				i++;
+				continue;
+			}
+			if (/^-./.test(word) || (isShell && /^\+./.test(word))) continue;
+		}
+		if (family === "deno" && !subcommandSkipped && word === "run") {
+			subcommandSkipped = true;
+			continue;
+		}
+		if (STDIN_OPERANDS.has(word)) return { kind: "stdin", fromProcessSubstitution: stdinFromProcessSubstitution };
+		return { kind: "operand", operand: word };
 	}
-	return undefined;
-}
-
-/** `true` when `words` run a program read from stdin: a shell or interpreter with no operand, or `-`. */
-function readsProgramFromStdin(words: string[]): boolean {
-	const head = words[0];
-	if (head === undefined) return false;
-	const name = basenameOfHeadToken(head);
-	if (!SHELL_C_WRAPPERS.has(name) && !INTERPRETER_RE.test(name)) return false;
-	const operand = firstOperand(words);
-	return operand === undefined || operand === "-";
+	return { kind: "stdin", fromProcessSubstitution: stdinFromProcessSubstitution };
 }
 
 /**
- * `true` when a pipe, heredoc or here-string feeds an interpreter the program it runs from
- * stdin (`curl ... | python3`, `python3 - <<'EOF'`), at any layer the shell runs. The same rule
- * `commandFeedsBareShellWithoutDashC` applies to the shells, and the reason `python* -c*` is a
- * danger pattern: the deny scan can't vet a program in another language. An interpreter given a
- * script (`... | python3 -m json.tool`, `python3 tool.py <<EOF`) reads data, not code.
+ * `true` when a pipe, heredoc or here-string feeds a shell, interpreter or `source` the program
+ * it runs from stdin (`curl ... | python3`, `python3 - <<'EOF'`, `source /dev/stdin <<<...`), in
+ * the command or any command line it runs. The rule `commandFeedsBareShellWithoutDashC` applies
+ * to the shells, and the reason `python* -c*` is a danger pattern: the deny scan can't vet a
+ * program in another language. A runner given a script (`... | python3 -m json.tool`,
+ * `python3 tool.py <<EOF`) reads data, not code.
  */
-function commandFeedsInterpreterFromStdin(command: string): boolean {
-	return executedTexts(command).some((text) =>
-		splitChain(text).some((seg) => {
-			const words = unwrappedWords(seg.text);
-			const head = words[0];
-			if (head === undefined || !INTERPRETER_RE.test(basenameOfHeadToken(head))) return false;
-			if (!readsProgramFromStdin(words)) return false;
-			return seg.operator === "|" || /<<<|<</.test(seg.text);
-		}),
+function commandFeedsCodeFromStdin(command: string): boolean {
+	const executed = scanExecutedCode(command);
+	return (
+		executed.truncated ||
+		executed.codes.some((code) =>
+			splitChain(code).some((seg) => {
+				if (programSource(unwrappedWords(seg.text))?.kind !== "stdin") return false;
+				return isPipeOperator(seg.operator) || /<<<|<</.test(seg.text);
+			}),
+		)
 	);
 }
 
 /**
- * `true` when code runs straight out of a process substitution, at any layer the shell runs:
- * a shell, interpreter, `source` or `.` whose script is `<(...)` (`bash <(curl ...)`,
- * `source <(...)`, `bash < <(...)`), or a `>(...)` that runs what is written into it
- * (`tee >(sh)`). The deny scan sees the substitution's command, never the program it produces.
+ * `true` when code runs straight out of a process substitution, in the command or any command
+ * line it runs: a shell, interpreter, `source` or `.` whose script is `<(...)` (`bash <(curl ...)`,
+ * `source <(...)`) or whose stdin is one (`bash < <(...)`), or a `>(...)` that runs what is written
+ * into it (`tee >(sh)`). The deny scan sees the substitution's command, never the program it
+ * produces. A process substitution that only carries data (`diff <(ls a) <(ls b)`,
+ * `python3 tool.py < <(git log)`) runs nothing.
  */
 function commandRunsProcessSubstitution(command: string): boolean {
-	return executedTexts(command).some(
-		(text) =>
-			splitChain(text).some((seg) => {
-				const words = unwrappedWords(seg.text);
-				const head = words[0];
-				if (head === undefined || !isCodeRunnerName(basenameOfHeadToken(head))) return false;
-				if (firstOperand(words)?.startsWith("<(")) return true;
-				return words.some((word, i) => word.startsWith("<(") && words[i - 1] === "<");
-			}) ||
-			extractProcessSubstitutions(text).some(
-				({ direction, body }) => direction === ">" && readsProgramFromStdin(unwrappedWords(body)),
-			),
+	const executed = scanExecutedCode(command);
+	if (executed.truncated) return true;
+	const runsOne = executed.codes.some((code) =>
+		splitChain(code).some((seg) => {
+			const source = programSource(unwrappedWords(seg.text));
+			if (source?.kind === "operand") return source.operand.startsWith("<(");
+			return source?.kind === "stdin" && source.fromProcessSubstitution;
+		}),
+	);
+	return (
+		runsOne ||
+		executed.processSubstitutions.some(
+			({ direction, body }) => direction === ">" && programSource(unwrappedWords(body))?.kind === "stdin",
+		)
 	);
 }
 
@@ -946,19 +1034,18 @@ interface DenyScanResult {
 	 * `commandDenyScanTruncated` below.
 	 */
 	truncated: boolean;
-	/**
-	 * Text a shell runs as a command line of its own, at every layer found: `bash -c` bodies,
-	 * `eval` arguments, `pwsh -c`/`env -S`/`find -exec` commands, and substitution bodies.
-	 * Unlike `candidates`, never a heredoc or here-string payload, which is data unless a shell
-	 * reads it (`commandFeedsBareShellWithoutDashC` covers that).
-	 */
-	executed: string[];
 }
 
-/** `segments` joined back with one space around every operator. */
+/**
+ * `segments` joined back with one space around every operator, `|&` spelled `|`, so a pattern
+ * written `curl * | *` also matches `curl x|sh` and `curl x |& sh`.
+ */
 function spaceChainOperators(segments: ChainSegment[]): string {
 	return segments
-		.map((seg) => (seg.operator === undefined ? seg.text.trim() : `${seg.operator} ${seg.text.trim()}`))
+		.map((seg) => {
+			if (seg.operator === undefined) return seg.text.trim();
+			return `${isPipeOperator(seg.operator) ? "|" : seg.operator} ${seg.text.trim()}`;
+		})
 		.join(" ");
 }
 
@@ -976,7 +1063,8 @@ function spaceChainOperators(segments: ChainSegment[]): string {
 function scanDenyCandidates(command: string): DenyScanResult {
 	const seen = new Set<string>();
 	const queue: Array<{ text: string; depth: number }> = [{ text: command, depth: 0 }];
-	const executed: string[] = [];
+	// Queued once: a text reached by several paths would otherwise eat the cap once per path.
+	const queued = new Set<string>([command]);
 	let truncated = false;
 
 	while (queue.length > 0) {
@@ -995,11 +1083,12 @@ function scanDenyCandidates(command: string): DenyScanResult {
 		}
 
 		const enqueue = (candidate: string) => {
-			if (seen.has(candidate)) return;
+			if (seen.has(candidate) || queued.has(candidate)) return;
 			if (seen.size + queue.length >= MAX_DENY_CANDIDATES) {
 				truncated = true;
 				return;
 			}
+			queued.add(candidate);
 			queue.push({ text: candidate, depth: depth + 1 });
 		};
 
@@ -1007,14 +1096,9 @@ function scanDenyCandidates(command: string): DenyScanResult {
 		const segments = segmentObjs.map((s) => s.text);
 		const pieces = segments.length > 1 ? segments : [text];
 		for (const seg of segments) enqueue(seg);
-		// A pattern written `curl * | *` must also match `curl x|sh`.
-		if (segmentObjs.length > 1) {
-			const spaced = spaceChainOperators(segmentObjs);
-			if (normalizeForMatch(spaced) !== normalizeForMatch(text)) enqueue(spaced);
-		}
 
 		for (let i = 0; i < segmentObjs.length; i++) {
-			if (segmentObjs[i].operator !== "|") continue;
+			if (!isPipeOperator(segmentObjs[i].operator)) continue;
 			const prevText = segmentObjs[i - 1]?.text;
 			if (prevText === undefined) continue;
 			const echoOutput = extractSimpleEchoOutput(prevText);
@@ -1038,53 +1122,212 @@ function scanDenyCandidates(command: string): DenyScanResult {
 			const shellC =
 				extractShellBodyAfterDashC(working, SHELL_C_WRAPPERS) ??
 				extractShellBodyAfterDashC(basenameResolved, SHELL_C_WRAPPERS);
-			if (shellC !== undefined) {
-				enqueue(shellC);
-				executed.push(shellC);
-			}
+			if (shellC !== undefined) enqueue(shellC);
 
 			const hereRedirect = extractHereStringOrHeredocPayload(piece);
 			if (hereRedirect !== undefined) enqueue(hereRedirect);
 
 			const otherShellArg = extractOtherShellWrapperArg(working) ?? extractOtherShellWrapperArg(basenameResolved);
-			if (otherShellArg !== undefined) {
-				enqueue(otherShellArg);
-				executed.push(otherShellArg);
-			}
+			if (otherShellArg !== undefined) enqueue(otherShellArg);
 
 			const evalArg = extractEvalArg(working) ?? extractEvalArg(basenameResolved);
-			if (evalArg !== undefined) {
-				enqueue(evalArg);
-				executed.push(evalArg);
-			}
+			if (evalArg !== undefined) enqueue(evalArg);
 
 			const findExecArg = extractFindExecArg(working) ?? extractFindExecArg(basenameResolved);
-			if (findExecArg !== undefined) {
-				enqueue(findExecArg);
-				executed.push(findExecArg);
-			}
+			if (findExecArg !== undefined) enqueue(findExecArg);
 
 			const envSplitStringArg = extractEnvSplitStringArg(beforeWrapperStrip);
-			if (envSplitStringArg !== undefined) {
-				enqueue(envSplitStringArg);
-				executed.push(envSplitStringArg);
-			}
+			if (envSplitStringArg !== undefined) enqueue(envSplitStringArg);
 
 			for (const sub of extractSubstitutions(piece)) {
 				enqueue(sub);
-				executed.push(sub);
 				const echoOutput = extractSimpleEchoOutput(sub);
 				if (echoOutput !== undefined) enqueue(echoOutput);
 			}
 		}
 	}
 
-	return { candidates: [...seen], truncated, executed };
+	return { candidates: [...seen], truncated };
 }
 
-/** `command` and every command line a shell runs inside it (`DenyScanResult.executed`). */
-function executedTexts(command: string): string[] {
-	return [command, ...scanDenyCandidates(command).executed];
+/** One layer of shell text, read the way the shell reads it. */
+interface LexedShellText {
+	/** The text with heredoc bodies cut out and each process substitution collapsed to `<(_)`/`>(_)`. */
+	code: string;
+	/** Bodies of the `$(...)` and backtick substitutions the shell runs: outside single quotes, and in unquoted heredoc bodies. */
+	substitutions: string[];
+	/** Process substitutions outside quotes and heredoc bodies, and the way each is wired. */
+	processSubstitutions: Array<{ direction: "<" | ">"; body: string }>;
+}
+
+/** A heredoc operator (`<<EOF`, `<<-'EOF'`, `<< "EOF"`, `<<\\EOF`) and its delimiter. */
+const HEREDOC_OPERATOR_RE = /^<<(-?)[ \t]*(?:(['"])([^'"\n]+)\2|(\\?)([A-Za-z_][A-Za-z0-9_]*))/;
+
+/** The `$(...)` or backtick substitution starting at `text[i]`, if one does. */
+function substitutionAt(text: string, i: number): { body: string; end: number } | undefined {
+	if (text[i] === "$" && text[i + 1] === "(") return parenthesizedBody(text, i + 1);
+	if (text[i] !== "`") return undefined;
+	let j = i + 1;
+	while (j < text.length && text[j] !== "`") j += text[j] === "\\" ? 2 : 1;
+	return { body: text.slice(i + 1, j), end: j + 1 };
+}
+
+/** Every `$(...)` and backtick substitution in `text`, which runs them all (an unquoted heredoc body). */
+function substitutionsIn(text: string): string[] {
+	const bodies: string[] = [];
+	let i = 0;
+	while (i < text.length) {
+		const sub = substitutionAt(text, i);
+		if (sub) {
+			bodies.push(sub.body);
+			i = sub.end;
+		} else {
+			i += text[i] === "\\" ? 2 : 1;
+		}
+	}
+	return bodies;
+}
+
+/**
+ * Reads one layer of shell text as the shell would, for the checks that ask whether something is
+ * RUN: single-quoted text runs nothing; in double quotes only `$(...)` and backticks run; a quoted
+ * heredoc's body is data, and an unquoted one runs only its substitutions. Unlike the deny scan,
+ * which over-matches on purpose, a commit message or a file written through a heredoc must not
+ * read as code here.
+ */
+function lexShellText(text: string): LexedShellText {
+	let code = "";
+	const substitutions: string[] = [];
+	const processSubstitutions: Array<{ direction: "<" | ">"; body: string }> = [];
+	const pendingHeredocs: Array<{ delimiter: string; quoted: boolean; stripTabs: boolean }> = [];
+	let quote: "'" | '"' | undefined;
+	let i = 0;
+	while (i < text.length) {
+		const ch = text[i];
+		if (quote === "'") {
+			code += ch;
+			if (ch === "'") quote = undefined;
+			i++;
+			continue;
+		}
+		if (ch === "\\" && i + 1 < text.length) {
+			code += ch + text[i + 1];
+			i += 2;
+			continue;
+		}
+		const sub = substitutionAt(text, i);
+		if (sub) {
+			substitutions.push(sub.body);
+			code += text.slice(i, sub.end);
+			i = sub.end;
+			continue;
+		}
+		if (quote === '"') {
+			if (ch === '"') quote = undefined;
+			code += ch;
+			i++;
+			continue;
+		}
+		if (ch === "'" || ch === '"') {
+			quote = ch;
+			code += ch;
+			i++;
+			continue;
+		}
+		if ((ch === "<" || ch === ">") && text[i + 1] === "(") {
+			const { body, end } = parenthesizedBody(text, i + 1);
+			processSubstitutions.push({ direction: ch, body });
+			code += `${ch}(_)`;
+			i = end;
+			continue;
+		}
+		const heredoc = ch === "<" && text[i + 2] !== "<" ? text.slice(i).match(HEREDOC_OPERATOR_RE) : null;
+		if (heredoc) {
+			pendingHeredocs.push({
+				delimiter: heredoc[3] ?? heredoc[5],
+				quoted: heredoc[2] !== undefined || heredoc[4] === "\\",
+				stripTabs: heredoc[1] === "-",
+			});
+			code += heredoc[0];
+			i += heredoc[0].length;
+			continue;
+		}
+		code += ch;
+		i++;
+		if (ch !== "\n") continue;
+		// The bodies follow this line, one per heredoc it opened, each up to its delimiter line.
+		for (const pending of pendingHeredocs.splice(0)) {
+			while (i < text.length) {
+				const newline = text.indexOf("\n", i);
+				const line = text.slice(i, newline === -1 ? text.length : newline);
+				i = newline === -1 ? text.length : newline + 1;
+				if ((pending.stripTabs ? line.replace(/^\t+/, "") : line) === pending.delimiter) break;
+				if (!pending.quoted) substitutions.push(...substitutionsIn(line));
+			}
+		}
+	}
+	return { code, substitutions, processSubstitutions };
+}
+
+/** Every command line the shell runs for a command, found by `scanExecutedCode`. */
+interface ExecutedScan {
+	/** The command and each command line run inside it (`-c` bodies, `eval` arguments, substitutions), lexed. */
+	codes: string[];
+	/** The process substitutions among them, and the way each is wired. */
+	processSubstitutions: Array<{ direction: "<" | ">"; body: string }>;
+	/** `true` when the scan hit the same bounds as the deny scan; callers then fail closed. */
+	truncated: boolean;
+}
+
+/**
+ * Finds every command line the shell RUNS for `command`: the command itself and, recursively,
+ * `bash -c` bodies, `eval` arguments, `pwsh -c`/`env -S`/`find -exec` commands and
+ * substitution bodies, each read by `lexShellText`, so neither a heredoc body nor quoted text is
+ * mistaken for one.
+ */
+function scanExecutedCode(command: string): ExecutedScan {
+	const codes: string[] = [];
+	const processSubstitutions: Array<{ direction: "<" | ">"; body: string }> = [];
+	const seen = new Set<string>();
+	const queue: Array<{ text: string; depth: number }> = [{ text: command, depth: 0 }];
+	let truncated = false;
+	while (queue.length > 0) {
+		const next = queue.shift();
+		if (!next) break;
+		if (seen.has(next.text)) continue;
+		if (seen.size >= MAX_DENY_CANDIDATES || next.depth >= MAX_DENY_DEPTH) {
+			truncated = true;
+			break;
+		}
+		seen.add(next.text);
+		const lexed = lexShellText(next.text);
+		codes.push(lexed.code);
+		processSubstitutions.push(...lexed.processSubstitutions);
+		const runs = (body: string | undefined) => {
+			if (body !== undefined && !seen.has(body)) queue.push({ text: body, depth: next.depth + 1 });
+		};
+		for (const body of lexed.substitutions) runs(body);
+		for (const { body } of lexed.processSubstitutions) runs(body);
+		for (const seg of splitChain(lexed.code)) {
+			const beforeWrapperStrip = stripEnvAssignments(stripLeadingBackslashEscape(seg.text));
+			let working = beforeWrapperStrip;
+			for (let guard = 0; guard < 5; guard++) {
+				const { stripped, changed } = stripPassthroughPrefix(working);
+				if (!changed) break;
+				working = stripped;
+			}
+			const basenameResolved = resolveBasenameOfFirstToken(working);
+			runs(
+				extractShellBodyAfterDashC(working, SHELL_C_WRAPPERS) ??
+					extractShellBodyAfterDashC(basenameResolved, SHELL_C_WRAPPERS),
+			);
+			runs(extractOtherShellWrapperArg(working) ?? extractOtherShellWrapperArg(basenameResolved));
+			runs(extractEvalArg(working) ?? extractEvalArg(basenameResolved));
+			runs(extractFindExecArg(working) ?? extractFindExecArg(basenameResolved));
+			runs(extractEnvSplitStringArg(beforeWrapperStrip));
+		}
+	}
+	return { codes, processSubstitutions, truncated };
 }
 
 /** Candidate list only, for callers that don't need the truncation flag. */
@@ -1144,29 +1387,34 @@ function commandInvokesOtherShell(command: string): boolean {
 	return collectDenyCandidates(command).some((candidate) => headIsOtherShellWrapper(candidate));
 }
 
-/** A shell variable/parameter expansion, command substitution, or backtick substitution in command position. */
+/**
+ * A shell variable/parameter expansion (positional and special parameters included: `$1`, `$@`),
+ * command substitution, or backtick substitution in command position.
+ */
 function isDynamicCommandHead(token: string): boolean {
-	return /^(\$\(|\$\{|\$[A-Za-z_]|`)/.test(token);
+	return /^(\$\(|\$\{|\$[A-Za-z_0-9@*#?$!-]|`)/.test(token);
 }
 
 /**
  * `true` when any chain segment's command position (after stripping leading
  * `VAR=val` assignments) is a variable/expansion rather than a literal
  * command name (`$p`, `${HOME:+pwsh}`, `$(...)`, a backtick substitution), at
- * any layer the shell runs: `bash -c "$(curl ...)"` and `eval "$(curl ...)"`
+ * any layer the shell runs (`scanExecutedCode`): `bash -c "$(curl ...)"` and `eval "$(curl ...)"`
  * run another command's output. What actually runs then depends on the
  * environment or on that output, so no pattern — deny, danger filter, or
  * interpreter check — can reason about it; auto mode must require approval
  * instead of silently resolving to whatever the variable happens to hold.
  */
 function commandHeadIsDynamic(command: string): boolean {
-	return executedTexts(command).some((text) =>
+	const dynamicHead = (text: string) =>
 		splitChain(text).some((seg) => {
 			const working = stripEnvAssignments(stripLeadingBackslashEscape(seg.text));
 			const head = tokenizeShellWords(working.trim())[0];
 			return head !== undefined && isDynamicCommandHead(head);
-		}),
-	);
+		});
+	if (dynamicHead(command)) return true;
+	const executed = scanExecutedCode(command);
+	return executed.truncated || executed.codes.some(dynamicHead);
 }
 
 /** Extracts the `<cmd>` from `find ... -exec <cmd> ... ;`/`+`/`-execdir <cmd> ... ;`, if present. */
@@ -1216,7 +1464,11 @@ function matchDenyPattern(command: string, pattern: string): boolean {
 		return true;
 	}
 	const regex = globToRegExp(normalizeForMatch(pattern));
-	return candidates.some((candidate) => regex.test(normalizeForMatch(candidate)));
+	return candidates.some(
+		(candidate) =>
+			regex.test(normalizeForMatch(candidate)) ||
+			regex.test(normalizeForMatch(spaceChainOperators(splitChain(candidate)))),
+	);
 }
 
 /**
@@ -1529,7 +1781,7 @@ export class PermissionGate {
 							"auto mode: command feeds a bare shell interpreter via pipe/here-string/heredoc with no -c, which the deny scan can't fully vet; requires approval",
 					};
 				}
-				if (commandFeedsInterpreterFromStdin(command)) {
+				if (commandFeedsCodeFromStdin(command)) {
 					return {
 						action: "approve",
 						reason:

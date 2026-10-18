@@ -93,7 +93,7 @@ describe("subagent tool inherits the session's permission mode", () => {
 		const harness = await createSubagentHarness(scripted.runner);
 		harnesses.push(harness);
 
-		await harness.session.prompt("/permissions default");
+		await harness.session.prompt("/permissions ask");
 		await harness.session.prompt("/yolo");
 		await harness.session.prompt("/yolo");
 		harness.setResponses([
@@ -105,7 +105,7 @@ describe("subagent tool inherits the session's permission mode", () => {
 		await harness.session.prompt("review please");
 
 		expect(scripted.calls).toHaveLength(1);
-		expect(modeOf(scripted.calls[0])).toBe("default");
+		expect(modeOf(scripted.calls[0])).toBe("ask");
 	});
 
 	it("switches /yolo off to auto when the session started in yolo", async () => {
@@ -145,12 +145,12 @@ describe("subagent tool inherits the session's permission mode", () => {
 		expect(modeOf(scripted.calls[0])).toBe("yolo");
 	});
 
-	it("passes default mode to every parallel task after /permissions default", async () => {
+	it("passes ask mode to every parallel task after /permissions ask", async () => {
 		const scripted = createScriptedRunner(agentScript);
 		const harness = await createSubagentHarness(scripted.runner);
 		harnesses.push(harness);
 
-		await harness.session.prompt("/permissions default");
+		await harness.session.prompt("/permissions ask");
 		harness.setResponses([
 			fauxAssistantMessage(
 				[
@@ -168,15 +168,15 @@ describe("subagent tool inherits the session's permission mode", () => {
 		await harness.session.prompt("review please");
 
 		expect(scripted.calls).toHaveLength(2);
-		for (const call of scripted.calls) expect(modeOf(call)).toBe("default");
+		for (const call of scripted.calls) expect(modeOf(call)).toBe("ask");
 	});
 
-	it("passes default mode to every chain step after /permissions default", async () => {
+	it("passes ask mode to every chain step after /permissions ask", async () => {
 		const scripted = createScriptedRunner(agentScript);
 		const harness = await createSubagentHarness(scripted.runner);
 		harnesses.push(harness);
 
-		await harness.session.prompt("/permissions default");
+		await harness.session.prompt("/permissions ask");
 		harness.setResponses([
 			fauxAssistantMessage(
 				[
@@ -194,16 +194,16 @@ describe("subagent tool inherits the session's permission mode", () => {
 		await harness.session.prompt("review please");
 
 		expect(scripted.calls).toHaveLength(2);
-		for (const call of scripted.calls) expect(modeOf(call)).toBe("default");
+		for (const call of scripted.calls) expect(modeOf(call)).toBe("ask");
 	});
 
-	it("passes explicit default mode after /permissions default, even with a stale yolo env var", async () => {
+	it("passes explicit ask mode after /permissions ask, even with a stale yolo env var", async () => {
 		vi.stubEnv(PERMISSION_MODE_ENV, "yolo");
 		const scripted = createScriptedRunner(agentScript);
 		const harness = await createSubagentHarness(scripted.runner);
 		harnesses.push(harness);
 
-		await harness.session.prompt("/permissions default");
+		await harness.session.prompt("/permissions ask");
 		harness.setResponses([
 			fauxAssistantMessage([fauxToolCall("subagent", { agent: "reviewer", task: "look at auth.ts" })], {
 				stopReason: "toolUse",
@@ -213,7 +213,7 @@ describe("subagent tool inherits the session's permission mode", () => {
 		await harness.session.prompt("review please");
 
 		expect(scripted.calls).toHaveLength(1);
-		expect(modeOf(scripted.calls[0])).toBe("default");
+		expect(modeOf(scripted.calls[0])).toBe("ask");
 	});
 });
 
@@ -247,38 +247,38 @@ describe("the footer names a permission mode other than the one sessions start i
 		const { harness, statuses } = await createStatusHarness();
 		expect(statuses).toEqual([undefined]);
 
-		await harness.session.prompt("/permissions default");
-		expect(statuses.at(-1)).toBe("perms: default");
+		await harness.session.prompt("/permissions ask");
+		expect(statuses.at(-1)).toBe("perms: ask");
 		await harness.session.prompt("/yolo");
 		expect(statuses.at(-1)).toBe("perms: yolo");
 		await harness.session.prompt("/yolo");
-		expect(statuses.at(-1)).toBe("perms: default");
+		expect(statuses.at(-1)).toBe("perms: ask");
 		await harness.session.prompt("/permissions auto");
 		expect(statuses.at(-1)).toBeUndefined();
 	});
 
 	it("names a mode seeded from DRAHT_PERMISSION_MODE before any command runs", async () => {
-		vi.stubEnv(PERMISSION_MODE_ENV, "default");
+		vi.stubEnv(PERMISSION_MODE_ENV, "ask");
 		const { statuses, warnings } = await createStatusHarness();
-		expect(statuses).toEqual(["perms: default"]);
+		expect(statuses).toEqual(["perms: ask"]);
 		expect(warnings).toEqual([]);
 	});
 
-	it("starts a mistyped DRAHT_PERMISSION_MODE in default, and says so", async () => {
-		vi.stubEnv(PERMISSION_MODE_ENV, "defualt");
+	it("starts an unknown DRAHT_PERMISSION_MODE, like the old name default, in ask, and says so", async () => {
+		vi.stubEnv(PERMISSION_MODE_ENV, "default");
 		const { statuses, warnings } = await createStatusHarness();
-		expect(statuses).toEqual(["perms: default"]);
+		expect(statuses).toEqual(["perms: ask"]);
 		expect(warnings).toHaveLength(1);
-		expect(warnings[0]).toContain('DRAHT_PERMISSION_MODE="defualt"');
+		expect(warnings[0]).toContain('DRAHT_PERMISSION_MODE="default"');
 	});
 
 	it("keeps a chosen mode across a runtime rebuild only where it asks more than the start mode", async () => {
 		// The same factory run again is what /new, /resume, /fork and /reload do.
 		const factory = createSubagentExtension({ runner: createScriptedRunner(agentScript).runner });
 		const first = await createStatusHarness(factory);
-		await first.harness.session.prompt("/permissions default");
+		await first.harness.session.prompt("/permissions ask");
 		const rebuilt = await createStatusHarness(factory);
-		expect(rebuilt.statuses).toEqual(["perms: default"]);
+		expect(rebuilt.statuses).toEqual(["perms: ask"]);
 
 		await rebuilt.harness.session.prompt("/yolo");
 		const rebuiltAgain = await createStatusHarness(factory);
@@ -286,13 +286,13 @@ describe("the footer names a permission mode other than the one sessions start i
 	});
 
 	it("never lets a chosen mode relax a stricter DRAHT_PERMISSION_MODE on a rebuild", async () => {
-		vi.stubEnv(PERMISSION_MODE_ENV, "default");
+		vi.stubEnv(PERMISSION_MODE_ENV, "ask");
 		const factory = createSubagentExtension({ runner: createScriptedRunner(agentScript).runner });
 		const first = await createStatusHarness(factory);
 		await first.harness.session.prompt("/permissions auto");
 		expect(first.statuses.at(-1)).toBeUndefined();
 		const rebuilt = await createStatusHarness(factory);
-		expect(rebuilt.statuses).toEqual(["perms: default"]);
+		expect(rebuilt.statuses).toEqual(["perms: ask"]);
 	});
 });
 
@@ -304,21 +304,21 @@ describe("seedPermissionMode", () => {
 	});
 
 	it("reads a mode name in any letter case and with surrounding whitespace", () => {
-		expect(seedPermissionMode("Default")).toEqual({ mode: "default" });
+		expect(seedPermissionMode("Ask")).toEqual({ mode: "ask" });
 		expect(seedPermissionMode(" AUTO ")).toEqual({ mode: "auto" });
 		expect(seedPermissionMode("yolo\n")).toEqual({ mode: "yolo" });
 	});
 
-	it("starts in default, the strictest, when the value names no mode", () => {
-		expect(seedPermissionMode("defualt")).toEqual({ mode: "default", unrecognized: "defualt" });
-		expect(seedPermissionMode("strict")).toEqual({ mode: "default", unrecognized: "strict" });
+	it("starts in ask, the strictest, when the value names no mode, the old name default included", () => {
+		expect(seedPermissionMode("default")).toEqual({ mode: "ask", unrecognized: "default" });
+		expect(seedPermissionMode("strict")).toEqual({ mode: "ask", unrecognized: "strict" });
 	});
 });
 
 describe("permissionEnv resolves at spawn time, not queue time", () => {
 	it("gives a queued agent the mode current when its slot is granted, not when it was queued", async () => {
 		const limiter = new AgentLimiter(1);
-		let mode: "default" | "auto" | "yolo" = "yolo";
+		let mode: "ask" | "auto" | "yolo" = "yolo";
 		const session = { permissionMode: () => mode };
 		const items = [
 			{ agent: { name: "first", description: "d", systemPrompt: "s", source: "user" as const }, task: "t1" },
@@ -352,11 +352,11 @@ describe("permissionEnv resolves at spawn time, not queue time", () => {
 
 		// The session's mode changes while "second" is still queued. A mode baked in at queue time
 		// would freeze it at "yolo"; the fix reads it only once "second" is actually granted a slot.
-		mode = "default";
+		mode = "ask";
 		gate.resolve();
 		await resultPromise;
 
-		expect(seenModes.second).toBe("default");
+		expect(seenModes.second).toBe("ask");
 	});
 });
 
@@ -433,7 +433,7 @@ function fakeDuetContext(sessionManager: object, overrides: Partial<ExtensionCon
 }
 
 describe("duet teammates inherit the session's permission mode", () => {
-	it("defaults to default mode when nothing set the session's permission-mode provider", async () => {
+	it("defaults to ask mode when nothing set the session's permission-mode provider", async () => {
 		const scripted = createScriptedRunner(agentScript);
 		const { state } = createDuetFakePi(scripted.runner);
 		const ctx = fakeDuetContext({});
@@ -457,7 +457,7 @@ describe("duet teammates inherit the session's permission mode", () => {
 
 		expect(result.isError).toBeFalsy();
 		expect(scripted.calls).toHaveLength(1);
-		expect(modeOf(scripted.calls[0])).toBe("default");
+		expect(modeOf(scripted.calls[0])).toBe("ask");
 	});
 
 	it("passes yolo mode to teammates once the session's permission mode is yolo", async () => {
@@ -522,7 +522,7 @@ const WORKFLOW_SCRIPT = `export const meta = { name: "demo", description: "Demo 
 	return { result };`;
 
 describe("workflow agent() inherits the session's permission mode", () => {
-	it("defaults to default mode when nothing set the session's permission-mode provider", async () => {
+	it("defaults to ask mode when nothing set the session's permission-mode provider", async () => {
 		const scripted = createScriptedRunner(agentScript);
 		const harness = await createWorkflowHarness(scripted.runner);
 		harnesses.push(harness);
@@ -536,7 +536,7 @@ describe("workflow agent() inherits the session's permission mode", () => {
 		await harness.session.prompt("run the workflow");
 
 		expect(scripted.calls).toHaveLength(1);
-		expect(modeOf(scripted.calls[0])).toBe("default");
+		expect(modeOf(scripted.calls[0])).toBe("ask");
 	});
 
 	it("passes auto mode to agent() once the session's permission mode is auto", async () => {

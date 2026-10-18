@@ -37,7 +37,7 @@
  * real WebSocket or a real Unix socket.
  *
  * Harness hygiene, each item paid for by a probe that passed while proving nothing:
- *  - `DRAHT_PERMISSION_MODE` is pinned to `default` in the child env. Under `auto`, the mode a
+ *  - `DRAHT_PERMISSION_MODE` is pinned to `ask` in the child env. Under `auto`, the mode a
  *    session starts in and the one this repo's interactive shell exports, the scripted `bash` call
  *    is auto-allowed and NO ask is ever raised — every assertion below would then be waiting on a
  *    prompt that never happens.
@@ -182,7 +182,7 @@ async function startDrahtSession(
 	const script = JSON.stringify([{ toolCalls: [{ id: "call-1", name: "bash", arguments: { command } }] }]);
 	const stderr = { text: "" };
 
-	// Built from scratch rather than inherited, with the mode pinned to `default`: in `auto` (an
+	// Built from scratch rather than inherited, with the mode pinned to `ask`: in `auto` (an
 	// unset variable, or this repo's shell) the scripted call runs unasked and no ask ever comes.
 	const proc = Bun.spawn(
 		["node", DRAHT_CLI, "--attachable", "--mode", "rpc", "--provider", "draht-stub", "--model", "stub-1"],
@@ -195,7 +195,7 @@ async function startDrahtSession(
 				DRAHT_CODING_AGENT_DIR: agentDir,
 				DRAHT_STUB_PROVIDER: "1",
 				DRAHT_STUB_TOOL_CALLS: script,
-				DRAHT_PERMISSION_MODE: "default",
+				DRAHT_PERMISSION_MODE: "ask",
 				...extraEnv,
 			},
 			stdin: "pipe",

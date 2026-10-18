@@ -57,7 +57,7 @@ describe("createPermissionGateToolCallHandler", () => {
 			return true;
 		});
 		const ctx = fakeCtx({ ui: { confirm } as unknown as ExtensionContext["ui"] });
-		const gate = new PermissionGate([], { cwd: ctx.cwd, mode: "default" });
+		const gate = new PermissionGate([], { cwd: ctx.cwd, mode: "ask" });
 
 		const handler = createPermissionGateToolCallHandler(gate, {
 			describe: () => ({
@@ -86,7 +86,7 @@ describe("createPermissionGateToolCallHandler", () => {
 
 	it("blocks with the no-UI suffix when there is no answering surface", async () => {
 		const ctx = fakeCtx({ hasUI: false });
-		const gate = new PermissionGate([], { cwd: ctx.cwd, mode: "default" });
+		const gate = new PermissionGate([], { cwd: ctx.cwd, mode: "ask" });
 		const handler = createPermissionGateToolCallHandler(gate);
 
 		const result = await handler(workflowEvent(), ctx);
@@ -110,7 +110,7 @@ describe("subagent factory tool_call wiring", () => {
 	// The mode that asks before a workflow starts; a session otherwise starts in auto, and a
 	// developer's shell may export any mode.
 	beforeEach(() => {
-		vi.stubEnv(PERMISSION_MODE_ENV, "default");
+		vi.stubEnv(PERMISSION_MODE_ENV, "ask");
 	});
 
 	afterEach(() => {

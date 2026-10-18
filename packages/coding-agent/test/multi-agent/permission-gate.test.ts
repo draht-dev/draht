@@ -566,10 +566,11 @@ describe("PermissionGate.evaluate", () => {
 
 describe("isPermissionMode", () => {
 	it("accepts the three known modes and rejects everything else", () => {
-		expect(isPermissionMode("default")).toBe(true);
+		expect(isPermissionMode("ask")).toBe(true);
 		expect(isPermissionMode("auto")).toBe(true);
 		expect(isPermissionMode("yolo")).toBe(true);
 		expect(isPermissionMode("YOLO")).toBe(false);
+		expect(isPermissionMode("default")).toBe(false);
 		expect(isPermissionMode("")).toBe(false);
 		expect(isPermissionMode(undefined)).toBe(false);
 	});
@@ -688,7 +689,7 @@ describe("PermissionGate modes", () => {
 
 			const defaultGate = new PermissionGate([{ tool: "bash", pattern: "rm -rf *", action: "deny" }], {
 				cwd: "/repo",
-				mode: "default",
+				mode: "ask",
 			});
 			expect(defaultGate.evaluate("bash", { command: manyPieces }).action).toBe("deny");
 
@@ -797,8 +798,8 @@ describe("PermissionGate modes", () => {
 		});
 	});
 
-	it("default mode behavior is unchanged", () => {
-		const gate = new PermissionGate([], { cwd: "/repo", mode: "default" });
+	it("ask mode behavior is unchanged", () => {
+		const gate = new PermissionGate([], { cwd: "/repo", mode: "ask" });
 		expect(gate.evaluate("bash", { command: "echo hi" }).action).toBe("approve");
 	});
 
@@ -812,8 +813,8 @@ describe("PermissionGate modes", () => {
 			expect(gate.evaluate("duet_delegate", duetCall).action).toBe("allow");
 		});
 
-		it("default mode asks first", () => {
-			const gate = new PermissionGate([], { cwd: "/repo", mode: "default" });
+		it("ask mode asks first", () => {
+			const gate = new PermissionGate([], { cwd: "/repo", mode: "ask" });
 			expect(gate.evaluate("workflow", workflowCall).action).toBe("approve");
 			expect(gate.evaluate("duet_delegate", duetCall).action).toBe("approve");
 		});
@@ -834,9 +835,9 @@ describe("PermissionGate modes", () => {
 		});
 	});
 
-	it("orders modes by how much they ask: default, then auto, then yolo", () => {
-		expect(stricterPermissionMode("auto", "default")).toBe("default");
-		expect(stricterPermissionMode("default", "yolo")).toBe("default");
+	it("orders modes by how much they ask: ask, then auto, then yolo", () => {
+		expect(stricterPermissionMode("auto", "ask")).toBe("ask");
+		expect(stricterPermissionMode("ask", "yolo")).toBe("ask");
 		expect(stricterPermissionMode("yolo", "auto")).toBe("auto");
 		expect(stricterPermissionMode("yolo", "yolo")).toBe("yolo");
 	});

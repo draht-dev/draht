@@ -373,12 +373,12 @@ permission gate as every other tool call: an explicit `allow` or `deny` rule in
 `.draht/permissions.yml` applies as written, and an `approve` rule asks in every mode but `yolo`.
 Without a matching rule the session's permission mode decides. In `auto`, the mode a session
 starts in, and in `yolo` the run starts without asking: every agent it starts runs the gate over
-its own tool calls. In `default` the call needs approval, shown with the workflow's name, phases
+its own tool calls. In `ask` the call needs approval, shown with the workflow's name, phases
 (with any per-phase model), source, truncated args, and limits (concurrency, max agents, token
 budget and time limit, each with its source — see [Token budget and time
 limit](#token-budget-and-time-limit)). A duet batch (`duet_delegate`) is gated the same way.
 A `workflow` tool call with an invalid `meta` block is gated like any other and fails immediately
-once it starts (in `default`, the approval prompt describes it as invalid); a `/<name>`/`/workflow`
+once it starts (in `ask`, the approval prompt describes it as invalid); a `/<name>`/`/workflow`
 command run instead rejects an invalid `meta` block up front, before the gate. With no UI
 available (print or JSON, or any other headless caller), a call that still needs approval is
 blocked rather than left waiting; RPC mode has a UI context, so it forwards the approval to the
@@ -411,7 +411,7 @@ JSON) passes the ask on to its own polyphase parent, if it has one.
 Only when nobody can be asked is the call blocked: it is surfaced with a warning line, a `⚠` glyph
 in the row, and a note in the parent-model result text listing a few blocked samples. Allow such
 calls with an `allow` rule in `permissions.yml`, or start the run in a less strict mode
-(`/permissions auto` from `default`, `/yolo`, or `DRAHT_PERMISSION_MODE` for a headless parent).
+(`/permissions auto` from `ask`, `/yolo`, or `DRAHT_PERMISSION_MODE` for a headless parent).
 
 ## Nesting depth
 

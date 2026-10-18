@@ -39,7 +39,7 @@
  * prompt when nothing is pending and an ANSWER when something is.
  *
  * Harness hygiene, each item paid for by a probe that passed while proving nothing:
- *  - `DRAHT_PERMISSION_MODE` is pinned to `default` in the child env (the env is BUILT, not
+ *  - `DRAHT_PERMISSION_MODE` is pinned to `ask` in the child env (the env is BUILT, not
  *    inherited). Under `auto`, the mode a session starts in and the one this repo's interactive
  *    shell exports, the scripted `bash` call is auto-allowed and NO ask is ever raised.
  *  - Every temp dir sits directly under `/tmp` with a short name: a Unix socket path over ~104
@@ -168,7 +168,7 @@ test(
 		const command = `echo approved > ${marker}`;
 		const script = JSON.stringify([{ toolCalls: [{ id: "call-1", name: "bash", arguments: { command } }] }]);
 
-		// BUILT, never inherited, with the mode pinned to `default`: in `auto` (an unset variable, or
+		// BUILT, never inherited, with the mode pinned to `ask`: in `auto` (an unset variable, or
 		// this repo's shell) the scripted call runs unasked and the ask this test waits for never comes.
 		const env: NodeJS.ProcessEnv = {
 			PATH: process.env.PATH,
@@ -177,7 +177,7 @@ test(
 			DRAHT_CODING_AGENT_DIR: agentDir,
 			DRAHT_STUB_PROVIDER: "1",
 			DRAHT_STUB_TOOL_CALLS: script,
-			DRAHT_PERMISSION_MODE: "default",
+			DRAHT_PERMISSION_MODE: "ask",
 		};
 
 		const socketDir = path.join(agentDir, "sockets");
@@ -359,7 +359,7 @@ test(
 			DRAHT_CODING_AGENT_DIR: agentDir,
 			DRAHT_STUB_PROVIDER: "1",
 			DRAHT_STUB_TOOL_CALLS: script,
-			DRAHT_PERMISSION_MODE: "default",
+			DRAHT_PERMISSION_MODE: "ask",
 		};
 
 		const socketDir = path.join(agentDir, "sockets");

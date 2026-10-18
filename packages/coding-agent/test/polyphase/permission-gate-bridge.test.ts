@@ -34,7 +34,7 @@ function bridgeAnswering(verdict: ChildPermissionVerdict): {
 	};
 }
 
-const gate = () => new PermissionGate([], { cwd: "/project", mode: "default" });
+const gate = () => new PermissionGate([], { cwd: "/project", mode: "ask" });
 
 describe("createPermissionGateToolCallHandler without a UI", () => {
 	it("asks the parent and lets the call run once the parent approves", async () => {
@@ -80,7 +80,7 @@ describe("createPermissionGateToolCallHandler without a UI", () => {
 		const { bridge, asks } = bridgeAnswering({ kind: "approved" });
 		const denyGate = new PermissionGate([{ tool: "bash", pattern: "rm -rf *", action: "deny" }], {
 			cwd: "/project",
-			mode: "default",
+			mode: "ask",
 		});
 		const handler = createPermissionGateToolCallHandler(denyGate, { parentBridge: bridge });
 		const result = await handler(bashEvent("rm -rf /"), headlessCtx());

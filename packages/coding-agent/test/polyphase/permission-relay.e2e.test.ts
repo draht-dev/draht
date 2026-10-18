@@ -87,7 +87,7 @@ describe("permission bridge, real child process", () => {
 				agentDir,
 				command: `echo "marker=[$DRAHT_POLYPHASE_PERMISSION_BRIDGE]" > ${marker}`,
 				run: {
-					env: { DRAHT_PERMISSION_MODE: "default" },
+					env: { DRAHT_PERMISSION_MODE: "ask" },
 					onPermissionAsk: async () => ({ kind: "approved" }),
 				},
 			});
@@ -110,7 +110,7 @@ describe("permission bridge, real child process", () => {
 				agentDir,
 				command,
 				run: {
-					env: { DRAHT_PERMISSION_MODE: "default" },
+					env: { DRAHT_PERMISSION_MODE: "ask" },
 					onPermissionAsk: async (request) => {
 						asks.push(request);
 						return { kind: "approved" };
@@ -147,7 +147,7 @@ describe("permission bridge, real child process", () => {
 				agentDir,
 				command: `echo relayed > ${marker}`,
 				run: {
-					env: { DRAHT_PERMISSION_MODE: "default" },
+					env: { DRAHT_PERMISSION_MODE: "ask" },
 					onPermissionAsk: async () => ({ kind: "denied", reason: "Denied by the user in the parent session" }),
 				},
 			});
@@ -169,7 +169,7 @@ describe("permission bridge, real child process", () => {
 				project,
 				agentDir,
 				command: `echo relayed > ${marker}`,
-				run: { env: { DRAHT_PERMISSION_MODE: "default" } },
+				run: { env: { DRAHT_PERMISSION_MODE: "ask" } },
 			});
 
 			expect(existsSync(marker), stderr).toBe(false);

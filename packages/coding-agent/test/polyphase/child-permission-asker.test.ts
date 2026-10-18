@@ -68,7 +68,7 @@ function setup(options: {
 	const sessionKey = {};
 	sessionKeys.push(sessionKey);
 	const session = getPolyphaseSession(sessionKey, undefined);
-	session.setPermissionModeProvider(() => options.mode ?? "default");
+	session.setPermissionModeProvider(() => options.mode ?? "ask");
 	const ctx = {
 		cwd: project,
 		hasUI: options.hasUI ?? true,
@@ -129,7 +129,7 @@ describe("createChildPermissionAsker", () => {
 	});
 
 	it("asks the human with the subagent named, the command shown and the child's cwd", async () => {
-		const { asker, confirms, request, project } = setup({ mode: "default" });
+		const { asker, confirms, request, project } = setup({ mode: "ask" });
 		await expect(asker(request(), live())).resolves.toEqual({ kind: "approved" });
 		expect(confirms).toHaveLength(1);
 		const call = confirms[0];
@@ -140,13 +140,13 @@ describe("createChildPermissionAsker", () => {
 	});
 
 	it("reports the human's refusal as a denial the child can explain", async () => {
-		const { asker, request } = setup({ mode: "default", confirm: async () => false });
+		const { asker, request } = setup({ mode: "ask", confirm: async () => false });
 		const verdict = await asker(request(), live());
 		expect(verdict).toEqual({ kind: "denied", reason: "Denied by the user in the parent session" });
 	});
 
 	it("names the whole chain for an ask forwarded from deeper down", async () => {
-		const { asker, confirms, request } = setup({ mode: "default" });
+		const { asker, confirms, request } = setup({ mode: "ask" });
 		await asker(request({ via: ["helper#2"] }), live());
 		expect(confirms[0]?.title).toContain("reviewer#1 › helper#2");
 	});
@@ -154,7 +154,7 @@ describe("createChildPermissionAsker", () => {
 	it("shows one dialog at a time: a second ask waits for the first to be answered", async () => {
 		const answers: ((value: boolean) => void)[] = [];
 		const { asker, confirms, request } = setup({
-			mode: "default",
+			mode: "ask",
 			confirm: () => new Promise<boolean>((resolve) => answers.push(resolve)),
 		});
 
@@ -175,7 +175,7 @@ describe("createChildPermissionAsker", () => {
 	it("never shows an ask that was withdrawn while it waited in the queue", async () => {
 		const answers: ((value: boolean) => void)[] = [];
 		const { asker, confirms, request } = setup({
-			mode: "default",
+			mode: "ask",
 			confirm: () => new Promise<boolean>((resolve) => answers.push(resolve)),
 		});
 		const controller = new AbortController();
@@ -192,7 +192,7 @@ describe("createChildPermissionAsker", () => {
 	});
 
 	it("judges the path a child buried behind junk keys, instead of a pathless grep in the project", async () => {
-		const { asker, confirms, request } = setup({ mode: "default", confirm: async () => false });
+		const { asker, confirms, request } = setup({ mode: "ask", confirm: async () => false });
 		const junk = Object.fromEntries(Array.from({ length: 64 }, (_, i) => [String(i), 0]));
 		// Exactly what a child's gate hands the bridge for this call.
 		const input = toChildPermissionInput({ ...junk, pattern: ".", path: "/etc/passwd" });
@@ -205,7 +205,7 @@ describe("createChildPermissionAsker", () => {
 	});
 
 	it("is unavailable when this session has no UI and no parent to forward to", async () => {
-		const { asker, confirms, request } = setup({ mode: "default", hasUI: false });
+		const { asker, confirms, request } = setup({ mode: "ask", hasUI: false });
 		await expect(asker(request(), live())).resolves.toEqual({ kind: "unavailable" });
 		expect(confirms).toHaveLength(0);
 	});
@@ -220,7 +220,7 @@ describe("createChildPermissionAsker", () => {
 		};
 		// grep is allowed by default; this rule makes even a pathless grep need a human.
 		const { asker, request } = setup({
-			mode: "default",
+			mode: "ask",
 			hasUI: false,
 			upstream,
 			rules: "rules:\n  - tool: grep\n    action: approve\n",
@@ -253,7 +253,7 @@ describe("createChildPermissionAsker", () => {
 				return { kind: "approved" };
 			},
 		};
-		const { asker, request } = setup({ mode: "default", hasUI: false, upstream });
+		const { asker, request } = setup({ mode: "ask", hasUI: false, upstream });
 
 		await asker(request({ toolName: "read", input: { path: "~/.ssh/id_rsa" }, cwd: "/somewhere/child" }), live());
 
@@ -274,7 +274,7 @@ describe("createChildPermissionAsker", () => {
 	});
 
 	it("is unavailable, never a guess, when the session's context has gone stale", async () => {
-		const { request } = setup({ mode: "default" });
+		const { request } = setup({ mode: "ask" });
 		const sessionKey = {};
 		sessionKeys.push(sessionKey);
 		const staleCtx = {

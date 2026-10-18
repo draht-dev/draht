@@ -121,7 +121,7 @@ describe("polyphase core builtin", () => {
 		vi.stubEnv(POLYPHASE_DEPTH_ENV, "");
 		// The approval-dialog tests need the mode that asks before a workflow starts. A session
 		// otherwise starts in auto, and a developer's shell may export any mode.
-		vi.stubEnv(PERMISSION_MODE_ENV, "default");
+		vi.stubEnv(PERMISSION_MODE_ENV, "ask");
 	});
 
 	afterEach(() => {

@@ -16,7 +16,7 @@
  * if the gate were unwired from the ask).
  *
  * Harness hygiene, each item load-bearing:
- *  - `DRAHT_PERMISSION_MODE` is pinned to `default` in the child env. Under `auto`,
+ *  - `DRAHT_PERMISSION_MODE` is pinned to `ask` in the child env. Under `auto`,
  *    the mode a session starts in and the one this repo's interactive shell exports,
  *    a plain `echo` is auto-allowed and no prompt is raised at all — the test would
  *    pass while proving nothing.
@@ -82,7 +82,7 @@ interface RpcSession {
  */
 function startRpc(options: { cwd: string; agentDir: string; script: string }): RpcSession {
 	const env: NodeJS.ProcessEnv = { ...process.env };
-	env.DRAHT_PERMISSION_MODE = "default";
+	env.DRAHT_PERMISSION_MODE = "ask";
 	env.DRAHT_STUB_PROVIDER = "1";
 	env.DRAHT_STUB_TOOL_CALLS = options.script;
 	env.DRAHT_CODING_AGENT_DIR = options.agentDir;

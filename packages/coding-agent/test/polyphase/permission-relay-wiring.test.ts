@@ -26,8 +26,8 @@ const dirs: string[] = [];
 
 beforeEach(() => {
 	// A developer's exported mode, or their global permissions.yml, must not decide these asks.
-	// `default`, because a session otherwise starts in auto, which allows `npm test` unasked.
-	vi.stubEnv(PERMISSION_MODE_ENV, "default");
+	// `ask`, because a session otherwise starts in auto, which allows `npm test` unasked.
+	vi.stubEnv(PERMISSION_MODE_ENV, "ask");
 	const agentDir = mkdtempSync(join(tmpdir(), "relay-wiring-agent-"));
 	dirs.push(agentDir);
 	vi.stubEnv(ENV_AGENT_DIR, agentDir);
@@ -165,7 +165,7 @@ describe("children's permission asks reach this session's dialog", () => {
 						const session = getPolyphaseSession(ctx.sessionManager, pi.getSettings().polyphase);
 						renderDeps.getStore = () => session.store;
 						// No subagent extension here, so nothing else would provide the mode.
-						session.setPermissionModeProvider(() => "default");
+						session.setPermissionModeProvider(() => "ask");
 						pi.registerTool(createWorkflowToolDefinition({ getSession: () => session, runner, renderDeps }));
 						pi.setActiveTools([...pi.getActiveTools(), WORKFLOW_TOOL_NAME]);
 					});

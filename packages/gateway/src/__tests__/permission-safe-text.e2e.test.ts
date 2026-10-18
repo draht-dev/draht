@@ -33,7 +33,7 @@
  * would keep passing with the producer wired to nothing.
  *
  * Harness hygiene, every item paid for by a probe that passed while proving nothing:
- *  - `DRAHT_PERMISSION_MODE` is pinned to `default` in the draht child's environment and deleted
+ *  - `DRAHT_PERMISSION_MODE` is pinned to `ask` in the draht child's environment and deleted
  *    from the daemon's. Under `auto`, the mode a session starts in and the one this repo's
  *    interactive shell exports, the scripted call is auto-allowed and NO ask is raised at all.
  *  - The agent dir sits directly under /tmp with a short name: a Unix socket path over ~104 bytes
@@ -191,7 +191,7 @@ async function startDrahtSession(toolCall: {
 	const script = JSON.stringify([{ toolCalls: [toolCall] }]);
 	const stderr = { text: "" };
 
-	// Built from scratch rather than inherited, with the mode pinned to `default`: in `auto` (an
+	// Built from scratch rather than inherited, with the mode pinned to `ask`: in `auto` (an
 	// unset variable, or this repo's shell) the scripted call runs unasked and no ask ever comes.
 	const proc = Bun.spawn(
 		["node", DRAHT_CLI, "--attachable", "--mode", "rpc", "--provider", "draht-stub", "--model", "stub-1"],
@@ -204,7 +204,7 @@ async function startDrahtSession(toolCall: {
 				DRAHT_CODING_AGENT_DIR: agentDir,
 				DRAHT_STUB_PROVIDER: "1",
 				DRAHT_STUB_TOOL_CALLS: script,
-				DRAHT_PERMISSION_MODE: "default",
+				DRAHT_PERMISSION_MODE: "ask",
 			},
 			stdin: "pipe",
 			stdout: "ignore",

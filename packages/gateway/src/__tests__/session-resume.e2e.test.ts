@@ -540,7 +540,7 @@ beforeAll(async () => {
 	const port = freeLoopbackPort();
 	daemonStderr = { text: "" };
 	// Built from scratch rather than inherited, and the resumed session's mode
-	// declared as `default`: in `auto` (an unset variable, or this repo's shell)
+	// declared as `ask`: in `auto` (an unset variable, or this repo's shell)
 	// its scripted call runs unasked and the ask this test answers never comes.
 	const daemon = Bun.spawn(["bun", GATEWAY_CLI, "--port", String(port), "--auth", TOKEN], {
 		env: {
@@ -558,7 +558,7 @@ beforeAll(async () => {
 			DRAHT_STUB_TOOL_CALLS: JSON.stringify([
 				{ toolCalls: [{ id: "call-1", name: "bash", arguments: { command: `env > ${childEnvFile}` } }] },
 			]),
-			DRAHT_PERMISSION_MODE: "default",
+			DRAHT_PERMISSION_MODE: "ask",
 			DRAHT_RESUME_ENV_ALLOW:
 				"DRAHT_STUB_PROVIDER,DRAHT_STUB_TOOL_CALLS,DRAHT_PERMISSION_MODE,DYLD_LIBRARY_PATH,LD_PRELOAD",
 			...CANARIES,
@@ -782,7 +782,7 @@ describe("session_resume (R35-ALWAYS.9)", () => {
 
 		// ── POSITIVE: what was declared did cross, and PATH was CONSTRUCTED ──────
 		expect(child.DRAHT_STUB_PROVIDER).toBe("1");
-		expect(child.DRAHT_PERMISSION_MODE).toBe("default");
+		expect(child.DRAHT_PERMISSION_MODE).toBe("ask");
 		expect(child.DRAHT_CODING_AGENT_DIR).toBe(agentDir);
 		// The tail is the absolute trusted PATH the primitive constructs, NOT the
 		// daemon's — which begins with the shim directory and does not appear here

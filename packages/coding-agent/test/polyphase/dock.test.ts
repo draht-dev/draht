@@ -27,7 +27,7 @@ function testSession(store: PolyphaseStore, dock = true): PolyphaseSession {
 		limiter: new AgentLimiter(4),
 		settings: () => resolvePolyphaseSettings(dock ? undefined : { dock: false }),
 		refreshSettings: () => {},
-		permissionMode: () => "default",
+		permissionMode: () => "ask",
 		setPermissionModeProvider: () => {},
 		pendingDirectives: () => undefined,
 		setPendingDirectives: () => {},

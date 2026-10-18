@@ -19,7 +19,7 @@ export interface PolyphaseSession {
 	settings(): ResolvedPolyphaseSettings;
 	/** Re-resolves settings; updates the limiter's capacity and the pump's interval. */
 	refreshSettings(raw: PolyphaseSettings | undefined): void;
-	/** "default" until a provider is set. */
+	/** "ask" until a provider is set. */
 	permissionMode(): PermissionMode;
 	setPermissionModeProvider(provider: () => PermissionMode): void;
 	/** The latest user prompt's `+500k`/`+30min`-style directives (D-B), kept until the turn
@@ -50,7 +50,7 @@ class PolyphaseSessionImpl implements PolyphaseSession {
 
 	private readonly pump: UpdatePump;
 	private resolved: ResolvedPolyphaseSettings;
-	private permissionModeProvider: () => PermissionMode = () => "default";
+	private permissionModeProvider: () => PermissionMode = () => "ask";
 	private pendingDirectivesValue: ParsedDirectives | undefined;
 	private readonly parentPromptListeners = new Set<() => void>();
 	private permissionPromptTail: Promise<void> = Promise.resolve();

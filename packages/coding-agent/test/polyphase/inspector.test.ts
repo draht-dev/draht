@@ -53,7 +53,7 @@ function testSession(sample: { store: PolyphaseStore; dispose(): void }, capacit
 		limiter,
 		settings: () => resolvePolyphaseSettings(undefined),
 		refreshSettings: () => {},
-		permissionMode: () => "default",
+		permissionMode: () => "ask",
 		setPermissionModeProvider: () => {},
 		pendingDirectives: () => undefined,
 		setPendingDirectives: () => {},

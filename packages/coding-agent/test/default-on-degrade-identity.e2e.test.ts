@@ -56,7 +56,7 @@
  *     each other.
  *
  * ── HARNESS HYGIENE, each item paid for by a probe that proved nothing ──────────────────────────
- *  • `DRAHT_PERMISSION_MODE` is pinned to `default`, never inherited: the environment is BUILT,
+ *  • `DRAHT_PERMISSION_MODE` is pinned to `ask`, never inherited: the environment is BUILT,
  *    not filtered. Under `auto`, the mode a session starts in and the one this repo's interactive
  *    shell exports, the scripted `bash` call is auto-allowed and no permission ask — and therefore
  *    no `permission_resolution` row — is ever raised.
@@ -193,7 +193,7 @@ async function createSandbox(name: string): Promise<Sandbox> {
  * The child's entire environment, built from nothing rather than filtered from `process.env`.
  *
  * A filter can miss a provider key spelling or the ambient `DRAHT_PERMISSION_MODE`; a
- * from-scratch env cannot. The mode is pinned to `default`, the one that asks.
+ * from-scratch env cannot. The mode is pinned to `ask`, the one that asks.
  */
 function childEnv(sandbox: Sandbox, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
 	return {
@@ -203,7 +203,7 @@ function childEnv(sandbox: Sandbox, extra: Record<string, string> = {}): NodeJS.
 		TERM: "xterm-256color",
 		DRAHT_CODING_AGENT_DIR: sandbox.agentDir,
 		DRAHT_STUB_PROVIDER: "1",
-		DRAHT_PERMISSION_MODE: "default",
+		DRAHT_PERMISSION_MODE: "ask",
 		HTTP_PROXY: DEAD_PROXY,
 		HTTPS_PROXY: DEAD_PROXY,
 		ALL_PROXY: DEAD_PROXY,

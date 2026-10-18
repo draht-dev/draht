@@ -10,7 +10,7 @@
  *
  * These tests drive the EMITTED BINARY, never an in-process import: an
  * in-process test would pass while the product a child process sees stayed
- * broken. `DRAHT_PERMISSION_MODE` is pinned to `default` in every child
+ * broken. `DRAHT_PERMISSION_MODE` is pinned to `ask` in every child
  * environment: under `auto`, the mode a session starts in and the one this repo's
  * interactive shell exports, a test would prove nothing about permissions.
  */
@@ -54,7 +54,7 @@ interface RunResult {
  */
 function childEnv(agentDir: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = { ...process.env };
-	env.DRAHT_PERMISSION_MODE = "default";
+	env.DRAHT_PERMISSION_MODE = "ask";
 	delete env.DRAHT_STUB_TOOL_CALLS;
 	env.DRAHT_STUB_PROVIDER = "1";
 	env.DRAHT_CODING_AGENT_DIR = agentDir;

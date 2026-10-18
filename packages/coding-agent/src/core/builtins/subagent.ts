@@ -116,21 +116,21 @@ export function permissionEnv(session: { permissionMode(): PermissionMode }): ()
 /** The mode a session starts in, and the raw `DRAHT_PERMISSION_MODE` value when it named none. */
 export interface SeededPermissionMode {
 	mode: PermissionMode;
-	/** Set when the variable held something other than a mode name; the mode is then `default`. */
+	/** Set when the variable held something other than a mode name; the mode is then `ask`. */
 	unrecognized?: string;
 }
 
 /**
  * The mode `DRAHT_PERMISSION_MODE` starts a session in. Unset or blank means
  * `DEFAULT_SESSION_PERMISSION_MODE`; a mode name counts whatever its case or surrounding
- * whitespace; anything else means `default`, the strictest. Someone who set the variable at all
+ * whitespace; anything else means `ask`, the strictest. Someone who set the variable at all
  * most likely meant to opt out of auto, so a typo must not quietly opt them back in.
  */
 export function seedPermissionMode(value: string | undefined): SeededPermissionMode {
 	const normalized = value?.trim().toLowerCase() ?? "";
 	if (normalized === "") return { mode: DEFAULT_SESSION_PERMISSION_MODE };
 	if (isPermissionMode(normalized)) return { mode: normalized };
-	return { mode: "default", unrecognized: value };
+	return { mode: "ask", unrecognized: value };
 }
 
 const mailboxSystem = new MailboxSystem();
@@ -1102,7 +1102,7 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 	const runnerOverride = options.runner;
 	// The mode last chosen with /permissions or /yolo. A runtime rebuild (/new, /resume, /fork,
 	// /reload) runs the factory below again, and seeding from the environment alone would turn a
-	// chosen `default` back into auto. Only applied where it asks more than the seed, so it never
+	// chosen `ask` back into auto. Only applied where it asks more than the seed, so it never
 	// relaxes a session.
 	let chosenPermissionMode: PermissionMode | undefined;
 
@@ -1556,7 +1556,7 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 		// only for a trusted project — and per-session cwd changes take effect
 		// without an extension reload.
 		//
-		// The session permission mode (default/auto/yolo) is session-scoped state,
+		// The session permission mode (ask/auto/yolo) is session-scoped state,
 		// settable via /permissions and /yolo below and seeded from
 		// DRAHT_PERMISSION_MODE (see `seedPermissionMode`). It relaxes prompting,
 		// never `deny` rules.
@@ -1587,7 +1587,7 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 		}
 
 		const MODE_DESCRIPTIONS: Record<PermissionMode, string> = {
-			default: "rules as authored; unmatched bash commands require approval",
+			ask: "rules as authored; unmatched bash commands require approval",
 			auto: "auto-approve bash unless the command looks dangerous, and start workflows and duet batches without asking (deny rules still block)",
 			yolo: "no approval prompts this session (deny rules still block)",
 		};
@@ -1743,7 +1743,7 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 			updatePermissionStatus(ctx);
 			if (seededPermissionMode.unrecognized !== undefined) {
 				ctx.ui.notify(
-					`${PERMISSION_MODE_ENV}=${JSON.stringify(seededPermissionMode.unrecognized)} names no permission mode (${PERMISSION_MODES.join(", ")}); starting in default`,
+					`${PERMISSION_MODE_ENV}=${JSON.stringify(seededPermissionMode.unrecognized)} names no permission mode (${PERMISSION_MODES.join(", ")}); starting in ask`,
 					"warning",
 				);
 			}

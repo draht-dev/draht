@@ -29,7 +29,7 @@
  *
  * Rules are evaluated top-to-bottom; the first matching rule wins.
  *
- * On top of the rules sits a session-level `PermissionMode` (`default` /
+ * On top of the rules sits a session-level `PermissionMode` (`ask` /
  * `auto` / `yolo`, see the type doc) that relaxes how unmatched calls and
  * `approve` outcomes are handled — `deny` rules are never relaxed.
  *
@@ -60,7 +60,7 @@ export type PermissionAction = "deny" | "allow" | "approve";
  * Session-level permission mode. Modes only relax the gate's *default*
  * decisions — explicit rules from `permissions.yml` always win first:
  *
- * - `default`: rules as authored; unmatched bash/powershell requires approval.
+ * - `ask`: rules as authored; unmatched bash/powershell requires approval.
  * - `auto`: unmatched bash is auto-allowed unless it trips the built-in
  *   danger filter (`DANGEROUS_COMMAND_PATTERNS`), in which case it still
  *   requires approval. `powershell` is excluded from this auto-allow — the
@@ -72,14 +72,14 @@ export type PermissionAction = "deny" | "allow" | "approve";
  *   `allow`. Explicit `deny` rules still block — yolo is "stop asking",
  *   not "disable the gate".
  */
-export type PermissionMode = "default" | "auto" | "yolo";
+export type PermissionMode = "ask" | "auto" | "yolo";
 
 /** Strictest first: `stricterPermissionMode` relies on this order. */
-export const PERMISSION_MODES: readonly PermissionMode[] = ["default", "auto", "yolo"];
+export const PERMISSION_MODES: readonly PermissionMode[] = ["ask", "auto", "yolo"];
 
 /**
  * The mode a session starts in when `DRAHT_PERMISSION_MODE` names none. A `PermissionGate`
- * constructed without a mode still uses `default`, the strictest, so a caller that forgets to
+ * constructed without a mode still uses `ask`, the strictest, so a caller that forgets to
  * pass the session's mode never gets a laxer gate than the session has. Never `yolo`: `/yolo`
  * switches back to this mode when nothing else was chosen.
  */
@@ -131,7 +131,7 @@ const DEFAULT_ALLOWED_TOOLS = new Set(["subagent", "polyphase_result"]);
 /**
  * Delegating tools that fan out paid model requests: a workflow run and a duet batch. Like
  * `DEFAULT_ALLOWED_TOOLS`, they only start child processes that run this same gate over every
- * tool call they make, so `auto` mode starts them without asking; `default` mode asks first,
+ * tool call they make, so `auto` mode starts them without asking; `ask` mode asks first,
  * for the spend. Explicit rules can still `deny`/`approve` these.
  */
 const AUTO_ALLOWED_DELEGATION_TOOLS = new Set(["workflow", "duet_delegate"]);
@@ -1248,7 +1248,7 @@ function ruleMatches(rule: PermissionRule, toolName: string, args: Record<string
 export interface PermissionGateOptions {
 	/** Project root used to determine whether a path is "within the project" for default decisions. Defaults to `process.cwd()`. */
 	cwd?: string;
-	/** Session permission mode; see `PermissionMode`. Defaults to `"default"`. */
+	/** Session permission mode; see `PermissionMode`. Defaults to `"ask"`. */
 	mode?: PermissionMode;
 }
 
@@ -1264,7 +1264,7 @@ export class PermissionGate {
 	constructor(rules: PermissionRule[] = [], options: PermissionGateOptions = {}) {
 		this.rules = rules;
 		this.cwd = options.cwd ?? process.cwd();
-		this.mode = options.mode ?? "default";
+		this.mode = options.mode ?? "ask";
 	}
 
 	/** Evaluate a tool call. `args` should carry `command` for bash, or `path`/`file_path` for read/write/edit. */
@@ -1372,7 +1372,7 @@ export class PermissionGate {
 			// Unlike bash, powershell has no danger filter tuned for its own
 			// syntax (DANGEROUS_COMMAND_PATTERNS is bash-shaped), so auto mode
 			// cannot safely auto-allow it — every unmatched powershell call
-			// requires approval in default and auto mode (yolo's applyMode still
+			// requires approval in ask and auto mode (yolo's applyMode still
 			// turns this approve into allow, as for every tool).
 			return { action: "approve", reason: "no rule matched; powershell commands always require approval" };
 		}

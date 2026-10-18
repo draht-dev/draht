@@ -4,7 +4,7 @@
  *
  * ─── WHAT THE REQUIREMENT SAYS, AND THE TWO WAYS IT IS BROKEN AS WRITTEN ────────────────────────
  *
- * (a) IT IS VACUOUS UNLESS A PROMPT IS ACTUALLY RAISED. Under `DRAHT_PERMISSION_MODE=default` with
+ * (a) IT IS VACUOUS UNLESS A PROMPT IS ACTUALLY RAISED. Under `DRAHT_PERMISSION_MODE=ask` with
  *     no answering surface, draht raises no prompt at all — the gate hard-blocks at
  *     `packages/coding-agent/src/core/builtins/subagent.ts` with "(no UI available to request
  *     approval)". "Every execution that raises a local prompt" then enumerates the EMPTY SET and a
@@ -31,15 +31,15 @@
  *
  * ─── WHY ONE CANNED ARGUMENT PER TOOL WOULD ASSERT NOTHING ─────────────────────────────────────
  *
- * The gate is ARGUMENT-DEPENDENT, not metadata-dependent. Measured under shipped defaults (mode
- * `default`, no permissions.yml, cwd = a fresh temp project):
+ * The gate is ARGUMENT-DEPENDENT, not metadata-dependent. Measured under the mode this file pins
+ * (`ask`, no permissions.yml, cwd = a fresh temp project):
  *
  *   bash      → approve on EVERY call; there is no allow-vector at all.
  *   read      → allow inside the project, approve for a path outside it (or missing).
  *   write     → same.
  *   edit      → same.
  *   hello     → approve on EVERY call: an extension tool matches no rule and the catch-all in
- *               permission-gate.ts defaults unknown tools to `approve`. True under `default` AND
+ *               permission-gate.ts defaults unknown tools to `approve`. True under `ask` AND
  *               `auto`, which is exactly the case R34-PERM.7 names.
  *   subagent  → allow on EVERY call; it is in `DEFAULT_ALLOWED_TOOLS`.
  *
@@ -85,7 +85,7 @@
  *
  * ─── HARNESS HYGIENE, EACH ITEM PAID FOR BY A PROBE THAT PASSED WHILE PROVING NOTHING ──────────
  *
- *  - `DRAHT_PERMISSION_MODE` is pinned to `default` in every draht child env. Under `auto`, the
+ *  - `DRAHT_PERMISSION_MODE` is pinned to `ask` in every draht child env. Under `auto`, the
  *    mode a session starts in and the one this repo's interactive shell exports, `bash` is
  *    auto-allowed and the danger filter decides; `yolo` downgrades every approve to allow and
  *    raises ZERO prompts.
@@ -199,7 +199,7 @@ const VECTORS: Row[] = [
 			marker: (p) => join(p.inside, "bash-ran.txt"),
 		},
 		allow: null,
-		note: "Under mode `default` every bash call requires approval, so there is no allow-vector. (Only `auto` allows one, via the danger filter — a different mode, deliberately not exercised here.)",
+		note: "Under mode `ask` every bash call requires approval, so there is no allow-vector. (Only `auto` allows one, via the danger filter — a different mode, deliberately not exercised here.)",
 	},
 	{
 		tool: "read",
@@ -266,7 +266,7 @@ const VECTORS: Row[] = [
 			resultContains: () => "Hello, T11!",
 		},
 		allow: null,
-		note: "The extension-provided tool R34-PERM.7 names. No rule can match it, so the catch-all defaults it to `approve` on EVERY call — under `default` and under `auto` alike. There is no allow-vector.",
+		note: "The extension-provided tool R34-PERM.7 names. No rule can match it, so the catch-all defaults it to `approve` on EVERY call — under `ask` and under `auto` alike. There is no allow-vector.",
 	},
 	{
 		tool: "subagent",
@@ -482,7 +482,7 @@ async function startSession(vector: Vector, options: SessionOptions = {}): Promi
 	const script = JSON.stringify([{ toolCalls: [{ id: CALL_ID, name: call.name, arguments: call.arguments }] }]);
 	const stderr = { text: "" };
 
-	// Built from scratch rather than inherited, with the mode pinned to `default`: in `auto` (an
+	// Built from scratch rather than inherited, with the mode pinned to `ask`: in `auto` (an
 	// unset variable, or this repo's shell) the scripted call runs unasked and no ask ever comes.
 	const proc = Bun.spawn(
 		[
@@ -509,7 +509,7 @@ async function startSession(vector: Vector, options: SessionOptions = {}): Promi
 				DRAHT_CODING_AGENT_DIR: agentDir,
 				DRAHT_STUB_PROVIDER: "1",
 				DRAHT_STUB_TOOL_CALLS: script,
-				DRAHT_PERMISSION_MODE: "default",
+				DRAHT_PERMISSION_MODE: "ask",
 				...options.env,
 			},
 			stdin: "pipe",

@@ -119,7 +119,7 @@ export function permissionEnv(session: { permissionMode(): PermissionMode }): ()
  * `yolo`, so no single key press drops every approval; that takes `/yolo`. From `yolo` it goes back
  * to `auto`.
  */
-const NEXT_PERMISSION_MODE: Readonly<Record<PermissionMode, PermissionMode>> = {
+const NEXT_PERMISSION_MODE: Readonly<Record<PermissionMode, Exclude<PermissionMode, "yolo">>> = {
 	auto: "ask",
 	ask: "auto",
 	yolo: "auto",
@@ -1112,10 +1112,10 @@ export function describeMergeFailure(result: RunResult): string | undefined {
 /** `createSubagentExtension(options?)`; the default export is `createSubagentExtension()` (§10.5). */
 export function createSubagentExtension(options: { runner?: AgentRunner } = {}): (pi: ExtensionAPI) => void {
 	const runnerOverride = options.runner;
-	// The mode last chosen with /permissions or /yolo. A runtime rebuild (/new, /resume, /fork,
-	// /reload) runs the factory below again, and seeding from the environment alone would turn a
-	// chosen `ask` back into auto. Only applied where it asks more than the seed, so it never
-	// relaxes a session.
+	// The mode last chosen with /permissions, /yolo or `app.permissions.cycle`. A runtime rebuild
+	// (/new, /resume, /fork, /reload) runs the factory below again, and seeding from the environment
+	// alone would turn a chosen `ask` back into auto. Only applied where it asks more than the seed,
+	// so it never relaxes a session.
 	let chosenPermissionMode: PermissionMode | undefined;
 
 	return (pi: ExtensionAPI) => {
@@ -1570,9 +1570,9 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 		// without an extension reload.
 		//
 		// The session permission mode (ask/auto/yolo) is session-scoped state,
-		// settable via /permissions and /yolo below and seeded from
-		// DRAHT_PERMISSION_MODE (see `seedPermissionMode`). It relaxes prompting,
-		// never `deny` rules.
+		// settable via /permissions, /yolo and `app.permissions.cycle` below and
+		// seeded from DRAHT_PERMISSION_MODE (see `seedPermissionMode`). It relaxes
+		// prompting, never `deny` rules.
 		const seededPermissionMode = seedPermissionMode(process.env[PERMISSION_MODE_ENV]);
 		let permissionMode: PermissionMode =
 			chosenPermissionMode === undefined

@@ -688,11 +688,11 @@ describe("PermissionGate modes", () => {
 		it("denies (not approves) a truncated deny scan when a deny rule applies to the tool", () => {
 			const manyPieces = `${Array.from({ length: 60 }, (_, i) => `echo ${i}`).join("; ")}; rm -rf ~`;
 
-			const defaultGate = new PermissionGate([{ tool: "bash", pattern: "rm -rf *", action: "deny" }], {
+			const askGate = new PermissionGate([{ tool: "bash", pattern: "rm -rf *", action: "deny" }], {
 				cwd: "/repo",
 				mode: "ask",
 			});
-			expect(defaultGate.evaluate("bash", { command: manyPieces }).action).toBe("deny");
+			expect(askGate.evaluate("bash", { command: manyPieces }).action).toBe("deny");
 
 			expect(gate.evaluate("bash", { command: manyPieces }).action).toBe("deny");
 

@@ -548,9 +548,9 @@ test("a SHORT benign command arrives verbatim and says `truncated: false` — th
 	// costs the requirement everything it was for. This test is what refuses them.
 	//
 	// It runs the same producer, the same relay and the same wire as the hostile case; the ONLY
-	// difference is the length of the string. Under default permission mode an unmatched bash call
-	// requires approval (permission-gate.ts `defaultDecision`), so a 22-character `echo` is a real
-	// ask with a real frame.
+	// difference is the length of the string. In the `ask` mode this file pins, an unmatched bash
+	// call requires approval (permission-gate.ts `defaultDecision`), so a 22-character `echo` is a
+	// real ask with a real frame.
 	const command = "echo BENIGN-SHORT-OK";
 	expect(command.length).toBeLessThan(100);
 

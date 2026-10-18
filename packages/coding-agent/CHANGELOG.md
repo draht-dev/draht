@@ -14,7 +14,7 @@
 - a workflow run's token budget and time limit now come from the user's own prompt (e.g. `+500k`, `+30min`), else the `workflow` tool's `budgetTokens`/`timeLimit` parameters, else `polyphase.defaultBudgetTokens`/`polyphase.workflowTimeoutMs`, else no limit at all (the script runs until it returns); the approval prompt, a start-of-run log line, and the final result text all show which limits applied and their source, or a disclaimer naming only the missing ones
 - a workflow time limit is graceful: past the limit, running and queued agents are cancelled (`cancelled (time limit)`) and `agent()` returns `null`, but the script keeps running to return partial results; a hard sandbox deadline 60s later is the backstop
 - a tool call a subagent, workflow agent, or duet teammate needs approval for is now asked in the parent session (decided under its current mode first, so `/permissions auto` and `/yolo` also cover running agents) instead of being blocked unasked; asks from parallel agents queue instead of displacing each other into silent denials
-- `alt+m` (`app.permissions.cycle`) switches the session's permission mode between `auto` and `ask`, and from `yolo` back to `auto`; entering `yolo` stays a deliberate `/yolo`
+- `alt+m` (`app.permissions.cycle`) switches the session's permission mode between `auto` and `ask`, and from `yolo` back to `auto`; entering `yolo` stays a deliberate `/yolo`. An extension shortcut on the same key is reported as a conflict and skipped, since the session takes the key first
 
 ### Changed
 

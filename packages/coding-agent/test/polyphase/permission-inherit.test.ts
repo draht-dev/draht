@@ -319,7 +319,8 @@ describe("app.permissions.cycle switches the session's permission mode", () => {
 			onTerminalInput: (handler) => {
 				handlers.push(handler);
 				return () => {
-					handlers.splice(handlers.indexOf(handler), 1);
+					const index = handlers.indexOf(handler);
+					if (index !== -1) handlers.splice(index, 1);
 				};
 			},
 			setStatus: (key, text) => {
@@ -371,6 +372,16 @@ describe("app.permissions.cycle switches the session's permission mode", () => {
 	it("listens for the key only in the TUI", async () => {
 		const { handlers } = await createKeyHarness("rpc");
 		expect(handlers).toHaveLength(0);
+	});
+
+	it("keeps exactly one listener across a reload, so one press still switches once", async () => {
+		const { harness, handlers, statuses, press } = await createKeyHarness("tui");
+		expect(handlers).toHaveLength(1);
+
+		await harness.session.reload();
+		expect(handlers).toHaveLength(1);
+		press("\x1bm");
+		expect(statuses.at(-1)).toBe("perms: ask");
 	});
 });
 

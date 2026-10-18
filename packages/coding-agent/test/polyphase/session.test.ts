@@ -104,7 +104,7 @@ describe("refreshSettings", () => {
 });
 
 describe("permissionMode", () => {
-	it("defaults to 'default' until a provider is set", () => {
+	it("defaults to 'ask' until a provider is set", () => {
 		const key = trackedKey();
 		const session = getPolyphaseSession(key, undefined);
 		expect(session.permissionMode()).toBe("ask");

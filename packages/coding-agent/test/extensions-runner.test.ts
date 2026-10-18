@@ -191,6 +191,29 @@ describe("ExtensionRunner", () => {
 			warnSpy.mockRestore();
 		});
 
+		it("skips a shortcut on the permission-mode key, which the session consumes before any extension", async () => {
+			const extCode = `
+				export default function(pi) {
+					pi.registerShortcut("alt+m", {
+						description: "Never reached",
+						handler: async () => {},
+					});
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "permission-key.ts"), extCode);
+
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+			const shortcuts = runner.getShortcuts(defaultKeybindings);
+
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("conflicts with built-in"));
+			expect(shortcuts.has("alt+m")).toBe(false);
+
+			warnSpy.mockRestore();
+		});
+
 		it("allows a shortcut when the reserved set no longer contains the default key", async () => {
 			const extCode = `
 				export default function(pi) {

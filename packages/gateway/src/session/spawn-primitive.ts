@@ -590,7 +590,12 @@ export function buildChildEnvironment(options: ChildEnvironmentOptions): Record<
 		.map((name) => name.trim())
 		.filter((name) => name.length > 0 && ENV_NAME.test(name));
 
-	for (const name of [...(options.credentialEnv ?? DECLARED_CREDENTIAL_ENV), ...extra]) {
+	// A harness's credentials never carry the permission mode: `yolo` crosses only on the operator's
+	// own `DRAHT_RESUME_ENV_ALLOW` declaration.
+	const credentials = (options.credentialEnv ?? DECLARED_CREDENTIAL_ENV).filter(
+		(name) => name !== FORWARDED_PERMISSION_MODE_ENV,
+	);
+	for (const name of [...credentials, ...extra]) {
 		if (isForbiddenEnvName(name)) continue;
 		const value = env[name];
 		if (typeof value === "string" && value.length > 0) child[name] = value;

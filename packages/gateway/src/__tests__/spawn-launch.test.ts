@@ -222,6 +222,15 @@ test("the daemon's permission mode crosses on its own, except yolo, which needs 
 	expect(built({ DRAHT_PERMISSION_MODE: "yolo" })).toBeUndefined();
 	expect(built({ DRAHT_PERMISSION_MODE: " YOLO " })).toBeUndefined();
 	expect(built({ DRAHT_PERMISSION_MODE: "yolo", DRAHT_RESUME_ENV_ALLOW: "DRAHT_PERMISSION_MODE" })).toBe("yolo");
+	// A harness naming it among its credentials is not that declaration.
+	expect(
+		buildChildEnvironment({
+			env: { DRAHT_PERMISSION_MODE: "yolo" },
+			agentDir: "/tmp/spl-agent",
+			cwd: "/tmp/spl-cwd",
+			credentialEnv: ["DRAHT_PERMISSION_MODE"],
+		}).DRAHT_PERMISSION_MODE,
+	).toBeUndefined();
 });
 
 test("a populated `credentialEnv` crosses exactly the names it declares and no others", async () => {

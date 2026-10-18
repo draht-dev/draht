@@ -802,6 +802,9 @@ const INTERPRETER_INLINE_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new M
 /** Operands that name stdin itself. */
 const STDIN_OPERANDS: ReadonlySet<string> = new Set(["-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"]);
 
+/** A descriptor other than stdin by path (`/dev/fd/3`): what a process substitution expands to. */
+const DESCRIPTOR_PATH_RE = /^\/(?:dev\/fd|proc\/(?:self|\d+)\/fd)\/[1-9]\d*$/;
+
 /** A `<(...)` or `>(...)` process substitution: its command, and which way it is wired. */
 type ProcessSubstitution = { direction: "<" | ">"; body: string };
 
@@ -812,7 +815,21 @@ const REDIRECTION_RE = /^\d*(?:<<<|<<-?|<>|<|&>>?|>>?|>&)(?!\()/;
 type ProgramSource =
 	| { kind: "operand"; operand: string }
 	| { kind: "inline" }
-	| { kind: "stdin"; fromProcessSubstitution: boolean };
+	| { kind: "stdin"; fromDescriptor: boolean };
+
+/**
+ * `true` when `words` redirect stdin from a process substitution or another descriptor
+ * (`< <(...)`, `0</dev/fd/3`, `<&3`), never from a file or stdin itself.
+ */
+function stdinFromDescriptor(words: string[]): boolean {
+	return words.some((word, i) => {
+		const redirection = word.match(/^0?<(?![<>(])(&?)(.*)$/);
+		if (!redirection) return false;
+		const target = redirection[2] === "" ? (words[i + 1] ?? "") : redirection[2];
+		if (redirection[1] === "&") return /^[1-9]\d*$/.test(target);
+		return target.startsWith("<(") || DESCRIPTOR_PATH_RE.test(target);
+	});
+}
 
 /** `text`'s words once leading assignments and passthrough wrappers (`env`, `nice`, ...) are gone. */
 function unwrappedWords(text: string): string[] {
@@ -828,8 +845,8 @@ function unwrappedWords(text: string): string[] {
 /**
  * Where the shell, interpreter, `source` or `.` that `words` start with takes its program
  * from: a script operand, inline code (`-c`, `-e`, `-m`), or stdin (no operand, `-` and its
- * spellings, or a shell given `-s`), noting whether stdin is redirected from a `<(...)` anywhere
- * among the words. `undefined` when `words` start with anything else. Option arguments
+ * spellings, or a shell given `-s`), noting whether stdin is redirected from a `<(...)` or another
+ * descriptor anywhere among the words. `undefined` when `words` start with anything else. Option arguments
  * (`bash -o pipefail`, `python3 -W ignore`) and redirections (`> out.txt`) are skipped, so
  * neither passes for the script.
  */
@@ -842,7 +859,7 @@ function programSource(words: string[]): ProgramSource | undefined {
 	const family = interpreterFamily(name);
 	const argFlags = INTERPRETER_ARG_FLAGS.get(family);
 	const inlineFlags = INTERPRETER_INLINE_FLAGS.get(family);
-	const fromProcessSubstitution = words.some((word, i) => /^0?<$/.test(word) && words[i + 1]?.startsWith("<("));
+	const fromDescriptor = stdinFromDescriptor(words);
 	let readsStdin = false;
 	let optionsDone = false;
 	let subcommandSkipped = false;
@@ -880,10 +897,10 @@ function programSource(words: string[]): ProgramSource | undefined {
 			subcommandSkipped = true;
 			continue;
 		}
-		if (readsStdin || STDIN_OPERANDS.has(word)) return { kind: "stdin", fromProcessSubstitution };
+		if (readsStdin || STDIN_OPERANDS.has(word)) return { kind: "stdin", fromDescriptor };
 		return { kind: "operand", operand: word };
 	}
-	return { kind: "stdin", fromProcessSubstitution };
+	return { kind: "stdin", fromDescriptor };
 }
 
 /**
@@ -909,17 +926,20 @@ function commandFeedsCodeFromStdin(command: string): boolean {
  * `true` when code runs straight out of a process substitution, in the command or any command
  * line it runs: a shell, interpreter, `source` or `.` whose script is `<(...)` (`bash <(curl ...)`,
  * `source <(...)`) or whose stdin is one (`bash < <(...)`), or a `>(...)` that runs what is written
- * into it (`tee >(sh)`). The deny scan sees the substitution's command, never the program it
- * produces. A process substitution that only carries data (`diff <(ls a) <(ls b)`,
- * `python3 tool.py < <(git log)`) runs nothing.
+ * into it (`tee >(sh)`). A descriptor path counts as one, being what `<(...)` expands to
+ * (`bash /dev/fd/3 3< <(curl ...)`, `bash <&3`). The deny scan sees the substitution's command,
+ * never the program it produces. A process substitution that only carries data
+ * (`diff <(ls a) <(ls b)`, `python3 tool.py < <(git log)`) runs nothing.
  */
 function commandRunsProcessSubstitution(command: string): boolean {
 	const executed = scanExecutedCode(command);
 	if (executed.truncated) return true;
 	const runsOne = executed.segments.some((seg) => {
 		const source = programSource(unwrappedWords(seg.text));
-		if (source?.kind === "operand") return source.operand.startsWith("<(");
-		return source?.kind === "stdin" && source.fromProcessSubstitution;
+		if (source?.kind === "operand") {
+			return source.operand.startsWith("<(") || DESCRIPTOR_PATH_RE.test(source.operand);
+		}
+		return source?.kind === "stdin" && source.fromDescriptor;
 	});
 	return (
 		runsOne ||

@@ -9,6 +9,7 @@
 
 ### Added
 
+- `alt+m` (`app.permissions.cycle`) cycles the session's permission mode from `auto` to `ask` to `yolo` and back, so the first press from the start mode only ever asks more
 - add `pi.appendUsage()` for extensions to record model-attributed usage outside a tool result
 - command runs (`/<name>`, `/workflow <name>`) now record one usage entry per finished agent, so their cost appears in the session footer's totals and cost breakdown
 - a workflow run's token budget and time limit now come from the user's own prompt (e.g. `+500k`, `+30min`), else the `workflow` tool's `budgetTokens`/`timeLimit` parameters, else `polyphase.defaultBudgetTokens`/`polyphase.workflowTimeoutMs`, else no limit at all (the script runs until it returns); the approval prompt, a start-of-run log line, and the final result text all show which limits applied and their source, or a disclaimer naming only the missing ones

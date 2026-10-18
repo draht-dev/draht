@@ -13,6 +13,7 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { getKeybindings } from "@draht/tui";
 import { Type } from "@sinclair/typebox";
 import { CONFIG_DIR_NAME, getAgentDir, getPackageDir } from "../../config.js";
 import { comparablePath, realPathStrict } from "../../utils/canonical-path.js";
@@ -112,6 +113,16 @@ export const PERMISSION_MODE_ENV = "DRAHT_PERMISSION_MODE";
 export function permissionEnv(session: { permissionMode(): PermissionMode }): () => Readonly<Record<string, string>> {
 	return () => ({ [PERMISSION_MODE_ENV]: session.permissionMode() });
 }
+
+/**
+ * The order `app.permissions.cycle` steps through. From the mode a session starts in, the first
+ * press only ever asks more; `yolo` takes a second one.
+ */
+const NEXT_PERMISSION_MODE: Readonly<Record<PermissionMode, PermissionMode>> = {
+	auto: "ask",
+	ask: "yolo",
+	yolo: "auto",
+};
 
 /** The mode a session starts in, and the raw `DRAHT_PERMISSION_MODE` value when it named none. */
 export interface SeededPermissionMode {
@@ -1116,6 +1127,7 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 			lastProjectTrust?.cwd === cwd ? lastProjectTrust.trusted : false;
 
 		let currentSession: ReturnType<typeof getPolyphaseSession> | undefined;
+		let unsubscribeModeKey: (() => void) | undefined;
 
 		const renderDeps: PolyphaseRenderDeps = {
 			getStore: () => currentSession?.store,
@@ -1747,12 +1759,24 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 					"warning",
 				);
 			}
+			unsubscribeModeKey?.();
+			unsubscribeModeKey = undefined;
+			if (ctx.mode === "tui" && ctx.hasUI) {
+				unsubscribeModeKey = ctx.ui.onTerminalInput((data) => {
+					if (!getKeybindings().matches(data, "app.permissions.cycle")) return undefined;
+					setPermissionMode(NEXT_PERMISSION_MODE[permissionMode], ctx);
+					ctx.ui.notify(`Permission mode: ${permissionMode} — ${MODE_DESCRIPTIONS[permissionMode]}`, "info");
+					return { consume: true };
+				});
+			}
 			if (!ctx.sessionManager) return;
 			currentSession = getPolyphaseSession(ctx.sessionManager, pi.getSettings().polyphase);
 			currentSession.setPermissionModeProvider(() => permissionMode);
 		});
 
 		pi.on("session_shutdown", (_event, ctx) => {
+			unsubscribeModeKey?.();
+			unsubscribeModeKey = undefined;
 			disposePolyphaseSession(ctx.sessionManager, "shutdown");
 			currentSession = undefined;
 		});

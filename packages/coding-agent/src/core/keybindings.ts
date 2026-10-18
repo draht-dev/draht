@@ -17,6 +17,7 @@ export interface AppKeybindings {
 	"app.exit": true;
 	"app.suspend": true;
 	"app.thinking.cycle": true;
+	"app.permissions.cycle": true;
 	"app.context.cycle": true;
 	"app.thinking.save": true;
 	"app.model.cycleForward": true;
@@ -108,6 +109,10 @@ export const KEYBINDINGS = {
 	"app.thinking.cycle": {
 		defaultKeys: "shift+tab",
 		description: "Cycle thinking level",
+	},
+	"app.permissions.cycle": {
+		defaultKeys: "alt+m",
+		description: "Cycle permission mode",
 	},
 	"app.context.cycle": {
 		defaultKeys: "ctrl+shift+l",

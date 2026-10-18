@@ -40,3 +40,14 @@ describe("Windows keybinding defaults", () => {
 		expect(KEYBINDINGS["app.message.dequeue"].defaultKeys).toBe(windowsKeybindings ? "alt+q" : "alt+up");
 	});
 });
+
+describe("app.permissions.cycle", () => {
+	it("defaults to alt+m, which no other keybinding uses by default", () => {
+		expect(KEYBINDINGS["app.permissions.cycle"].defaultKeys).toBe("alt+m");
+		for (const [id, binding] of Object.entries(KEYBINDINGS)) {
+			if (id === "app.permissions.cycle") continue;
+			const keys = Array.isArray(binding.defaultKeys) ? binding.defaultKeys : [binding.defaultKeys];
+			expect(keys, id).not.toContain("alt+m");
+		}
+	});
+});

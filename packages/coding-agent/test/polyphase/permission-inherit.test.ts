@@ -6,7 +6,8 @@
 
 import type { Api, Model } from "@draht/ai";
 import { fauxAssistantMessage, fauxToolCall } from "@draht/ai";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { KeybindingsManager, setKeybindings } from "@draht/tui";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import duetBuiltin from "../../src/core/builtins/duet.ts";
 import {
 	createSubagentExtension,
@@ -20,8 +21,10 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 	RegisteredCommand,
+	TerminalInputHandler,
 	ToolDefinition,
 } from "../../src/core/extensions/types.ts";
+import { KEYBINDINGS } from "../../src/core/keybindings.ts";
 import { AgentLimiter } from "../../src/core/polyphase/limiter.ts";
 import type { PolyphaseRenderDeps } from "../../src/core/polyphase/render/renderers.ts";
 import { getPolyphaseSession, type PolyphaseSession } from "../../src/core/polyphase/session.ts";
@@ -293,6 +296,55 @@ describe("the footer names a permission mode other than the one sessions start i
 		expect(first.statuses.at(-1)).toBeUndefined();
 		const rebuilt = await createStatusHarness(factory);
 		expect(rebuilt.statuses).toEqual(["perms: ask"]);
+	});
+});
+
+describe("app.permissions.cycle steps the session's permission mode", () => {
+	beforeAll(() => {
+		setKeybindings(new KeybindingsManager(KEYBINDINGS));
+	});
+
+	async function createKeyHarness(mode: "tui" | "rpc") {
+		const handlers: TerminalInputHandler[] = [];
+		const statuses: (string | undefined)[] = [];
+		const notices: string[] = [];
+		const uiContext = createTestUiContext({
+			onTerminalInput: (handler) => {
+				handlers.push(handler);
+				return () => {
+					handlers.splice(handlers.indexOf(handler), 1);
+				};
+			},
+			setStatus: (key, text) => {
+				if (key === "permissions") statuses.push(text);
+			},
+			notify: (message) => notices.push(message),
+		});
+		const harness = await createHarness({
+			extensionFactories: [createSubagentExtension({ runner: createScriptedRunner(agentScript).runner })],
+		});
+		harnesses.push(harness);
+		await harness.session.bindExtensions({ uiContext, mode });
+		const press = (data: string) => handlers.map((handler) => handler(data)).find((result) => result !== undefined);
+		return { handlers, statuses, notices, press };
+	}
+
+	it("goes from auto to ask to yolo and back on alt+m, and leaves other keys alone", async () => {
+		const { statuses, notices, press } = await createKeyHarness("tui");
+
+		expect(press("m")).toBeUndefined();
+		expect(press("\x1bm")).toEqual({ consume: true });
+		expect(statuses.at(-1)).toBe("perms: ask");
+		expect(press("\x1bm")).toEqual({ consume: true });
+		expect(statuses.at(-1)).toBe("perms: yolo");
+		expect(press("\x1bm")).toEqual({ consume: true });
+		expect(statuses.at(-1)).toBeUndefined();
+		expect(notices.at(-1)).toContain("Permission mode: auto");
+	});
+
+	it("listens for the key only in the TUI", async () => {
+		const { handlers } = await createKeyHarness("rpc");
+		expect(handlers).toHaveLength(0);
 	});
 });
 

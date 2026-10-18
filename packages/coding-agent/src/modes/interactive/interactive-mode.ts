@@ -7095,6 +7095,7 @@ export class InteractiveMode {
 		const exit = this.getAppKeyDisplay("app.exit");
 		const suspend = this.getAppKeyDisplay("app.suspend");
 		const cycleThinkingLevel = this.getAppKeyDisplay("app.thinking.cycle");
+		const cyclePermissionMode = this.getAppKeyDisplay("app.permissions.cycle");
 		const cycleContextWindow = this.getAppKeyDisplay("app.context.cycle");
 		const cycleModelForward = this.getAppKeyDisplay("app.model.cycleForward");
 		const selectModel = this.getAppKeyDisplay("app.model.select");
@@ -7142,6 +7143,7 @@ export class InteractiveMode {
 | \`${exit}\` | Exit (when editor is empty) |
 | \`${suspend}\` | Suspend to background |
 | \`${cycleThinkingLevel}\` | Cycle thinking level |
+| \`${cyclePermissionMode}\` | Cycle permission mode (auto, ask, yolo) |
 ${cycleContextWindow ? `| \`${cycleContextWindow}\` | Cycle context window |\n` : ""}| \`${cycleModelForward}\` / \`${cycleModelBackward}\` | Cycle models |
 | \`${selectModel}\` | Open model selector |
 | \`${expandTools}\` | Toggle tool output expansion |

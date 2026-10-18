@@ -332,7 +332,7 @@
 ## Milestone 6 — Bash Sandbox Confinement
 
 > Design spec: `.planning/specs/2026-07-12-bash-sandbox-confinement.md`.
-> Scope: `packages/coding-agent` (core + interactive mode + `core/builtins/`); no new package. Generalizes Phase 28's OS-boundary pattern (`packages/rlm/src/sandbox.ts`) from the RLM REPL to the agent's bash tool, composing with (not replacing) the permission gate and its default/auto/yolo modes.
+> Scope: `packages/coding-agent` (core + interactive mode + `core/builtins/`); no new package. Generalizes Phase 28's OS-boundary pattern (`packages/rlm/src/sandbox.ts`) from the RLM REPL to the agent's bash tool, composing with (not replacing) the permission gate and its ask/auto/yolo modes.
 
 ### R44-SBX: Sandbox Executor Core
 - R44-SBX.1: `SandboxExecutor` interface in `packages/coding-agent/src/core/sandbox/` with per-platform backends — macOS Seatbelt (`sandbox-exec -f` + SBPL profile generated from policy), Linux Landlock (kernel ≥ 5.13) with `unshare`/bwrap namespace fallback; unsupported platforms report `unavailable`

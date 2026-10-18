@@ -5,7 +5,7 @@
 ### Breaking Changes
 
 - the `default` permission mode is renamed `ask`, since it is no longer the mode a session starts in: use `/permissions ask` and `DRAHT_PERMISSION_MODE=ask`. `/permissions default` is refused, and `DRAHT_PERMISSION_MODE=default` starts the session in `ask` with a warning
-- a session now starts in the `auto` permission mode instead of `default` when `DRAHT_PERMISSION_MODE` is unset, in the TUI, print, JSON, and RPC modes and in sessions the gateway resumes: an unmatched bash command runs unasked unless it trips the danger filter, and a workflow or duet batch starts without the approval prompt. Set `DRAHT_PERMISSION_MODE=ask` to keep asking; a gateway passes it on to a session it resumes only when its `DRAHT_RESUME_ENV_ALLOW` lists it
+- a session now starts in the `auto` permission mode instead of `default` when `DRAHT_PERMISSION_MODE` is unset, in the TUI, print, JSON, and RPC modes and in sessions the gateway resumes: an unmatched bash command runs unasked unless it trips the danger filter, and a workflow or duet batch starts without the approval prompt. Set `DRAHT_PERMISSION_MODE=ask` to keep asking; the gateway passes its own value on to the sessions it starts or resumes
 
 ### Added
 

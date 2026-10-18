@@ -200,6 +200,16 @@ test("`credentialEnv: []` crosses no credential at all, while the base environme
 	expect(env.get("PATH")).toBe("/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
 }, 120_000);
 
+test("the daemon's permission mode crosses, so a session it starts asks the way a local one would", async () => {
+	const { spawner, dir, request } = harness(BINDS_AND_REPORTS, {
+		env: { HOME: "/tmp", DRAHT_PERMISSION_MODE: "ask" },
+	});
+	const { pid } = await spawner.launch(request);
+	pgids.add(pid);
+
+	expect(childEnv(dir).get("DRAHT_PERMISSION_MODE")).toBe("ask");
+}, 120_000);
+
 test("a populated `credentialEnv` crosses exactly the names it declares and no others", async () => {
 	const { spawner, dir, request } = harness(
 		BINDS_AND_REPORTS,

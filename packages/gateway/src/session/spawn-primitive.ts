@@ -177,6 +177,14 @@ export const DECLARED_CREDENTIAL_ENV: readonly string[] = [
 const BASE_ENV_NAMES: readonly string[] = ["HOME", "LANG", "LC_ALL", "LC_CTYPE", "LOGNAME", "TMPDIR", "TZ", "USER"];
 
 /**
+ * Draht's own policy for what a session may do unasked, passed on so the operator's
+ * `DRAHT_PERMISSION_MODE` reaches the sessions this daemon starts the same way it reaches the ones
+ * started in a terminal. Unset on the daemon, it stays unset, and the session starts in auto like
+ * any other.
+ */
+export const FORWARDED_POLICY_ENV_NAMES: readonly string[] = ["DRAHT_PERMISSION_MODE"];
+
+/**
  * Names that are refused even when an operator declares them.
  *
  * Every one of these changes what code a program loads before its own first
@@ -556,7 +564,7 @@ export function buildChildEnvironment(options: ChildEnvironmentOptions): Record<
 		: DEFAULT_RESUME_PATH;
 	child.PATH = path;
 
-	for (const name of BASE_ENV_NAMES) {
+	for (const name of [...BASE_ENV_NAMES, ...FORWARDED_POLICY_ENV_NAMES]) {
 		const value = env[name];
 		if (typeof value === "string" && value.length > 0) child[name] = value;
 	}

@@ -539,8 +539,8 @@ beforeAll(async () => {
 
 	const port = freeLoopbackPort();
 	daemonStderr = { text: "" };
-	// Built from scratch rather than inherited, and the resumed session's mode
-	// declared as `ask`: in `auto` (an unset variable, or this repo's shell)
+	// Built from scratch rather than inherited, and the daemon's mode set to
+	// `ask`, which it passes on to the resumed session: in `auto` (an unset variable, or this repo's shell)
 	// its scripted call runs unasked and the ask this test answers never comes.
 	const daemon = Bun.spawn(["bun", GATEWAY_CLI, "--port", String(port), "--auth", TOKEN], {
 		env: {
@@ -551,16 +551,16 @@ beforeAll(async () => {
 			TMPDIR: home,
 			DRAHT_CODING_AGENT_DIR: agentDir,
 			// Declared, and therefore expected to cross. The stub provider is how a
-			// resumed session answers with no API key, the scripted tool call is how
-			// it is made to report its own environment, and the mode is how that
-			// call is made to ask first.
+			// resumed session answers with no API key, and the scripted tool call is
+			// how it is made to report its own environment.
 			DRAHT_STUB_PROVIDER: "1",
 			DRAHT_STUB_TOOL_CALLS: JSON.stringify([
 				{ toolCalls: [{ id: "call-1", name: "bash", arguments: { command: `env > ${childEnvFile}` } }] },
 			]),
+			DRAHT_RESUME_ENV_ALLOW: "DRAHT_STUB_PROVIDER,DRAHT_STUB_TOOL_CALLS,DYLD_LIBRARY_PATH,LD_PRELOAD",
+			// Undeclared on purpose: the daemon passes its own mode on by default, and
+			// `ask` is how the scripted call is made to ask first.
 			DRAHT_PERMISSION_MODE: "ask",
-			DRAHT_RESUME_ENV_ALLOW:
-				"DRAHT_STUB_PROVIDER,DRAHT_STUB_TOOL_CALLS,DRAHT_PERMISSION_MODE,DYLD_LIBRARY_PATH,LD_PRELOAD",
 			...CANARIES,
 		},
 		stdin: "ignore",

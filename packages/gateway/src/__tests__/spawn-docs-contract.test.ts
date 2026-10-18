@@ -157,6 +157,7 @@ describe("spec §15.1 states the spawned/discovered environment split (R36-SPAWN
 			"buildChildEnvironment",
 			"DEFAULT_RESUME_PATH",
 			"BASE_ENV_NAMES",
+			"FORWARDED_POLICY_ENV_NAMES",
 			"DECLARED_CREDENTIAL_ENV",
 			"NEVER_FORWARDED",
 		]) {

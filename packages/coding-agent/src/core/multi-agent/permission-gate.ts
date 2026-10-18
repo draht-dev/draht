@@ -333,34 +333,19 @@ interface ChainSegment {
 	operator?: string;
 }
 
-/**
- * Quote-aware split of a command string on top-level chain operators (`;`, `&&`, `||`, `|&`, `|`,
- * `&`, newlines). Inside double quotes and `$'...'` a backslash escapes the next character, so
- * `"a \" | b"` stays one piece, as it does for the shell.
- */
+/** Quote-aware split of a command string on top-level chain operators (`;`, `&&`, `||`, `|&`, `|`, `&`, newlines). */
 function splitChain(command: string): ChainSegment[] {
 	const segments: ChainSegment[] = [];
 	let current = "";
-	let quote: '"' | "'" | "$'" | undefined;
+	let quote: '"' | "'" | undefined;
 	let operator: string | undefined;
 	let i = 0;
 	while (i < command.length) {
 		const ch = command[i];
 		if (quote) {
-			if (ch === "\\" && quote !== "'" && i + 1 < command.length) {
-				current += ch + command[i + 1];
-				i += 2;
-				continue;
-			}
 			current += ch;
-			if (ch === (quote === "$'" ? "'" : quote)) quote = undefined;
+			if (ch === quote) quote = undefined;
 			i++;
-			continue;
-		}
-		if (ch === "$" && command[i + 1] === "'") {
-			quote = "$'";
-			current += "$'";
-			i += 2;
 			continue;
 		}
 		if (ch === '"' || ch === "'") {
@@ -737,7 +722,7 @@ function feedsBareShellViaHereDocOrString(text: string): boolean {
 }
 
 /** `true` when any `|`-joined segment pipes into a known shell with no `-c` (`echo ... | bash`). */
-function pipedIntoBareShell(segments: ChainSegment[]): boolean {
+function pipedIntoBareShell(segments: readonly ChainSegment[]): boolean {
 	return segments.some((seg) => {
 		if (!isPipeOperator(seg.operator)) return false;
 		const trimmed = seg.text.trim();
@@ -763,7 +748,11 @@ function commandFeedsBareShellWithoutDashC(command: string): boolean {
 	};
 	if (feedsShell(command)) return true;
 	const executed = scanExecutedCode(command);
-	return executed.truncated || executed.codes.some(feedsShell);
+	return (
+		executed.truncated ||
+		pipedIntoBareShell(executed.segments) ||
+		executed.segments.some((seg) => feedsBareShellViaHereDocOrString(seg.text))
+	);
 }
 
 /** Interpreters: each runs a script operand, inline code (`-c`, `-e`), or the program on stdin. */
@@ -869,7 +858,7 @@ function programSource(words: string[]): ProgramSource | undefined {
 				optionsDone = true;
 				continue;
 			}
-			if (isShell && SHELL_DASH_O_FLAGS.has(word)) {
+			if (isShell && (SHELL_DASH_O_FLAGS.has(word) || /^[-+][A-Za-z]*[oO]$/.test(word))) {
 				i++;
 				continue;
 			}
@@ -909,12 +898,10 @@ function commandFeedsCodeFromStdin(command: string): boolean {
 	const executed = scanExecutedCode(command);
 	return (
 		executed.truncated ||
-		executed.codes.some((code) =>
-			splitChain(code).some((seg) => {
-				if (programSource(unwrappedWords(seg.text))?.kind !== "stdin") return false;
-				return isPipeOperator(seg.operator) || /<<<|<</.test(seg.text);
-			}),
-		)
+		executed.segments.some((seg) => {
+			if (programSource(unwrappedWords(seg.text))?.kind !== "stdin") return false;
+			return isPipeOperator(seg.operator) || /<<<|<</.test(seg.text);
+		})
 	);
 }
 
@@ -929,13 +916,11 @@ function commandFeedsCodeFromStdin(command: string): boolean {
 function commandRunsProcessSubstitution(command: string): boolean {
 	const executed = scanExecutedCode(command);
 	if (executed.truncated) return true;
-	const runsOne = executed.codes.some((code) =>
-		splitChain(code).some((seg) => {
-			const source = programSource(unwrappedWords(seg.text));
-			if (source?.kind === "operand") return source.operand.startsWith("<(");
-			return source?.kind === "stdin" && source.fromProcessSubstitution;
-		}),
-	);
+	const runsOne = executed.segments.some((seg) => {
+		const source = programSource(unwrappedWords(seg.text));
+		if (source?.kind === "operand") return source.operand.startsWith("<(");
+		return source?.kind === "stdin" && source.fromProcessSubstitution;
+	});
 	return (
 		runsOne ||
 		executed.processSubstitutions.some(
@@ -1170,25 +1155,38 @@ function scanDenyCandidates(command: string): DenyScanResult {
 
 /** One layer of shell text, read the way the shell reads it. */
 interface LexedShellText {
-	/** The text with heredoc bodies cut out and each process substitution collapsed to `<(_)`/`>(_)`. */
-	code: string;
+	/**
+	 * The text split at its unquoted chain operators, with heredoc bodies cut out and each process
+	 * substitution collapsed to `<(_)`/`>(_)`.
+	 */
+	segments: ChainSegment[];
 	/** Bodies of the `$(...)` and backtick substitutions the shell runs: outside single quotes, and in unquoted heredoc bodies. */
 	substitutions: string[];
 	/** Process substitutions outside quotes and heredoc bodies, and the way each is wired. */
 	processSubstitutions: ProcessSubstitution[];
-	/** `true` when a heredoc's delimiter line never came: the rest of the text was read as its body. */
+	/** `true` when a heredoc's delimiter line never came, or its delimiter could not be read. */
 	unterminatedHeredoc: boolean;
+	/** Where reading stopped: the end of the text, or just past the `)` that closes a `$(`, `<(` or `>(`. */
+	end: number;
+}
+
+/** A heredoc operator and what it takes to end its body. */
+interface HeredocOperator {
+	length: number;
+	delimiter: string;
+	/** Any quote or backslash in the delimiter word: the body is data, nothing in it runs. */
+	quoted: boolean;
+	/** `<<-`: leading tabs are stripped before the delimiter line is compared. */
+	stripTabs: boolean;
+	/** The delimiter word runs into `(`, which this reader cannot follow; the caller fails closed. */
+	unreadable: boolean;
 }
 
 /**
  * The heredoc operator at `text[i]` (`<<EOF`, `<<-'EOF'`, `<< "E O F"`, `<<\\EOF`, `<<END-OF-DATA`):
- * its length and its delimiter, the whole shell word after `<<` with quotes and backslashes removed.
- * Any quote or backslash in that word makes the body data.
+ * the delimiter is the whole shell word after `<<`, quotes and backslashes removed.
  */
-function heredocAt(
-	text: string,
-	i: number,
-): { length: number; delimiter: string; quoted: boolean; stripTabs: boolean } | undefined {
+function heredocAt(text: string, i: number): HeredocOperator | undefined {
 	const operator = text.slice(i).match(/^<<(-?)[ \t]*/);
 	if (!operator) return undefined;
 	let j = i + operator[0].length;
@@ -1212,27 +1210,33 @@ function heredocAt(
 		}
 	}
 	if (delimiter === "") return undefined;
-	return { length: j - i, delimiter, quoted, stripTabs: operator[1] === "-" };
+	return { length: j - i, delimiter, quoted, stripTabs: operator[1] === "-", unreadable: text[j] === "(" };
 }
 
-/** The `$(...)` or backtick substitution starting at `text[i]`, if one does. */
-function substitutionAt(text: string, i: number): { body: string; end: number } | undefined {
-	if (text[i] === "$" && text[i + 1] === "(") return parenthesizedBody(text, i + 1);
-	if (text[i] !== "`") return undefined;
-	let j = i + 1;
-	while (j < text.length && text[j] !== "`") j += text[j] === "\\" ? 2 : 1;
-	return { body: text.slice(i + 1, j), end: j + 1 };
+/** The index just past the `)` that closes the arithmetic opened by the `(` at `text[open]`. */
+function arithmeticEnd(text: string, open: number): number {
+	let depth = 0;
+	for (let j = open; j < text.length; j++) {
+		if (text[j] === "(") depth++;
+		else if (text[j] === ")" && --depth === 0) return j + 1;
+	}
+	return text.length;
 }
 
-/** Every `$(...)` and backtick substitution in `text`, which runs them all (an unquoted heredoc body). */
+/** The `$(...)` and backtick substitutions in arithmetic or an unquoted heredoc body, which runs them all. */
 function substitutionsIn(text: string): string[] {
 	const bodies: string[] = [];
 	let i = 0;
 	while (i < text.length) {
-		const sub = substitutionAt(text, i);
-		if (sub) {
-			bodies.push(sub.body);
-			i = sub.end;
+		if (text[i] === "$" && text[i + 1] === "(" && text[i + 2] !== "(") {
+			const inner = lexShellText(text, i + 2, true);
+			bodies.push(text.slice(i + 2, Math.max(i + 2, inner.end - 1)));
+			i = inner.end;
+		} else if (text[i] === "`") {
+			let j = i + 1;
+			while (j < text.length && text[j] !== "`") j += text[j] === "\\" ? 2 : 1;
+			bodies.push(text.slice(i + 1, j));
+			i = j + 1;
 		} else {
 			i += text[i] === "\\" ? 2 : 1;
 		}
@@ -1242,83 +1246,159 @@ function substitutionsIn(text: string): string[] {
 
 /**
  * Reads one layer of shell text as the shell would, for the checks that ask whether something is
- * RUN: single-quoted text runs nothing; in double quotes only `$(...)` and backticks run; a quoted
- * heredoc's body is data, and an unquoted one runs only its substitutions. Unlike the deny scan,
+ * RUN, and splits it at its unquoted chain operators. Single-quoted text runs nothing; in double
+ * quotes only `$(...)` and backticks run; a quoted heredoc's body is data and an unquoted one runs
+ * only its substitutions; `$((...))` and `((...))` are arithmetic. A `$(`, `<(` or `>(` is read to
+ * the `)` that really closes it, past quotes and heredocs (`untilCloseParen`). Unlike the deny scan,
  * which over-matches on purpose, a commit message or a file written through a heredoc must not
- * read as code here. A heredoc whose delimiter line never comes swallows the rest of the text;
- * the result says so, and the checks then ask rather than trust a misread.
+ * read as code here. A heredoc that never ends, or whose delimiter this reader cannot follow, is
+ * reported, and the checks then ask rather than trust a misread.
  */
-function lexShellText(text: string): LexedShellText {
-	let code = "";
+function lexShellText(text: string, start = 0, untilCloseParen = false): LexedShellText {
+	const segments: ChainSegment[] = [];
 	const substitutions: string[] = [];
 	const processSubstitutions: ProcessSubstitution[] = [];
-	const pendingHeredocs: Array<{ delimiter: string; quoted: boolean; stripTabs: boolean }> = [];
+	const pendingHeredocs: HeredocOperator[] = [];
 	let unterminatedHeredoc = false;
+	let current = "";
+	let operator: string | undefined;
 	let quote: "'" | '"' | undefined;
-	let i = 0;
+	let depth = 0;
+	const endSegment = (next: string) => {
+		segments.push({ text: current, operator });
+		current = "";
+		operator = next;
+	};
+	let i = start;
 	while (i < text.length) {
 		const ch = text[i];
 		if (quote === "'") {
-			code += ch;
+			current += ch;
 			if (ch === "'") quote = undefined;
 			i++;
 			continue;
 		}
 		if (ch === "\\" && i + 1 < text.length) {
-			code += ch + text[i + 1];
+			current += ch + text[i + 1];
 			i += 2;
 			continue;
 		}
-		const sub = substitutionAt(text, i);
-		if (sub) {
-			substitutions.push(sub.body);
-			code += text.slice(i, sub.end);
-			i = sub.end;
+		if (ch === "$" && text[i + 1] === "(") {
+			if (text[i + 2] === "(") {
+				const end = arithmeticEnd(text, i + 1);
+				substitutions.push(...substitutionsIn(text.slice(i + 3, end)));
+				current += text.slice(i, end);
+				i = end;
+				continue;
+			}
+			const inner = lexShellText(text, i + 2, true);
+			substitutions.push(text.slice(i + 2, Math.max(i + 2, inner.end - 1)));
+			current += text.slice(i, inner.end);
+			i = inner.end;
+			continue;
+		}
+		if (ch === "`") {
+			let j = i + 1;
+			while (j < text.length && text[j] !== "`") j += text[j] === "\\" ? 2 : 1;
+			substitutions.push(text.slice(i + 1, j));
+			current += text.slice(i, j + 1);
+			i = j + 1;
 			continue;
 		}
 		if (quote === '"') {
 			if (ch === '"') quote = undefined;
-			code += ch;
+			current += ch;
 			i++;
+			continue;
+		}
+		if (ch === "$" && text[i + 1] === "$") {
+			// `$$` is the shell's pid: a quote right after it is a plain one, not `$'...'`.
+			current += "$$";
+			i += 2;
 			continue;
 		}
 		if (ch === "$" && text[i + 1] === "'") {
 			// ANSI-C quoting: like single quotes, but a backslash escapes the next character, `\'` too.
 			let j = i + 2;
 			while (j < text.length && text[j] !== "'") j += text[j] === "\\" ? 2 : 1;
-			code += text.slice(i, j + 1);
+			current += text.slice(i, j + 1);
 			i = j + 1;
 			continue;
 		}
 		if (ch === "'" || ch === '"') {
 			quote = ch;
-			code += ch;
+			current += ch;
 			i++;
 			continue;
 		}
-		if (text.startsWith("<<<", i)) {
-			// A here-string: its word follows and is read as any other.
-			code += "<<<";
-			i += 3;
+		if ((ch === "<" || ch === ">") && text[i + 1] === "(") {
+			const inner = lexShellText(text, i + 2, true);
+			processSubstitutions.push({ direction: ch, body: text.slice(i + 2, Math.max(i + 2, inner.end - 1)) });
+			current += `${ch}(_)`;
+			i = inner.end;
 			continue;
 		}
-		if ((ch === "<" || ch === ">") && text[i + 1] === "(") {
-			const { body, end } = parenthesizedBody(text, i + 1);
-			processSubstitutions.push({ direction: ch, body });
-			code += `${ch}(_)`;
+		if (ch === "(" && text[i + 1] === "(") {
+			const end = arithmeticEnd(text, i);
+			substitutions.push(...substitutionsIn(text.slice(i + 2, end)));
+			current += text.slice(i, end);
 			i = end;
+			continue;
+		}
+		if (ch === "(") {
+			depth++;
+			current += ch;
+			i++;
+			continue;
+		}
+		if (ch === ")") {
+			i++;
+			if (depth > 0) {
+				depth--;
+				current += ch;
+				continue;
+			}
+			if (untilCloseParen) break;
+			current += ch;
+			continue;
+		}
+		if (text.startsWith("<<<", i)) {
+			current += "<<<";
+			i += 3;
 			continue;
 		}
 		const heredoc = ch === "<" && text[i + 1] === "<" ? heredocAt(text, i) : undefined;
 		if (heredoc) {
-			pendingHeredocs.push({ delimiter: heredoc.delimiter, quoted: heredoc.quoted, stripTabs: heredoc.stripTabs });
-			code += text.slice(i, i + heredoc.length);
+			if (heredoc.unreadable) unterminatedHeredoc = true;
+			pendingHeredocs.push(heredoc);
+			current += text.slice(i, i + heredoc.length);
 			i += heredoc.length;
 			continue;
 		}
-		code += ch;
+		const two = text.slice(i, i + 2);
+		if (two === "&&" || two === "||" || two === "|&") {
+			endSegment(two);
+			i += 2;
+			continue;
+		}
+		// `&>file`, `2>&1` and `<&3` are redirections, not a background `&`.
+		if (ch === "&" && (text[i + 1] === ">" || /[<>]$/.test(current))) {
+			current += ch;
+			i++;
+			continue;
+		}
+		if (ch === ";" || ch === "|" || ch === "&") {
+			endSegment(ch);
+			i++;
+			continue;
+		}
+		if (ch !== "\n") {
+			current += ch;
+			i++;
+			continue;
+		}
+		endSegment(";");
 		i++;
-		if (ch !== "\n") continue;
 		// The bodies follow this line, one per heredoc it opened, each up to its delimiter line.
 		for (const pending of pendingHeredocs.splice(0)) {
 			let terminated = false;
@@ -1335,21 +1415,21 @@ function lexShellText(text: string): LexedShellText {
 			if (!terminated) unterminatedHeredoc = true;
 		}
 	}
-	if (pendingHeredocs.length > 0) unterminatedHeredoc = true;
-	return { code, substitutions, processSubstitutions, unterminatedHeredoc };
+	segments.push({ text: current, operator });
+	return { segments, substitutions, processSubstitutions, unterminatedHeredoc, end: i };
 }
 
 /** Every command line the shell runs for a command, found by `scanExecutedCode`. */
 interface ExecutedScan {
-	/** The command and each command line run inside it (`-c` bodies, `eval` arguments, substitutions), lexed. */
-	codes: string[];
+	/** The chain segments of the command and of each command line run inside it (`-c` bodies, `eval` arguments, substitutions), lexed. */
+	readonly segments: readonly ChainSegment[];
 	/** The process substitutions among them, and the way each is wired. */
-	processSubstitutions: ProcessSubstitution[];
+	readonly processSubstitutions: readonly ProcessSubstitution[];
 	/**
 	 * `true` when the scan hit the same bounds as the deny scan, or a heredoc never ended, so
 	 * something may have been read as data that the shell runs; callers then fail closed.
 	 */
-	truncated: boolean;
+	readonly truncated: boolean;
 }
 
 /** The last command's executed scan: one evaluation asks several checks about the same command. */
@@ -1367,7 +1447,7 @@ function scanExecutedCode(command: string): ExecutedScan {
 }
 
 function computeExecutedScan(command: string): ExecutedScan {
-	const codes: string[] = [];
+	const segments: ChainSegment[] = [];
 	const processSubstitutions: ProcessSubstitution[] = [];
 	const seen = new Set<string>();
 	const queue: Array<{ text: string; depth: number }> = [{ text: command, depth: 0 }];
@@ -1383,14 +1463,14 @@ function computeExecutedScan(command: string): ExecutedScan {
 		seen.add(next.text);
 		const lexed = lexShellText(next.text);
 		if (lexed.unterminatedHeredoc) truncated = true;
-		codes.push(lexed.code);
+		segments.push(...lexed.segments);
 		processSubstitutions.push(...lexed.processSubstitutions);
 		const runs = (body: string | undefined) => {
 			if (body !== undefined && !seen.has(body)) queue.push({ text: body, depth: next.depth + 1 });
 		};
 		for (const body of lexed.substitutions) runs(body);
 		for (const { body } of lexed.processSubstitutions) runs(body);
-		for (const seg of splitChain(lexed.code)) {
+		for (const seg of lexed.segments) {
 			const beforeWrapperStrip = stripEnvAssignments(stripLeadingBackslashEscape(seg.text));
 			let working = beforeWrapperStrip;
 			for (let guard = 0; guard < 5; guard++) {
@@ -1409,19 +1489,19 @@ function computeExecutedScan(command: string): ExecutedScan {
 			runs(extractEnvSplitStringArg(beforeWrapperStrip));
 		}
 	}
-	return { codes, processSubstitutions, truncated };
+	return { segments, processSubstitutions, truncated };
 }
 
 /** The last command's deny scan: one evaluation matches the same command against every pattern. */
-let lastDenyScan: { command: string; result: DenyScanResult; forms?: string[] } | undefined;
+let lastDenyScan: { command: string; result: DenyScanResult; forms?: readonly string[] } | undefined;
 
-function cachedDenyScan(command: string): { command: string; result: DenyScanResult; forms?: string[] } {
+function cachedDenyScan(command: string): { command: string; result: DenyScanResult; forms?: readonly string[] } {
 	if (lastDenyScan?.command !== command) lastDenyScan = { command, result: scanDenyCandidates(command) };
 	return lastDenyScan;
 }
 
 /** Candidate list only, for callers that don't need the truncation flag. */
-function collectDenyCandidates(command: string): string[] {
+function collectDenyCandidates(command: string): readonly string[] {
 	return cachedDenyScan(command).result.candidates;
 }
 
@@ -1429,7 +1509,7 @@ function collectDenyCandidates(command: string): string[] {
  * Every candidate normalized for glob matching, and its chain again with spaced operators, so a
  * pattern written `curl * | *` also matches `curl x|sh` and `curl x |& sh`.
  */
-function matchableDenyForms(command: string): string[] {
+function matchableDenyForms(command: string): readonly string[] {
 	const scan = cachedDenyScan(command);
 	scan.forms ??= scan.result.candidates.flatMap((candidate) => {
 		const plain = normalizeForMatch(candidate);
@@ -1511,17 +1591,16 @@ function isDynamicCommandHead(token: string, options: { specialParameters: boole
  * instead of silently resolving to whatever the variable happens to hold.
  */
 function commandHeadIsDynamic(command: string): boolean {
-	const dynamicHead = (text: string, specialParameters: boolean) =>
-		splitChain(text).some((seg) => {
-			const working = stripEnvAssignments(stripLeadingBackslashEscape(seg.text));
-			const head = tokenizeShellWords(working.trim())[0];
-			return head !== undefined && isDynamicCommandHead(head, { specialParameters });
-		});
+	const dynamicHead = (seg: ChainSegment, specialParameters: boolean) => {
+		const working = stripEnvAssignments(stripLeadingBackslashEscape(seg.text));
+		const head = tokenizeShellWords(working.trim())[0];
+		return head !== undefined && isDynamicCommandHead(head, { specialParameters });
+	};
 	// The raw command's segments include heredoc lines, where `$5` or `"$@"` is text: special
 	// parameters count only in what the lexed scan finds the shell runs.
-	if (dynamicHead(command, false)) return true;
+	if (splitChain(command).some((seg) => dynamicHead(seg, false))) return true;
 	const executed = scanExecutedCode(command);
-	return executed.truncated || executed.codes.some((code) => dynamicHead(code, true));
+	return executed.truncated || executed.segments.some((seg) => dynamicHead(seg, true));
 }
 
 /** Extracts the `<cmd>` from `find ... -exec <cmd> ... ;`/`+`/`-execdir <cmd> ... ;`, if present. */
@@ -1653,9 +1732,13 @@ export const DANGEROUS_COMMAND_PATTERNS: readonly string[] = [
 	// work, and the gate cannot see file contents anyway (see the module doc
 	// on interpreter escape hatches).
 	"python* -c*",
+	"pypy* -c*",
 	"node -e*",
 	"node --eval*",
 	"node -p*",
+	"nodejs -e*",
+	"nodejs --eval*",
+	"nodejs -p*",
 	"bun -e*",
 	"bun --eval*",
 	"deno eval*",

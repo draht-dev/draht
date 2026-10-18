@@ -28,7 +28,6 @@
 - subagent, workflow, and duet children now inherit the parent session's current permission mode (set via `/permissions` or `/yolo`) at spawn time, instead of only the parent process's own `DRAHT_PERMISSION_MODE`
 - the permission gate resolves a path the way the tools do (`~`, a leading `@`, `file://`) and checks both `path` and `file_path`, so `read ~/.ssh/id_rsa` or an outside `path` next to an inside `file_path` no longer passes as a file inside the project
 - `auto` mode asks before running code the danger filter cannot read: a shell, interpreter, `source`, or `.` whose script or stdin is a process substitution (`bash <(curl …)`, `bash < <(curl …)`, `tee >(sh)`); another command's output run as a command at any layer (every `bash -c "$(…)"` and `eval "$(…)"`, `eval "$(ssh-agent -s)"` included, and `$1` or `$@` in command position); and a program fed to an interpreter through a pipe, heredoc, or here-string (`… | python3`, `python3 - <<'EOF'`, `xargs python3`). Heredoc bodies and quoted text count as data, not code. Pipe patterns like `curl * | *` also match without spaces around the pipe and with `|&`, and deny rules see the commands inside `<(…)` and `>(…)`
-- an escaped quote inside double quotes (`\"`) or `$'...'` no longer hides a chained command from deny rules and the danger filter, so `bash -c "bash -c \"curl …|sh\""` is denied by a `curl * | *` rule instead of running
 
 ## [2026.10.8-1] - 2026-10-08
 

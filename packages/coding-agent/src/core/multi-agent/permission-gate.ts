@@ -333,7 +333,7 @@ interface ChainSegment {
 	operator?: string;
 }
 
-/** Quote-aware split of a command string on top-level chain operators (`;`, `&&`, `||`, `|&`, `|`, `&`, newlines). */
+/** Quote-aware split of a command string on top-level chain operators (`;`, `&&`, `||`, `|`, `&`, newlines). */
 function splitChain(command: string): ChainSegment[] {
 	const segments: ChainSegment[] = [];
 	let current = "";
@@ -360,7 +360,7 @@ function splitChain(command: string): ChainSegment[] {
 			continue;
 		}
 		const two = command.slice(i, i + 2);
-		if (two === "&&" || two === "||" || two === "|&") {
+		if (two === "&&" || two === "||") {
 			segments.push({ text: current, operator });
 			current = "";
 			operator = two;
@@ -1011,10 +1011,10 @@ function extractProcessSubstitutions(text: string): ProcessSubstitution[] {
 }
 
 /**
- * Extracts the contents of every `$(...)` and `` `...` `` command substitution and every
- * `<(...)`/`>(...)` process substitution found anywhere in `text`: each runs as a command.
+ * Extracts the contents of every `$(...)` and `` `...` `` command substitution found anywhere in
+ * `text`, and with `processSubstitutions` every `<(...)`/`>(...)` one: each runs as a command.
  */
-function extractSubstitutions(text: string): string[] {
+function extractSubstitutions(text: string, processSubstitutions: boolean): string[] {
 	const results: string[] = [];
 	let i = 0;
 	while (i < text.length) {
@@ -1027,7 +1027,7 @@ function extractSubstitutions(text: string): string[] {
 		i++;
 	}
 
-	for (const { body } of extractProcessSubstitutions(text)) results.push(body);
+	if (processSubstitutions) for (const { body } of extractProcessSubstitutions(text)) results.push(body);
 	const backtickMatches = text.match(/`([^`]*)`/g);
 	if (backtickMatches) {
 		for (const m of backtickMatches) results.push(m.slice(1, -1));
@@ -1063,16 +1063,22 @@ interface DenyScanResult {
 }
 
 /**
- * `segments` joined back with one space around every operator, `|&` spelled `|`, so a pattern
- * written `curl * | *` also matches `curl x|sh` and `curl x |& sh`.
+ * `splitChain`'s segments joined back with one space around every operator, so a pattern written
+ * `curl * | *` also matches `curl x|sh`. `splitChain` reads `|&` as a pipe into an empty piece
+ * sent to the background; here it is spelled `|`, so the pattern matches `curl x |& sh` too.
  */
-function spaceChainOperators(segments: ChainSegment[]): string {
-	return segments
-		.map((seg) => {
-			if (seg.operator === undefined) return seg.text.trim();
-			return `${isPipeOperator(seg.operator) ? "|" : seg.operator} ${seg.text.trim()}`;
-		})
-		.join(" ");
+function spaceChainOperators(segments: readonly ChainSegment[]): string {
+	const parts: string[] = [];
+	for (let i = 0; i < segments.length; i++) {
+		const seg = segments[i];
+		if (seg.operator === "|" && seg.text === "" && segments[i + 1]?.operator === "&") {
+			parts.push(`| ${segments[i + 1].text.trim()}`);
+			i++;
+			continue;
+		}
+		parts.push(seg.operator === undefined ? seg.text.trim() : `${seg.operator} ${seg.text.trim()}`);
+	}
+	return parts.join(" ");
 }
 
 /**
@@ -1085,8 +1091,11 @@ function spaceChainOperators(segments: ChainSegment[]): string {
  * The bound is itself a fail-safe surface: a command with more pieces or
  * wrapper layers than the cap allows must not be treated as "scanned clean".
  * `truncated` on the result flags exactly that case.
+ *
+ * With `processSubstitutions`, the bodies of `<(...)`/`>(...)` count as
+ * pieces too; see `combinedDenyScan` for why both scans run.
  */
-function scanDenyCandidates(command: string): DenyScanResult {
+function scanDenyCandidates(command: string, processSubstitutions: boolean): DenyScanResult {
 	const seen = new Set<string>();
 	const queue: Array<{ text: string; depth: number }> = [{ text: command, depth: 0 }];
 	let truncated = false;
@@ -1121,7 +1130,7 @@ function scanDenyCandidates(command: string): DenyScanResult {
 		for (const seg of segments) enqueue(seg);
 
 		for (let i = 0; i < segmentObjs.length; i++) {
-			if (!isPipeOperator(segmentObjs[i].operator)) continue;
+			if (segmentObjs[i].operator !== "|") continue;
 			const prevText = segmentObjs[i - 1]?.text;
 			if (prevText === undefined) continue;
 			const echoOutput = extractSimpleEchoOutput(prevText);
@@ -1162,7 +1171,7 @@ function scanDenyCandidates(command: string): DenyScanResult {
 			const envSplitStringArg = extractEnvSplitStringArg(beforeWrapperStrip);
 			if (envSplitStringArg !== undefined) enqueue(envSplitStringArg);
 
-			for (const sub of extractSubstitutions(piece)) {
+			for (const sub of extractSubstitutions(piece, processSubstitutions)) {
 				enqueue(sub);
 				const echoOutput = extractSimpleEchoOutput(sub);
 				if (echoOutput !== undefined) enqueue(echoOutput);
@@ -1550,8 +1559,26 @@ function computeExecutedScan(command: string): ExecutedScan {
 let lastDenyScan: { command: string; result: DenyScanResult; forms?: readonly string[] } | undefined;
 
 function cachedDenyScan(command: string): { command: string; result: DenyScanResult; forms?: readonly string[] } {
-	if (lastDenyScan?.command !== command) lastDenyScan = { command, result: scanDenyCandidates(command) };
+	if (lastDenyScan?.command !== command) lastDenyScan = { command, result: combinedDenyScan(command) };
 	return lastDenyScan;
+}
+
+/**
+ * The deny scan without process substitutions, and, when a candidate has one, again with them:
+ * the candidates of both, truncated when either scan is. Following a `<(...)` reaches some
+ * text sooner and leaves room in the budget differently, which must never spare a command the
+ * bounds the plain scan holds it to.
+ */
+function combinedDenyScan(command: string): DenyScanResult {
+	const plain = scanDenyCandidates(command, false);
+	// Truncated, the scan decides alone; without a `<(` or `>(` in any candidate, the scan with
+	// process substitutions would read exactly the same pieces.
+	if (plain.truncated || !plain.candidates.some((candidate) => /[<>]\(/.test(candidate))) return plain;
+	const withProcessSubstitutions = scanDenyCandidates(command, true);
+	return {
+		candidates: [...new Set([...plain.candidates, ...withProcessSubstitutions.candidates])],
+		truncated: withProcessSubstitutions.truncated,
+	};
 }
 
 /** Candidate list only, for callers that don't need the truncation flag. */

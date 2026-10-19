@@ -46,6 +46,7 @@ todo.md
 plans/
 .pi/hf-sessions/
 .pi/hf-sessions-backup/
+.draht/settings.json
 collect.sh
 packages/agent/docs/extensions/pi-server-artifact/index.md
 

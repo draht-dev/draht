@@ -24,7 +24,7 @@ import type {
 	TerminalInputHandler,
 	ToolDefinition,
 } from "../../src/core/extensions/types.ts";
-import { KEYBINDINGS } from "../../src/core/keybindings.ts";
+import { KEYBINDINGS, useWindowsKeybindings } from "../../src/core/keybindings.ts";
 import { AgentLimiter } from "../../src/core/polyphase/limiter.ts";
 import type { PolyphaseRenderDeps } from "../../src/core/polyphase/render/renderers.ts";
 import { getPolyphaseSession, type PolyphaseSession } from "../../src/core/polyphase/session.ts";
@@ -347,6 +347,23 @@ describe("app.permissions.cycle switches the session's permission mode", () => {
 		expect(statuses.at(-1)).toBeUndefined();
 		expect(notices.at(-1)).toContain("Permission mode: auto");
 	});
+
+	// Windows and WSL bind ctrl+q to app.message.followUp instead.
+	it.skipIf(useWindowsKeybindings())(
+		"switches on ctrl+q too, while the µ a macOS terminal types for Option+M stays text",
+		async () => {
+			const { statuses, press } = await createKeyHarness("tui");
+
+			// Typing µ must never change how much the session asks.
+			expect(press("µ")).toBeUndefined();
+			expect(statuses.at(-1)).toBeUndefined();
+			expect(press("\x11")).toEqual({ consume: true });
+			expect(statuses.at(-1)).toBe("perms: ask");
+			// kitty keyboard protocol: `q` (113) with ctrl (modifier 5).
+			expect(press("\x1b[113;5u")).toEqual({ consume: true });
+			expect(statuses.at(-1)).toBeUndefined();
+		},
+	);
 
 	it("never enters yolo, and leaves it for auto", async () => {
 		const { harness, statuses, press } = await createKeyHarness("tui");

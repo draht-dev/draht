@@ -15,8 +15,27 @@ draht uses extended-key protocols so terminals can distinguish combinations such
 | Inline images or colors are not detected | [Override detected capabilities](#override-detected-capabilities) |
 | An IME candidate window appears in the wrong place | [WezTerm](#wezterm) or [IntelliJ IDEA](#intellij-idea-integrated-terminal) |
 | Modified keys fail only inside tmux | [Run draht in tmux](tmux.md) |
+| `Alt+M` types `µ`, or another `Alt` shortcut types a character, on macOS | [Use Option as Alt on macOS](#use-option-as-alt-on-macos) |
 
 Use `/hotkeys` to inspect draht's active shortcuts. See [Keybindings](keybindings.md) to change them.
+
+## Use Option as Alt on macOS
+
+macOS terminals use the Option key to type characters by default. Option+M types `µ`, and Option+A types `å`. draht then receives the character, not an `Alt` shortcut, so `alt+m` (permission mode), `alt+a` (agent inspector), `alt+b` and `alt+f` (move by word), and other `Alt` shortcuts on letter keys do not work. The terminal on the Mac makes this choice, so it also applies when draht runs on another machine over SSH.
+
+`ctrl+q` switches the permission mode without any setup. For the other shortcuts, set the left Option key to act as `Alt`. Keep the right Option key for characters that need it, such as `@`, `€`, `[`, and `{` on a German layout:
+
+| Terminal | Setting |
+|---|---|
+| iTerm2 | **Settings > Profiles > Keys > General**: set **Left Option key** to **Esc+** |
+| Ghostty | `macos-option-as-alt = left` |
+| Kitty | `macos_option_as_alt left` |
+| Alacritty | `option_as_alt = "OnlyLeft"` in the `[window]` table |
+| WezTerm | No change needed: the left Option key acts as `Alt` by default |
+| Apple Terminal | **Settings > Profiles > Keyboard**: **Use Option as Meta key** |
+| VS Code integrated terminal | `"terminal.integrated.macOptionIsMeta": true` |
+
+Apple Terminal and VS Code change both Option keys at once, so characters typed with Option are no longer available there. If you need those characters, keep the default and use `ctrl+q`, or [assign other keys](keybindings.md#assign-keybindings) to the shortcuts you use.
 
 ## Kitty
 

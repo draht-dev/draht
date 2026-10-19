@@ -38,16 +38,20 @@ describe("Windows keybinding defaults", () => {
 			windowsKeybindings ? "ctrl+down" : ["ctrl+shift+down", "ctrl+down"],
 		);
 		expect(KEYBINDINGS["app.message.dequeue"].defaultKeys).toBe(windowsKeybindings ? "alt+q" : "alt+up");
+		expect(KEYBINDINGS["app.permissions.cycle"].defaultKeys).toEqual(
+			windowsKeybindings ? "alt+m" : ["alt+m", "ctrl+q"],
+		);
 	});
 });
 
 describe("app.permissions.cycle", () => {
-	it("defaults to alt+m, which no other keybinding uses by default", () => {
-		expect(KEYBINDINGS["app.permissions.cycle"].defaultKeys).toBe("alt+m");
+	it("defaults to keys no other keybinding uses by default", () => {
+		const defaults = KEYBINDINGS["app.permissions.cycle"].defaultKeys;
+		const ownKeys: readonly string[] = Array.isArray(defaults) ? defaults : [defaults];
 		for (const [id, binding] of Object.entries(KEYBINDINGS)) {
 			if (id === "app.permissions.cycle") continue;
 			const keys = Array.isArray(binding.defaultKeys) ? binding.defaultKeys : [binding.defaultKeys];
-			expect(keys, id).not.toContain("alt+m");
+			for (const key of ownKeys) expect(keys, `${id} also binds ${key}`).not.toContain(key);
 		}
 	});
 });

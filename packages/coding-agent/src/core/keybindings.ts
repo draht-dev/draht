@@ -111,7 +111,9 @@ export const KEYBINDINGS = {
 		description: "Cycle thinking level",
 	},
 	"app.permissions.cycle": {
-		defaultKeys: "alt+m",
+		// A macOS terminal types µ for Option+M unless Option is set to act as Alt; ctrl+q arrives
+		// everywhere. Windows and WSL keep alt+m alone, since ctrl+q queues a follow-up there.
+		defaultKeys: windowsKeybindings ? "alt+m" : ["alt+m", "ctrl+q"],
 		description: "Switch permission mode between auto and ask",
 	},
 	"app.context.cycle": {

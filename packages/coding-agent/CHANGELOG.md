@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `app.permissions.cycle` also answers to `ctrl+q` by default, except on Windows and WSL, where `ctrl+q` queues a follow-up. A macOS terminal types `µ` for Option+M unless Option is set to act as Alt, so `alt+m` alone did not reach draht there. [Configure your terminal](docs/terminal-setup.md#use-option-as-alt-on-macos) lists that setting for each terminal
+
 ## [2026.10.19-1] - 2026-10-19
 
 ### Breaking Changes

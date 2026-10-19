@@ -391,7 +391,7 @@ because a saved workflow can start subagents just like a saved agent definition 
 **Permission mode inside subagents.** Every child spawned for the session — a `subagent` call, a
 workflow's `agent()` call, or a duet teammate — gets `DRAHT_PERMISSION_MODE` in its environment
 set, at spawn time, to the session's *current* permission mode (whatever `/permissions`,
-`/yolo` or `alt+m` last set; before any of them, the parent process's own `DRAHT_PERMISSION_MODE`, and unset means
+`/yolo` or `app.permissions.cycle` last set; before any of them, the parent process's own `DRAHT_PERMISSION_MODE`, and unset means
 `auto`). A stale `DRAHT_PERMISSION_MODE` left in the parent's process
 environment therefore never escalates a child past what the session currently uses. Deny rules in
 `permissions.yml` still apply in the child regardless of mode, since the child loads and evaluates

@@ -191,13 +191,17 @@ describe("ExtensionRunner", () => {
 			warnSpy.mockRestore();
 		});
 
-		it("skips a shortcut on the permission-mode key, which the session consumes before any extension", async () => {
+		it("skips a shortcut on the permission-mode keys, which the session consumes before any extension", async () => {
+			// ctrl+q is reserved on every platform: for app.permissions.cycle, or for
+			// app.message.followUp on Windows and WSL.
 			const extCode = `
 				export default function(pi) {
-					pi.registerShortcut("alt+m", {
-						description: "Never reached",
-						handler: async () => {},
-					});
+					for (const key of ["alt+m", "ctrl+q"]) {
+						pi.registerShortcut(key, {
+							description: "Never reached",
+							handler: async () => {},
+						});
+					}
 				}
 			`;
 			fs.writeFileSync(path.join(extensionsDir, "permission-key.ts"), extCode);
@@ -210,6 +214,7 @@ describe("ExtensionRunner", () => {
 
 			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("conflicts with built-in"));
 			expect(shortcuts.has("alt+m")).toBe(false);
+			expect(shortcuts.has("ctrl+q")).toBe(false);
 
 			warnSpy.mockRestore();
 		});

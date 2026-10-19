@@ -35,8 +35,10 @@ const WORKSPACE = {
 const BUDGETS = {
 	"packages/ai": {
 		"./models": {
-			maxFiles: 15,
+			// Request telemetry reaches @draht/ai's telemetry.ts and @draht/telemetry's root (index, noop, metrics, memory).
+			maxFiles: 18,
 			forbid: ["providers/", "models.generated.ts", "index.ts", "utils/validation.ts", "utils/typebox-helpers.ts"],
+			allow: ["packages/telemetry/src/index.ts"],
 		},
 		"./utils/*": { maxFiles: 3, forbid: ["providers/", "api/", "index.ts"] },
 	},
@@ -137,7 +139,7 @@ for (const [pkgDir, budgets] of Object.entries(BUDGETS)) {
 				failures += 1;
 			}
 			for (const pattern of budget.forbid ?? []) {
-				const hit = graph.filter((file) => file.includes(pattern));
+				const hit = graph.filter((file) => file.includes(pattern) && !(budget.allow ?? []).some((allowed) => file.endsWith(allowed)));
 				if (hit.length > 0) {
 					console.error(`${pkgDir} export "${name}" must not reach ${pattern}:\n${hit.map((f) => `    ${f}`).join("\n")}`);
 					failures += 1;

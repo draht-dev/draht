@@ -1369,7 +1369,9 @@ function walkDir(dir, visit) {
 				// Walking in audits some other branch's tree as if it were this one:
 				// six `pi-extension-*` packages renamed on main still fail from a
 				// worktree pinned before the rename, and no edit here can green it.
-				entry.name === ".claude"
+				// `.worktrees/<name>` is the same thing in this repo's own layout.
+				entry.name === ".claude" ||
+				entry.name === ".worktrees"
 			)
 				continue;
 			walkDir(fullPath, visit);

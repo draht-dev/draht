@@ -19,7 +19,7 @@
  *      the lockfile unreproducible
  *   4. Draht-only scripts exist on disk
  *   5. verify.sh branding check targets @mariozechner/pi-* (not @draht/*)
- *   6. .planning/ files are not modified vs main (branding guard must not touch them)
+ *   6. .planning/ files are not modified since branching from main (branding guard must not touch them)
  *   7. Repo-level subagents exist in .draht/agents/
  *   8. GSD sources exist in packages/coding-agent/src/gsd/
  *   9. GSD hooks exist in packages/coding-agent/hooks/gsd/
@@ -538,7 +538,9 @@ try {
 	if (run("git rev-parse --abbrev-ref HEAD") === "main" || run("git rev-parse HEAD") === run("git rev-parse main")) {
 		pass(`.planning/ check skipped (authoring branch)`);
 	} else {
-		check(run("git diff main -- .planning/") === "", `.planning/ unchanged vs main`);
+		// Main may have advanced independently; only this branch's planning edits count.
+		const base = run("git merge-base main HEAD");
+		check(run(`git diff ${base} -- .planning/`) === "", `.planning/ unchanged vs merge-base with main`);
 	}
 } catch {
 	// If not on a branch or main doesn't exist, skip

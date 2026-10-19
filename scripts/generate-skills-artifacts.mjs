@@ -19,6 +19,7 @@
  *   - packages/draht-codex/skills/<name>/<extra>      (plain skills only)
  *   - packages/draht-codex/skills/<cmd>/SKILL.md      (codex-only wrapper)
  *   - packages/draht-codex/skills/<cmd>/command.md    (== codex commands/<cmd>.md)
+ *   - packages/draht-codex/skills/<name>/agents/openai.yaml (explicit invocation policy where required)
  *
  * A skill directory is a "command" skill (gets a commands/<cmd>.md on both
  * hosts, plus a codex-only wrapper skill dir) when it has a command.md file
@@ -51,6 +52,19 @@ const DEFAULT_ROOT = resolve(__dirname, "..");
 
 const HOSTS = ["claude", "codex"];
 const PACKAGE_NAME = { claude: "draht-claude", codex: "draht-codex" };
+const INVOCATION_POLICY_PATH = "agents/openai.yaml";
+const EXPLICIT_INVOCATION_POLICY = "policy:\n  allow_implicit_invocation: false\n";
+
+function isExplicitSkill(text) {
+	const frontmatter = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1] ?? "";
+	return /^disable-model-invocation: true\s*$/m.test(frontmatter);
+}
+
+function explicitCommand(text) {
+	if (isExplicitSkill(text)) return text;
+	if (/^---\r?\n/.test(text)) return text.replace(/^---\r?\n/, "---\ndisable-model-invocation: true\n");
+	return `---\ndisable-model-invocation: true\n---\n\n${text}`;
+}
 
 /**
  * Replace every canonical line that has a matching dialect-table entry with
@@ -134,6 +148,18 @@ export function discoverSkills(skillsRoot) {
 export function computeArtifacts(skillsRoot) {
 	const artifacts = [];
 	for (const skill of discoverSkills(skillsRoot)) {
+		const explicit = isExplicitSkill(skill.skillMd);
+		const policy = skill.extraFiles.find((file) => file.relPath === INVOCATION_POLICY_PATH);
+		if (explicit || policy) {
+			if (!explicit || policy?.content !== EXPLICIT_INVOCATION_POLICY) {
+				throw new Error(`skills/${skill.name}: explicit invocation policy must agree in SKILL.md and agents/openai.yaml`);
+			}
+			artifacts.push({
+				pkg: PACKAGE_NAME.codex,
+				relPath: `skills/${skill.name}/agents/openai.yaml`,
+				content: policy.content,
+			});
+		}
 		if (skill.commandMd === null) {
 			// Plain skill: same-shaped SKILL.md on both hosts, no wrapper.
 			// Extra files (references/ etc.) mirror verbatim modulo the generic
@@ -146,6 +172,7 @@ export function computeArtifacts(skillsRoot) {
 					content: render(skill.skillMd, entries, host),
 				});
 				for (const extra of skill.extraFiles) {
+					if (extra.relPath === INVOCATION_POLICY_PATH) continue;
 					artifacts.push({
 						pkg: PACKAGE_NAME[host],
 						relPath: `skills/${skill.name}/${extra.relPath}`,
@@ -156,7 +183,7 @@ export function computeArtifacts(skillsRoot) {
 			continue;
 		}
 
-		if (skill.extraFiles.length > 0) {
+		if (skill.extraFiles.some((file) => file.relPath !== INVOCATION_POLICY_PATH)) {
 			throw new Error(
 				`skills/${skill.name}: extra files (${skill.extraFiles
 					.map((f) => f.relPath)
@@ -171,7 +198,7 @@ export function computeArtifacts(skillsRoot) {
 			artifacts.push({
 				pkg: PACKAGE_NAME[host],
 				relPath: `commands/${skill.name}.md`,
-				content: render(skill.commandMd, entries, host),
+				content: render(host === "claude" && explicit ? explicitCommand(skill.commandMd) : skill.commandMd, entries, host),
 			});
 		}
 

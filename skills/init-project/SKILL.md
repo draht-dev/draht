@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 name: init-project
 description: Draht command prompt wrapper for init-project. Use when the user selects the Draht init-project workflow or wants to initialize GSD planning for an existing codebase.
 ---

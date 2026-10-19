@@ -103,4 +103,21 @@ describe("gsd extension runtime loading", () => {
 			type: "warning",
 		});
 	});
+
+	it("dispatches quick as direct verified work without a mandatory delegation or commit chain", async () => {
+		const { result, runner } = await loadGsdRunner();
+		const messages: string[] = [];
+		result.runtime.sendUserMessage = (content) => {
+			messages.push(typeof content === "string" ? content : JSON.stringify(content));
+		};
+
+		await runner.getCommand("quick")?.handler("rename the field", runner.createCommandContext());
+
+		expect(messages).toHaveLength(1);
+		expect(messages[0]).toContain("Implement this task directly: rename the field");
+		expect(messages[0]).toContain("applicable checks");
+		expect(messages[0]).toContain("only if the user has authorized");
+		expect(messages[0]).not.toContain("git-committer");
+		expect(messages[0]).not.toContain("chain mode");
+	});
 });

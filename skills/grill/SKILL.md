@@ -1,6 +1,6 @@
 ---
 name: grill
-description: Draht command prompt wrapper for grill. Use when the user wants to stress-test any subject — an idea, a spec, raw tickets, an architecture decision, or an open discussion — through relentless structured interrogation with no presumed outcome. Triggers on phrases like "grill", "stress-test", "poke holes in", "interrogate", "tear this apart".
+description: Examine an idea, specification, or decision through critical questioning when the user asks to stress-test it.
 ---
 
 # Draht Command: grill

@@ -13,6 +13,7 @@ import type { KeybindingsConfig } from "../keybindings.ts";
 import type { ModelRegistry } from "../model-registry.ts";
 import type { ScopedModel } from "../model-resolver.ts";
 import type { SessionManager } from "../session-manager.ts";
+import { BUILTIN_PATH_PREFIX } from "../source-info.ts";
 import {
 	type BuildSystemPromptOptions,
 	buildSystemPrompt,
@@ -1073,7 +1074,16 @@ export class ExtensionRunner {
 		let context = await buildContext(entries);
 		let valid = true;
 
-		for (const { ext, handlers } of snapshotEventHandlers(this.extensions, baseEvent.type)) {
+		const boundaryHandlers = snapshotEventHandlers(this.extensions, baseEvent.type);
+		if (baseEvent.type === "agent_before_settle") {
+			// Verify the final state after other settlement handlers have made their edits.
+			const completionChecksPath = `${BUILTIN_PATH_PREFIX}completion-checks`;
+			boundaryHandlers.sort(
+				(left, right) =>
+					Number(left.ext.path === completionChecksPath) - Number(right.ext.path === completionChecksPath),
+			);
+		}
+		for (const { ext, handlers } of boundaryHandlers) {
 			for (const handler of handlers) {
 				const event = {
 					...baseEvent,

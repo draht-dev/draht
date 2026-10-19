@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 name: pause-work
 description: Draht command prompt wrapper for pause-work. Use when the user selects the Draht pause-work workflow or wants to create a CONTINUE-HERE handoff document.
 ---

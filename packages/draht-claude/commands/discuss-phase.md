@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 description: Capture implementation decisions before planning a phase
 argument-hint: "<phase-number>"
 allowed-tools: Bash, Read, Write, Edit
@@ -12,27 +13,23 @@ Phase: $1
 
 > **Tool note**: Invoke `draht-tools <subcommand>` as `node "${CLAUDE_PLUGIN_ROOT}/bin/draht-tools.cjs" <subcommand>` via the Bash tool.
 
-## Atomic Reasoning
-
-Decompose the work into independently verifiable units before acting; the `atomic-reasoning` skill holds the full discipline — load it when the decomposition is not obvious.
-
 ## Steps
 1. Run `draht-tools phase-info $1` to load phase context
 2. Ground the discussion in current structure: run `draht-tools graph-context <area>` and `draht-tools graph-clusters` on the area being discussed, and cross-check discovered domain terms with `draht-tools graph-query <term>`.
 3. Identify gray areas based on what's being built
-4. Present the whole frontier of open decisions in one numbered round — every question whose prerequisites are settled, each with a recommended answer the user can accept by number; defer questions that depend on still-open answers to the next round. Environment facts are your job, never the user's — dispatch a subagent and only hold back the questions downstream of it.
+4. Ask about material unresolved decisions, grouping related questions and offering recommendations. Obtain repository facts directly; proceed with independent work while waiting.
 5. If `.planning/DOMAIN.md` exists, load it and validate discovered terms against the glossary. Add any new domain terms found during discussion.
-6. Record decisions with `draht-tools save-context $1` — label each entry **decided** (the user explicitly chose) or **assumed** (you inferred from context). An answer accepted by number counts as decided. Assumed entries are flagged for confirmation; a plan built on an unlabeled assumption fails silently later.
-7. Commit: `draht-tools commit-docs "capture phase $1 context"`
+6. Record decisions with `draht-tools save-context $1` — label each entry **decided** (the user explicitly chose) or **assumed** (you inferred from context). An answer accepted by number counts as decided. State material assumptions and clarify those that would change scope or correctness.
+7. If committing is authorized: `draht-tools commit-docs "capture phase $1 context"`
 
 ## Workflow
-This is one step in the per-phase cycle. Use fresh sessions (`/clear`) between steps:
+This is one step in the per-phase cycle. Start a fresh session when context limits make it useful:
 
 ```
 /discuss-phase N → /plan-phase N → /execute-phase N → /verify-work N → /discuss-phase N+1 → ...
 ```
 
-After completing this command, tell the user to start a fresh session and run `/plan-phase $1`. Do NOT suggest `/next-milestone` — that is only after ALL phases in the milestone are verified.
+After completing this command, identify `/plan-phase $1` as the next step. Do NOT suggest `/next-milestone` — that is only after ALL phases in the milestone are verified.
 
 ## Gray Area Categories
 - **Visual features** → Layout, density, interactions, empty states

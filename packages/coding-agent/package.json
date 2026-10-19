@@ -10,7 +10,8 @@
 	"bin": {
 		"coding-agent": "dist/bundle/cli.js",
 		"draht": "dist/bundle/cli.js",
-		"draht-tools": "bin/draht-tools.cjs"
+		"draht-tools": "bin/draht-tools.cjs",
+		"drahtbank": "bin/drahtbank.mjs"
 	},
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
@@ -32,6 +33,7 @@
 		"hooks",
 		"agents",
 		"bin",
+		"eval/drahtbank",
 		"CHANGELOG.md"
 	],
 	"scripts": {
@@ -44,7 +46,7 @@
 		"copy-binary-assets": "shx cp package.json dist/ && shx cp README.md dist/ && shx cp CHANGELOG.md dist/ && shx mkdir -p dist/theme && shx cp src/modes/interactive/theme/*.json dist/theme/ && shx mkdir -p dist/assets && shx cp src/modes/interactive/assets/*.png dist/assets/ && shx mkdir -p dist/export-html/vendor && shx cp src/core/export-html/template.html dist/export-html/ && shx cp src/core/export-html/vendor/*.js dist/export-html/vendor/ && shx cp -r docs dist/ && shx cp -r examples dist/ && shx cp -r prompts dist/ && shx cp -r skills dist/ && shx cp -r hooks dist/ && shx cp -r agents dist/ && node -e \"require('fs').copyFileSync(require.resolve('@silvia-odwyer/photon-node/photon_rs_bg.wasm'), 'dist/photon_rs_bg.wasm')\"",
 		"sync-tools": "node ../../scripts/sync-draht-tools.mjs",
 		"test": "vitest --run",
-		"prepublishOnly": "node ../../scripts/sync-draht-tools.mjs && bun run clean && bun run build"
+		"prepublishOnly": "node ../../scripts/sync-draht-tools.mjs && node ../../scripts/sync-checks-runtime.mjs --check && bun run clean && bun run build"
 	},
 	"dependencies": {
 		"@draht/chord": "workspace:*",

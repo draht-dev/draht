@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 description: Create a CONTINUE-HERE handoff document for session continuity
 allowed-tools: Bash, Read, Write, Edit
 ---

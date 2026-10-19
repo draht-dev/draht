@@ -1,6 +1,7 @@
 ---
+disable-model-invocation: true
 name: triage
-description: Draht command prompt wrapper for triage. Use when the user pastes an external issue report — a bug report, support ticket, `gh issue view` output, or forwarded user complaint — and wants it classified and routed rather than fixed. Classifies (bug / performance / feature request / question / reroute) after a bounded cause trace, dedupes against GitHub Issues with typed outcomes, creates a tracker issue only behind a strict all-conditions gate, and ends with one typed verdict marker. Triggers on "triage this", "someone reported", "is this a bug or a feature request", "should we file this", or a pasted issue report.
+description: Run the Draht triage command when the user explicitly selects that workflow to classify an external issue report.
 ---
 
 # Draht Command: triage

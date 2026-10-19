@@ -61,7 +61,7 @@ Bounded pass — report on each step:
 2. Check whether the visible symptom belongs to that code path or to a dependency below it.
 3. If the report looks like a regression: `git log --oneline -20` and recent diffs on the affected files — name candidate commits.
 4. Check whether a merged commit or open PR already addresses the same symptom.
-5. Separate confirmed facts from hypotheses — label every statement observed, derived, or assumed.
+5. Separate confirmed facts from hypotheses — label the confidence of material findings as observed, derived, or assumed.
 
 Stop at diagnosis strength sufficient for routing — a complete root cause is /fix's job, not yours. Do not build a reproduction unless one command is already obvious from the report itself.
 
@@ -148,14 +148,3 @@ End the report with exactly one marker line, the last line of the response:
 ```
 
 `bug` and `performance` carry `tracker=` only when this run matched or created a live issue. Everything else — feature request, question, feedback, reroute, unclear — closes with `[triage:other]`. Never emit two markers; never bury the marker mid-report. A follow-up `/fix` run takes the marker plus its tracker link as the issue input.
-
-## Rationalization Table
-
-| Excuse | Reality |
-|---|---|
-| "The report names the component, route it there" | A keyword match is not a trace. Route on a confirmed code path or signature, or say the owner is unclear. |
-| "Probably a duplicate of #123" | Probably means possibly related: link it as uncertain and create nothing. |
-| "Filing a ticket is harmless" | A guessed or duplicate ticket costs a maintainer two triages. Prefer no ticket. |
-| "The old closed issue matches, done" | A long-closed issue is a regression lead — trace what re-broke it. |
-| "No repo access, but the cause is obvious" | Reading a report yields hypotheses. Classify conservatively and say the trace was unavailable. |
-| "I'll fix it while I'm here" | Triage ends at the verdict. Hand `[triage:bug]` to `/fix`. |

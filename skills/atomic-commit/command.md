@@ -7,9 +7,9 @@ allowed-tools: Bash, Read, Task
 
 Analyze changes and create atomic commits.
 
-## Red Flags — STOP
+## Commit prerequisites
 
-Do NOT proceed with a commit if **any** of these is true:
+Resolve these conditions before committing:
 
 - A single proposed commit mixes unrelated concerns (e.g., a feature + an unrelated refactor + a config tweak)
 - The change set contains potential secrets (`.env`, credentials, API keys in source)
@@ -17,7 +17,7 @@ Do NOT proceed with a commit if **any** of these is true:
 - Pre-commit hooks fail — fix the cause, never use `--no-verify`
 - You cannot articulate the "why" of a commit in one sentence — that's a sign it contains more than one logical change
 
-If any of these triggers, surface the issue to the user and split the change set before continuing.
+Split unrelated changes and resolve check failures within scope. Report secrets or ownership questions that cannot be safely resolved.
 
 ## Atomic Reasoning
 
@@ -33,9 +33,9 @@ First, gather the current state:
 
 ## Strategy
 
-Based on the changes, analyze and group them into logical, ATOMIC commits. Each commit should:
+Based on the changes, analyze and group them into logical, atomic commits. Each commit should:
 
-1. Contain ONE logical change only
+1. Contain one logical change only
 2. Be self-contained and complete
 3. Not break the build if applied independently
 
@@ -44,7 +44,7 @@ You may delegate this work to the `git-committer` subagent if the change set is 
 For each group of changes you identify:
 - List the specific files that belong together
 - Generate a clear, descriptive commit message following conventional commits format
-- Explain WHY these changes belong in one commit
+- Explain why these changes belong in one commit
 
 Then execute the `git add <specific-files>` and `git commit` commands for each atomic commit in the order they should be applied.
 
@@ -56,7 +56,7 @@ type(scope): brief description
 Common types: feat, fix, refactor, docs, test, chore, style, perf. For strict TDD cycles, also use `red:`, `green:`, `refactor:`.
 
 ## Rules
-- NEVER use `git add -A` or `git add .` — always stage specific files
-- NEVER use `git commit --no-verify`
-- NEVER force push
+- Never use `git add -A` or `git add .` — always stage specific files
+- Never use `git commit --no-verify`
+- Never force push
 - Review diffs before committing to ensure nothing unexpected is staged

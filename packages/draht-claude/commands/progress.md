@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 description: Show current GSD project status (milestone, phase, task, blockers)
 allowed-tools: Bash, Read
 ---

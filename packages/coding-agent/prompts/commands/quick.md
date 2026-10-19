@@ -1,76 +1,23 @@
 ---
-description: "Execute a small ad-hoc task with tracking (implementer + TDD + optional spec-reviewer pass)"
+description: "Complete an ad-hoc task directly with relevant verification and optional specialist help"
 ---
 
 # /quick
 
-Execute a small ad-hoc task with tracking.
-
-## Usage
-```
-/quick [description]
-```
-
+Usage: `/quick [description]`
 Task: $ARGUMENTS
 
-## "Small" Is a Claim, Not a Fact
+Complete the requested task directly, using an approach proportionate to its scope. Follow repository and user instructions. Ordinary work needs no numbered plan, XML, `.planning/` state, phase command, or session reset.
 
-Before planning, verify the task is actually quick: grep the blast radius (callers, imports, tests touching the target). If the change reaches further than the description implies, say so and recommend `/plan-phase`-level treatment instead of forcing it through. And if the description names a solution ("add a flag"), confirm the problem it solves — a smaller fix may exist. A "quick task" that silently grows is how untracked complexity enters a codebase.
+1. Inspect the relevant code, callers, and tests; identify the observable result the user needs.
+2. Make the smallest complete change and preserve unrelated behavior. For behavior changes, add or update focused tests. Reproduce a bug before fixing it and demonstrate that the regression test detects it; skip tests for pure documentation or configuration changes with no testable behavior.
+3. Run the relevant project checks and any tests you created or changed, following repository command restrictions. A failed command, timeout, or unavailable required check is not a pass; do not weaken checks to obtain one.
+4. Report the result, changed files, and observed verification with decisive output. State what remains unverified. Do not commit unless requested.
 
-## Atomic Reasoning
+## Optional delegation
 
-Decompose the work into independently verifiable units before acting; the `atomic-reasoning` skill holds the full discipline — load it when the decomposition is not obvious.
+Delegate when independent investigation, implementation, or fresh review materially helps. Give each agent the task, relevant context, scope, and expected evidence. Use the `implementer` agent for changes, the `spec-reviewer` agent for an explicit spec, and the `reviewer` agent for code quality; when both reviews are needed, check spec compliance first.
 
-## Steps
-1. Run `draht-tools next-quick-number` to get task number
-2. Analyze the task and write a concrete plan with actual task details (files, actions, verification). Pipe it into `draht-tools create-quick-plan`:
-   ```
-   echo 'plan content here' | draht-tools create-quick-plan NNN "$ARGUMENTS"
-   ```
-   The plan content must include: a `# Quick Task NNN: title` heading, a `## Tasks` section with one or more `<task>` XML blocks containing real file paths, real actions, and real verification steps — NOT placeholders like `[files]`.
+Require delegated reports to end with one `STATUS: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED`. Check evidence before accepting `DONE`; resolve correctness concerns before completion. Supply missing context for `NEEDS_CONTEXT`. An implementer blocker stops the task; a review blocker returns its required fixes for implementation and re-review. Allow at most **3 implementer re-dispatches total across review stages**, then report unresolved findings. Never claim completion while required checks or review findings remain unresolved.
 
-3. **Stage 1 — Implementer.** Use the `subagent` tool in **single mode** with the `implementer` agent:
-   ```
-   Execute this task: $ARGUMENTS
-
-   Follow the TDD cycle:
-   - RED — Write a failing test that describes the desired behaviour
-   - GREEN — Write the minimum implementation to make it pass
-   - REFACTOR — Clean up while keeping the test green
-   Exception: skip the TDD cycle only for pure config or documentation-only tasks that have no testable behaviour.
-
-   Comment discipline: comments exist ONLY for constraints the code cannot express — a protocol quirk, a deliberate deviation, a non-obvious invariant. If code needs comments to be understood, rewrite the code until it doesn't. Never narrate steps, restate the diff, or leave "removed X" / "this handles Y" breadcrumbs. Comment density above the surrounding file's norm is a defect — fix it before committing. A heavily-commented solution signals the design is wrong: redesign, don't annotate.
-
-   After completion, report: files changed, tests written, and verification results.
-
-   End your response with `STATUS: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED` per the agent contract.
-
-   Do NOT run draht, draht-tools, draht help, or pi commands — use only standard tools.
-   ```
-
-   Read the final `STATUS:` line:
-   - `DONE` → go to Stage 2 (or skip Stage 2 for pure-config / pure-docs).
-   - `DONE_WITH_CONCERNS` → log; if correctness, re-dispatch; otherwise continue.
-   - `NEEDS_CONTEXT` → provide missing info and re-dispatch.
-   - `BLOCKED` → STOP, report.
-
-4. **Stage 2 — Spec-reviewer (skip for pure-config / pure-docs).** Use the `subagent` tool with the `spec-reviewer` agent. Prompt:
-   ```
-   Review the diff for quick task NNN against `.planning/quick/NNN-*-PLAN.md`. ONLY check spec compliance — does the diff implement exactly what the plan's <test>/<action>/<done> sections asked, no more, no less?
-
-   End with `STATUS: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED`.
-   ```
-   - `DONE` → go to Stage 3.
-   - `BLOCKED` → re-dispatch implementer with Required Fixes. Repeat until `DONE`. **Hard cap: 3 re-dispatches total** — at the cap, STOP and report the disagreement to the user.
-
-5. **Stage 3 — Reviewer (optional code-quality pass).** For non-trivial quick tasks (more than one file, or domain code), use the `subagent` tool with the `reviewer` agent. Otherwise skip.
-   - `DONE` → task complete.
-   - `BLOCKED` → re-dispatch implementer with Must-fix list — same **hard cap of 3 re-dispatches**; at the cap, STOP and report.
-
-6. Write summary: `draht-tools write-quick-summary NNN`
-7. Update state: `draht-tools update-state`
-
-## When to skip Stage 3
-- Pure config (tsconfig, biome, formatter)
-- Docs-only edits
-- Single-line obvious changes (typo, version bump)
+Use the `subagent` tool for optional delegation. Subagents use standard tools only; the orchestrator runs any `draht`, `draht-tools`, `draht help`, or `pi` commands.

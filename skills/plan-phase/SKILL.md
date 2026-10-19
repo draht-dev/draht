@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 name: plan-phase
 description: Draht command prompt wrapper for plan-phase. Use when the user selects the Draht plan-phase workflow or wants to create atomic execution plans for a roadmap phase.
 ---

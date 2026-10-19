@@ -10,7 +10,7 @@ Run fresh-context worker iterations against a fixed goal until an independent ch
 
 Goal: $ARGUMENTS
 
-> **Tool note**: Spawn Codex subagents using the matching Draht agent prompts. Workers are `implementer` (or `debugger` for pure-diagnosis goals); the final gate is `spec-reviewer`. One worker per iteration — never parallel workers inside the loop.
+> **Tool note**: Dispatch subagents using the matching Draht agent role. Workers are `implementer` (or `debugger` for pure-diagnosis goals); use `spec-reviewer` for acceptance criteria the check cannot establish. One worker per iteration — never parallel workers inside the loop.
 
 ## When to Loop vs Orchestrate
 
@@ -59,17 +59,17 @@ Each iteration dispatches ONE fresh worker whose prompt contains, in full (worke
 2. The last 3 entries of `PROGRESS.md` and the last 5 `git log --oneline` lines — the recoverable state
 3. The previous iteration's failure evidence, terse: the failing assertions or error lines, not full output
 4. Standing orders:
-   - **Startup ritual** — read the progress log, run the CHECK first, observe the current failure before changing anything
+   - **Orient** — read the progress log and current check evidence; rerun if the evidence is missing or its inputs changed
    - **One increment** — the smallest change that moves the check toward passing; do not batch
-   - **Commit the increment** even if the check still fails — state must survive context death
+   - **Preserve the increment** in the working tree and progress log; commit only when authorized
    - **Append one `PROGRESS.md` entry** — what changed / check result observed / suggested next step
    - Never edit or delete tests or the check to make it pass; never claim completion without quoting check output
 
 ## Independent Verification — the gate
 
-After EVERY iteration, re-run the CHECK yourself and read exit code and output. Completion is decided by this re-run, never by the worker's report — worker claims are inputs, not verdicts.
+After each iteration, inspect the CHECK’s exit status, output, and input state. Reuse auditable successful evidence when the inputs are unchanged; otherwise run the CHECK. A worker’s unsupported completion claim is insufficient.
 
-- **Check passes** → dispatch `spec-reviewer` once over the full loop diff (contract vs everything changed since the loop started). Only a clean spec review ends the loop as DONE; concerns trigger one more targeted iteration.
+- **Check passes** → compare the full diff with the contract. Use `spec-reviewer` when semantic acceptance criteria remain outside the check. Required findings trigger a targeted iteration within the existing cap.
 - **Check fails** → extract the terse failure evidence and feed it into the next iteration's prompt as guidance.
 
 ## Stall Detection
@@ -77,7 +77,7 @@ After EVERY iteration, re-run the CHECK yourself and read exit code and output. 
 Stop early when the loop is running but not progressing:
 
 - Two consecutive iterations with the identical failure signature, or
-- An iteration that produced no commit
+- An iteration that produced no relevant change or new diagnostic evidence
 
 On stall, do not dispatch the same input again — change something: decompose the goal, add context the workers were missing, switch worker (`implementer` → `debugger`), consult `advisor` for a course correction, or surface to the user with the evidence so far.
 
@@ -85,16 +85,16 @@ On stall, do not dispatch the same input again — change something: decompose t
 
 1. Parse `$ARGUMENTS` into GOAL and flags; derive the CHECK; refuse to loop without one
 2. Write `.planning/loop/LOOP.md` and `.planning/loop/PROGRESS.md`
-3. Iterate: dispatch worker → re-run CHECK yourself → branch (pass → gate, fail → next iteration, stall / max / BLOCKED → hard stop)
-4. On success: spec-review the full diff, then report — outcome first, check output quoted, iterations used
+3. Iterate: dispatch worker → validate current CHECK evidence → branch (pass → gate, fail → next iteration, stall / max / BLOCKED → hard stop)
+4. On success: resolve any required spec review, then report — outcome first, check output quoted, iterations used
 5. On any hard stop: append a handoff entry to `PROGRESS.md` (state observed, failure evidence, recommended next step) and report with observed / derived / assumed labels
 6. Leave `.planning/loop/` in place as the loop's record
 
 ## Rules
 
-- One worker, one increment, at least one commit per iteration
-- Loops are volume work — run workers on the executor tier and keep steering (this context, `advisor`, `spec-reviewer`) on the strongest tier
-- The worker never grades its own work — your re-run of the check plus a fresh-context spec review decide completion
+- One worker and one verifiable increment per iteration; commits require authorization
+- Choose available worker models that meet the task’s checks; change tiers only when evidence supports the tradeoff
+- Completion requires current passing check evidence and any required review; an agent’s confidence is not a check
 - Never raise max iterations mid-loop without asking the user
-- Tests and the check are immutable inside the loop; tampering means revert and hard stop
+- Tests and the check are immutable inside the loop; tampering means stop and report the affected changes; do not discard unrelated work
 - Evidence discipline applies to the loop verdict: label results observed / derived / assumed

@@ -107,13 +107,6 @@ export const DISCIPLINE_DIALECT = {
 	],
 	"verification-gate": [
 		{
-			canonical:
-				'description: Evidence before claims — before stating that work is done, fixed, passing, working, ready, complete, or successful, run the command that proves it and read the output. Triggers on language like "done", "fixed", "should work", "looks good", "passing", "ready to ship", "complete", or whenever the agent is about to assert positive state. Applies everywhere — feature work, bug fixes, refactors, infra, docs that depend on code state.',
-			claude:
-				'description: Evidence before claims — before stating that work is done, fixed, passing, working, ready, complete, or successful, run the command that proves it and read the output. Triggers on language like "done", "fixed", "should work", "looks good", "passing", "ready to ship", "complete", or whenever Claude is about to assert positive state. Applies everywhere — feature work, bug fixes, refactors, infra, docs that depend on code state.',
-			codex: 'description: Evidence before claims — before stating that work is done, fixed, passing, working, ready, complete, or successful, run the command that proves it and read the output. Triggers on language like "done", "fixed", "should work", "looks good", "passing", "ready to ship", "complete", or whenever Codex is about to assert positive state. Applies everywhere — feature work, bug fixes, refactors, infra, docs that depend on code state.',
-		},
-		{
 			canonical: '| "The user can verify themselves" | The user asked the agent to do the work. The work isn\'t done until proven. |',
 			claude: '| "The user can verify themselves" | The user asked Claude to do the work. The work isn\'t done until proven. |',
 			codex: '| "The user can verify themselves" | The user asked Codex to do the work. The work isn\'t done until proven. |',

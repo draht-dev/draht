@@ -11,10 +11,6 @@ Plan the next milestone after ALL phases in the current one are complete.
 /next-milestone
 ```
 
-## Atomic Reasoning
-
-Decompose the work into independently verifiable units before acting; the `atomic-reasoning` skill holds the full discipline — load it when the decomposition is not obvious.
-
 ## Prerequisites
 - `.planning/ROADMAP.md` must exist
 - ALL phases in the current milestone must be complete (verified via /verify-work)
@@ -37,17 +33,17 @@ Decompose the work into independently verifiable units before acting; the `atomi
    - Should any v2 requirements be promoted based on what we learned?
    - Are there new requirements discovered during implementation?
 4. Propose next milestone:
-   - Define 3-5 phases, each with a clear goal (outcome, not activity)
+   - Define coherent phases, each with an observable goal
    - Order phases by dependency
    - Map each phase to specific requirements
    - Estimate relative complexity
-5. Present the proposed milestone for user approval before writing files
-6. After approval:
+5. Present the proposed milestone and resolve blocking scope decisions; use existing authorization for agreed work
+6. Record the agreed milestone (label any proposal or unresolved assumption):
    - Update `ROADMAP.md` with the new milestone and phases
    - Update `STATE.md` to reflect milestone transition
    - Update `REQUIREMENTS.md` if requirements changed
    - Update `DOMAIN.md` if domain model needs evolution
-   - Commit: `draht-tools commit-docs "plan next milestone"`
+   - If committing is authorized: `draht-tools commit-docs "plan next milestone"`
 
 ## Rules
 - Always review what was actually built, not just what was planned

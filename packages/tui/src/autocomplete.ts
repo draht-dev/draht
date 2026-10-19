@@ -250,6 +250,8 @@ export interface AutocompleteItem {
 	value: string;
 	label: string;
 	description?: string;
+	/** Reopen suggestions after this item is applied, for arguments completed in steps. */
+	continueCompletion?: boolean;
 }
 
 type Awaitable<T> = T | Promise<T>;

@@ -3025,6 +3025,37 @@ describe("Editor component", () => {
 			assert.strictEqual(editor.isShowingAutocomplete(), false);
 		});
 
+		it("reopens argument completions after an item that continues completion", async () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			const provider = new CombinedAutocompleteProvider(
+				[
+					{
+						name: "pick",
+						description: "Pick a model",
+						getArgumentCompletions: (prefix) =>
+							prefix.endsWith("/")
+								? [{ value: `${prefix}model-a `, label: "model-a" }]
+								: [{ value: "provider-a/", label: "provider-a", continueCompletion: true }],
+					},
+				],
+				process.cwd(),
+			);
+			editor.setAutocompleteProvider(provider);
+			editor.setText("/pick ");
+
+			editor.handleInput("p");
+			await flushAutocomplete();
+			editor.handleInput("\r");
+			assert.strictEqual(editor.getText(), "/pick provider-a/");
+			await flushAutocomplete();
+			assert.strictEqual(editor.isShowingAutocomplete(), true);
+
+			editor.handleInput("\t");
+			assert.strictEqual(editor.getText(), "/pick provider-a/model-a ");
+			await flushAutocomplete();
+			assert.strictEqual(editor.isShowingAutocomplete(), false);
+		});
+
 		it("ignores invalid slash command argument completion results", async () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 			const provider = new CombinedAutocompleteProvider(

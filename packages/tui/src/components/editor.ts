@@ -22,7 +22,7 @@ import {
 	visibleWidth,
 } from "../utils.ts";
 import { findWordBackward, findWordForward } from "../word-navigation.ts";
-import { SelectList, type SelectListLayoutOptions, type SelectListTheme } from "./select-list.ts";
+import { type SelectItem, SelectList, type SelectListLayoutOptions, type SelectListTheme } from "./select-list.ts";
 
 const graphemeSegmenter = getGraphemeSegmenter();
 const wordSegmenter = getWordSegmenter();
@@ -782,6 +782,7 @@ export class Editor implements Component, Focusable {
 					this.setCursorCol(result.cursorCol);
 					this.cancelAutocomplete();
 					if (this.onChange) this.onChange(this.getText());
+					this.continueCompletionAfter(selected);
 				}
 				return;
 			}
@@ -808,6 +809,7 @@ export class Editor implements Component, Focusable {
 					} else {
 						this.cancelAutocomplete();
 						if (this.onChange) this.onChange(this.getText());
+						this.continueCompletionAfter(selected);
 						return;
 					}
 				}
@@ -2254,8 +2256,13 @@ export class Editor implements Component, Focusable {
 			this.setCursorCol(result.cursorCol);
 			this.cancelAutocomplete();
 			this.onChange?.(this.getText());
+			this.continueCompletionAfter(selected);
 		};
 		return list;
+	}
+
+	private continueCompletionAfter(item: SelectItem): void {
+		if ("continueCompletion" in item && item.continueCompletion === true) this.tryTriggerAutocomplete();
 	}
 
 	private tryTriggerAutocomplete(explicitTab: boolean = false): void {

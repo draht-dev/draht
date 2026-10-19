@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `AutocompleteItem.continueCompletion` reopens suggestions after the item is applied, for arguments completed in steps
+
 ## [2026.10.4-1] - 2026-10-04
 
 ### Added

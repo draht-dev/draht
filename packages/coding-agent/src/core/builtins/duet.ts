@@ -1,6 +1,6 @@
 import type { ThinkingLevel } from "@draht/agent-core";
 import type { Api, Model } from "@draht/ai";
-import { Text } from "@draht/tui";
+import { type AutocompleteItem, fuzzyFilter, Text } from "@draht/tui";
 import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI, ExtensionContext } from "../extensions/types.ts";
 import { parseModelPattern } from "../model-resolver.ts";
@@ -100,12 +100,9 @@ function uniqueDefaultRole(model: Model<Api>, usedRoles: Set<string>): string {
 	}
 }
 
-/** Resolve comma-separated `[role=]provider/model[:thinking]` participant specifications. */
+/** Resolve comma- or space-separated `[role=]provider/model[:thinking]` participant specifications. */
 export function parseDuetParticipantSpecs(specs: string, availableModels: Model<Api>[]): DuetParticipant[] {
-	const rawSpecs = specs
-		.split(",")
-		.map((spec) => spec.trim())
-		.filter(Boolean);
+	const rawSpecs = specs.split(/[\s,]+/).filter(Boolean);
 
 	if (rawSpecs.length < 2) throw new Error("Duet mode requires at least two models.");
 	if (rawSpecs.length > MAX_DUET_PARTICIPANTS) {
@@ -148,6 +145,76 @@ export function parseDuetParticipantSpecs(specs: string, availableModels: Model<
 	}
 
 	return participants;
+}
+
+/**
+ * Complete `/duet` arguments in steps: strategy, then a provider, then one of its models. Each
+ * participant slot opens the provider list again until two models are chosen.
+ */
+export function getDuetArgumentCompletions(partial: string, availableModels: Model<Api>[]): AutocompleteItem[] | null {
+	const firstSpace = partial.indexOf(" ");
+	if (firstSpace === -1) {
+		const items = ["status", "off", "turns", "triage"]
+			.filter((option) => option.startsWith(partial))
+			.map((option) =>
+				isDuetStrategy(option)
+					? { value: `${option} `, label: option, continueCompletion: true }
+					: { value: option, label: option },
+			);
+		return items.length > 0 ? items : null;
+	}
+	if (!isDuetStrategy(partial.slice(0, firstSpace))) return null;
+
+	const tokenStart = Math.max(partial.lastIndexOf(" "), partial.lastIndexOf(",")) + 1;
+	const head = partial.slice(0, tokenStart);
+	const token = partial.slice(tokenStart);
+	const equalsIndex = token.indexOf("=");
+	const rolePrefix = equalsIndex === -1 ? "" : token.slice(0, equalsIndex + 1);
+	const query = token.slice(rolePrefix.length);
+	if (query.includes(":")) return null;
+
+	const chosen = new Set(
+		head
+			.slice(firstSpace + 1)
+			.split(/[\s,]+/)
+			.filter(Boolean)
+			.map((spec) => spec.slice(spec.indexOf("=") + 1).split(":")[0]),
+	);
+	const candidates = availableModels.filter((model) => !chosen.has(modelKey(model)));
+	const continueAfterModel = chosen.size + 1 < 2;
+	const toModelItem = (model: Model<Api>): AutocompleteItem => ({
+		value: `${head}${rolePrefix}${modelKey(model)} `,
+		label: model.id,
+		description: model.provider,
+		continueCompletion: continueAfterModel,
+	});
+
+	const slashIndex = query.indexOf("/");
+	if (slashIndex !== -1) {
+		const provider = query.slice(0, slashIndex);
+		const models = candidates.filter((model) => model.provider === provider);
+		const matches = fuzzyFilter(models, query.slice(slashIndex + 1), (model) => `${model.id} ${model.name}`);
+		return matches.length > 0 ? matches.map(toModelItem) : null;
+	}
+
+	const modelCounts = new Map<string, number>();
+	for (const model of candidates) modelCounts.set(model.provider, (modelCounts.get(model.provider) ?? 0) + 1);
+	const providers = fuzzyFilter([...modelCounts.keys()].sort(), query, (provider) => provider);
+	if (providers.length > 0) {
+		return providers.map((provider) => {
+			const count = modelCounts.get(provider) ?? 0;
+			return {
+				value: `${head}${rolePrefix}${provider}/`,
+				label: provider,
+				description: `${count} model${count === 1 ? "" : "s"}`,
+				continueCompletion: true,
+			};
+		});
+	}
+
+	// No provider matches: let a model name typed directly still complete.
+	const matches = fuzzyFilter(candidates, query, (model) => `${model.id} ${model.provider} ${model.name}`);
+	return matches.length > 0 ? matches.map(toModelItem) : null;
 }
 
 export function advanceDuetTurn(state: DuetState): DuetParticipant {
@@ -355,6 +422,7 @@ export default function duetBuiltin(pi: ExtensionAPI, options: { runner?: AgentR
 	let runningTurnParticipant: DuetParticipant | undefined;
 	let delegatedForPrompt = false;
 	let selectingParticipant = false;
+	let completionContext: ExtensionContext | undefined;
 
 	pi.registerFlag("duet", {
 		description: "Comma-separated duet models: [role=]provider/model[:thinking]",
@@ -671,7 +739,7 @@ export default function duetBuiltin(pi: ExtensionAPI, options: { runner?: AgentR
 	}
 
 	pi.registerCommand("duet", {
-		description: "Configure multi-model collaboration. Usage: /duet [turns|triage] [[role=]model,...] | off | status",
+		description: "Configure multi-model collaboration. Usage: /duet [turns|triage] [[role=]model ...] | off | status",
 		handler: async (args, ctx) => {
 			const trimmed = args.trim();
 			if (!trimmed || trimmed === "status") {
@@ -691,7 +759,7 @@ export default function duetBuiltin(pi: ExtensionAPI, options: { runner?: AgentR
 			const firstSpace = trimmed.indexOf(" ");
 			const strategyText = firstSpace === -1 ? trimmed : trimmed.slice(0, firstSpace);
 			if (!isDuetStrategy(strategyText)) {
-				ctx.ui.notify("Usage: /duet [turns|triage] [[role=]provider/model,...] | off | status", "error");
+				ctx.ui.notify("Usage: /duet [turns|triage] [[role=]provider/model ...] | off | status", "error");
 				return;
 			}
 
@@ -708,14 +776,18 @@ export default function duetBuiltin(pi: ExtensionAPI, options: { runner?: AgentR
 			}
 		},
 		getArgumentCompletions: (partial) => {
-			const options = ["status", "off", "turns", "triage"];
-			return options
-				.filter((option) => option.startsWith(partial))
-				.map((option) => ({ value: option, label: option }));
+			let availableModels: Model<Api>[] = [];
+			try {
+				availableModels = completionContext?.modelRegistry.getAvailable() ?? [];
+			} catch {
+				// A context from a replaced session throws; complete without models until the next session starts.
+			}
+			return getDuetArgumentCompletions(partial, availableModels);
 		},
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		completionContext = ctx;
 		disableDuet(ctx, false);
 
 		const duetFlag = pi.getFlag("duet");

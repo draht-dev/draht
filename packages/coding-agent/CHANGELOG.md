@@ -15,6 +15,7 @@
 - a workflow time limit is graceful: past the limit, running and queued agents are cancelled (`cancelled (time limit)`) and `agent()` returns `null`, but the script keeps running to return partial results; a hard sandbox deadline 60s later is the backstop
 - a tool call a subagent, workflow agent, or duet teammate needs approval for is now asked in the parent session (decided under its current mode first, so `/permissions auto` and `/yolo` also cover running agents) instead of being blocked unasked; asks from parallel agents queue instead of displacing each other into silent denials
 - `alt+m` (`app.permissions.cycle`) switches the session's permission mode between `auto` and `ask`, and from `yolo` back to `auto`; entering `yolo` stays a deliberate `/yolo`. An extension shortcut on the same key is reported as a conflict and skipped, since the session takes the key first
+- `/duet` autocompletes its arguments step by step: strategy, then a provider, then that provider's models, reopening the list until two models are chosen; participants may now be separated by spaces as well as commas
 
 ### Changed
 

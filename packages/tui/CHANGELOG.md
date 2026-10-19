@@ -1,10 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2026.10.19-1] - 2026-10-19
 
 ### Added
 
-- `AutocompleteItem.continueCompletion` reopens suggestions after the item is applied, for arguments completed in steps
+- reopen autocomplete after items that continue completion
 
 ## [2026.10.4-1] - 2026-10-04
 

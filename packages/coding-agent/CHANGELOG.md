@@ -1,35 +1,43 @@
 # Changelog
 
-## [Unreleased]
+## [2026.10.19-1] - 2026-10-19
 
 ### Breaking Changes
 
-- the `default` permission mode is renamed `ask`, since it is no longer the mode a session starts in: use `/permissions ask` and `DRAHT_PERMISSION_MODE=ask`. `/permissions default` is refused, and `DRAHT_PERMISSION_MODE=default` starts the session in `ask` with a warning
-- a session now starts in the `auto` permission mode instead of `default` when `DRAHT_PERMISSION_MODE` is unset, in the TUI, print, JSON, and RPC modes and in sessions the gateway resumes: an unmatched bash command runs unasked unless it trips the danger filter, and a workflow or duet batch starts without the approval prompt. Set `DRAHT_PERMISSION_MODE=ask` to keep asking; the gateway passes its own value on to the sessions it starts or resumes, except `yolo`, which it passes only when its `DRAHT_RESUME_ENV_ALLOW` lists the variable
+- rename the default permission mode to ask
+- start sessions in the auto permission mode
 
 ### Added
 
-- add `pi.appendUsage()` for extensions to record model-attributed usage outside a tool result
-- command runs (`/<name>`, `/workflow <name>`) now record one usage entry per finished agent, so their cost appears in the session footer's totals and cost breakdown
-- a workflow run's token budget and time limit now come from the user's own prompt (e.g. `+500k`, `+30min`), else the `workflow` tool's `budgetTokens`/`timeLimit` parameters, else `polyphase.defaultBudgetTokens`/`polyphase.workflowTimeoutMs`, else no limit at all (the script runs until it returns); the approval prompt, a start-of-run log line, and the final result text all show which limits applied and their source, or a disclaimer naming only the missing ones
-- a workflow time limit is graceful: past the limit, running and queued agents are cancelled (`cancelled (time limit)`) and `agent()` returns `null`, but the script keeps running to return partial results; a hard sandbox deadline 60s later is the backstop
-- a tool call a subagent, workflow agent, or duet teammate needs approval for is now asked in the parent session (decided under its current mode first, so `/permissions auto` and `/yolo` also cover running agents) instead of being blocked unasked; asks from parallel agents queue instead of displacing each other into silent denials
-- `alt+m` (`app.permissions.cycle`) switches the session's permission mode between `auto` and `ask`, and from `yolo` back to `auto`; entering `yolo` stays a deliberate `/yolo`. An extension shortcut on the same key is reported as a conflict and skipped, since the session takes the key first
-- `/duet` autocompletes its arguments step by step: strategy, then a provider, then that provider's models, reopening the list until two models are chosen; participants may now be separated by spaces as well as commas
+- autocomplete /duet strategy, provider and models
+- pass DRAHT_PERMISSION_MODE on to the sessions it starts
+- cycle the permission mode with alt+m
+- start workflows and duet batches unasked in auto mode
+- take a workflow's budget and time limit from the prompt
+- count command-run usage in the session totals
 
 ### Changed
 
-- `auto` mode starts a workflow (`workflow` tool, `/<name>`, `/workflow <name>`) or a duet batch without the approval prompt; `ask` mode still asks first, and an explicit `allow`, `deny`, or `approve` rule in `permissions.yml` still applies
-- `/yolo` switched off returns to the mode it replaced instead of always `default`, and the footer names every mode other than `auto`, including one set by `DRAHT_PERMISSION_MODE` at startup
-- a mode chosen with `/permissions`, `/yolo`, or `alt+m` outlasts `/new`, `/resume`, `/fork`, and `/reload` when it asks more than the mode the session would start in
-- `DRAHT_PERMISSION_MODE` is read regardless of letter case and surrounding whitespace, and a value that names no mode starts the session in `ask` with a warning
+- drop the escaped-quote changelog entry
+- drop the scan-budget claim, note the escaped-quote fix
+- bring the changelog in line with the permission changes
 
 ### Fixed
 
-- subagent, workflow, and duet children now inherit the parent session's current permission mode (set via `/permissions` or `/yolo`) at spawn time, instead of only the parent process's own `DRAHT_PERMISSION_MODE`
-- the permission gate resolves a path the way the tools do (`~`, a leading `@`, `file://`) and checks both `path` and `file_path`, so `read ~/.ssh/id_rsa` or an outside `path` next to an inside `file_path` no longer passes as a file inside the project
-- `auto` mode asks before running code the danger filter cannot read: a shell, interpreter, `source`, or `.` whose script or stdin is a process substitution or the descriptor one expands to (`bash <(curl …)`, `bash < <(curl …)`, `tee >(sh)`, `bash /dev/fd/3 3< <(curl …)`); another command's output run as a command at any layer (every `bash -c "$(…)"` and `eval "$(…)"`, `eval "$(ssh-agent -s)"` included, and `$1` or `$@` in command position); and a program fed to an interpreter through a pipe, heredoc, or here-string (`… | python3`, `python3 - <<'EOF'`, `xargs python3`). Heredoc bodies and quoted text count as data, not code. Pipe patterns like `curl * | *` also match without spaces around the pipe and with `|&`, and stdin from a `/dev/tcp` connection or any shell (`tcsh`, `mksh`, …) counts too
-- deny rules and the `auto` danger filter now see a command wherever the shell runs it: inside `if …; then`, loops, `{ …; }`, `( … )`, `!`, case arms and function bodies (`if [ -d build ]; then rm -rf build; fi` ran unasked in `auto`, and a `rm -rf *` deny rule missed it in every mode), inside `<(…)` and `>(…)`, after an apostrophe in a heredoc or a comment, an escaped quote or `$'…'`, and in `bash -euo pipefail -c '…'`
+- match deny rules and the danger filter on what the shell runs
+- reserve the permission-mode key, finish the ask rename
+- keep main's deny-scan budget and allow matching exactly
+- ask when a code runner reads a descriptor in auto mode
+- bound the run checks' reader, read heredoc bodies whole
+- give the run checks their own reader, keep main's splitChain
+- close the lexer gaps and keep main's scan budget
+- keep a daemon's yolo out of the sessions it starts unless declared
+- switch alt+m between auto and ask, once per press
+- read executed code the way the shell does, and keep the scan budget
+- ask before auto mode runs code the danger filter cannot read
+- judge the file a tool will open in the permission gate
+- ask the parent session instead of blocking subagent tool calls
+- pass the session's permission mode to polyphase children
 
 ## [2026.10.8-1] - 2026-10-08
 

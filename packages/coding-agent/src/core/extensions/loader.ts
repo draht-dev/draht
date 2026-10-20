@@ -100,6 +100,7 @@ function getAliases(): Record<string, string> {
 	// superset of the core entrypoint): existing extensions using the old
 	// global API keep working at runtime until compat is removed.
 	const piAiCompatEntry = resolveWorkspaceOrImport("ai/dist/compat.js", "@draht/ai/compat");
+	const piAiModelsEntry = resolveWorkspaceOrImport("ai/dist/models.js", "@draht/ai/models");
 	const piAiOauthEntry = resolveWorkspaceOrImport("ai/dist/oauth.js", "@draht/ai/oauth");
 	const piAiProvidersEntry = resolveWorkspaceOrImport("ai/dist/providers/all.js", "@draht/ai/providers/all");
 	const piAiProvidersFauxEntry = resolveWorkspaceOrImport("ai/dist/providers/faux.js", "@draht/ai/providers/faux");
@@ -111,6 +112,7 @@ function getAliases(): Record<string, string> {
 		"@draht/ai/providers/all": piAiProvidersEntry,
 		"@draht/ai/providers/faux": piAiProvidersFauxEntry,
 		"@draht/ai/compat": piAiCompatEntry,
+		"@draht/ai/models": piAiModelsEntry,
 		"@draht/ai/oauth": piAiOauthEntry,
 		"@draht/ai": piAiCompatEntry,
 		"typebox/compile": typeboxCompileEntry,

@@ -1,5 +1,6 @@
 import * as bundledPiAgentCore from "@draht/agent-core";
 import * as bundledPiAiCompat from "@draht/ai/compat";
+import * as bundledPiAiModels from "@draht/ai/models";
 import * as bundledPiAiOauth from "@draht/ai/oauth";
 import * as bundledPiAiProviders from "@draht/ai/providers/all";
 import * as bundledPiAiProvidersFaux from "@draht/ai/providers/faux";
@@ -26,6 +27,7 @@ export const VIRTUAL_MODULES: Record<string, unknown> = {
 	// global API keep working at runtime until compat is removed.
 	"@draht/ai": bundledPiAiCompat,
 	"@draht/ai/compat": bundledPiAiCompat,
+	"@draht/ai/models": bundledPiAiModels,
 	"@draht/ai/oauth": bundledPiAiOauth,
 	"@draht/ai/providers/all": bundledPiAiProviders,
 	// Every @draht/ai subpath an extension may import needs its own entry here and

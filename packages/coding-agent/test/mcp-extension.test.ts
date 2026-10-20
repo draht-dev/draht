@@ -17,6 +17,7 @@ import { InMemoryAuthStorageBackend } from "../src/core/auth-storage.ts";
 import { validateMcpServerConfig } from "../src/core/mcp-servers.ts";
 import { truncateMiddle } from "../src/core/tools/truncate.ts";
 import {
+	addMcpServerConfig,
 	getMcpToolExposure,
 	loadMcpConfig,
 	type McpServerEntry,
@@ -146,6 +147,28 @@ describe("MCP config", () => {
 		const rejected = loadMcpConfig({ ...paths, projectTrusted: true });
 		expect(rejected.errors).toEqual([expect.stringContaining("an override can only set")]);
 		expect(rejected.servers[0].config).toEqual(config);
+	});
+
+	// Regression: #11191.
+	it("reads and edits mcp.json files that start with a UTF-8 BOM", () => {
+		const paths = setup({}, {});
+		const global = join(paths.agentDir, "mcp.json");
+		const project = join(paths.cwd, ".draht", "mcp.json");
+		writeFileSync(global, '\uFEFF{"mcpServers":{"demo":{"command":"echo","enabled":false}}}\n');
+		writeFileSync(project, '\uFEFF{"mcpServers":{"local":{"command":"local-cmd"}}}\n');
+
+		const loaded = loadMcpConfig({ ...paths, projectTrusted: true });
+		expect(loaded.errors).toEqual([]);
+		expect(loaded.servers.map((server) => [server.name, server.scope])).toEqual([
+			["demo", "global"],
+			["local", "project"],
+		]);
+
+		expect(addMcpServerConfig(global, "other", { command: "other-cmd" })).toBe(false);
+		expect(JSON.parse(readFileSync(global, "utf8")).mcpServers).toEqual({
+			demo: { command: "echo", enabled: false },
+			other: { command: "other-cmd" },
+		});
 	});
 
 	// Regression: #10239.

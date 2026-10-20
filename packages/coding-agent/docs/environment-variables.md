@@ -97,6 +97,7 @@ These variables are read by draht itself:
 | `DRAHT_SKIP_VERSION_CHECK` | Disable the latest-version request to the npm registry entry for `@draht/coding-agent` |
 | `DRAHT_MODEL_CATALOG_BASE_URL` | Enable the remote model catalog overlay from a self-hosted endpoint; the overlay is off when unset |
 | `DRAHT_TELEMETRY` | Override provider attribution headers (OpenRouter, NVIDIA NIM, Cloudflare): `1`/`true`/`yes` or `0`/`false`/`no` |
+| `DRAHT_CODEMODE_MAX_WORKERS` | Maximum codemode workers alive at once across all sessions in the process; default `2`. Each worker's script may use up to 256 MB. Raise it when one process runs several sessions, such as in-process subagents. Further scripts wait for a free worker. See [Codemode](codemode.md) |
 | `DRAHT_CACHE_RETENTION` | Set to `long` for extended provider prompt caching where supported |
 | `DRAHT_SHARE_VIEWER_URL` | Base URL of a share viewer for `/share`; when unset, `/share` prints the gist URL |
 | `DRAHT_RADIUS_GATEWAY` | Not consulted by the builtin Radius model provider (which always uses `https://radius.pi.dev`, or a per-provider `baseUrl` from provider config) or by `/bug`; currently has no effect on behavior |

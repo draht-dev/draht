@@ -127,7 +127,8 @@ describe("M7: runBuild reports failures via its return value, not process.exitCo
 		const repo = initRepo();
 		const outDir = mkdtempSync(join(tmpdir(), "reels-cli-p1-out-"));
 		const exitCodeBefore = process.exitCode;
-		process.exitCode = undefined;
+		const sentinelExitCode = 42;
+		process.exitCode = sentinelExitCode;
 		try {
 			writeFileSync(join(repo, "a.txt"), "1\n");
 			git(repo, ["add", "a.txt"]);
@@ -143,9 +144,10 @@ describe("M7: runBuild reports failures via its return value, not process.exitCo
 			);
 
 			expect(result).toEqual({ published: 0, failed: 2 });
-			expect(process.exitCode).toBeUndefined();
+			expect(process.exitCode).toBe(sentinelExitCode);
 		} finally {
-			process.exitCode = exitCodeBefore;
+			// Bun ignores undefined after a numeric exit code has been assigned.
+			process.exitCode = exitCodeBefore ?? 0;
 			rmSync(repo, { recursive: true, force: true });
 			rmSync(outDir, { recursive: true, force: true });
 		}

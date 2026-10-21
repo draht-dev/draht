@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 name: discuss-phase
 description: Draht command prompt wrapper for discuss-phase. Use when the user selects the Draht discuss-phase workflow or wants to capture implementation decisions before planning a phase.
 ---

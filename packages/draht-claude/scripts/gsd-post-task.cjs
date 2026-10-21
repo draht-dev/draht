@@ -91,54 +91,93 @@ if (commitHash) {
 	}
 }
 
-// 1. Append to execution log
+function hasTypeConfig(directory) {
+	while (true) {
+		if (fs.existsSync(path.join(directory, "tsconfig.json"))) return true;
+		const parent = path.dirname(directory);
+		if (parent === directory) return false;
+		directory = parent;
+	}
+}
+
+function hasTestCommand() {
+	if (toolchain.pm === "bun") return true;
+	let directory = cwd;
+	while (true) {
+		const packagePath = path.join(directory, "package.json");
+		if (fs.existsSync(packagePath)) {
+			const pkg = JSON.parse(fs.readFileSync(packagePath, "utf-8"));
+			return typeof pkg.scripts?.test === "string" && pkg.scripts.test.trim().length > 0;
+		}
+		const parent = path.dirname(directory);
+		if (parent === directory) return false;
+		directory = parent;
+	}
+}
+
+function commandFailureReason(error) {
+	if (error.code === "ETIMEDOUT") return "timed out";
+	if (error.signal) return `signal ${error.signal}`;
+	if (typeof error.status === "number") return `exit ${error.status}`;
+	return error.code || error.message || "unknown process error";
+}
+
+function verify(command, timeout) {
+	try {
+		execSync(command, { timeout, encoding: "utf-8", cwd, stdio: "pipe" });
+		return "pass";
+	} catch (error) {
+		const output = [error.stdout, error.stderr].filter(Boolean).join("\n").trim().slice(-4000);
+		console.error(`${command} failed (${commandFailureReason(error)})${output ? `:\n${output}` : ""}`);
+		return "fail";
+	}
+}
+
+let finalStatus = status;
+let checks;
+if (status === "pass") {
+	checks = { types: "skip", tests: "skip" };
+	if (hasTypeConfig(cwd)) {
+		const tsCmd = toolchain.pm === "bun" ? "bun run tsc --noEmit" : "npx tsc --noEmit";
+		checks.types = verify(tsCmd, 30000);
+	} else {
+		console.log("Type check skipped: no tsconfig.json.");
+	}
+	try {
+		if (hasTestCommand()) {
+			checks.tests = verify(toolchain.testCmd, 60000);
+		} else {
+			console.log("Tests skipped: no configured test script.");
+		}
+	} catch (error) {
+		checks.tests = "fail";
+		console.error(`Cannot determine test command: ${error.message}`);
+	}
+	if (checks.types === "fail" || checks.tests === "fail") {
+		finalStatus = "fail";
+		if (hookConfig.qualityGateStrict) process.exitCode = 1;
+	}
+	console.log(`Task ${phaseNum}-${planNum}-${taskNum}: types=${checks.types}, tests=${checks.tests}`);
+}
+
+// Persist only the result after verification, including failures in advisory mode.
 const entry = {
 	timestamp: new Date().toISOString(),
 	phase: parseInt(phaseNum, 10),
 	plan: parseInt(planNum, 10),
 	task: parseInt(taskNum, 10),
-	status,
+	status: finalStatus,
+	reportedStatus: status,
+	checks,
 	commit: commitHash || null,
 };
 
 fs.appendFileSync(LOG_FILE, JSON.stringify(entry) + "\n");
 
-// 2. Run type check and tests if status is pass
-if (status === "pass") {
-	// Type check
-	try {
-		const tsCmd = toolchain.pm === "bun" ? "bun run tsc --noEmit 2>&1" : "npx tsc --noEmit 2>&1";
-		execSync(tsCmd, { timeout: 30000, encoding: "utf-8", cwd });
-		// Run tests
-		try {
-			const testOutput = execSync(`${toolchain.testCmd} 2>&1`, { timeout: 60000, encoding: "utf-8", cwd });
-			const testMatch = testOutput.match(/(\d+) pass/);
-			const testCount = testMatch ? testMatch[1] : "?";
-			console.log(`✅ Task ${phaseNum}-${planNum}-${taskNum}: passed + types clean + ${testCount} tests pass`);
-		} catch (testErr) {
-			const testOut = testErr.stdout || testErr.stderr || "";
-			const failMatch = testOut.match(/(\d+) fail/);
-			if (failMatch) {
-				console.log(`⚠️  Task ${phaseNum}-${planNum}-${taskNum}: passed + types clean but ${failMatch[1]} test(s) failed`);
-			} else {
-				console.log(`✅ Task ${phaseNum}-${planNum}-${taskNum}: passed + types clean (no test runner found)`);
-			}
-		}
-	} catch (error) {
-		const output = error.stdout || "";
-		const errorCount = (output.match(/error TS/g) || []).length;
-		if (errorCount > 0) {
-			console.log(`⚠️  Task ${phaseNum}-${planNum}-${taskNum}: passed but ${errorCount} type error(s) introduced`);
-			fs.appendFileSync(LOG_FILE, JSON.stringify({
-				...entry,
-				warning: `${errorCount} type errors introduced`,
-			}) + "\n");
-		} else {
-			console.log(`✅ Task ${phaseNum}-${planNum}-${taskNum}: passed`);
-		}
-	}
-} else if (status === "fail") {
-	console.log(`❌ Task ${phaseNum}-${planNum}-${taskNum}: FAILED`);
+if (finalStatus === "pass") {
+	console.log(`Task ${phaseNum}-${planNum}-${taskNum}: passed`);
+} else if (finalStatus === "fail") {
+	console.log(`Task ${phaseNum}-${planNum}-${taskNum}: FAILED`);
 
 	// Check if we should create a fix plan
 	const logContent = fs.readFileSync(LOG_FILE, "utf-8");
@@ -152,7 +191,7 @@ if (status === "pass") {
 	if (taskFailures.length >= 3) {
 		console.error(`\n❌ HARD STOP: task ${phaseNum}-${planNum}-${taskNum} has failed ${taskFailures.length} times.`);
 		console.error(`   Do NOT re-dispatch the implementer. Escalate: report to the user or create a fix plan:`);
-		console.error(`   draht create-fix-plan ${phaseNum} ${planNum} "Task ${taskNum} failed repeatedly"`);
+		console.error(`   draht-tools create-fix-plan ${phaseNum} ${planNum} "Task ${taskNum} failed repeatedly"`);
 		process.exit(1);
 	}
 } else {

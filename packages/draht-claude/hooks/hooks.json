@@ -46,6 +46,16 @@
     ],
     "PreToolUse": [
       {
+        "matcher": "Bash|bash|exec_command|shell_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/git-safety-hook.cjs\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [
           {

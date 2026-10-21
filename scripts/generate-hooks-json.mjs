@@ -80,6 +80,14 @@ function hooksTemplate() {
 			// — the hook is blocked for exactly as long as the person takes.
 			PreToolUse: [
 				{
+					matcher: "Bash|bash|exec_command|shell_command",
+					hooks: [{
+						type: "command",
+						command: `node "${PLUGIN_ROOT_TOKEN}/scripts/git-safety-hook.cjs"`,
+						timeout: 10,
+					}],
+				},
+				{
 					matcher: "Edit|Write|MultiEdit",
 					hooks: [
 						{

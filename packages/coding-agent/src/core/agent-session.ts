@@ -446,6 +446,7 @@ export class AgentSession {
 	private _lastActivityOutcome: AgentActivityOutcome = "completed";
 	private _isBeforeSettle = false;
 	private _abortDuringBeforeSettle = false;
+	private _beforeSettleAbortController: AbortController | undefined;
 	private _isEmittingAgentSettled = false;
 	private readonly _deferredSettledActions: Array<() => Promise<void>> = [];
 
@@ -1388,11 +1389,14 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	dispose(): void {
+		if (this._isAgentRunActive) this._agentRunAbortRequested = true;
+		if (this._isBeforeSettle) this._abortDuringBeforeSettle = true;
 		try {
 			this.abortRetry();
 			this.abortCompaction();
 			this.abortBranchSummary();
 			this.abortBash();
+			this._beforeSettleAbortController?.abort();
 			this.agent.abort();
 		} catch {
 			// Dispose must succeed even if an abort hook throws.
@@ -1854,6 +1858,7 @@ export class AgentSession {
 		if (!this._extensionRunner.hasHandlers("agent_before_settle")) return this.agent.hasQueuedMessages();
 		this._isBeforeSettle = true;
 		this._abortDuringBeforeSettle = false;
+		this._beforeSettleAbortController = new AbortController();
 		try {
 			const result = await this._extensionRunner.emitBoundary(
 				{ type: "agent_before_settle", outcome: this._lastActivityOutcome },
@@ -1871,6 +1876,7 @@ export class AgentSession {
 			return shouldContinue;
 		} finally {
 			this._isBeforeSettle = false;
+			this._beforeSettleAbortController = undefined;
 		}
 	}
 
@@ -2399,6 +2405,7 @@ export class AgentSession {
 		this.abortCompaction();
 		this.abortBranchSummary();
 		if (this._isBeforeSettle) this._abortDuringBeforeSettle = true;
+		this._beforeSettleAbortController?.abort();
 		this.agent.abort();
 		await this.waitForIdle();
 	}
@@ -3486,7 +3493,7 @@ export class AgentSession {
 				getScopedModels: () => this._scopedModels,
 				isIdle: () => this.isIdle,
 				isProjectTrusted: () => this.settingsManager.isProjectTrusted(),
-				getSignal: () => this.agent.signal,
+				getSignal: () => this._beforeSettleAbortController?.signal ?? this.agent.signal,
 				abort: () => {
 					if (this._extensionAbortHandler) {
 						this._extensionAbortHandler();

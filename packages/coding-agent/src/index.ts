@@ -355,6 +355,7 @@ export {
 	createWriteToolDefinition,
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
+	DRAHTBANK_TOOL_OPERATIONS_VERSION,
 	type EditOperations,
 	type EditToolDetails,
 	type EditToolInput,
@@ -494,6 +495,6 @@ export { copyToClipboard } from "./utils/clipboard.ts";
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.ts";
 export { convertToPng } from "./utils/image-convert.ts";
 export { formatDimensionNote, type ResizedImage, resizeImage } from "./utils/image-resize.ts";
-export { detectSupportedImageMimeTypeFromFile } from "./utils/mime.ts";
+export { detectSupportedImageMimeType, detectSupportedImageMimeTypeFromFile } from "./utils/mime.ts";
 // Shell utilities
 export { getPowerShellConfig, getShellConfig } from "./utils/shell.ts";

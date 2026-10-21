@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 name: progress
 description: Draht command prompt wrapper for progress. Use when the user selects the Draht progress workflow or wants current GSD project status.
 ---

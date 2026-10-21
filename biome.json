@@ -27,6 +27,7 @@
 		"includes": [
 			"packages/*/src/**/*.ts",
 			"packages/*/test/**/*.ts",
+			"packages/coding-agent/eval/**/*.ts",
 			"packages/coding-agent/examples/**/*.ts",
 			"packages/web-ui/src/**/*.ts",
 			"packages/web-ui/example/**/*.ts",
@@ -38,6 +39,7 @@
 			"!packages/mom/data/**/*",
 			"!.claude",
 			"!.worktrees",
+			"!!.artifacts",
 			"!!**/node_modules"
 		]
 	},

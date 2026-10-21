@@ -70,6 +70,18 @@ export function createReadToolDefinition(
 	const autoResizeImages = options?.autoResizeImages ?? true;
 	const fallbackResizeOptions = options?.resizeOptions;
 	const ops = options?.operations ?? defaultReadOperations;
+	// Remote or confined backends own normalization probes as well as content
+	// reads. Probing the local host first can leak or select unrelated files.
+	const exists = options?.operations
+		? async (path: string) => {
+				try {
+					await ops.access(path);
+					return true;
+				} catch {
+					return false;
+				}
+			}
+		: undefined;
 	return {
 		name: "read",
 		label: "read",
@@ -100,7 +112,7 @@ export function createReadToolDefinition(
 
 					(async () => {
 						try {
-							const absolutePath = await resolveReadPathAsync(path, ctx?.cwd || cwd);
+							const absolutePath = await resolveReadPathAsync(path, ctx?.cwd || cwd, exists);
 							if (aborted) return;
 							// Check if file exists and is readable.
 							await ops.access(absolutePath);

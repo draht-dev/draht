@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 name: next-milestone
 description: Draht command prompt wrapper for next-milestone. Use when the user selects the Draht next-milestone workflow or wants to plan the next milestone after all current phases are complete.
 ---

@@ -2,6 +2,40 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- standalone native quality gates now default to strict verification, matching the plugin gates
+
+### Added
+
+- add OpenCode Console browser sign-in for Zen and Go through `/login`, with organization selection and automatic token refresh
+- add `drahtbank` for repeated baseline/candidate prompt comparisons across native, Claude, and Codex assets, with isolated fixtures, deterministic grading, bounded runners, and recorded usage
+- add Drahtbank v2 with named prompt variants, separate screening and holdout cases, structured review facts, observed verification evidence, and a separate offline runtime lane; preserve the v1 suite and recorded scores
+- run configured project checks before native session completion, with cancellation, bounded repairs, and visible failure after exhausted retries
+
+### Changed
+
+- remove mandatory brainstorming approvals, fixed debugging hypothesis counts, repeated self-check rituals, and automatic commit/session-reset instructions; retain scoped evidence and bounded correction contracts
+- share project-defined `.draht/checks.json` verification across hosts, cache successful checks by input content, and enforce configured failures on committed and non-JavaScript changes
+- preserve explicit-only activation in portable skill installs as well as generated plugin artifacts
+- make `/quick` execute and verify directly without GSD artifacts or mandatory delegation; retain scoped evidence and optional review contracts
+- add `--checks-only` and `--no-tests` verification modes independent of planning state
+- use focused graph context and narrow TypeScript skill discovery to relevant implementation and review work
+
+### Fixed
+
+- enforce literal force-push and Git hook-bypass safeguards through a shared native/plugin policy
+- quality gates now reject unsuccessful verification commands by exit status; post-task hooks record failed checks instead of reporting an unverified pass
+- resolve debugger/reviewer scope and orchestration status conflicts, retain actionable suspected security findings, and correct research and fix-plan instructions
+- clarify that `/triage` completes at routing-strength diagnosis, accepts labeled hypotheses without a reproduction, and does not expect a fix
+- allow spec review against plain acceptance criteria without requiring XML plans
+- run shipped CommonJS hooks correctly inside the native package's ESM distribution
+- cancel completion checks when a session is disposed and prevent hook-requested continuation from restarting it
+- support Drahtbank with Node installed outside system runtime directories while preserving fixture isolation
+- include Git safety and completion-check runtime assets in standalone release archives
+- rerun project checks when declared inputs cross symlinks or submodules instead of reusing incomplete snapshots
+- resolve Drahtbank's test runner from the selected workspace with both hoisted and package-local dependencies
+
 ## [2026.10.20-1] - 2026-10-20
 
 ### Fixed

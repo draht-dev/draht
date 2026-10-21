@@ -1,11 +1,12 @@
 ---
+disable-model-invocation: true
 name: gsd-workflow
-description: Draht's Get Shit Done workflow — how to use /new-project, /discuss-phase, /plan-phase, /execute-phase, /verify-work, /next-milestone, /pause-work, /resume-work, /progress, /fix, /quick and the .planning/ directory structure to drive a project from idea to shipping. Use when the user asks how to plan work, structure a project, set up milestones, track progress, or wants to start using draht's workflow.
+description: Optional GSD milestone and phase workflow with .planning/ artifacts. Use only when the user explicitly chooses GSD, asks about its lifecycle, or invokes its project or phase commands.
 ---
 
 # GSD (Get Shit Done) Workflow
 
-Draht's GSD workflow is a milestone → phase → plan → task hierarchy that lives in `.planning/` and is driven by slash commands + hooks.
+GSD is an optional milestone → phase → plan → task hierarchy in `.planning/`, selected through explicit project-management commands. It is not required for ordinary coding, debugging, review, or verification. The presence of `.planning/` alone does not select this workflow; it may hold only a codebase graph or historical context.
 
 At repository-saga scope, each planned `saga-spawner` beat maps 1:1 to one roadmap phase; the saga graph schedules phases without replacing their plans or verification.
 
@@ -55,14 +56,14 @@ If `MAP.json` is absent, run `draht-tools map-graph` first. Subagents can't run 
 - **`/init-project`** — existing codebase: map → extract domain → questioning → roadmap
 - **`/map-codebase`** — standalone codebase analysis
 
-### Per-phase cycle (fresh session between each step)
+### Per-phase cycle (when selected)
 Each step is **graph-first** (see above): orient via `graph-context`/`graph-query`/`graph-impact` before grepping or walking the tree.
 1. **`/discuss-phase N`** — capture decisions, gray areas, domain terms
 2. **`/plan-phase N`** — create atomic execution plans (parallel via `architect` subagents). Architects emit `---END-PLAN---` to separate plan content from the `STATUS:` footer.
 3. **`/execute-phase N`** — per-task three-stage loop: `implementer → spec-reviewer → reviewer`. TDD red→green→refactor inside each implementer task. Tasks within a plan are sequential; independent plans parallelize.
 4. **`/verify-work N`** — parallel `verifier` + `security-auditor` + `reviewer` + `spec-reviewer` (phase-level compliance against the plan files), produce UAT report.
 
-Start a fresh session (`/clear`) between steps. Each command assumes a clean context.
+Session resets are optional. Carry relevant plans, evidence, and unresolved work when a context handoff is useful.
 
 ### Milestone transition
 - **`/next-milestone`** — only after ALL phases in the current milestone are `complete`
@@ -73,10 +74,10 @@ Start a fresh session (`/clear`) between steps. Each command assumes a clean con
 - **`/progress`** — show current position in the roadmap
 
 ### Ad-hoc
-- **`/quick`** — small task with tracking. Implementer → spec-reviewer → (optional) reviewer.
-- **`/fix`** — bug fix with 4-phase systematic debugging (root cause → pattern → hypothesis → reproducing-test-first impl). Stops after 3 failed fix attempts.
+- **`/quick`** — complete an ad-hoc task directly with relevant checks; specialist delegation is optional and planning artifacts are not required.
+- **`/fix`** — investigate a bug, test the leading explanation, then fix and verify it. Stops after 3 failed fix attempts without treating that retry limit as a diagnosis.
 - **`/review`** — parallel `reviewer` + `security-auditor`, plus `spec-reviewer` when a plan is in scope.
-- **`/atomic-commit`** — analyze diff, split into atomic conventional commits (Red Flag block prevents mixed-concern commits).
+- **`/atomic-commit`** — analyze the diff and create authorized atomic conventional commits.
 - **`/orchestrate`** — general-purpose specialist dispatch with parallel / chain / fan-out / two-stage modes.
 
 ## Subagent Roster
@@ -94,14 +95,14 @@ Start a fresh session (`/clear`) between steps. Each command assumes a clean con
 
 ## Subagent STATUS Protocol
 
-Every draht agent ends with one of four status lines. Orchestrating commands branch on it:
+Orchestrating commands must request one final status line from each dispatched agent and check its evidence:
 
-- **`STATUS: DONE`** — proceed
+- **`STATUS: DONE`** — proceed after checking the evidence
 - **`STATUS: DONE_WITH_CONCERNS`** — proceed; log concerns. If correctness-related, address first.
 - **`STATUS: NEEDS_CONTEXT`** — provide missing info and re-dispatch the same agent
-- **`STATUS: BLOCKED`** — STOP. Do not retry the same agent on the same input. Adjust inputs or surface to user.
+- **`STATUS: BLOCKED`** — an implementer blocker stops the task. Review findings return to the implementer and required reviews, within the active command's retry cap (at most 3 implementer re-dispatches per task). Do not retry unchanged inputs or advance past unresolved required findings.
 
-For any spec-driven work, `spec-reviewer` runs **before** `reviewer`. Spec compliance prevents over/under-building; running quality review first lets spec gaps hide.
+When both reviews are required by a selected workflow, run `spec-reviewer` before `reviewer`.
 
 ## Task Format (XML inside PLAN.md files)
 
@@ -128,37 +129,52 @@ The plugin ships workflow hooks under `${CLAUDE_PLUGIN_ROOT}/scripts/`:
 - `gsd-pre-execute.cjs <phase>` — preconditions before execution (DOMAIN.md, plans, uncommitted changes)
 - `gsd-post-task.cjs <phase> <plan> <task> <status> [commit]` — record result + type check + tests + TDD cycle check
 - `gsd-post-phase.cjs <phase>` — generate phase report, update ROADMAP status
-- `gsd-quality-gate.cjs [--strict]` — lint + typecheck + test + coverage against `.planning/config.json` threshold
+- `gsd-quality-gate.cjs [--strict]` — applicable lint, typecheck, and tests, plus source/domain heuristics; `--no-tests --checks-only` restricts it to deterministic type and lint checks
 
-These are invoked from inside commands. In addition, two **lifecycle hooks** fire automatically regardless of command prose (registered in `hooks/hooks.json`):
+The phase hooks are invoked by their explicit commands. Automatic checks are independent of GSD and do not require `.planning/` (registered in `hooks/hooks.json`):
 
 - `post-edit-check.cjs` — PostToolUse on Edit/Write: file-scoped lint feedback on every edit
-- `stop-quality-gate.cjs` — Stop: runs the quality gate when a turn ends with uncommitted source changes in a `.planning` project
+- `stop-quality-gate.cjs` — Stop: runs project-defined `.draht/checks.json` commands and reuses successful results while their inputs are unchanged. Without that configuration, plugins run type/lint checks on uncommitted source changes. Automatic verification excludes GSD heuristics.
+
+Native sessions run the same configured project checks before completion in trusted projects. Failed checks return diagnostics for at most three repair attempts, then leave a visible unverified result. Neither committed changes nor non-JavaScript inputs escape configured checks. Tests run automatically only when the project explicitly configures them; focused task checks can still be run directly.
 
 ## Configuration
 
-`.planning/config.json` (optional):
+Use `.draht/checks.json` for deterministic verification, independently of GSD:
+
+```json
+{
+  "checks": [
+    { "name": "acceptance", "command": ["node", "scripts/check.mjs"], "inputs": ["src", "scripts/check.mjs", "package.json"] }
+  ]
+}
+```
+
+Commands are argv arrays; paths are project-relative files/directories, without globs. Include all dependencies in `inputs`, or omit it to cover the project. Set `cache: false` for checks that depend on services, environment variables, or ignored dependencies. Configured failures always block, including on repeated Stop events; `enabled: false` explicitly disables this gate. Use the runner's `--force` option to discard reusable evidence.
+
+`.planning/config.json` controls optional GSD hooks and the plugins' unconfigured fallback:
 
 ```json
 {
   "hooks": {
-    "coverageThreshold": 80,
     "tddMode": "advisory",
     "qualityGateStrict": true,
-    "stopGate": true
+    "stopGate": true,
+    "planningContext": false
   }
 }
 ```
 
 - `tddMode: "strict"` — post-task hook aborts on green: commit without preceding red:
 - `tddMode: "advisory"` — logs a warning instead
-- `qualityGateStrict` — **defaults to true**: the gate fails (exit 1) on any lint/type/test/coverage miss; set `false` to demote to warnings
-- `stopGate: false` — disable the automatic Stop-time quality gate
-- Hard stop: 3 recorded failures for the same task make `gsd-post-task.cjs` exit non-zero — the retry loop ends there
+- `qualityGateStrict` — defaults to true in standalone quality gates: failed applicable lint/type/test commands return nonzero; set `false` for legacy advisory results. Post-task verification still records failures in advisory mode. Configured `.draht/checks.json` checks always enforce their exit status.
+- `stopGate: false` — disable the plugin fallback when no `.draht/checks.json` exists
+- `planningContext: true` — opt into automatic planning-state context at session start and before prompts. The default is silent, even when planning files exist; explicit workflows can read those files themselves.
+- Hard stop: 3 recorded failures for the same task end the retry loop. A strict post-task verification failure also returns nonzero before that cap; it must be corrected without exceeding the cap.
 
 ## Key Rules
 
-- One phase at a time, one cycle step per session
+- When GSD is selected, track the active phase and complete its required gates and documented handoffs
 - `/next-milestone` ONLY after every phase in the current milestone is verified
 - Fix plans include a reproducing test before any implementation
 - Never skip verification — it's the only thing that marks a phase complete

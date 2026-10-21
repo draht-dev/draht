@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 name: verify-work
 description: Draht command prompt wrapper for verify-work. Use when the user selects the Draht verify-work workflow or wants acceptance testing of completed phase work.
 ---

@@ -93,6 +93,8 @@ import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } fro
 export type Tool = AgentTool<any>;
 export type ToolDef = ToolDefinition<any, any>;
 export type ToolName = "read" | "bash" | "powershell" | "edit" | "write" | "grep" | "find" | "ls";
+/** Grep process injection, backend-only read path access, and optional session environment exposure. */
+export const DRAHTBANK_TOOL_OPERATIONS_VERSION = "fixture-operations-v1";
 export const allToolNames: Set<ToolName> = new Set([
 	"read",
 	"bash",

@@ -34,9 +34,42 @@ describe("generate-skills-artifacts: computeArtifacts is a pure function", () =>
 		expect(second).toEqual(first);
 	});
 
-	it("discovers 128 artifacts from the 40 canonical skills", () => {
+	it("discovers 142 artifacts from the 40 canonical skills", () => {
 		const artifacts = computeArtifacts(SKILLS_ROOT);
-		expect(artifacts.length).toBe(128);
+		expect(artifacts.length).toBe(142);
+	});
+
+	it("requires explicit invocation for Codex ad-hoc workflows and GSD lifecycle skills", () => {
+		const artifacts = computeArtifacts(SKILLS_ROOT);
+		const policies = artifacts.filter((artifact) => artifact.relPath.endsWith("/agents/openai.yaml"));
+		expect(policies.map((artifact) => `${artifact.pkg}/${artifact.relPath}`).sort()).toEqual([
+			"draht-codex/skills/discuss-phase/agents/openai.yaml",
+			"draht-codex/skills/execute-phase/agents/openai.yaml",
+			"draht-codex/skills/fix/agents/openai.yaml",
+			"draht-codex/skills/gsd-workflow/agents/openai.yaml",
+			"draht-codex/skills/init-project/agents/openai.yaml",
+			"draht-codex/skills/new-project/agents/openai.yaml",
+			"draht-codex/skills/next-milestone/agents/openai.yaml",
+			"draht-codex/skills/pause-work/agents/openai.yaml",
+			"draht-codex/skills/plan-phase/agents/openai.yaml",
+			"draht-codex/skills/progress/agents/openai.yaml",
+			"draht-codex/skills/quick/agents/openai.yaml",
+			"draht-codex/skills/resume-work/agents/openai.yaml",
+			"draht-codex/skills/triage/agents/openai.yaml",
+			"draht-codex/skills/verify-work/agents/openai.yaml",
+		]);
+		for (const policy of policies) {
+			expect(policy.content).toBe("policy:\n  allow_implicit_invocation: false\n");
+			const name = policy.relPath.split("/")[1];
+			expect(readFileSync(join(SKILLS_ROOT, name, "agents/openai.yaml"), "utf8")).toBe(policy.content);
+			expect(readFileSync(join(SKILLS_ROOT, name, "SKILL.md"), "utf8")).toContain("disable-model-invocation: true");
+			const claude = artifacts.find(
+				(artifact) =>
+					artifact.pkg === "draht-claude" &&
+					(artifact.relPath === `commands/${name}.md` || artifact.relPath === `skills/${name}/SKILL.md`),
+			);
+			expect(claude?.content).toContain("disable-model-invocation: true");
+		}
 	});
 
 	it("emits no packages/draht-claude skills/<cmd>/ wrapper artifacts (no wrapper skills on the claude side)", () => {
@@ -107,6 +140,38 @@ describe("generate-skills-artifacts: plain-skill extra files, on a synthetic ski
 		expect(byPkg.get("draht-claude")).not.toBe(byPkg.get("draht-codex"));
 	});
 
+	it("rejects conflicting explicit invocation policy in a portable skill", () => {
+		writeFile(
+			"gsd-workflow/SKILL.md",
+			"---\nname: gsd-workflow\ndescription: fixture\ndisable-model-invocation: true\n---\nbody\n",
+		);
+		writeFile("gsd-workflow/agents/openai.yaml", "policy:\n  allow_implicit_invocation: true\n");
+
+		expect(() => computeArtifacts(tmpSkillsRoot)).toThrow(/explicit invocation policy must agree/);
+	});
+
+	it("rejects an explicit skill missing its portable Codex policy", () => {
+		writeFile(
+			"manual/SKILL.md",
+			"---\nname: manual\ndescription: fixture\ndisable-model-invocation: true\n---\nbody\n",
+		);
+		expect(() => computeArtifacts(tmpSkillsRoot)).toThrow(/explicit invocation policy must agree/);
+	});
+
+	it("accepts matching portable policy on a command and keeps it out of Claude support files", () => {
+		writeFile(
+			"manual/SKILL.md",
+			"---\nname: manual\ndescription: fixture\ndisable-model-invocation: true\n---\nbody\n",
+		);
+		writeFile("manual/command.md", "---\ndescription: fixture\n---\ncommand\n");
+		writeFile("manual/agents/openai.yaml", "policy:\n  allow_implicit_invocation: false\n");
+		const artifacts = computeArtifacts(tmpSkillsRoot);
+		expect(artifacts.filter((artifact) => artifact.relPath.endsWith("openai.yaml"))).toHaveLength(1);
+		expect(artifacts.find((artifact) => artifact.pkg === "draht-claude")?.content).toContain(
+			"disable-model-invocation: true",
+		);
+	});
+
 	it("rejects extra files under a command skill (no claude-side skills/<cmd>/ dir exists to receive them)", () => {
 		writeFile("cmd/SKILL.md", "---\nname: cmd\ndescription: fixture\n---\nbody\n");
 		writeFile("cmd/command.md", "command template\n");
@@ -138,7 +203,7 @@ describe("generate-skills-artifacts: CLI, isolated in a temp output root", () =>
 	it("regenerated output into a temp root matches the real committed package files", () => {
 		run(["--output-root", tmpRoot]);
 		const generated = collectFiles(join(tmpRoot, "packages"));
-		expect(Object.keys(generated).length).toBe(128);
+		expect(Object.keys(generated).length).toBe(142);
 		for (const [relPath, content] of Object.entries(generated)) {
 			const committedPath = join(REPO_ROOT, "packages", relPath);
 			expect(readFileSync(committedPath, "utf8"), `${relPath} differs from the committed file`).toBe(content);
@@ -183,6 +248,28 @@ describe("generate-skills-artifacts: CLI, isolated in a temp output root", () =>
 		rmSync(join(tmpRoot, "packages/draht-codex/skills/draht"), { recursive: true, force: true });
 
 		expect(() => run(["--check", "--output-root", tmpRoot])).toThrow();
+	});
+
+	it.each([
+		{ skill: "triage", state: "missing" },
+		{ skill: "triage", state: "enabled" },
+		{ skill: "new-project", state: "missing" },
+		{ skill: "new-project", state: "enabled" },
+		{ skill: "gsd-workflow", state: "missing" },
+		{ skill: "gsd-workflow", state: "enabled" },
+	])("--check rejects $state explicit invocation policy for $skill", ({ skill, state }) => {
+		run(["--output-root", tmpRoot]);
+		const policyPath = `packages/draht-codex/skills/${skill}/agents/openai.yaml`;
+		const policyFile = join(tmpRoot, policyPath);
+		if (state === "missing") rmSync(policyFile);
+		else writeFileSync(policyFile, "policy:\n  allow_implicit_invocation: true\n");
+		let stderr = "";
+		try {
+			run(["--check", "--output-root", tmpRoot]);
+		} catch (error) {
+			stderr = String((error as { stderr?: unknown }).stderr ?? "");
+		}
+		expect(stderr).toContain(policyPath);
 	});
 
 	it("--check exits non-zero and says 'unexpected' for a stray file inside a generated skill dir", () => {

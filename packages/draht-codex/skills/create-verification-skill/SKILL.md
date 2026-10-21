@@ -1,6 +1,6 @@
 ---
 name: create-verification-skill
-description: Draht command prompt wrapper for create-verification-skill. Use when a project has no scripted way to prove UI/CLI/service behaviour and the user wants a committed project-local verify-<app> skill that launches the real app, drives a feature the way a user does, and captures proof artifacts. Triggers on "create a verification skill", "make a control skill for this repo", "how do we prove the app actually works", "drive the app like a user".
+description: Create a project-local skill that drives an application and captures verification evidence when the user requests one.
 ---
 
 # Draht Command: create-verification-skill

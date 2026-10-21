@@ -46,12 +46,6 @@ function stripBrandNames(content: string): string {
 // cross-skill reference.
 const TRAVERSAL_ALLOWLIST: Array<{ relPath: string; snippet: string; reason: string }> = [
 	{
-		relPath: "ddd-workflow/SKILL.md",
-		snippet: "'../billing/...'",
-		reason:
-			"pedagogical anti-pattern example (a hypothetical illegal cross-context import) inside inline code — not a real relative reference, and not resolved against anything.",
-	},
-	{
 		relPath: "saga-spawner/SKILL.md",
 		snippet: "npx tsx ../../node_modules/vitest/dist/cli.js",
 		reason:
@@ -153,14 +147,10 @@ describe("portability: no host-dialect markers outside the allowlist", () => {
 		});
 	}
 
-	it("model-tiering/SKILL.md actually contains the brand names the allowlist strips (proves the rule is exercised)", () => {
-		const content = readFileSync(
-			resolve(listCanonicalSkills().find((s) => s.name === "model-tiering")!.skillMdPath),
-			"utf8",
-		);
-		for (const brand of BRAND_NAME_ALLOWLIST) {
-			expect(content).toContain(brand);
-		}
+	it("allows model/API names without hiding host-specific invocation markers", () => {
+		const hostMarkers = ["Claude", "Codex", "Task tool", "subagent_type", "spawn_agent", "$draht", "/draht:"];
+		const content = [...BRAND_NAME_ALLOWLIST, ...hostMarkers].join("\n");
+		expect(stripBrandNames(content).match(DIALECT_MARKER_RE)).toEqual(hostMarkers);
 	});
 
 	it("draht/SKILL.md's Host Invocation section actually contains host markers (proves the allowlist is scoped precisely, not accidentally over-broad)", () => {

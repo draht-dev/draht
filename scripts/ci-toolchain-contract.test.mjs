@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { execFileSync } from "node:child_process";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { delimiter, dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -81,4 +84,89 @@ test("publishing workflow steps hand bun publish its token through NPM_CONFIG_TO
 	const scheduled = read(".github/workflows/scheduled-release.yml");
 	assert.match(scheduled, /resume_publish:/);
 	assert.match(scheduled, /run: npm run release -- --resume-publish/);
+});
+
+test("binary archives ship executable Git safety and completion-check runtimes", { skip: process.platform === "win32", timeout: 30_000 }, async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "draht-binary-archive-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const write = (path, content, mode = 0o644) => {
+		const target = join(root, path);
+		mkdirSync(dirname(target), { recursive: true });
+		writeFileSync(target, content, { mode });
+	};
+	const platforms = ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64", "windows-x64"];
+	const packageRoot = "packages/coding-agent";
+	write("package.json", JSON.stringify({ version: "1.0.0", drahtReleaseBunRevision: manifest.drahtReleaseBunRevision }));
+	write("scripts/build-binaries.sh", read("scripts/build-binaries.sh"));
+	write("scripts/build-runtime-manifest.mjs", read("scripts/build-runtime-manifest.mjs"));
+	write("fixture-bin/bun", `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args.length === 1 && args[0] === "--revision") {
+ console.log(${JSON.stringify(manifest.drahtReleaseBunRevision)});
+} else if (args[0] === "install" && args.includes("--frozen-lockfile")) {
+} else if (args.length === 2 && args[0] === "run" && args[1] === "build") {
+} else if (args[0] === "build" && args.includes("--compile") && args.indexOf("--outfile") === args.length - 2) {
+ fs.writeFileSync(args.at(-1), "fixture binary");
+} else {
+ throw new Error("Unexpected fixture Bun invocation: " + JSON.stringify(args));
+}
+`, 0o755);
+	write("fixture-bin/git", `#!/usr/bin/env node
+const assert = require("node:assert/strict");
+assert.deepEqual(process.argv.slice(2), ["rev-parse", "HEAD"]);
+console.log("1".repeat(40));
+`, 0o755);
+	for (const file of ["package.json", "README.md", "CHANGELOG.md", "dist/modes/interactive/theme/default.json", "dist/modes/interactive/assets/logo.png", "dist/core/export-html/template.html", "docs/providers.md", "examples/example.js"]) {
+		write(`${packageRoot}/${file}`, file.endsWith(".json") ? "{}" : "fixture asset");
+	}
+	write("node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm", "fixture wasm");
+	cpSync(join(ROOT, packageRoot, "hooks"), join(root, packageRoot, "hooks"), { recursive: true });
+	for (const platform of platforms) {
+		const native = platform.replace("windows-", "win32-");
+		write(`packages/tui/native/${native.split("-")[0]}/prebuilds/${native}/binding.node`, "fixture native asset");
+	}
+	execFileSync("bash", [join(root, "scripts/build-binaries.sh")], {
+		cwd: root,
+		env: { ...process.env, PATH: `${join(root, "fixture-bin")}${delimiter}${process.env.PATH ?? ""}` },
+		encoding: "utf8",
+		timeout: 20_000,
+	});
+	const binaries = join(root, packageRoot, "binaries");
+	const runtimeManifest = JSON.parse(readFileSync(join(binaries, "runtime-manifest.json"), "utf8"));
+	const require = createRequire(import.meta.url);
+	for (const platform of platforms) {
+		await t.test(platform, () => {
+			const windows = platform === "windows-x64";
+			const unpacked = join(root, "extracted", platform);
+			mkdirSync(unpacked, { recursive: true });
+			if (windows) execFileSync("unzip", ["-q", join(binaries, `draht-${platform}.zip`), "-d", unpacked]);
+			else execFileSync("tar", ["-xzf", join(binaries, `draht-${platform}.tar.gz`), "-C", unpacked]);
+			const payload = windows ? unpacked : join(unpacked, "draht");
+			const policy = require(join(payload, "hooks/checks/git-safety.cjs"));
+			assert.equal(policy.findGitSafetyViolation("git status"), undefined);
+			assert.match(policy.findGitSafetyViolation("git commit --no-verify"), /hook bypass/i);
+			const artifact = runtimeManifest.artifacts.find((entry) => entry.platform === platform);
+			assert.ok(artifact, `${platform} must appear in the runtime manifest`);
+			for (const file of ["git-safety.cjs", "checks-runtime.cjs"]) {
+				const member = `hooks/checks/${file}`;
+				assert.deepEqual(readFileSync(join(payload, member)), readFileSync(join(ROOT, packageRoot, member)));
+				assert.ok(artifact.files.includes(windows ? member : `draht/${member}`), `${platform} manifest omits ${member}`);
+			}
+			const project = join(root, "projects", platform);
+			write(`projects/${platform}/.draht/checks.json`, JSON.stringify({
+				checks: [{ name: "archive-check", cache: false, command: [process.execPath, "-e", "require('node:fs').writeFileSync('checked.txt', 'verified')"] }],
+			}));
+			const output = execFileSync(process.execPath, [join(payload, "hooks/checks/checks-runtime.cjs"), "--cwd", project, "--json"], {
+				cwd: project,
+				encoding: "utf8",
+				timeout: 10_000,
+			});
+			const result = JSON.parse(output);
+			assert.equal(result.status, "passed");
+			assert.equal(result.configured, true);
+			assert.equal(result.checks[0].status, "passed");
+			assert.equal(readFileSync(join(project, "checked.txt"), "utf8"), "verified");
+		});
+	}
 });

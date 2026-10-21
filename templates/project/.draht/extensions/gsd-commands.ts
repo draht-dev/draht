@@ -18,7 +18,7 @@
  * Utilities:
  *   /review  <scope>            — ad-hoc code review + security audit
  *   /fix     <issue>            — targeted fix plan for a failing task
- *   /quick   <task>             — one-shot implement + commit (skip full GSD)
+ *   /quick   <task>             — implement directly and verify the requested change
  *   /resume                     — pick up interrupted work from CONTINUE-HERE.md
  *   /status                     — show .planning/STATE.md overview
  *   /new-project <name> [path]  — create project dir, git init, scaffold .draht/
@@ -206,7 +206,7 @@ After both complete, merge into a single prioritized findings report.`,
 
 	// ── /quick ───────────────────────────────────────────────────────────────
 	pi.registerCommand("quick", {
-		description: "One-shot task: implement + commit. Skips full GSD workflow. Usage: /quick <task>",
+		description: "Implement and verify a small task directly. Usage: /quick <task>",
 		handler: async (args, ctx) => {
 			if (!args.trim()) {
 				ctx.ui.notify("Usage: /quick <task description>", "warning");
@@ -215,9 +215,9 @@ After both complete, merge into a single prioritized findings report.`,
 			if (isBusy(ctx, ctx.ui)) return;
 
 			pi.sendUserMessage(
-				`Use the subagent tool in chain mode with agentScope "project":
-1. agent: implementer   — task: "${args.trim()}"
-2. agent: git-committer — task: "Commit the changes just made: {previous}"`,
+				`Implement this task directly: ${args.trim()}
+
+Read the relevant code, keep the change within the requested scope, and run the applicable checks before reporting completion. Report the result and verification evidence. Delegate only when independent work would benefit from it. Create commits only if the user has authorized them.`,
 			);
 		},
 	});

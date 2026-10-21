@@ -25,7 +25,7 @@
 	"scripts": {
 		"sync-tools": "node ../../scripts/sync-draht-tools.mjs",
 		"test": "node cli.mjs --help > /dev/null && node scripts/gsd-pre-execute.cjs --self-check 2>/dev/null || true",
-		"prepublishOnly": "node ../../scripts/sync-draht-tools.mjs && node ../../scripts/generate-skills-artifacts.mjs --check"
+		"prepublishOnly": "node ../../scripts/sync-draht-tools.mjs && node ../../scripts/generate-skills-artifacts.mjs --check && node ../../scripts/sync-checks-runtime.mjs --check"
 	},
 	"dependencies": {
 		"@draht/tools": "workspace:*"

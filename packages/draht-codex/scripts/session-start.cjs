@@ -9,7 +9,7 @@
  *   (goal-drift guard — the spec reaches every session, not just milestones)
  * - Surfaces the most recent lessons from STATE.md ## Lessons
  * - Flags CONTINUE-HERE.md if the previous session was paused
- * - Silent in projects without .planning/
+ * - Opt in with hooks.planningContext: true in .planning/config.json
  */
 
 const fs = require("node:fs");
@@ -18,8 +18,10 @@ const path = require("node:path");
 const cwd = process.cwd();
 const PLANNING = path.join(cwd, ".planning");
 
-if (!fs.existsSync(PLANNING)) {
-	// No draht planning — silent
+try {
+	const config = JSON.parse(fs.readFileSync(path.join(PLANNING, "config.json"), "utf-8"));
+	if (config?.hooks?.planningContext !== true) process.exit(0);
+} catch {
 	process.exit(0);
 }
 
@@ -87,7 +89,7 @@ const continuePath = path.join(PLANNING, "CONTINUE-HERE.md");
 if (fs.existsSync(continuePath)) {
 	lines.push("");
 	lines.push("CONTINUE-HERE.md present — the previous session was paused.");
-	lines.push("Run /resume-work to continue, or read .planning/CONTINUE-HERE.md for the handoff.");
+	lines.push("Read .planning/CONTINUE-HERE.md if relevant to the current task; /resume-work is available for explicit workflow continuation.");
 }
 
 if (lines.length > 0) {

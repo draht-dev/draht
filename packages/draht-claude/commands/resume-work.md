@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 description: Resume from the CONTINUE-HERE handoff document
 allowed-tools: Bash, Read, Write, Edit
 ---

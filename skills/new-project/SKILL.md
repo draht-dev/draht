@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 name: new-project
 description: Draht command prompt wrapper for new-project. Use when the user selects the Draht new-project workflow or wants greenfield GSD planning from questioning through roadmap.
 ---

@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 name: execute-phase
 description: Draht command prompt wrapper for execute-phase. Use when the user selects the Draht execute-phase workflow or wants to execute phase plans with atomic commits, TDD, and review gates.
 ---

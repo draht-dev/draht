@@ -134,6 +134,7 @@ for platform in "${PLATFORMS[@]}"; do
     cp dist/modes/interactive/assets/* binaries/$platform/assets/ 2>/dev/null || echo "  (warning: no dist/modes/interactive/assets to copy)"
     cp -r dist/core/export-html binaries/$platform/
     cp -r docs binaries/$platform/
+    cp -r hooks binaries/$platform/
     mkdir -p binaries/$platform/examples
     (cd examples && tar --exclude='node_modules' -cf - .) | (cd binaries/$platform/examples && tar -xf -)
 

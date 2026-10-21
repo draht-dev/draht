@@ -734,6 +734,51 @@ describe("AgentSession actionable boundaries", () => {
 		);
 		expect(harness.eventsOfType("agent_settled")).toHaveLength(1);
 	});
+
+	it("cancels pre-settlement work and suppresses continuation when disposed during the hook", async () => {
+		const started = deferred();
+		let handled = false;
+		let observedSignal: AbortSignal | undefined;
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					pi.on("agent_before_settle", async (_event, ctx) => {
+						if (handled) return;
+						handled = true;
+						const signal = ctx.signal;
+						if (!signal) throw new Error("missing pre-settlement signal");
+						observedSignal = signal;
+						const cancelled = deferred();
+						signal.addEventListener("abort", cancelled.resolve, { once: true });
+						started.resolve();
+						await cancelled.promise;
+						return {
+							entries: [
+								{
+									type: "custom_message",
+									customType: "disposed-boundary",
+									content: "continue queued work",
+									display: false,
+								},
+							],
+							continue: true,
+						};
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		harness.setResponses([fauxAssistantMessage("first"), fauxAssistantMessage("must not run")]);
+
+		const prompt = harness.session.prompt("start");
+		await started.promise;
+		harness.session.dispose();
+		await prompt;
+
+		expect(observedSignal?.aborted).toBe(true);
+		expect(harness.faux.state.callCount).toBe(1);
+		expect(harness.session.isIdle).toBe(true);
+	});
 });
 
 describe("durable length recovery", () => {

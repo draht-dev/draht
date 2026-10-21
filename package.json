@@ -15,6 +15,7 @@
 		"packages/coding-agent/examples/extensions/gondolin"
 	],
 	"scripts": {
+		"drahtbank": "node packages/coding-agent/bin/drahtbank.mjs",
 		"clean": "npm run clean --workspaces",
 		"build": "cd packages/chord && npm run build && cd ../tui && npm run build && cd ../telemetry && npm run build && cd ../codemode && npm run build && cd ../mcp && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../router && npm run build && cd ../knowledge && npm run build && cd ../rlm && npm run build && cd ../coding-agent && npm run build && cd ../mom && npm run build && cd ../web-ui && npm run build && cd ../pods && npm run build && cd ../install && npm run build",
 		"build:native:darwin": "npm --prefix packages/tui run build:native:darwin",
@@ -32,7 +33,8 @@
 		"check:bun-serve-hostname": "node scripts/check-bun-serve-hostname.mjs",
 		"check:browser-smoke": "node scripts/check-browser-smoke.mjs",
 		"check:skills-artifacts": "node scripts/generate-skills-artifacts.mjs --check",
-		"check:hooks": "node scripts/generate-hooks-json.mjs --check",
+		"check:hooks": "node scripts/generate-hooks-json.mjs --check && npm run check:checks-runtime",
+		"check:checks-runtime": "node scripts/sync-checks-runtime.mjs --check",
 		"check:install-publishable": "node scripts/check-install-publishable.mjs",
 		"check:entry-graphs": "node scripts/check-entry-graphs.mjs",
 		"generate:models": "npm --prefix packages/ai run generate-models",

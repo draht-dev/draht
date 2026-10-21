@@ -1,6 +1,8 @@
 import type { InlineExtension } from "../extensions/types.ts";
 import checkpointsBuiltin from "./checkpoints.ts";
+import completionChecksBuiltin from "./completion-checks.ts";
 import duetBuiltin from "./duet.ts";
+import gitSafetyBuiltin from "./git-safety.ts";
 import polyphaseBuiltin from "./polyphase.ts";
 import subagentBuiltin from "./subagent.ts";
 
@@ -13,8 +15,10 @@ import subagentBuiltin from "./subagent.ts";
  * the core bash/read/write/edit tools are always available.
  */
 export const CORE_BUILTIN_EXTENSIONS: InlineExtension[] = [
+	{ name: "git-safety", factory: gitSafetyBuiltin },
 	{ name: "multi-agent", factory: subagentBuiltin },
 	{ name: "duet", factory: duetBuiltin },
 	{ name: "checkpoints", factory: checkpointsBuiltin },
 	{ name: "polyphase", factory: polyphaseBuiltin },
+	{ name: "completion-checks", factory: completionChecksBuiltin },
 ];

@@ -130,6 +130,25 @@ To check whether that particular run was worth it cost-wise, take the
 `compareCost()` (see Cost envelope, above) rather than assuming either
 direction.
 
+## Sandbox requirements
+
+Linux RLM sessions require `unshare` or `bwrap`, a 64-bit x86 or ARM Python
+interpreter, seccomp filtering, and an enabled Landlock ABI 3 or newer. The
+bootstrap grants read access to isolated Python module paths, system library
+directories (including the Nix store when present), the driver, and runtime
+support files. Regular-file writes are confined to the session workdir;
+`/dev/null` is also writable. Process execution, networking, and filesystem
+metadata changes are denied. File metadata such as names and sizes is not
+hidden.
+
+If these kernel restrictions cannot be installed, the driver does not run.
+macOS continues to use `sandbox-exec`. Both platforms run a sandbox startup
+check before accepting model-generated Python.
+
+The preferred `unshare` path keeps Python at the PID monitored for memory
+usage. With the `bwrap` fallback, RSS polling currently observes the wrapper
+process instead; the session's RSS ceiling is not reliable on that path.
+
 ## Development
 
 ```bash

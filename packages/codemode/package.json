@@ -52,7 +52,7 @@
 		"directory": "packages/codemode"
 	},
 	"engines": {
-		"node": ">=22.19.0"
+		"node": ">=22.23.4"
 	},
 	"dependencies": {
 		"quickjs-wasi": "3.6.2"

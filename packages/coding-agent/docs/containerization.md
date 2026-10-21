@@ -35,7 +35,7 @@ Plain Docker provides the simplest whole-process container boundary.
 Create `Dockerfile.draht`:
 
 ```dockerfile
-FROM node:24-bookworm-slim
+FROM node:24.22.1-bookworm-slim
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends bash ca-certificates git ripgrep \

@@ -1,7 +1,19 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	copyFileSync,
+	cpSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { assessRuntimeChecks, RUNTIME_CHECKS, runRuntimeChecks } from "../eval/drahtbank/runtime-checks.mjs";
@@ -152,5 +164,61 @@ describe("Drahtbank runtime evidence", () => {
 		expect(report).toMatchObject({ complete: false, passed: false, process: { exitCode: null } });
 		expect(report.process.error).toContain("ETIMEDOUT");
 		expect(report.errors).toContain("Vitest process did not complete successfully");
+	});
+
+	it.each(["hoisted", "package-local"])("resolves real runner packages with %s Vitest", (layout) => {
+		const fixture = mkdtempSync(join(tmpdir(), "drahtbank-runtime-dependencies-"));
+		temporary.push(fixture);
+		const fixturePackage = join(fixture, "packages/coding-agent");
+		mkdirSync(fixturePackage, { recursive: true });
+		for (const host of ["ai", "draht-claude", "draht-codex"]) {
+			symlinkSync(join(root, "packages", host), join(fixture, "packages", host), "junction");
+		}
+		for (const directory of ["eval", "hooks", "src", "test"]) {
+			symlinkSync(join(packageRoot, directory), join(fixturePackage, directory), "junction");
+		}
+		for (const file of ["package.json", "vitest.config.ts"]) {
+			copyFileSync(join(packageRoot, file), join(fixturePackage, file));
+		}
+		for (const file of ["package.json", "bun.lock"]) copyFileSync(join(root, file), join(fixture, file));
+		const installed = createRequire(import.meta.url);
+		const tsxManifest = installed.resolve("tsx/package.json");
+		const vitestManifest = installed.resolve("vitest/package.json");
+		const vitestModules = join(layout === "hoisted" ? fixture : fixturePackage, "node_modules");
+		mkdirSync(join(fixture, "node_modules"));
+		mkdirSync(vitestModules, { recursive: true });
+		cpSync(dirname(tsxManifest), join(fixture, "node_modules/tsx"), { recursive: true });
+		cpSync(dirname(vitestManifest), join(vitestModules, "vitest"), { recursive: true });
+		expect(existsSync(join(fixture, "node_modules/vitest"))).toBe(layout === "hoisted");
+		execFileSync("git", ["init", "--quiet"], { cwd: fixture });
+		execFileSync(
+			"git",
+			[
+				"-c",
+				"user.name=Test",
+				"-c",
+				"user.email=test@example.invalid",
+				"commit",
+				"--allow-empty",
+				"--quiet",
+				"-m",
+				"fixture",
+			],
+			{ cwd: fixture },
+		);
+		// Resolve and fingerprint the real dependencies before exercising the timeout path.
+		const report = runRuntimeChecks(join(fixture, "output"), { root: fixture, timeoutMs: 1 });
+		expect(report.command.slice(1, 3)).toEqual([
+			join(fixture, "node_modules/tsx/dist/cli.mjs"),
+			join(vitestModules, "vitest/dist/cli.js"),
+		]);
+		expect(report.identity).toMatchObject({
+			tsxVersion: JSON.parse(readFileSync(tsxManifest, "utf8")).version,
+			vitestVersion: JSON.parse(readFileSync(vitestManifest, "utf8")).version,
+			tsxSha256: hash(readFileSync(installed.resolve("tsx/cli"), "utf8")),
+			vitestSha256: hash(readFileSync(installed.resolve("vitest/dist/cli.js"), "utf8")),
+		});
+		expect(report).toMatchObject({ root: fixture, packageRoot: fixturePackage, complete: false, passed: false });
+		expect(report.process.error).toContain("ETIMEDOUT");
 	});
 });

@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -127,13 +128,14 @@ export function runRuntimeChecks(output, options = {}) {
 	if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 3_600_000) throw new Error("timeoutMs must be from 1 to 3600000");
 	if (existsSync(output) && readdirSync(output).length) throw new Error("Choose an empty runtime-checks output directory");
 	const sourcesBefore = snapshot(root);
-	const tsx = join(root, "node_modules/tsx/dist/cli.mjs"), vitest = join(root, "node_modules/vitest/dist/cli.js");
+	const packageRequire = createRequire(join(packageRoot, "package.json"));
+	const tsx = packageRequire.resolve("tsx/cli"), vitest = packageRequire.resolve("vitest/dist/cli.js");
 	const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_") && name !== "NODE_OPTIONS"));
 	const identity = { node: process.version, platform: process.platform, arch: process.arch, nodeSha256: hash(readFileSync(process.execPath)),
 		evaluatorPath: fileURLToPath(import.meta.url), evaluatorSha256: hash(readFileSync(fileURLToPath(import.meta.url))),
 		tsxSha256: hash(readFileSync(tsx)), vitestSha256: hash(readFileSync(vitest)),
-		tsxVersion: JSON.parse(readFileSync(join(root, "node_modules/tsx/package.json"))).version,
-		vitestVersion: JSON.parse(readFileSync(join(root, "node_modules/vitest/package.json"))).version,
+		tsxVersion: JSON.parse(readFileSync(packageRequire.resolve("tsx/package.json"))).version,
+		vitestVersion: JSON.parse(readFileSync(packageRequire.resolve("vitest/package.json"))).version,
 		commit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, env, encoding: "utf8" }).trim(),
 		sourceChanges: execFileSync("git", ["status", "--porcelain=v1", "--untracked-files=all", "--", ...SOURCE_PATHS], { cwd: root, env, encoding: "utf8" }).trim() };
 	mkdirSync(output, { recursive: true });

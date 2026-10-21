@@ -34,6 +34,7 @@
 - support Drahtbank with Node installed outside system runtime directories while preserving fixture isolation
 - include Git safety and completion-check runtime assets in standalone release archives
 - rerun project checks when declared inputs cross symlinks or submodules instead of reusing incomplete snapshots
+- resolve Drahtbank's test runner from the selected workspace with both hoisted and package-local dependencies
 
 ## [2026.10.20-1] - 2026-10-20
 

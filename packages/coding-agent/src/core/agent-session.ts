@@ -1389,6 +1389,8 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	dispose(): void {
+		if (this._isAgentRunActive) this._agentRunAbortRequested = true;
+		if (this._isBeforeSettle) this._abortDuringBeforeSettle = true;
 		try {
 			this.abortRetry();
 			this.abortCompaction();

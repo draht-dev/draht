@@ -45,7 +45,7 @@ Decompose the work into independently verifiable units before acting; the `atomi
    - `## Coverage Goals` — target coverage percentage and which paths are critical
    - `## Testing Levels` — what is tested at unit level vs integration vs e2e, with examples
    - `## Excluded` — what is explicitly not tested and why
-7. Commit: `draht-tools commit-docs "map existing codebase"`
+7. If committing is authorized: `draht-tools commit-docs "map existing codebase"`
 
 ## Living map for agents
 

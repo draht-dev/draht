@@ -1,6 +1,6 @@
 ---
 name: explainers
-description: Pick the output form that lets a human understand agent work fastest, and build it from evidence — Mermaid diagrams for relational content, a self-contained HTML explainer for findings worth exploring, the STE register in unslop for procedures, and narrated video reels as a non-core option. Use when a report, review, plan, investigation, or handoff describes structure (dependencies, call paths, data flow, state machines, sequences, timelines, wave order), when the user asks to "draw", "diagram", "visualize", "show me", "explain as HTML", "make an explainer", or "Schaubild", or when prose alone would make the reader rebuild a graph in their head.
+description: Choose prose, a Mermaid diagram, or a self-contained HTML explainer for agent output, built only from cited evidence. Use when output describes dependencies, call paths, sequences or state, or the user asks for a diagram.
 ---
 
 # Explainers

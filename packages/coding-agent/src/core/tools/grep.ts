@@ -1,7 +1,8 @@
 import { readFile as fsReadFile, stat as fsStat } from "node:fs/promises";
 import { createInterface } from "node:readline";
+import type { Readable } from "node:stream";
 import type { AgentTool } from "@draht/agent-core";
-import { spawn } from "child_process";
+import { type ChildProcess, spawn } from "child_process";
 import path from "path";
 import { type Static, Type } from "typebox";
 import { ensureTool } from "../../utils/tools-manager.ts";
@@ -46,6 +47,11 @@ export interface GrepToolDetails {
 	linesTruncated?: boolean;
 }
 
+export type GrepProcess = Pick<ChildProcess, "on" | "kill" | "killed"> & {
+	stdout: Readable;
+	stderr: Readable;
+};
+
 /**
  * Pluggable operations for the grep tool.
  * Override these to delegate search to remote systems (for example SSH).
@@ -55,6 +61,8 @@ export interface GrepOperations {
 	isDirectory: (absolutePath: string) => Promise<boolean> | boolean;
 	/** Read file contents for context lines */
 	readFile: (absolutePath: string) => Promise<string> | string;
+	/** Start ripgrep with these arguments and piped stdout/stderr. Bypasses local tool resolution. */
+	spawn?: (args: string[]) => GrepProcess;
 }
 
 const defaultGrepOperations: GrepOperations = {
@@ -116,14 +124,18 @@ export function createGrepToolDefinition(
 
 				(async () => {
 					try {
-						const rgPath = await ensureTool("rg");
-						if (!rgPath) {
-							settle(() => reject(new Error("ripgrep (rg) is not available and could not be downloaded")));
-							return;
+						const ops = customOps ?? defaultGrepOperations;
+						let start = ops.spawn;
+						if (!start) {
+							const rgPath = await ensureTool("rg");
+							if (!rgPath) {
+								settle(() => reject(new Error("ripgrep (rg) is not available and could not be downloaded")));
+								return;
+							}
+							start = (args) => spawn(rgPath, args, { stdio: ["ignore", "pipe", "pipe"] });
 						}
 
 						const searchPath = resolveToCwd(searchDir || ".", ctx?.cwd || cwd);
-						const ops = customOps ?? defaultGrepOperations;
 						let isDirectory: boolean;
 						try {
 							isDirectory = await ops.isDirectory(searchPath);
@@ -165,7 +177,11 @@ export function createGrepToolDefinition(
 						if (glob) args.push("--glob", glob);
 						args.push("--", pattern, searchPath);
 
-						const child = spawn(rgPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+						if (signal?.aborted) {
+							settle(() => reject(new Error("Operation aborted")));
+							return;
+						}
+						const child = start(args);
 						const rl = createInterface({ input: child.stdout });
 						let stderr = "";
 						let matchCount = 0;
@@ -190,6 +206,7 @@ export function createGrepToolDefinition(
 							stopChild();
 						};
 						signal?.addEventListener("abort", onAbort, { once: true });
+						if (signal?.aborted) onAbort();
 						child.stderr?.on("data", (chunk) => {
 							stderr += chunk.toString();
 						});

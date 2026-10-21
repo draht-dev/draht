@@ -49,7 +49,7 @@ Decompose the work into independently verifiable units before acting; the `atomi
    - `## Aggregates` — aggregates and their root entities per context
    - `## Domain Events` — any existing event names or patterns discovered
 6. Create `.planning/TEST-STRATEGY.md` with: Test Framework, Directory Conventions, Coverage Goals, Testing Levels, Excluded
-7. Commit: `draht-tools commit-docs "map existing codebase"`
+7. If committing is authorized: `draht-tools commit-docs "map existing codebase"`
 
 ## Living map for agents
 

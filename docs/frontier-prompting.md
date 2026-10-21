@@ -61,7 +61,7 @@ Runtime mirrors, generated skills, hook registrations, portable activation polic
 
 The reusable [Drahtbank benchmark](../packages/coding-agent/docs/drahtbank.md) now provides versioned cases, repeated paired runs, runner adapters, usage recording, and deterministic grading. The pilot below remains the original, separately recorded experiment.
 
-Against `8705c2adc`, the tracked Markdown prompt assets shrink by 36% in coding-agent, 32% in draht-claude, and 30% in draht-codex. The canonical catalog shrinks by 32%. These are UTF-8 asset bytes across separate contexts, not tokenizer counts or an estimate of every session's input. Reproduce with `node scripts/measure-frontier-prompts.mjs 8705c2adc`.
+Against `8705c2adc`, the tracked Markdown prompt assets shrink by 37% in coding-agent, 33% in draht-claude, and 30% in draht-codex. The canonical catalog shrinks by 33%. These are UTF-8 asset bytes across separate contexts, not tokenizer counts or an estimate of every session's input. Reproduce with `node scripts/measure-frontier-prompts.mjs 8705c2adc`.
 
 Selected canonical assets:
 
@@ -94,4 +94,6 @@ The primary run exposed inherited plugin instructions that led Astra to revert c
 
 Exact prompt snapshots, manifests, raw traces, audited failures, and reports are retained locally under `.artifacts/drahtbank/gpt-astra-opus-2026-10-18/primary/` and `followup/`. Earlier checkout-local runs were excluded after detecting parent-Git context leakage; the runner now constrains Git discovery to the fixture. These cases exercise prompt text on the native runtime, not actual plugin activation, hooks, or the full command catalog. Larger tasks, better text rubrics, and observable transient writes are needed before broader quality claims.
 
-Validation uses isolated repositories, command shims, and the faux provider for lifecycle tests. Focused tests run from their package roots, and `npm run check` validates the repository. No build, development server, or full `npm test` was run; repository changes remain uncommitted. Existing ignored build artifacts from the original same-commit checkout supply workspace dependencies; the original worktree remains untouched.
+The subsequent [four-variant comparison and quota recovery](frontier-prompt-comparison.md) cover the Opus pruning branch, the frontier implementation, and three selected Opus changes combined with the frontier implementation. Those cohorts remain separate from this initial comparison.
+
+Validation uses isolated repositories, command shims, and the faux provider for lifecycle tests. Focused tests run from their package roots, and `npm run check` validates the repository. No build, development server, or full `npm test` was run. Existing ignored build artifacts supply workspace dependencies; the original worktree remains untouched.

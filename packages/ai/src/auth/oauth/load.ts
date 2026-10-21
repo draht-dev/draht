@@ -22,6 +22,7 @@ type OAuthFlowLoaders = {
 	xai: () => OAuthAuth | Promise<OAuthAuth>;
 	radius: (options: { name: string; gateway: string }) => OAuthAuth | Promise<OAuthAuth>;
 	opencodeGo: () => OAuthAuth | Promise<OAuthAuth>;
+	opencode: () => OAuthAuth | Promise<OAuthAuth>;
 	googleAntigravity: () => OAuthAuth | Promise<OAuthAuth>;
 	googleGeminiCli: () => OAuthAuth | Promise<OAuthAuth>;
 };
@@ -85,6 +86,11 @@ export const loadRadiusOAuth = async (options: { name: string; gateway: string }
 export const loadOpenCodeGoOAuth = async (): Promise<OAuthAuth> => {
 	if (bundledLoaders) return bundledLoaders.opencodeGo();
 	return ((await importOAuthModule("./opencode-go.ts")) as { opencodeGoOAuth: OAuthAuth }).opencodeGoOAuth;
+};
+
+export const loadOpenCodeOAuth = async (): Promise<OAuthAuth> => {
+	if (bundledLoaders) return bundledLoaders.opencode();
+	return ((await importOAuthModule("./opencode-go.ts")) as { opencodeOAuth: OAuthAuth }).opencodeOAuth;
 };
 
 export const loadGoogleAntigravityOAuth = async (): Promise<OAuthAuth> => {

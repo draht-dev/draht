@@ -20,7 +20,7 @@ Run the session on the executor tier; dispatch the `advisor` agent (pinned to th
 - **When stuck** — recurring errors, an approach that is not converging, results that don't fit
 - **Once before declaring done** on hard tasks — after writes and test output exist; save the deliverable before the consult and commit only when the task authorizes it
 
-Treat the advice with serious weight: deviate only on empirical failure or primary-source contradiction. If your evidence points one way and the advisor points another, don't silently switch — surface the conflict in one reconcile consult ("I found X, you suggest Y — which constraint breaks the tie?").
+Weigh the advice heavily; the user's instructions, empirical failure, and primary sources override it. If your evidence points one way and the advisor points another, don't silently switch — surface the conflict in one reconcile consult ("I found X, you suggest Y — which constraint breaks the tie?").
 
 Target ~1–3 consults per task. On short reactive tasks where the next action is dictated by output just read, skip the advisor — its value is highest before the approach crystallizes.
 

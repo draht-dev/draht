@@ -1,6 +1,6 @@
 ---
 name: blast-radius
-description: Impact analysis beyond the diff — find what a change could break somewhere else before it ships, reduce the safety argument to the one falsifiable fact it rests on, and prove that fact by running real code, saying for every fact which rung of the evidence ladder it stopped at. Use for "what could this break", "blast radius of this change", or reviewing a small diff you don't trust yet. Not the uncertainty × blast-radius ordering heuristic in draht's planning commands — that phrase ranks risks for scheduling; this skill is the impact investigation itself.
+description: Find what a change could break beyond the diff and prove the one fact its safety rests on by running real code — use when asked what a change could break, or before shipping one you distrust. Not the uncertainty × blast-radius ordering heuristic in planning commands.
 ---
 
 # Blast Radius

@@ -19,6 +19,14 @@ Run `/logout` and select a provider to remove its stored credential. This does n
 
 Radius authentication uses its gateway catalog and caches refreshed model metadata for later offline startup. A custom Radius gateway configured in `models.json` uses its own catalog rather than inheriting the built-in public Radius catalog.
 
+## OpenCode Console
+
+Run `/login opencode-go` for Go or `/login opencode` for Zen and choose browser sign-in. Open the displayed authorization URL, confirm the device code, and select your organization. Draht saves the resulting OAuth credential in its normal credential store and refreshes it when it expires.
+
+The browser can run on another machine; this device flow does not need a localhost callback. If authorization expires or is denied, start `/login` again.
+
+API-key login and `OPENCODE_API_KEY` remain available. An expired API key is not a refreshable browser credential: use browser sign-in or replace the key. Zen and Go keep separate provider entries in Draht, so sign in to the provider you intend to use.
+
 ## Use an API key from the environment
 
 Environment variables are useful in CI and anywhere draht should not store the key. Set the variable before starting draht:

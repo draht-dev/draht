@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added OpenCode Console browser login for Zen and Go with organization-scoped credentials, token refresh, and existing API-key login support.
+
 ## [2026.10.8-1] - 2026-10-08
 
 ### Changed

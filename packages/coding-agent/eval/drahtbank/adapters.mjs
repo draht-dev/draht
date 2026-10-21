@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 // Adapters describe argv and parse output; the runner owns process limits and files.
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const OWNED_FLAGS = new Set([
@@ -71,6 +73,7 @@ export function buildInvocation(config, paths) {
 	command.push(
 		"--mode", "json", "--print", "--no-session", "--no-attachable", "--no-context-files", "--no-skills",
 		"--no-prompt-templates", "--no-extensions", "--no-themes", "--no-approve", "--offline",
+		"--no-builtin-tools", "--extension", fileURLToPath(new URL("isolated-tools.ts", import.meta.url)),
 		"--tools", `read,${process.platform === "win32" ? "powershell" : "bash"},edit,write,grep,find,ls`,
 		"--provider", config.provider, "--model", config.model,
 	);

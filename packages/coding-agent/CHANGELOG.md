@@ -8,7 +8,9 @@
 
 ### Added
 
+- add OpenCode Console browser sign-in for Zen and Go through `/login`, with organization selection and automatic token refresh
 - add `drahtbank` for repeated baseline/candidate prompt comparisons across native, Claude, and Codex assets, with isolated fixtures, deterministic grading, bounded runners, and recorded usage
+- add Drahtbank v2 with named prompt variants, separate screening and holdout cases, structured review facts, observed verification evidence, and a separate offline runtime lane; preserve the v1 suite and recorded scores
 - run configured project checks before native session completion, with cancellation, bounded repairs, and visible failure after exhausted retries
 
 ### Changed
@@ -25,6 +27,7 @@
 - enforce literal force-push and Git hook-bypass safeguards through a shared native/plugin policy
 - quality gates now reject unsuccessful verification commands by exit status; post-task hooks record failed checks instead of reporting an unverified pass
 - resolve debugger/reviewer scope and orchestration status conflicts, retain actionable suspected security findings, and correct research and fix-plan instructions
+- clarify that `/triage` completes at routing-strength diagnosis, accepts labeled hypotheses without a reproduction, and does not expect a fix
 - allow spec review against plain acceptance criteria without requiring XML plans
 - run shipped CommonJS hooks correctly inside the native package's ESM distribution
 

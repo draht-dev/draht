@@ -7,7 +7,7 @@ import { registerBundledOAuthFlowLoaders } from "./auth/oauth/load.ts";
 import { metaOAuth } from "./auth/oauth/meta.ts";
 import { openaiChatGPTOAuth } from "./auth/oauth/openai-chatgpt.ts";
 import { openaiCodexOAuth } from "./auth/oauth/openai-codex.ts";
-import { opencodeGoOAuth } from "./auth/oauth/opencode-go.ts";
+import { opencodeGoOAuth, opencodeOAuth } from "./auth/oauth/opencode-go.ts";
 import { openRouterOAuth } from "./auth/oauth/openrouter.ts";
 import { createRadiusOAuth } from "./auth/oauth/radius.ts";
 import { xaiOAuth } from "./auth/oauth/xai.ts";
@@ -25,6 +25,7 @@ export function registerBunOAuthFlows(): void {
 		xai: () => xaiOAuth,
 		radius: createRadiusOAuth,
 		opencodeGo: () => opencodeGoOAuth,
+		opencode: () => opencodeOAuth,
 		googleAntigravity: () => antigravityOAuth,
 		googleGeminiCli: () => geminiCliOAuth,
 	});

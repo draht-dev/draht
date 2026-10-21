@@ -13,11 +13,10 @@ export function opencodeGoProvider(): Provider<"anthropic-messages" | "openai-co
 		name: "OpenCode Go",
 		auth: {
 			apiKey: envApiKeyAuth("OpenCode API key", ["OPENCODE_API_KEY"]),
-			// draht-only OAuth flow. Upstream deleted the runtime registry that used to make
-			// this reachable, so the provider must declare it directly (mirrors xai.ts).
 			oauth: lazyOAuth({
 				name: "OpenCode Go",
-				loginLabel: "Paste an OpenCode Zen API key",
+				isSubscription: true,
+				loginLabel: "Sign in with OpenCode Console",
 				load: loadOpenCodeGoOAuth,
 			}),
 		},

@@ -3,7 +3,8 @@ import { googleGenerativeAIApi } from "../api/google-generative-ai.lazy.ts";
 import { openAICompletionsApi } from "../api/openai-completions.lazy.ts";
 import { openAIResponsesApi } from "../api/openai-responses.lazy.ts";
 import { typesafeSystemOneApi } from "../api/typesafe-system-one.lazy.ts";
-import { envApiKeyAuth } from "../auth/helpers.ts";
+import { envApiKeyAuth, lazyOAuth } from "../auth/helpers.ts";
+import { loadOpenCodeOAuth } from "../auth/oauth/load.ts";
 import { createProvider, type Provider } from "../models.ts";
 import { OPENCODE_CLASSIFIER_MODELS, OPENCODE_MODELS } from "./opencode.models.ts";
 import { withOpenCodeSessionHeader } from "./opencode-headers.ts";
@@ -14,7 +15,14 @@ export function opencodeProvider(): Provider<OpenCodeApi> {
 	return createProvider<OpenCodeApi>({
 		id: "opencode",
 		name: "OpenCode Zen",
-		auth: { apiKey: envApiKeyAuth("OpenCode API key", ["OPENCODE_API_KEY"]) },
+		auth: {
+			apiKey: envApiKeyAuth("OpenCode API key", ["OPENCODE_API_KEY"]),
+			oauth: lazyOAuth({
+				name: "OpenCode Zen",
+				loginLabel: "Sign in with OpenCode Console",
+				load: loadOpenCodeOAuth,
+			}),
+		},
 		models: [...Object.values(OPENCODE_MODELS), ...Object.values(OPENCODE_CLASSIFIER_MODELS)],
 		api: {
 			"anthropic-messages": withOpenCodeSessionHeader(anthropicMessagesApi()),

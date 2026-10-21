@@ -49,6 +49,6 @@
 		"directory": "packages/mom"
 	},
 	"engines": {
-		"node": ">=20.0.0"
+		"node": ">=22.23.4"
 	}
 }

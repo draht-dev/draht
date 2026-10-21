@@ -52,6 +52,6 @@
 		"directory": "packages/draht-codex"
 	},
 	"engines": {
-		"node": ">=20.6.0"
+		"node": ">=22.23.4"
 	}
 }

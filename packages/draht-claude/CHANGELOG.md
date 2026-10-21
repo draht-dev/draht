@@ -27,6 +27,7 @@
 - replace nonexistent research and milestone commands, correct fix-plan retry instructions, and recognize graph artifacts already produced by map-codebase
 - block failed completion-check launches, timeouts, and signals; recognize source changes with unusual paths and untracked directories
 - allow spec review against plain acceptance criteria without requiring XML plans
+- rerun project checks when declared inputs cross symlinks or submodules instead of reusing incomplete snapshots
 
 ## [2026.10.8-1] - 2026-10-08
 

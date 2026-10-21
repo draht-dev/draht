@@ -1,5 +1,14 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -100,6 +109,63 @@ describe.each(runtimes)("$name project checks runtime", ({ script }) => {
 		expect(run().checks[0].status).toBe("passed");
 		expect(readFileSync(marker, "utf8")).toBe("run\nrun\n");
 	});
+
+	it.each([
+		{ boundary: "symlink", input: "vendor", configRoot: "." },
+		{ boundary: "symlink", input: "vendor/src", configRoot: "." },
+		{ boundary: "untracked symlink", input: "vendor/src", configRoot: "." },
+		{ boundary: "ignored symlink", input: "vendor", configRoot: "." },
+		{ boundary: "ignored symlink", input: "vendor/src", configRoot: "." },
+		{ boundary: "submodule", input: "vendor", configRoot: "." },
+		{ boundary: "submodule", input: "vendor/src", configRoot: "." },
+		{ boundary: "symlink", input: "vendor/src", configRoot: "nested" },
+		{ boundary: "submodule", input: "vendor/src", configRoot: "nested" },
+	])(
+		"does not reuse checks for $input across a $boundary boundary in $configRoot",
+		({ boundary, input, configRoot }) => {
+			cwd = join(cwd, configRoot);
+			write("src/example.py", "original\n");
+			const dependency = join(fixture, "dependency");
+			mkdirSync(join(dependency, "src"), { recursive: true });
+			writeFileSync(join(dependency, "src/example.py"), "valid\n");
+			if (boundary !== "submodule") {
+				symlinkSync(dependency, join(cwd, "vendor"), "junction");
+				if (boundary === "symlink") execFileSync("git", ["add", "vendor"], { cwd });
+				if (boundary === "ignored symlink") write(".gitignore", "vendor\n");
+			} else {
+				execFileSync("git", ["init", "--quiet"], { cwd: dependency });
+				execFileSync("git", ["add", "src/example.py"], { cwd: dependency });
+				execFileSync(
+					"git",
+					["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "-m", "fixture"],
+					{ cwd: dependency },
+				);
+				execFileSync(
+					"git",
+					["-c", "protocol.file.allow=always", "submodule", "add", "--quiet", dependency, "vendor"],
+					{
+						cwd,
+					},
+				);
+			}
+			configure([
+				check({
+					name: "dependency source",
+					inputs: [input],
+					command: [
+						process.execPath,
+						"-e",
+						"process.exit(require('node:fs').readFileSync('vendor/src/example.py', 'utf8') === 'valid\\n' ? 0 : 1)",
+					],
+				}),
+				check(),
+			]);
+			expect(run().checks.map((entry) => entry.status)).toEqual(["passed", "passed"]);
+			write("vendor/src/example.py", "broken\n");
+			expect(run().checks.map((entry) => entry.status)).toEqual(["failed", "cached"]);
+			expect(readFileSync(marker, "utf8")).toBe("run\n");
+		},
+	);
 
 	it("does not invalidate a scoped check for unrelated documentation", () => {
 		configure();

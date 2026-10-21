@@ -90,13 +90,24 @@ function fingerprint(root, check, config, repo) {
 	if (!repo || !check.cache) return null;
 	const files = new Set(git(root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean));
 	for (const input of check.inputs) {
+		// Git may omit ignored symlinks; inspect every explicit input ancestor.
+		let absolute = root;
+		for (const component of input.split("/")) {
+			absolute = path.join(absolute, component);
+			try {
+				if (fs.lstatSync(absolute).isSymbolicLink()) return null;
+			} catch (error) {
+				if (error.code !== "ENOENT") throw error;
+				break;
+			}
+		}
 		// Include explicit ignored files too (e.g. a generated schema).
 		try { if (!fs.statSync(path.join(root, input)).isDirectory()) files.add(input); } catch { files.add(input); }
 	}
 	const hash = createHash("sha256").update(JSON.stringify({ version: VERSION, root, check, config, node: process.version, platform: process.platform, arch: process.arch }));
 	hash.update(fs.readFileSync(path.join(root, ".draht", "checks.json")));
 	for (const file of [...files].sort()) {
-		if (!check.inputs.some((input) => input === "." || file === input || file.startsWith(`${input}/`))) continue;
+		if (!check.inputs.some((input) => input === "." || file === input || file.startsWith(`${input}/`) || input.startsWith(`${file}/`))) continue;
 		hash.update(`\0${file}\0`);
 		try {
 			const absolute = path.join(root, file);

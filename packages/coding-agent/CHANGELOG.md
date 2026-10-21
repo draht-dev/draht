@@ -33,6 +33,7 @@
 - cancel completion checks when a session is disposed and prevent hook-requested continuation from restarting it
 - support Drahtbank with Node installed outside system runtime directories while preserving fixture isolation
 - include Git safety and completion-check runtime assets in standalone release archives
+- rerun project checks when declared inputs cross symlinks or submodules instead of reusing incomplete snapshots
 
 ## [2026.10.20-1] - 2026-10-20
 

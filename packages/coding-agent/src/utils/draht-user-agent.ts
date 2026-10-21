@@ -1,4 +1,6 @@
+import { formatUserAgent } from "@draht/ai";
+
+/** draht's `User-Agent` for its own network requests; the same detailed form @draht/ai sends to providers. */
 export function getDrahtUserAgent(version: string): string {
-	const runtime = process.versions.bun ? `bun/${process.versions.bun}` : `node/${process.version}`;
-	return `draht/${version} (${process.platform}; ${runtime}; ${process.arch})`;
+	return formatUserAgent({ userAgent: "detailed", version });
 }

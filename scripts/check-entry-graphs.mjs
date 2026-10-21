@@ -36,7 +36,8 @@ const BUDGETS = {
 	"packages/ai": {
 		"./models": {
 			// Request telemetry reaches @draht/ai's telemetry.ts and @draht/telemetry's root (index, noop, metrics, memory).
-			maxFiles: 18,
+			// Request identity reaches utils/identity.ts and its version constant.
+			maxFiles: 20,
 			forbid: ["providers/", "models.generated.ts", "index.ts", "utils/validation.ts", "utils/typebox-helpers.ts"],
 			allow: ["packages/telemetry/src/index.ts"],
 		},

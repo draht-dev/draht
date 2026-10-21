@@ -6,6 +6,7 @@
 import {
 	type AssistantMessage,
 	type ClientIdentity,
+	DRAHT_ATTRIBUTION,
 	EventStream,
 	getCurrentTools,
 	getToolStateChanges,
@@ -37,7 +38,7 @@ export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
  * Request identity of agent loops: @draht/ai's defaults with provider attribution to draht. `AgentLoopConfig.identity`
  * overrides it field by field.
  */
-export const DEFAULT_AGENT_IDENTITY: ClientIdentity = { attribution: true };
+export const DEFAULT_AGENT_IDENTITY: ClientIdentity = { attribution: DRAHT_ATTRIBUTION };
 
 /**
  * Start an agent loop with a new prompt message.

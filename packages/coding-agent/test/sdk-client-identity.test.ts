@@ -5,6 +5,7 @@ import {
 	type Api,
 	type AssistantMessage,
 	createAssistantMessageEventStream,
+	DRAHT_ATTRIBUTION,
 	getAttributionHeaders,
 	type Model,
 	normalizeContext,
@@ -145,7 +146,7 @@ describe("createAgentSession client identity", () => {
 		expect(options?.identity).toEqual({
 			userAgent: "detailed",
 			version: VERSION,
-			attribution: { categories: "cli-agent" },
+			attribution: DRAHT_ATTRIBUTION,
 		});
 		expect(getAttributionHeaders(model, options?.identity)).toEqual({
 			"HTTP-Referer": "https://github.com/draht-dev/draht",
@@ -158,7 +159,7 @@ describe("createAgentSession client identity", () => {
 		const model = createModel("nvidia", "https://integrate.api.nvidia.com/v1");
 		const options = await captureOptions(model, { telemetryEnabled: false });
 
-		expect(options?.identity).toEqual({ userAgent: "detailed", version: VERSION, attribution: false });
+		expect(options?.identity).toEqual({ userAgent: "detailed", version: VERSION, attribution: null });
 		expect(getAttributionHeaders(model, options?.identity)).toEqual({});
 	});
 
@@ -166,7 +167,7 @@ describe("createAgentSession client identity", () => {
 		process.env.DRAHT_TELEMETRY = "0";
 		const options = await captureOptions(createModel("openrouter", "https://openrouter.ai/api/v1"));
 
-		expect(options?.identity?.attribution).toBe(false);
+		expect(options?.identity?.attribution).toBeNull();
 	});
 
 	it("adds OpenCode session headers for custom OpenCode providers", async () => {

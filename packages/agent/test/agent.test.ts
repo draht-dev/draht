@@ -1,4 +1,4 @@
-import type { ClientIdentity } from "@draht/ai";
+import { type ClientIdentity, DRAHT_ATTRIBUTION } from "@draht/ai";
 import {
 	type AssistantMessage,
 	createAssistantMessageEventStream,
@@ -1214,15 +1214,16 @@ describe("Agent", () => {
 		});
 
 		await agent.prompt("hello");
-		agent.identity = { userAgent: "short", attribution: "acme" };
+		const acme = { name: "acme", url: "https://acme.example" };
+		agent.identity = { userAgent: "short", attribution: acme };
 		await agent.prompt("hello again");
 		agent.identity = { userAgent: "short" };
 		await agent.prompt("and again");
 
 		expect(received).toEqual([
-			{ attribution: true },
-			{ attribution: "acme", userAgent: "short" },
-			{ attribution: true, userAgent: "short" },
+			{ attribution: DRAHT_ATTRIBUTION },
+			{ attribution: acme, userAgent: "short" },
+			{ attribution: DRAHT_ATTRIBUTION, userAgent: "short" },
 		]);
 	});
 });

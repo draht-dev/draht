@@ -20,18 +20,19 @@
  * are discovered here at spawn time via a real subprocess call, never
  * hardcoded/guessed -- see `resolvePythonInstallation`.
  *
- * **Linux**: wraps with `unshare --user --map-root-user --net --mount --`
- * (empty net namespace = network unreachable at the kernel; mount
- * namespace for FS confinement), falling back to `bwrap` with equivalent
- * flags if `unshare` isn't available. Availability is detected at spawn
- * time, never assumed.
+ * **Linux**: unshare creates private user/network/mount namespaces. A
+ * trusted Python bootstrap then applies Landlock filesystem rules, drops
+ * capabilities and installs a seccomp syscall allowlist before loading the
+ * driver in the same Python process. This requires Landlock ABI 3+ and
+ * seccomp on x86-64/AArch64; unsupported kernels fail closed. bwrap remains
+ * the namespace fallback when unshare is unavailable.
  *
  * **Fail closed everywhere**: if the sandboxing mechanism for the current
  * platform can't be established (wrapper binary missing, profile missing,
- * Python installation can't be discovered, unsupported platform), every
- * function here throws `SandboxUnavailableError` synchronously rather than
- * returning a command that would run the driver unwrapped. There is no
- * fallback path to an unsandboxed spawn anywhere in this module.
+ * Python installation can't be discovered, unsupported platform), command
+ * resolution throws `SandboxUnavailableError`. Linux kernel-policy failures
+ * terminate the bootstrap before it loads the driver. Neither path falls
+ * back to an unsandboxed driver.
  */
 
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
@@ -41,6 +42,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MACOS_PROFILE_PATH = join(__dirname, "..", "sandbox", "macos.sb");
+const LINUX_BOOTSTRAP_PATH = join(__dirname, "..", "python", "linux_sandbox.py");
 const DEFAULT_SANDBOX_EXEC_BIN = "/usr/bin/sandbox-exec";
 
 /**
@@ -121,15 +123,21 @@ const pythonInstallationCache = new Map<string, PythonInstallation>();
  * the answer can't change during this process's lifetime and this runs on
  * every sandboxed spawn.
  */
-function resolvePythonInstallation(pythonBin: string): PythonInstallation {
-	const cached = pythonInstallationCache.get(pythonBin);
+function resolvePythonInstallation(pythonBin: string, isolated = false): PythonInstallation {
+	const cacheKey = JSON.stringify([pythonBin, isolated]);
+	const cached = pythonInstallationCache.get(cacheKey);
 	if (cached) return cached;
 
 	let stdout: string;
 	try {
-		stdout = execFileSync(pythonBin, ["-c", "import sys; print(sys.executable); print(sys.prefix)"], {
-			encoding: "utf8",
-		});
+		stdout = execFileSync(
+			pythonBin,
+			[...(isolated ? ["-I", "-S"] : []), "-c", "import sys; print(sys.executable); print(sys.prefix)"],
+			{
+				encoding: "utf8",
+				...(isolated ? { env: buildScrubbedEnv() } : {}),
+			},
+		);
 	} catch (err) {
 		throw new SandboxUnavailableError(
 			`sandbox_violation: could not run ${JSON.stringify(pythonBin)} to discover its installation -- refusing to run the REPL driver unsandboxed. (${
@@ -164,7 +172,7 @@ function resolvePythonInstallation(pythonBin: string): PythonInstallation {
 	const reexecBin = existsSync(reexecCandidate) ? realpathSync(reexecCandidate) : realBin;
 
 	const installation: PythonInstallation = { realBin, reexecBin, prefix };
-	pythonInstallationCache.set(pythonBin, installation);
+	pythonInstallationCache.set(cacheKey, installation);
 	return installation;
 }
 
@@ -230,6 +238,11 @@ function buildMacosCommand(opts: SandboxSpawnOptions): SandboxedCommand {
 
 function buildLinuxCommand(opts: SandboxSpawnOptions): SandboxedCommand {
 	const pythonBin = opts.pythonBin ?? "python3";
+	if (!existsSync(LINUX_BOOTSTRAP_PATH)) {
+		throw new SandboxUnavailableError(
+			"sandbox_violation: Linux bootstrap is missing -- refusing to run the REPL driver unsandboxed.",
+		);
+	}
 
 	let workdir: string;
 	let driverPath: string;
@@ -246,28 +259,34 @@ function buildLinuxCommand(opts: SandboxSpawnOptions): SandboxedCommand {
 
 	const unshareBin = opts.unshareBin ?? resolveOnPath("unshare");
 	if (unshareBin && existsSync(unshareBin)) {
-		// Empty user+net namespace: no interfaces besides loopback exist, so
-		// network is unreachable at the kernel regardless of anything Python
-		// itself tries. Mount namespace confines the filesystem view; the
-		// workdir bind-mount (rw) plus the rest of the root (ro, implicit --
-		// `unshare --mount` alone doesn't remount anything) is a coarser
-		// boundary than the macOS profile's explicit allowlist, which is why
-		// `--map-root-user` + a private mount namespace is paired with the
-		// driver only ever being told about `workdir` for file I/O at the
-		// Python-guardrail layer (Phase 28 task 2) -- the kernel-level net
-		// denial is what task 1 owns and is unconditional here.
+		const { realBin } = resolvePythonInstallation(pythonBin, true);
+		// No --fork: Node's RSS monitor and kill target must remain Python's
+		// PID. -I -S excludes user paths and site startup code before confinement.
 		return {
 			command: unshareBin,
-			args: ["--user", "--map-root-user", "--net", "--mount", "--", pythonBin, driverPath],
+			args: [
+				"--user",
+				"--map-root-user",
+				"--net",
+				"--mount",
+				"--",
+				realBin,
+				"-I",
+				"-S",
+				LINUX_BOOTSTRAP_PATH,
+				driverPath,
+				workdir,
+			],
 		};
 	}
 
 	const bwrapBin = opts.bwrapBin ?? resolveOnPath("bwrap");
 	if (bwrapBin && existsSync(bwrapBin)) {
-		const binds = ["/usr", "/lib", "/bin", "/sbin"]
+		const { realBin, prefix } = resolvePythonInstallation(pythonBin, true);
+		const binds = [...new Set(["/usr", "/lib", "/lib64", "/bin", "/sbin", "/nix/store", prefix])]
 			.filter((path) => existsSync(path))
 			.flatMap((path) => ["--ro-bind", path, path]);
-		if (existsSync("/lib64")) binds.push("--ro-bind", "/lib64", "/lib64");
+		for (const path of [LINUX_BOOTSTRAP_PATH, driverPath, realBin]) binds.push("--ro-bind", path, path);
 		return {
 			command: bwrapBin,
 			args: [
@@ -285,8 +304,12 @@ function buildLinuxCommand(opts: SandboxSpawnOptions): SandboxedCommand {
 				"/dev",
 				"--chdir",
 				workdir,
-				pythonBin,
+				realBin,
+				"-I",
+				"-S",
+				LINUX_BOOTSTRAP_PATH,
 				driverPath,
+				workdir,
 			],
 		};
 	}
@@ -354,8 +377,9 @@ function buildScrubbedEnv(): NodeJS.ProcessEnv {
 
 /**
  * Spawns `repl_driver.py` wrapped in the platform's OS-level sandbox.
- * Throws `SandboxUnavailableError` synchronously (before any process is
- * created) if the sandbox can't be established -- there is no unwrapped
+ * Throws `SandboxUnavailableError` for command-resolution failures. Linux
+ * kernel-policy failures terminate the child before the driver runs; the
+ * session's startup self-test observes that failure. There is no unwrapped
  * fallback path.
  */
 export function spawnSandboxed(opts: SandboxSpawnOptions): ChildProcess {

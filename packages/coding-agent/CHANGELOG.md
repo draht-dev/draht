@@ -31,6 +31,7 @@
 - allow spec review against plain acceptance criteria without requiring XML plans
 - run shipped CommonJS hooks correctly inside the native package's ESM distribution
 - cancel completion checks when a session is disposed and prevent hook-requested continuation from restarting it
+- support Drahtbank with Node installed outside system runtime directories while preserving fixture isolation
 
 ## [2026.10.20-1] - 2026-10-20
 

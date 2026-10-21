@@ -1,5 +1,7 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
+	chmodSync,
+	copyFileSync,
 	existsSync,
 	linkSync,
 	mkdirSync,
@@ -50,6 +52,52 @@ describe.skipIf(process.platform !== "linux")("Drahtbank kernel filesystem bound
 		expect(await isolation.fs({ op: "stat", path: "src/nested" })).toMatchObject({ isDirectory: true });
 		expect(await isolation.fs({ op: "readdir", path: "src/nested" })).toEqual(["file.txt"]);
 		expect(await isolation.fs({ op: "access", path: "src/nested/file.txt", mode: 6 })).toBeNull();
+	});
+
+	it("mounts only a custom Node executable readonly without exposing its install directory", () => {
+		const runtime = join(root, "custom-runtime");
+		const fixture = join(root, "custom-node-workspace");
+		mkdirSync(runtime);
+		mkdirSync(fixture);
+		const node = join(runtime, "node");
+		const sibling = join(runtime, "host-only-config");
+		copyFileSync(process.execPath, node);
+		chmodSync(node, 0o755);
+		writeFileSync(sibling, "host-only data");
+		const helper = new URL("../eval/drahtbank/isolation.mjs", import.meta.url).href;
+		const confined = `const fs=require("node:fs"),assert=require("node:assert/strict");
+assert.throws(()=>fs.writeFileSync("/.drahtbank/bin/node","overwrite"));
+assert.throws(()=>fs.chmodSync("/.drahtbank/bin/node",0o755),{code:"EROFS"});
+assert.throws(()=>fs.writeFileSync("/.drahtbank/bin/neighbor","overwrite"));
+assert.throws(()=>fs.readFileSync(process.argv[1]));
+assert.throws(()=>fs.writeFileSync(process.argv[1],"overwrite"));
+fs.writeFileSync("local.txt","inside");
+console.log("confined");`;
+		const source = `import assert from "node:assert/strict";
+import {dirname} from "node:path";
+import {createIsolation} from ${JSON.stringify(helper)};
+const isolation=await createIsolation(process.argv[1]);
+try {
+ const lookup=await isolation.run([isolation.shellPath,"--noprofile","--norc","-c","command -v node"]);
+ assert.equal(lookup.exitCode,0,lookup.stderr);
+ assert.equal(lookup.stdout,isolation.nodePath+"\\n");
+ for(const command of [isolation.nodePath,"node"]) {
+  const result=await isolation.run([command,"-e",${JSON.stringify(confined)},process.argv[2]]);
+  assert.equal(result.exitCode,0,result.stderr);
+  assert.equal(result.stdout,"confined\\n");
+ }
+ assert.equal(Buffer.from(await isolation.fs({op:"read",path:"local.txt"}),"base64").toString(),"inside");
+ await assert.rejects(createIsolation(dirname(process.execPath)),/workspace overlaps Node executable/);
+ console.log(JSON.stringify(isolation.evidence.runtimeFiles));
+} finally {isolation.dispose();}`;
+
+		const output = execFileSync(node, ["--input-type=module", "-e", source, fixture, sibling], {
+			encoding: "utf8",
+			timeout: 20_000,
+		});
+
+		expect(JSON.parse(output)).toEqual([{ source: node, target: "/.drahtbank/bin/node" }]);
+		expect(readFileSync(sibling, "utf8")).toBe("host-only data");
 	});
 
 	it("rejects absolute and parent paths before direct filesystem access", async () => {

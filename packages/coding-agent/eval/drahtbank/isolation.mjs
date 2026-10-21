@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 export const ISOLATION_VERSION = "linux-user-mount-pid-net-ipc-chroot-v1";
 const WORKER = fileURLToPath(new URL("./isolation-worker.mjs", import.meta.url));
 const WORKER_PATH = "/.drahtbank/worker.mjs";
+const NODE_RUNTIME_PATH = "/.drahtbank/bin/node";
 const ARTIFACTS_PATH = "/.drahtbank/artifacts";
 const MAX_OUTPUT = 10 * 1024 * 1024;
 const MAX_FILESYSTEM_OUTPUT = Math.ceil(MAX_OUTPUT / 3) * 4 + 1024;
@@ -31,6 +32,8 @@ root_count=$1
 shift
 artifacts=$1
 shift
+node_runtime=$1
+shift
 "$mount_bin" --make-rprivate /
 "$mount_bin" -t tmpfs -o size=16m,nosuid,nodev,uid=0,gid=0 tmpfs "$root"
 "$mkdir_bin" -p "$root/.drahtbank" "$root/dev" "$root$workspace"
@@ -42,6 +45,12 @@ while [ "$root_count" -gt 0 ]; do
 	"$mount_bin" --bind "$runtime" "$root$runtime"
 	"$mount_bin" -o remount,bind,ro,nosuid,nodev "$root$runtime"
 done
+if [ -n "$node_runtime" ]; then
+	"$mkdir_bin" -p "$root/.drahtbank/bin"
+	"$touch_bin" "$root${NODE_RUNTIME_PATH}"
+	"$mount_bin" --bind "$node_runtime" "$root${NODE_RUNTIME_PATH}"
+	"$mount_bin" -o remount,bind,ro,nosuid,nodev "$root${NODE_RUNTIME_PATH}"
+fi
 "$touch_bin" "$root/.drahtbank/worker.mjs"
 "$mount_bin" --bind "$worker" "$root/.drahtbank/worker.mjs"
 "$mount_bin" -o remount,bind,ro,nosuid,nodev "$root/.drahtbank/worker.mjs"
@@ -130,8 +139,12 @@ function createExecutor(workspace) {
 		throw unavailable(`${name} is not available in a readonly runtime root`);
 	};
 	const bins = Object.fromEntries(["unshare", "bash", "chroot", "setpriv", "mount", "mkdir", "touch", "rg", "fd"].map((name) => [name, resolveExecutable(name)]));
-	const nodePath = realpathSync(process.execPath);
-	if (!runtimeAllows(nodePath)) throw unavailable("Node is not in a readonly runtime root");
+	const sourceNodePath = realpathSync(process.execPath);
+	if (contained(sourceNodePath, workspace)) throw unavailable("workspace overlaps Node executable");
+	if (!statSync(sourceNodePath).isFile()) throw unavailable("Node executable is not a regular file");
+	accessSync(sourceNodePath, constants.X_OK);
+	const runtimeFiles = runtimeAllows(sourceNodePath) ? [] : [{ source: sourceNodePath, target: NODE_RUNTIME_PATH }];
+	const nodePath = runtimeFiles[0]?.target ?? sourceNodePath;
 	const paths = new Set([dirname(nodePath), ...Object.values(bins).map(dirname)]);
 	for (const entry of (process.env.PATH ?? "").split(delimiter)) {
 		try {
@@ -184,7 +197,7 @@ function createExecutor(workspace) {
 			"--user", "--map-root-user", "--mount", "--net", "--ipc", "--pid", "--fork", "--kill-child=KILL", "--",
 			bins.bash, "--noprofile", "--norc", "-c", SETUP, "--",
 			root, workspace, WORKER, bins.chroot, bins.setpriv, bins.mount, bins.mkdir, bins.touch, bins.bash,
-			String(runtimeRoots.length), artifactDirectory ?? "", ...runtimeRoots, ...argv,
+			String(runtimeRoots.length), artifactDirectory ?? "", runtimeFiles[0]?.source ?? "", ...runtimeRoots, ...argv,
 		];
 		return { root, command: bins.unshare, args };
 	};
@@ -280,7 +293,7 @@ function createExecutor(workspace) {
 		workspace, nodePath, shellPath: bins.bash, workerPath: WORKER_PATH, spawn, run, runSync, fs, resolveExecutable,
 		retainReadOnlyFile, dispose,
 		evidence: {
-			policy: ISOLATION_VERSION, workspace, runtimeRoots,
+			policy: ISOLATION_VERSION, workspace, runtimeRoots, runtimeFiles,
 			workerSha256: createHash("sha256").update(readFileSync(WORKER)).digest("hex"),
 			network: "private namespace", hostProc: false, inheritedEnvironment: false,
 			readonlyArtifactsPath: ARTIFACTS_PATH,

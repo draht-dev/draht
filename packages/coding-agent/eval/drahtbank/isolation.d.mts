@@ -30,6 +30,7 @@ export interface Isolation {
 		policy: typeof ISOLATION_VERSION;
 		workspace: string;
 		runtimeRoots: string[];
+		runtimeFiles: Array<{ source: string; target: string }>;
 		workerSha256: string;
 		network: string;
 		hostProc: false;

@@ -112,9 +112,18 @@ abstract class BaseLink implements Link {
 /** Payloads whose JSON is longer than this many characters are deflated. */
 export const PACK_THRESHOLD = 64 * 1024;
 
+/** Largest inflated payload accepted, so a small deflated frame cannot expand without bound. */
+export const MAX_INFLATED_BYTES = 128 * 1024 * 1024;
+
 const zlib: typeof Zlib | undefined = (
 	globalThis as { process?: { getBuiltinModule?(id: "node:zlib"): typeof Zlib } }
 ).process?.getBuiltinModule?.("node:zlib");
+
+/** Inflates on Node, refusing output past `MAX_INFLATED_BYTES`. */
+function inflateRawText(bytes: Uint8Array): string {
+	if (zlib === undefined) throw new TypeError("packed payload without zlib");
+	return zlib.inflateRawSync(bytes, { maxOutputLength: MAX_INFLATED_BYTES }).toString("utf8");
+}
 
 /** A deflated JSON payload, kept as received until a host uses it. */
 export class Packed {
@@ -127,8 +136,7 @@ export class Packed {
 /** A frame payload as its user needs it: inflated and parsed if it arrived packed. */
 export function unpack(value: unknown): unknown {
 	if (!(value instanceof Packed)) return value;
-	if (zlib === undefined) throw new TypeError("packed payload without zlib");
-	return JSON.parse(zlib.inflateRawSync(value.bytes).toString("utf8"));
+	return JSON.parse(inflateRawText(value.bytes));
 }
 
 type PayloadField = "args" | "value";
@@ -219,15 +227,28 @@ export function inflateMessage(data: Uint8Array): string {
 	if (zlib === undefined) throw new TypeError("inflateMessage needs zlib");
 	const { envelope, field, bytes } = splitMessage(data);
 	const head = JSON.stringify(envelope);
-	return `${head.slice(0, -1)},${JSON.stringify(field)}:${zlib.inflateRawSync(bytes).toString("utf8")}}`;
+	return `${head.slice(0, -1)},${JSON.stringify(field)}:${inflateRawText(bytes)}}`;
 }
 
 /** Inflates without zlib (browsers). */
 async function inflate(bytes: Uint8Array): Promise<unknown> {
-	const stream = new Blob([bytes as Uint8Array<ArrayBuffer>])
+	const reader = new Blob([bytes as Uint8Array<ArrayBuffer>])
 		.stream()
-		.pipeThrough(new DecompressionStream("deflate-raw"));
-	return JSON.parse(await new Response(stream).text());
+		.pipeThrough(new DecompressionStream("deflate-raw"))
+		.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		total += value.byteLength;
+		if (total > MAX_INFLATED_BYTES) {
+			await reader.cancel();
+			throw new RangeError("inflated payload exceeds MAX_INFLATED_BYTES");
+		}
+		chunks.push(value);
+	}
+	return JSON.parse(await new Blob(chunks as Uint8Array<ArrayBuffer>[]).text());
 }
 
 /** Parses a JSON frame; anything else is a protocol error. */

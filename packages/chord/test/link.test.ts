@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { deflateRawSync } from "node:zlib";
 import { Type } from "typebox";
 import { describe, it } from "vitest";
 import {
@@ -18,7 +19,7 @@ import {
 	type Self,
 	type StateEvent,
 } from "../src/index.ts";
-import { Packed, unpack } from "../src/link.ts";
+import { inflateMessage, MAX_INFLATED_BYTES, Packed, unpack } from "../src/link.ts";
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -627,5 +628,29 @@ describe("links: IPC", () => {
 		assert.equal(sent.length, 1);
 		link.send({ t: "ping", n: 2 });
 		assert.equal(sent.length, 1, "a closed link sends nothing more");
+	});
+});
+
+describe("packed payload inflation limit", () => {
+	// Zeros deflate about 1000:1, so a few hundred KiB of input inflates past the cap.
+	const bomb = deflateRawSync(Buffer.alloc(MAX_INFLATED_BYTES + 1));
+
+	it("unpack refuses a payload that inflates past MAX_INFLATED_BYTES", () => {
+		assert(bomb.byteLength < 1024 * 1024);
+		assert.throws(() => unpack(new Packed(bomb)), RangeError);
+	});
+
+	it("inflateMessage refuses a payload that inflates past MAX_INFLATED_BYTES", () => {
+		const head = Buffer.from(JSON.stringify({ t: "result", id: 1, z: "value" }));
+		const message = Buffer.alloc(4 + head.byteLength + bomb.byteLength);
+		message.writeUInt32BE(head.byteLength, 0);
+		head.copy(message, 4);
+		bomb.copy(message, 4 + head.byteLength);
+		assert.throws(() => inflateMessage(message), RangeError);
+	});
+
+	it("unpack still inflates payloads within the limit", () => {
+		const value = { text: "x".repeat(200_000) };
+		assert.deepEqual(unpack(new Packed(deflateRawSync(JSON.stringify(value)))), value);
 	});
 });

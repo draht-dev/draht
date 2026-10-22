@@ -47,6 +47,7 @@ export {
 	inflateMessage,
 	ipcLink,
 	type Link,
+	MAX_INFLATED_BYTES,
 	memoryLinkPair,
 	PACK_THRESHOLD,
 	type WebSocketLike,

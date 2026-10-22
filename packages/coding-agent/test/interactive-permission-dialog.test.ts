@@ -240,8 +240,9 @@ type DialogOpts = { signal?: AbortSignal; timeout?: number; detail?: PermissionA
 type DialogHost = {
 	programStatus: ProgramStatusReporter;
 	statusReports: ProgramStatus[];
-	extensionSelector: ExtensionSelectorComponent | undefined;
-	extensionSelectorSettle: ((value: string | undefined) => void) | undefined;
+	extensionDialogs: Array<{ component: unknown; kind: string }>;
+	/** The visible dialog when it is a selector. A test view over `extensionDialogs`. */
+	readonly extensionSelector: ExtensionSelectorComponent | undefined;
 	extensionDialogDecidedBy: string | undefined;
 	editorContainer: { clear(): void; addChild(child: unknown): void };
 	editor: unknown;
@@ -257,18 +258,22 @@ type DialogHost = {
 		blocked?: BlockedStatus,
 	): Promise<string | undefined>;
 	showExtensionConfirm(title: string, message: string, opts?: DialogOpts): Promise<boolean>;
-	hideExtensionSelector(): void;
 	flushExtensionDialogDecidedNotice(): void;
 	noteExtensionDialogResolvedElsewhere(label: string): void;
 	buildPermissionDetailRows(detail: PermissionAskDetail): string[];
 	/** The real session-invalidate / `/reload` teardown. See `setBeforeSessionInvalidate`. */
 	resetExtensionUI(): void;
-	extensionInput: { dispose?(): void; handleInput?(keyData: string): void } | undefined;
-	extensionEditor: unknown;
+	readonly extensionInput: { dispose?(): void; handleInput?(keyData: string): void } | undefined;
+	readonly extensionEditor: unknown;
 	showExtensionInput(title: string, placeholder?: string, opts?: DialogOpts): Promise<string | undefined>;
-	hideExtensionInput(): void;
 	showExtensionEditor(title: string, prefill?: string): Promise<string | undefined>;
-	hideExtensionEditor(): void;
+	showExtensionCustom<T>(
+		factory: (tui: unknown, theme: unknown, keybindings: unknown, done: (result: T) => void) => unknown,
+	): Promise<T>;
+	pushExtensionDialog(dialog: unknown): void;
+	removeExtensionDialog(component: unknown): void;
+	showTopExtensionDialog(): void;
+	closeAllExtensionDialogs(): void;
 	/** Upstream v0.99.2: every extension dialog first disposes the active built-in selector. */
 	disposeActiveSelector(): void;
 };
@@ -288,11 +293,19 @@ function createHost(columns = RENDER_WIDTH): DialogHost {
 			() => statusTerminal,
 			() => undefined,
 		),
-		extensionSelector: undefined,
-		extensionSelectorSettle: undefined,
+		extensionDialogs: [],
+		get extensionSelector() {
+			return visibleDialog<ExtensionSelectorComponent>(host, "selector");
+		},
+		get extensionInput() {
+			return visibleDialog<{ dispose?(): void; handleInput?(keyData: string): void }>(host, "input");
+		},
+		get extensionEditor() {
+			return visibleDialog(host, "editor");
+		},
 		extensionDialogDecidedBy: undefined,
 		editorContainer: { clear: vi.fn(), addChild: vi.fn() },
-		editor: { name: "editor" },
+		editor: { name: "editor", text: "", getText: () => "", setText: vi.fn() },
 		ui: { setFocus: vi.fn(), requestRender: vi.fn(), hideOverlay: vi.fn(), terminal: { columns } },
 		notices: [] as string[],
 		showExtensionNotify(message: string) {
@@ -304,10 +317,6 @@ function createHost(columns = RENDER_WIDTH): DialogHost {
 		// none of them is under test here; the point of driving the REAL `resetExtensionUI` is that
 		// the dialog teardown inside it is the shipped one, reached the way a session invalidate
 		// reaches it.
-		extensionInput: undefined,
-		extensionInputSettle: undefined,
-		extensionEditor: undefined,
-		extensionEditorSettle: undefined,
 		keybindings: new KeybindingsManager(),
 		settingsManager: { getExternalEditorCommand: () => "true" },
 		clearExtensionTerminalInputListeners: vi.fn(),
@@ -335,15 +344,17 @@ function createHost(columns = RENDER_WIDTH): DialogHost {
 	for (const name of [
 		"showExtensionSelector",
 		"showExtensionConfirm",
-		"hideExtensionSelector",
+		"pushExtensionDialog",
+		"removeExtensionDialog",
+		"showTopExtensionDialog",
+		"closeAllExtensionDialogs",
 		"flushExtensionDialogDecidedNotice",
 		"noteExtensionDialogResolvedElsewhere",
 		"buildPermissionDetailRows",
 		"resetExtensionUI",
 		"showExtensionInput",
-		"hideExtensionInput",
 		"showExtensionEditor",
-		"hideExtensionEditor",
+		"showExtensionCustom",
 		"disposeActiveSelector",
 	] as const) {
 		(host as unknown as Record<string, unknown>)[name] = (prototype[name] as (...args: unknown[]) => unknown).bind(
@@ -351,6 +362,20 @@ function createHost(columns = RENDER_WIDTH): DialogHost {
 		);
 	}
 	return host;
+}
+
+/** The visible (top) dialog's component, if it is of `kind`. */
+function visibleDialog<T>(host: DialogHost, kind: string): T | undefined {
+	const top = host.extensionDialogs.at(-1);
+	return top?.kind === kind ? (top.component as T) : undefined;
+}
+
+/** Answer the visible selector the way a human does: move to the option, press enter. */
+function choose(host: DialogHost, option: "Yes" | "No"): void {
+	const selector = host.extensionSelector;
+	if (!selector) throw new Error("no visible selector");
+	if (option === "No") selector.handleInput("j");
+	selector.handleInput("\n");
 }
 
 /**
@@ -466,7 +491,7 @@ describe("InteractiveMode permission dialog", () => {
 		expect(rows).toContain("echo");
 	});
 
-	it("settles the first dialog's promise when a second one opens", async () => {
+	it("stacks a second dialog over the first and shows the first again once it closes", async () => {
 		const host = createHost();
 
 		const first = host.showExtensionConfirm("First", "message one");
@@ -474,18 +499,23 @@ describe("InteractiveMode permission dialog", () => {
 		expect(firstComponent).toBeDefined();
 
 		const second = host.showExtensionConfirm("Second", "message two");
+		const secondComponent = host.extensionSelector;
 
-		// The first promise resolves rather than hanging inside beforeToolCall forever.
-		await expect(first).resolves.toBe(false);
-		// ...and the second dialog is the one actually installed.
-		expect(host.extensionSelector).toBeDefined();
-		expect(host.extensionSelector).not.toBe(firstComponent);
+		// The second dialog is visible; the first stays open underneath rather than being answered for the human.
+		expect(secondComponent).not.toBe(firstComponent);
+		expect(await settledValueOf(first)).toBe(PENDING);
 
-		host.extensionSelectorSettle?.("Yes");
+		choose(host, "Yes");
 		await expect(second).resolves.toBe(true);
+		expect(host.extensionSelector).toBe(firstComponent);
+
+		choose(host, "No");
+		await expect(first).resolves.toBe(false);
+		expect(host.extensionDialogs).toHaveLength(0);
+		expect(host.statusReports.at(-1)).toEqual({ state: "idle", app: "draht" });
 	});
 
-	it("does not let the displaced dialog's abort tear down its successor", async () => {
+	it("does not let a hidden dialog's abort tear down the visible one", async () => {
 		const host = createHost();
 		const controller = new AbortController();
 
@@ -493,12 +523,63 @@ describe("InteractiveMode permission dialog", () => {
 		const second = host.showExtensionConfirm("Second", "message two");
 		const secondComponent = host.extensionSelector;
 
-		await expect(first).resolves.toBe(false);
 		controller.abort();
+		await expect(first).resolves.toBe(false);
 
 		expect(host.extensionSelector).toBe(secondComponent);
-		host.extensionSelectorSettle?.("No");
+		expect(host.extensionDialogs).toHaveLength(1);
+		choose(host, "No");
 		await expect(second).resolves.toBe(false);
+	});
+
+	it("settles every stacked dialog fail-closed when a session invalidate tears them down", async () => {
+		// Stacking keeps hidden dialogs open, so teardown must reach all of them, not just the visible one:
+		// a permission ask buried under an input must still resolve as a denial, never strand.
+		const host = createHost();
+
+		const confirm = host.showExtensionConfirm("Approve tool call?", "bash: not allowed", {
+			detail: detailFor("npm install"),
+		});
+		const input = host.showExtensionInput("Name?");
+		const editor = host.showExtensionEditor("Instructions");
+		expect(host.extensionDialogs).toHaveLength(3);
+
+		host.resetExtensionUI();
+
+		expect(await settledValueOf(confirm)).toBe(false);
+		expect(await settledValueOf(input)).toBeUndefined();
+		expect(await settledValueOf(editor)).toBeUndefined();
+		expect(host.extensionDialogs).toHaveLength(0);
+		expect(host.statusReports.at(-1)).toEqual({ state: "idle", app: "draht" });
+	});
+
+	it("keeps reporting a pending permission ask while a custom component is stacked over it", async () => {
+		const host = createHost();
+
+		const confirm = host.showExtensionConfirm("Approve tool call?", "bash: not allowed");
+		const custom = host.showExtensionCustom<string>(() => ({ render: () => [], invalidate() {} }));
+		await vi.waitFor(() => expect(host.extensionDialogs).toHaveLength(2));
+
+		expect(host.statusReports.at(-1)).toMatchObject({ state: "blocked", kind: "permission" });
+
+		host.resetExtensionUI();
+		await expect(custom).rejects.toThrow();
+		expect(await settledValueOf(confirm)).toBe(false);
+	});
+
+	it("rejects an inline custom component when a session invalidate tears it down", async () => {
+		const host = createHost();
+		const dispose = vi.fn();
+
+		const custom = host.showExtensionCustom<string>(() => ({ render: () => [], invalidate() {}, dispose }));
+		await vi.waitFor(() => expect(host.extensionDialogs).toHaveLength(1));
+		const confirm = host.showExtensionConfirm("Approve tool call?", "from inside the custom component");
+
+		host.resetExtensionUI();
+
+		await expect(custom).rejects.toThrow("Extension UI was reset");
+		expect(dispose).toHaveBeenCalledTimes(1);
+		expect(await settledValueOf(confirm)).toBe(false);
 	});
 
 	it("resolves to false on abort and reports the deciding surface exactly once", async () => {
@@ -524,8 +605,7 @@ describe("InteractiveMode permission dialog", () => {
 
 	it("settles the awaited promise when a session invalidate tears the dialog down", async () => {
 		// `setBeforeSessionInvalidate` and `/reload` both call `resetExtensionUI`, which calls
-		// `hideExtensionSelector` directly. That path used to drop the component without touching
-		// `extensionSelectorSettle`, stranding the promise `beforeToolCall` awaits — no dialog, no
+		// the dialog teardown directly. That path used to drop the component without settling it, stranding the promise `beforeToolCall` awaits — no dialog, no
 		// tool call, no way out. Fail-closed means it must settle, and settle as a DENIAL.
 		const host = createHost();
 
@@ -546,11 +626,11 @@ describe("InteractiveMode permission dialog", () => {
 		expect(await settledValueOf(confirm)).toBe(false);
 		expect(host.statusReports.at(-1)).toEqual({ state: "idle", app: "draht" });
 		expect(host.extensionSelector).toBeUndefined();
-		expect(host.extensionSelectorSettle).toBeUndefined();
+		expect(host.extensionDialogs).toHaveLength(0);
 	});
 
 	it("still delivers the human's choice even though hiding settles fail-closed", async () => {
-		// The fail-closed settle in `hideExtensionSelector` must not race the real answer: selecting
+		// The fail-closed teardown settle must not race the real answer: selecting
 		// `Yes` has to resolve `true`, not the `undefined` that teardown supplies.
 		const host = createHost();
 
@@ -654,7 +734,7 @@ describe("InteractiveMode permission dialog", () => {
 		host.noteExtensionDialogResolvedElsewhere("geist-console");
 		expect(host.notices).toEqual([]); // a dialog is open, so nothing is emitted yet
 
-		host.extensionSelectorSettle?.("Yes");
+		choose(host, "Yes");
 		expect(await settledValueOf(first)).toBe(true);
 		expect(host.extensionDialogDecidedBy).toBeUndefined();
 
@@ -757,7 +837,7 @@ describe("InteractiveMode permission dialog", () => {
 	// --- H4: the other two dialog types strand their promise the same way ----------------------
 
 	it("settles an open ui.input when a session invalidate tears it down", async () => {
-		// `hideExtensionInput` only disposed and re-focused: nothing settled the `resolve` captured in
+		// Teardown used to only dispose and re-focus: nothing settled the `resolve` captured in
 		// `showExtensionInput`'s closure, so `resetExtensionUI` (session invalidate, `/reload`) left
 		// the awaiting extension hanging forever — regression 1 of the previous round, untouched.
 		const host = createHost();

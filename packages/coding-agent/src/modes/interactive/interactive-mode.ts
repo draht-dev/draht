@@ -263,6 +263,17 @@ class ExpandableText extends ThemedText implements Expandable {
 	}
 }
 
+type ExtensionDialogComponent = Component & { dispose?(): void };
+
+/** An extension dialog in the editor slot. See {@link InteractiveMode.extensionDialogs}. */
+type ExtensionDialog = {
+	component: ExtensionDialogComponent;
+	kind: "selector" | "input" | "editor" | "custom";
+	blocked: BlockedStatus | undefined;
+	/** Answers the dialog fail-closed: `undefined` for select/confirm/input/editor, a rejection for custom. */
+	failClosed: () => void;
+};
+
 type CompactionQueuedMessage = {
 	text: string;
 	mode: "steer" | "followUp";
@@ -562,23 +573,17 @@ export class InteractiveMode {
 	private installChangeWarningShown = false;
 
 	// Extension UI state
-	private extensionSelector: ExtensionSelectorComponent | undefined = undefined;
 	/**
-	 * Settles the promise of the dialog currently occupying {@link extensionSelector}.
+	 * Extension dialogs in the editor slot (select, confirm, input, editor, inline custom). The last one is visible.
 	 *
-	 * The slot holds at most one dialog, so opening a second one used to overwrite the first without
-	 * settling it — stranding a promise that `beforeToolCall` is awaiting, which wedges the agent
-	 * loop forever. Keeping the settle function beside the component makes the slot non-clobbering.
+	 * A new dialog stacks on top of the visible one instead of replacing it, and closing it shows the previous one
+	 * again, so dialogs opened from inside another dialog work. Every entry carries its fail-closed answer:
+	 * {@link closeAllExtensionDialogs} (session invalidate, `/reload`) settles each one, so no promise
+	 * `beforeToolCall` awaits is ever stranded and an unanswered permission ask is a denial.
 	 */
-	private extensionSelectorSettle: ((value: string | undefined) => void) | undefined = undefined;
+	private extensionDialogs: ExtensionDialog[] = [];
 	/** Label of the surface that decided the open ask elsewhere, pending a one-line notice. */
 	private extensionDialogDecidedBy: string | undefined = undefined;
-	private extensionInput: ExtensionInputComponent | undefined = undefined;
-	/** Settles the promise `showExtensionInput` returned. See {@link hideExtensionInput}. */
-	private extensionInputSettle: ((value: string | undefined) => void) | undefined = undefined;
-	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
-	/** Settles the promise `showExtensionEditor` returned. See {@link hideExtensionEditor}. */
-	private extensionEditorSettle: ((value: string | undefined) => void) | undefined = undefined;
 	private extensionTerminalInputSubscriptions = new Set<{
 		handler: (data: string) => { consume?: boolean; data?: string } | undefined;
 		unsubscribe: () => void;
@@ -2462,15 +2467,7 @@ export class InteractiveMode {
 	}
 
 	private resetExtensionUI(): void {
-		if (this.extensionSelector) {
-			this.hideExtensionSelector();
-		}
-		if (this.extensionInput) {
-			this.hideExtensionInput();
-		}
-		if (this.extensionEditor) {
-			this.hideExtensionEditor();
-		}
+		this.closeAllExtensionDialogs();
 		this.ui.hideOverlay();
 		this.clearExtensionTerminalInputListeners();
 		this.setExtensionFooter(undefined);
@@ -2696,6 +2693,52 @@ export class InteractiveMode {
 		};
 	}
 
+	/** Show an extension dialog on top of the stack. */
+	private pushExtensionDialog(dialog: ExtensionDialog): void {
+		this.disposeActiveSelector();
+		this.extensionDialogs.push(dialog);
+		this.showTopExtensionDialog();
+	}
+
+	/**
+	 * Remove a dialog WITHOUT settling it; its owner settles it. If it was visible, the previous dialog or the
+	 * editor takes the slot. A hidden dialog leaving (say, its signal aborted) never disturbs the visible one.
+	 */
+	private removeExtensionDialog(component: ExtensionDialogComponent): void {
+		const index = this.extensionDialogs.findIndex((dialog) => dialog.component === component);
+		if (index === -1) return;
+		this.extensionDialogs.splice(index, 1);
+		if (index === this.extensionDialogs.length) this.showTopExtensionDialog();
+	}
+
+	private showTopExtensionDialog(): void {
+		const top = this.extensionDialogs.at(-1);
+		const component = top?.component ?? this.editor;
+		this.editorContainer.clear();
+		this.editorContainer.addChild(component);
+		this.ui.setFocus(component);
+		// A custom component reports no status of its own; one stacked over a pending ask must not hide it.
+		const blocked = this.extensionDialogs.findLast((dialog) => dialog.blocked !== undefined)?.blocked;
+		this.programStatus.setBlocked("extension-dialog", blocked);
+		this.ui.requestRender();
+	}
+
+	/**
+	 * Tear down every extension dialog, answering each one fail-closed.
+	 *
+	 * `resetExtensionUI` (reached from `setBeforeSessionInvalidate` and `/reload`) used to drop dialogs
+	 * without settling them, which stranded the promise `beforeToolCall` awaits and wedged the agent loop: no
+	 * dialog on screen, no tool call, no way out. Hidden dialogs further down the stack need the same treatment.
+	 */
+	private closeAllExtensionDialogs(): void {
+		const dialogs = this.extensionDialogs;
+		if (dialogs.length === 0) return;
+		this.extensionDialogs = [];
+		this.showTopExtensionDialog();
+		// Last, so no continuation can observe a half-torn-down slot. Newest first, the order they were stacked.
+		for (const dialog of dialogs.reverse()) dialog.failClosed();
+	}
+
 	/**
 	 * Show a selector for extensions.
 	 */
@@ -2713,52 +2756,32 @@ export class InteractiveMode {
 			}
 
 			let settled = false;
-			const settle = (value: string | undefined): void => {
+			const finish = (value: string | undefined): void => {
 				if (settled) return;
 				settled = true;
 				opts?.signal?.removeEventListener("abort", onAbort);
-				if (this.extensionSelectorSettle === settle) this.extensionSelectorSettle = undefined;
 				// A deciding-surface label that nothing flushed belongs to THIS ask and dies with it.
 				// Left standing it is sticky: the next, unrelated dialog's teardown would emit
 				// "Permission resolved by <whoever>" about an ask that surface never saw.
 				this.extensionDialogDecidedBy = undefined;
+				selector.dispose();
+				this.removeExtensionDialog(selector);
+				// Last, so the caller's continuation cannot observe a half-torn-down dialog slot.
 				resolve(value);
 			};
 
 			const onAbort = () => {
-				// A dialog that was already displaced by a newer one must not tear the newer one down.
-				if (!settled) {
-					// Flush BEFORE settling: `settle` drops the pending label, and `hideExtensionSelector`
-					// now settles this dialog fail-closed on its way out.
-					this.flushExtensionDialogDecidedNotice();
-					this.hideExtensionSelector();
-				}
-				settle(undefined);
+				// Flush BEFORE finishing: `finish` drops the pending label.
+				if (!settled) this.flushExtensionDialogDecidedNotice();
+				finish(undefined);
 			};
 			opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
-			// Non-clobbering slot. Whatever is already in it is disposed and its promise settled as
-			// cancelled BEFORE the replacement takes over; the previous code overwrote the field and
-			// left the earlier caller awaiting a promise nothing could ever resolve.
-			const displaced = this.extensionSelectorSettle;
-			this.extensionSelector?.dispose();
-			this.extensionSelector = undefined;
-			this.extensionSelectorSettle = undefined;
-
-			this.extensionSelector = new ExtensionSelectorComponent(
+			const selector = new ExtensionSelectorComponent(
 				title,
 				options,
-				// Settle BEFORE hiding: `hideExtensionSelector` settles whatever is still in the slot
-				// fail-closed, so hiding first would resolve the ask as `undefined` (a denial) and the
-				// human's actual choice would be swallowed by the `settled` guard.
-				(option) => {
-					settle(option);
-					this.hideExtensionSelector();
-				},
-				() => {
-					settle(undefined);
-					this.hideExtensionSelector();
-				},
+				(option) => finish(option),
+				() => finish(undefined),
 				{
 					tui: this.ui,
 					timeout: opts?.timeout,
@@ -2766,19 +2789,13 @@ export class InteractiveMode {
 					onToggleToolsExpanded: () => this.toggleToolOutputExpansion(),
 				},
 			);
-			this.extensionSelectorSettle = settle;
-
-			this.disposeActiveSelector();
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.extensionSelector);
-			this.ui.setFocus(this.extensionSelector);
-			// Extension dialogs share the editor slot: opening one replaces the status of a displaced one.
-			this.programStatus.setBlocked("extension-dialog", blocked);
-			this.ui.requestRender();
-
-			// Settle the displaced caller only once the replacement is installed, so its continuation
-			// cannot observe an empty dialog slot.
-			displaced?.(undefined);
+			// `undefined` is the fail-closed answer: `showExtensionConfirm` maps it to `false`, i.e. denial.
+			this.pushExtensionDialog({
+				component: selector,
+				kind: "selector",
+				blocked,
+				failClosed: () => finish(undefined),
+			});
 		});
 	}
 
@@ -2792,7 +2809,7 @@ export class InteractiveMode {
 	noteExtensionDialogResolvedElsewhere(label: string): void {
 		this.extensionDialogDecidedBy = label;
 		// Nothing is open to abort, so no teardown will flush the notice — emit it now.
-		if (!this.extensionSelector) this.flushExtensionDialogDecidedNotice();
+		if (!this.extensionDialogs.some((dialog) => dialog.kind === "selector")) this.flushExtensionDialogDecidedNotice();
 	}
 
 	/** Emit the pending deciding-surface notice at most once, then forget it. */
@@ -2801,34 +2818,6 @@ export class InteractiveMode {
 		if (label === undefined) return;
 		this.extensionDialogDecidedBy = undefined;
 		this.showExtensionNotify(`Permission resolved by ${label}`, "info");
-	}
-
-	/**
-	 * Hide the extension selector, settling its promise FAIL-CLOSED if nothing else has.
-	 *
-	 * Every teardown path FOR THE SELECTOR funnels through here — {@link hideExtensionInput} and
-	 * {@link hideExtensionEditor} are the matching, separate ones for the other two dialog types, and
-	 * they need the same treatment for the same reason. This one used to drop the component on the
-	 * floor without touching {@link extensionSelectorSettle} when `resetExtensionUI` (reached from
-	 * `setBeforeSessionInvalidate` and from `/reload`) called it. A session invalidate while a permission ask
-	 * was open therefore stranded the promise `beforeToolCall` awaits and wedged the agent loop
-	 * forever: no dialog on screen, no tool call, no way out.
-	 *
-	 * `undefined` is the fail-closed answer — `showExtensionConfirm` maps it to `false`, i.e. denial.
-	 * Callers that carry a real answer must `settle(...)` it BEFORE calling this.
-	 */
-	private hideExtensionSelector(): void {
-		const settle = this.extensionSelectorSettle;
-		this.extensionSelectorSettle = undefined;
-		this.extensionSelector?.dispose();
-		this.editorContainer.clear();
-		this.editorContainer.addChild(this.editor);
-		this.extensionSelector = undefined;
-		this.programStatus.setBlocked("extension-dialog", undefined);
-		this.ui.setFocus(this.editor);
-		this.ui.requestRender();
-		// Last, so the caller's continuation cannot observe a half-torn-down dialog slot.
-		settle?.(undefined);
 	}
 
 	/**
@@ -2949,78 +2938,31 @@ export class InteractiveMode {
 			}
 
 			let settled = false;
-			const settle = (value: string | undefined): void => {
+			const finish = (value: string | undefined): void => {
 				if (settled) return;
 				settled = true;
 				opts?.signal?.removeEventListener("abort", onAbort);
-				if (this.extensionInputSettle === settle) this.extensionInputSettle = undefined;
+				input.dispose();
+				this.removeExtensionDialog(input);
 				resolve(value);
 			};
-
-			const onAbort = () => {
-				// A dialog already displaced by a newer one must not tear the newer one down.
-				if (!settled) this.hideExtensionInput();
-				settle(undefined);
-			};
+			const onAbort = () => finish(undefined);
 			opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
-			const displaced = this.extensionInputSettle;
-			this.extensionInput?.dispose();
-			this.extensionInput = undefined;
-			this.extensionInputSettle = undefined;
-
-			this.extensionInput = new ExtensionInputComponent(
+			const input = new ExtensionInputComponent(
 				title,
 				placeholder,
-				// Settle BEFORE hiding, for the same reason the selector does: `hideExtensionInput`
-				// settles whatever is still in the slot fail-closed, so hiding first would resolve the
-				// ask as `undefined` and the human's actual answer would hit the `settled` guard.
-				(value) => {
-					settle(value);
-					this.hideExtensionInput();
-				},
-				() => {
-					settle(undefined);
-					this.hideExtensionInput();
-				},
+				(value) => finish(value),
+				() => finish(undefined),
 				{ tui: this.ui, timeout: opts?.timeout },
 			);
-			this.extensionInputSettle = settle;
-
-			this.disposeActiveSelector();
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.extensionInput);
-			this.ui.setFocus(this.extensionInput);
-			this.programStatus.setBlocked("extension-dialog", { kind: "question", message: title });
-			this.ui.requestRender();
-
-			// Only once the replacement is installed, so the displaced caller's continuation cannot
-			// observe an empty dialog slot.
-			displaced?.(undefined);
+			this.pushExtensionDialog({
+				component: input,
+				kind: "input",
+				blocked: { kind: "question", message: title },
+				failClosed: () => finish(undefined),
+			});
 		});
-	}
-
-	/**
-	 * Hide the extension input, settling its promise FAIL-CLOSED if nothing else has.
-	 *
-	 * Same defect the selector had: this used to dispose and re-focus without touching the `resolve`
-	 * captured in {@link showExtensionInput}'s closure, so `resetExtensionUI` — a session invalidate
-	 * or `/reload` — left the extension awaiting `ui.input(...)` hanging forever.
-	 *
-	 * Callers that carry a real answer must `settle(...)` it BEFORE calling this.
-	 */
-	private hideExtensionInput(): void {
-		const settle = this.extensionInputSettle;
-		this.extensionInputSettle = undefined;
-		this.extensionInput?.dispose();
-		this.editorContainer.clear();
-		this.editorContainer.addChild(this.editor);
-		this.extensionInput = undefined;
-		this.programStatus.setBlocked("extension-dialog", undefined);
-		this.ui.setFocus(this.editor);
-		this.ui.requestRender();
-		// Last, so the caller's continuation cannot observe a half-torn-down dialog slot.
-		settle?.(undefined);
 	}
 
 	/**
@@ -3029,70 +2971,30 @@ export class InteractiveMode {
 	private showExtensionEditor(title: string, prefill?: string): Promise<string | undefined> {
 		return new Promise((resolve) => {
 			let settled = false;
-			const settle = (value: string | undefined): void => {
+			const finish = (value: string | undefined): void => {
 				if (settled) return;
 				settled = true;
-				if (this.extensionEditorSettle === settle) this.extensionEditorSettle = undefined;
+				this.removeExtensionDialog(editor);
 				resolve(value);
 			};
 
-			const displaced = this.extensionEditorSettle;
-			this.extensionEditor = undefined;
-			this.extensionEditorSettle = undefined;
-
-			this.extensionEditor = new ExtensionEditorComponent(
+			const editor = new ExtensionEditorComponent(
 				this.ui,
 				this.keybindings,
 				title,
 				prefill,
-				// Settle BEFORE hiding: `hideExtensionEditor` settles the slot fail-closed.
-				(value) => {
-					settle(value);
-					this.hideExtensionEditor();
-				},
-				() => {
-					settle(undefined);
-					this.hideExtensionEditor();
-				},
+				(value) => finish(value),
+				() => finish(undefined),
 				undefined,
 				this.settingsManager.getExternalEditorCommand(),
 			);
-			this.extensionEditorSettle = settle;
-
-			this.disposeActiveSelector();
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.extensionEditor);
-			this.ui.setFocus(this.extensionEditor);
-			this.programStatus.setBlocked("extension-dialog", { kind: "question", message: title });
-			this.ui.requestRender();
-
-			// Only once the replacement is installed, so the displaced caller's continuation cannot
-			// observe an empty dialog slot.
-			displaced?.(undefined);
+			this.pushExtensionDialog({
+				component: editor,
+				kind: "editor",
+				blocked: { kind: "question", message: title },
+				failClosed: () => finish(undefined),
+			});
 		});
-	}
-
-	/**
-	 * Hide the extension editor, settling its promise FAIL-CLOSED if nothing else has.
-	 *
-	 * Same defect the selector had: this used to clear the container and re-focus without touching
-	 * the `resolve` captured in {@link showExtensionEditor}'s closure, so `resetExtensionUI` — a
-	 * session invalidate or `/reload` — stranded whoever was awaiting the editor forever. `/compact`
-	 * with custom instructions is one such caller.
-	 *
-	 * Callers that carry a real answer must `settle(...)` it BEFORE calling this.
-	 */
-	private hideExtensionEditor(): void {
-		const settle = this.extensionEditorSettle;
-		this.extensionEditorSettle = undefined;
-		this.editorContainer.clear();
-		this.editorContainer.addChild(this.editor);
-		this.extensionEditor = undefined;
-		this.programStatus.setBlocked("extension-dialog", undefined);
-		this.ui.setFocus(this.editor);
-		this.ui.requestRender();
-		// Last, so the caller's continuation cannot observe a half-torn-down dialog slot.
-		settle?.(undefined);
 	}
 
 	/**
@@ -3206,18 +3108,16 @@ export class InteractiveMode {
 		const savedText = this.editor.getText();
 		const isOverlay = options?.overlay ?? false;
 
-		const restoreEditor = () => {
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
-			this.editor.setText(savedText);
-			this.ui.setFocus(this.editor);
-			this.ui.requestRender();
-		};
-
 		return new Promise((resolve, reject) => {
-			let component: Component & { dispose?(): void };
+			let component: ExtensionDialogComponent | undefined;
 			let overlayHandle: OverlayHandle | undefined;
 			let closed = false;
+
+			const restoreEditor = () => {
+				if (component) this.removeExtensionDialog(component);
+				this.editor.setText(savedText);
+				this.ui.requestRender();
+			};
 
 			const close = (result: T) => {
 				if (closed) return;
@@ -3249,18 +3149,30 @@ export class InteractiveMode {
 								return opts;
 							}
 							// Fallback: use component's width property if available
-							const w = (component as { width?: number }).width;
+							const w = (c as { width?: number }).width;
 							return w ? { width: w } : undefined;
 						};
-						overlayHandle = this.ui.showOverlay(component, resolveOptions());
+						overlayHandle = this.ui.showOverlay(c, resolveOptions());
 						// Expose handle to caller for visibility control
 						options?.onHandle?.(overlayHandle);
 					} else {
-						this.disposeActiveSelector();
-						this.editorContainer.clear();
-						this.editorContainer.addChild(component);
-						this.ui.setFocus(component);
-						this.ui.requestRender();
+						this.pushExtensionDialog({
+							component: c,
+							kind: "custom",
+							blocked: undefined,
+							// A custom component has no neutral answer, so a reset rejects rather than strand the caller.
+							failClosed: () => {
+								if (closed) return;
+								closed = true;
+								this.editor.setText(savedText);
+								try {
+									c.dispose?.();
+								} catch {
+									/* ignore dispose errors */
+								}
+								reject(new Error("Extension UI was reset"));
+							},
+						});
 					}
 				})
 				.catch((err) => {

@@ -28,6 +28,7 @@ export interface AppKeybindings {
 	"app.session.toggleNamedFilter": true;
 	"app.editor.external": true;
 	"app.message.copy": true;
+	"app.login.copyUrl": true;
 	"app.message.followUp": true;
 	"app.message.dequeue": true;
 	"app.clipboard.pasteImage": true;
@@ -149,6 +150,10 @@ export const KEYBINDINGS = {
 	"app.message.copy": {
 		defaultKeys: "ctrl+x",
 		description: "Copy selection or last assistant message",
+	},
+	"app.login.copyUrl": {
+		defaultKeys: "ctrl+x",
+		description: "Copy login URL",
 	},
 	"app.message.followUp": {
 		defaultKeys: windowsKeybindings ? "ctrl+q" : "alt+enter",

@@ -128,8 +128,11 @@ In fullscreen mode, these actions control the transcript and take precedence ove
 | `app.suspend` | `ctrl+z` (None on Windows) | Suspend to background |
 | `app.editor.external` | `ctrl+g` | Open in external editor (`externalEditor`, `$VISUAL`, `$EDITOR`, Notepad on Windows, or `nano` elsewhere) |
 | `app.clipboard.pasteImage` | `ctrl+v` (`alt+v` on Windows and WSL) | Paste files on macOS, images, or text from clipboard |
+| `app.login.copyUrl` | `ctrl+x` | Copy the complete login URL while `/login` is open |
 
 On native Windows, `app.suspend` has no default because Windows terminals do not support Unix job control. If you assign it manually, draht shows a status message instead of suspending. WSL uses the normal `ctrl+z` and `fg` behavior.
+
+During `/login`, `app.login.copyUrl` copies the original URL without the line breaks shown on screen. Over SSH, this requires a local terminal that allows OSC 52 clipboard writes.
 
 ### Sessions
 

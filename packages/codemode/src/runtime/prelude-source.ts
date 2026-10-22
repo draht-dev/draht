@@ -16,7 +16,7 @@
  * JSON text passed in as `storeJson`, and the keys the script wrote are reported
  * with a successful "done".
  *
- * Evaluates to a function `(bridge, toolsJson, globalsJson, storeJson) => { settle, run, stalled }`.
+ * Evaluates to a function `(bridge, toolsJson, globalsJson, storeJson, preLockdownSource) => { settle, run, stalled }`.
  * `toolsJson` lists `{ name, jsName, description }`: `tools[jsName]` and `tools[name]` call the
  * tool, and `ALL_TOOLS` lists `{ name: jsName, description }`.
  * `stalled()` reports a script that has not finished while no host call is pending: with no timers
@@ -25,7 +25,7 @@
  * `bridge(kind, a, b, c)` with kind "call" or "global" (id, name, argsJson),
  * "output" ("text" or "console", text) or ("image", data, mimeType), or "done" (ok, valueJsonOrErrorJson, writesJson).
  *
- * Before anything else the prelude freezes the built-ins and makes the built-in globals read-only.
+ * After running the trusted host hook, the prelude freezes the built-ins and makes the built-in globals read-only.
  * The prelude shares them with the script, so a script that patched one (for example
  * `Array.prototype.toJSON`) could otherwise corrupt what the prelude reports to the host.
  */
@@ -43,8 +43,11 @@ export const MAX_OUTPUT_ITEMS = 100_000;
 const IMAGE_HELPER_EXPECTS =
 	"image expects a non-empty image URL string, an object with image_url, or a raw MCP image block";
 
-export const PRELUDE_SOURCE: string = `(function (bridge, toolsJson, globalsJson, storeJson) {
+export const PRELUDE_SOURCE: string = `(function (bridge, toolsJson, globalsJson, storeJson, preLockdownSource) {
 	"use strict";
+
+	// Only the host supplies this source. A separate function keeps its bindings private.
+	if (preLockdownSource) Function(preLockdownSource)();
 
 	// Freeze every object reachable from the built-in globals, plus the intrinsics that are only
 	// reachable from instances (iterator and generator prototypes, %TypedArray%).
@@ -95,7 +98,7 @@ export const PRELUDE_SOURCE: string = `(function (bridge, toolsJson, globalsJson
 			add(descriptor.get);
 			add(descriptor.set);
 			if ("value" in descriptor && descriptor.configurable) {
-				Object.defineProperty(globalThis, key, { writable: false, configurable: false });
+				Object.defineProperty(globalThis, key, { value: descriptor.value, writable: false, configurable: false });
 			}
 		}
 		add(Object.getPrototypeOf(function* () {}));

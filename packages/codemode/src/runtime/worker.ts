@@ -111,6 +111,7 @@ async function main(data: WorkerData): Promise<void> {
 				vm.newString(JSON.stringify(data.tools)),
 				vm.newString(JSON.stringify(data.globals)),
 				vm.newString(JSON.stringify(data.store)),
+				vm.newString(data.preLockdownSource ?? ""),
 			),
 		),
 	);

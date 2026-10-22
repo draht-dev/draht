@@ -8,6 +8,7 @@ import type { CodemodeWasmModule } from "../wasm.ts";
  */
 
 export interface WorkerData {
+	preLockdownSource?: string;
 	code: string;
 	/** `jsName` is the identifier the script uses; `description` is listed in `ALL_TOOLS`. */
 	tools: { name: string; jsName: string; description: string }[];

@@ -19,7 +19,7 @@ import {
 } from "@draht/codemode";
 import { getCodemodeWorkerSpecifier, getQuickJSWasmPath } from "../../../config.ts";
 import type { WorkflowMeta } from "./meta.ts";
-import { buildWorkflowPrelude, PHASE_MAX_CHARS } from "./prelude.ts";
+import { buildWorkflowPrelude, PHASE_MAX_CHARS, WORKFLOW_PRE_LOCKDOWN_SOURCE } from "./prelude.ts";
 
 export interface WorkflowAgentRequest {
 	prompt: string;
@@ -282,6 +282,7 @@ export async function runWorkflowScript(spec: WorkflowRunSpec): Promise<Workflow
 	};
 
 	const sandbox = new CodemodeSandbox({
+		preLockdownSource: WORKFLOW_PRE_LOCKDOWN_SOURCE,
 		globals: [agentGlobal, phaseGlobal, logGlobal],
 		timeoutMs: spec.timeoutMs > 0 ? spec.timeoutMs : Number.POSITIVE_INFINITY,
 		memoryLimitBytes: spec.memoryLimitBytes ?? DEFAULT_MEMORY_LIMIT_BYTES,

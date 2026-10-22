@@ -685,6 +685,29 @@ describe("limits and lifetime", () => {
 });
 
 describe("escape hatches", () => {
+	it("freezes trusted host replacements and does not expose the pre-lockdown hook to script input", async () => {
+		const sandbox = new CodemodeSandbox({
+			preLockdownSource: 'const hostOnly = "private"; Math.random = () => 0.25;',
+		});
+		sandboxes.push(sandbox);
+		const injection = "Math.random = () => 0.75; globalThis.injected = true;";
+		const result = await sandbox.execute(
+			`
+			const hidden = [typeof preLockdownSource, typeof hostOnly];
+			globalThis.preLockdownSource = load("preLockdownSource");
+			eval(globalThis.preLockdownSource);
+			try { Object.defineProperty(Math, "random", { value: () => 1 }); } catch {}
+			return { hidden, random: Math.random(), frozen: Object.isFrozen(Math), injected };
+		`,
+			{ store: { preLockdownSource: injection } },
+		);
+		expect(result).toMatchObject({
+			ok: true,
+			value: { hidden: ["undefined", "undefined"], random: 0.25, frozen: true, injected: true },
+		});
+		expect(await sandbox.execute("return Math.random();")).toMatchObject({ ok: true, value: 0.25 });
+	});
+
 	it("has no host globals", async () => {
 		const sandbox = createSandbox();
 		const result = await sandbox.execute(`

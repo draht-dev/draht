@@ -92,6 +92,11 @@ export type CodemodeResult =
 	| { ok: false; error: CodemodeError; output: CodemodeOutputItem[]; calls: CodemodeCall[] };
 
 export interface CodemodeSandboxOptions {
+	/**
+	 * Trusted host code evaluated in the VM before built-ins are frozen. Never populate this
+	 * from script input. Runs once per execution and is not exposed to the script.
+	 */
+	preLockdownSource?: string;
 	tools?: CodemodeTool[];
 	/**
 	 * Functions exposed as top-level identifiers instead of on `tools`, for host helpers such as

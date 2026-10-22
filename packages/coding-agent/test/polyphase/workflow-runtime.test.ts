@@ -489,6 +489,32 @@ describe("runWorkflowScript: caps", () => {
 });
 
 describe("runWorkflowScript: determinism", () => {
+	it("keeps the determinism bans after a script tries to replace the built-ins", async () => {
+		const host = new FakeWorkflowHost(async () => ({ kind: "value", value: "ok" }));
+		const outcome = await runWorkflowScript(
+			makeSpec(
+				`
+			const blocked = [];
+			try { Object.defineProperty(Math, "random", { value: () => 0 }); } catch {}
+			try { Math.random = () => 0; } catch {}
+			try { globalThis.Date = function () { return 0; }; } catch {}
+			const x = new Date(0);
+			for (const call of [() => Date.now(), () => new Date(), () => Math.random(), () => x.constructor()]) {
+				try { call(); blocked.push(false); } catch (error) {
+					blocked.push(error.message.includes("runs must be deterministic"));
+				}
+			}
+			return { blocked, frozen: Object.isFrozen(Date), same: x.constructor === Date };
+		`,
+				{ host },
+			),
+		);
+		expect(outcome).toMatchObject({
+			ok: true,
+			value: { blocked: [true, true, true, true], frozen: true, same: true },
+		});
+	});
+
 	it("Math.random, Date.now, Date() and new Date() throw, but new Date(0).toISOString() works", async () => {
 		const host = new FakeWorkflowHost(async () => ({ kind: "value", value: "ok" }));
 		const outcome = await runWorkflowScript(

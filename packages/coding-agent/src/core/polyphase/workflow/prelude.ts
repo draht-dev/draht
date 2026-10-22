@@ -65,14 +65,19 @@ function embed(value: unknown): string {
 		.join("\\u2029");
 }
 
-/**
- * Beyond DESIGN.md §13.2's verbatim statement list, this also bans `performance.now` (the same
- * determinism rationale as `Date.now`/`Math.random`, otherwise an uncovered escape hatch), pins
- * `Date.prototype.constructor` to the banning proxy (so `x.constructor()` can't bypass the ban the
- * way the determinism test exercises), and has `agent()` capture the call site with `new Error()`
- * before awaiting, rewriting a `{ok:false}` reply's stack onto it so a thrown agent failure reports
- * its script line instead of only the prelude's. Each is intentional; none is in §13.2.
- */
+/** Trusted VM setup: lockdown freezes these bans before any workflow input runs. */
+export const WORKFLOW_PRE_LOCKDOWN_SOURCE = [
+	'const __polyphaseBan = (n) => () => { throw new Error(n + " is not available in workflow scripts: runs must be deterministic"); };',
+	'Object.defineProperty(Math, "random", { value: __polyphaseBan("Math.random"), writable: false, configurable: false });',
+	'if (typeof performance === "object" && performance !== null) { const __polyphaseDescs = Object.getOwnPropertyDescriptors(performance); __polyphaseDescs.now = { value: __polyphaseBan("performance.now"), writable: false, enumerable: true, configurable: false }; globalThis.performance = Object.create(Object.getPrototypeOf(performance), __polyphaseDescs); }',
+	"const __polyphaseDate = Date;",
+	'Object.defineProperty(__polyphaseDate, "now", { value: __polyphaseBan("Date.now"), writable: false, configurable: false });',
+	'const __polyphaseDateProxy = new Proxy(__polyphaseDate, { apply() { return __polyphaseBan("Date()")(); }, construct(t, a, nt) { if (a.length === 0) return __polyphaseBan("new Date()")(); return Reflect.construct(t, a, nt); } });',
+	'Object.defineProperty(__polyphaseDate.prototype, "constructor", { value: __polyphaseDateProxy, writable: false, configurable: false });',
+	"globalThis.Date = __polyphaseDateProxy;",
+].join(" ");
+
+/** Agent failures retain their script call site through the host bridge. */
 function statements(input: PreludeInput): string[] {
 	return [
 		`const meta = Object.freeze(${embed(input.meta)});`,
@@ -80,14 +85,6 @@ function statements(input: PreludeInput): string[] {
 		"let __polyphasePhase = undefined; let __polyphaseSpent = 0;",
 		`const __polyphaseMax = ${embed(normalizeMaxItemsPerCall(input.maxItemsPerCall))}; const __polyphaseTotal = ${embed(input.budgetTokens)};`,
 		"const budget = Object.freeze({ total: __polyphaseTotal, spent: () => __polyphaseSpent, remaining: () => __polyphaseTotal === null ? Infinity : Math.max(0, __polyphaseTotal - __polyphaseSpent) });",
-		'const __polyphaseBan = (n) => () => { throw new Error(n + " is not available in workflow scripts: runs must be deterministic"); };',
-		'Object.defineProperty(Math, "random", { value: __polyphaseBan("Math.random"), writable: false, configurable: false });',
-		'if (typeof performance === "object" && performance !== null) { const __polyphaseDescs = Object.getOwnPropertyDescriptors(performance); __polyphaseDescs.now = { value: __polyphaseBan("performance.now"), writable: false, enumerable: true, configurable: false }; globalThis.performance = Object.create(Object.getPrototypeOf(performance), __polyphaseDescs); }',
-		"const __polyphaseDate = Date;",
-		'Object.defineProperty(__polyphaseDate, "now", { value: __polyphaseBan("Date.now"), writable: false, configurable: false });',
-		'const __polyphaseDateProxy = new Proxy(__polyphaseDate, { apply() { return __polyphaseBan("Date()")(); }, construct(t, a, nt) { if (a.length === 0) return __polyphaseBan("new Date()")(); return Reflect.construct(t, a, nt); } });',
-		'Object.defineProperty(__polyphaseDate.prototype, "constructor", { value: __polyphaseDateProxy, writable: false, configurable: false });',
-		"globalThis.Date = __polyphaseDateProxy;",
 		'const __polyphaseText = (p) => typeof p === "string" ? p : (() => { try { return JSON.stringify(p); } catch { return String(p); } })();',
 		'const log = (...parts) => { __polyphase.log(parts.map(__polyphaseText).join(" "), "info").catch(() => undefined); };',
 		'const __polyphaseWarn = (text) => { __polyphase.log(text, "warning").catch(() => undefined); };',

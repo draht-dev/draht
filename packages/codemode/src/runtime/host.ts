@@ -110,6 +110,7 @@ interface PendingCall {
 }
 
 interface ExecutionOptions {
+	preLockdownSource: string | undefined;
 	code: string;
 	tools: ReadonlyMap<string, CodemodeTool>;
 	globals: ReadonlyMap<string, CodemodeTool>;
@@ -182,6 +183,7 @@ class Execution {
 	private start(options: ExecutionOptions, wasm: CodemodeWasmModule): void {
 		if (this.finished) return;
 		const workerData: WorkerData = {
+			preLockdownSource: options.preLockdownSource,
 			code: options.code,
 			tools: [...options.tools.values()].map((tool) => ({
 				name: tool.name,
@@ -353,6 +355,7 @@ class Execution {
  * table and defaults. `close()` aborts in-flight executions.
  */
 export class CodemodeSandbox {
+	private readonly preLockdownSource: string | undefined;
 	private readonly toolsByName = new Map<string, CodemodeTool>();
 	private readonly globalsByName = new Map<string, CodemodeTool>();
 	private readonly timeoutMs: number;
@@ -364,6 +367,7 @@ export class CodemodeSandbox {
 	private closed = false;
 
 	constructor(options: CodemodeSandboxOptions = {}) {
+		this.preLockdownSource = options.preLockdownSource;
 		this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 		this.memoryLimitBytes = options.memoryLimitBytes;
 		this.maxOutputChars = options.maxOutputChars;
@@ -411,6 +415,7 @@ export class CodemodeSandbox {
 	execute(code: string, options: CodemodeExecuteOptions = {}): Promise<CodemodeResult> {
 		if (this.closed) return Promise.reject(new Error("Sandbox is closed"));
 		const execution = new Execution({
+			preLockdownSource: this.preLockdownSource,
 			code,
 			tools: new Map(this.toolsByName),
 			globals: this.globalsByName,

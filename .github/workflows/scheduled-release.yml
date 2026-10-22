@@ -116,6 +116,38 @@ jobs:
         if: steps.pending.outputs.should-release == 'true'
         run: bunx playwright-core install --with-deps chromium
 
+      # Same preflight as the CI coding-agent shard: test.sh runs the Drahtbank suites.
+      - name: Enable and verify Drahtbank isolation
+        if: steps.pending.outputs.should-release == 'true'
+        shell: bash
+        run: |
+          # Permit the namespace launcher on Ubuntu without changing other AppArmor profiles.
+          # Use the distro's profile name so an existing unshare attachment is replaced.
+          if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo apparmor_parser --replace --skip-cache <<'PROFILE'
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile unshare /usr/bin/unshare flags=(unconfined) {
+            userns,
+          }
+          PROFILE
+          fi
+          # Run as the normal runner user; failure must stop this job before the release.
+          node --input-type=module <<'JS'
+          import { mkdtempSync, rmSync } from "node:fs";
+          import { tmpdir } from "node:os";
+          import { join } from "node:path";
+          import { createIsolation } from "./packages/coding-agent/eval/drahtbank/isolation.mjs";
+          const workspace = mkdtempSync(join(tmpdir(), "drahtbank-ci-"));
+          try {
+            const isolation = await createIsolation(workspace);
+            isolation.dispose();
+            console.log("Drahtbank isolation preflight passed");
+          } finally {
+            rmSync(workspace, { recursive: true, force: true });
+          }
+          JS
+
       - name: Verify npm publication identity
         if: steps.pending.outputs.should-release == 'true'
         env:

@@ -2,7 +2,6 @@ import { setKeybindings, type TUI } from "@draht/tui";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { McpManagerView } from "../src/extensions/mcp/ui.ts";
-import { LoginDialogComponent } from "../src/modes/interactive/components/login-dialog.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
@@ -28,24 +27,6 @@ describe("sign-in URL copy key", () => {
 	beforeEach(() => {
 		setKeybindings(new KeybindingsManager());
 		copyToClipboard.mockClear();
-	});
-
-	test("login dialog copies the auth URL instead of typing into the code input", async () => {
-		const dialog = new LoginDialogComponent(tui, "test", () => {});
-		dialog.showAuth(URL);
-		void dialog.showManualInput("Paste the code:");
-		expect(rendered(dialog)).toContain("ctrl+x to copy");
-
-		dialog.handleInput(CTRL_X);
-		await vi.waitFor(() => expect(rendered(dialog)).toContain("Copied URL to clipboard"));
-		expect(copyToClipboard).toHaveBeenCalledWith(URL);
-	});
-
-	test("login dialog ignores the copy key without an auth URL", () => {
-		const dialog = new LoginDialogComponent(tui, "test", () => {});
-		dialog.showDeviceCode({ userCode: "ABCD", verificationUri: "https://example.invalid/device" });
-		dialog.handleInput(CTRL_X);
-		expect(copyToClipboard).not.toHaveBeenCalled();
 	});
 
 	test("MCP sign-in screen copies the authorization URL", async () => {

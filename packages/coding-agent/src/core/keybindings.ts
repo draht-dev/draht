@@ -74,6 +74,10 @@ const APP_KEYBINDINGS = {
 		defaultKeys: "ctrl+x",
 		description: "Copy selection or last assistant message",
 	},
+	"app.login.copyUrl": {
+		defaultKeys: "ctrl+x",
+		description: "Copy login URL",
+	},
 	"app.message.followUp": {
 		defaultKeys: windowsKeybindings ? "ctrl+q" : "alt+enter",
 		description: "Queue follow-up message",

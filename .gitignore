@@ -1,6 +1,8 @@
 node_modules
 dist/
 .artifacts/
+/.worktrees/
+/.reels-cache/
 *.log
 .DS_Store
 *.tsbuildinfo

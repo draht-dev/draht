@@ -35,6 +35,7 @@
 - include Git safety and completion-check runtime assets in standalone release archives
 - rerun project checks when declared inputs cross symlinks or submodules instead of reusing incomplete snapshots
 - resolve Drahtbank's test runner from the selected workspace with both hoisted and package-local dependencies
+- copy complete `/login` URLs with a configurable shortcut, including over SSH, without terminal line breaks
 
 ## [2026.10.20-1] - 2026-10-20
 

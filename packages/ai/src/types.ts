@@ -192,7 +192,7 @@ export interface ProviderRequestOptions<TModel = Model<Api>> {
 	headers?: ProviderHeaders;
 	/**
 	 * How the request identifies the calling app: `User-Agent` and provider attribution headers.
-	 * Absent fields use pi-ai's defaults: a detailed `User-Agent` and no attribution.
+	 * Absent fields use @draht/ai's defaults: a detailed `User-Agent` and no attribution.
 	 */
 	identity?: ClientIdentity;
 	/**

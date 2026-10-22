@@ -479,7 +479,7 @@ function isReservedHeader(key: string): boolean {
 function bedrockUserAgent(identity: ClientIdentity | undefined): string | [string, string?][] {
 	const mode = identity?.userAgent ?? "detailed";
 	if (typeof mode === "object") return mode.custom;
-	return mode === "short" ? [["pi"]] : [["pi", getClientVersion(identity)]];
+	return mode === "short" ? [["draht"]] : [["draht", getClientVersion(identity)]];
 }
 
 /**

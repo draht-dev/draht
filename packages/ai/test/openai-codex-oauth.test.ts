@@ -485,6 +485,31 @@ describe("OpenAI Codex OAuth", () => {
 		expect(consoleError).not.toHaveBeenCalled();
 	});
 
+	it("defaults the browser login originator to one OpenAI's authorize endpoint accepts", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				jsonResponse({ access_token: createAccessToken("acct"), refresh_token: "refresh", expires_in: 3600 }),
+			),
+		);
+
+		let authUrl = "";
+		await openaiCodexOAuth.login({
+			signal: neverAbortedSignal,
+			notify: (event) => {
+				if (event.type === "auth_url") authUrl = event.url;
+			},
+			prompt: async (prompt) => {
+				if (prompt.type === "select") return "browser";
+				if (prompt.type !== "manual_code") throw new Error(`Unexpected prompt: ${prompt.type}`);
+				const state = new URL(authUrl).searchParams.get("state");
+				return `http://localhost:1455/auth/callback?code=pasted-code&state=${state}`;
+			},
+		});
+
+		expect(new URL(authUrl).searchParams.get("originator")).toBe("codex_cli_rs");
+	});
+
 	it("uses the app's agent name as the browser login originator", async () => {
 		vi.stubGlobal(
 			"fetch",

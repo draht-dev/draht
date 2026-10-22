@@ -208,7 +208,7 @@ export interface LoginOptions {
 	getDeviceId?: () => string;
 	/**
 	 * Name this app introduces itself with during login, e.g. OpenAI's agent name hint and
-	 * Codex originator. Defaults to draht's own name.
+	 * Codex browser-login originator. Defaults to "Draht" and "codex_cli_rs" respectively.
 	 */
 	agentName?: string;
 }

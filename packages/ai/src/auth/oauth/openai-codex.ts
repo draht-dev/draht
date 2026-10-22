@@ -288,7 +288,8 @@ async function pollOpenAICodexDeviceAuth(device: DeviceAuthInfo, signal: AbortSi
 }
 
 async function createAuthorizationFlow(
-	originator: string = "draht",
+	// OpenAI's authorize endpoint rejects unregistered originators such as "draht".
+	originator: string = "codex_cli_rs",
 ): Promise<{ verifier: string; state: string; url: string }> {
 	const { verifier, challenge } = await generatePKCE();
 	const state = createState();

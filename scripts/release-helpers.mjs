@@ -70,6 +70,26 @@ const PLUGIN_MANIFESTS = Object.freeze([
 	"packages/draht-codex/.codex-plugin/plugin.json",
 ]);
 
+/**
+ * @draht/ai sends its own version in the detailed User-Agent (DRAHT_AI_VERSION). The constant is source, not
+ * JSON, so binary bundles never read package.json at runtime; the release stamps it with every package version.
+ */
+export const AI_VERSION_MODULE = "packages/ai/src/utils/version.ts";
+const AI_VERSION_PATTERN = /(export const DRAHT_AI_VERSION = ")([^"]*)(";)/;
+
+/** The DRAHT_AI_VERSION value in the @draht/ai version module, or undefined when the module has none. */
+export function readAiVersionConstant(source) {
+	return source.match(AI_VERSION_PATTERN)?.[2];
+}
+
+function stampAiVersionModule(root, version) {
+	const modulePath = join(root, AI_VERSION_MODULE);
+	if (!existsSync(modulePath)) return;
+	const source = readFileSync(modulePath, "utf8");
+	if (!AI_VERSION_PATTERN.test(source)) throw new Error(`${modulePath} has no DRAHT_AI_VERSION constant to stamp`);
+	writeFileSync(modulePath, source.replace(AI_VERSION_PATTERN, `$1${version}$3`));
+}
+
 function readJson(path) {
 	return JSON.parse(readFileSync(path, "utf8"));
 }
@@ -126,6 +146,11 @@ export function assertReleaseVersions(root, version) {
 		const actual = readJson(manifestPath).version;
 		if (actual !== version) stale.push(`${manifestPath} has ${actual}; expected ${version}`);
 	}
+	const aiVersionPath = join(root, AI_VERSION_MODULE);
+	if (existsSync(aiVersionPath)) {
+		const actual = readAiVersionConstant(readFileSync(aiVersionPath, "utf8"));
+		if (actual !== version) stale.push(`${aiVersionPath} DRAHT_AI_VERSION is ${actual ?? "missing"}; expected ${version}`);
+	}
 	const lockPath = join(root, "bun.lock");
 	if (existsSync(lockPath)) {
 		const lock = readFileSync(lockPath, "utf8");
@@ -172,6 +197,7 @@ export function setVersion(root, version) {
 		manifest.version = version;
 		writeJson(manifestPath, manifest);
 	}
+	stampAiVersionModule(root, version);
 	const lockPath = join(root, "bun.lock");
 	if (existsSync(lockPath)) {
 		let lock = readFileSync(lockPath, "utf8");

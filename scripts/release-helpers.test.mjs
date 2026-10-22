@@ -7,11 +7,13 @@ import test from "node:test";
 import { spawnSync } from "node:child_process";
 
 import {
+	AI_VERSION_MODULE,
 	EXPECTED_RELEASE_ASSETS,
 	assertBunToolchain,
 	assertReleaseVersions,
 	getScopePackages,
 	listGithubReleaseAssets,
+	readAiVersionConstant,
 	missingReleaseAssets,
 	setVersion,
 	validateReleaseArtifacts,
@@ -51,6 +53,39 @@ test("setting package versions synchronizes plugin manifests and dependency vers
 	assert.equal(JSON.parse(readFileSync(join(root, "packages/draht-claude/package.json"))).dependencies.a, "^2.0.0");
 	assert.equal(JSON.parse(readFileSync(join(root, "packages/draht-codex/package.json"))).dependencies.a, "workspace:*");
 	assert.doesNotMatch(readFileSync(join(root, "bun.lock"), "utf8"), /0\.9\.0/);
+});
+
+function aiVersionModule(version) {
+	return `// The @draht/ai package version.\nexport const DRAHT_AI_VERSION = "${version}";\n`;
+}
+
+test("setting package versions stamps DRAHT_AI_VERSION in the @draht/ai version module", () => {
+	const root = versionFixture();
+	const modulePath = join(root, AI_VERSION_MODULE);
+	mkdirSync(join(modulePath, ".."), { recursive: true });
+	writeFileSync(modulePath, aiVersionModule("0.9.0"));
+	assert.throws(() => assertReleaseVersions(root, "1.0.0"), /DRAHT_AI_VERSION is 0\.9\.0; expected 1\.0\.0/);
+	setVersion(root, "2.0.0");
+	assert.equal(readFileSync(modulePath, "utf8"), aiVersionModule("2.0.0"));
+	assert.equal(readAiVersionConstant(readFileSync(modulePath, "utf8")), "2.0.0");
+	assert.doesNotThrow(() => assertReleaseVersions(root, "2.0.0"));
+});
+
+test("a stale DRAHT_AI_VERSION fails the release version gate even when every manifest is current", () => {
+	const root = versionFixture();
+	setVersion(root, "2.0.0");
+	const modulePath = join(root, AI_VERSION_MODULE);
+	mkdirSync(join(modulePath, ".."), { recursive: true });
+	writeFileSync(modulePath, aiVersionModule("1.9.9"));
+	assert.throws(() => assertReleaseVersions(root, "2.0.0"), /version\.ts DRAHT_AI_VERSION is 1\.9\.9; expected 2\.0\.0/);
+});
+
+test("a version module without DRAHT_AI_VERSION fails stamping instead of being skipped", () => {
+	const root = versionFixture();
+	const modulePath = join(root, AI_VERSION_MODULE);
+	mkdirSync(join(modulePath, ".."), { recursive: true });
+	writeFileSync(modulePath, "export const SOMETHING_ELSE = 1;\n");
+	assert.throws(() => setVersion(root, "2.0.0"), /has no DRAHT_AI_VERSION constant to stamp/);
 });
 
 test("setting package versions keeps each file's existing indentation", () => {

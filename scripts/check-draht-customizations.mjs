@@ -55,6 +55,9 @@
  *      package.json, but Claude Code / Codex key update detection off the
  *      plugin manifest version, so a gap between the two writers freezes
  *      installed plugins on a stale version without anyone noticing.
+ *  22. DRAHT_AI_VERSION in packages/ai/src/utils/version.ts equals
+ *      packages/ai/package.json "version" — @draht/ai sends it in the detailed
+ *      User-Agent, and a release that does not stamp it ships a stale version.
  */
 
 import { readFileSync, existsSync, readdirSync } from "node:fs";
@@ -62,6 +65,7 @@ import { execSync } from "node:child_process";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadWorkspaces, topologicallySortPublicPackages } from "./publish-workspaces.mjs";
+import { AI_VERSION_MODULE, readAiVersionConstant } from "./release-helpers.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "..");
@@ -1267,6 +1271,31 @@ for (const { pkgPath, manifestPath } of pluginManifestPairs) {
 		manifest.version === pkg.version,
 		`${manifestPath}: version "${manifest.version}" matches ${pkgPath} version "${pkg.version}"`,
 	);
+}
+
+// ── 22. DRAHT_AI_VERSION matches packages/ai/package.json ────────────
+//
+// @draht/ai sends DRAHT_AI_VERSION in the detailed User-Agent. It is a source
+// constant rather than a runtime JSON import so binary bundles stay
+// self-contained, which means nothing keeps it current at runtime:
+// release-helpers.mjs setVersion stamps it, and this check makes any drift
+// (a writer that skipped it, a hand edit) a red check instead of a stale
+// version on the wire.
+
+console.log("\nDRAHT_AI_VERSION lockstep");
+
+{
+	const aiPkgPath = "packages/ai/package.json";
+	if (!existsSync(resolve(root, AI_VERSION_MODULE)) || !existsSync(resolve(root, aiPkgPath))) {
+		fail(`${AI_VERSION_MODULE}: cannot compare — ${AI_VERSION_MODULE} or ${aiPkgPath} not found`);
+	} else {
+		const constant = readAiVersionConstant(readFileSync(resolve(root, AI_VERSION_MODULE), "utf8"));
+		const aiVersion = readJson(aiPkgPath).version;
+		check(
+			constant === aiVersion,
+			`${AI_VERSION_MODULE}: DRAHT_AI_VERSION "${constant ?? "missing"}" matches ${aiPkgPath} version "${aiVersion}"`,
+		);
+	}
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────

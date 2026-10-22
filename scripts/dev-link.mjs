@@ -20,10 +20,10 @@ const run = (cmd, cwd = ROOT) => {
 	execSync(cmd, { cwd, stdio: "inherit" });
 };
 
-// 1. Build workspace deps + coding-agent
+// 1. Build workspace deps + coding-agent (dependencies first: chord and ai import telemetry)
+run("cd packages/telemetry && bun run build");
 run("cd packages/chord && bun run build");
 run("cd packages/tui && bun run build");
-run("cd packages/telemetry && bun run build");
 run("cd packages/codemode && bun run build");
 run("cd packages/mcp && bun run build");
 run("cd packages/ai && bun run build");

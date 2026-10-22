@@ -66,7 +66,9 @@ describe("context-window profiles", () => {
 			expect(codex, `openai-codex/${id} in catalog`).toBeDefined();
 			if (!direct || !codex) continue;
 			expect(getAvailableContextWindows(direct)).toEqual([272000, 1050000]);
-			expect(getAvailableContextWindows(codex)).toEqual([272000, 372000, 1050000]);
+			// The catalog's own window (272k for most, from the live Codex listing) joins draht's codex profile.
+			const expected = [...new Set([codex.contextWindow, 372000, 1050000])].sort((x, y) => x - y);
+			expect(getAvailableContextWindows(codex)).toEqual(expected);
 		}
 	});
 

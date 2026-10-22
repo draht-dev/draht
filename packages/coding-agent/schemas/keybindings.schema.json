@@ -259,6 +259,10 @@
       "$ref": "#/$defs/KeybindingValue",
       "description": "Copy selection or last assistant message"
     },
+    "app.login.copyUrl": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Copy login URL"
+    },
     "app.message.followUp": {
       "$ref": "#/$defs/KeybindingValue",
       "description": "Queue follow-up message"

@@ -46,6 +46,7 @@ describe("grep process operations", () => {
 		});
 
 		expect(start).toHaveBeenCalledWith([
+			"--no-config",
 			"--json",
 			"--line-number",
 			"--color=never",

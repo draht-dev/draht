@@ -13,7 +13,7 @@ draht update [target] [options]
 draht list
 draht config [options]
 draht auth <check|print-api-key|print-bearer-token> [options]
-draht mcp <list|login|logout> [options]
+draht mcp <add|remove|list|login|logout> [options]
 draht checkpoint prune [--days <n>] [--max-per-session <n>] [--dry-run]
 draht rlm --input <path|glob|url> --query "..." [--max-cost <n>]
 draht rlm replay <trajectory-id> [--verbose]
@@ -163,7 +163,7 @@ Tool selection does not grant permission to execute. Every selected tool still p
 | `find` | Find paths using glob patterns |
 | `ls` | List directory contents |
 
-Built-in extensions add two more tools. They are off by default; the MCP extension turns them on when an MCP server needs them (see [MCP](mcp.md#exposure)). To enable them yourself, name them in `--tools` or `defaultTools`.
+Built-in extensions add two more tools. They are off by default; the MCP extension turns them on when an MCP server needs them (see [MCP](mcp.md#control-tool-exposure)). To enable them yourself, name them in `--tools` or `defaultTools`.
 
 | Built-in extension | Purpose |
 |---|---|
@@ -373,6 +373,6 @@ These commands work outside a session, so agents can run them through `bash`. Se
 | `draht mcp login <server> [--timeout <seconds>]` | Sign in to an OAuth server: open the authorization page and wait for the browser; a terminal also accepts the pasted redirect URL. `--timeout` limits the whole sign-in, including requests to the authorization server (default 300 seconds) |
 | `draht mcp logout <server>` | Delete the stored OAuth credentials of a server |
 
-`add` and `remove` change `~/.draht/agent/mcp.json`, or `.draht/mcp.json` in the current directory with `--local` (`-l`). `add` also takes `--exposure <mode>` (see [Exposure](mcp.md#exposure)) and `--description <text>` and does not connect; run `draht mcp list` to check the server.
+`add` and `remove` change `~/.draht/agent/mcp.json`, or `.draht/mcp.json` in the current directory with `--local` (`-l`). `add` also takes `--exposure <mode>` (see [Exposure](mcp.md#control-tool-exposure)) and `--description <text>` and does not connect; run `draht mcp list` to check the server.
 
 Project `.draht/mcp.json` files are only read for projects that are already trusted.

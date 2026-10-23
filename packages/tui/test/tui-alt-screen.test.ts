@@ -1544,6 +1544,9 @@ describe("TuiAltScreen", () => {
 		for (const { line, needle } of [
 			{ line: "extensions/starline/fixed-editor/compositor.ts", needle: "starline" },
 			{ line: "draht-dev/draht-tui", needle: "dev" },
+			{ line: "~/.draht/agent/settings.json", needle: "agent" },
+			{ line: "~\\Documents\\draht", needle: "Documents" },
+			{ line: "foo+bar", needle: "bar" },
 		]) {
 			const copied: string[] = [];
 			const terminal = new RecordingTerminal(80, 1);

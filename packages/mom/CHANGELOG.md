@@ -1,6 +1,14 @@
 # Changelog
 
-## [Unreleased]
+## [2026.10.23-1] - 2026-10-23
+
+### Changed
+
+- bump Node.js for Oct 2026 security releases
+
+### Fixed
+
+- enforce patched Node versions per release line
 
 ## [2026.10.8-1] - 2026-10-08
 

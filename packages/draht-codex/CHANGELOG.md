@@ -1,34 +1,20 @@
 # Changelog
 
-## [Unreleased]
+## [2026.10.23-1] - 2026-10-23
 
-### Breaking Changes
+### Added
 
-- automatic session and prompt planning context now requires `hooks.planningContext: true` in `.planning/config.json`
+- validate hybrid prompts with confined model comparisons
+- streamline agent prompts and add deterministic verification
 
 ### Changed
 
-- shorten blast-radius, explainers, and saga-spawner discovery descriptions while preserving their instructions
-- remove mandatory brainstorming approvals, fixed debugging hypothesis counts, repeated self-check rituals, and automatic commit/session-reset instructions; retain scoped evidence and bounded correction contracts
-- share project-defined `.draht/checks.json` verification across hosts, cache successful checks by input content, and enforce configured failures on committed and non-JavaScript changes
-- preserve explicit-only activation in portable skill installs as well as generated plugin artifacts
-- make ordinary work and `/quick` direct, with relevant verification and optional delegation; GSD phase workflows require explicit selection
-- narrow skill discovery descriptions, use focused graph context, and replace outdated model-tiering claims with workload-based evaluation guidance
-- bound per-prompt planning reminders to one line of at most 196 characters
-- run completion type/lint checks without requiring `.planning`, excluding workflow heuristics and automatic full-suite runs
-- add `--checks-only` for standalone verification without workflow heuristics
+- bump Node.js for Oct 2026 security releases
 
 ### Fixed
 
-- make user instructions take precedence over advisor advice and clarify diagnosis-only triage completion
-- enforce literal force-push and Git hook-bypass safeguards through a shared native/plugin policy
-- quality gates now reject unsuccessful verification commands by exit status; post-task hooks record failed checks instead of reporting an unverified pass
-- require explicit invocation for generated GSD lifecycle skills and triage, fix, and quick wrappers through Codex host policy
-- resolve debugger/reviewer scope and orchestration status conflicts while retaining actionable suspected security findings
-- replace nonexistent research and milestone commands, correct fix-plan retry instructions, and recognize graph artifacts already produced by map-codebase
-- block failed completion-check launches, timeouts, and signals; recognize source changes with unusual paths and untracked directories
-- allow spec review against plain acceptance criteria without requiring XML plans
-- rerun project checks when declared inputs cross symlinks or submodules instead of reusing incomplete snapshots
+- enforce patched Node versions per release line
+- avoid stale passes across input boundaries
 
 ## [2026.10.8-1] - 2026-10-08
 

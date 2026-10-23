@@ -1,41 +1,142 @@
 # Changelog
 
-## [Unreleased]
-
-### Breaking Changes
-
-- standalone native quality gates now default to strict verification, matching the plugin gates
+## [2026.10.23-1] - 2026-10-23
 
 ### Added
 
-- add OpenCode Console browser sign-in for Zen and Go through `/login`, with organization selection and automatic token refresh
-- add `drahtbank` for repeated baseline/candidate prompt comparisons across native, Claude, and Codex assets, with isolated fixtures, deterministic grading, bounded runners, and recorded usage
-- add Drahtbank v2 with named prompt variants, separate screening and holdout cases, structured review facts, observed verification evidence, and a separate offline runtime lane; preserve the v1 suite and recorded scores
-- run configured project checks before native session completion, with cancellation, bounded repairs, and visible failure after exhausted retries
+- validate hybrid prompts with confined model comparisons
+- streamline agent prompts and add deterministic verification
 
 ### Changed
 
-- remove mandatory brainstorming approvals, fixed debugging hypothesis counts, repeated self-check rituals, and automatic commit/session-reset instructions; retain scoped evidence and bounded correction contracts
-- share project-defined `.draht/checks.json` verification across hosts, cache successful checks by input content, and enforce configured failures on committed and non-JavaScript changes
-- preserve explicit-only activation in portable skill installs as well as generated plugin artifacts
-- make `/quick` execute and verify directly without GSD artifacts or mandatory delegation; retain scoped evidence and optional review contracts
-- add `--checks-only` and `--no-tests` verification modes independent of planning state
-- use focused graph context and narrow TypeScript skill discovery to relevant implementation and review work
+- feat(coding-agent): default NVIDIA to Nemotron 3.5 Super VL (badlogic/pi-mono#10910)
+- fix(coding-agent): recovery omits tool results with the truncated tool call
+- fix(coding-agent): grep tool ignores ripgrep config via --no-config
+- fix(coding-agent): activate extension tools registered after the branch recorded its loadout
+- fix(ai,agent,coding-agent,durable): client identity follow-ups
+- feat(ai,agent,coding-agent): move client identity and provider attribution into pi-ai
+- fix(coding-agent): apply /compact instructions to split-turn prefix summary
+- fix(coding-agent): accept mcp.json files with a UTF-8 BOM
+- fix(coding-agent): expose @earendil-works/pi-ai/models in the extension loader
+- fix(coding-agent): queue codemode scripts at the worker limit
+- fix(coding-agent): keep clipboard helpers out of pi's process group so Ctrl+Z does not stop them
+- fix(ai): drop Codex models rejected for ChatGPT accounts (badlogic/pi-mono#11173)
+- fix(coding-agent): render CJK emphasis in HTML export (badlogic/pi-mono#11168)
+- Break single Mermaid diagram into two
+- fix(coding-agent): accept managed install markers with a UTF-8 BOM
+- fix(ai): recover from Copilot request-size overflow
+- fix(coding-agent): resolve Windows shells from installation directories
+- fix(coding-agent): accept Windows Store shell aliases
+- docs(coding-agent): restore extension guide details (badlogic/pi-mono#11039)
+- docs(ai,coding-agent): generate models.json reference from schemas (badlogic/pi-mono#11038)
+- fix(coding-agent): remove fixed output limits from summary requests (badlogic/pi-mono#11036)
+- fix(coding-agent): keep empty quoted prompt template arguments
+- fix(coding-agent): normalize read line-range labels (badlogic/pi-mono#10938)
+- fix(coding-agent): resolve model references through one provider selection policy (badlogic/pi-mono#10913)
+- feat(ai): keep the prompt cache when changing thinking level on OpenAI GPT-6 (badlogic/pi-mono#10930)
+- fix(coding-agent): keep codemode cancellation prompt and bounded
+- docs(coding-agent): restructure NVIDIA RTX llama.cpp prerequisites
+- fix(coding-agent): restore active tools on session resume (badlogic/pi-mono#10887)
+- docs(coding-agent): add NVIDIA RTX llama.cpp setup
+- feat(coding-agent): add PI_CLIPBOARD_OSC52 to force OSC 52 copies
+- fix(codemode): reject // @options: lines that are not the first line
+- fix(coding-agent): retry transient Windows EPERM when acquiring auth lock
+- fix(coding-agent): warn and exit non-zero in print mode on truncated response
+- feat(coding-agent): show elapsed and total time on codemode rows
+- fix(mcp,coding-agent): accept any JSON value as tool structuredContent
+- fix(coding-agent): stop listing MCP resources when connecting
+- fix(coding-agent): expand ~ in resource setting patterns
+- feat(coding-agent): remove the experimental server stack and the client, protocol, and server packages
+- fix(coding-agent): describe pi mcp login --timeout as a limit on the whole sign-in
+- feat(ai,coding-agent): list only the OpenRouter models a key may use (badlogic/pi-mono#10672)
+- fix(coding-agent): make codemode output joining linear
+- fix(coding-agent): emit before_agent_start for runs started by custom messages (badlogic/pi-mono#10739)
+- refactor(codemode,coding-agent): decouple MCP from codemode
+- fix(coding-agent): code mode description says schema tools resolve with their value on failure
+- fix(coding-agent,durable): omit thinking from compaction summaries
+- feat(coding-agent): use pi.dev configuration schemas (badlogic/pi-mono#10751)
+- fix(coding-agent): load symlinked AGENTS.md in nested git worktrees
+- feat(coding-agent): publish configuration schemas (badlogic/pi-mono#9880)
+- feat(tui,coding-agent): use only the terminal cursor when showHardwareCursor is enabled
+- wait for streaming and watcher events instead of fixed sleeps
+- fix: address actionable npm audit findings
+- feat(tui,coding-agent): report program status via OSC 7501
+- fix(coding-agent): cancel MCP OAuth sign-ins and stop refreshing on close
+- fix(coding-agent): strip ANSI sequences split across user bash output chunks
+- fix(coding-agent): read Termux clipboard on Android platform
+- docs(coding-agent): document azure provider id, Foundry models, and deployment mapping
+- fix(coding-agent): ignore Node's own worker messages in image resize
+- fix(coding-agent): keep MCP manager responsive (closes badlogic/pi-mono#10562)
+- feat(ai,coding-agent): add OpenAI Decisions classifier and classifier images
+- fix(codemode,coding-agent): separate codemode output items
+- feat: record response, tool execution, and durable task times
+- fix(coding-agent): mark codemode lookup helpers as async in description
+- fix(coding-agent): apply outputPad to all transcript blocks (badlogic/pi-mono#10557)
+- align documented message types (badlogic/pi-mono#10566)
+- feat(coding-agent): accept +name/-name entries in --tools
+- fix(coding-agent): disable .env autoload in standalone binary
+- feat(coding-agent): use llama.cpp classifier models natively (badlogic/pi-mono#10382)
+- Prune managed installs (badlogic/pi-mono#10511)
+- fix(coding-agent): keep hidden tools out of prompt rules and skills hint
+- fix(coding-agent): close MCP connections that are still connecting on shutdown
+- fix(coding-agent): keep MCP tools with --tools, add tool patterns and --no-mcp
+- fix(mcp): send application_type in OAuth dynamic client registration
+- fix(coding-agent): resolve codemode read calls on images to image blocks
+- fix(coding-agent): keep syntax colors on multiline tokens (badlogic/pi-mono#10356)
+- fix(tui): keep Home/End for the editor in fullscreen mode
+- feat(ai): support Azure Foundry Chat Completions deployments (badlogic/pi-mono#9714)
+- fix(coding-agent): do not report dead terminal stdin errors as crashes
+- fix(coding-agent,durable): fix CI test stub and macOS watch startup race
+- feat(coding-agent): save codemode image() output to temp files
+- fix(coding-agent): keep codemode working after the install is updated or removed
+- fix(ai,coding-agent): persist rotated OAuth tokens when a refresh is cancelled
+- feat(ai): add per-thinking-level sampling parameters (badlogic/pi-mono#9776)
+- fix(coding-agent): default NVIDIA to Nemotron 3 Ultra
+- fix(coding-agent): render MCP tool calls before their server connects
+- fix(tui,coding-agent): convert non-PNG images for Kitty in Image
+- feat(coding-agent): allow project mcp.json to override enabled and exposure of global servers
+- fix(codemode): cap script output so print loops cannot exhaust host memory
+- docs(ai,coding-agent): document Cloudflare Clef classifiers
+- feat(coding-agent): opt-in MCP OAuth client ID metadata documents
+- fix(coding-agent): ignore empty entries in --models
+- fix(coding-agent): pin brace-expansion 5.0.12
+- feat(coding-agent): copy OAuth sign-in URLs with app.message.copy
+- feat(coding-agent): shrink codemode prompt and guide scripts back from errors
+- feat(coding-agent): make fullscreen the default TUI mode
+- docs(coding-agent): add Radius to providers page, rename provider docs sections
+- feat(coding-agent): add models.generateImages() to codemode
+- feat(agent): remove the experimental harness from pi-agent-core
+- feat(coding-agent): offer Radius sign-in and MCP setup in /login
+- feat(coding-agent): add header-only quietStartup mode
+- fix(coding-agent): keep pastel palettes pastel in the system theme (badlogic/pi-mono#10293)
+- fix(coding-agent): restore MCP tools loaded by tool_search on resume and reload
+- fix(coding-agent): rename unconfigured to not configured
+- fix(coding-agent): keep one copy of each rendered user message line
+- fix(coding-agent): store MCP OAuth credentials per server name and URL
+- test(coding-agent): run the official MCP client conformance suite in CI
+- fix(mcp): keep granted scopes on step-up authorization
+- fix(coding-agent): require --model when --provider is given
+- fix(coding-agent): make /mcp login sign-in URL clickable in the TUI
+- feat(coding-agent): add MCP oauth.authServerMetadataUrl and check RFC 9207 iss
+- bump Node.js for Oct 2026 security releases
 
 ### Fixed
 
-- enforce literal force-push and Git hook-bypass safeguards through a shared native/plugin policy
-- quality gates now reject unsuccessful verification commands by exit status; post-task hooks record failed checks instead of reporting an unverified pass
-- resolve debugger/reviewer scope and orchestration status conflicts, retain actionable suspected security findings, and correct research and fix-plan instructions
-- clarify that `/triage` completes at routing-strength diagnosis, accepts labeled hypotheses without a reproduction, and does not expect a fix
-- allow spec review against plain acceptance criteria without requiring XML plans
-- run shipped CommonJS hooks correctly inside the native package's ESM distribution
-- cancel completion checks when a session is disposed and prevent hook-requested continuation from restarting it
-- support Drahtbank with Node installed outside system runtime directories while preserving fixture isolation
-- include Git safety and completion-check runtime assets in standalone release archives
-- rerun project checks when declared inputs cross symlinks or submodules instead of reusing incomplete snapshots
-- resolve Drahtbank's test runner from the selected workspace with both hoisted and package-local dependencies
-- copy complete `/login` URLs with a configurable shortcut, including over SSH, without terminal line breaks
+- update tests and keybindings schema left stale by the upstream sync
+- stack concurrent extension dialogs, settling each fail-closed on teardown
+- copy complete login URLs with configurable shortcut
+- use mimo-v2.6-pro as Xiaomi default model
+- close own custom ui overlay (badlogic/pi-mono#10999)
+- use claude-sonnet-4.5 in model registry tests
+- strip fake cursor markers in OAuth prompt regression test
+- apply workflow determinism bans before codemode lockdown
+- clear fullscreen selection on transcript rebuild (badlogic/pi-mono#10567)
+- enforce patched Node versions per release line
+- resolve workspace test dependencies
+- avoid stale passes across input boundaries
+- include verification hooks in binary archives
+- support isolated Node runtimes in CI
+- prevent continuation after session disposal
 
 ## [2026.10.20-1] - 2026-10-20
 

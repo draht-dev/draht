@@ -1,6 +1,19 @@
 # Changelog
 
-## [Unreleased]
+## [2026.10.23-1] - 2026-10-23
+
+### Changed
+
+- fix(ai,agent,coding-agent,durable): client identity follow-ups
+- feat(ai,agent,coding-agent): move client identity and provider attribution into pi-ai
+- fix(ai): time responses with private fields; use the real stream in proxy and test mocks
+- feat: record response, tool execution, and durable task times
+- feat(agent): remove the experimental harness from pi-agent-core
+- bump Node.js for Oct 2026 security releases
+
+### Fixed
+
+- enforce patched Node versions per release line
 
 ## [2026.10.8-1] - 2026-10-08
 

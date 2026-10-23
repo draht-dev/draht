@@ -1,6 +1,36 @@
 # Changelog
 
-## [Unreleased]
+## [2026.10.23-1] - 2026-10-23
+
+### Changed
+
+- fix(tui): escape regex metacharacters in single-segment fd queries (badlogic/pi-mono#11212)
+- fix(tui): restore terminal modes when the process exits without stop()
+- fix(tui): stop unclosed display math from swallowing Markdown tables
+- feat(tui): enable Kitty images for Rex
+- fix(tui): render CJK emphasis next to punctuation (badlogic/pi-mono#10730)
+- feat(tui): detect Rex terminal for OSC 8 hyperlinks
+- fix(tui): let unhandled wheel input scroll the transcript under a focused overlay
+- fix(tui): keep delayed terminal replies out of keyboard input
+- feat(coding-agent): publish configuration schemas (badlogic/pi-mono#9880)
+- feat(tui,coding-agent): use only the terminal cursor when showHardwareCursor is enabled
+- feat(tui,coding-agent): report program status via OSC 7501
+- fix(tui): detect Herdr as supporting OSC 8 hyperlinks
+- fix(coding-agent): apply outputPad to all transcript blocks (badlogic/pi-mono#10557)
+- fix(tui): keep Home/End for the editor in fullscreen mode
+- fix(tui,coding-agent): convert non-PNG images for Kitty in Image
+- fix(tui): preserve WezTerm images while scrolling
+- fix(tui): reduce memory retained per rendered message
+- fix(tui): preserve ANSI order at slice boundaries
+- bump Node.js for Oct 2026 security releases
+
+### Fixed
+
+- enable kitty images in herdr (badlogic/pi-mono#10774)
+- support override colorFn options in CompactionStatusIndicator (badlogic/pi-mono#10810)
+- clear fullscreen selection on transcript rebuild (badlogic/pi-mono#10567)
+- complete slash commands after leading whitespace (badlogic/pi-mono#10218)
+- enforce patched Node versions per release line
 
 ## [2026.10.19-1] - 2026-10-19
 

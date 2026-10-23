@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2026.10.23-1] - 2026-10-23
+
+### Added
+
+- streamline agent prompts and add deterministic verification
 
 ## [2026.10.8-1] - 2026-10-08
 

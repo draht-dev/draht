@@ -1,10 +1,99 @@
 # Changelog
 
-## [Unreleased]
+## [2026.10.23-1] - 2026-10-23
 
 ### Added
 
-- Added OpenCode Console browser login for Zen and Go with organization-scoped credentials, token refresh, and existing API-key login support.
+- add copy code login method to Anthropic OAuth (badlogic/pi-mono#10194)
+- validate hybrid prompts with confined model comparisons
+
+### Changed
+
+- feat(coding-agent): default NVIDIA to Nemotron 3.5 Super VL (badlogic/pi-mono#10910)
+- refresh the model catalog from live provider listings
+- fix(ai,agent,coding-agent,durable): client identity follow-ups
+- feat(ai,agent,coding-agent): move client identity and provider attribution into pi-ai
+- fix(ai): match retryable status codes only as standalone numbers
+- fix(ai): retry Codex CLI stream disconnect errors relayed by proxies
+- fix(ai): handle ChatGPT Business workspace usage limit errors
+- fix(ai,coding-agent): drop models retired upstream
+- fix(ai): drop Codex models rejected for ChatGPT accounts (badlogic/pi-mono#11173)
+- fix(ai): expect xhigh thinking for Grok 4.3 and Grok 4.5
+- fix(ai): keep the prompt cache across tool changes on Responses (badlogic/pi-mono#11142)
+- fix(ai): recover from Copilot request-size overflow
+- feat(ai): add MiniMax-M3.1-Flash and hide only old MiniMax models
+- feat: Durable and pi-ai telemetry; Context.telemetry is always a span
+- fix(ai): update GLM-4.6V Coding Plan cache read price in test
+- docs(ai,coding-agent): generate models.json reference from schemas (badlogic/pi-mono#11038)
+- fix(ai): retry more gateway upstream failure errors
+- fix(ai): treat whitespace-only tool output as empty
+- fix(ai): retry node-fetch 'request to ... failed' errors
+- fix(ai): drop thinking from other models instead of sending it as text (badlogic/pi-mono#11000)
+- fix(ai): keep images of error tool results for Anthropic and Bedrock Claude
+- feat(ai): use Chat Completions for the kimi-coding provider
+- fix(ai): support off thinking level on Claude Haiku 5.5 and Opus 5
+- fix(ai): retry "The service is temporarily unavailable" errors
+- fix(ai): report malformed final tool-call arguments instead of keeping the parsed prefix (badlogic/pi-mono#10944)
+- fix(ai): use 500K context window for Codex GPT-6.1 Sol
+- feat(ai): remove unused assistant-message frame API
+- fix(ai): send only thinking on/off toggle for Xiaomi MiMo models
+- fix(ai): send thinkingLevel for Gemini 4 models
+- fix(ai): order thinking before text when a completions chunk has both
+- fix(ai): retry gateway 'Unable to forward upstream stream' errors
+- feat(ai): keep the prompt cache when changing thinking level on OpenAI GPT-6 (badlogic/pi-mono#10930)
+- fix(ai): move OpenCode providers to inference endpoints
+- fix(ai): repair invalid \u escapes in tool-call arguments
+- fix(ai): retry "The upstream provider returned an error"
+- fix(ai): fall back on Anthropic strict tool limits
+- feat(ai,coding-agent): list only the OpenRouter models a key may use (badlogic/pi-mono#10672)
+- test(ai): e2e repro for radius dropping replayed Claude thinking
+- fix(ai): use models.dev metadata for Claude 5.5 models
+- fix(ai): apply Mistral request timeout only to response headers
+- feat(coding-agent): publish configuration schemas (badlogic/pi-mono#9880)
+- fix(ai): pin Kimi K3 Moonshot pricing and expect Haiku 5.5 adaptive thinking
+- fix(ai): keep prompt-length pricing tiers from all model catalogs
+- feat(ai): add Claude Haiku 5.5
+- fix(ai): retry Mistral finish_reason error
+- fix(ai): fall back to a free port for Anthropic OAuth callback
+- fix(ai): type empty OpenAI classifier catalogs
+- feat(ai,coding-agent): add OpenAI Decisions classifier and classifier images
+- fix(ai): compare faux prompt-cache usage per message
+- fix(ai): keep AssistantMessageEventStream assignable from plain event streams
+- fix(ai): replace bundled Radius catalog with gateway catalog
+- feat: record response, tool execution, and durable task times
+- fix(ai): update output limit assertions for token estimate
+- fix(ai): estimate request context at 3.5 characters per token
+- fix(ai): retry transient server-busy provider errors
+- fix(ai): let caller headers override Codex originator and User-Agent (badlogic/pi-mono#10429)
+- feat(ai): let apps name themselves in OpenAI logins (badlogic/pi-mono#10433)
+- fix(ai): retry HTTP/2 pending stream cancellation
+- feat(ai): support Azure Foundry Chat Completions deployments (badlogic/pi-mono#9714)
+- fix(ai,coding-agent): persist rotated OAuth tokens when a refresh is cancelled
+- feat(ai): add per-thinking-level sampling parameters (badlogic/pi-mono#9776)
+- fix(coding-agent): default NVIDIA to Nemotron 3 Ultra
+- fix(ai): drop stale thinking blocks on Bedrock Claude replays
+- fix(ai): keep models.dev pricing tiers for Amazon Bedrock models
+- fix(ai): fail Sign in with ChatGPT when the callback port is taken
+- feat(ai): add Cloudflare Clef classifiers to Workers AI (badlogic/pi-mono#10316)
+- fix(ai): use dashed Claude model IDs for Cloudflare AI Gateway
+- feat(ai): define Anthropic mid-conversation tools inline
+- fix(ai): retry "Selected model is at capacity" provider errors
+- fix(ai): update Together DeepSeek V4 Pro model ID (badlogic/pi-mono#10336)
+- fix(ai): drop mismatched item ids when replaying grammar tool calls
+- bump Node.js for Oct 2026 security releases
+
+### Fixed
+
+- send an originator OpenAI accepts on the Codex browser login
+- identify as draht in the Bedrock user agent
+- stamp DRAHT_AI_VERSION from packages/ai/package.json
+- only list announced removals as still unavailable
+- OpenRouter reasoning test uses deepseek-r1-0528, deepseek-r1 left the catalog
+- use mimo-v2.6 models in Xiaomi tests
+- use claude-sonnet-4.5 in OpenRouter tests
+- update Xiaomi replay test for removed reasoning_effort
+- send reasoning effort to OpenAI models on Bedrock Converse (badlogic/pi-mono#10142)
+- enforce patched Node versions per release line
 
 ## [2026.10.8-1] - 2026-10-08
 

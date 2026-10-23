@@ -1,7 +1,7 @@
 # Changelog
 
-## [Unreleased]
+## [2026.10.23-1] - 2026-10-23
 
 ### Fixed
 
-- Enforce Linux REPL filesystem and process restrictions before running Python code; refuse startup when the required kernel protections are unavailable.
+- enforce Linux sandbox boundaries

@@ -26,7 +26,12 @@ import type {
 	LoadExtensionsResult,
 } from "./extensions/types.ts";
 import { findGitPaths } from "./footer-data-provider.ts";
-import { DefaultPackageManager, type PathMetadata, type ResolvedResource } from "./package-manager.ts";
+import {
+	DefaultPackageManager,
+	type PackageInstallFailure,
+	type PathMetadata,
+	type ResolvedResource,
+} from "./package-manager.ts";
 import type { PromptTemplate } from "./prompt-templates.ts";
 import { loadPromptTemplates } from "./prompt-templates.ts";
 import { SettingsManager } from "./settings-manager.ts";
@@ -95,6 +100,28 @@ function collectExtensionPackageWarnings(
 		});
 	}
 	return warnings;
+}
+
+/** Describe a package that was skipped because it could not be installed, including how to drop it. */
+function describePackageInstallFailure(failure: PackageInstallFailure): string {
+	const hint =
+		failure.scope === "temporary"
+			? "Check the source and try again."
+			: `Run "${APP_NAME} remove ${failure.source}${failure.scope === "project" ? " --local" : ""}" to remove it from settings.json.`;
+	return `failed to install (${failure.message}). ${hint}`;
+}
+
+/** One-line startup warning for a package that could not be installed. */
+export function formatPackageInstallWarning(failure: PackageInstallFailure): string {
+	return `Extension package "${failure.source}": ${describePackageInstallFailure(failure)}`;
+}
+
+function collectPackageInstallWarnings(
+	...failures: Array<PackageInstallFailure[] | undefined>
+): Array<{ path: string; warning: string }> {
+	return failures.flatMap((entries) =>
+		(entries ?? []).map((failure) => ({ path: failure.source, warning: describePackageInstallFailure(failure) })),
+	);
 }
 
 function mergeExtensionWarnings(
@@ -626,6 +653,10 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const cliExtensionPaths = await this.packageManager.resolveExtensionSources(this.additionalExtensionPaths, {
 			temporary: true,
 		});
+		const installWarnings = collectPackageInstallWarnings(
+			resolvedPaths.installFailures,
+			cliExtensionPaths.installFailures,
+		);
 		// Kept on the instance so post-reload passes (extendResources) can still resolve package metadata.
 		this.resourceMetadataByPath = new Map();
 		const metadataByPath = this.resourceMetadataByPath;
@@ -680,7 +711,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 		const packageWarnings = collectExtensionPackageWarnings(extensionPaths, metadataByPath);
 		const extensionsResult = await this.loadFinalExtensionSet(extensionPaths, preTrustExtensions);
-		mergeExtensionWarnings(extensionsResult, packageWarnings);
+		mergeExtensionWarnings(extensionsResult, [...installWarnings, ...packageWarnings]);
 		for (const p of this.additionalExtensionPaths) {
 			if (isLocalPath(p)) {
 				const resolved = this.resolveResourcePath(p);
@@ -793,8 +824,12 @@ export class DefaultResourceLoader implements ResourceLoader {
 			]),
 		);
 		const packageWarnings = collectExtensionPackageWarnings(extensionPaths, metadataByPath);
+		const installWarnings = collectPackageInstallWarnings(
+			resolvedPaths.installFailures,
+			cliExtensionPaths.installFailures,
+		);
 		const extensionsResult = await loadExtensionsCached(extensionPaths, this.cwd, this.eventBus);
-		mergeExtensionWarnings(extensionsResult, packageWarnings);
+		mergeExtensionWarnings(extensionsResult, [...installWarnings, ...packageWarnings]);
 		if (!options.includeInlineFactories) {
 			return extensionsResult;
 		}

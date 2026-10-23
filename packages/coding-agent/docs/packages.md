@@ -16,6 +16,8 @@ draht install ./local-package
 
 `draht list` shows configured packages. Use `draht remove <source>` to remove one and `draht update --extensions` to reconcile package installations. See [Command Line](cli.md#package-commands) for every package command and option.
 
+If a configured package fails to install at startup, for example because npm cannot reach the registry, draht warns about it, skips that package's resources, and keeps running. draht tries to install it again on the next start or `/reload`. `draht install` and `draht update --extensions` still report the failure and exit non-zero.
+
 Personal installs are written to `~/.draht/agent/settings.json`. Add `--local` or `-l` to write the package declaration to `.draht/settings.json`. draht reads declarations from that file only after project trust is granted.
 
 Project packages are installed and loaded only after project trust is resolved. Packages can execute extension code and can include skills that instruct the model to run programs. Review third-party package source before installing it. Review project package declarations before granting project trust.

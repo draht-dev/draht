@@ -1,6 +1,6 @@
 {
 	"name": "@draht/chord",
-	"version": "2026.10.23-1",
+	"version": "2026.10.23",
 	"description": "Typed host runtime for plugins, contracts, replicated state, and RPC over JSON links",
 	"type": "module",
 	"main": "./dist/index.js",

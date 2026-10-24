@@ -1,6 +1,6 @@
 {
 	"name": "@draht/mcp",
-	"version": "2026.10.23-1",
+	"version": "2026.10.23",
 	"description": "Standalone Model Context Protocol client for draht and other applications",
 	"type": "module",
 	"main": "./dist/index.js",

@@ -93,7 +93,7 @@ Codex treats agent `model:` as reference metadata — `configure --list` shows i
 
 ### Command prompt wrappers
 
-The plugin ships 17 command prompt wrappers, one per `commands/*.md` template:
+The plugin ships 23 command prompt wrappers, one per `commands/*.md` template:
 
 - `new-project`
 - `init-project`
@@ -121,7 +121,7 @@ The plugin ships 17 command prompt wrappers, one per `commands/*.md` template:
 
 ### Support skills
 
-The GSD workflow templates live in `commands/`. Alongside the 23 command wrappers above, the plugin ships 16 support skills (39 skill directories in total), loaded by description match or by name.
+The GSD workflow templates live in `commands/`. Alongside the 23 command wrappers above, the plugin ships 18 support skills (42 skill directories in total, including the router), loaded by description match or by name.
 
 Router:
 
@@ -138,6 +138,7 @@ Disciplines:
 - `model-tiering` — advisor and orchestrator patterns for cost-efficient model selection
 - `saga-spawner` — saga-graph reconciliation loop for unattended repo advancement as a cloud routine
 - `tdd-workflow` — red→green→refactor discipline, commit conventions, cycle violations
+- `test-audit` — authoring gates, evidence-led test audits, and subsystem campaigns that preserve owner-boundary contracts
 - `verification-gate` — evidence before claims: run the command that proves it before saying "done"
 
 Creative:

@@ -82,7 +82,8 @@ limits no longer apply.
 
 Only the user starts a new task: `/budget new` in draht, or `/draht:budget new`
 and `$draht:budget new` submitted as the whole prompt in the plugins. Agents
-cannot reset the task.
+cannot reset the task. Edits to `.draht/budgets.json`, including an agent's,
+apply only from the next new task, so review the file before starting one.
 
 ## Enforcement
 

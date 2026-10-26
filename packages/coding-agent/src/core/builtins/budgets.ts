@@ -77,8 +77,10 @@ async function callBudget(
 	let errors = "";
 	let termination: string | undefined;
 	try {
-		const child = spawnProcess(isBunBinary ? "node" : process.execPath, [runtimePath(), "call"], {
+		// A compiled binary runs a script as plain Bun when BUN_BE_BUN is set, so budgets need no separate Node.
+		const child = spawnProcess(process.execPath, [runtimePath(), "call"], {
 			cwd: request.cwd,
+			env: isBunBinary ? { ...process.env, BUN_BE_BUN: "1" } : process.env,
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 		const terminate = (reason: string) => {

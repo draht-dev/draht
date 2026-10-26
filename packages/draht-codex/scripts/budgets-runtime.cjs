@@ -3008,7 +3008,7 @@ function clearStopFailures(cwd, session) {
 }
 
 // packages/coding-agent/src/core/builtins/budget-guidance.ts
-var BUDGET_GUIDANCE = "Budgets are ceilings, not targets: write the smallest clear solution. Prefer clear names, cohesive functions, and focused modules. Keep documentation concise: explain contracts, setup, and non-obvious decisions; avoid restating code or writing progress diaries. Do not minify code or make arbitrary file splits just to fit a budget.";
+var BUDGET_GUIDANCE = "Budgets are ceilings, not targets: write the smallest clear solution. Prefer clear names, cohesive functions, and focused modules. Keep documentation concise: explain contracts, setup, and non-obvious decisions; avoid restating code or writing progress diaries. Do not minify code or make arbitrary file splits just to fit a budget. Change .draht/budgets.json only when the user asks; edits apply only after the user starts a new budget task.";
 
 // packages/coding-agent/src/core/budgets/tools.ts
 var import_node_path8 = require("node:path");
@@ -3141,7 +3141,8 @@ function replace(source, value) {
 function previewTool(cwd, name, input) {
   const tool = name.split(/[.:]/).at(-1)?.toLowerCase();
   if (tool === "apply_patch") {
-    const value = typeof input === "string" ? input : record2(input).patch ?? record2(input).input;
+    const args2 = typeof input === "string" ? void 0 : record2(input);
+    const value = args2 ? args2.command ?? args2.patch ?? args2.input : input;
     return previewPatch(cwd, text(value, "patch"));
   }
   if (tool !== "write" && tool !== "edit" && tool !== "multiedit") return void 0;

@@ -90,6 +90,18 @@ describe.each(["draht-claude", "draht-codex"])("%s budget hooks", (host) => {
 		expect(stop().status).toBe(0);
 	});
 
+	it("preflights the apply_patch payload Codex hooks deliver as tool_input.command", () => {
+		hook("UserPromptSubmit");
+		const result = hook("PreToolUse", {
+			tool_name: "apply_patch",
+			tool_input: {
+				command: `*** Begin Patch\n*** Add File: large.ts\n${"+const x = 1;\n".repeat(10)}*** End Patch`,
+			},
+		});
+		expect(result.status).toBe(2);
+		expect(result.stderr).toContain("file ceiling 10");
+	});
+
 	it("preflights Codex apply_patch including free-form input", () => {
 		hook("UserPromptSubmit");
 		const result = hook("PreToolUse", {

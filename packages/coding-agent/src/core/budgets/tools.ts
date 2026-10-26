@@ -25,7 +25,9 @@ function replace(source: string, value: unknown): string {
 export function previewTool(cwd: string, name: string, input: unknown): ProposedBudgetFile[] | undefined {
 	const tool = name.split(/[.:]/).at(-1)?.toLowerCase();
 	if (tool === "apply_patch") {
-		const value = typeof input === "string" ? input : (record(input).patch ?? record(input).input);
+		// Codex hooks deliver the patch as tool_input.command; other hosts pass it as patch or input.
+		const args = typeof input === "string" ? undefined : record(input);
+		const value = args ? (args.command ?? args.patch ?? args.input) : input;
 		return previewPatch(cwd, text(value, "patch"));
 	}
 	if (tool !== "write" && tool !== "edit" && tool !== "multiedit") return undefined;

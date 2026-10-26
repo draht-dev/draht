@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { build } from "esbuild";
@@ -13,6 +14,8 @@ const targets = [
 	"packages/draht-codex/scripts",
 ];
 const vocabularyAsset = "budgets-cl100k.json.gz";
+// Resolves dependencies the way the bundled sources do, under both hoisted and isolated package layouts.
+const requireFromRuntime = createRequire(resolve(root, "packages/coding-agent/src/core/budgets/policy.ts"));
 const vocabularyModule = realpathSync(fileURLToPath(import.meta.resolve("gpt-tokenizer/bpeRanks/cl100k_base")));
 const encodingModule = realpathSync(fileURLToPath(import.meta.resolve("gpt-tokenizer/encoding/cl100k_base")));
 
@@ -48,6 +51,15 @@ export default function loadBudgetVocabulary() {
   }
 }
 `;
+}
+
+/** The installed package directory; nested folders such as gpt-tokenizer's cjs/ carry the package name too. */
+function packageDirectory(name) {
+	const entry = requireFromRuntime.resolve(name);
+	const marker = `${sep}node_modules${sep}${name.split("/").join(sep)}${sep}`;
+	const index = entry.lastIndexOf(marker);
+	if (index < 0) throw new Error(`Cannot locate the ${name} package from ${entry}`);
+	return entry.slice(0, index + marker.length - 1);
 }
 
 function sameVocabulary(asset, vocabulary) {
@@ -106,10 +118,10 @@ export async function syncBudgetRuntime({ check = false } = {}) {
 	});
 	if (!vocabularyReplaced || !encodingReplaced) throw new Error("Budget tokenizer modules were not replaced");
 	const license = ["gpt-tokenizer", "diff"].map((name) => {
-		const location = ["LICENSE", "LICENSE.txt"].map((file) => resolve(root, "node_modules", name, file)).find(existsSync);
+		const location = ["LICENSE", "LICENSE.txt"].map((file) => join(packageDirectory(name), file)).find(existsSync);
 		if (!location) throw new Error(`Missing bundled dependency license: ${name}`);
 		return `${name}\n${readFileSync(location, "utf8")}`;
-	}).join("\n\n") + "\n\n" + readFileSync(resolve(root, "node_modules/gpt-tokenizer/data/Unicode-LICENSE.txt"), "utf8");
+	}).join("\n\n") + "\n\n" + readFileSync(join(packageDirectory("gpt-tokenizer"), "data/Unicode-LICENSE.txt"), "utf8");
 	const assets = new Map([
 		["budgets-runtime.cjs", Buffer.from(result.outputFiles[0].contents)],
 		["budgets-runtime.LICENSE", Buffer.from(license)],

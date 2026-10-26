@@ -51,6 +51,26 @@ describe("extensions discovery", () => {
 		expect(result.extensions.map((e) => path.basename(e.path)).sort()).toEqual(["bar.ts", "foo.ts"]);
 	});
 
+	it("marks a project's extensions and their tools as project scope and the agent dir's as user scope", async () => {
+		const project = path.join(tempDir, "project");
+		fs.mkdirSync(path.join(project, ".draht", "extensions"), { recursive: true });
+		fs.writeFileSync(path.join(project, ".draht", "extensions", "local.ts"), extensionCodeWithTool("local_tool"));
+		fs.writeFileSync(path.join(extensionsDir, "global.ts"), extensionCodeWithTool("global_tool"));
+
+		const result = await discoverAndLoadExtensions([], project, tempDir);
+
+		expect(result.errors).toHaveLength(0);
+		const scopes = Object.fromEntries(
+			result.extensions.flatMap((extension) =>
+				[...extension.tools.values()].map((tool) => [
+					tool.definition.name,
+					[extension.sourceInfo.scope, tool.sourceInfo.scope],
+				]),
+			),
+		);
+		expect(scopes).toEqual({ local_tool: ["project", "project"], global_tool: ["user", "user"] });
+	});
+
 	it("loads the coding-agent entrypoint without rewriting pi-ai provider subpaths", async () => {
 		fs.writeFileSync(
 			path.join(extensionsDir, "coding-agent-import.ts"),

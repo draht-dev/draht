@@ -30,6 +30,7 @@ import type {
 	ToolRenderers,
 } from "../../core/extensions/types.ts";
 import { READ_MCP_RESOURCE_TOOL } from "../../core/mcp-servers.ts";
+import type { SourceScope } from "../../core/source-info.ts";
 import { formatToolCallWithArgs, getTextOutput, replaceTabs } from "../../core/tools/render-utils.ts";
 import { formatSize, truncateMiddle } from "../../core/tools/truncate.ts";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
@@ -315,6 +316,8 @@ export function createMcpToolDefinition(options: {
 	name: string;
 	exposure: McpExposure;
 	namespace: ToolNamespace;
+	/** Scope of the configuration that defines the server, which the tool's annotations come from. */
+	annotationsScope: SourceScope;
 	timeoutMs: number;
 	getClient: () => Promise<McpToolCaller>;
 	/** Whether `read_mcp_resource` can read the server's resources. */
@@ -332,7 +335,7 @@ export function createMcpToolDefinition(options: {
 		outputSchema: createMcpResultSchema(tool.outputSchema),
 		exposure: toToolExposure(options.exposure),
 		namespace: options.namespace,
-		...(annotations ? { annotations } : {}),
+		...(annotations ? { annotations, annotationsScope: options.annotationsScope } : {}),
 		...createMcpToolRenderers(label),
 		async execute(_toolCallId, params, signal, onUpdate) {
 			const client = await options.getClient();

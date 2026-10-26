@@ -27,11 +27,20 @@
  *     action: approve
  * ```
  *
- * Rules are evaluated top-to-bottom; the first matching rule wins.
+ * Rules are evaluated top-to-bottom; the first matching rule wins. A rule's
+ * `tool` is a tool name or a glob over tool names, where `*` stands for any
+ * run of characters and `?` for one, matched case-insensitively:
+ * `mcp__docs__*` covers every tool whose name starts with `mcp__docs__`, such
+ * as the tools of the `docs` MCP server.
  *
  * On top of the rules sits a session-level `PermissionMode` (`ask` /
  * `auto` / `yolo`, see the type doc) that relaxes how unmatched calls and
  * `approve` outcomes are handled — `deny` rules are never relaxed.
+ *
+ * An unmatched tool the gate has no default for requires approval, unless it
+ * declares itself read-only (`readOnlyHint`) through sources trusted to say
+ * so (`hasTrustedReadOnlyHint`); then it is allowed within the project, in
+ * `ask` and `supervised` only when it also declares `openWorldHint: false`.
  *
  * `pattern` matching against bash commands is textual (no real shell
  * parser), so `deny` and `allow`/`approve` patterns are matched with
@@ -52,16 +61,21 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { minimatch } from "minimatch";
 import { parse } from "yaml";
 import { CONFIG_DIR_NAME, getAgentDir } from "../../config.ts";
+import type { SourceInfo, SourceScope } from "../source-info.ts";
 import { resolveToCwd } from "../tools/path-utils.ts";
 
 /** The three permission tiers a rule (or default) can resolve to. */
 export type PermissionAction = "deny" | "allow" | "approve";
 
 /**
- * Session-level permission mode. Modes only relax the gate's *default*
+ * Session-level permission mode. Modes only change the gate's *default*
  * decisions — explicit rules from `permissions.yml` always win first:
  *
+ * - `supervised`: like `ask`, and unmatched `write`/`edit` calls require
+ *   approval inside the project too.
  * - `ask`: rules as authored; unmatched bash/powershell requires approval.
+ *   A trusted read-only tool runs unasked only when it also declares
+ *   `openWorldHint: false` (as in `supervised`).
  * - `auto`: unmatched bash is auto-allowed unless it trips the built-in
  *   danger filter (`DANGEROUS_COMMAND_PATTERNS`), in which case it still
  *   requires approval. `powershell` is excluded from this auto-allow — the
@@ -73,15 +87,15 @@ export type PermissionAction = "deny" | "allow" | "approve";
  *   `allow`. Explicit `deny` rules still block — yolo is "stop asking",
  *   not "disable the gate".
  */
-export type PermissionMode = "ask" | "auto" | "yolo";
+export type PermissionMode = "supervised" | "ask" | "auto" | "yolo";
 
 /** Strictest first: `stricterPermissionMode` relies on this order. */
-export const PERMISSION_MODES: readonly PermissionMode[] = ["ask", "auto", "yolo"];
+export const PERMISSION_MODES: readonly PermissionMode[] = ["supervised", "ask", "auto", "yolo"];
 
 /**
  * The mode a session starts in when `DRAHT_PERMISSION_MODE` names none. A `PermissionGate`
- * constructed without a mode still uses `ask`, the strictest, so a caller that forgets to
- * pass the session's mode never gets a laxer gate than the session has. Never `yolo`: `/yolo`
+ * constructed without a mode still uses `ask`, so a caller that forgets to pass the session's
+ * mode never gets a laxer gate than any session but a `supervised` one has. Never `yolo`: `/yolo`
  * switches back to this mode when nothing else was chosen.
  */
 export const DEFAULT_SESSION_PERMISSION_MODE: Exclude<PermissionMode, "yolo"> = "auto";
@@ -97,7 +111,7 @@ export function stricterPermissionMode(a: PermissionMode, b: PermissionMode): Pe
 
 /** A single permission rule as authored in `permissions.yml`. */
 export interface PermissionRule {
-	/** Tool identifier this rule applies to (e.g. "bash", "read", "write", "edit"), or "*" for any tool. */
+	/** Tool this rule applies to (e.g. "bash", "read", "write", "edit"), or a glob over tool names ("mcp__docs__*", "*"). */
 	tool: string;
 	/** Glob pattern matched against the bash command string (only meaningful for tools with a `command` arg). */
 	pattern?: string;
@@ -149,6 +163,12 @@ function validateRule(raw: unknown, index: number): PermissionRule {
 
 	if (typeof record.tool !== "string" || record.tool.length === 0) {
 		throw new Error(`permissions.yml: rule at index ${index} is missing a valid "tool" field`);
+	}
+	// `paths` globs know braces and brackets; in `tool` they would silently never match a tool name.
+	if (/[{}[\]]/.test(record.tool)) {
+		throw new Error(
+			`permissions.yml: rule at index ${index} has braces or brackets in "tool"; only * and ? are wildcards there`,
+		);
 	}
 	if (!isPermissionAction(record.action)) {
 		throw new Error(
@@ -2000,20 +2020,57 @@ function describeMatch(rule: PermissionRule): string {
 }
 
 /**
- * A `tool: bash` rule's `pattern` is authored against bash command shapes, so
- * only its `deny` half is safe to reuse for `powershell` calls: a bash `deny`
- * over-matching onto a powershell command is the fail-safe direction, while a
- * bash `allow`/`approve` pattern (e.g. `ls *`) under-matching real
- * powershell syntax would otherwise create the illusion of coverage without
- * actually vetting powershell-specific danger. `tool: powershell` rules
- * (and `tool: "*"`) are unaffected and keep matching normally.
+ * A rule whose `tool` names bash (`tool: bash`, or a glob such as `b*`) has a
+ * `pattern` authored against bash command shapes, so only its `deny` half is
+ * safe to reuse for `powershell` calls: a bash `deny` over-matching onto a
+ * powershell command is the fail-safe direction, while a bash
+ * `allow`/`approve` pattern (e.g. `ls *`) under-matching real powershell
+ * syntax would otherwise create the illusion of coverage without actually
+ * vetting powershell-specific danger. Rules whose `tool` names powershell
+ * itself (`tool: powershell`, `tool: "*"`) are unaffected and keep matching
+ * normally.
  */
 function bashDenyRuleAppliesToPowershell(rule: PermissionRule, toolName: string): boolean {
-	return toolName === "powershell" && rule.tool.toLowerCase() === "bash" && rule.action === "deny";
+	return toolName === "powershell" && rule.action === "deny" && toolPatternMatches(rule.tool, "bash");
+}
+
+/** Whether a rule's `tool` names `toolName` (lowercase): exactly, or as a glob of `*` and `?`, in any letter case. */
+function toolPatternMatches(pattern: string, toolName: string): boolean {
+	return matchesWildcards(pattern.toLowerCase(), toolName);
+}
+
+/**
+ * Whether `text` matches `glob`, where `*` stands for any run of characters and `?` for one, in time
+ * proportional to the product of their lengths. Not `globToRegExp`: a regex of many `*` backtracks
+ * exponentially on a long text it does not match (`*a*a*a*a*a*a*b` takes seconds on 64 characters).
+ */
+function matchesWildcards(glob: string, text: string): boolean {
+	let g = 0;
+	let t = 0;
+	// The last `*` seen, and where in `text` its run ends so far, to widen it when a later part fails.
+	let star = -1;
+	let starEnd = 0;
+	while (t < text.length) {
+		// `*` first: taken as a literal for a `*` in `text`, it would leave no point to widen from.
+		if (glob[g] === "*") {
+			star = g++;
+			starEnd = t;
+		} else if (g < glob.length && (glob[g] === "?" || glob[g] === text[t])) {
+			g++;
+			t++;
+		} else if (star !== -1) {
+			g = star + 1;
+			t = ++starEnd;
+		} else {
+			return false;
+		}
+	}
+	while (glob[g] === "*") g++;
+	return g === glob.length;
 }
 
 function toolMatchesRule(rule: PermissionRule, toolName: string): boolean {
-	return rule.tool === "*" || rule.tool.toLowerCase() === toolName || bashDenyRuleAppliesToPowershell(rule, toolName);
+	return toolPatternMatches(rule.tool, toolName) || bashDenyRuleAppliesToPowershell(rule, toolName);
 }
 
 function ruleMatches(rule: PermissionRule, toolName: string, args: Record<string, unknown>, cwd: string): boolean {
@@ -2040,6 +2097,73 @@ function ruleMatches(rule: PermissionRule, toolName: string, args: Record<string
 	return true;
 }
 
+/** What the gate reads about a called tool besides its name: the matching parts of its `ToolInfo`. */
+export interface GatedTool {
+	annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; openWorldHint?: boolean };
+	/** Scope of the source the annotations come from, when the registering extension relays them. */
+	annotationsScope?: SourceScope;
+	/** Where the extension that registered the tool was loaded from. */
+	sourceInfo: Pick<SourceInfo, "scope">;
+}
+
+/**
+ * Whether `tool` declares itself read-only through sources trusted to say so. Hints are not
+ * verified, so a project's own configuration never vouches for one: the extension that registered
+ * the tool must come from outside the project (built in, `-e`, the SDK, the user's own extensions
+ * and packages: scope `temporary` or `user`), and so must any source it relays the hints from
+ * (`annotationsScope`, such as the `mcp.json` that defines an MCP server). Not `source`: a project
+ * package can be named `builtin`. A tool that also declares itself destructive contradicts itself,
+ * so its hint does not count either.
+ */
+function hasTrustedReadOnlyHint(tool: GatedTool): boolean {
+	if (tool.annotations?.readOnlyHint !== true || tool.annotations.destructiveHint === true) return false;
+	return tool.sourceInfo.scope !== "project" && tool.annotationsScope !== "project";
+}
+
+/** Past these bounds the walk over a call's arguments stops, and the call counts as naming a path outside. */
+const MAX_PATH_SCAN_DEPTH = 32;
+const MAX_PATH_SCAN_VALUES = 10_000;
+
+/**
+ * Whether `value` names a file location rather than plain text: an absolute path, one under `~`,
+ * a drive letter, a leading `@` (the tools strip it) or a `file:` URL, or a path climbing with `..`.
+ */
+function looksLikePath(value: string): boolean {
+	return isAbsolute(value) || /^(?:~|@|file:|[A-Za-z]:)/i.test(value) || /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(value);
+}
+
+/**
+ * Whether every string in `args` that looks like a path, at any depth, names a location inside
+ * `cwd`. Tools name their paths under keys of their own (`paths`, `uri`, nested options), so the key
+ * does not decide. A path that does not resolve, and arguments too deep or too many to walk, count
+ * as naming one outside.
+ */
+function argsStayWithinProject(args: Record<string, unknown>, cwd: string): boolean {
+	const pending: { value: unknown; depth: number }[] = [{ value: args, depth: 0 }];
+	let visited = 0;
+	for (let item = pending.pop(); item !== undefined; item = pending.pop()) {
+		if (++visited > MAX_PATH_SCAN_VALUES) return false;
+		const { value, depth } = item;
+		if (typeof value === "string") {
+			const candidate = value.trim();
+			if (!looksLikePath(candidate)) continue;
+			try {
+				if (!isWithinProject(candidate, cwd)) return false;
+			} catch {
+				// `file://host/x` and other URLs no tool can open.
+				return false;
+			}
+		} else if (typeof value === "object" && value !== null) {
+			if (depth >= MAX_PATH_SCAN_DEPTH) return false;
+			for (const child of Object.values(value)) {
+				if (pending.length >= MAX_PATH_SCAN_VALUES) return false;
+				pending.push({ value: child, depth: depth + 1 });
+			}
+		}
+	}
+	return true;
+}
+
 export interface PermissionGateOptions {
 	/** Project root used to determine whether a path is "within the project" for default decisions. Defaults to `process.cwd()`. */
 	cwd?: string;
@@ -2062,8 +2186,11 @@ export class PermissionGate {
 		this.mode = options.mode ?? "ask";
 	}
 
-	/** Evaluate a tool call. `args` should carry `command` for bash, or `path`/`file_path` for read/write/edit. */
-	evaluate(toolName: string, args: Record<string, unknown> = {}): PermissionDecision {
+	/**
+	 * Evaluate a tool call. `args` should carry `command` for bash, or `path`/`file_path` for read/write/edit.
+	 * `tool` is the called tool as the session registered it, if known; its hints only inform default decisions.
+	 */
+	evaluate(toolName: string, args: Record<string, unknown> = {}, tool?: GatedTool): PermissionDecision {
 		const normalizedTool = toolName.toLowerCase();
 
 		if (normalizedTool === "bash" || normalizedTool === "powershell") {
@@ -2088,7 +2215,7 @@ export class PermissionGate {
 			}
 		}
 
-		return this.applyMode(this.defaultDecision(normalizedTool, args));
+		return this.applyMode(this.defaultDecision(normalizedTool, args, tool));
 	}
 
 	/**
@@ -2102,7 +2229,7 @@ export class PermissionGate {
 		return decision;
 	}
 
-	private defaultDecision(toolName: string, args: Record<string, unknown>): PermissionDecision {
+	private defaultDecision(toolName: string, args: Record<string, unknown>, tool?: GatedTool): PermissionDecision {
 		if (DEFAULT_ALLOWED_TOOLS.has(toolName)) {
 			return { action: "allow", reason: `no rule matched; "${toolName}" is allowed by default` };
 		}
@@ -2196,6 +2323,9 @@ export class PermissionGate {
 		if (PATH_SCOPED_TOOLS.has(toolName)) {
 			const filePaths = getPathArgs(args);
 			if (filePaths.length > 0 && filePaths.every((filePath) => isWithinProject(filePath, this.cwd))) {
+				if (this.mode === "supervised" && toolName !== "read") {
+					return { action: "approve", reason: "supervised mode: file changes require approval" };
+				}
 				return { action: "allow", reason: "no rule matched; allowed by default within the project" };
 			}
 			return {
@@ -2215,6 +2345,28 @@ export class PermissionGate {
 			return {
 				action: "approve",
 				reason: "no rule matched; path is outside the project, requires approval",
+			};
+		}
+
+		if (tool !== undefined && hasTrustedReadOnlyHint(tool)) {
+			// In `ask` and `supervised`, only a tool that also stays in a closed world: a read-only tool that
+			// reaches the web can still carry what it read out in a query or URL.
+			if ((this.mode === "ask" || this.mode === "supervised") && tool.annotations?.openWorldHint !== false) {
+				return {
+					action: "approve",
+					reason: `${this.mode} mode: "${toolName}" is read-only but may reach an open world (no openWorldHint: false), requires approval`,
+				};
+			}
+			// Like grep/find/ls: a read-only tool still asks before it reads a path outside the project.
+			if (argsStayWithinProject(args, this.cwd)) {
+				return {
+					action: "allow",
+					reason: `no rule matched; "${toolName}" is read-only by a trusted source's hint, allowed by default within the project`,
+				};
+			}
+			return {
+				action: "approve",
+				reason: `no rule matched; "${toolName}" is read-only by a trusted source's hint, but names a path outside the project, requires approval`,
 			};
 		}
 

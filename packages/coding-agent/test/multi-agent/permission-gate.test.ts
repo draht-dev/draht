@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	DEFAULT_SESSION_PERMISSION_MODE,
 	findDangerousPattern,
+	type GatedTool,
 	isPermissionMode,
 	loadRules,
 	PermissionGate,
@@ -13,6 +14,7 @@ import {
 	parseRules,
 	stricterPermissionMode,
 } from "../../src/core/multi-agent/permission-gate.ts";
+import type { SourceScope } from "../../src/core/source-info.ts";
 
 /** Backslash-escapes `"` and `\` for embedding `inner` inside another `"..."`-quoted shell -c wrapper. */
 function escapeForDoubleQuotedWrap(inner: string): string {
@@ -56,6 +58,14 @@ rules:
 		expect(() => parseRules("rules:\n  - tool: bash\n")).toThrow();
 		expect(() => parseRules("rules:\n  - tool: bash\n    action: yolo\n")).toThrow();
 		expect(() => parseRules("rules: not-an-array\n")).toThrow();
+	});
+
+	it("rejects braces and brackets in a rule's tool, which would never match a tool name", () => {
+		expect(() => parseRules('rules:\n  - tool: "mcp__{prod,staging}__*"\n    action: deny\n')).toThrow(
+			/only \* and \?/,
+		);
+		expect(() => parseRules('rules:\n  - tool: "mcp__[ab]__*"\n    action: deny\n')).toThrow(/only \* and \?/);
+		expect(parseRules('rules:\n  - tool: "mcp__docs__?et*"\n    action: deny\n')).toHaveLength(1);
 	});
 });
 
@@ -565,8 +575,245 @@ describe("PermissionGate.evaluate", () => {
 	});
 });
 
+describe("PermissionGate tool globs", () => {
+	it("matches every tool of one MCP server with a trailing *, and no other tool", () => {
+		const gate = new PermissionGate([{ tool: "mcp__t3-code__*", action: "allow" }], { cwd: "/repo" });
+		expect(gate.evaluate("mcp__t3-code__task_status").action).toBe("allow");
+		expect(gate.evaluate("mcp__t3-code__delegate_task", { task: "x" }).action).toBe("allow");
+		expect(gate.evaluate("mcp__t3-codex__task_status").action).toBe("approve");
+		expect(gate.evaluate("mcp__docs__search").action).toBe("approve");
+		expect(gate.evaluate("bash", { command: "echo hi" }).action).toBe("approve");
+	});
+
+	it("matches ? as one character and ignores letter case", () => {
+		const gate = new PermissionGate([{ tool: "MCP__Docs__?et", action: "deny" }]);
+		expect(gate.evaluate("mcp__docs__get").action).toBe("deny");
+		expect(gate.evaluate("mcp__docs__SET").action).toBe("deny");
+		expect(gate.evaluate("mcp__docs__reset").action).toBe("approve");
+		expect(gate.evaluate("mcp__docs__et").action).toBe("approve");
+	});
+
+	it("treats every other character literally and keeps names without * or ? exact", () => {
+		const gate = new PermissionGate([
+			{ tool: "mcp__docs", action: "deny" },
+			{ tool: "mcp__a.b__*", action: "deny" },
+		]);
+		expect(gate.evaluate("mcp__docs__search").action).toBe("approve");
+		expect(gate.evaluate("mcp__docs").action).toBe("deny");
+		expect(gate.evaluate("mcp__a.b__x").action).toBe("deny");
+		expect(gate.evaluate("mcp__axb__x").action).toBe("approve");
+	});
+
+	it("applies pattern and paths of a glob rule like those of a named rule", () => {
+		const gate = new PermissionGate(
+			[
+				{ tool: "b*", pattern: "git push *", action: "deny" },
+				{ tool: "*", paths: ["secrets/**"], action: "deny" },
+			],
+			{ cwd: "/repo" },
+		);
+		expect(gate.evaluate("bash", { command: "git push origin main" }).action).toBe("deny");
+		expect(gate.evaluate("bash", { command: "git status" }).action).toBe("approve");
+		expect(gate.evaluate("read", { path: "secrets/key" }).action).toBe("deny");
+		expect(gate.evaluate("mcp__fs__read_file", { path: "secrets/key" }).action).toBe("deny");
+	});
+
+	it("carries a deny glob that names bash over to powershell, but never an allow glob", () => {
+		const denyGate = new PermissionGate([{ tool: "ba?h", pattern: "*Remove-Item*", action: "deny" }]);
+		expect(denyGate.evaluate("powershell", { command: "Remove-Item -Recurse -Force ~" }).action).toBe("deny");
+		const allowGate = new PermissionGate([{ tool: "b*", pattern: "ls *", action: "allow" }]);
+		expect(allowGate.evaluate("powershell", { command: "ls *" }).action).toBe("approve");
+		expect(allowGate.evaluate("bash", { command: "ls src" }).action).toBe("allow");
+	});
+
+	it("matches tool names that themselves contain * or ?", () => {
+		const gate = new PermissionGate([{ tool: "*", action: "deny" }]);
+		expect(gate.evaluate("*x").action).toBe("deny");
+		expect(gate.evaluate("?").action).toBe("deny");
+		const prefixGate = new PermissionGate([{ tool: "a*", action: "deny" }]);
+		expect(prefixGate.evaluate("a*b").action).toBe("deny");
+		expect(prefixGate.evaluate("b*a").action).toBe("approve");
+		const serverGate = new PermissionGate([{ tool: "mcp__*", action: "deny" }]);
+		expect(serverGate.evaluate("mcp__*__x").action).toBe("deny");
+	});
+
+	it("answers at once for a glob of many * and a long tool name it does not match", () => {
+		const gate = new PermissionGate([{ tool: `${"*a".repeat(12)}*b`, action: "deny" }]);
+		expect(gate.evaluate("a".repeat(200)).action).toBe("approve");
+		expect(gate.evaluate(`${"a".repeat(200)}b`).action).toBe("deny");
+	});
+
+	it("fails closed on a truncated deny scan when a deny glob names the tool", () => {
+		const manyPieces = `${Array.from({ length: 60 }, (_, i) => `echo ${i}`).join("; ")}; rm -rf ~`;
+		const gate = new PermissionGate([{ tool: "*sh", pattern: "rm -rf *", action: "deny" }], {
+			cwd: "/repo",
+			mode: "yolo",
+		});
+		for (const tool of ["bash", "powershell"]) {
+			const decision = gate.evaluate(tool, { command: manyPieces });
+			expect(decision.action).toBe("deny");
+			expect(decision.reason).toContain("more chained/wrapped pieces than the deny scan can fully cover");
+		}
+	});
+});
+
+describe("PermissionGate read-only hints", () => {
+	// Built-in tools and extensions, `-e` extensions and the SDK's settle to `temporary`, the user's own to `user`.
+	const FROM_OUTSIDE: GatedTool["sourceInfo"] = { scope: "temporary" };
+	const FROM_USER: GatedTool["sourceInfo"] = { scope: "user" };
+	const FROM_PROJECT: GatedTool["sourceInfo"] = { scope: "project" };
+	const readOnly = (sourceInfo: GatedTool["sourceInfo"], annotationsScope?: SourceScope): GatedTool => ({
+		annotations: { readOnlyHint: true, openWorldHint: false },
+		sourceInfo,
+		...(annotationsScope ? { annotationsScope } : {}),
+	});
+
+	it("asks in ask and supervised mode for a read-only tool that may reach an open world, and allows it in auto", () => {
+		for (const annotations of [{ readOnlyHint: true }, { readOnlyHint: true, openWorldHint: true }]) {
+			const tool: GatedTool = { annotations, sourceInfo: FROM_OUTSIDE };
+			for (const mode of ["ask", "supervised"] as const) {
+				const decision = new PermissionGate([], { cwd: "/repo", mode }).evaluate("mcp__web__fetch", {}, tool);
+				expect(decision.action).toBe("approve");
+				expect(decision.reason).toContain("open world");
+			}
+			expect(
+				new PermissionGate([], { cwd: "/repo", mode: "auto" }).evaluate("mcp__web__fetch", {}, tool).action,
+			).toBe("allow");
+		}
+	});
+
+	for (const mode of ["supervised", "ask", "auto"] as const) {
+		it(`${mode}: allows an unmatched read-only tool from a built-in, -e, SDK, or user extension`, () => {
+			const gate = new PermissionGate([], { cwd: "/repo", mode });
+			for (const sourceInfo of [FROM_OUTSIDE, FROM_USER]) {
+				expect(gate.evaluate("mcp__t3-code__task_status", {}, readOnly(sourceInfo)).action).toBe("allow");
+			}
+		});
+
+		it(`${mode}: asks for a read-only tool from a project extension`, () => {
+			const gate = new PermissionGate([], { cwd: "/repo", mode });
+			expect(gate.evaluate("mcp__t3-code__task_status", {}, readOnly(FROM_PROJECT)).action).toBe("approve");
+		});
+	}
+
+	it("asks for a tool that declares itself both read-only and destructive", () => {
+		const gate = new PermissionGate([], { cwd: "/repo" });
+		const tool: GatedTool = { annotations: { readOnlyHint: true, destructiveHint: true }, sourceInfo: FROM_OUTSIDE };
+		expect(gate.evaluate("mcp__docs__purge", {}, tool).action).toBe("approve");
+		const notDestructive: GatedTool = {
+			annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+			sourceInfo: FROM_OUTSIDE,
+		};
+		expect(gate.evaluate("mcp__docs__search", {}, notDestructive).action).toBe("allow");
+	});
+
+	it("asks when the hint comes from a project source the extension relays, and never trusts more than the extension", () => {
+		const gate = new PermissionGate([], { cwd: "/repo" });
+		expect(gate.evaluate("mcp__docs__search", {}, readOnly(FROM_OUTSIDE, "project")).action).toBe("approve");
+		expect(gate.evaluate("mcp__docs__search", {}, readOnly(FROM_USER, "project")).action).toBe("approve");
+		expect(gate.evaluate("mcp__docs__search", {}, readOnly(FROM_OUTSIDE, "user")).action).toBe("allow");
+		expect(gate.evaluate("mcp__docs__search", {}, readOnly(FROM_OUTSIDE, "temporary")).action).toBe("allow");
+		expect(gate.evaluate("mcp__docs__search", {}, readOnly(FROM_PROJECT, "user")).action).toBe("approve");
+	});
+
+	it("asks without a true readOnlyHint, or without the tool", () => {
+		const gate = new PermissionGate([], { cwd: "/repo" });
+		expect(gate.evaluate("mcp__docs__search", {}, { sourceInfo: FROM_OUTSIDE }).action).toBe("approve");
+		expect(
+			gate.evaluate("mcp__docs__search", {}, { annotations: { readOnlyHint: false }, sourceInfo: FROM_OUTSIDE })
+				.action,
+		).toBe("approve");
+		expect(gate.evaluate("mcp__docs__search", {}).action).toBe("approve");
+	});
+
+	it("asks when any argument, under any key and at any depth, names a path outside the project", () => {
+		const gate = new PermissionGate([], { cwd: "/repo" });
+		const tool = readOnly(FROM_OUTSIDE);
+		const decide = (args: Record<string, unknown>) => gate.evaluate("mcp__fs__read", args, tool).action;
+		for (const args of [
+			{ path: "~/.ssh/id_rsa" },
+			{ path: "src/a.ts", file_path: "/etc/shadow" },
+			{ paths: ["src/a.ts", "/etc/shadow"] },
+			{ filePath: "../outside/key" },
+			{ directory: "~" },
+			{ uri: "file:///etc/passwd" },
+			{ options: { nested: [{ target: "src/../../etc" }] } },
+			{ path: "  /etc/passwd  " },
+			{ path: "@/etc/passwd" },
+			{ uri: "file://host/share/key" },
+		]) {
+			expect(decide(args), JSON.stringify(args)).toBe("approve");
+		}
+		for (const args of [
+			{ path: "src/a.ts" },
+			{ paths: ["/repo/src/a.ts", "README.md"] },
+			{ uri: "file:///repo/docs/index.md" },
+			{ query: "how does the gate decide?", limit: 5, recursive: true, url: "https://example.com/a/../b" },
+			{ text: "see ../README.md for details" },
+		]) {
+			expect(decide(args), JSON.stringify(args)).toBe("allow");
+		}
+	});
+
+	it("asks for arguments too deep or too many to walk", () => {
+		const gate = new PermissionGate([], { cwd: "/repo" });
+		const tool = readOnly(FROM_OUTSIDE);
+		let deep: Record<string, unknown> = { path: "src/a.ts" };
+		for (let i = 0; i < 100; i++) deep = { inner: deep };
+		expect(gate.evaluate("mcp__fs__read", deep, tool).action).toBe("approve");
+		const many = { paths: Array.from({ length: 20_000 }, (_, i) => `src/${i}.ts`) };
+		expect(gate.evaluate("mcp__fs__read", many, tool).action).toBe("approve");
+		const deeper: Record<string, unknown> = { a: [] };
+		let cursor = deeper.a as unknown[];
+		for (let i = 0; i < 50_000; i++) {
+			const next: unknown[] = [];
+			cursor.push(next);
+			cursor = next;
+		}
+		expect(gate.evaluate("mcp__fs__read", deeper, tool).action).toBe("approve");
+	});
+
+	it("leaves explicit rules and the defaults of tools the gate knows unchanged", () => {
+		const tool = readOnly(FROM_OUTSIDE);
+		const gate = new PermissionGate(
+			[
+				{ tool: "mcp__docs__drop", action: "deny" },
+				{ tool: "mcp__docs__*", action: "approve" },
+			],
+			{ cwd: "/repo" },
+		);
+		expect(gate.evaluate("mcp__docs__drop", {}, tool).action).toBe("deny");
+		expect(gate.evaluate("mcp__docs__search", {}, tool).action).toBe("approve");
+		expect(gate.evaluate("bash", { command: "echo hi" }, tool).action).toBe("approve");
+		expect(gate.evaluate("read", { path: "/etc/passwd" }, tool).action).toBe("approve");
+		expect(gate.evaluate("ls", { path: "/tmp" }, tool).action).toBe("approve");
+	});
+});
+
+describe("PermissionGate supervised mode", () => {
+	const gate = new PermissionGate([{ tool: "write", paths: ["notes/**"], action: "allow" }], {
+		cwd: "/repo",
+		mode: "supervised",
+	});
+
+	it("asks before every unmatched file change, also inside the project", () => {
+		expect(gate.evaluate("write", { path: "src/a.ts" }).action).toBe("approve");
+		expect(gate.evaluate("edit", { path: "src/a.ts" }).reason).toContain("supervised mode");
+		expect(gate.evaluate("write", { path: "/etc/passwd" }).action).toBe("approve");
+	});
+
+	it("keeps reads, rules, and the rest of ask mode", () => {
+		expect(gate.evaluate("read", { path: "src/a.ts" }).action).toBe("allow");
+		expect(gate.evaluate("grep", { pattern: "x" }).action).toBe("allow");
+		expect(gate.evaluate("write", { path: "notes/today.md" }).action).toBe("allow");
+		expect(gate.evaluate("bash", { command: "echo hi" }).action).toBe("approve");
+		expect(gate.evaluate("workflow", { name: "w" }).action).toBe("approve");
+	});
+});
+
 describe("isPermissionMode", () => {
-	it("accepts the three known modes and rejects everything else", () => {
+	it("accepts the four known modes and rejects everything else", () => {
+		expect(isPermissionMode("supervised")).toBe(true);
 		expect(isPermissionMode("ask")).toBe(true);
 		expect(isPermissionMode("auto")).toBe(true);
 		expect(isPermissionMode("yolo")).toBe(true);
@@ -1199,6 +1446,8 @@ describe("PermissionGate modes", () => {
 		expect(stricterPermissionMode("ask", "yolo")).toBe("ask");
 		expect(stricterPermissionMode("yolo", "auto")).toBe("auto");
 		expect(stricterPermissionMode("yolo", "yolo")).toBe("yolo");
+		expect(stricterPermissionMode("ask", "supervised")).toBe("supervised");
+		expect(stricterPermissionMode("supervised", "auto")).toBe("supervised");
 	});
 
 	it("a session starts in auto, while a gate given no mode stays at the strictest", () => {

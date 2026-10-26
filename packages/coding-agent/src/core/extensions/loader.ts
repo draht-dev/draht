@@ -17,7 +17,13 @@ import type { CheckpointRestoreOptions } from "../checkpoints/checkpoint-manager
 import { createEventBus, type EventBus } from "../event-bus.ts";
 import type { ExecOptions } from "../exec.ts";
 import { execCommand } from "../exec.ts";
-import { type McpServerConfig, McpServerRegistry, mcpNamespace, validateMcpServerConfig } from "../mcp-servers.ts";
+import {
+	type McpServerConfig,
+	McpServerRegistry,
+	mcpNamespace,
+	type RegisteredMcpServer,
+	validateMcpServerConfig,
+} from "../mcp-servers.ts";
 import { readPiManifest } from "../pi-manifest.ts";
 import { createSyntheticSourceInfo, getSyntheticPathSource, isSyntheticPath } from "../source-info.ts";
 import { time } from "../timings.ts";
@@ -512,7 +518,15 @@ function createExtensionAPI(
 				.list()
 				.find((server) => server.name !== name && mcpNamespace(server.name) === mcpNamespace(name));
 			if (clash) throw new Error(`MCP server "${name}" conflicts with registered server "${clash.name}"`);
-			const server = { name, config: structuredClone(validated), extensionPath: extension.path };
+			const server: RegisteredMcpServer = {
+				name,
+				config: structuredClone(validated),
+				extensionPath: extension.path,
+				// Read when listed: the resource loader settles the extension's source after its factory ran.
+				get extensionScope() {
+					return extension.sourceInfo.scope;
+				},
+			};
 			applyRuntimeChange(() => runtime.mcpServers.register(server));
 		},
 
@@ -929,5 +943,23 @@ export async function discoverAndLoadExtensions(
 		addPaths([resolved]);
 	}
 
-	return loadExtensions(allPaths, resolvedCwd, eventBus);
+	const result = await loadExtensions(allPaths, resolvedCwd, eventBus);
+	// No resource loader settles their source here, and the permission gate trusts tool hints by scope:
+	// a project's extensions must not keep the default `temporary`.
+	const isUnder = (file: string, dir: string) => {
+		const relative = path.relative(dir, path.resolve(file));
+		return !relative.startsWith("..") && !path.isAbsolute(relative);
+	};
+	for (const extension of result.extensions) {
+		const scope = isUnder(extension.resolvedPath, localExtDir)
+			? "project"
+			: isUnder(extension.resolvedPath, globalExtDir)
+				? "user"
+				: undefined;
+		if (scope === undefined) continue;
+		extension.sourceInfo = { ...extension.sourceInfo, scope };
+		for (const tool of extension.tools.values()) tool.sourceInfo = extension.sourceInfo;
+		for (const command of extension.commands.values()) command.sourceInfo = extension.sourceInfo;
+	}
+	return result;
 }

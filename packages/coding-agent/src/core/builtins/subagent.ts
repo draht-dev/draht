@@ -29,6 +29,7 @@ import {
 	AgentFSM,
 	type AgentFSMTransitionEvent,
 	DEFAULT_SESSION_PERMISSION_MODE,
+	type GatedTool,
 	isPermissionMode,
 	loadRules,
 	type Message as MailboxMessage,
@@ -117,9 +118,10 @@ export function permissionEnv(session: { permissionMode(): PermissionMode }): ()
 /**
  * Where `app.permissions.cycle` switches to. It alternates `auto` and `ask` and never enters
  * `yolo`, so no single key press drops every approval; that takes `/yolo`. From `yolo` it goes back
- * to `auto`.
+ * to `auto`, and from `supervised`, which only `/permissions` enters, to `ask`.
  */
 const NEXT_PERMISSION_MODE: Readonly<Record<PermissionMode, Exclude<PermissionMode, "yolo">>> = {
+	supervised: "ask",
 	auto: "ask",
 	ask: "auto",
 	yolo: "auto",
@@ -778,6 +780,8 @@ export function loadPermissionRules(projectDir: string, projectTrusted: boolean,
 
 /** Hook points `createPermissionGateToolCallHandler` offers to its caller (§10.5). */
 export interface PermissionGateHandlerOptions {
+	/** The called tool as the session registered it, whose read-only hint can spare an ask. */
+	getTool?: (toolName: string) => GatedTool | undefined;
 	/** Called only for `approve` decisions. Must be cheap and must not throw. */
 	describe?: (event: ToolCallEvent, ctx: ExtensionContext) => ApprovalDescription | undefined;
 	/** Called right before `ctx.ui.confirm` (so an open inspector can close first). */
@@ -803,7 +807,7 @@ export function createPermissionGateToolCallHandler(
 ): (event: ToolCallEvent, ctx: ExtensionContext) => Promise<ToolCallEventResult | undefined> {
 	return async (event, ctx) => {
 		const input = event.input as Record<string, unknown>;
-		const decision = gate.evaluate(event.toolName, input);
+		const decision = gate.evaluate(event.toolName, input, options?.getTool?.(event.toolName));
 
 		if (decision.action === "deny") {
 			return { block: true, reason: decision.reason };
@@ -1600,7 +1604,8 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 		}
 
 		const MODE_DESCRIPTIONS: Record<PermissionMode, string> = {
-			ask: "rules as authored; unmatched bash commands require approval",
+			supervised: "like ask, and every file change requires approval",
+			ask: "rules as authored; unmatched bash commands, and read-only tools that may reach the web, require approval",
 			auto: "auto-approve bash unless the command looks dangerous, and start workflows and duet batches without asking (deny rules still block)",
 			yolo: "no approval prompts this session (deny rules still block)",
 		};
@@ -1613,6 +1618,7 @@ export function createSubagentExtension(options: { runner?: AgentRunner } = {}):
 					mode: permissionMode,
 				}),
 				{
+					getTool: (name) => pi.getAllTools().find((tool) => tool.name === name),
 					describe: (e, c) => {
 						if (e.toolName !== WORKFLOW_TOOL_NAME) return undefined;
 						try {

@@ -5,6 +5,8 @@
  * extension that handles `mcp_servers_change`) connects them next to the servers from `mcp.json`.
  */
 
+import type { SourceScope } from "./source-info.ts";
+
 /**
  * Regular expression for a tool name pattern where `*` matches any characters, as `toolExposure`,
  * `--tools`, and `--exclude-tools` accept them.
@@ -332,6 +334,8 @@ export interface RegisteredMcpServer {
 	config: McpServerConfig;
 	/** Path of the extension that registered the server. */
 	extensionPath: string;
+	/** Scope the extension that registered the server was loaded from. */
+	extensionScope: SourceScope;
 }
 
 /** Servers registered by the extensions of one runtime. */

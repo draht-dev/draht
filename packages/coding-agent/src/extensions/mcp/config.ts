@@ -38,6 +38,7 @@ import {
 	mcpNamespace,
 	validateMcpServerConfig,
 } from "../../core/mcp-servers.ts";
+import type { SourceScope } from "../../core/source-info.ts";
 import { stripBom } from "../../utils/text.ts";
 
 export type {
@@ -59,6 +60,8 @@ export interface McpServerEntry {
 	 * `pi.registerMcpServer()`. Changes to extension servers are not saved.
 	 */
 	scope?: "global" | "project" | "extension";
+	/** For `extension` servers: the scope the registering extension was loaded from. */
+	extensionScope?: SourceScope;
 	/** Project `mcp.json` with an override of this global server's `enabled`, `exposure`, or `toolExposure`. */
 	override?: string;
 }

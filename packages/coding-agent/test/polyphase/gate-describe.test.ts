@@ -122,6 +122,7 @@ describe("subagent factory tool_call wiring", () => {
 		const fakePi = {
 			registerTool: () => {},
 			registerCommand: () => {},
+			getAllTools: () => [],
 			getSettings,
 			on: (event: string, fn: unknown) => {
 				if (event === "tool_call") handler = fn as typeof handler;

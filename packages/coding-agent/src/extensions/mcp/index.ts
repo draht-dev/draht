@@ -39,6 +39,7 @@ import type {
 } from "../../core/extensions/types.ts";
 import { mcpNamespace } from "../../core/mcp-servers.ts";
 import type { ModelRegistry } from "../../core/model-registry.ts";
+import type { SourceScope } from "../../core/source-info.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
 import { CODEMODE_TOOL_NAME } from "../codemode/tool.ts";
 import { TOOL_SEARCH_TOOL_NAME } from "../tool-search/tool.ts";
@@ -134,6 +135,17 @@ function isEnabled(server: Pick<McpServer, "entry">): boolean {
 
 function exposureOf(entry: McpServerEntry): McpExposure {
 	return entry.config.exposure ?? "codemode";
+}
+
+/**
+ * Scope of the configuration that defines the server, which its tools' annotations come from: the
+ * user's for the global `mcp.json`, the registering extension's for registered servers, and the
+ * project's for the project `mcp.json` and entries of unknown origin.
+ */
+function annotationsScopeOf(entry: McpServerEntry): SourceScope {
+	if (entry.scope === "global") return "user";
+	if (entry.scope === "extension") return entry.extensionScope ?? "project";
+	return "project";
 }
 
 /** Exposures the server's tools can have, known from its config before it connects. */
@@ -345,7 +357,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 		const registeredServers = (): { servers: McpServer[]; overridden: string[] } => {
 			const registered: McpServer[] = [];
 			const overriddenNames: string[] = [];
-			for (const { name, config, extensionPath } of pi.getMcpServers()) {
+			for (const { name, config, extensionPath, extensionScope } of pi.getMcpServers()) {
 				const configured = configuredEntries.find((entry) => mcpNamespace(entry.name) === mcpNamespace(name));
 				if (configured) {
 					overriddenNames.push(
@@ -354,7 +366,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 					continue;
 				}
 				registered.push({
-					entry: { name, config, source: extensionPath, scope: "extension" },
+					entry: { name, config, source: extensionPath, scope: "extension", extensionScope },
 					registeredConfig: JSON.stringify(config),
 				});
 			}
@@ -422,6 +434,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 					name: assignName(tool.name, `${server}\0${tool.name}`),
 					exposure: getMcpToolExposure(entry.config, tool.name),
 					namespace,
+					annotationsScope: annotationsScopeOf(entry),
 					timeoutMs: connection.timeoutMs,
 					getClient: async () => {
 						// A prepared call can outlive this definition's connection while the readiness
@@ -473,19 +486,27 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 
 		/** Exposure the resource tools were last registered with; undefined until a server has resources. */
 		let resourceToolsExposure: McpExposure | undefined;
+		/** Scope of their read-only hints when last registered. */
+		let resourceToolsScope: SourceScope | undefined;
 		/**
 		 * Register the resource tools with the widest exposure of the servers they reach: `direct` when
-		 * one of them is direct, and so on. They are hidden when no server has resources.
+		 * one of them is direct, and so on. They are hidden when no server has resources. Their read-only
+		 * hints count as coming from the least trusted of those servers, the project's when one is.
 		 */
 		const syncResourceTools = () => {
-			const exposures = new Set(serversWithResources().map((server) => exposureOf(server.entry)));
+			const reached = serversWithResources();
+			const exposures = new Set(reached.map((server) => exposureOf(server.entry)));
 			const exposure = (["direct", "codemode", "deferred"] as const).find((candidate) => exposures.has(candidate));
 			const next = exposure ?? "hidden";
-			if (next === resourceToolsExposure || (resourceToolsExposure === undefined && next === "hidden")) return;
-			const wasDirect = resourceToolsExposure === "direct";
+			const scopes = new Set(reached.map((server) => annotationsScopeOf(server.entry)));
+			const scope = (["project", "user", "temporary"] as const).find((candidate) => scopes.has(candidate)) ?? "user";
+			if (next === resourceToolsExposure && scope === resourceToolsScope) return;
+			if (resourceToolsExposure === undefined && next === "hidden") return;
+			const wasDirect = resourceToolsExposure === "direct" && next !== "direct";
 			resourceToolsExposure = next;
+			resourceToolsScope = scope;
 			const resourceDefinitions = createMcpResourceToolDefinitions({ exposure: next, servers: resourceServers });
-			for (const definition of resourceDefinitions) pi.registerTool(definition);
+			for (const definition of resourceDefinitions) pi.registerTool({ ...definition, annotationsScope: scope });
 			if (wasDirect) {
 				const names = new Set(resourceDefinitions.map((definition) => definition.name));
 				pi.setActiveTools(pi.getActiveTools().filter((name) => !names.has(name)));

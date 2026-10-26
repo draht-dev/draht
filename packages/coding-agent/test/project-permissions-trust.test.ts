@@ -65,6 +65,7 @@ function captureToolCallHandler(): ToolCallHandler {
 	activateSubagent({
 		registerTool: () => {},
 		registerCommand: () => {},
+		getAllTools: () => [],
 		on: (event: string, fn: unknown) => {
 			if (event === "tool_call") handler = fn as ToolCallHandler;
 		},

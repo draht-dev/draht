@@ -266,7 +266,19 @@ Reading and listing resources is retried once after a transient HTTP error (408,
 
 Every MCP call passes through draht's tool pipeline. Extension `tool_call` and `tool_result` handlers, including permission gates, therefore apply to MCP tools. Calls made from codemode scripts carry the codemode call ID as `parentToolCallId`.
 
-`pi.getAllTools()` reports the annotations declared by each server: `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint`. Permission extensions can use these hints to decide which calls require confirmation (see [Tool exposure](extensions.md#tool-exposure)). Resource tools are marked read-only.
+`pi.getAllTools()` reports the annotations declared by each server: `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint`. Permission extensions can use these hints to decide which calls require confirmation (see [Tool exposure](extensions.md#tool-exposure)). Resource tools are marked read-only. `annotationsScope` names where the hints come from: `user` for a server in the global `mcp.json`, `project` for one in the project's, and the registering extension's scope for a registered server. The resource tools take the least trusted scope of the servers they reach.
+
+In the `ask` and `auto` permission modes, draht's permission gate asks before an MCP call unless a rule in `permissions.yml` allows it or the tool is read-only. A rule's `tool` accepts `*` for any run of characters and `?` for one, so one rule covers all tools of a server:
+
+```yaml
+rules:
+  - tool: "mcp__docs__*"
+    action: allow
+```
+
+The glob matches tool names, in which every character but letters, digits, and `_` becomes `_`, and ignores letter case: `mcp__docs__*` also covers servers named `Docs`, `docs-`, or `docs__admin`.
+
+Without a matching rule, a tool whose server declares `readOnlyHint: true` runs without asking if, in the `ask` and `supervised` modes, it also declares `openWorldHint: false`, the server is in the global `mcp.json` or registered by an extension from outside the project, and no argument of the call names a path outside the project: an absolute path, one under `~`, a `file:` URL, or one climbing out with `..`. The hints are not verified, so tools of a server in the project's `mcp.json` still ask, and so do the resource tools while such a server has resources. The resource tools declare no `openWorldHint`, so they ask in `ask` and `supervised` mode.
 
 ## Extensions and SDK
 

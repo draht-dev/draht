@@ -87,7 +87,7 @@ import type {
 } from "../session-manager.ts";
 import type { Settings } from "../settings-manager.ts";
 import type { SlashCommandInfo } from "../slash-commands.ts";
-import type { SourceInfo } from "../source-info.ts";
+import type { SourceInfo, SourceScope } from "../source-info.ts";
 import type { BuildSystemPromptOptions, NormalizedBuildSystemPromptOptions } from "../system-prompt.ts";
 import type { BashOperations } from "../tools/bash.ts";
 import type { EditToolDetails } from "../tools/edit.ts";
@@ -749,6 +749,14 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 
 	/** Hints about what the tool does, for example from an MCP server. */
 	annotations?: ToolAnnotations;
+
+	/**
+	 * Scope of the source `annotations` come from when the registering extension relays another
+	 * source's hints, for example `"project"` for an MCP server from a project's `mcp.json`. The
+	 * built-in permission gate ignores `readOnlyHint` from project scope, as it does for tools of
+	 * extensions loaded from the project, so the field can lower trust in the hints but never raise it.
+	 */
+	annotationsScope?: SourceScope;
 
 	/**
 	 * Whether registering the tool activates it. Default: `true` for `direct` and `model-only` tools;
@@ -2350,6 +2358,7 @@ export type ToolInfo = Pick<
 	exposure: ToolExposure;
 	namespace?: ToolNamespace;
 	annotations?: ToolAnnotations;
+	annotationsScope?: SourceScope;
 	sourceInfo: SourceInfo;
 };
 

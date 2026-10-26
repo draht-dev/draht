@@ -12,7 +12,7 @@ This bundles everything draht gives its own CLI — slash commands, specialist s
 
 ## What you get
 
-### 23 slash commands
+### Slash commands
 
 **Project lifecycle**
 - `/new-project` — greenfield: questioning → domain model → requirements → roadmap
@@ -32,6 +32,7 @@ This bundles everything draht gives its own CLI — slash commands, specialist s
 - `/progress` — show current position in the roadmap
 
 **Ad-hoc**
+- `/draht:budget [configure|status|new]` — configure this repository's token budgets, inspect usage, or start a new task
 - `/quick <task>` — small tracked task with TDD cycle
 - `/fix <bug>` — diagnose → reproducing test → minimal fix (debugger + implementer subagents)
 - `/review [scope]` — parallel code review + security audit
@@ -104,6 +105,12 @@ Invoked from inside commands (not Claude Code lifecycle hooks):
 - **PermissionRequest** — while the judge TUI is running, parks the prompt as a card and waits for the human swipe (`judge-hook.cjs`)
 
 The judge hooks are inert unless you run the TUI, and inert again where no Python interpreter is available — edits proceed and the normal permission dialog appears exactly as before.
+
+### Token budgets
+
+Opt-in per-file token limits encourage readable, cohesive code and concise documentation. `/draht:budget` guides you through writing the repository's `.draht/budgets.json`; repositories without that file are not measured. The defaults are 5,000 tokens per code file and 1,500 per documentation file. Lockfiles, changelogs, and generated files are skipped, and task totals are optional. Trusted plugin hooks enforce the same offline accounting as native draht, shared by subagents and linked worktrees. Chat responses have no budget.
+
+Add `status` to inspect limits and usage. Only the user starts a new task, by submitting `/draht:budget new` as the whole prompt. See the [budget guide](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/docs/budgets.md).
 
 ### The judge queue — reviewing gates, not decisions
 

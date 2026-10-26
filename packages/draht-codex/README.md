@@ -40,6 +40,7 @@ Session continuity:
 
 Ad-hoc:
 
+- `commands/budget.md` - guided configuration of this repository's token budgets
 - `commands/quick.md`
 - `commands/fix.md`
 - `commands/review.md`
@@ -93,8 +94,9 @@ Codex treats agent `model:` as reference metadata — `configure --list` shows i
 
 ### Command prompt wrappers
 
-The plugin ships 17 command prompt wrappers, one per `commands/*.md` template:
+The plugin ships a command prompt wrapper for each `commands/*.md` template:
 
+- `budget`
 - `new-project`
 - `init-project`
 - `map-codebase`
@@ -121,7 +123,7 @@ The plugin ships 17 command prompt wrappers, one per `commands/*.md` template:
 
 ### Support skills
 
-The GSD workflow templates live in `commands/`. Alongside the 23 command wrappers above, the plugin ships 16 support skills (39 skill directories in total), loaded by description match or by name.
+The GSD workflow templates live in `commands/`. Alongside the command wrappers above, support skills load by description match or by name.
 
 Router:
 
@@ -176,6 +178,12 @@ The plugin includes `hooks/hooks.json` plus these scripts:
 - `judge-hook.cjs` (PostToolUse, PreToolUse, UserPromptSubmit, Stop, PermissionRequest) — the gate queue: a new test is replayed against the code as it stands, and mutated once the implementation lands; inert unless the `judge` TUI in `bin/judge` is running
 
 Codex loads plugin-bundled hooks only after the user reviews and trusts them.
+
+### Token budgets
+
+Opt-in per-file token limits encourage readable, cohesive code and concise documentation. `$draht:budget`, or `budget` in `/skills`, guides you through writing the repository's `.draht/budgets.json`; repositories without that file are not measured. The defaults are 5,000 tokens per code file and 1,500 per documentation file. Lockfiles, changelogs, and generated files are skipped, and task totals are optional. Trusted plugin hooks enforce the same offline accounting as native draht, shared by subagents and linked worktrees. Chat responses have no budget.
+
+Add `status` to inspect limits and usage. Only the user starts a new task, by submitting `$draht:budget new` as the whole prompt. See the [budget guide](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/docs/budgets.md).
 
 ## Installation
 

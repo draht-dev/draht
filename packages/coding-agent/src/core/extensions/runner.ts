@@ -1093,10 +1093,9 @@ export class ExtensionRunner {
 		const boundaryHandlers = snapshotEventHandlers(this.extensions, baseEvent.type);
 		if (baseEvent.type === "agent_before_settle") {
 			// Verify the final state after other settlement handlers have made their edits.
-			const completionChecksPath = `${BUILTIN_PATH_PREFIX}completion-checks`;
+			const finalChecks = [`${BUILTIN_PATH_PREFIX}completion-checks`, `${BUILTIN_PATH_PREFIX}budgets`];
 			boundaryHandlers.sort(
-				(left, right) =>
-					Number(left.ext.path === completionChecksPath) - Number(right.ext.path === completionChecksPath),
+				(left, right) => finalChecks.indexOf(left.ext.path) - finalChecks.indexOf(right.ext.path),
 			);
 		}
 		for (const { ext, handlers } of boundaryHandlers) {

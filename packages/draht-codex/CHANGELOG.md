@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- add opt-in token budgets for repositories with `.draht/budgets.json`, enforced by trusted lifecycle hooks with the native defaults and exclusions, guided setup through `$draht:budget`, user-only task resets, and a bundled CLI for validation and status
+
 ## [2026.10.23-1] - 2026-10-23
 
 ### Added

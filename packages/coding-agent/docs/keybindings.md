@@ -160,7 +160,7 @@ During `/login`, `app.login.copyUrl` copies the original URL without the line br
 | `app.model.cycleBackward` | `shift+ctrl+p` (`alt+p` on Windows and WSL) | Cycle to previous model |
 | `app.models.save` | `ctrl+s` | Save the selected default model or scoped model configuration to settings |
 | `app.thinking.cycle` | `shift+tab` | Cycle thinking level |
-| `app.permissions.cycle` | `alt+m`, `ctrl+q` (`alt+m` on Windows and WSL) | Switch the permission mode between `auto` and `ask`; from `yolo`, back to `auto` |
+| `app.permissions.cycle` | `alt+m`, `ctrl+q` (`alt+m` on Windows and WSL) | Switch the permission mode between `auto` and `ask`; from `yolo`, back to `auto`; from `supervised`, to `ask` |
 | `app.context.cycle` | `ctrl+shift+l` | Cycle supported context-window sizes for the current model |
 | `app.thinking.save` | `ctrl+s` | Save current thinking level to settings |
 | `app.thinking.toggle` | `ctrl+t` | Collapse or expand thinking blocks |

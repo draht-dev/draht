@@ -1,10 +1,46 @@
 import type { AuthInfoLink, OAuthDeviceCodeInfo } from "@draht/ai";
-import { Container, type Focusable, getKeybindings, Input, Spacer, Text, TruncatedText, type TUI } from "@draht/tui";
+import {
+	Container,
+	type Focusable,
+	getKeybindings,
+	hyperlink,
+	Input,
+	replaceControlCharacters,
+	Spacer,
+	Text,
+	TruncatedText,
+	type TUI,
+} from "@draht/tui";
 import { copyToClipboard } from "../../../utils/clipboard.js";
 import { openBrowser } from "../../../utils/open-browser.js";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 import { keyHint } from "./keybinding-hints.js";
+
+/**
+ * The `http:` or `https:` URL `value` names, normalized, or undefined. The shared launcher also opens files and custom
+ * protocols, so login only opens web URLs. Normalizing percent-encodes control characters, which would otherwise end a
+ * terminal hyperlink early.
+ */
+function webUrl(value: string): string | undefined {
+	if (!URL.canParse(value)) return undefined;
+	const url = new URL(value);
+	return url.protocol === "https:" || url.protocol === "http:" ? url.href : undefined;
+}
+
+/**
+ * `value` normalized as a web URL, else with control characters replaced: an untrusted string printed as is could end a
+ * hyperlink early or send its own escape sequences to the terminal.
+ */
+function displayUrl(value: string): string {
+	return webUrl(value) ?? replaceControlCharacters(value);
+}
+
+/** `text` as a terminal hyperlink to `url` when that is a web URL, else plain `text`. */
+function webLink(text: string, url: string): string {
+	const target = webUrl(url);
+	return target === undefined ? text : hyperlink(text, target);
+}
 
 /**
  * Login dialog component - replaces editor during OAuth login flow
@@ -105,18 +141,17 @@ export class LoginDialogComponent extends Container implements Focusable {
 	}
 
 	private addAuthLink(url: string): void {
-		const linkedUrl = `\x1b]8;;${url}\x07${url}\x1b]8;;\x07`;
-		this.contentContainer.addChild(new Text(theme.fg("accent", linkedUrl), 1, 0));
+		const shownUrl = displayUrl(url);
+		this.contentContainer.addChild(new Text(theme.fg("accent", webLink(shownUrl, shownUrl)), 1, 0));
 
 		const clickHint = process.platform === "darwin" ? "Cmd+click to open" : "Ctrl+click to open";
-		const hyperlink = `\x1b]8;;${url}\x07${clickHint}\x1b]8;;\x07`;
 		const copyHint = getKeybindings().getKeys("app.login.copyUrl").length
 			? `${keyHint("app.login.copyUrl", "to copy URL")} · `
 			: "";
-		this.contentContainer.addChild(new Text(copyHint + theme.fg("dim", hyperlink), 1, 0));
+		this.contentContainer.addChild(new Text(copyHint + theme.fg("dim", webLink(clickHint, url)), 1, 0));
 		const copyStatus = new Text("", 1, 0);
 		this.contentContainer.addChild(copyStatus);
-		this.authLink = { url, copyStatus };
+		this.authLink = { url: shownUrl, copyStatus };
 	}
 
 	private async copyAuthUrl(): Promise<void> {
@@ -139,6 +174,7 @@ export class LoginDialogComponent extends Container implements Focusable {
 		this.clearDeviceCodeAction();
 		this.contentContainer.clear();
 		this.contentContainer.addChild(new Spacer(1));
+		const target = webUrl(url);
 		this.addAuthLink(url);
 
 		if (instructions) {
@@ -146,7 +182,7 @@ export class LoginDialogComponent extends Container implements Focusable {
 			this.contentContainer.addChild(new Text(theme.fg("warning", instructions), 1, 0));
 		}
 
-		openBrowser(url);
+		if (target !== undefined) openBrowser(target);
 		this.tui.requestRender();
 	}
 
@@ -198,11 +234,10 @@ export class LoginDialogComponent extends Container implements Focusable {
 		}
 		if (info.openBrowserOnConfirm) {
 			try {
-				// The shared launcher also opens files; device-code login must only open web URLs.
-				const url = new URL(info.verificationUri);
-				if (url.protocol === "https:" || url.protocol === "http:") openBrowser(url.href);
+				const target = webUrl(info.verificationUri);
+				if (target !== undefined) openBrowser(target);
 			} catch {
-				// Invalid URLs or launcher failures must not interrupt login.
+				// Launcher failures must not interrupt login.
 			}
 		}
 	}
@@ -271,9 +306,9 @@ export class LoginDialogComponent extends Container implements Focusable {
 		this.contentContainer.addChild(new Spacer(1));
 		this.contentContainer.addChild(new Text(theme.fg("text", message), 1, 0));
 		for (const link of links) {
-			const text = link.label ? `${link.label}: ${link.url}` : link.url;
-			const hyperlink = `\x1b]8;;${link.url}\x07${text}\x1b]8;;\x07`;
-			this.contentContainer.addChild(new Text(theme.fg("accent", hyperlink), 1, 0));
+			const url = displayUrl(link.url);
+			const text = link.label ? `${link.label}: ${url}` : url;
+			this.contentContainer.addChild(new Text(theme.fg("accent", webLink(text, url)), 1, 0));
 		}
 		if (showCloseHint) {
 			this.contentContainer.addChild(new Spacer(1));

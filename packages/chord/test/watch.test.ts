@@ -1,7 +1,7 @@
 // Tests for Chord's watch handles: the shared lifecycle through `Watch`, and what `NativeWatch` does differently.
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
-import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	BACKGROUND_CONTEXT,
 	type Context,
@@ -12,7 +12,7 @@ import {
 import { applyImmutable, type Op, track } from "../src/delta/index.ts";
 import { MAX_PENDING_OPS } from "../src/delta/pending.ts";
 import type { JsonValue } from "../src/json.ts";
-import { NativeWatch, Watch, type WatchEnd } from "../src/watch.ts";
+import { NativeWatch, type NativeWatchChange, Watch, type WatchChange, type WatchEnd } from "../src/watch.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -23,6 +23,11 @@ function flush(): Promise<void> {
 function deferred(): { readonly promise: Promise<void>; readonly resolve: () => void } {
 	const { promise, resolve } = Promise.withResolvers<void>();
 	return { promise, resolve: () => resolve() };
+}
+
+/** A source's frame that is not a retirement. */
+function frame<T>(value: T, ops: readonly Op[]): WatchChange<T> {
+	return { value, ops, retired: false };
 }
 
 /** A watch whose detach and reports are recorded. */
@@ -39,9 +44,9 @@ function recordedWatch<T>(value: T) {
 /** A started watch collecting its calls. */
 function collectingWatch<T>(value: T) {
 	const { watch, recorded } = recordedWatch(value);
-	const frames: Array<{ value: T; ops: readonly Op[] }> = [];
-	watch.start(async (delivered, ops) => {
-		frames.push({ value: delivered, ops });
+	const frames: Array<{ value: T; ops: readonly Op[]; retired?: true }> = [];
+	watch.start(async ({ value: delivered, ops, retired }) => {
+		frames.push(retired ? { value: delivered, ops, retired } : { value: delivered, ops });
 	});
 	return { watch, recorded, frames };
 }
@@ -69,21 +74,20 @@ const collect = (() => {
 describe("Watch delivery", () => {
 	it("keeps the acquisition value until start, then delivers the frames since in one call", async () => {
 		const { watch } = recordedWatch<JsonValue>({ n: 0, text: "" });
-		watch.advance({ n: 1, text: "" }, [["s", ["n"], 1]], context);
+		watch.advance(frame({ n: 1, text: "" }, [["s", ["n"], 1]]), context);
 		watch.advance(
-			{ n: 2, text: "a" },
-			[
+			frame({ n: 2, text: "a" }, [
 				["s", ["n"], 2],
 				["a", ["text"], "a"],
-			],
+			]),
 			context,
 		);
-		watch.advance({ n: 2, text: "ab" }, [["a", ["text"], "b"]], context);
+		watch.advance(frame({ n: 2, text: "ab" }, [["a", ["text"], "b"]]), context);
 		await flush();
 		expect(watch.value).toEqual({ n: 0, text: "" });
 
 		const frames: Array<{ value: JsonValue; ops: readonly Op[] }> = [];
-		watch.start(async (value, ops) => {
+		watch.start(async ({ value, ops }) => {
 			frames.push({ value, ops });
 		});
 		expect(frames).toEqual([]);
@@ -103,14 +107,14 @@ describe("Watch delivery", () => {
 	it("passes a frame's ops on by identity to a listener that keeps up", async () => {
 		const { watch } = recordedWatch<JsonValue>(0);
 		const delivered: Array<readonly Op[]> = [];
-		watch.start(async (_value, ops) => {
+		watch.start(async ({ ops }) => {
 			delivered.push(ops);
 		});
 		const first: readonly Op[] = [["r", 1]];
 		const second: readonly Op[] = [["r", 2]];
-		watch.advance(1, first, context);
+		watch.advance(frame(1, first), context);
 		await flush();
-		watch.advance(2, second, context);
+		watch.advance(frame(2, second), context);
 		await flush();
 		expect(delivered).toHaveLength(2);
 		expect(delivered[0]).toBe(first);
@@ -119,7 +123,7 @@ describe("Watch delivery", () => {
 
 	it("never invokes the listener inline", async () => {
 		const { watch, frames } = collectingWatch<JsonValue>(0);
-		watch.advance(1, [["r", 1]], context);
+		watch.advance(frame(1, [["r", 1]]), context);
 		expect(frames).toEqual([]);
 		await flush();
 		expect(frames).toEqual([{ value: 1, ops: [["r", 1]] }]);
@@ -130,16 +134,16 @@ describe("Watch delivery", () => {
 		const gate = deferred();
 		const calls: string[] = [];
 		const frames: Array<{ value: JsonValue; ops: readonly Op[] }> = [];
-		watch.start(async (value, ops) => {
+		watch.start(async ({ value, ops }) => {
 			calls.push(`start ${JSON.stringify(value)}`);
 			frames.push({ value, ops });
 			if (frames.length === 1) await gate.promise;
 			calls.push(`end ${JSON.stringify(value)}`);
 		});
-		watch.advance({ text: "a" }, [["a", ["text"], "a"]], context);
+		watch.advance(frame({ text: "a" }, [["a", ["text"], "a"]]), context);
 		await flush();
-		watch.advance({ text: "ab" }, [["a", ["text"], "b"]], context);
-		watch.advance({ text: "abc" }, [["a", ["text"], "c"]], context);
+		watch.advance(frame({ text: "ab" }, [["a", ["text"], "b"]]), context);
+		watch.advance(frame({ text: "abc" }, [["a", ["text"], "c"]]), context);
 		await flush();
 		expect(calls).toEqual(['start {"text":"a"}']);
 		gate.resolve();
@@ -153,11 +157,11 @@ describe("Watch delivery", () => {
 		const key = createContextKey<string>("frame");
 		const controller = new AbortController();
 		const delivered: Context[] = [];
-		watch.start(async (_value, _ops, deliveryContext) => {
+		watch.start(async (_change, deliveryContext) => {
 			delivered.push(deliveryContext);
 		});
-		watch.advance(1, [["r", 1]], withContextValue(key, "first", context));
-		watch.advance(2, [["r", 2]], withContextValue(key, "second", withAbortSignal(controller.signal, context)));
+		watch.advance(frame(1, [["r", 1]]), withContextValue(key, "first", context));
+		watch.advance(frame(2, [["r", 2]]), withContextValue(key, "second", withAbortSignal(controller.signal, context)));
 		await flush();
 		expect(delivered).toHaveLength(1);
 		expect(delivered[0]?.value(key)).toBe("second");
@@ -180,12 +184,12 @@ describe("Watch with a slow listener", () => {
 			edit(change.state as Doc);
 			const prepared = change.prepare();
 			tracker.adopt(prepared);
-			watch.advance(tracker.value, prepared.ops, context);
+			watch.advance(frame(tracker.value, prepared.ops), context);
 		};
 		let replica: Doc = tracker.value;
 		const calls: Array<{ commits: number; ops: number }> = [];
 		let commits = 0;
-		watch.start(async (value, ops) => {
+		watch.start(async ({ value, ops }) => {
 			replica = applyImmutable(replica, ops);
 			expect(replica).toEqual(value);
 			calls.push({ commits, ops: ops.length });
@@ -217,7 +221,7 @@ function advanceDistinct(watch: Watch<JsonValue>, count: number): JsonValue {
 	const values: number[] = [];
 	for (let index = 0; index < count; index++) {
 		values.push(index);
-		watch.advance({ k: [...values] }, [["s", ["k", index], index]], context);
+		watch.advance(frame({ k: [...values] }, [["s", ["k", index], index]]), context);
 	}
 	return { k: values };
 }
@@ -240,11 +244,11 @@ describe("Watch overflow", () => {
 		const { watch } = recordedWatch<JsonValue>({ k: [] });
 		const gate = deferred();
 		const frames: Array<{ value: JsonValue; ops: readonly Op[] }> = [];
-		watch.start(async (value, ops) => {
+		watch.start(async ({ value, ops }) => {
 			frames.push({ value, ops });
 			if (frames.length === 1) await gate.promise;
 		});
-		watch.advance({ k: [], first: true }, [["s", ["first"], true]], context);
+		watch.advance(frame({ k: [], first: true }, [["s", ["first"], true]]), context);
 		await flush();
 		const newest = advanceDistinct(watch, MAX_PENDING_OPS + 1);
 		gate.resolve();
@@ -259,8 +263,8 @@ describe("Watch overflow", () => {
 		const { watch, frames } = collectingWatch<JsonValue>({ k: [] });
 		advanceDistinct(watch, MAX_PENDING_OPS + 1);
 		await flush();
-		watch.advance({ n: 1 }, [["r", { n: 1 }]], context);
-		watch.advance({ n: 2 }, [["s", ["n"], 2]], context);
+		watch.advance(frame({ n: 1 }, [["r", { n: 1 }]]), context);
+		watch.advance(frame({ n: 2 }, [["s", ["n"], 2]]), context);
 		await flush();
 		expect(frames.at(-1)).toEqual({
 			value: { n: 2 },
@@ -273,43 +277,62 @@ describe("Watch overflow", () => {
 });
 
 describe("Watch retirement", () => {
-	it('delivers `[["r", null]]` as the last call and then ends retired', async () => {
+	it("reports a retirement in the next call with the value the source gives, and goes on", async () => {
 		const { watch, frames, recorded } = collectingWatch<JsonValue>(1);
 		const settled = endOf(watch);
-		watch.advance(2, [["r", 2]], context);
+		watch.advance(frame(2, [["r", 2]]), context);
 		await flush();
-		watch.retire(context);
-		watch.advance(3, [["r", 3]], context);
+		watch.advance({ value: 2, ops: [], retired: true }, context);
+		await flush();
+		watch.advance(frame(3, [["r", 3]]), context);
 		await flush();
 		expect(frames).toEqual([
 			{ value: 2, ops: [["r", 2]] },
-			{ value: null, ops: [["r", null]] },
+			{ value: 2, ops: [], retired: true },
+			{ value: 3, ops: [["r", 3]] },
 		]);
-		expect(watch.value).toBeNull();
-		expect(settled.end).toEqual({ reason: "retired" });
-		expect(recorded.detached).toBe(1);
+		expect(watch.value).toBe(3);
+		expect(settled.end).toBeUndefined();
+		expect(recorded.detached).toBe(0);
+		await watch.stop();
 	});
 
-	it("drops pending frames, also an overflow, for the retirement", async () => {
-		for (const pending of [3, MAX_PENDING_OPS + 1]) {
-			const { watch } = recordedWatch<JsonValue>({ k: [] });
-			advanceDistinct(watch, pending);
-			watch.retire(context);
-			const frames: Array<{ value: JsonValue; ops: readonly Op[] }> = [];
-			watch.start(async (value, ops) => {
-				frames.push({ value, ops });
-			});
-			expect(await watch.closed).toEqual({ reason: "retired" });
-			expect(frames).toEqual([{ value: null, ops: [["r", null]] }]);
-		}
+	it("folds a retirement and the frames around it into one call that reports it", async () => {
+		const { watch } = recordedWatch<JsonValue>({ n: 0 });
+		watch.advance(frame({ n: 1 }, [["s", ["n"], 1]]), context);
+		watch.advance({ value: { n: 1 }, ops: [], retired: true }, context);
+		watch.advance(frame({ m: 1 }, [["r", { m: 1 }]]), context);
+		const changes: WatchChange<JsonValue>[] = [];
+		watch.start(async (change) => {
+			changes.push(change);
+		});
+		await flush();
+		expect(changes).toEqual([{ value: { m: 1 }, ops: [["r", { m: 1 }]], retired: true }]);
+		watch.advance(frame({ m: 2 }, [["s", ["m"], 2]]), context);
+		await flush();
+		expect(changes[1]).toEqual({ value: { m: 2 }, ops: [["s", ["m"], 2]], retired: false });
+		await watch.stop();
 	});
 
-	it("ends retired only on its source's retirement, never on a null value", async () => {
+	it("keeps reporting the retirement past an overflow", async () => {
+		const { watch } = recordedWatch<JsonValue>({ k: [] });
+		watch.advance({ value: { k: [] }, ops: [], retired: true }, context);
+		const newest = advanceDistinct(watch, MAX_PENDING_OPS + 1);
+		const changes: WatchChange<JsonValue>[] = [];
+		watch.start(async (change) => {
+			changes.push(change);
+		});
+		await flush();
+		expect(changes).toEqual([{ value: newest, ops: [["r", newest]], retired: true }]);
+		await watch.stop();
+	});
+
+	it("treats a null value as a value, never as a retirement", async () => {
 		const { watch, frames } = collectingWatch<JsonValue>(1);
 		const settled = endOf(watch);
-		watch.advance(null, [["r", null]], context);
+		watch.advance(frame(null, [["r", null]]), context);
 		await flush();
-		watch.advance(2, [["r", 2]], context);
+		watch.advance(frame(2, [["r", 2]]), context);
 		await flush();
 		expect(frames).toEqual([
 			{ value: null, ops: [["r", null]] },
@@ -319,21 +342,201 @@ describe("Watch retirement", () => {
 		expect(await watch.stop()).toEqual({ reason: "stopped" });
 	});
 
-	it("is only available to watches whose values include null", () => {
-		const check = (numbers: Watch<number>, documents: Watch<{ n: number } | null>) => {
-			// @ts-expect-error `retire` delivers `null`, which a number watch cannot hold.
-			numbers.retire(context);
-			documents.retire(context);
-		};
-		expectTypeOf(check).toBeFunction();
-	});
-
 	it("discards a retirement still pending when the source ends", async () => {
 		const { watch } = recordedWatch<JsonValue>(1);
-		watch.retire(context);
+		watch.advance({ value: 1, ops: [], retired: true }, context);
 		watch.end();
 		expect(await watch.closed).toEqual({ reason: "ended" });
 		expect(watch.value).toBe(1);
+	});
+});
+
+describe("Watch end after delivery", () => {
+	it("takes no more frames, delivers what is pending, then ends `ended` and only then detaches", async () => {
+		const { watch, frames, recorded } = collectingWatch<JsonValue>(1);
+		const settled = endOf(watch);
+		watch.advance({ value: 1, ops: [], retired: true }, context);
+		watch.endAfterDelivery();
+		expect(recorded.detached).toBe(0);
+		// The source sends nothing more: a later frame is not taken.
+		watch.advance(frame(2, [["r", 2]]), context);
+		await flush();
+		expect(frames).toEqual([{ value: 1, ops: [], retired: true }]);
+		expect(settled.end).toEqual({ reason: "ended" });
+		expect(recorded.detached).toBe(1);
+	});
+
+	it("waits for start to deliver, and ends at once with nothing pending", async () => {
+		const { watch, recorded } = recordedWatch<JsonValue>(1);
+		watch.advance(frame(2, [["r", 2]]), context);
+		watch.endAfterDelivery();
+		await flush();
+		const settled = endOf(watch);
+		await flush();
+		expect(settled.end).toBeUndefined();
+		expect(recorded.detached).toBe(0);
+		const values: JsonValue[] = [];
+		watch.start(async ({ value }) => {
+			values.push(value);
+		});
+		expect(await watch.closed).toEqual({ reason: "ended" });
+		expect(values).toEqual([2]);
+		expect(recorded.detached).toBe(1);
+
+		const idle = collectingWatch<JsonValue>(1);
+		idle.watch.endAfterDelivery();
+		expect(await idle.watch.closed).toEqual({ reason: "ended" });
+		expect(idle.frames).toEqual([]);
+		expect(idle.recorded.detached).toBe(1);
+	});
+
+	it("ends a never-started watch at its source's end, dropping what is pending", async () => {
+		const { watch, recorded } = recordedWatch<JsonValue>(1);
+		watch.advance({ value: 1, ops: [], retired: true }, context);
+		watch.endAfterDelivery();
+		const failure = new Error("source failed");
+		watch.end({ error: failure });
+		expect(await watch.closed).toEqual({ reason: "failed", error: failure });
+		expect(recorded.detached).toBe(1);
+		expect(() => watch.start(async () => {})).toThrow("Watch is stopped");
+	});
+
+	/** A started watch whose listener is in a call held by `gate`, with nothing pending, then `endAfterDelivery()`. */
+	async function endingWhileRunning(settle: () => Promise<void>) {
+		const { watch, recorded } = recordedWatch<JsonValue>(0);
+		const gate = deferred();
+		const values: JsonValue[] = [];
+		let returned = false;
+		watch.start(async ({ value }) => {
+			values.push(value);
+			await gate.promise;
+			await settle();
+			returned = true;
+		});
+		watch.advance({ value: 1, ops: [["r", 1]], retired: true }, context);
+		await flush();
+		expect(values).toEqual([1]);
+		watch.endAfterDelivery();
+		const settled = endOf(watch);
+		await flush();
+		return { watch, recorded, values, settled, release: gate.resolve, returned: () => returned };
+	}
+
+	it("ends `ended` only after the running call returns when nothing is pending, detached then", async () => {
+		const ending = await endingWhileRunning(async () => {});
+		expect(ending.settled.end).toBeUndefined();
+		expect(ending.recorded.detached).toBe(0);
+		ending.release();
+		expect(await ending.watch.closed).toEqual({ reason: "ended" });
+		expect(ending.returned()).toBe(true);
+		expect(ending.values).toEqual([1]);
+		expect(ending.recorded.detached).toBe(1);
+	});
+
+	it("ends `listener_error` and reports it when the running call throws after `endAfterDelivery()`", async () => {
+		const failure = new Error("listener failed");
+		const ending = await endingWhileRunning(async () => {
+			throw failure;
+		});
+		expect(ending.settled.end).toBeUndefined();
+		ending.release();
+		expect(await ending.watch.closed).toEqual({ reason: "listener_error", error: failure });
+		expect(ending.recorded.reported).toEqual([failure]);
+		expect(ending.recorded.detached).toBe(1);
+	});
+
+	it("ends `stopped` when stopped while ending, without awaiting the running call", async () => {
+		const ending = await endingWhileRunning(async () => {});
+		expect(await ending.watch.stop()).toEqual({ reason: "stopped" });
+		expect(ending.recorded.detached).toBe(1);
+		expect(ending.returned()).toBe(false);
+		ending.release();
+		await flush();
+		expect(await ending.watch.closed).toEqual({ reason: "stopped" });
+	});
+});
+
+describe("Watch change objects", () => {
+	/** A frame context carrying `payload` and an abort signal, as a producer's is. */
+	function producerContext(payload: object) {
+		const controller = new AbortController();
+		return withAbortSignal(
+			controller.signal,
+			withContextValue(createContextKey<object>("payload"), payload, context),
+		);
+	}
+
+	it("hands a listener plain data only: `{ value, ops, retired }`, cloneable and serializable", async () => {
+		const { watch } = recordedWatch<JsonValue>({ n: 0 });
+		const changes: WatchChange<JsonValue>[] = [];
+		watch.start(async (change) => {
+			changes.push(change);
+		});
+		watch.advance(frame({ n: 1 }, [["s", ["n"], 1]]), producerContext({}));
+		await flush();
+		// Folded: the watch builds the change.
+		watch.advance(frame({ n: 2 }, [["s", ["n"], 2]]), producerContext({}));
+		watch.advance({ value: { n: 2 }, ops: [], retired: true }, producerContext({}));
+		await flush();
+		expect(changes).toHaveLength(2);
+		for (const change of changes) {
+			expect(Object.keys(change)).toEqual(["value", "ops", "retired"]);
+			expect(structuredClone(change)).toEqual(change);
+			expect(JSON.parse(JSON.stringify(change))).toEqual(change);
+		}
+		expect(changes[1]).toEqual({ value: { n: 2 }, ops: [["s", ["n"], 2]], retired: true });
+		await watch.stop();
+	});
+
+	it("passes a frame delivered alone on as the source made it", async () => {
+		const { watch } = recordedWatch<JsonValue>(0);
+		const changes: WatchChange<JsonValue>[] = [];
+		watch.start(async (change) => {
+			changes.push(change);
+		});
+		const alone = frame(1, [["r", 1]]);
+		watch.advance(alone, context);
+		await flush();
+		expect(changes[0]).toBe(alone);
+		await watch.stop();
+	});
+
+	it("keeps no frame context alive through a change a listener keeps", async () => {
+		const kept: Array<WatchChange<JsonValue> | NativeWatchChange<number>> = [];
+		/** Deliver one frame whose context alone references `payload`, keep the change, and stop the watch. */
+		const deliver = async (native: boolean): Promise<WeakRef<object>> => {
+			const payload = { big: "x".repeat(1000) };
+			if (native) {
+				const watch = new NativeWatch<number>(
+					0,
+					() => {},
+					() => {},
+				);
+				watch.start(async (change) => {
+					kept.push(change);
+				});
+				watch.advance(1, producerContext(payload));
+				await flush();
+				expect(Object.keys(kept.at(-1)!)).toEqual(["value"]);
+				expect(structuredClone(kept.at(-1))).toEqual({ value: 1 });
+				await watch.stop();
+			} else {
+				const { watch } = recordedWatch<JsonValue>(0);
+				watch.start(async (change) => {
+					kept.push(change);
+				});
+				watch.advance(frame(1, [["r", 1]]), producerContext(payload));
+				await flush();
+				await watch.stop();
+			}
+			return new WeakRef(payload);
+		};
+		for (const native of [false, true]) {
+			const payload = await deliver(native);
+			await collect();
+			expect(kept).toHaveLength(native ? 2 : 1);
+			expect(payload.deref()).toBeUndefined();
+		}
 	});
 });
 
@@ -353,7 +556,7 @@ describe("Watch ends", () => {
 
 	it("ends `ended` or `failed` from its source, dropping pending frames", async () => {
 		const { watch, frames } = collectingWatch<JsonValue>(0);
-		watch.advance(1, [["r", 1]], context);
+		watch.advance(frame(1, [["r", 1]]), context);
 		watch.end();
 		await flush();
 		expect(frames).toEqual([]);
@@ -370,14 +573,14 @@ describe("Watch ends", () => {
 		const { watch } = recordedWatch<JsonValue>(0);
 		const gate = deferred();
 		const calls: string[] = [];
-		watch.start(async (value) => {
+		watch.start(async ({ value }) => {
 			calls.push(`start ${value}`);
 			await gate.promise;
 			calls.push(`end ${value}`);
 		});
-		watch.advance(1, [["r", 1]], context);
+		watch.advance(frame(1, [["r", 1]]), context);
 		await flush();
-		watch.advance(2, [["r", 2]], context);
+		watch.advance(frame(2, [["r", 2]]), context);
 		expect(await watch.stop()).toEqual({ reason: "stopped" });
 		gate.resolve();
 		await flush();
@@ -407,14 +610,14 @@ describe("Watch ends", () => {
 		const failure = new Error("listener failed");
 		const gate = deferred();
 		const values: JsonValue[] = [];
-		watch.start(async (value) => {
+		watch.start(async ({ value }) => {
 			values.push(value);
 			await gate.promise;
 			throw failure;
 		});
-		watch.advance(1, [["r", 1]], context);
+		watch.advance(frame(1, [["r", 1]]), context);
 		await flush();
-		watch.advance(2, [["r", 2]], context);
+		watch.advance(frame(2, [["r", 2]]), context);
 		gate.resolve();
 		expect(await watch.closed).toEqual({ reason: "listener_error", error: failure });
 		expect(values).toEqual([1]);
@@ -425,7 +628,7 @@ describe("Watch ends", () => {
 	it("wraps a thrown non-Error in an Error", async () => {
 		const { watch } = recordedWatch<JsonValue>(0);
 		watch.start(() => Promise.reject("plain"));
-		watch.advance(1, [["r", 1]], context);
+		watch.advance(frame(1, [["r", 1]]), context);
 		const end = await watch.closed;
 		expect(end.reason).toBe("listener_error");
 		expect(end.reason === "listener_error" && end.error.message).toBe("plain");
@@ -446,7 +649,7 @@ describe("Watch references", () => {
 			const listener = async (): Promise<void> => {};
 			watch.observeCancellation(controller.signal);
 			watch.start(listener);
-			watch.advance(1, [["r", 1]], context);
+			watch.advance(frame(1, [["r", 1]]), context);
 			await flush();
 			end(watch);
 			return {
@@ -469,7 +672,7 @@ describe("Watch references", () => {
 			(watch: Watch<JsonValue>) => void watch.stop(),
 			(watch: Watch<JsonValue>) => watch.cancel(),
 			(watch: Watch<JsonValue>) => watch.end(),
-			(watch: Watch<JsonValue>) => watch.retire(context),
+			(watch: Watch<JsonValue>) => watch.endAfterDelivery(),
 		]) {
 			const ended = await acquire(end);
 			await flush();
@@ -478,6 +681,59 @@ describe("Watch references", () => {
 			expect(ended.listener.deref()).toBeUndefined();
 			expect(ended.signal.deref()).toBeUndefined();
 		}
+	});
+
+	it("keeps no ops a fold or an overflow dropped, while it waits", async () => {
+		/** Feed an unstarted watch four tracker batches of 4,000 sets each: the third overflows, the fourth is ignored. */
+		const overflow = () => {
+			const initial: Record<string, number> = {};
+			for (let i = 0; i < 16_000; i++) initial[`k${i}`] = 0;
+			const tracker = track<Record<string, number>>(initial);
+			const watch = new Watch<JsonValue>(
+				initial,
+				() => {},
+				() => {},
+			);
+			const batches: Array<WeakRef<readonly Op[]>> = [];
+			for (let round = 0; round < 4; round++) {
+				const change = tracker.beginChange();
+				for (let i = round * 4_000; i < (round + 1) * 4_000; i++) change.state[`k${i}`] = 1;
+				const prepared = change.prepare();
+				tracker.adopt(prepared);
+				batches.push(new WeakRef(prepared.ops));
+				watch.advance(frame(tracker.value, prepared.ops), context);
+			}
+			return { watch, batches, newest: tracker.value };
+		};
+		const { watch, batches, newest } = overflow();
+		await collect();
+		expect(batches.map((batch) => batch.deref() === undefined)).toEqual([true, true, true, true]);
+		const changes: WatchChange<JsonValue>[] = [];
+		watch.start(async (change) => {
+			changes.push(change);
+		});
+		await flush();
+		expect(changes).toEqual([{ value: newest, ops: [["r", newest]], retired: false }]);
+		await watch.stop();
+	});
+
+	it("delivers a native backlog that never drains in order", async () => {
+		const watch = new NativeWatch<number>(
+			0,
+			() => {},
+			() => {},
+		);
+		const values: number[] = [];
+		let next = 50;
+		// Each call queues one more value behind a backlog of 50, so the queue never empties for 1,000 values.
+		watch.start(async ({ value }) => {
+			values.push(value);
+			if (next < 1_000) watch.advance(next++, context);
+		});
+		for (let n = 0; n < 50; n++) watch.advance(n, context);
+		await flush();
+		expect(values).toEqual(Array.from({ length: 1_000 }, (_, n) => n));
+		await watch.stop();
 	});
 
 	it("releases its pending queue and leaf index once delivered or ended", async () => {
@@ -494,10 +750,10 @@ describe("Watch references", () => {
 			watch.start(async () => {
 				if (++calls === 1) await gate.promise;
 			});
-			watch.advance(1, [["s", ["n"], 1]], context);
+			watch.advance(frame(1, [["s", ["n"], 1]]), context);
 			await flush();
-			watch.advance(2, [["s", ["o"], payload]], context);
-			watch.advance(3, [["s", ["n"], 3]], context);
+			watch.advance(frame(2, [["s", ["o"], payload]]), context);
+			watch.advance(frame(3, [["s", ["n"], 3]]), context);
 			await settle(watch, gate.resolve);
 			return { watch, payload: new WeakRef(payload) };
 		};
@@ -529,7 +785,7 @@ describe("NativeWatch", () => {
 		);
 		const key = createContextKey<string>("frame");
 		const delivered: Array<{ value: { run: () => number }; frame: string | undefined }> = [];
-		watch.start(async (value, deliveryContext) => {
+		watch.start(async ({ value }, deliveryContext) => {
 			delivered.push({ value, frame: deliveryContext.value(key) });
 		});
 		watch.advance(first, withContextValue(key, "first", context));
@@ -551,7 +807,7 @@ describe("NativeWatch", () => {
 		);
 		for (let n = 1; n <= 101; n++) watch.advance(n, context);
 		const values: number[] = [];
-		watch.start(async (value) => {
+		watch.start(async ({ value }) => {
 			values.push(value);
 		});
 		await flush();
@@ -567,7 +823,7 @@ describe("NativeWatch", () => {
 		);
 		for (let n = 1; n <= 101; n++) watch.advance(`value ${n}`, context);
 		const values: string[] = [];
-		watch.start(async (value) => {
+		watch.start(async ({ value }) => {
 			values.push(value);
 		});
 		await flush();
@@ -591,6 +847,18 @@ describe("NativeWatch", () => {
 		const ended = create();
 		ended.end();
 		expect(await ended.closed).toEqual({ reason: "ended" });
+
+		const finishing = create();
+		const finished: number[] = [];
+		finishing.advance(1, context);
+		finishing.advance(2, context);
+		finishing.endAfterDelivery();
+		finishing.advance(3, context);
+		finishing.start(async ({ value }) => {
+			finished.push(value);
+		});
+		expect(await finishing.closed).toEqual({ reason: "ended" });
+		expect(finished).toEqual([1, 2]);
 
 		const error = new Error("source failed");
 		const failed = create();

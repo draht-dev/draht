@@ -8,15 +8,27 @@ import type { JsonValue } from "./json.ts";
  *
  * - `stopped`: `stop()` was called.
  * - `cancelled`: the context the watch was acquired with was cancelled.
- * - `retired`: the source was retired; its last frame was `[["r", null]]`.
  * - `ended`: the source closed (its owner ended or closed).
  * - `listener_error`: the listener threw or rejected with `error`.
  * - `failed`: the source failed with `error`.
  */
 export type WatchEnd =
-	| { readonly reason: "stopped" | "cancelled" | "retired" | "ended" }
+	| { readonly reason: "stopped" | "cancelled" | "ended" }
 	| { readonly reason: "listener_error"; readonly error: Error }
 	| { readonly reason: "failed"; readonly error: unknown };
+
+/**
+ * One call of a JSON watch's listener, and one change a source hands its watch: the newest value, the ops that turn the
+ * previous value into it, and whether the document the watch follows was retired since the previous call. A retirement
+ * does not end the watch: `value` is then what the address shows after it (the source decides; a Durable document keeps
+ * the last value the watch was given, with no ops), and a document created there later arrives as `[["r", value]]`,
+ * possibly in the same call. Plain data: the frame's context is the listener's second argument, never part of the
+ * change.
+ */
+export type WatchChange<T> = { readonly value: T; readonly ops: readonly Op[]; readonly retired: boolean };
+
+/** One call of a native watch's listener: the new value. */
+export type NativeWatchChange<T> = { readonly value: T };
 
 /**
  * Serialized observation of an immutable value: one listener call at a time; changes made meanwhile arrive folded into
@@ -26,7 +38,7 @@ export interface WatchHandle<T> {
 	/** Acquisition revision before start; latest delivered immutable revision afterward. */
 	readonly value: T;
 	/** Install the sole asynchronous listener. Never invokes it inline. */
-	start(listener: (value: T, ops: readonly Op[], context: Context) => Promise<void>): void;
+	start(listener: (change: WatchChange<T>, context: Context) => Promise<void>): void;
 	/** Idempotently stop future callbacks and return this watch's terminal result. */
 	stop(): Promise<WatchEnd>;
 	/** Settle when the watch terminates; an already-running callback remains caller-owned. */
@@ -64,39 +76,32 @@ export interface NativeWatchHandle<T> {
 	/** Acquisition value before start; latest delivered value afterward. */
 	readonly value: T;
 	/** Install the sole asynchronous listener. Never invokes it inline. */
-	start(listener: (value: T, context: Context) => Promise<void>): void;
+	start(listener: (change: NativeWatchChange<T>, context: Context) => Promise<void>): void;
 	/** Idempotently stop future callbacks and return this watch's terminal result. */
 	stop(): Promise<WatchEnd>;
 	/** Settle when the watch terminates; an already-running callback remains caller-owned. */
 	readonly closed: Promise<WatchEnd>;
 }
 
-type WatchListener<T> = (value: T, ops: readonly Op[], context: Context) => Promise<void>;
-
-type NativeWatchListener<T> = (value: T, context: Context) => Promise<void>;
-
-/** One listener call: the value it delivers and the context of the newest frame it covers. */
-type Delivery<T> = {
-	readonly value: T;
-	readonly context: Context;
-	/** The retirement: the watch ends `retired` once it is delivered. */
-	readonly retires: boolean;
-};
+type Listener<C> = (change: C, context: Context) => Promise<void>;
 
 /**
  * The lifecycle both handles share: serialized delivery and termination. A source feeds it and ends it explicitly;
  * termination drops every reference the watch holds into its source, so a stopped watch that is still referenced keeps
- * nothing but its last value alive. Subclasses keep what is pending and say how a listener is called.
+ * nothing but its last value alive. Subclasses keep what is pending, each change apart from its frame's context, so the
+ * change a listener gets carries nothing but its data.
  */
-abstract class WatchLifecycle<T, L, D extends Delivery<T>> {
+abstract class WatchLifecycle<T, C extends { readonly value: T }> {
 	#detach: (() => void) | undefined;
 	#report: ((error: unknown) => void) | undefined;
 	readonly #closed = Promise.withResolvers<WatchEnd>();
 	#value: T;
-	#listener: L | undefined;
+	#listener: Listener<C> | undefined;
 	#started = false;
 	#scheduled = false;
 	#running = false;
+	/** Set by `endAfterDelivery()`: the source sends nothing more; the watch ends `ended` once it delivered the rest. */
+	#ending = false;
 	/** Set once, by `#terminate()`. */
 	#end: WatchEnd | undefined;
 	#cancellationSignal: AbortSignal | undefined;
@@ -116,7 +121,7 @@ abstract class WatchLifecycle<T, L, D extends Delivery<T>> {
 		return this.#closed.promise;
 	}
 
-	start(listener: L): void {
+	start(listener: Listener<C>): void {
 		if (this.#started) throw new Error("Watch is already started");
 		if (this.#end !== undefined) throw new Error("Watch is stopped");
 		this.#started = true;
@@ -144,21 +149,36 @@ abstract class WatchLifecycle<T, L, D extends Delivery<T>> {
 		this.#terminate({ reason: "cancelled" });
 	}
 
-	/** The source closed: end with `ended`, or with `failed` and the error when the source failed. */
+	/**
+	 * The source closed: end with `ended`, or with `failed` and the error when the source failed, at once, dropping what
+	 * is pending.
+	 */
 	end(failure?: { readonly error: unknown }): void {
 		this.#terminate(failure === undefined ? { reason: "ended" } : { reason: "failed", error: failure.error });
 	}
 
-	/** Whether the watch still takes frames: it has not ended. */
-	protected get open(): boolean {
-		return this.#end === undefined;
+	/**
+	 * The source sends nothing more after its last frames, such as a retirement: take no more frames, deliver what is
+	 * pending, then end `ended`, after the running call returns, if one runs. Until then the watch stays attached, so
+	 * `end()`, `stop()`, cancellation, and a throwing listener still end it first; a watch never started keeps what is
+	 * pending until one of them or `start()`.
+	 */
+	endAfterDelivery(): void {
+		if (this.#end !== undefined || this.#ending) return;
+		this.#ending = true;
+		if (!this.#running && this.pendingContext === undefined) this.#terminate({ reason: "ended" });
 	}
 
-	/** Take the next delivery, or undefined when nothing is pending. */
-	protected abstract next(): D | undefined;
+	/** Whether the watch still takes frames: it has not ended, and its source has not ended. */
+	protected get open(): boolean {
+		return this.#end === undefined && !this.#ending;
+	}
 
-	/** Call `listener` with one delivery. */
-	protected abstract invoke(listener: L, delivery: D, context: Context): Promise<void>;
+	/** The context of the newest frame the next call covers, or undefined when nothing is pending. */
+	protected abstract get pendingContext(): Context | undefined;
+
+	/** Take the next change; called only while something is pending. */
+	protected abstract next(): C;
 
 	/** Drop everything pending and every reference into the source; called once, on termination. */
 	protected abstract release(): void;
@@ -177,7 +197,10 @@ abstract class WatchLifecycle<T, L, D extends Delivery<T>> {
 		});
 	}
 
-	/** Deliver until nothing is pending; what arrives during a call is taken after it returns. */
+	/**
+	 * Deliver until nothing is pending; what arrives during a call is taken after it returns. A watch whose source ended
+	 * ends once it delivered the rest and its last call returned.
+	 */
 	async #drain(): Promise<void> {
 		if (this.#running || this.#end !== undefined || !this.#started) return;
 		this.#running = true;
@@ -185,20 +208,20 @@ abstract class WatchLifecycle<T, L, D extends Delivery<T>> {
 			while (this.#end === undefined) {
 				const listener = this.#listener;
 				if (listener === undefined) break;
-				const delivery = this.next();
-				if (delivery === undefined) break;
-				this.#value = delivery.value;
+				const frameContext = this.pendingContext;
+				if (frameContext === undefined) {
+					if (this.#ending) this.#terminate({ reason: "ended" });
+					break;
+				}
+				const change = this.next();
+				this.#value = change.value;
 				try {
-					await this.invoke(listener, delivery, withoutAbortSignal(delivery.context));
+					await listener(change, withoutAbortSignal(frameContext));
 				} catch (error) {
 					if (this.#end === undefined) {
 						this.#report?.(error);
 						this.#terminate({ reason: "listener_error", error: toError(error) });
 					}
-					break;
-				}
-				if (delivery.retires) {
-					this.#terminate({ reason: "retired" });
 					break;
 				}
 			}
@@ -238,61 +261,67 @@ function toError(error: unknown): Error {
 	}
 }
 
-type WatchDelivery<T> = Delivery<T> & { readonly ops: readonly Op[] };
-
-/** Canonical terminal frame of a retired source. */
-const RETIREMENT_OPERATIONS: readonly Op[] = [["r", null]];
-
 /**
  * The watch handle of a JSON source. Frames that arrive before `start()` or while the listener runs wait in one
  * `PendingOps` queue; the next call gets the newest value, the folded ops of every frame since the previous call (or
- * `[["r", newest]]` after the queue overflowed) and the newest frame's context. `detach` unsubscribes it from its
- * source on termination; `report` gets a listener's throw, which also ends the watch.
+ * `[["r", newest]]` after the queue overflowed), `retired` when any of them was a retirement, and the newest frame's
+ * context. A frame delivered alone is passed on as the source made it. `detach` unsubscribes it from its source on
+ * termination; `report` gets a listener's throw, which also ends the watch.
  */
-export class Watch<T> extends WatchLifecycle<T, WatchListener<T>, WatchDelivery<T>> implements WatchHandle<T> {
+export class Watch<T> extends WatchLifecycle<T, WatchChange<T>> implements WatchHandle<T> {
 	readonly #ops = new PendingOps();
-	/** The newest frame, while a call is pending. */
-	#newest: { readonly value: T; readonly context: Context } | undefined;
-	#retiring = false;
-
-	/** Queue the frame `ops`, which turn the previous value into `value`. */
-	advance(value: T, ops: readonly Op[], context: Context): void {
-		if (!this.open || this.#retiring) return;
-		this.#ops.push(ops);
-		this.#newest = { value, context };
-		this.pending();
-	}
+	/**
+	 * The source's change while it is the only frame pending: the call passes it on, with no allocation. A second frame
+	 * drops it, so its ops stay only as long as `PendingOps` keeps them (folded, or dropped by an overflow).
+	 */
+	#lone: WatchChange<T> | undefined;
+	/** The newest frame's value and context, while a call is pending; the context also marks that one is. */
+	#newestValue: T | undefined;
+	#newestContext: Context | undefined;
+	/** A pending frame was a retirement. */
+	#retired = false;
 
 	/**
-	 * The source retired: queue the last frame, `[["r", null]]` with value `null`, then end `retired`. Typed for watches
-	 * whose values include `null`.
+	 * Queue the frame `change`: its ops turn the previous value into its value, and `retired` says the document the
+	 * watch follows was retired, which the next call reports however many frames it folds.
 	 */
-	retire(this: Watch<T | null>, context: Context): void {
-		if (!this.open || this.#retiring) return;
-		this.#retiring = true;
-		this.#ops.push(RETIREMENT_OPERATIONS);
-		this.#newest = { value: null, context };
+	advance(change: WatchChange<T>, context: Context): void {
+		if (!this.open) return;
+		this.#lone = this.#newestContext === undefined ? change : undefined;
+		this.#ops.push(change.ops);
+		this.#newestValue = change.value;
+		this.#newestContext = context;
+		if (change.retired) this.#retired = true;
 		this.pending();
 	}
 
-	protected next(): WatchDelivery<T> | undefined {
-		const newest = this.#newest;
-		if (newest === undefined) return undefined;
-		this.#newest = undefined;
-		const batch = this.#ops.take();
-		// Values of a JSON watch are JSON; `T` is the source's narrower or wider view of them (e.g. a typed document).
-		const ops: readonly Op[] = batch.kind === "ops" ? batch.ops : [["r", newest.value as JsonValue]];
-		// Nothing is queued after a retirement, so a retiring watch's pending call is its last.
-		return { value: newest.value, ops, context: newest.context, retires: this.#retiring };
+	protected get pendingContext(): Context | undefined {
+		return this.#newestContext;
 	}
 
-	protected invoke(listener: WatchListener<T>, delivery: WatchDelivery<T>, context: Context): Promise<void> {
-		return listener(delivery.value, delivery.ops, context);
+	protected next(): WatchChange<T> {
+		const lone = this.#lone;
+		// Set with the context, which says a frame is pending.
+		const value = this.#newestValue as T;
+		const batch = this.#ops.take();
+		const retired = this.#retired;
+		this.#lone = undefined;
+		this.#newestValue = undefined;
+		this.#newestContext = undefined;
+		this.#retired = false;
+		// One frame never folds or overflows: its change is the call's.
+		if (lone !== undefined) return lone;
+		// Values of a JSON watch are JSON; `T` is the source's narrower or wider view of them (e.g. a typed document).
+		const ops: readonly Op[] = batch.kind === "ops" ? batch.ops : [["r", value as JsonValue]];
+		return { value, ops, retired };
 	}
 
 	protected release(): void {
 		this.#ops.take();
-		this.#newest = undefined;
+		this.#lone = undefined;
+		this.#newestValue = undefined;
+		this.#newestContext = undefined;
+		this.#retired = false;
 	}
 }
 
@@ -303,11 +332,15 @@ const MAX_PENDING_NATIVE_VALUES = 100;
  * The watch handle of a native source: every value in order, one call each; past 100 pending values they collapse to
  * one, `replace()` or by default the newest value. `detach` and `report` as for `Watch`.
  */
-export class NativeWatch<T>
-	extends WatchLifecycle<T, NativeWatchListener<T>, Delivery<T>>
-	implements NativeWatchHandle<T>
-{
-	readonly #pending: Delivery<T>[] = [];
+export class NativeWatch<T> extends WatchLifecycle<T, NativeWatchChange<T>> implements NativeWatchHandle<T> {
+	/**
+	 * Pending values in order, each followed by its frame's context, from `#head` on. Values are kept raw: the change a
+	 * call gets is built when it is taken, so a value an overflow drops costs no object. A read index instead of
+	 * `shift()` takes a backlog in constant time per value; taken slots are cleared at once, the array is emptied once
+	 * all of it was taken, and its taken prefix dropped after 100 values.
+	 */
+	readonly #pending: Array<T | Context | undefined> = [];
+	#head = 0;
 	#replace: (() => T) | undefined;
 
 	constructor(value: T, detach: () => void, report: (error: unknown) => void, replace?: () => T) {
@@ -318,26 +351,45 @@ export class NativeWatch<T>
 	/** Queue `value`, the source's new value. */
 	advance(value: T, context: Context): void {
 		if (!this.open) return;
-		if (this.#pending.length < MAX_PENDING_NATIVE_VALUES) {
-			this.#pending.push({ value, context, retires: false });
+		if (this.#pending.length - this.#head < 2 * MAX_PENDING_NATIVE_VALUES) {
+			this.#pending.push(value, context);
 		} else {
 			this.#pending.length = 0;
-			const replacement = this.#replace === undefined ? value : this.#replace();
-			this.#pending.push({ value: replacement, context, retires: false });
+			this.#head = 0;
+			this.#pending.push(this.#replace === undefined ? value : this.#replace(), context);
 		}
 		this.pending();
 	}
 
-	protected next(): Delivery<T> | undefined {
-		return this.#pending.shift();
+	protected get pendingContext(): Context | undefined {
+		// The slot after a value holds its context; past the end it is empty.
+		return this.#pending[this.#head + 1] as Context | undefined;
 	}
 
-	protected invoke(listener: NativeWatchListener<T>, delivery: Delivery<T>, context: Context): Promise<void> {
-		return listener(delivery.value, context);
+	protected next(): NativeWatchChange<T> {
+		const head = this.#head;
+		const pending = this.#pending;
+		// The slot at `#head` holds a value.
+		const value = pending[head] as T;
+		if (head + 2 === pending.length) {
+			pending.length = 0;
+			this.#head = 0;
+		} else if (head + 2 >= 2 * MAX_PENDING_NATIVE_VALUES) {
+			// A backlog that never drains: drop the taken prefix, at most once per 100 values, so the array stays bounded.
+			pending.copyWithin(0, head + 2);
+			pending.length -= head + 2;
+			this.#head = 0;
+		} else {
+			pending[head] = undefined;
+			pending[head + 1] = undefined;
+			this.#head = head + 2;
+		}
+		return { value };
 	}
 
 	protected release(): void {
 		this.#pending.length = 0;
+		this.#head = 0;
 		this.#replace = undefined;
 	}
 }

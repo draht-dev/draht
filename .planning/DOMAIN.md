@@ -149,6 +149,7 @@ There are no SQL tables anywhere in the monorepo (inferred). State lives as: (a)
 | Skill / SlashCommand / Extension | Coding Agent | User-facing capability registration surfaces. |
 | Trust / ProjectTrust | Coding Agent | Permission gate for a project directory. |
 | Compaction | Coding Agent | History summarization to fit context. |
+| Budget task | Coding Agent | The accounting window of opt-in token budgets: a starting snapshot shared by every worktree of a repository, kept until the user starts a new one. Not a GSD Task. |
 | Phase | GSD | A numbered milestone grouping related plans. Maps to a directory under `.planning/phases/`. |
 | Plan | GSD | A structured implementation guide (Markdown + XML) for one cohesive slice of a phase. |
 | Task | GSD | Smallest unit of work in a plan, with TDD structure: test → action → refactor. |

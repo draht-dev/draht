@@ -3107,6 +3107,7 @@ export class InteractiveMode {
 			overlay?: boolean;
 			overlayOptions?: OverlayOptions | (() => OverlayOptions);
 			onHandle?: (handle: OverlayHandle) => void;
+			blocked?: BlockedStatus;
 		},
 	): Promise<T> {
 		const savedText = this.editor.getText();
@@ -3163,7 +3164,7 @@ export class InteractiveMode {
 						this.pushExtensionDialog({
 							component: c,
 							kind: "custom",
-							blocked: undefined,
+							blocked: options?.blocked,
 							// A custom component has no neutral answer, so a reset rejects rather than strand the caller.
 							failClosed: () => {
 								if (closed) return;

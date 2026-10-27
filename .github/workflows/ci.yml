@@ -12,10 +12,13 @@ concurrency:
 
 permissions: {}
 
+# Jobs run on Blacksmith runners (the blacksmith-sh GitHub App is installed on
+# draht-dev). Release and publish workflows stay on GitHub-hosted runners.
+
 jobs:
   build-check:
     name: Build & check
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
     timeout-minutes: 20
@@ -44,7 +47,7 @@ jobs:
   # This job is deliberately dependency-free so it costs seconds, not a install.
   shard-map:
     name: Shard map
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
     timeout-minutes: 5
@@ -67,7 +70,9 @@ jobs:
   test-workspaces:
     name: Test (${{ matrix.shard }})
     needs: shard-map
-    runs-on: ubuntu-latest
+    # gateway and coding-agent are the critical path of the whole run; the
+    # other shards finish well inside their time on 4 vCPUs.
+    runs-on: ${{ (matrix.shard == 'gateway' || matrix.shard == 'coding-agent') && 'blacksmith-8vcpu-ubuntu-2404' || 'blacksmith-4vcpu-ubuntu-2404' }}
     permissions:
       contents: read
     timeout-minutes: 30
@@ -137,7 +142,7 @@ jobs:
   # fails if any suite under scripts/ is left out of the root `test` chain.
   test-scripts:
     name: Test (scripts)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
     timeout-minutes: 20
@@ -163,7 +168,7 @@ jobs:
   # that need a browser installed.
   test-scripts-serial:
     name: Test (scripts, serial)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
     timeout-minutes: 40
@@ -189,7 +194,7 @@ jobs:
 
   go:
     name: Go (draht-graph)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
     defaults:
@@ -255,7 +260,7 @@ jobs:
       # -race REQUIRES a C toolchain, so CGO_ENABLED=1 here and only here.
       # The project's own dev box has no C compiler at all, so this job is
       # the only place this project can get race coverage — keep it, do not
-      # make it continue-on-error. ubuntu-latest ships gcc preinstalled.
+      # make it continue-on-error. The Blacksmith Ubuntu 24.04 image ships gcc.
       - name: go test -race
         env:
           CGO_ENABLED: "1"
@@ -263,7 +268,7 @@ jobs:
 
   mcp-conformance:
     name: MCP client conformance
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
     timeout-minutes: 20

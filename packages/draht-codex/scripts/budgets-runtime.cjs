@@ -2063,19 +2063,10 @@ function budgetChange(path, measured, limits) {
 
 // packages/coding-agent/src/core/budgets/renames.ts
 var MIN_RENAME_SIMILARITY = 0.5;
-var NEAR_IDENTICAL_SIMILARITY = 0.95;
-var MAX_RENAME_COMPARISONS = 32;
-function similarity(measured) {
-  const total = measured.baselineTokens + measured.fileTokens;
-  return total === 0 ? 1 : 1 - (measured.addedTokens + measured.deletedTokens) / total;
-}
-function fileName(path) {
-  return path.slice(path.lastIndexOf("/") + 1);
-}
-function append(groups, key, path) {
-  const paths = groups.get(key);
-  if (paths) paths.push(path);
-  else groups.set(key, [path]);
+function lineProfile(text3) {
+  const lines = /* @__PURE__ */ new Map();
+  for (const line of text3.split("\n")) lines.set(line, (lines.get(line) ?? 0) + line.length + 1);
+  return { lines, size: text3.length + 1 };
 }
 function sharedSuffix(left, right) {
   const leftParts = left.split("/");
@@ -2086,27 +2077,14 @@ function sharedSuffix(left, right) {
   }
   return shared;
 }
-function* candidates(path, sources, named) {
-  const name = fileName(path);
-  const likely = [];
-  for (const source of named.get(name) ?? []) {
-    const sourceHash = sources.get(source);
-    if (sourceHash !== void 0) likely.push({ source, sourceHash, rank: sharedSuffix(path, source) });
-  }
-  yield* likely.sort((left, right) => right.rank - left.rank);
-  for (const [source, sourceHash] of sources) {
-    if (fileName(source) !== name) yield { source, sourceHash, rank: 0 };
-  }
-}
-function pairRenames(deleted, added, measure, measured = () => false) {
+function pairRenames(deleted, added, content) {
   const pairs = /* @__PURE__ */ new Map();
   const sources = new Map(deleted);
-  if (sources.size === 0) return pairs;
   const identical = /* @__PURE__ */ new Map();
-  const named = /* @__PURE__ */ new Map();
   for (const [path, hash] of deleted) {
-    append(identical, hash, path);
-    append(named, fileName(path), path);
+    const paths = identical.get(hash);
+    if (paths) paths.push(path);
+    else identical.set(hash, [path]);
   }
   for (const [path, hash] of added) {
     const source = identical.get(hash)?.find((candidate) => sources.has(candidate));
@@ -2114,26 +2092,39 @@ function pairRenames(deleted, added, measure, measured = () => false) {
     pairs.set(path, source);
     sources.delete(source);
   }
-  let comparisons = MAX_RENAME_COMPARISONS;
-  for (const [path, hash] of added) {
-    if (pairs.has(path)) continue;
-    let best;
-    let exhausted = false;
-    for (const { source, sourceHash } of candidates(path, sources, named)) {
-      if (!measured(sourceHash, hash)) {
-        exhausted = comparisons === 0;
-        if (exhausted) break;
-        comparisons--;
+  const targets = added.filter(([path]) => !pairs.has(path));
+  if (targets.length === 0 || sources.size === 0) return pairs;
+  const sizes = /* @__PURE__ */ new Map();
+  const holders = /* @__PURE__ */ new Map();
+  for (const [source, sourceHash] of sources) {
+    const { lines, size } = lineProfile(content(sourceHash));
+    sizes.set(source, size);
+    for (const [line, lineSize] of lines) {
+      const entries = holders.get(line);
+      if (entries) entries.push([source, lineSize]);
+      else holders.set(line, [[source, lineSize]]);
+    }
+  }
+  const matches = [];
+  for (const [order, [path, hash]] of targets.entries()) {
+    const { lines, size } = lineProfile(content(hash));
+    const overlaps = /* @__PURE__ */ new Map();
+    for (const [line, lineSize] of lines) {
+      for (const [source, sourceSize] of holders.get(line) ?? []) {
+        overlaps.set(source, (overlaps.get(source) ?? 0) + Math.min(lineSize, sourceSize));
       }
-      const score = similarity(measure(sourceHash, hash));
-      if (best ? score > best.score : score >= MIN_RENAME_SIMILARITY) best = { source, score };
-      if (score >= NEAR_IDENTICAL_SIMILARITY) break;
     }
-    if (best) {
-      pairs.set(path, best.source);
-      sources.delete(best.source);
+    for (const [source, overlap] of overlaps) {
+      const score = 2 * overlap / (size + (sizes.get(source) ?? 0));
+      if (score < MIN_RENAME_SIMILARITY) continue;
+      matches.push({ path, source, score, shared: sharedSuffix(path, source), order });
     }
-    if (exhausted) break;
+  }
+  matches.sort((left, right) => right.score - left.score || right.shared - left.shared || left.order - right.order);
+  for (const { path, source } of matches) {
+    if (pairs.has(path) || !sources.has(source)) continue;
+    pairs.set(path, source);
+    sources.delete(source);
   }
   return pairs;
 }
@@ -2354,16 +2345,29 @@ function canonicalBudgetPath(cwd, path) {
   }
   return (0, import_node_path2.join)((0, import_node_fs2.realpathSync)(existing), ...missing);
 }
+function inNestedRepository(workspace, path) {
+  for (let parent = (0, import_node_path2.dirname)(path); parent !== "."; parent = (0, import_node_path2.dirname)(parent)) {
+    if (budgetPathExists((0, import_node_path2.join)(workspace.root, parent, ".git"))) return true;
+  }
+  return false;
+}
 function budgetFilePath(workspace, target) {
   const file = (0, import_node_path2.relative)(workspace.root, target);
-  if (!isBudgetRelativePath(file)) return void 0;
-  for (let parent = (0, import_node_path2.dirname)(target); parent !== workspace.root; parent = (0, import_node_path2.dirname)(parent)) {
-    if (budgetPathExists((0, import_node_path2.join)(parent, ".git"))) return void 0;
-  }
+  if (!isBudgetRelativePath(file) || inNestedRepository(workspace, file)) return void 0;
   const ignored = runGit(workspace.root, ["check-ignore", "-q", "--", file]);
   if (ignored.status === 0) return void 0;
   if (ignored.status !== 1) throw new Error(`Budget ignore inspection failed: ${ignored.stderr.trim()}`);
   return file.split(import_node_path2.sep).join("/");
+}
+function pathsOutsideBudget(workspace, paths) {
+  const nested = new Set(paths.filter((path) => inNestedRepository(workspace, path)));
+  const others = paths.filter((path) => !nested.has(path));
+  if (others.length === 0) return [...nested];
+  const ignored = runGit(workspace.root, ["check-ignore", "-z", "--stdin"], `${others.join("\0")}\0`);
+  if (ignored.status !== 0 && ignored.status !== 1) {
+    throw new Error(`Budget ignore inspection failed: ${ignored.stderr.trim()}`);
+  }
+  return [...nested, ...ignored.stdout.split("\0").filter(Boolean)];
 }
 function isSourcePath(path) {
   return SOURCE_EXTENSIONS.has((0, import_node_path2.extname)(path).slice(1).toLowerCase()) || /^(dockerfile|makefile)$/i.test((0, import_node_path2.basename)(path));
@@ -2647,10 +2651,8 @@ function evaluateBudget(directory, state, options = {}) {
   const measures = /* @__PURE__ */ new Map();
   let measured = false;
   const content = (hash) => hash && projected.has(hash) ? projected.get(hash) ?? null : readBudgetContent(directory, hash);
-  const measureKey = (beforeHash, afterHash) => `${beforeHash ?? ""}:${afterHash ?? ""}`;
-  const isMeasured = (beforeHash, afterHash) => measures.has(measureKey(beforeHash, afterHash)) || known.has(measureKey(beforeHash, afterHash));
   const measure = (beforeHash, afterHash) => {
-    const key = measureKey(beforeHash, afterHash);
+    const key = `${beforeHash ?? ""}:${afterHash ?? ""}`;
     let value = measures.get(key) ?? known.get(key);
     if (!value) {
       value = measureTokens(content(beforeHash), content(afterHash));
@@ -2674,7 +2676,7 @@ function evaluateBudget(directory, state, options = {}) {
       if (before && !after) deleted.push([path, before]);
       if (after && !before) added.push([path, after]);
     }
-    const renames = pairRenames(deleted, added, measure, isMeasured);
+    const renames = pairRenames(deleted, added, (hash) => content(hash) ?? "");
     const moved = new Set(renames.values());
     for (const path of paths) {
       if (moved.has(path)) continue;
@@ -2783,16 +2785,18 @@ function snapshotWorkspace(options) {
   const files = [];
   const snapshot = [];
   const unmeasured = [];
+  const vanished = [];
   let reread = false;
   for (const path of paths) {
     if (excluded.has(path) || linked(path)) continue;
     const absolutePath = (0, import_node_path5.join)(workspace.root, path);
     const stat = regularFile(absolutePath);
-    if (!stat) continue;
     if (!listed.has(path)) {
-      unmeasured.push(path);
+      if (stat) unmeasured.push(path);
+      else vanished.push(path);
       continue;
     }
+    if (!stat) continue;
     const cached = previous && Object.hasOwn(previous.files, path) ? previous.files[path] : void 0;
     const settled = previous && Math.max(stat.mtimeMs, stat.ctimeMs) < previous.startedAt - TIMESTAMP_GRANULARITY_MS;
     let hash;
@@ -2813,6 +2817,7 @@ function snapshotWorkspace(options) {
   };
   const same = previous && JSON.stringify(next.files) === JSON.stringify(previous.files) && JSON.stringify(next.excluded) === JSON.stringify(previous.excluded);
   if (reread || !same) writeBudgetCache(directory, cacheName, next);
+  unmeasured.push(...pathsOutsideBudget(workspace, vanished));
   return { files: Object.fromEntries(snapshot), unmeasured };
 }
 

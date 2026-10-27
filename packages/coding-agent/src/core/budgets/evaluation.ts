@@ -46,12 +46,8 @@ export function evaluateBudget(
 	let measured = false;
 	const content = (hash: string | undefined) =>
 		hash && projected.has(hash) ? (projected.get(hash) ?? null) : readBudgetContent(directory, hash);
-	const measureKey = (beforeHash: string | undefined, afterHash: string | undefined) =>
-		`${beforeHash ?? ""}:${afterHash ?? ""}`;
-	const isMeasured = (beforeHash: string, afterHash: string) =>
-		measures.has(measureKey(beforeHash, afterHash)) || known.has(measureKey(beforeHash, afterHash));
 	const measure = (beforeHash: string | undefined, afterHash: string | undefined): MeasuredTokens => {
-		const key = measureKey(beforeHash, afterHash);
+		const key = `${beforeHash ?? ""}:${afterHash ?? ""}`;
 		let value = measures.get(key) ?? known.get(key);
 		if (!value) {
 			value = measureTokens(content(beforeHash), content(afterHash));
@@ -75,7 +71,7 @@ export function evaluateBudget(
 			if (before && !after) deleted.push([path, before]);
 			if (after && !before) added.push([path, after]);
 		}
-		const renames = pairRenames(deleted, added, measure, isMeasured);
+		const renames = pairRenames(deleted, added, (hash) => content(hash) ?? "");
 		const moved = new Set(renames.values());
 		for (const path of paths) {
 			if (moved.has(path)) continue;

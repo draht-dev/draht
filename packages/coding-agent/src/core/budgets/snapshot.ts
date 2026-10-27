@@ -2,7 +2,14 @@ import { isUtf8 } from "node:buffer";
 import { lstatSync, readFileSync, type Stats } from "node:fs";
 import { join } from "node:path";
 import { type BudgetSnapshot, readBudgetCache, storeBudgetObject, writeBudgetCache } from "./state.ts";
-import { type BudgetWorkspace, isMissingPath, isSourcePath, listWorkspacePaths, symlinkCheck } from "./workspace.ts";
+import {
+	type BudgetWorkspace,
+	isMissingPath,
+	isSourcePath,
+	listWorkspacePaths,
+	pathsOutsideBudget,
+	symlinkCheck,
+} from "./workspace.ts";
 
 /** Size, modification time, change time, inode, and the stored content hash, or null for binary content. */
 type FileEntry = [number, number, number, number, string | null];
@@ -15,7 +22,7 @@ interface StatCache {
 
 export interface WorkspaceSnapshot {
 	files: BudgetSnapshot;
-	/** Earlier paths that still exist but left the budget, because Git now ignores them or a nested repository holds them. */
+	/** Earlier paths that left the budget, existing or not, because Git now ignores them or a nested repository holds them. */
 	unmeasured: string[];
 }
 
@@ -85,17 +92,19 @@ export function snapshotWorkspace(options: {
 	const files: Array<[string, FileEntry]> = [];
 	const snapshot: Array<[string, string]> = [];
 	const unmeasured: string[] = [];
+	const vanished: string[] = [];
 	let reread = false;
 	for (const path of paths) {
 		if (excluded.has(path) || linked(path)) continue;
 		const absolutePath = join(workspace.root, path);
 		const stat = regularFile(absolutePath);
-		if (!stat) continue;
-		// An earlier path Git no longer lists still exists, so it was ignored or taken into a nested repository.
+		// Git no longer lists an earlier path: it left the budget if it still exists, or if Git would leave it out now.
 		if (!listed.has(path)) {
-			unmeasured.push(path);
+			if (stat) unmeasured.push(path);
+			else vanished.push(path);
 			continue;
 		}
+		if (!stat) continue;
 		const cached = previous && Object.hasOwn(previous.files, path) ? previous.files[path] : undefined;
 		const settled = previous && Math.max(stat.mtimeMs, stat.ctimeMs) < previous.startedAt - TIMESTAMP_GRANULARITY_MS;
 		let hash: string | null;
@@ -127,5 +136,6 @@ export function snapshotWorkspace(options: {
 		JSON.stringify(next.files) === JSON.stringify(previous.files) &&
 		JSON.stringify(next.excluded) === JSON.stringify(previous.excluded);
 	if (reread || !same) writeBudgetCache(directory, cacheName, next);
+	unmeasured.push(...pathsOutsideBudget(workspace, vanished));
 	return { files: Object.fromEntries(snapshot), unmeasured };
 }

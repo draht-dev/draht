@@ -398,6 +398,22 @@ describe("shared task token budgets", () => {
 		]);
 	});
 
+	it.each([
+		["after an audit saw it ignored", true],
+		["before any audit", false],
+	])("does not charge deleting a starting file that Git ignores, %s", (_case, audited) => {
+		configure({ maxCodeTokens: 10 });
+		writeFileSync(join(repo, "build.js"), "export const value = 123456789;\n".repeat(3));
+		beginTask({ cwd: repo });
+		writeFileSync(join(repo, ".gitignore"), "build.js\n");
+		if (audited) expect(auditBudget({ cwd: repo }).status).toBe("passed");
+		rmSync(join(repo, "build.js"));
+		expect(auditBudget({ cwd: repo })).toMatchObject({
+			status: "passed",
+			usage: { codeTokens: countTokens("build.js\n") },
+		});
+	});
+
 	it("measures edits through a symlinked session directory as the repository's own files", () => {
 		configure({ maxFileTokens: 5 });
 		const link = join(root, "link");

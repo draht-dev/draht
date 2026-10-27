@@ -483,16 +483,15 @@ describe("budget exclusions", () => {
 });
 
 describe("budget rename detection", () => {
-	const tokens = (text: string) => measureTokens(null, text);
 	const contents = new Map<string, string>();
 	const hash = (text: string) => {
 		const value = budgetContentHash(text);
 		contents.set(value, text);
 		return value;
 	};
-	const measure = (beforeHash: string, afterHash: string) =>
-		measureTokens(contents.get(beforeHash) ?? null, contents.get(afterHash) ?? null);
+	const content = (value: string) => contents.get(value) ?? "";
 	const body = "export const value = 1;\n".repeat(40);
+	const lines = (name: string) => Array.from({ length: 30 }, (_, line) => `export const ${name}${line} = ${line};\n`);
 
 	it("pairs identical content first, then the most similar remaining file", () => {
 		const edited = `${body}export const extra = 2;\n`;
@@ -505,7 +504,7 @@ describe("budget rename detection", () => {
 				["moved/b.ts", hash(edited)],
 				["moved/a.ts", hash(`${body}export const other = 3;\n`)],
 			],
-			measure,
+			content,
 		);
 		expect(pairs).toEqual(
 			new Map([
@@ -519,72 +518,67 @@ describe("budget rename detection", () => {
 		const pairs = pairRenames(
 			[["old.ts", hash(body)]],
 			[["new.md", hash("Completely different prose.\n".repeat(30))]],
-			measure,
+			content,
 		);
 		expect(pairs.size).toBe(0);
-		expect(tokens(body).fileTokens).toBeGreaterThan(0);
 	});
 
-	it("compares an edited move with the deleted file sharing most of its path first", () => {
+	it("pairs each edited move in a batch of near-identical files with its own source", () => {
 		const deleted: Array<[string, string]> = [];
 		const added: Array<[string, string]> = [];
 		for (let index = 0; index < 12; index++) {
-			const content = `${body}export const feature${index} = ${index};\n`;
-			deleted.push([`src/feature${index}/index.ts`, hash(content)]);
-			added.push([`lib/feature${index}/index.ts`, hash(`${content}export const moved = true;\n`)]);
+			const text = `${body}export const feature${index} = ${index};\n`;
+			deleted.push([`src/feature${index}/index.ts`, hash(text)]);
+			added.push([`lib/feature${index}/index.ts`, hash(`${text}export const moved = true;\n`)]);
 		}
-		let comparisons = 0;
-		const pairs = pairRenames(deleted, added, (before, after) => {
-			comparisons++;
-			return measure(before, after);
-		});
-		expect([...pairs]).toEqual(added.map(([path], index) => [path, deleted[index][0]]));
-		expect(comparisons).toBe(12);
+		expect(pairRenames(deleted, added, content)).toEqual(
+			new Map(added.map(([path], index) => [path, deleted[index][0]])),
+		);
 	});
 
-	it("prefers a near-identical source over a less similar one that shares the destination's name", () => {
-		const lines = Array.from({ length: 30 }, (_, line) => `export const value${line} = ${line};\n`);
-		const source = lines.join("");
-		const other = Array.from({ length: 10 }, (_, line) => `export const other${line} = ${line};\n`);
-		const related = [...lines.slice(0, 20), ...other].join("");
-		const destination = `${source}export const extra = true;\n`;
-		const sameName = measureTokens(related, destination);
-		expect(
-			1 - (sameName.addedTokens + sameName.deletedTokens) / (sameName.baselineTokens + sameName.fileTokens),
-		).toBeGreaterThan(0.5);
+	it("prefers the closest source over a less similar one that shares the destination's name", () => {
+		const source = lines("value");
+		const related = [...source.slice(0, 20), ...lines("other").slice(0, 10)].join("");
+		const destination = hash(`${source.join("")}export const extra = true;\n`);
+		// On its own, the same-name file is similar enough to count as the source.
+		expect(pairRenames([["a/index.ts", hash(related)]], [["b/index.ts", destination]], content)).toEqual(
+			new Map([["b/index.ts", "a/index.ts"]]),
+		);
 		const pairs = pairRenames(
 			[
 				["a/index.ts", hash(related)],
-				["a/main.ts", hash(source)],
+				["a/main.ts", hash(source.join(""))],
 			],
-			[["b/index.ts", hash(destination)]],
-			measure,
+			[["b/index.ts", destination]],
+			content,
 		);
 		expect(pairs).toEqual(new Map([["b/index.ts", "a/main.ts"]]));
 	});
 
-	it("spends its comparison limit only on new measurements, so cached ones let a large batch pair fully", () => {
+	it("lets the closest pair claim a source before a weaker match listed earlier", () => {
+		const source = lines("value");
+		const weaker = [...source.slice(0, 20), ...lines("other").slice(0, 10)].join("");
+		const pairs = pairRenames(
+			[["old.ts", hash(source.join(""))]],
+			[
+				["a.ts", hash(weaker)],
+				["b.ts", hash(`${source.join("")}export const extra = true;\n`)],
+			],
+			content,
+		);
+		expect(pairs).toEqual(new Map([["b.ts", "old.ts"]]));
+	});
+
+	it("pairs every edited move of a large batch in one evaluation", () => {
 		const deleted: Array<[string, string]> = [];
 		const added: Array<[string, string]> = [];
-		for (let index = 0; index < 9; index++) {
-			const content = Array.from(
-				{ length: 30 },
-				(_, line) => `export const value${index}x${line} = ${line};\n`,
-			).join("");
-			deleted.push([`old/source${index}.ts`, hash(content)]);
-			// Reversed, so each moved file finds its source last among the remaining candidates.
-			added.unshift([`new/target${index}.ts`, hash(`${content}export const extra = ${index};\n`)]);
+		for (let index = 0; index < 60; index++) {
+			const text = lines(`value${index}x`).join("");
+			deleted.push([`old/source${index}.ts`, hash(text)]);
+			added.unshift([`new/target${index}.ts`, hash(`${text}export const extra = ${index};\n`)]);
 		}
-		const cache = new Map<string, MeasuredTokens>();
-		const cached = (before: string, after: string) => cache.has(`${before}:${after}`);
-		const caching = (before: string, after: string) => {
-			const value = cache.get(`${before}:${after}`) ?? measure(before, after);
-			cache.set(`${before}:${after}`, value);
-			return value;
-		};
-		expect(pairRenames(deleted, added, caching, cached).size).toBeLessThan(9);
-		expect([...pairRenames(deleted, added, caching, cached)]).toEqual(
-			added.map(([path]) => [path, path.replace("new/target", "old/source")]),
+		expect(pairRenames(deleted, added, content)).toEqual(
+			new Map(added.map(([path]) => [path, path.replace("new/target", "old/source")])),
 		);
 	});
 });

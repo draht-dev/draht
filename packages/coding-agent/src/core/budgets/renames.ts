@@ -1,37 +1,14 @@
-import type { MeasuredTokens } from "./policy.ts";
-
-/** At least half of a moved file's tokens must survive for the move to count as a rename. */
+/** At least half of a moved file's content must survive for the move to count as a rename. */
 const MIN_RENAME_SIMILARITY = 0.5;
-/** A match this close ends the search: no other candidate could change the accounting by more than a few percent. */
-const NEAR_IDENTICAL_SIMILARITY = 0.95;
-/**
- * Bounds the new measurements spent on rename candidates in one evaluation. Measurements are cached afterwards, so a
- * batch of moves too large for one evaluation pairs fully over the following ones.
- */
-const MAX_RENAME_COMPARISONS = 32;
 
-interface Candidate {
-	source: string;
-	sourceHash: string;
-	rank: number;
+/** Characters on each distinct line, so the content two files share can be compared regardless of line order. */
+function lineProfile(text: string): { lines: Map<string, number>; size: number } {
+	const lines = new Map<string, number>();
+	for (const line of text.split("\n")) lines.set(line, (lines.get(line) ?? 0) + line.length + 1);
+	return { lines, size: text.length + 1 };
 }
 
-function similarity(measured: MeasuredTokens): number {
-	const total = measured.baselineTokens + measured.fileTokens;
-	return total === 0 ? 1 : 1 - (measured.addedTokens + measured.deletedTokens) / total;
-}
-
-function fileName(path: string): string {
-	return path.slice(path.lastIndexOf("/") + 1);
-}
-
-function append(groups: Map<string, string[]>, key: string, path: string): void {
-	const paths = groups.get(key);
-	if (paths) paths.push(path);
-	else groups.set(key, [path]);
-}
-
-/** How many trailing path segments two paths share. */
+/** How many trailing path segments two paths share; a moved file usually keeps its name, often its directory. */
 function sharedSuffix(left: string, right: string): number {
 	const leftParts = left.split("/");
 	const rightParts = right.split("/");
@@ -46,41 +23,23 @@ function sharedSuffix(left: string, right: string): number {
 }
 
 /**
- * Orders the comparisons: a moved file usually keeps its name and often its parent directory, so deleted files with
- * the same name come first, those sharing more of the path ahead, followed by every other deleted file.
- */
-function* candidates(path: string, sources: ReadonlyMap<string, string>, named: ReadonlyMap<string, string[]>) {
-	const name = fileName(path);
-	const likely: Candidate[] = [];
-	for (const source of named.get(name) ?? []) {
-		const sourceHash = sources.get(source);
-		if (sourceHash !== undefined) likely.push({ source, sourceHash, rank: sharedSuffix(path, source) });
-	}
-	yield* likely.sort((left, right) => right.rank - left.rank);
-	for (const [source, sourceHash] of sources) {
-		if (fileName(source) !== name) yield { source, sourceHash, rank: 0 };
-	}
-}
-
-/**
  * Pairs files a worktree added with files it deleted, so a moved file is measured against its old content instead
- * of costing a whole deletion plus a whole new file. Identical content pairs first, then the most similar file;
- * likelier candidates are compared first and win ties. Returns added path to deleted path.
+ * of costing a whole deletion plus a whole new file. Identical content pairs first. Otherwise a pair's similarity is
+ * the share of both files' characters on lines they have in common; the most similar pairs claim their files first,
+ * and a shared file name and path only break ties. Returns added path to deleted path.
  */
 export function pairRenames(
 	deleted: ReadonlyArray<[path: string, hash: string]>,
 	added: ReadonlyArray<[path: string, hash: string]>,
-	measure: (beforeHash: string, afterHash: string) => MeasuredTokens,
-	measured: (beforeHash: string, afterHash: string) => boolean = () => false,
+	content: (hash: string) => string,
 ): Map<string, string> {
 	const pairs = new Map<string, string>();
 	const sources = new Map(deleted);
-	if (sources.size === 0) return pairs;
 	const identical = new Map<string, string[]>();
-	const named = new Map<string, string[]>();
 	for (const [path, hash] of deleted) {
-		append(identical, hash, path);
-		append(named, fileName(path), path);
+		const paths = identical.get(hash);
+		if (paths) paths.push(path);
+		else identical.set(hash, [path]);
 	}
 	for (const [path, hash] of added) {
 		const source = identical.get(hash)?.find((candidate) => sources.has(candidate));
@@ -88,26 +47,40 @@ export function pairRenames(
 		pairs.set(path, source);
 		sources.delete(source);
 	}
-	let comparisons = MAX_RENAME_COMPARISONS;
-	for (const [path, hash] of added) {
-		if (pairs.has(path)) continue;
-		let best: { source: string; score: number } | undefined;
-		let exhausted = false;
-		for (const { source, sourceHash } of candidates(path, sources, named)) {
-			if (!measured(sourceHash, hash)) {
-				exhausted = comparisons === 0;
-				if (exhausted) break;
-				comparisons--;
+	const targets = added.filter(([path]) => !pairs.has(path));
+	if (targets.length === 0 || sources.size === 0) return pairs;
+	// Each line lists the deleted files holding it, so only files with lines in common are compared.
+	const sizes = new Map<string, number>();
+	const holders = new Map<string, Array<[source: string, size: number]>>();
+	for (const [source, sourceHash] of sources) {
+		const { lines, size } = lineProfile(content(sourceHash));
+		sizes.set(source, size);
+		for (const [line, lineSize] of lines) {
+			const entries = holders.get(line);
+			if (entries) entries.push([source, lineSize]);
+			else holders.set(line, [[source, lineSize]]);
+		}
+	}
+	const matches: Array<{ path: string; source: string; score: number; shared: number; order: number }> = [];
+	for (const [order, [path, hash]] of targets.entries()) {
+		const { lines, size } = lineProfile(content(hash));
+		const overlaps = new Map<string, number>();
+		for (const [line, lineSize] of lines) {
+			for (const [source, sourceSize] of holders.get(line) ?? []) {
+				overlaps.set(source, (overlaps.get(source) ?? 0) + Math.min(lineSize, sourceSize));
 			}
-			const score = similarity(measure(sourceHash, hash));
-			if (best ? score > best.score : score >= MIN_RENAME_SIMILARITY) best = { source, score };
-			if (score >= NEAR_IDENTICAL_SIMILARITY) break;
 		}
-		if (best) {
-			pairs.set(path, best.source);
-			sources.delete(best.source);
+		for (const [source, overlap] of overlaps) {
+			const score = (2 * overlap) / (size + (sizes.get(source) ?? 0));
+			if (score < MIN_RENAME_SIMILARITY) continue;
+			matches.push({ path, source, score, shared: sharedSuffix(path, source), order });
 		}
-		if (exhausted) break;
+	}
+	matches.sort((left, right) => right.score - left.score || right.shared - left.shared || left.order - right.order);
+	for (const { path, source } of matches) {
+		if (pairs.has(path) || !sources.has(source)) continue;
+		pairs.set(path, source);
+		sources.delete(source);
 	}
 	return pairs;
 }

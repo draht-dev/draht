@@ -181,20 +181,36 @@ export function canonicalBudgetPath(cwd: string, path: string): string {
 	return join(realpathSync(existing), ...missing);
 }
 
+function inNestedRepository(workspace: BudgetWorkspace, path: string): boolean {
+	for (let parent = dirname(path); parent !== "."; parent = dirname(parent)) {
+		if (budgetPathExists(join(workspace.root, parent, ".git"))) return true;
+	}
+	return false;
+}
+
 /**
  * The repository-relative path of a canonical edit target, or undefined when the target is outside the files
  * budgets measure: outside the repository, inside Git metadata or a nested repository, or ignored by Git.
  */
 export function budgetFilePath(workspace: BudgetWorkspace, target: string): string | undefined {
 	const file = relative(workspace.root, target);
-	if (!isBudgetRelativePath(file)) return undefined;
-	for (let parent = dirname(target); parent !== workspace.root; parent = dirname(parent)) {
-		if (budgetPathExists(join(parent, ".git"))) return undefined;
-	}
+	if (!isBudgetRelativePath(file) || inNestedRepository(workspace, file)) return undefined;
 	const ignored = runGit(workspace.root, ["check-ignore", "-q", "--", file]);
 	if (ignored.status === 0) return undefined;
 	if (ignored.status !== 1) throw new Error(`Budget ignore inspection failed: ${ignored.stderr.trim()}`);
 	return file.split(sep).join("/");
+}
+
+/** The repository-relative paths, existing or not, that Git ignores or a nested repository holds. */
+export function pathsOutsideBudget(workspace: BudgetWorkspace, paths: readonly string[]): string[] {
+	const nested = new Set(paths.filter((path) => inNestedRepository(workspace, path)));
+	const others = paths.filter((path) => !nested.has(path));
+	if (others.length === 0) return [...nested];
+	const ignored = runGit(workspace.root, ["check-ignore", "-z", "--stdin"], `${others.join("\0")}\0`);
+	if (ignored.status !== 0 && ignored.status !== 1) {
+		throw new Error(`Budget ignore inspection failed: ${ignored.stderr.trim()}`);
+	}
+	return [...nested, ...ignored.stdout.split("\0").filter(Boolean)];
 }
 
 export function isSourcePath(path: string): boolean {

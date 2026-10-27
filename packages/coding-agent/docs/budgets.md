@@ -67,9 +67,9 @@ A change costs the tokens in its added lines plus the tokens in its deleted
 lines, measured against the task's starting snapshot. Replacing a 100-token block
 with an 80-token block costs 180 tokens; unchanged lines are free, and redrafts
 do not add up. Diffs with more than 4,096 line edits are charged as whole-file
-replacements. A moved file is measured against its old content when at least
-half of it is unchanged, so moving a file costs only its edits and keeps its
-limit.
+replacements. A moved file is measured against the deleted file it shares the
+most lines with, when at least half of its content is unchanged, so moving a
+file costs only its edits and keeps its limit.
 
 ## Tasks
 

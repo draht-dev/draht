@@ -381,6 +381,23 @@ describe("shared task token budgets", () => {
 		});
 	});
 
+	it("measures a starting file against its starting content again once Git stops ignoring it", () => {
+		configure({ maxFileTokens: 10, maxOversizedGrowthTokens: 0 });
+		const large = "export const value = 123456789;\n".repeat(3);
+		writeFileSync(join(repo, "build.js"), large);
+		beginTask({ cwd: repo });
+		writeFileSync(join(repo, ".gitignore"), "build.js\n");
+		writeFileSync(join(repo, "build.js"), `${large}${large}`);
+		expect(auditBudget({ cwd: repo }).status).toBe("passed");
+		writeFileSync(join(repo, "build.js"), large);
+		writeFileSync(join(repo, ".gitignore"), "");
+		expect(auditBudget({ cwd: repo })).toMatchObject({ status: "passed", usage: { codeTokens: 0 } });
+		writeFileSync(join(repo, "build.js"), `${large}x;\n`);
+		expect(auditBudget({ cwd: repo }).violations).toEqual([
+			`build.js: ${countTokens(`${large}x;\n`)} code tokens exceed file ceiling ${countTokens(large)}`,
+		]);
+	});
+
 	it("measures edits through a symlinked session directory as the repository's own files", () => {
 		configure({ maxFileTokens: 5 });
 		const link = join(root, "link");

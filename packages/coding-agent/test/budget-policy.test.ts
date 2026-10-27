@@ -542,6 +542,27 @@ describe("budget rename detection", () => {
 		expect(comparisons).toBe(12);
 	});
 
+	it("prefers a near-identical source over a less similar one that shares the destination's name", () => {
+		const lines = Array.from({ length: 30 }, (_, line) => `export const value${line} = ${line};\n`);
+		const source = lines.join("");
+		const other = Array.from({ length: 10 }, (_, line) => `export const other${line} = ${line};\n`);
+		const related = [...lines.slice(0, 20), ...other].join("");
+		const destination = `${source}export const extra = true;\n`;
+		const sameName = measureTokens(related, destination);
+		expect(
+			1 - (sameName.addedTokens + sameName.deletedTokens) / (sameName.baselineTokens + sameName.fileTokens),
+		).toBeGreaterThan(0.5);
+		const pairs = pairRenames(
+			[
+				["a/index.ts", hash(related)],
+				["a/main.ts", hash(source)],
+			],
+			[["b/index.ts", hash(destination)]],
+			measure,
+		);
+		expect(pairs).toEqual(new Map([["b/index.ts", "a/main.ts"]]));
+	});
+
 	it("spends its comparison limit only on new measurements, so cached ones let a large batch pair fully", () => {
 		const deleted: Array<[string, string]> = [];
 		const added: Array<[string, string]> = [];
@@ -551,7 +572,8 @@ describe("budget rename detection", () => {
 				(_, line) => `export const value${index}x${line} = ${line};\n`,
 			).join("");
 			deleted.push([`old/source${index}.ts`, hash(content)]);
-			added.push([`new/target${index}.ts`, hash(`${content}export const extra = ${index};\n`)]);
+			// Reversed, so each moved file finds its source last among the remaining candidates.
+			added.unshift([`new/target${index}.ts`, hash(`${content}export const extra = ${index};\n`)]);
 		}
 		const cache = new Map<string, MeasuredTokens>();
 		const cached = (before: string, after: string) => cache.has(`${before}:${after}`);
@@ -562,7 +584,7 @@ describe("budget rename detection", () => {
 		};
 		expect(pairRenames(deleted, added, caching, cached).size).toBeLessThan(9);
 		expect([...pairRenames(deleted, added, caching, cached)]).toEqual(
-			added.map(([path], index) => [path, deleted[index][0]]),
+			added.map(([path]) => [path, path.replace("new/target", "old/source")]),
 		);
 	});
 });

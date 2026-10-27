@@ -2,6 +2,8 @@ import type { MeasuredTokens } from "./policy.ts";
 
 /** At least half of a moved file's tokens must survive for the move to count as a rename. */
 const MIN_RENAME_SIMILARITY = 0.5;
+/** A match this close ends the search: no other candidate could change the accounting by more than a few percent. */
+const NEAR_IDENTICAL_SIMILARITY = 0.95;
 /**
  * Bounds the new measurements spent on rename candidates in one evaluation. Measurements are cached afterwards, so a
  * batch of moves too large for one evaluation pairs fully over the following ones.
@@ -44,8 +46,8 @@ function sharedSuffix(left: string, right: string): number {
 }
 
 /**
- * A moved file usually keeps its name and often its parent directory, so deleted files with the same name come
- * first, those sharing more of the path ahead, followed by every other deleted file.
+ * Orders the comparisons: a moved file usually keeps its name and often its parent directory, so deleted files with
+ * the same name come first, those sharing more of the path ahead, followed by every other deleted file.
  */
 function* candidates(path: string, sources: ReadonlyMap<string, string>, named: ReadonlyMap<string, string[]>) {
 	const name = fileName(path);
@@ -62,8 +64,8 @@ function* candidates(path: string, sources: ReadonlyMap<string, string>, named: 
 
 /**
  * Pairs files a worktree added with files it deleted, so a moved file is measured against its old content instead
- * of costing a whole deletion plus a whole new file. Identical content pairs first, then the most similar file
- * among the likeliest candidates. Returns added path to deleted path.
+ * of costing a whole deletion plus a whole new file. Identical content pairs first, then the most similar file;
+ * likelier candidates are compared first and win ties. Returns added path to deleted path.
  */
 export function pairRenames(
 	deleted: ReadonlyArray<[path: string, hash: string]>,
@@ -89,18 +91,17 @@ export function pairRenames(
 	let comparisons = MAX_RENAME_COMPARISONS;
 	for (const [path, hash] of added) {
 		if (pairs.has(path)) continue;
-		let best: (Candidate & { score: number }) | undefined;
+		let best: { source: string; score: number } | undefined;
 		let exhausted = false;
-		for (const candidate of candidates(path, sources, named)) {
-			// A match among likelier candidates wins over every less likely one.
-			if (best && candidate.rank < best.rank) break;
-			if (!measured(candidate.sourceHash, hash)) {
+		for (const { source, sourceHash } of candidates(path, sources, named)) {
+			if (!measured(sourceHash, hash)) {
 				exhausted = comparisons === 0;
 				if (exhausted) break;
 				comparisons--;
 			}
-			const score = similarity(measure(candidate.sourceHash, hash));
-			if (score >= (best?.score ?? MIN_RENAME_SIMILARITY)) best = { ...candidate, score };
+			const score = similarity(measure(sourceHash, hash));
+			if (best ? score > best.score : score >= MIN_RENAME_SIMILARITY) best = { source, score };
+			if (score >= NEAR_IDENTICAL_SIMILARITY) break;
 		}
 		if (best) {
 			pairs.set(path, best.source);

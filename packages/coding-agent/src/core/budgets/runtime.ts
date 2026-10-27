@@ -193,10 +193,14 @@ function refreshWorktrees(location: BudgetLocation, state: BudgetState, enrolled
 			continue;
 		}
 		const { files, unmeasured } = takeSnapshot(location, workspace, state, participant);
-		// A file that left the budget leaves the baseline too, so it is not charged as deleted.
-		for (const path of unmeasured) delete participant.baseline[path];
-		if (!unmeasured.length && sameSnapshot(files, participant.current)) continue;
-		participant.current = files;
+		// While out of the budget, a starting file counts as unchanged; once back, it is measured against its start.
+		const unchanged = unmeasured.flatMap(
+			(path): Array<[string, string]> =>
+				Object.hasOwn(participant.baseline, path) ? [[path, participant.baseline[path]]] : [],
+		);
+		const current = unchanged.length ? Object.fromEntries([...Object.entries(files), ...unchanged]) : files;
+		if (sameSnapshot(current, participant.current)) continue;
+		participant.current = current;
 		changed = true;
 	}
 	return changed;

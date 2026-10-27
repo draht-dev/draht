@@ -2063,6 +2063,7 @@ function budgetChange(path, measured, limits) {
 
 // packages/coding-agent/src/core/budgets/renames.ts
 var MIN_RENAME_SIMILARITY = 0.5;
+var NEAR_IDENTICAL_SIMILARITY = 0.95;
 var MAX_RENAME_COMPARISONS = 32;
 function similarity(measured) {
   const total = measured.baselineTokens + measured.fileTokens;
@@ -2118,15 +2119,15 @@ function pairRenames(deleted, added, measure, measured = () => false) {
     if (pairs.has(path)) continue;
     let best;
     let exhausted = false;
-    for (const candidate of candidates(path, sources, named)) {
-      if (best && candidate.rank < best.rank) break;
-      if (!measured(candidate.sourceHash, hash)) {
+    for (const { source, sourceHash } of candidates(path, sources, named)) {
+      if (!measured(sourceHash, hash)) {
         exhausted = comparisons === 0;
         if (exhausted) break;
         comparisons--;
       }
-      const score = similarity(measure(candidate.sourceHash, hash));
-      if (score >= (best?.score ?? MIN_RENAME_SIMILARITY)) best = { ...candidate, score };
+      const score = similarity(measure(sourceHash, hash));
+      if (best ? score > best.score : score >= MIN_RENAME_SIMILARITY) best = { source, score };
+      if (score >= NEAR_IDENTICAL_SIMILARITY) break;
     }
     if (best) {
       pairs.set(path, best.source);
@@ -2921,9 +2922,12 @@ function refreshWorktrees(location, state, enrolled) {
       continue;
     }
     const { files, unmeasured } = takeSnapshot(location, workspace, state, participant);
-    for (const path of unmeasured) delete participant.baseline[path];
-    if (!unmeasured.length && sameSnapshot(files, participant.current)) continue;
-    participant.current = files;
+    const unchanged = unmeasured.flatMap(
+      (path) => Object.hasOwn(participant.baseline, path) ? [[path, participant.baseline[path]]] : []
+    );
+    const current = unchanged.length ? Object.fromEntries([...Object.entries(files), ...unchanged]) : files;
+    if (sameSnapshot(current, participant.current)) continue;
+    participant.current = current;
     changed = true;
   }
   return changed;

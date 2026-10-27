@@ -13,7 +13,8 @@ concurrency:
 permissions: {}
 
 # Jobs run on Blacksmith runners (the blacksmith-sh GitHub App is installed on
-# draht-dev). Release and publish workflows stay on GitHub-hosted runners.
+# draht-dev), except the Landlock-dependent test shards below. Release and
+# publish workflows stay on GitHub-hosted runners.
 
 jobs:
   build-check:
@@ -70,9 +71,12 @@ jobs:
   test-workspaces:
     name: Test (${{ matrix.shard }})
     needs: shard-map
-    # gateway and coding-agent are the critical path of the whole run; the
-    # other shards finish well inside their time on 4 vCPUs.
-    runs-on: ${{ (matrix.shard == 'gateway' || matrix.shard == 'coding-agent') && 'blacksmith-8vcpu-ubuntu-2404' || 'blacksmith-4vcpu-ubuntu-2404' }}
+    # Only gateway runs on Blacksmith. The rlm sandbox needs Landlock, which the
+    # Blacksmith kernel lacks (ENOSYS), and rlm's suites run in `rest` and are
+    # reached from coding-agent's rlm-cli test. Those shards, and any shard
+    # added later, stay on GitHub-hosted runners so the fail-closed sandbox
+    # stays covered.
+    runs-on: ${{ matrix.shard == 'gateway' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: read
     timeout-minutes: 30

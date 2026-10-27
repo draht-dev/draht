@@ -14,7 +14,9 @@
 
 # draht: open source coding agent for the terminal
 
-draht is an open source (MIT) AI coding agent that runs in your terminal, published on npm as `@draht/coding-agent`, for developers who want to work with Anthropic, OpenAI, Google, GitHub Copilot and other models from one extensible CLI. It is a fork of the pi coding agent by Mario Zechner and adds features such as duet mode (two models in one session), Polyphase multi-agent workflows, RLM for inputs larger than the context window, and opinionated workflow prompts for test-driven and planned agentic engineering.
+draht is an open source (MIT) AI coding agent that runs in your terminal, published on npm as `@draht/coding-agent`, for developers who want to work with Anthropic, OpenAI, Google, GitHub Copilot and other models from one extensible CLI. It is a fork of the pi coding agent by Mario Zechner and adds features such as duet mode (two models in one session), Polyphase multi-agent workflows, RLM for inputs larger than the context window, and optional opinionated workflow prompts for agentic engineering (TDD, DDD and GSD).
+
+<!-- Oskar: /rlm inside a session is not documented; only `draht rlm` is. Add it if it ships. -->
 
 <!-- Oskar: add a short terminal GIF or asciinema recording here (e.g. duet mode), with alt text. -->
 
@@ -113,16 +115,16 @@ draht ships prompt templates (slash commands), skills and subagent prompts that 
 
 **Skills** ([skills/](skills) and [packages/coding-agent/skills](packages/coding-agent/skills)), loaded by the model when a task matches, or forced with `/skill:name`:
 
-- `tdd-workflow`: write a behavior-focused test, confirm it fails for the right reason, make the smallest complete change, then refactor. Use TDD where a regression contract helps; do not manufacture tests for docs, config or mechanical changes.
-- `ddd-workflow`: model concepts, invariants and context boundaries with the project's own language. DDD is optional; do not add aggregates, events, repositories or adapters without a concrete need.
-- `gsd-workflow`: the optional milestone, phase, plan, task hierarchy stored in `.planning/`. Only used when you explicitly choose it.
+- `tdd-workflow`: write a behavior-focused test, confirm it fails for the right reason, make the smallest complete change, then refactor. Optional. Use TDD where a regression contract helps; do not manufacture tests for docs, config or mechanical changes.
+- `ddd-workflow`: optional. Model concepts, invariants and context boundaries with the project's own language. Do not add aggregates, events, repositories or adapters without a concrete need.
+- `gsd-workflow`: optional. The milestone, phase, plan, task hierarchy stored in `.planning/`. Only used when you explicitly choose it.
 - Others include `debugging-workflow`, `verification-gate`, `atomic-commit`, `blast-radius`, `epistemics`, `typescript-discipline` and `unslop`.
 
 **Subagent prompts** ([packages/coding-agent/agents](packages/coding-agent/agents)): for example, the implementer prompt asks for the smallest complete change, reading code before editing, matching existing patterns, and never silencing failing checks.
 
-Opinions these files encode, from the files themselves: tests and verification as evidence rather than ritual, small atomic changes and commits, explicit planning artifacts when you opt in, and parallel specialist review before work is called done. Drahtbank exists to measure changes to these prompts.
+TDD, DDD and GSD are all optional; draht does not require any of them for ordinary coding. Opinions these files encode, from the files themselves: tests and verification as evidence rather than ritual, small atomic changes and commits, explicit planning artifacts when you opt in, and parallel specialist review before work is called done. Drahtbank exists to measure changes to these prompts.
 
-<!-- Oskar: are the root skills/ (tdd-workflow, ddd-workflow, gsd-workflow) shipped in the npm package, or only via draht-claude/draht-codex? packages/coding-agent/skills contains a different set. -->
+The workflow skills ship both in the `@draht/coding-agent` npm package and in the draht-claude and draht-codex plugins.
 
 ## Configuration, models and providers
 
@@ -142,12 +144,14 @@ Opinions these files encode, from the files themselves: tests and verification a
 | **[@draht/tui](packages/tui)** | Terminal UI library with differential rendering |
 | **[@draht/web-ui](packages/web-ui)** | Web components for AI chat interfaces |
 | **[@draht/pods](packages/pods)** | CLI for managing vLLM deployments on GPU pods |
+| **[@draht/router](packages/router)** | Role-based model routing with direct API calls, automatic fallback, and cost tracking |
+| **[@draht/chord](packages/chord)** | Typed host runtime for plugins, contracts, replicated state, and RPC over JSON links |
 
 The table lists supported public packages, not every workspace. In particular, `@draht/infra`, `@draht/invoice`, `@draht/compliance`, and `@draht/workflows` are examples; `@draht/ci`, `@draht/landing`, and `@draht/x-markdown` are internal tools. They are private and excluded from public package releases.
 
 ## How draht differs from pi
 
-draht is built on [pi](https://github.com/earendil-works/pi-mono), the coding agent by Mario Zechner, and is periodically synced with it (see [.upstream-sync](.upstream-sync)). pi is MIT licensed; its copyright notice is kept in this repo's [LICENSE](LICENSE). The minimal core and the extension model come from pi.
+draht is built on [pi](https://github.com/earendil-works/pi-mono), the coding agent by Mario Zechner, and is periodically synced with it (see [.upstream-sync](.upstream-sync)). pi is MIT licensed; its copyright notice is kept in this repo's [LICENSE](LICENSE). The minimal core and the extension model come from pi. The `@draht/router` and `@draht/chord` packages are also forks of pi code.
 
 Differences documented in this repo:
 
@@ -172,7 +176,7 @@ Models from the built-in providers listed under [Features](#features), plus cust
 Yes. Run `/login` and choose Anthropic Claude Pro/Max, OpenAI ChatGPT Plus/Pro (Codex), GitHub Copilot, Google Gemini CLI or Google Antigravity.
 
 ### Is draht a fork of pi?
-Yes. draht is based on pi by Mario Zechner and keeps its MIT copyright notice.
+Yes. draht, including `@draht/router` and `@draht/chord`, is based on pi by Mario Zechner and keeps its MIT copyright notice.
 
 ### Does draht support MCP?
 Yes. draht connects to MCP servers over stdio or streamable HTTP, for example `draht mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem .`. See [mcp.md](packages/coding-agent/docs/mcp.md).
@@ -188,8 +192,8 @@ The name `draht` was already taken on npm, so the package is `@draht/coding-agen
 ### What is RLM in draht?
 RLM (Recursive Language Models) is a `draht rlm` command for questions about inputs too large for a model's context window. The model writes Python that inspects the input in a sandboxed REPL instead of reading it all into the prompt. For inputs that fit in context, a normal read is faster and cheaper.
 
-### What are the GSD, TDD and DDD workflows?
-Optional prompts shipped with draht. GSD is a planning workflow (`/new-project`, `/plan-phase`, `/execute-phase`, `/verify-work`) with files in `.planning/`. `tdd-workflow` and `ddd-workflow` are skills the model loads when a task calls for them, or you force them with `/skill:tdd-workflow` and `/skill:ddd-workflow`.
+### Does draht require TDD, DDD or GSD?
+No. All three are optional workflows shipped with draht. GSD is a planning workflow (`/new-project`, `/plan-phase`, `/execute-phase`, `/verify-work`) with files in `.planning/`. `tdd-workflow` and `ddd-workflow` are skills the model loads when a task calls for them, or you force them with `/skill:tdd-workflow` and `/skill:ddd-workflow`.
 
 ### Can I use draht's prompts in Claude Code or Codex?
 Yes. `npx draht-claude install` and `npx draht-codex install` install the commands, subagents and workflows as plugins.

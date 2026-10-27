@@ -82,11 +82,11 @@ export type { Ctx, GetOptions, Readable, RefStatus, Shape, StateEvent } from "./
 export {
 	NativeWatch,
 	type NativeWatchable,
-	type NativeWatchChange,
+	type NativeWatchCall,
 	type NativeWatchHandle,
 	Watch,
 	type Watchable,
-	type WatchChange,
+	type WatchCall,
 	type WatchEnd,
 	type WatchHandle,
 } from "./watch.ts";

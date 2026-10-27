@@ -1,0 +1,76 @@
+{
+  "pages": [
+    {
+      "id": "home",
+      "path": "/",
+      "section": "draht",
+      "title": "coding agents that ship for less",
+      "description": "Draht routes coding tasks by capability and cost, writes the failing test first, reads your domain model, and logs each model call. Use it in Claude Code or from the CLI.",
+      "lang": "en"
+    },
+    {
+      "id": "blog",
+      "path": "/blog",
+      "section": "blog",
+      "title": "Blog",
+      "description": "Notes on coding agents, TDD, DDD, and the engineering decisions behind Draht.",
+      "lang": "en"
+    },
+    {
+      "id": "blog-atomic-reasoning",
+      "path": "/blog/atomic-reasoning",
+      "section": "blog",
+      "title": "Atomic reasoning in GSD workflows",
+      "description": "How Draht splits work into units that can be implemented and checked independently.",
+      "lang": "en"
+    },
+    {
+      "id": "blog-eight-disciplines-for-coding-agents",
+      "path": "/blog/eight-disciplines-for-coding-agents",
+      "section": "blog",
+      "title": "Eight reasoning disciplines for a coding agent",
+      "description": "Eight procedures Draht uses to keep coding agents focused on the request, the evidence, and the highest-risk parts of the work.",
+      "lang": "en"
+    },
+    {
+      "id": "blog-polyphase-live-agent-workflows",
+      "path": "/blog/polyphase-live-agent-workflows",
+      "section": "blog",
+      "title": "Polyphase — see what every agent is doing",
+      "description": "Draht's latest work on main adds live agent oversight, scriptable workflows, and saved commands for repeatable multi-agent tasks.",
+      "lang": "en"
+    },
+    {
+      "id": "blog-v2026-5-12-discipline-gates",
+      "path": "/blog/v2026-5-12-discipline-gates",
+      "section": "blog",
+      "title": "v2026.5.12 — Discipline gates for AI coding agents",
+      "description": "Draht's May release adds explicit handoff states, spec review before quality review, a four-phase /fix protocol, and workflow stop conditions.",
+      "lang": "en"
+    },
+    {
+      "id": "docs",
+      "path": "/docs",
+      "section": "docs",
+      "title": "Documentation",
+      "description": "Install Draht, choose a provider, manage sessions, and extend the agent with prompts, skills, themes, or TypeScript modules.",
+      "lang": "en"
+    },
+    {
+      "id": "episodes",
+      "path": "/episodes",
+      "section": "episodes",
+      "title": "Episodes",
+      "description": "Follow the university's build one episode per week, starting with an empty repository in Episode 1.",
+      "lang": "en"
+    },
+    {
+      "id": "uni",
+      "path": "/uni",
+      "section": "uni",
+      "title": "draht uni — building in public",
+      "description": "Follow the build of uni.draht.dev, one episode per week. Episode 1 is live; join the waitlist for the next release.",
+      "lang": "en"
+    }
+  ]
+}

@@ -757,6 +757,8 @@ Content`,
 					"--prefix",
 					realpathSync(join(agentDir, "npm")),
 					"--legacy-peer-deps",
+					"--no-audit",
+					"--no-fund",
 				],
 				undefined,
 			);
@@ -770,7 +772,15 @@ Content`,
 
 			expect(runCommandSpy).toHaveBeenCalledWith(
 				"npm",
-				["uninstall", "@scope/pkg", "--prefix", realpathSync(join(agentDir, "npm")), "--legacy-peer-deps"],
+				[
+					"uninstall",
+					"@scope/pkg",
+					"--prefix",
+					realpathSync(join(agentDir, "npm")),
+					"--legacy-peer-deps",
+					"--no-audit",
+					"--no-fund",
+				],
 				undefined,
 			);
 		});
@@ -794,12 +804,12 @@ Content`,
 
 			expect(runCommandSpy).toHaveBeenCalledWith(
 				"npm",
-				["install", "@scope/pkg", "--prefix", realNpmRoot, "--legacy-peer-deps"],
+				["install", "@scope/pkg", "--prefix", realNpmRoot, "--legacy-peer-deps", "--no-audit", "--no-fund"],
 				undefined,
 			);
 			expect(runCommandSpy).toHaveBeenCalledWith(
 				"npm",
-				["uninstall", "@scope/pkg", "--prefix", realNpmRoot, "--legacy-peer-deps"],
+				["uninstall", "@scope/pkg", "--prefix", realNpmRoot, "--legacy-peer-deps", "--no-audit", "--no-fund"],
 				undefined,
 			);
 		});
@@ -850,9 +860,13 @@ Content`,
 
 			await packageManager.install(source);
 
-			expect(runCommandSpy).toHaveBeenCalledWith("npm", ["install", "--omit=dev", "--legacy-peer-deps"], {
-				cwd: targetDir,
-			});
+			expect(runCommandSpy).toHaveBeenCalledWith(
+				"npm",
+				["install", "--omit=dev", "--legacy-peer-deps", "--no-audit", "--no-fund"],
+				{
+					cwd: targetDir,
+				},
+			);
 		});
 
 		it("should remove a newly created checkout when git clone fails", async () => {
@@ -916,9 +930,13 @@ Content`,
 				cwd: targetDir,
 			});
 			expect(runCommandSpy).toHaveBeenCalledWith("git", ["clean", "-fdx"], { cwd: targetDir });
-			expect(runCommandSpy).toHaveBeenCalledWith("npm", ["install", "--omit=dev", "--legacy-peer-deps"], {
-				cwd: targetDir,
-			});
+			expect(runCommandSpy).toHaveBeenCalledWith(
+				"npm",
+				["install", "--omit=dev", "--legacy-peer-deps", "--no-audit", "--no-fund"],
+				{
+					cwd: targetDir,
+				},
+			);
 		});
 
 		it("should reconcile an existing git checkout to its update target when installing without a ref", async () => {
@@ -1067,9 +1085,13 @@ Content`,
 
 			await packageManager.update(source);
 
-			expect(runCommandSpy).toHaveBeenCalledWith("npm", ["install", "--omit=dev", "--legacy-peer-deps"], {
-				cwd: targetDir,
-			});
+			expect(runCommandSpy).toHaveBeenCalledWith(
+				"npm",
+				["install", "--omit=dev", "--legacy-peer-deps", "--no-audit", "--no-fund"],
+				{
+					cwd: targetDir,
+				},
+			);
 		});
 
 		it("should repair missing git package dependencies when the checkout is already current", async () => {
@@ -1094,9 +1116,13 @@ Content`,
 
 			await packageManager.update(source);
 
-			expect(runCommandSpy).toHaveBeenCalledWith("npm", ["install", "--omit=dev", "--legacy-peer-deps"], {
-				cwd: targetDir,
-			});
+			expect(runCommandSpy).toHaveBeenCalledWith(
+				"npm",
+				["install", "--omit=dev", "--legacy-peer-deps", "--no-audit", "--no-fund"],
+				{
+					cwd: targetDir,
+				},
+			);
 			expect(runCommandSpy).not.toHaveBeenCalledWith("git", ["clean", "-fdx"], { cwd: targetDir });
 		});
 
@@ -1128,9 +1154,13 @@ Content`,
 
 			await expect(packageManager.update(source)).rejects.toThrow("simulated clean failure");
 
-			expect(runCommandSpy).toHaveBeenCalledWith("npm", ["install", "--omit=dev", "--legacy-peer-deps"], {
-				cwd: targetDir,
-			});
+			expect(runCommandSpy).toHaveBeenCalledWith(
+				"npm",
+				["install", "--omit=dev", "--legacy-peer-deps", "--no-audit", "--no-fund"],
+				{
+					cwd: targetDir,
+				},
+			);
 		});
 
 		it("should disable peer installation through wrapped pnpm when updating git dependencies", async () => {
@@ -2513,6 +2543,8 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 					"--prefix",
 					realpathSync(join(tempDir, ".draht", "npm")),
 					"--legacy-peer-deps",
+					"--no-audit",
+					"--no-fund",
 				],
 				undefined,
 			);
@@ -2579,6 +2611,8 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 						"--prefix",
 						realpathSync(join(agentDir, "npm")),
 						"--legacy-peer-deps",
+						"--no-audit",
+						"--no-fund",
 					]);
 					mkdirSync(managedPath, { recursive: true });
 					writeFileSync(
@@ -2696,6 +2730,8 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 					"--prefix",
 					realpathSync(join(agentDir, "npm")),
 					"--legacy-peer-deps",
+					"--no-audit",
+					"--no-fund",
 				],
 				undefined,
 			);
@@ -2709,6 +2745,8 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 					"--prefix",
 					realpathSync(join(tempDir, ".draht", "npm")),
 					"--legacy-peer-deps",
+					"--no-audit",
+					"--no-fund",
 				],
 				undefined,
 			);

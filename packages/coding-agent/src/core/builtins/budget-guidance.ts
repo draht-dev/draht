@@ -1,0 +1,2 @@
+export const BUDGET_GUIDANCE =
+	"Budgets are ceilings, not targets: write the smallest clear solution. Prefer clear names, cohesive functions, and focused modules. Keep documentation concise: explain contracts, setup, and non-obvious decisions; avoid restating code or writing progress diaries. Do not minify code or make arbitrary file splits just to fit a budget. Change .draht/budgets.json only when the user asks; edits apply only after the user starts a new budget task.";

@@ -34,9 +34,9 @@ describe("generate-skills-artifacts: computeArtifacts is a pure function", () =>
 		expect(second).toEqual(first);
 	});
 
-	it("discovers 142 artifacts from the 40 canonical skills", () => {
+	it("discovers 146 artifacts from the 41 canonical skills", () => {
 		const artifacts = computeArtifacts(SKILLS_ROOT);
-		expect(artifacts.length).toBe(142);
+		expect(artifacts.length).toBe(146);
 	});
 
 	it("requires explicit invocation for Codex ad-hoc workflows and GSD lifecycle skills", () => {
@@ -203,7 +203,7 @@ describe("generate-skills-artifacts: CLI, isolated in a temp output root", () =>
 	it("regenerated output into a temp root matches the real committed package files", () => {
 		run(["--output-root", tmpRoot]);
 		const generated = collectFiles(join(tmpRoot, "packages"));
-		expect(Object.keys(generated).length).toBe(142);
+		expect(Object.keys(generated).length).toBe(146);
 		for (const [relPath, content] of Object.entries(generated)) {
 			const committedPath = join(REPO_ROOT, "packages", relPath);
 			expect(readFileSync(committedPath, "utf8"), `${relPath} differs from the committed file`).toBe(content);

@@ -24,10 +24,20 @@ const ROOT = resolve(__dirname, "..");
 // Placeholder substituted with each consumer's plugin-root expression below.
 const PLUGIN_ROOT_TOKEN = "__PLUGIN_ROOT__";
 
+// Token budgets run first for each event they handle. Stop has no budget hook: stop-quality-gate.cjs runs the
+// final budget audit after project checks, which may rewrite files.
+function budgetHook(event) {
+	return {
+		matcher: "",
+		hooks: [{ type: "command", command: `node "${PLUGIN_ROOT_TOKEN}/scripts/budgets-hook.cjs" ${event}`, timeout: 60 }],
+	};
+}
+
 function hooksTemplate() {
 	return {
 		hooks: {
 			SessionStart: [
+				budgetHook("SessionStart"),
 				{
 					matcher: "",
 					hooks: [
@@ -39,6 +49,7 @@ function hooksTemplate() {
 				},
 			],
 			UserPromptSubmit: [
+				budgetHook("UserPromptSubmit"),
 				{
 					matcher: "",
 					hooks: [
@@ -55,6 +66,7 @@ function hooksTemplate() {
 				},
 			],
 			PostToolUse: [
+				budgetHook("PostToolUse"),
 				{
 					matcher: "Edit|Write|MultiEdit",
 					hooks: [
@@ -79,6 +91,7 @@ function hooksTemplate() {
 			// unless the judge TUI is running, which is why the timeout is an hour
 			// — the hook is blocked for exactly as long as the person takes.
 			PreToolUse: [
+				budgetHook("PreToolUse"),
 				{
 					matcher: "Bash|bash|exec_command|shell_command",
 					hooks: [{

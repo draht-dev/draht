@@ -10,6 +10,7 @@
  * Explicit project checks cover every configured language and committed work.
  * Passing evidence is reused only while its input scope is unchanged. A failed
  * repeated Stop remains failed; the host retry flag cannot bypass verification.
+ * Token budgets are audited last, after checks that may rewrite files.
  */
 
 const { execFileSync, spawnSync } = require("node:child_process");
@@ -52,6 +53,17 @@ try {
 	const payload = JSON.parse(readStdin() || "{}");
 
 	const cwd = payload?.cwd || process.cwd();
+	const budgets = require("./budgets-runtime.cjs");
+	budgets.beginTask({ cwd });
+	const finish = () => {
+		const { exitCode, message } = budgets.stopBudget({
+			cwd,
+			retry: payload?.stop_hook_active === true,
+			session: typeof payload?.session_id === "string" ? payload.session_id : "",
+		});
+		if (message) console.error(message);
+		process.exit(exitCode);
+	};
 	const project = runChecks({ cwd });
 	if (project.configured || project.status === "failed") {
 		if (project.status === "failed") {
@@ -59,14 +71,14 @@ try {
 			for (const check of project.checks) if (check.output) console.error(check.output.slice(0, 1500));
 			process.exit(2);
 		}
-		process.exit(0);
+		finish();
 	}
 	const planning = path.join(cwd, ".planning");
 
 	// Planning metadata is optional; retain existing projects' explicit opt-out.
 	try {
 		const config = JSON.parse(fs.readFileSync(path.join(planning, "config.json"), "utf-8"));
-		if (config?.hooks?.stopGate === false) process.exit(0);
+		if (config?.hooks?.stopGate === false) finish();
 	} catch { /* no config — gate stays on */ }
 
 	// Only gate when uncommitted source changes exist — a conversational turn
@@ -77,9 +89,9 @@ try {
 			encoding: "utf-8", cwd, timeout: 10000, stdio: ["ignore", "pipe", "pipe"],
 		});
 	} catch {
-		process.exit(0); // not a git repo
+		finish(); // not a git repo
 	}
-	if (!hasSourceChanges(dirty)) process.exit(0);
+	if (!hasSourceChanges(dirty)) finish();
 
 	// Run configured types/lint checks, without GSD heuristics or a full test
 	// suite on every turn-end. The gate retains its project strictness policy.
@@ -91,7 +103,7 @@ try {
 		failGate({ error });
 	}
 	if (result.error || result.signal || result.status !== 0) failGate(result);
-	process.exit(0);
+	finish();
 } catch (error) {
 	console.error(`Quality gate could not run: ${error.message}`);
 	process.exit(2);

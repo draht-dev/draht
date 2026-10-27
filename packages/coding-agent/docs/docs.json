@@ -93,6 +93,10 @@
               "path": "configuration.md"
             },
             {
+              "title": "Set Token Budgets",
+              "path": "budgets.md"
+            },
+            {
               "title": "Create Prompt Templates",
               "path": "prompt-templates.md"
             },

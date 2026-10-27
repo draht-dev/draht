@@ -1,0 +1,22 @@
+# draht
+
+> draht is an open source (MIT) AI coding agent for the terminal, published on npm as @draht/coding-agent. It is a fork of the pi coding agent by Mario Zechner.
+
+- Run: `npx @draht/coding-agent`, or `npm install -g @draht/coding-agent` then `draht`
+- Auth: API keys (e.g. ANTHROPIC_API_KEY) or `/login` with Claude Pro/Max, ChatGPT Plus/Pro (Codex), GitHub Copilot, Gemini CLI, Antigravity
+- Default tools: read, write, edit, bash
+- Features: duet mode, Polyphase workflows, session tree, MCP servers, extensions, skills, prompt templates, themes, SDK and RPC mode
+- License: MIT
+
+## Docs
+
+- [README](https://github.com/draht-dev/draht/blob/main/README.md)
+- [Coding agent README](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/README.md)
+- [Providers](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/docs/providers.md)
+- [Duet mode](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/docs/duet.md)
+- [MCP](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/docs/mcp.md)
+- [SDK](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/docs/sdk.md)
+
+## Upstream
+
+- [pi by Mario Zechner](https://github.com/earendil-works/pi-mono)

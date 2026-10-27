@@ -64,11 +64,12 @@ All usable via Claude Code's `Task` tool (`subagent_type: <name>`):
 | `security-auditor` | Scans for injection, auth, secrets, unsafe patterns |
 | `advisor` | Strongest-tier strategic steer, consulted rarely when stuck or before committing to an approach |
 
-### 17 bundled skills
+### 19 bundled skills
 
 - **`draht`** — router and catalog for the skill family: what draht is, which skill fits which situation
 - **`gsd-workflow`** — complete GSD methodology reference (directory structure, cycle, hooks, config)
 - **`tdd-workflow`** — red→green→refactor discipline, commit conventions, cycle violations
+- **`test-audit`** — authoring gates, evidence-led test audits, and subsystem campaigns that preserve owner-boundary contracts
 - **`ddd-workflow`** — bounded contexts, ubiquitous language, aggregates, domain events
 - **`debugging-workflow`** — the four-phase systematic debugging protocol `/fix` enforces, available transversally
 - **`atomic-reasoning`** — decompose work into independently verifiable units before acting

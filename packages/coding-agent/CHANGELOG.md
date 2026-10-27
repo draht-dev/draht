@@ -4,6 +4,8 @@
 
 ### Added
 
+- Add a self-contained `/test-audit` prompt for behavior-focused test authoring and coverage audits ([#16](https://github.com/draht-dev/draht/pull/16))
+
 - Permission rules match tool names with `*` and `?`, so `tool: "mcp__docs__*"` covers every tool of the `docs` MCP server; a deny rule whose glob names `bash` also checks `powershell` commands, and braces or brackets in `tool` are rejected ([#31](https://github.com/draht-dev/draht/issues/31))
 - The permission gate runs unmatched calls to read-only tools (`readOnlyHint`) without asking in the `ask` and `auto` modes when the hint comes from outside the project: a built-in tool, an extension loaded with `-e`, by the SDK, or from the user's extensions and packages, or an MCP server in the global `mcp.json` or registered by such an extension. In `ask` the tool must also declare `openWorldHint: false`. Project extensions, project `mcp.json` servers (also through the MCP resource tools), tools that also declare `destructiveHint`, and calls naming a path outside the project still ask ([#31](https://github.com/draht-dev/draht/issues/31))
 - `supervised` permission mode: like `ask`, and every `write` and `edit` asks, also inside the project; set it with `/permissions supervised` or `DRAHT_PERMISSION_MODE=supervised` ([#31](https://github.com/draht-dev/draht/issues/31))

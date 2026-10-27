@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { describe, expect, it, vi } from "vitest";
 import type { SqliteExecutor } from "../../src/sqlite/index.ts";
 import { openNodeSqliteDatabase } from "../../src/sqlite/node.ts";
 import { RUN_CHANGES, runChanges } from "./helpers.ts";
@@ -16,6 +17,22 @@ describe("Node SQLite driver", () => {
 			} finally {
 				await database.close();
 			}
+		}
+	});
+
+	it("keeps the most recently used prepared statements and prepares evicted ones again", async () => {
+		const database = await openNodeSqliteDatabase(":memory:");
+		const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+		try {
+			for (let i = 0; i < 300; i++) await database.get(`SELECT ${i} AS n`);
+			const prepared = prepare.mock.calls.length;
+			expect(await database.get("SELECT 299 AS n")).toEqual({ n: 299 });
+			expect(prepare.mock.calls.length).toBe(prepared);
+			expect(await database.get("SELECT 0 AS n")).toEqual({ n: 0 });
+			expect(prepare.mock.calls.length).toBe(prepared + 1);
+		} finally {
+			prepare.mockRestore();
+			await database.close();
 		}
 	});
 

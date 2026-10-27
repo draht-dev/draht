@@ -93,6 +93,10 @@ abstract class NodeSqliteExecutor implements SqliteExecutor {
 		});
 	}
 
+	runCounted(sql: string, ...params: SqliteValue[]): Promise<number> {
+		return this.runOperation(() => Number(this.statement(sql).run(...params).changes));
+	}
+
 	get<T extends object>(sql: string, ...params: SqliteValue[]): Promise<T | undefined> {
 		return this.runOperation(() => this.statement(sql).get(...params) as T | undefined);
 	}

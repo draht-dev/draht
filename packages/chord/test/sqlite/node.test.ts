@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SqliteExecutor } from "../../src/sqlite/index.ts";
 import { openNodeSqliteDatabase } from "../../src/sqlite/node.ts";
+import { RUN_CHANGES, runChanges } from "./helpers.ts";
 
 describe("Node SQLite driver", () => {
 	it("configures connection defaults and accepts explicit settings", async () => {
@@ -15,6 +16,19 @@ describe("Node SQLite driver", () => {
 			} finally {
 				await database.close();
 			}
+		}
+	});
+
+	it("reports the rows a statement changed, without index writes", async () => {
+		const database = await openNodeSqliteDatabase(":memory:");
+		try {
+			expect(await runChanges(database)).toEqual(RUN_CHANGES);
+			const inTransaction = await database.transaction((handle) =>
+				handle.runCounted("INSERT INTO changes_probe VALUES (?, ?, ?)", "t", "t/1", 1),
+			);
+			expect(inTransaction).toBe(1);
+		} finally {
+			await database.close();
 		}
 	});
 

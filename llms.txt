@@ -5,7 +5,9 @@
 - Run: `npx @draht/coding-agent`, or `npm install -g @draht/coding-agent` then `draht`
 - Auth: API keys (e.g. ANTHROPIC_API_KEY) or `/login` with Claude Pro/Max, ChatGPT Plus/Pro (Codex), GitHub Copilot, Gemini CLI, Antigravity
 - Default tools: read, write, edit, bash
-- Features: duet mode, Polyphase workflows, session tree, MCP servers, extensions, skills, prompt templates, themes, SDK and RPC mode
+- Features: duet mode, Polyphase workflows, RLM (`draht rlm` for inputs larger than the context window), codemode, specialist subagents, virtual models, session tree, MCP servers, extensions, skills, prompt templates, themes, SDK and RPC mode
+- Opinionated prompts: slash commands such as /new-project, /plan-phase, /execute-phase, /verify-work, /fix, /review, /orchestrate; skills tdd-workflow, ddd-workflow, gsd-workflow
+- Plugins: `npx draht-claude install` (Claude Code), `npx draht-codex install` (Codex)
 - License: MIT
 
 ## Docs
@@ -14,6 +16,8 @@
 - [Coding agent README](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/README.md)
 - [Providers](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/docs/providers.md)
 - [Duet mode](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/docs/duet.md)
+- [RLM](https://github.com/draht-dev/draht/blob/main/packages/rlm/README.md)
+- [Slash commands](https://github.com/draht-dev/draht/tree/main/packages/coding-agent/prompts/commands)
 - [MCP](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/docs/mcp.md)
 - [SDK](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/docs/sdk.md)
 

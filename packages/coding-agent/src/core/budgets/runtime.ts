@@ -10,7 +10,7 @@ import {
 } from "./evaluation.ts";
 import { excludeMatcher, isAlwaysExcluded } from "./exclusions.ts";
 import { type BudgetLimits, DEFAULT_BUDGET_LIMITS } from "./policy.ts";
-import { snapshotWorkspace } from "./snapshot.ts";
+import { snapshotWorkspace, type WorkspaceSnapshot } from "./snapshot.ts";
 import {
 	BUDGET_TASK_MARKER,
 	type BudgetLedger,
@@ -138,7 +138,7 @@ function takeSnapshot(
 	workspace: BudgetWorkspace,
 	state: BudgetState,
 	participant: Pick<BudgetParticipant, "attributes" | "baseline" | "current">,
-): BudgetSnapshot {
+): WorkspaceSnapshot {
 	return snapshotWorkspace({
 		workspace,
 		directory: location.ledger.directory,
@@ -161,8 +161,9 @@ function enroll(location: BudgetLocation, state: BudgetState): BudgetParticipant
 	const { workspace } = location;
 	if (state.worktrees.some(({ root, removed }) => root === workspace.root && !removed)) return undefined;
 	const attributes = headCommit(workspace);
-	const files = takeSnapshot(location, workspace, state, { attributes, baseline: {}, current: {} });
-	const participant = { root: workspace.root, attributes, removed: false, baseline: files, current: files };
+	const { files } = takeSnapshot(location, workspace, state, { attributes, baseline: {}, current: {} });
+	// Projected edits change the current snapshot, so it must not share the baseline's object.
+	const participant = { root: workspace.root, attributes, removed: false, baseline: files, current: { ...files } };
 	state.worktrees.push(participant);
 	return participant;
 }
@@ -191,9 +192,11 @@ function refreshWorktrees(location: BudgetLocation, state: BudgetState, enrolled
 			changed = true;
 			continue;
 		}
-		const current = takeSnapshot(location, workspace, state, participant);
-		if (sameSnapshot(current, participant.current)) continue;
-		participant.current = current;
+		const { files, unmeasured } = takeSnapshot(location, workspace, state, participant);
+		// A file that left the budget leaves the baseline too, so it is not charged as deleted.
+		for (const path of unmeasured) delete participant.baseline[path];
+		if (!unmeasured.length && sameSnapshot(files, participant.current)) continue;
+		participant.current = files;
 		changed = true;
 	}
 	return changed;
@@ -330,17 +333,29 @@ function parseStopFailures(value: unknown): number | undefined {
 		: undefined;
 }
 
-/** Counts a failed final audit for one host session; returns how many in a row have failed since its last prompt. */
+/**
+ * Counts a failed final audit for one host session; returns how many in a row have failed since its last prompt.
+ * A count that cannot be stored reads as unbounded, so completion stops blocking instead of looping.
+ */
 export function recordStopFailure(cwd: string, session: string): number {
-	const location = locateBudget(cwd);
-	if (!location) return 0;
-	const name = stopCacheName(session);
-	const failures = (readBudgetCache(location.ledger.directory, name, parseStopFailures) ?? 0) + 1;
-	writeBudgetCache(location.ledger.directory, name, { failures });
-	return failures;
+	try {
+		const location = locateBudget(cwd);
+		if (!location) return 0;
+		const name = stopCacheName(session);
+		const failures = (readBudgetCache(location.ledger.directory, name, parseStopFailures) ?? 0) + 1;
+		writeBudgetCache(location.ledger.directory, name, { failures });
+		return failures;
+	} catch {
+		return Number.POSITIVE_INFINITY;
+	}
 }
 
+/** Best effort: a budget that cannot be located has no count to clear, and its inspection reports why. */
 export function clearStopFailures(cwd: string, session: string): void {
-	const location = locateBudget(cwd);
-	if (location) removeBudgetCache(location.ledger.directory, stopCacheName(session));
+	try {
+		const location = locateBudget(cwd);
+		if (location) removeBudgetCache(location.ledger.directory, stopCacheName(session));
+	} catch {
+		// The inspection reports the failure.
+	}
 }

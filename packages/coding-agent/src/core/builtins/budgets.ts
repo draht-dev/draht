@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { getPackageDir, isBunBinary } from "../../config.ts";
@@ -134,7 +134,20 @@ function loadRuntime() {
 	};
 }
 
-/** Edits the tool itself would reject, or that run on another filesystem, are left to the tool and the audit after it. */
+/** Reads a regular file; the nonblocking open keeps a named pipe from stalling the session's thread. */
+function readRegularFile(path: string): string | undefined {
+	const descriptor = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+	try {
+		return fstatSync(descriptor).isFile() ? readFileSync(descriptor, "utf8") : undefined;
+	} finally {
+		closeSync(descriptor);
+	}
+}
+
+/**
+ * Edits the tool itself would reject, of files that are not regular files, or that run on another filesystem are
+ * left to the tool and the audit after it.
+ */
 function previewEdit(event: ToolCallEvent, cwd: string): ProposedFiles | undefined {
 	if (isToolCallEventType("write", event)) {
 		return [{ path: resolveToCwd(event.input.path, cwd), content: event.input.content }];
@@ -142,7 +155,9 @@ function previewEdit(event: ToolCallEvent, cwd: string): ProposedFiles | undefin
 	if (!isToolCallEventType("edit", event)) return undefined;
 	try {
 		const path = resolveToCwd(event.input.path, cwd);
-		const { bom, text } = splitBom(readFileSync(path, "utf8"));
+		const original = readRegularFile(path);
+		if (original === undefined) return undefined;
+		const { bom, text } = splitBom(original);
 		const { newContent } = applyEditsToNormalizedContent(normalizeToLF(text), event.input.edits, event.input.path);
 		return [{ path, content: bom + restoreLineEndings(newContent, detectLineEnding(text)) }];
 	} catch {

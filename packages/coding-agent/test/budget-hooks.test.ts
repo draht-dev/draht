@@ -20,9 +20,10 @@ describe.each(["draht-claude", "draht-codex"])("%s budget hooks", (host) => {
 		writeFileSync(join(cwd, ".planning/config.json"), JSON.stringify({ hooks: { stopGate: false } }));
 	});
 	afterEach(() => rmSync(cwd, { recursive: true, force: true }));
-	function run(path: string, args: string[], payload: Record<string, unknown>) {
+	function run(path: string, args: string[], payload: Record<string, unknown>, env = process.env) {
 		const result = spawnSync(process.execPath, [path, ...args], {
 			cwd,
+			env,
 			input: JSON.stringify({ cwd, ...payload }),
 			encoding: "utf8",
 			timeout: 10000,
@@ -231,6 +232,24 @@ describe.each(["draht-claude", "draht-codex"])("%s budget hooks", (host) => {
 		expect(retry.stderr).toContain("maxFileTokens");
 	});
 
+	it("never blocks a prompt and blocks completion only once when Git is unavailable", () => {
+		hook("SessionStart");
+		const empty = mkdtempSync(join(tmpdir(), "budget-no-git-"));
+		const env = { ...process.env, PATH: empty };
+		const gate = resolve("..", host, "scripts/stop-quality-gate.cjs");
+		try {
+			const prompt = run(script, ["UserPromptSubmit"], { prompt: "continue" }, env);
+			expect(prompt.status).toBe(0);
+			expect(prompt.stdout).toContain("Budget inspection failed");
+			expect(run(gate, [], {}, env).status).toBe(2);
+			const retry = run(gate, [], { stop_hook_active: true }, env);
+			expect(retry.status).toBe(1);
+			expect(retry.stderr).toContain("Budget inspection failed");
+		} finally {
+			rmSync(empty, { recursive: true, force: true });
+		}
+	});
+
 	it("audits changes made by the final project check before accepting completion", () => {
 		writeFileSync(
 			join(cwd, ".draht/checks.json"),
@@ -328,5 +347,13 @@ describe.each([
 		expect(command("config").status).toBe(2);
 		expect(command("config").stderr).toContain("Git working tree");
 		expect(readFileSync(configPath, "utf8")).toBe('{"maxDocFileTokens":0}');
+	});
+	it.skipIf(process.platform === "win32")("rejects a named pipe as configuration without waiting for a writer", () => {
+		mkdirSync(join(cwd, ".draht"));
+		execFileSync("mkfifo", [join(cwd, ".draht/budgets.json")]);
+		const result = spawnSync(process.execPath, [runtime, "config"], { cwd, encoding: "utf8", timeout: 10_000 });
+		expect(result.error).toBeUndefined();
+		expect(result.status).toBe(2);
+		expect(result.stderr).toContain("must be a regular file");
 	});
 });

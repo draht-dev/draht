@@ -76,7 +76,8 @@ function hasCode(error: unknown, code: string): boolean {
 function readRegularFile(path: string, maxBytes = Number.POSITIVE_INFINITY): string {
 	let descriptor: number;
 	try {
-		descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+		// A nonblocking open returns at once for a named pipe, which the type check below then refuses.
+		descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
 	} catch (error) {
 		if (hasCode(error, "ELOOP")) throw new Error(`Budget file must not be a symlink: ${path}`);
 		throw error;

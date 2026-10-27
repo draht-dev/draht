@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
@@ -240,6 +240,51 @@ describe("native task budgets", () => {
 		expect(getToolResult(harness, "edit").isError).toBe(true);
 		expect(readFileSync(path, "utf8")).toBe(updated);
 	});
+
+	it.skipIf(process.platform === "win32")(
+		"leaves an edit of a named pipe to the edit tool without stalling the session",
+		async () => {
+			const harness = await setup();
+			const pipe = join(harness.tempDir, "pipe.ts");
+			execFileSync("mkfifo", [pipe]);
+			// The writer appears after four seconds, then feeds whichever reader opens the pipe next until it is killed.
+			const script = `
+				const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+				sleep(4000);
+				for (;;) {
+					try {
+						require("node:fs").writeFileSync(process.argv[1], "export const value = 1;\\n");
+					} catch (error) {
+						if (error.code !== "EPIPE") throw error;
+					}
+					sleep(200);
+				}`;
+			const writer = spawn(process.execPath, ["-e", script, pipe], { stdio: "ignore" });
+			harness.setResponses([
+				fauxAssistantMessage(
+					[fauxToolCall("edit", { path: "pipe.ts", edits: [{ oldText: "missing", newText: "found" }] })],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage("done"),
+			]);
+			let last = Date.now();
+			let longestStall = 0;
+			const heartbeat = setInterval(() => {
+				longestStall = Math.max(longestStall, Date.now() - last);
+				last = Date.now();
+			}, 20);
+			try {
+				await harness.session.prompt("edit the pipe");
+			} finally {
+				clearInterval(heartbeat);
+				writer.kill();
+			}
+			expect(getMessageText(getToolResult(harness, "edit"))).toContain("Could not find the exact text");
+			// Reading the pipe on the session's thread would stall it until the writer appeared.
+			expect(longestStall).toBeLessThan(2000);
+		},
+		20_000,
+	);
 
 	it("shares a code allowance across prompts and resets only on the idle user command", async () => {
 		const harness = await setup({ maxFileTokens: 1000, maxCodeTokens: 50, maxDocTokens: 50 });

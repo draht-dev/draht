@@ -2,7 +2,7 @@ import { isUtf8 } from "node:buffer";
 import { lstatSync, readFileSync, type Stats } from "node:fs";
 import { join } from "node:path";
 import { type BudgetSnapshot, readBudgetCache, storeBudgetObject, writeBudgetCache } from "./state.ts";
-import { type BudgetWorkspace, isSourcePath, listWorkspacePaths, symlinkCheck } from "./workspace.ts";
+import { type BudgetWorkspace, isMissingPath, isSourcePath, listWorkspacePaths, symlinkCheck } from "./workspace.ts";
 
 /** Size, modification time, change time, inode, and the stored content hash, or null for binary content. */
 type FileEntry = [number, number, number, number, string | null];
@@ -11,6 +11,12 @@ interface StatCache {
 	startedAt: number;
 	files: Record<string, FileEntry>;
 	excluded: string[];
+}
+
+export interface WorkspaceSnapshot {
+	files: BudgetSnapshot;
+	/** Earlier paths that still exist but left the budget, because Git now ignores them or a nested repository holds them. */
+	unmeasured: string[];
 }
 
 /**
@@ -49,7 +55,7 @@ function regularFile(path: string): Stats | undefined {
 		const stat = lstatSync(path);
 		return stat.isFile() ? stat : undefined;
 	} catch (error) {
-		if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+		if (isMissingPath(error)) return undefined;
 		throw error;
 	}
 }
@@ -64,11 +70,12 @@ export function snapshotWorkspace(options: {
 	cacheName: string;
 	excluded: (paths: string[]) => ReadonlySet<string>;
 	additionalPaths?: string[];
-}): BudgetSnapshot {
+}): WorkspaceSnapshot {
 	const { workspace, directory, cacheName } = options;
 	const startedAt = Date.now();
 	const previous = readBudgetCache(directory, cacheName, parseStatCache);
-	const paths = listWorkspacePaths(workspace, options.additionalPaths ?? []);
+	const listed = listWorkspacePaths(workspace);
+	const paths = [...new Set([...listed, ...(options.additionalPaths ?? [])])];
 	const known = new Set([...(previous?.excluded ?? []), ...Object.keys(previous?.files ?? {})]);
 	const excluded = new Set([
 		...(previous?.excluded ?? []),
@@ -77,12 +84,18 @@ export function snapshotWorkspace(options: {
 	const linked = symlinkCheck(workspace.root);
 	const files: Array<[string, FileEntry]> = [];
 	const snapshot: Array<[string, string]> = [];
+	const unmeasured: string[] = [];
 	let reread = false;
 	for (const path of paths) {
 		if (excluded.has(path) || linked(path)) continue;
 		const absolutePath = join(workspace.root, path);
 		const stat = regularFile(absolutePath);
 		if (!stat) continue;
+		// An earlier path Git no longer lists still exists, so it was ignored or taken into a nested repository.
+		if (!listed.has(path)) {
+			unmeasured.push(path);
+			continue;
+		}
 		const cached = previous && Object.hasOwn(previous.files, path) ? previous.files[path] : undefined;
 		const settled = previous && Math.max(stat.mtimeMs, stat.ctimeMs) < previous.startedAt - TIMESTAMP_GRANULARITY_MS;
 		let hash: string | null;
@@ -114,5 +127,5 @@ export function snapshotWorkspace(options: {
 		JSON.stringify(next.files) === JSON.stringify(previous.files) &&
 		JSON.stringify(next.excluded) === JSON.stringify(previous.excluded);
 	if (reread || !same) writeBudgetCache(directory, cacheName, next);
-	return Object.fromEntries(snapshot);
+	return { files: Object.fromEntries(snapshot), unmeasured };
 }

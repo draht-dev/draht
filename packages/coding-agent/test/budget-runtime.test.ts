@@ -195,6 +195,25 @@ describe("shared task token budgets", () => {
 		expect(auditBudget({ cwd: repo }).usage).toEqual({ codeTokens: 0, docTokens: 0 });
 	});
 
+	it.each(["task", "worktree"])(
+		"checks the first proposed edit of a new %s against its starting snapshot",
+		(scope) => {
+			configure({ maxFileTokens: 5 });
+			let cwd = repo;
+			if (scope === "worktree") {
+				git(repo, "add", ".draht/budgets.json");
+				git(repo, "commit", "-m", "initial");
+				beginTask({ cwd: repo });
+				cwd = join(root, "child");
+				git(repo, "worktree", "add", "-b", "child", cwd);
+			}
+			const content = "export const value = 123456789;\n";
+			const report = checkBudget({ cwd, proposed: [{ path: "large.ts", content }] });
+			expect(report.status).toBe("failed");
+			expect(report.violations).toEqual([`large.ts: ${countTokens(content)} code tokens exceed file ceiling 5`]);
+		},
+	);
+
 	it("keeps the baseline through commits and resumes, resetting only on an explicit new task", () => {
 		writeFileSync(join(repo, "code.ts"), "before\n");
 		git(repo, "add", "code.ts");
@@ -346,6 +365,22 @@ describe("shared task token budgets", () => {
 		}
 	});
 
+	it("stops measuring files that Git starts ignoring or a nested repository takes over, without charging removals", () => {
+		configure({ maxFileTokens: 10, maxOversizedGrowthTokens: 0 });
+		const large = "export const value = 123456789;\n".repeat(3);
+		mkdirSync(join(repo, "vendor"));
+		for (const path of ["build.js", "vendor/lib.js"]) writeFileSync(join(repo, path), large);
+		beginTask({ cwd: repo });
+		for (const path of ["build.js", "vendor/lib.js"]) writeFileSync(join(repo, path), `${large}${large}`);
+		expect(auditBudget({ cwd: repo }).violations).toHaveLength(2);
+		writeFileSync(join(repo, ".gitignore"), "build.js\n");
+		git(join(repo, "vendor"), "init");
+		expect(auditBudget({ cwd: repo })).toMatchObject({
+			status: "passed",
+			usage: { codeTokens: countTokens("build.js\n") },
+		});
+	});
+
 	it("measures edits through a symlinked session directory as the repository's own files", () => {
 		configure({ maxFileTokens: 5 });
 		const link = join(root, "link");
@@ -470,6 +505,24 @@ describe("shared task token budgets", () => {
 		expect(existsSync(lock)).toBe(false);
 	}, 15_000);
 
+	it.each([
+		["without an owner", undefined],
+		["with a partly written owner", '{"pid":'],
+	])(
+		"recovers an abandoned lock %s",
+		(_case, owner) => {
+			const initial = beginTask({ cwd: repo });
+			const lock = join(repo, ".git", "draht-budgets.lock");
+			mkdirSync(lock);
+			if (owner !== undefined) writeFileSync(join(lock, "owner"), owner);
+			const stale = new Date(Date.now() - 60_000);
+			utimesSync(lock, stale, stale);
+			expect(auditBudget({ cwd: repo })).toMatchObject({ status: "passed", taskId: initial.taskId });
+			expect(existsSync(lock)).toBe(false);
+		},
+		20_000,
+	);
+
 	it("rereads a same-size file changed within the timestamp granularity of the last snapshot", () => {
 		configure({ maxCodeTokens: 1 });
 		writeFileSync(join(repo, "code.ts"), "aaaa\n");
@@ -492,6 +545,19 @@ describe("shared task token budgets", () => {
 		expect(auditBudget({ cwd: repo })).toMatchObject({
 			status: "passed",
 			usage: { codeTokens: countTokens("x;\n") },
+		});
+	});
+
+	it("counts files under a directory replaced by a file as deleted instead of failing the audit", () => {
+		const code = "export const value = 1;\n";
+		mkdirSync(join(repo, "lib"));
+		writeFileSync(join(repo, "lib", "code.ts"), code);
+		beginTask({ cwd: repo });
+		rmSync(join(repo, "lib"), { recursive: true });
+		writeFileSync(join(repo, "lib"), "replacement\n");
+		expect(auditBudget({ cwd: repo })).toMatchObject({
+			status: "passed",
+			usage: { codeTokens: countTokens(code) + countTokens("replacement\n") },
 		});
 	});
 

@@ -59,7 +59,8 @@ Never measured:
   repositories
 
 Writes to unmeasured files pass unchecked, whether they come from edit tools or
-the shell.
+the shell. A file that Git starts ignoring during a task, or that a nested
+repository takes over, stops counting along with its earlier changes.
 
 A change costs the tokens in its added lines plus the tokens in its deleted
 lines, measured against the task's starting snapshot. Replacing a 100-token block

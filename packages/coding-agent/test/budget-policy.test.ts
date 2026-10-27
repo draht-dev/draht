@@ -524,4 +524,45 @@ describe("budget rename detection", () => {
 		expect(pairs.size).toBe(0);
 		expect(tokens(body).fileTokens).toBeGreaterThan(0);
 	});
+
+	it("compares an edited move with the deleted file sharing most of its path first", () => {
+		const deleted: Array<[string, string]> = [];
+		const added: Array<[string, string]> = [];
+		for (let index = 0; index < 12; index++) {
+			const content = `${body}export const feature${index} = ${index};\n`;
+			deleted.push([`src/feature${index}/index.ts`, hash(content)]);
+			added.push([`lib/feature${index}/index.ts`, hash(`${content}export const moved = true;\n`)]);
+		}
+		let comparisons = 0;
+		const pairs = pairRenames(deleted, added, (before, after) => {
+			comparisons++;
+			return measure(before, after);
+		});
+		expect([...pairs]).toEqual(added.map(([path], index) => [path, deleted[index][0]]));
+		expect(comparisons).toBe(12);
+	});
+
+	it("spends its comparison limit only on new measurements, so cached ones let a large batch pair fully", () => {
+		const deleted: Array<[string, string]> = [];
+		const added: Array<[string, string]> = [];
+		for (let index = 0; index < 9; index++) {
+			const content = Array.from(
+				{ length: 30 },
+				(_, line) => `export const value${index}x${line} = ${line};\n`,
+			).join("");
+			deleted.push([`old/source${index}.ts`, hash(content)]);
+			added.push([`new/target${index}.ts`, hash(`${content}export const extra = ${index};\n`)]);
+		}
+		const cache = new Map<string, MeasuredTokens>();
+		const cached = (before: string, after: string) => cache.has(`${before}:${after}`);
+		const caching = (before: string, after: string) => {
+			const value = cache.get(`${before}:${after}`) ?? measure(before, after);
+			cache.set(`${before}:${after}`, value);
+			return value;
+		};
+		expect(pairRenames(deleted, added, caching, cached).size).toBeLessThan(9);
+		expect([...pairRenames(deleted, added, caching, cached)]).toEqual(
+			added.map(([path], index) => [path, deleted[index][0]]),
+		);
+	});
 });

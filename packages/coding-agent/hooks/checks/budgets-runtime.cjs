@@ -2068,12 +2068,47 @@ function similarity(measured) {
   const total = measured.baselineTokens + measured.fileTokens;
   return total === 0 ? 1 : 1 - (measured.addedTokens + measured.deletedTokens) / total;
 }
-function pairRenames(deleted, added, measure) {
+function fileName(path) {
+  return path.slice(path.lastIndexOf("/") + 1);
+}
+function append(groups, key, path) {
+  const paths = groups.get(key);
+  if (paths) paths.push(path);
+  else groups.set(key, [path]);
+}
+function sharedSuffix(left, right) {
+  const leftParts = left.split("/");
+  const rightParts = right.split("/");
+  let shared = 0;
+  while (shared < Math.min(leftParts.length, rightParts.length) && leftParts[leftParts.length - 1 - shared] === rightParts[rightParts.length - 1 - shared]) {
+    shared++;
+  }
+  return shared;
+}
+function* candidates(path, sources, named) {
+  const name = fileName(path);
+  const likely = [];
+  for (const source of named.get(name) ?? []) {
+    const sourceHash = sources.get(source);
+    if (sourceHash !== void 0) likely.push({ source, sourceHash, rank: sharedSuffix(path, source) });
+  }
+  yield* likely.sort((left, right) => right.rank - left.rank);
+  for (const [source, sourceHash] of sources) {
+    if (fileName(source) !== name) yield { source, sourceHash, rank: 0 };
+  }
+}
+function pairRenames(deleted, added, measure, measured = () => false) {
   const pairs = /* @__PURE__ */ new Map();
   const sources = new Map(deleted);
   if (sources.size === 0) return pairs;
+  const identical = /* @__PURE__ */ new Map();
+  const named = /* @__PURE__ */ new Map();
+  for (const [path, hash] of deleted) {
+    append(identical, hash, path);
+    append(named, fileName(path), path);
+  }
   for (const [path, hash] of added) {
-    const source = [...sources].find(([, sourceHash]) => sourceHash === hash)?.[0];
+    const source = identical.get(hash)?.find((candidate) => sources.has(candidate));
     if (source === void 0) continue;
     pairs.set(path, source);
     sources.delete(source);
@@ -2082,18 +2117,22 @@ function pairRenames(deleted, added, measure) {
   for (const [path, hash] of added) {
     if (pairs.has(path)) continue;
     let best;
-    let bestSimilarity = MIN_RENAME_SIMILARITY;
-    for (const [source, sourceHash] of sources) {
-      if (comparisons-- <= 0) return pairs;
-      const score = similarity(measure(sourceHash, hash));
-      if (score >= bestSimilarity) {
-        best = source;
-        bestSimilarity = score;
+    let exhausted = false;
+    for (const candidate of candidates(path, sources, named)) {
+      if (best && candidate.rank < best.rank) break;
+      if (!measured(candidate.sourceHash, hash)) {
+        exhausted = comparisons === 0;
+        if (exhausted) break;
+        comparisons--;
       }
+      const score = similarity(measure(candidate.sourceHash, hash));
+      if (score >= (best?.score ?? MIN_RENAME_SIMILARITY)) best = { ...candidate, score };
     }
-    if (best === void 0) continue;
-    pairs.set(path, best);
-    sources.delete(best);
+    if (best) {
+      pairs.set(path, best.source);
+      sources.delete(best.source);
+    }
+    if (exhausted) break;
   }
   return pairs;
 }
@@ -2185,12 +2224,15 @@ var REPOSITORY_GIT_ENV = new Set(
     " "
   )
 );
+function isMissingPath(error) {
+  return error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR");
+}
 function budgetPathExists(path) {
   try {
     (0, import_node_fs2.lstatSync)(path);
     return true;
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+    if (isMissingPath(error)) return false;
     throw error;
   }
 }
@@ -2274,13 +2316,10 @@ function generatedPaths(workspace, commit, paths) {
 function isBudgetRelativePath(path) {
   return path.length > 0 && !(0, import_node_path2.isAbsolute)(path) && path.split(/[\\/]/).every((part) => part !== ".." && part !== ".git");
 }
-function listWorkspacePaths(workspace, additionalPaths) {
-  const paths = [
-    .../* @__PURE__ */ new Set([
-      ...git(workspace.root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean),
-      ...additionalPaths
-    ])
-  ];
+function listWorkspacePaths(workspace) {
+  const paths = new Set(
+    git(workspace.root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean)
+  );
   for (const path of paths) {
     if (!isBudgetRelativePath(path)) throw new Error(`Invalid budget snapshot path: ${path}`);
   }
@@ -2299,7 +2338,7 @@ function symlinkCheck(root) {
     try {
       return (0, import_node_fs2.lstatSync)((0, import_node_path2.join)(root, path)).isSymbolicLink();
     } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+      if (isMissingPath(error)) return false;
       throw error;
     }
   };
@@ -2334,7 +2373,7 @@ var import_node_crypto2 = require("node:crypto");
 var import_node_fs3 = require("node:fs");
 var import_node_path3 = require("node:path");
 var LOCK_WAIT_MS = 15e3;
-var STALE_RECOVERY_MS = 3e4;
+var ABANDONED_MS = 3e4;
 function hasCode(error, code) {
   return error instanceof Error && "code" in error && error.code === code;
 }
@@ -2373,13 +2412,11 @@ function parseOwner(owner) {
   }
 }
 function ownerIsDead(owner) {
-  const parsed = parseOwner(owner);
-  if (!parsed) return false;
   const current = hostIdentity();
-  if (parsed.boot && current.boot && parsed.boot !== current.boot) return true;
-  if (parsed.namespace !== current.namespace) return false;
+  if (owner.boot && current.boot && owner.boot !== current.boot) return true;
+  if (owner.namespace !== current.namespace) return false;
   try {
-    process.kill(parsed.pid, 0);
+    process.kill(owner.pid, 0);
     return false;
   } catch (error) {
     if (hasCode(error, "ESRCH")) return true;
@@ -2387,12 +2424,12 @@ function ownerIsDead(owner) {
     throw error;
   }
 }
-function removeStaleRecovery(recovery) {
+function abandoned(path) {
   try {
-    if (Date.now() - (0, import_node_fs3.statSync)(recovery).mtimeMs > STALE_RECOVERY_MS)
-      (0, import_node_fs3.rmSync)(recovery, { recursive: true, force: true });
+    return Date.now() - (0, import_node_fs3.statSync)(path).mtimeMs > ABANDONED_MS;
   } catch (error) {
-    if (!hasCode(error, "ENOENT")) throw error;
+    if (hasCode(error, "ENOENT")) return false;
+    throw error;
   }
 }
 function recoverDeadLock(lock) {
@@ -2401,12 +2438,14 @@ function recoverDeadLock(lock) {
     (0, import_node_fs3.mkdirSync)(recovery);
   } catch (error) {
     if (!hasCode(error, "EEXIST")) throw error;
-    removeStaleRecovery(recovery);
+    if (abandoned(recovery)) (0, import_node_fs3.rmSync)(recovery, { recursive: true, force: true });
     return;
   }
   try {
     const owner = readOwner(lock);
-    if (!owner || !ownerIsDead(owner) || readOwner(lock) !== owner) return;
+    const recorded = owner === void 0 ? void 0 : parseOwner(owner);
+    const dead = recorded ? ownerIsDead(recorded) : abandoned(lock);
+    if (!dead || readOwner(lock) !== owner) return;
     const removed = `${lock}.removed-${(0, import_node_crypto2.randomUUID)()}`;
     (0, import_node_fs3.renameSync)(lock, removed);
     (0, import_node_fs3.rmSync)(removed, { recursive: true });
@@ -2464,7 +2503,7 @@ function hasCode2(error, code) {
 function readRegularFile(path, maxBytes = Number.POSITIVE_INFINITY) {
   let descriptor;
   try {
-    descriptor = (0, import_node_fs4.openSync)(path, import_node_fs4.constants.O_RDONLY | (import_node_fs4.constants.O_NOFOLLOW ?? 0));
+    descriptor = (0, import_node_fs4.openSync)(path, import_node_fs4.constants.O_RDONLY | (import_node_fs4.constants.O_NOFOLLOW ?? 0) | (import_node_fs4.constants.O_NONBLOCK ?? 0));
   } catch (error) {
     if (hasCode2(error, "ELOOP")) throw new Error(`Budget file must not be a symlink: ${path}`);
     throw error;
@@ -2607,8 +2646,10 @@ function evaluateBudget(directory, state, options = {}) {
   const measures = /* @__PURE__ */ new Map();
   let measured = false;
   const content = (hash) => hash && projected.has(hash) ? projected.get(hash) ?? null : readBudgetContent(directory, hash);
+  const measureKey = (beforeHash, afterHash) => `${beforeHash ?? ""}:${afterHash ?? ""}`;
+  const isMeasured = (beforeHash, afterHash) => measures.has(measureKey(beforeHash, afterHash)) || known.has(measureKey(beforeHash, afterHash));
   const measure = (beforeHash, afterHash) => {
-    const key = `${beforeHash ?? ""}:${afterHash ?? ""}`;
+    const key = measureKey(beforeHash, afterHash);
     let value = measures.get(key) ?? known.get(key);
     if (!value) {
       value = measureTokens(content(beforeHash), content(afterHash));
@@ -2632,7 +2673,7 @@ function evaluateBudget(directory, state, options = {}) {
       if (before && !after) deleted.push([path, before]);
       if (after && !before) added.push([path, after]);
     }
-    const renames = pairRenames(deleted, added, measure);
+    const renames = pairRenames(deleted, added, measure, isMeasured);
     const moved = new Set(renames.values());
     for (const path of paths) {
       if (moved.has(path)) continue;
@@ -2722,7 +2763,7 @@ function regularFile(path) {
     const stat = (0, import_node_fs5.lstatSync)(path);
     return stat.isFile() ? stat : void 0;
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return void 0;
+    if (isMissingPath(error)) return void 0;
     throw error;
   }
 }
@@ -2730,7 +2771,8 @@ function snapshotWorkspace(options) {
   const { workspace, directory, cacheName } = options;
   const startedAt = Date.now();
   const previous = readBudgetCache(directory, cacheName, parseStatCache);
-  const paths = listWorkspacePaths(workspace, options.additionalPaths ?? []);
+  const listed = listWorkspacePaths(workspace);
+  const paths = [.../* @__PURE__ */ new Set([...listed, ...options.additionalPaths ?? []])];
   const known = /* @__PURE__ */ new Set([...previous?.excluded ?? [], ...Object.keys(previous?.files ?? {})]);
   const excluded = /* @__PURE__ */ new Set([
     ...previous?.excluded ?? [],
@@ -2739,12 +2781,17 @@ function snapshotWorkspace(options) {
   const linked = symlinkCheck(workspace.root);
   const files = [];
   const snapshot = [];
+  const unmeasured = [];
   let reread = false;
   for (const path of paths) {
     if (excluded.has(path) || linked(path)) continue;
     const absolutePath = (0, import_node_path5.join)(workspace.root, path);
     const stat = regularFile(absolutePath);
     if (!stat) continue;
+    if (!listed.has(path)) {
+      unmeasured.push(path);
+      continue;
+    }
     const cached = previous && Object.hasOwn(previous.files, path) ? previous.files[path] : void 0;
     const settled = previous && Math.max(stat.mtimeMs, stat.ctimeMs) < previous.startedAt - TIMESTAMP_GRANULARITY_MS;
     let hash;
@@ -2765,7 +2812,7 @@ function snapshotWorkspace(options) {
   };
   const same = previous && JSON.stringify(next.files) === JSON.stringify(previous.files) && JSON.stringify(next.excluded) === JSON.stringify(previous.excluded);
   if (reread || !same) writeBudgetCache(directory, cacheName, next);
-  return Object.fromEntries(snapshot);
+  return { files: Object.fromEntries(snapshot), unmeasured };
 }
 
 // packages/coding-agent/src/core/budgets/runtime.ts
@@ -2854,8 +2901,8 @@ function enroll(location, state) {
   const { workspace } = location;
   if (state.worktrees.some(({ root, removed }) => root === workspace.root && !removed)) return void 0;
   const attributes = headCommit(workspace);
-  const files = takeSnapshot(location, workspace, state, { attributes, baseline: {}, current: {} });
-  const participant = { root: workspace.root, attributes, removed: false, baseline: files, current: files };
+  const { files } = takeSnapshot(location, workspace, state, { attributes, baseline: {}, current: {} });
+  const participant = { root: workspace.root, attributes, removed: false, baseline: files, current: { ...files } };
   state.worktrees.push(participant);
   return participant;
 }
@@ -2873,9 +2920,10 @@ function refreshWorktrees(location, state, enrolled) {
       changed = true;
       continue;
     }
-    const current = takeSnapshot(location, workspace, state, participant);
-    if (sameSnapshot(current, participant.current)) continue;
-    participant.current = current;
+    const { files, unmeasured } = takeSnapshot(location, workspace, state, participant);
+    for (const path of unmeasured) delete participant.baseline[path];
+    if (!unmeasured.length && sameSnapshot(files, participant.current)) continue;
+    participant.current = files;
     changed = true;
   }
   return changed;
@@ -2995,16 +3043,23 @@ function parseStopFailures(value) {
   return typeof value === "object" && value !== null && "failures" in value && Number.isSafeInteger(value.failures) ? Number(value.failures) : void 0;
 }
 function recordStopFailure(cwd, session) {
-  const location = locateBudget(cwd);
-  if (!location) return 0;
-  const name = stopCacheName(session);
-  const failures = (readBudgetCache(location.ledger.directory, name, parseStopFailures) ?? 0) + 1;
-  writeBudgetCache(location.ledger.directory, name, { failures });
-  return failures;
+  try {
+    const location = locateBudget(cwd);
+    if (!location) return 0;
+    const name = stopCacheName(session);
+    const failures = (readBudgetCache(location.ledger.directory, name, parseStopFailures) ?? 0) + 1;
+    writeBudgetCache(location.ledger.directory, name, { failures });
+    return failures;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
 }
 function clearStopFailures(cwd, session) {
-  const location = locateBudget(cwd);
-  if (location) removeBudgetCache(location.ledger.directory, stopCacheName(session));
+  try {
+    const location = locateBudget(cwd);
+    if (location) removeBudgetCache(location.ledger.directory, stopCacheName(session));
+  } catch {
+  }
 }
 
 // packages/coding-agent/src/core/builtins/budget-guidance.ts

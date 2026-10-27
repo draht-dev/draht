@@ -3,8 +3,11 @@ import { mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, wr
 import { join } from "node:path";
 
 const LOCK_WAIT_MS = 15_000;
-/** Recovery takes moments, so a recovery marker this old was left by a process that died while recovering. */
-const STALE_RECOVERY_MS = 30_000;
+/**
+ * Recording a lock's owner and recovering a lock take moments, so a lock without a complete owner record, or a
+ * recovery marker, this old was abandoned by a process that died.
+ */
+const ABANDONED_MS = 30_000;
 
 interface LockOwner {
 	pid: number;
@@ -70,14 +73,12 @@ function parseOwner(owner: string): LockOwner | undefined {
 }
 
 /** An owner counts as dead only when this process can tell: the machine rebooted, or its PID left our namespace. */
-function ownerIsDead(owner: string): boolean {
-	const parsed = parseOwner(owner);
-	if (!parsed) return false;
+function ownerIsDead(owner: LockOwner): boolean {
 	const current = hostIdentity();
-	if (parsed.boot && current.boot && parsed.boot !== current.boot) return true;
-	if (parsed.namespace !== current.namespace) return false;
+	if (owner.boot && current.boot && owner.boot !== current.boot) return true;
+	if (owner.namespace !== current.namespace) return false;
 	try {
-		process.kill(parsed.pid, 0);
+		process.kill(owner.pid, 0);
 		return false;
 	} catch (error) {
 		if (hasCode(error, "ESRCH")) return true;
@@ -86,12 +87,12 @@ function ownerIsDead(owner: string): boolean {
 	}
 }
 
-function removeStaleRecovery(recovery: string): void {
+function abandoned(path: string): boolean {
 	try {
-		if (Date.now() - statSync(recovery).mtimeMs > STALE_RECOVERY_MS)
-			rmSync(recovery, { recursive: true, force: true });
+		return Date.now() - statSync(path).mtimeMs > ABANDONED_MS;
 	} catch (error) {
-		if (!hasCode(error, "ENOENT")) throw error;
+		if (hasCode(error, "ENOENT")) return false;
+		throw error;
 	}
 }
 
@@ -101,12 +102,15 @@ function recoverDeadLock(lock: string): void {
 		mkdirSync(recovery);
 	} catch (error) {
 		if (!hasCode(error, "EEXIST")) throw error;
-		removeStaleRecovery(recovery);
+		if (abandoned(recovery)) rmSync(recovery, { recursive: true, force: true });
 		return;
 	}
 	try {
 		const owner = readOwner(lock);
-		if (!owner || !ownerIsDead(owner) || readOwner(lock) !== owner) return;
+		const recorded = owner === undefined ? undefined : parseOwner(owner);
+		// A process that died before recording its owner in full leaves only the lock's age to go by.
+		const dead = recorded ? ownerIsDead(recorded) : abandoned(lock);
+		if (!dead || readOwner(lock) !== owner) return;
 		const removed = `${lock}.removed-${randomUUID()}`;
 		renameSync(lock, removed);
 		rmSync(removed, { recursive: true });

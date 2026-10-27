@@ -24,12 +24,17 @@ export interface ProposedBudgetFile {
 	content: string | null;
 }
 
+/** A path is absent when it is missing, or a directory on the way to it is missing or no longer a directory. */
+export function isMissingPath(error: unknown): boolean {
+	return error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR");
+}
+
 export function budgetPathExists(path: string): boolean {
 	try {
 		lstatSync(path);
 		return true;
 	} catch (error) {
-		if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+		if (isMissingPath(error)) return false;
 		throw error;
 	}
 }
@@ -133,16 +138,11 @@ export function isBudgetRelativePath(path: string): boolean {
 	return path.length > 0 && !isAbsolute(path) && path.split(/[\\/]/).every((part) => part !== ".." && part !== ".git");
 }
 
-/** Tracked and untracked, non-ignored paths, plus paths an earlier snapshot saw. */
-export function listWorkspacePaths(workspace: BudgetWorkspace, additionalPaths: readonly string[]): string[] {
-	const paths = [
-		...new Set([
-			...git(workspace.root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"])
-				.split("\0")
-				.filter(Boolean),
-			...additionalPaths,
-		]),
-	];
+/** Tracked and untracked, non-ignored paths outside nested repositories. */
+export function listWorkspacePaths(workspace: BudgetWorkspace): Set<string> {
+	const paths = new Set(
+		git(workspace.root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean),
+	);
 	for (const path of paths) {
 		if (!isBudgetRelativePath(path)) throw new Error(`Invalid budget snapshot path: ${path}`);
 	}
@@ -163,7 +163,7 @@ export function symlinkCheck(root: string): (path: string) => boolean {
 		try {
 			return lstatSync(join(root, path)).isSymbolicLink();
 		} catch (error) {
-			if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+			if (isMissingPath(error)) return false;
 			throw error;
 		}
 	};

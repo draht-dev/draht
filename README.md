@@ -151,7 +151,9 @@ The table lists supported public packages, not every workspace. In particular, `
 
 ## How draht differs from pi
 
-draht is built on [pi](https://github.com/earendil-works/pi-mono), the coding agent by Mario Zechner, and is periodically synced with it (see [.upstream-sync](.upstream-sync)). pi is MIT licensed; its copyright notice is kept in this repo's [LICENSE](LICENSE). The minimal core and the extension model come from pi. The `@draht/router` and `@draht/chord` packages are also forks of pi code.
+draht is built on [pi](https://github.com/earendil-works/pi-mono), the coding agent by Mario Zechner, and is periodically synced with it (see [.upstream-sync](.upstream-sync)). pi is MIT licensed; its copyright notice is kept in this repo's [LICENSE](LICENSE). The minimal core and the extension model come from pi.
+
+The `@draht/router` and `@draht/chord` packages are also forks of pi code.
 
 Differences documented in this repo:
 

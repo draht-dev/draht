@@ -649,6 +649,9 @@ function supportsAnthropicMidConvoSystemMessages(modelId: string): boolean {
 
 function isAnthropicAdaptiveThinkingModel(modelId: string): boolean {
 	return (
+		// OpenRouter's `~anthropic/claude-*-latest` aliases follow the newest model of each family,
+		// all of which use adaptive thinking.
+		/^~anthropic\/claude-[a-z]+-latest$/.test(modelId) ||
 		modelId.includes("opus-4-6") ||
 		modelId.includes("opus-4.6") ||
 		modelId.includes("opus-4-7") ||

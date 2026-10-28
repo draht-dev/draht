@@ -158,4 +158,19 @@ describe("SelectList", () => {
 			}
 		});
 	});
+
+	it("moves by one visible page with selection page keys (badlogic/pi-mono#7629)", () => {
+		const items = Array.from({ length: 12 }, (_, index) => ({ value: `item-${index}`, label: `Item ${index}` }));
+		const list = new SelectList(items, 5, testTheme);
+		const selections: string[] = [];
+		list.onSelectionChange = (item) => selections.push(item.value);
+
+		for (const key of ["\x1b[6~", "\x1b[6~", "\x1b[6~", "\x1b[6~", "\x1b[5~"]) list.handleInput(key);
+
+		assert.deepStrictEqual(selections, ["item-5", "item-10", "item-11", "item-6"]);
+
+		list.setFilter("no match");
+		list.handleInput("\x1b[6~");
+		assert.deepStrictEqual(selections, ["item-5", "item-10", "item-11", "item-6"]);
+	});
 });

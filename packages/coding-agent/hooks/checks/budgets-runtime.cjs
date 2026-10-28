@@ -37,7 +37,7 @@ var import_node_crypto4 = require("node:crypto");
 var import_node_fs6 = require("node:fs");
 var import_node_path6 = require("node:path");
 
-// packages/coding-agent/node_modules/diff/libesm/diff/base.js
+// node_modules/diff/libesm/diff/base.js
 var Diff = class {
   diff(oldStr, newStr, options = {}) {
     let callback;
@@ -239,7 +239,7 @@ var Diff = class {
   }
 };
 
-// packages/coding-agent/node_modules/diff/libesm/diff/line.js
+// node_modules/diff/libesm/diff/line.js
 var LineDiff = class extends Diff {
   constructor() {
     super(...arguments);

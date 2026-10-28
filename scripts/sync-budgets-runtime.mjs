@@ -122,8 +122,11 @@ export async function syncBudgetRuntime({ check = false } = {}) {
 		if (!location) throw new Error(`Missing bundled dependency license: ${name}`);
 		return `${name}\n${readFileSync(location, "utf8")}`;
 	}).join("\n\n") + "\n\n" + readFileSync(join(packageDirectory("gpt-tokenizer"), "data/Unicode-LICENSE.txt"), "utf8");
+	// esbuild's module path comments follow the install layout: the isolated linker reaches diff through
+	// packages/coding-agent/node_modules, the release workflow's hoisted linker through node_modules.
+	const bundle = result.outputFiles[0].text.replace(/^\/\/ (?:packages\/[^/\n]+\/)+node_modules\//gm, "// node_modules/");
 	const assets = new Map([
-		["budgets-runtime.cjs", Buffer.from(result.outputFiles[0].contents)],
+		["budgets-runtime.cjs", Buffer.from(bundle)],
 		["budgets-runtime.LICENSE", Buffer.from(license)],
 	]);
 	let synchronized = syncBudgetPrompt({ check });

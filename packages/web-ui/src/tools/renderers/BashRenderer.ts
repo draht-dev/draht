@@ -10,8 +10,8 @@ interface BashParams {
 }
 
 // Bash tool has undefined details (only uses output)
-export class BashRenderer implements ToolRenderer<BashParams, undefined> {
-	render(params: BashParams | undefined, result: ToolResultMessage<undefined> | undefined): ToolRenderResult {
+export class BashRenderer implements ToolRenderer<BashParams> {
+	render(params: BashParams | undefined, result: ToolResultMessage | undefined): ToolRenderResult {
 		const state = result ? (result.isError ? "error" : "complete") : "inprogress";
 
 		// With result: show command + output

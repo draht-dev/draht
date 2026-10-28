@@ -33,7 +33,7 @@ export const knowledgeExtension: ExtensionFactory = (pi) => {
 	});
 
 	pi.on("before_agent_start", async (event, _ctx) => {
-		if (!manager) return;
+		if (!manager || event.messageType !== "user") return;
 
 		try {
 			const results = await manager.searchKnowledge(event.prompt, "general", 3);

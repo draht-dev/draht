@@ -138,11 +138,13 @@ export interface CheckpointRestoreOptions {
 	 */
 	currentEntryId: string;
 	/**
-	 * Invoked after each individual path is written or deleted. Progress seam
-	 * for the UI, and the failure-injection seam for tests: throwing from it
-	 * aborts the restore and triggers the rollback to the safety snapshot.
+	 * Invoked after each write chunk, and once per individually deleted path.
+	 * Progress seam for the UI, and the failure-injection seam for tests:
+	 * throwing aborts the restore and triggers rollback to the safety snapshot.
 	 */
-	onPathRestored?: (path: string) => void | Promise<void>;
+	onPathsRestored?: (paths: readonly string[]) => void | Promise<void>;
+	/** Paths written by each git process. Defaults to {@link DEFAULT_RESTORE_WRITE_CHUNK_SIZE}. */
+	writeChunkSize?: number;
 }
 
 export interface CheckpointRestoreResult {
@@ -223,6 +225,35 @@ async function git(cwd: string, args: string[], extraEnv?: Record<string, string
 	return (await gitRaw(cwd, args, extraEnv)).trim();
 }
 
+/** Run git with caller-provided stdin, used for NUL-delimited path batches. */
+async function gitWithInput(
+	cwd: string,
+	args: string[],
+	input: string,
+	extraEnv?: Record<string, string>,
+): Promise<string> {
+	return await new Promise((resolve, reject) => {
+		const child = execFile(
+			"git",
+			args,
+			{
+				cwd,
+				env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
+				encoding: "utf8",
+				maxBuffer: 64 * 1024 * 1024,
+			},
+			(error, stdout) => {
+				if (error) reject(error);
+				else resolve(stdout.trim());
+			},
+		);
+		// The process callback owns command failures. In particular, a git
+		// refusal can close stdin early and surface EPIPE here as a second error.
+		child.stdin?.on("error", () => {});
+		child.stdin?.end(input);
+	});
+}
+
 function describeError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
@@ -281,8 +312,11 @@ async function diffTrees(top: string, fromTree: string, toTree: string): Promise
 	return diff;
 }
 
-/** Path arguments per git invocation, so a huge diff cannot overflow ARG_MAX. */
+/** Path arguments per read-only git invocation, so a huge query cannot overflow ARG_MAX. */
 const GIT_PATH_BATCH = 200;
+
+/** Paths written by one checkout-index process during restore. */
+export const DEFAULT_RESTORE_WRITE_CHUNK_SIZE = 200;
 
 /** Ignore-rule file that can live inside a snapshot tree. */
 const IGNORE_RULE_FILE = ".gitignore";
@@ -477,11 +511,12 @@ async function applyTreeDiff(
 	top: string,
 	sourceTree: string,
 	diff: TreeDiff,
-	onPathRestored?: (path: string) => void | Promise<void>,
+	onPathsRestored?: (paths: readonly string[]) => void | Promise<void>,
+	writeChunkSize: number = DEFAULT_RESTORE_WRITE_CHUNK_SIZE,
 ): Promise<void> {
 	for (const path of diff.deletes) {
 		deleteWorktreePath(top, path);
-		await onPathRestored?.(path);
+		await onPathsRestored?.([path]);
 	}
 	if (diff.writes.length === 0) return;
 
@@ -489,11 +524,13 @@ async function applyTreeDiff(
 	try {
 		const indexEnv = { ...CHECKPOINT_IDENTITY, GIT_INDEX_FILE: join(indexDir, "index") };
 		await git(top, ["read-tree", sourceTree], indexEnv);
-		for (const path of diff.writes) {
-			// `-f` overwrites an existing file and creates missing parent
-			// directories; the user's own index is untouched throughout.
-			await git(top, ["checkout-index", "-f", "-u", "--", path], indexEnv);
-			await onPathRestored?.(path);
+		for (let i = 0; i < diff.writes.length; i += writeChunkSize) {
+			const paths = diff.writes.slice(i, i + writeChunkSize);
+			// `-f` overwrites existing files and creates missing parent
+			// directories. `--stdin -z` keeps hostile path names literal without
+			// putting them in argv; the user's own index remains untouched.
+			await gitWithInput(top, ["checkout-index", "-f", "-u", "--stdin", "-z"], `${paths.join("\0")}\0`, indexEnv);
+			await onPathsRestored?.(paths);
 		}
 	} finally {
 		rmSync(indexDir, { recursive: true, force: true });
@@ -851,6 +888,14 @@ export class CheckpointManager {
 	 */
 	async restore(options: CheckpointRestoreOptions): Promise<CheckpointRestoreResult> {
 		const untouched = { restored: [] as string[], deleted: [] as string[] };
+		const writeChunkSize = options.writeChunkSize ?? DEFAULT_RESTORE_WRITE_CHUNK_SIZE;
+		if (!Number.isSafeInteger(writeChunkSize) || writeChunkSize < 1) {
+			return {
+				status: "failed",
+				...untouched,
+				reason: `restore writeChunkSize must be a positive safe integer, got ${writeChunkSize}`,
+			};
+		}
 		if (!(await isGitRepository(this.cwd))) {
 			return { status: "disabled", ...untouched, reason: `${this.cwd} is not inside a git repository` };
 		}
@@ -932,7 +977,7 @@ export class CheckpointManager {
 		}
 
 		try {
-			await applyTreeDiff(top, targetTree, diff, options.onPathRestored);
+			await applyTreeDiff(top, targetTree, diff, options.onPathsRestored, writeChunkSize);
 			clearRestoreMarker(markerPath);
 			return { status: "restored", restored: diff.writes, deleted: diff.deletes, safety, target };
 		} catch (error) {
@@ -942,7 +987,7 @@ export class CheckpointManager {
 				// have touched, and re-applying it is idempotent for the ones it
 				// never reached.
 				const inverse = await diffTrees(top, targetTree, safety.treeHash);
-				await applyTreeDiff(top, safety.treeHash, inverse);
+				await applyTreeDiff(top, safety.treeHash, inverse, undefined, writeChunkSize);
 				clearRestoreMarker(markerPath);
 				return { status: "rolled-back", ...untouched, safety, target, reason };
 			} catch (rollbackError) {

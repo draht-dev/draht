@@ -1,5 +1,5 @@
 import { mkdtempSync } from "node:fs";
-import { arch, platform, release, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { Type } from "typebox";
@@ -11,16 +11,18 @@ import {
 	stream as streamOpenAICodexResponses,
 	streamSimple as streamSimpleOpenAICodexResponses,
 } from "../src/api/openai-codex-responses.ts";
-import type { Context, Model } from "../src/types.ts";
+import type { Api, Context, Model } from "../src/types.ts";
+import { formatUserAgent } from "../src/utils/identity.ts";
+import { normalizeContext } from "../src/utils/transcript.ts";
 
-const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+const originalAgentDir = process.env.DRAHT_CODING_AGENT_DIR;
 
 afterEach(() => {
 	vi.unstubAllGlobals();
 	if (originalAgentDir === undefined) {
-		delete process.env.PI_CODING_AGENT_DIR;
+		delete process.env.DRAHT_CODING_AGENT_DIR;
 	} else {
-		process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+		process.env.DRAHT_CODING_AGENT_DIR = originalAgentDir;
 	}
 	closeOpenAICodexWebSocketSessions();
 	resetOpenAICodexWebSocketDebugStats();
@@ -28,9 +30,9 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-function mockToken(): string {
+function mockToken(accountId = "acc_test"): string {
 	const payload = Buffer.from(
-		JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acc_test" } }),
+		JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
 		"utf8",
 	).toString("base64");
 	return `aaa.${payload}.bbb`;
@@ -49,9 +51,11 @@ function decodeCodexRequestBody(body: RequestInit["body"] | undefined): Record<s
 function buildSSEPayload({
 	status,
 	includeDone = false,
+	endTurn,
 }: {
 	status: "completed" | "incomplete";
 	includeDone?: boolean;
+	endTurn?: boolean;
 }): string {
 	const terminalType = status === "incomplete" ? "response.incomplete" : "response.completed";
 	const events = [
@@ -75,6 +79,7 @@ function buildSSEPayload({
 			type: terminalType,
 			response: {
 				status,
+				end_turn: endTurn,
 				incomplete_details: status === "incomplete" ? { reason: "max_output_tokens" } : null,
 				usage: {
 					input_tokens: 5,
@@ -94,9 +99,9 @@ function buildSSEPayload({
 }
 
 describe("openai-codex streaming", () => {
-	it("streams SSE responses into AssistantMessageEventStream", async () => {
+	it("streams SSE responses and forwards raw provider events", async () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
-		process.env.PI_CODING_AGENT_DIR = tempDir;
+		process.env.DRAHT_CODING_AGENT_DIR = tempDir;
 
 		const payload = Buffer.from(
 			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acc_test" } }),
@@ -156,8 +161,8 @@ describe("openai-codex streaming", () => {
 				expect(headers?.get("Authorization")).toBe(`Bearer ${token}`);
 				expect(headers?.get("chatgpt-account-id")).toBe("acc_test");
 				expect(headers?.get("OpenAI-Beta")).toBe("responses=experimental");
-				expect(headers?.get("originator")).toBe("pi");
-				expect(headers?.get("User-Agent")).toBe(`pi (${platform()} ${release()}; ${arch()})`);
+				expect(headers?.get("originator")).toBe("draht");
+				expect(headers?.get("User-Agent")).toBe(formatUserAgent());
 				expect(headers?.get("accept")).toBe("text/event-stream");
 				expect(headers?.has("x-api-key")).toBe(false);
 				return new Response(stream, {
@@ -183,12 +188,21 @@ describe("openai-codex streaming", () => {
 			maxTokens: 128000,
 		};
 
-		const context: Context = {
+		const context = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-		};
+		});
 
-		const streamResult = streamOpenAICodexResponses(model, context, { apiKey: token, transport: "sse" });
+		const providerEvents: unknown[] = [];
+		const providerEventModels: Model<Api>[] = [];
+		const streamResult = streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			transport: "sse",
+			onProviderStreamEvent: (event, eventModel) => {
+				providerEvents.push(event);
+				providerEventModels.push(eventModel);
+			},
+		});
 		let sawTextDelta = false;
 		let sawDone = false;
 
@@ -204,14 +218,53 @@ describe("openai-codex streaming", () => {
 
 		expect(sawTextDelta).toBe(true);
 		expect(sawDone).toBe(true);
+		expect(providerEvents.map((event) => (event as { type?: string }).type)).toEqual([
+			"response.output_item.added",
+			"response.content_part.added",
+			"response.output_text.delta",
+			"response.output_item.done",
+			"response.completed",
+		]);
+		expect(providerEventModels).toEqual([model, model, model, model, model]);
+	});
+
+	// Regression test for https://github.com/earendil-works/pi/issues/9047
+	it("processes a terminal SSE event without a trailing blank line", async () => {
+		const token = mockToken();
+		const sse = buildSSEPayload({ status: "completed" }).trimEnd();
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+		const context = normalizeContext({
+			systemPrompt: "You are a helpful assistant.",
+			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+		});
+		const resultStream = streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			transport: "sse",
+			fetch: async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } }),
+		});
+		const result = await resultStream.result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(result.content.find((content) => content.type === "text")?.text).toBe("Hello");
 	});
 
 	it("completes after response.completed even when the SSE body stays open", async () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
-		process.env.PI_CODING_AGENT_DIR = tempDir;
+		process.env.DRAHT_CODING_AGENT_DIR = tempDir;
 		const token = mockToken();
 		const encoder = new TextEncoder();
-		const sse = buildSSEPayload({ status: "completed", includeDone: true });
+		const sse = buildSSEPayload({ status: "completed", includeDone: true, endTurn: false });
 
 		const stream = new ReadableStream<Uint8Array>({
 			start(controller) {
@@ -250,10 +303,10 @@ describe("openai-codex streaming", () => {
 			maxTokens: 128000,
 		};
 
-		const context: Context = {
+		const context = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-		};
+		});
 
 		const result = await Promise.race([
 			streamOpenAICodexResponses(model, context, { apiKey: token, transport: "sse" }).result(),
@@ -264,11 +317,12 @@ describe("openai-codex streaming", () => {
 
 		expect(result.content.find((c) => c.type === "text")?.text).toBe("Hello");
 		expect(result.stopReason).toBe("stop");
+		expect(result.endTurn).toBe(false);
 	});
 
 	it("maps response.incomplete to stopReason length even when the SSE body stays open", async () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
-		process.env.PI_CODING_AGENT_DIR = tempDir;
+		process.env.DRAHT_CODING_AGENT_DIR = tempDir;
 		const token = mockToken();
 		const encoder = new TextEncoder();
 		const sse = buildSSEPayload({ status: "incomplete" });
@@ -310,10 +364,10 @@ describe("openai-codex streaming", () => {
 			maxTokens: 128000,
 		};
 
-		const context: Context = {
+		const context = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-		};
+		});
 
 		const result = await Promise.race([
 			streamOpenAICodexResponses(model, context, { apiKey: token, transport: "sse" }).result(),
@@ -366,10 +420,10 @@ describe("openai-codex streaming", () => {
 			contextWindow: 400000,
 			maxTokens: 128000,
 		};
-		const context: Context = {
+		const context = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-		};
+		});
 
 		const result = await streamOpenAICodexResponses(model, context, {
 			apiKey: token,
@@ -463,10 +517,10 @@ describe("openai-codex streaming", () => {
 			contextWindow: 400000,
 			maxTokens: 128000,
 		};
-		const context: Context = {
+		const context = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-		};
+		});
 		const controller = new AbortController();
 		const events: string[] = [];
 
@@ -492,7 +546,7 @@ describe("openai-codex streaming", () => {
 
 	it("sets session-id/x-client-request-id headers and prompt_cache_key when sessionId is provided", async () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
-		process.env.PI_CODING_AGENT_DIR = tempDir;
+		process.env.DRAHT_CODING_AGENT_DIR = tempDir;
 
 		const payload = Buffer.from(
 			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acc_test" } }),
@@ -582,12 +636,16 @@ describe("openai-codex streaming", () => {
 			maxTokens: 128000,
 		};
 
-		const context: Context = {
+		const context = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-		};
+		});
 
-		const streamResult = streamOpenAICodexResponses(model, context, { apiKey: token, sessionId, transport: "sse" });
+		const streamResult = streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			sessionId,
+			transport: "sse",
+		});
 		await streamResult.result();
 	});
 
@@ -625,10 +683,10 @@ describe("openai-codex streaming", () => {
 			contextWindow: 400000,
 			maxTokens: 128000,
 		};
-		const context: Context = {
+		const context = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-		};
+		});
 
 		await streamOpenAICodexResponses(model, context, {
 			apiKey: token,
@@ -675,10 +733,10 @@ describe("openai-codex streaming", () => {
 			contextWindow: 400000,
 			maxTokens: 128000,
 		};
-		const context: Context = {
+		const context = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-		};
+		});
 
 		await streamOpenAICodexResponses(model, context, {
 			apiKey: token,
@@ -725,10 +783,10 @@ describe("openai-codex streaming", () => {
 			contextWindow: 400000,
 			maxTokens: 128000,
 		};
-		const context: Context = {
+		const context = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-		};
+		});
 
 		await streamOpenAICodexResponses(model, context, {
 			apiKey: token,
@@ -740,9 +798,58 @@ describe("openai-codex streaming", () => {
 		expect(capturedHeaders?.get("x-client-request-id")).toBe("x".repeat(64));
 	});
 
+	it("lets model and caller headers override originator and User-Agent", async () => {
+		const token = mockToken();
+		let capturedHeaders: Headers | undefined;
+		const encoder = new TextEncoder();
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_input: string | URL, init?: RequestInit) => {
+				capturedHeaders = init?.headers instanceof Headers ? init.headers : undefined;
+				return new Response(
+					new ReadableStream<Uint8Array>({
+						start(controller) {
+							controller.enqueue(encoder.encode(buildSSEPayload({ status: "completed" })));
+							controller.close();
+						},
+					}),
+					{ status: 200, headers: { "content-type": "text/event-stream" } },
+				);
+			}),
+		);
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+			headers: { originator: "my-app" },
+		};
+		const context = normalizeContext({
+			systemPrompt: "You are a helpful assistant.",
+			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+		});
+
+		await streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			transport: "sse",
+			headers: { "user-agent": "my-app/1.0", Authorization: "Bearer ignored" },
+		}).result();
+
+		expect(capturedHeaders?.get("originator")).toBe("my-app");
+		expect(capturedHeaders?.get("User-Agent")).toBe("my-app/1.0");
+		expect(capturedHeaders?.get("Authorization")).toBe(`Bearer ${token}`);
+	});
+
 	it("preserves gpt-5.5 xhigh reasoning effort from simple options", async () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
-		process.env.PI_CODING_AGENT_DIR = tempDir;
+		process.env.DRAHT_CODING_AGENT_DIR = tempDir;
 		const token = mockToken();
 		const sse = buildSSEPayload({ status: "completed" });
 		const encoder = new TextEncoder();
@@ -787,10 +894,10 @@ describe("openai-codex streaming", () => {
 			contextWindow: 400000,
 			maxTokens: 128000,
 		};
-		const context: Context = {
+		const context = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-		};
+		});
 
 		await streamSimpleOpenAICodexResponses(model, context, {
 			apiKey: token,
@@ -838,7 +945,7 @@ describe("openai-codex streaming", () => {
 
 		await streamOpenAICodexResponses(
 			model,
-			{
+			normalizeContext({
 				messages: [
 					{ role: "user", content: "Do not call ping. Respond with text instead.", timestamp: Date.now() },
 				],
@@ -849,7 +956,7 @@ describe("openai-codex streaming", () => {
 						parameters: Type.Object({ value: Type.String() }),
 					},
 				],
-			},
+			}),
 			{ apiKey: token, transport: "sse", toolChoice: "required" },
 		).result();
 
@@ -893,7 +1000,7 @@ describe("openai-codex streaming", () => {
 
 		await streamOpenAICodexResponses(
 			model,
-			{
+			normalizeContext({
 				messages: [{ role: "user", content: "Use a tool", timestamp: Date.now() }],
 				tools: [
 					{
@@ -909,7 +1016,7 @@ describe("openai-codex streaming", () => {
 						constrainedSampling: { type: "json_schema", strict: "prefer" },
 					},
 				],
-			},
+			}),
 			{
 				apiKey: token,
 				transport: "sse",
@@ -927,7 +1034,7 @@ describe("openai-codex streaming", () => {
 
 	it.each(["gpt-5.3-codex", "gpt-5.4", "gpt-5.5"])("clamps %s minimal reasoning effort to low", async (modelId) => {
 		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
-		process.env.PI_CODING_AGENT_DIR = tempDir;
+		process.env.DRAHT_CODING_AGENT_DIR = tempDir;
 
 		const payload = Buffer.from(
 			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acc_test" } }),
@@ -1011,10 +1118,10 @@ describe("openai-codex streaming", () => {
 			maxTokens: 128000,
 		};
 
-		const context: Context = {
+		const context = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-		};
+		});
 
 		const streamResult = streamOpenAICodexResponses(model, context, {
 			apiKey: token,
@@ -1034,7 +1141,7 @@ describe("openai-codex streaming", () => {
 		"uses the client-sent %s service tier for %s when Codex echoes default",
 		async (modelId, serviceTier, multiplier) => {
 			const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
-			process.env.PI_CODING_AGENT_DIR = tempDir;
+			process.env.DRAHT_CODING_AGENT_DIR = tempDir;
 			const token = mockToken();
 			const sse = `${[
 				`data: ${JSON.stringify({
@@ -1107,10 +1214,10 @@ describe("openai-codex streaming", () => {
 				maxTokens: 128000,
 			};
 
-			const context: Context = {
+			const context = normalizeContext({
 				systemPrompt: "You are a helpful assistant.",
 				messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-			};
+			});
 
 			const result = await streamOpenAICodexResponses(model, context, {
 				apiKey: token,
@@ -1126,7 +1233,7 @@ describe("openai-codex streaming", () => {
 
 	it("does not set session-id/x-client-request-id headers when sessionId is not provided", async () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
-		process.env.PI_CODING_AGENT_DIR = tempDir;
+		process.env.DRAHT_CODING_AGENT_DIR = tempDir;
 
 		const payload = Buffer.from(
 			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acc_test" } }),
@@ -1211,18 +1318,23 @@ describe("openai-codex streaming", () => {
 			maxTokens: 128000,
 		};
 
-		const context: Context = {
+		const context = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-		};
+		});
 
 		// No sessionId provided
-		const streamResult = streamOpenAICodexResponses(model, context, { apiKey: token, transport: "sse" });
+		const streamResult = streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			transport: "sse",
+		});
 		await streamResult.result();
 	});
-	it("forwards auto transport from streamSimple options and uses cached websocket context", async () => {
+	it("forwards auto transport and raw provider events from streamSimple", async () => {
 		const token = mockToken();
 		const sentBodies: unknown[] = [];
+		const providerEvents: unknown[] = [];
+		const providerEventModels: Model<Api>[] = [];
 		let capturedWebSocketHeaders: Record<string, string> | undefined;
 
 		const fetchMock = vi.fn(async () => new Response("unexpected fetch", { status: 500 }));
@@ -1271,9 +1383,10 @@ describe("openai-codex streaming", () => {
 						},
 					},
 					{
-						type: "response.completed",
+						type: "response.done",
 						response: {
 							status: "completed",
+							end_turn: false,
 							usage: {
 								input_tokens: 5,
 								output_tokens: 3,
@@ -1313,18 +1426,31 @@ describe("openai-codex streaming", () => {
 			contextWindow: 400000,
 			maxTokens: 128000,
 		};
-		const context: Context = {
+		const context = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
 			messages: [{ role: "user", content: "Say hello", timestamp: 1 }],
-		};
+		});
 
-		await streamSimpleOpenAICodexResponses(model, context, {
+		const result = await streamSimpleOpenAICodexResponses(model, context, {
 			apiKey: token,
 			sessionId: "session-auto",
 			transport: "auto",
+			onProviderStreamEvent: (event, eventModel) => {
+				providerEvents.push(event);
+				providerEventModels.push(eventModel);
+			},
 		}).result();
 
+		expect(result.endTurn).toBe(false);
 		expect(sentBodies).toHaveLength(1);
+		expect(providerEvents.map((event) => (event as { type?: string }).type)).toEqual([
+			"response.output_item.added",
+			"response.content_part.added",
+			"response.output_text.delta",
+			"response.output_item.done",
+			"response.done",
+		]);
+		expect(providerEventModels).toEqual([model, model, model, model, model]);
 		expect(capturedWebSocketHeaders?.["session-id"]).toBe("session-auto");
 		expect(capturedWebSocketHeaders?.session_id).toBeUndefined();
 		expect(capturedWebSocketHeaders?.["x-client-request-id"]).toBe("session-auto");
@@ -1332,6 +1458,106 @@ describe("openai-codex streaming", () => {
 		expect(getOpenAICodexWebSocketDebugStats("session-auto")).toMatchObject({
 			cachedContextRequests: 1,
 			fullContextRequests: 1,
+		});
+	});
+
+	it("scopes cached websockets to the authenticated account", async () => {
+		// Regression for #7284: rotating accounts must not reuse a socket authenticated by another account.
+		const connectedHeaders: Record<string, string>[] = [];
+		let responseId = 0;
+
+		class MockWebSocket {
+			static OPEN = 1;
+			readyState = MockWebSocket.OPEN;
+			private listeners = new Map<string, Set<(event: unknown) => void>>();
+
+			constructor(_url: string, protocols?: string | string[] | { headers?: Record<string, string> }) {
+				const headers =
+					protocols && typeof protocols === "object" && !Array.isArray(protocols) ? protocols.headers : undefined;
+				connectedHeaders.push(headers ?? {});
+				queueMicrotask(() => this.dispatch("open", {}));
+			}
+
+			addEventListener(type: string, listener: (event: unknown) => void): void {
+				let listeners = this.listeners.get(type);
+				if (!listeners) {
+					listeners = new Set();
+					this.listeners.set(type, listeners);
+				}
+				listeners.add(listener);
+			}
+
+			removeEventListener(type: string, listener: (event: unknown) => void): void {
+				this.listeners.get(type)?.delete(listener);
+			}
+
+			send(): void {
+				queueMicrotask(() => {
+					this.dispatch("message", {
+						data: JSON.stringify({
+							type: "response.completed",
+							response: {
+								id: `resp_${++responseId}`,
+								status: "completed",
+								usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+							},
+						}),
+					});
+				});
+			}
+
+			close(): void {
+				this.readyState = 3;
+			}
+
+			private dispatch(type: string, event: unknown): void {
+				for (const listener of this.listeners.get(type) ?? []) listener(event);
+			}
+		}
+
+		vi.stubGlobal("WebSocket", MockWebSocket);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("unexpected fetch", { status: 500 })),
+		);
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+		const context = normalizeContext({ systemPrompt: "", messages: [] });
+		const options = { sessionId: "shared-session", transport: "websocket-cached" as const };
+
+		await streamOpenAICodexResponses(model, context, {
+			...options,
+			apiKey: mockToken("account-a"),
+		}).result();
+		await streamOpenAICodexResponses(model, context, {
+			...options,
+			apiKey: mockToken("account-b"),
+		}).result();
+		await streamOpenAICodexResponses(model, context, {
+			...options,
+			apiKey: mockToken("account-a"),
+		}).result();
+
+		expect(connectedHeaders.map((headers) => headers["chatgpt-account-id"])).toEqual(["account-a", "account-b"]);
+		expect(connectedHeaders.map((headers) => headers.authorization)).toEqual([
+			`Bearer ${mockToken("account-a")}`,
+			`Bearer ${mockToken("account-b")}`,
+		]);
+		expect(global.fetch).not.toHaveBeenCalled();
+		expect(getOpenAICodexWebSocketDebugStats("shared-session")).toMatchObject({
+			connectionsCreated: 2,
+			connectionsReused: 1,
 		});
 	});
 
@@ -1407,10 +1633,10 @@ describe("openai-codex streaming", () => {
 			contextWindow: 400000,
 			maxTokens: 128000,
 		};
-		const context: Context = {
+		const context = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
 			messages: [{ role: "user", content: "Say hello", timestamp: 1 }],
-		};
+		});
 		const options = {
 			apiKey: token,
 			cacheRetention: "none" as const,
@@ -1490,10 +1716,10 @@ describe("openai-codex streaming", () => {
 			contextWindow: 400000,
 			maxTokens: 128000,
 		};
-		const context: Context = {
+		const context = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
 			messages: [{ role: "user", content: "Say hello", timestamp: 1 }],
-		};
+		});
 
 		const resultPromise = streamOpenAICodexResponses(model, context, {
 			apiKey: token,
@@ -1565,13 +1791,9 @@ describe("openai-codex streaming", () => {
 			maxTokens: 128000,
 		};
 
-		const result = await streamOpenAICodexResponses(
-			model,
-			{ systemPrompt: "", messages: [] },
-			{
-				apiKey: token,
-			},
-		).result();
+		const result = await streamOpenAICodexResponses(model, normalizeContext({ systemPrompt: "", messages: [] }), {
+			apiKey: token,
+		}).result();
 
 		expect(result.stopReason).toBe("stop");
 		expect(connections).toBe(2);
@@ -1654,10 +1876,10 @@ describe("openai-codex streaming", () => {
 			contextWindow: 400000,
 			maxTokens: 128000,
 		};
-		const context: Context = {
+		const context = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
 			messages: [{ role: "user", content: "Say hello", timestamp: 1 }],
-		};
+		});
 
 		const resultPromise = streamOpenAICodexResponses(model, context, {
 			apiKey: token,
@@ -1745,10 +1967,10 @@ describe("openai-codex streaming", () => {
 			contextWindow: 400000,
 			maxTokens: 128000,
 		};
-		const context: Context = {
+		const context = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
 			messages: [{ role: "user", content: "Say hello", timestamp: 1 }],
-		};
+		});
 
 		const resultPromise = streamOpenAICodexResponses(model, context, {
 			apiKey: token,
@@ -1840,10 +2062,10 @@ describe("openai-codex streaming", () => {
 			maxTokens: 128000,
 		};
 		const sessionId = "aged-ws-session";
-		const firstContext: Context = {
+		const firstContext = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
 			messages: [{ role: "user", content: "Say hello", timestamp: 1 }],
-		};
+		});
 
 		const first = await streamOpenAICodexResponses(model, firstContext, {
 			apiKey: token,
@@ -1851,10 +2073,9 @@ describe("openai-codex streaming", () => {
 			transport: "websocket-cached",
 		}).result();
 		vi.setSystemTime(new Date(startedAt.getTime() + 56 * 60 * 1000));
-		const secondContext: Context = {
-			systemPrompt: "You are a helpful assistant.",
+		const secondContext = normalizeContext({
 			messages: [...firstContext.messages, first, { role: "user", content: "Now finish", timestamp: 2 }],
-		};
+		});
 
 		await streamOpenAICodexResponses(model, secondContext, {
 			apiKey: token,
@@ -1989,13 +2210,13 @@ describe("openai-codex streaming", () => {
 			],
 		};
 
-		const first = await streamOpenAICodexResponses(model, firstContext, {
+		const first = await streamOpenAICodexResponses(model, normalizeContext(firstContext), {
 			apiKey: token,
 			sessionId: "session-1",
 			transport: "websocket-cached",
 		}).result();
 
-		const secondContext: Context = {
+		const secondContext = normalizeContext({
 			...firstContext,
 			messages: [
 				...firstContext.messages,
@@ -2010,7 +2231,7 @@ describe("openai-codex streaming", () => {
 				},
 				{ role: "user", content: "Now finish", timestamp: 3 },
 			],
-		};
+		});
 		await streamOpenAICodexResponses(model, secondContext, {
 			apiKey: token,
 			sessionId: "session-1",
@@ -2205,20 +2426,19 @@ describe("openai-codex streaming", () => {
 				contextWindow: 400000,
 				maxTokens: 128000,
 			};
-			const firstContext: Context = {
+			const firstContext = normalizeContext({
 				systemPrompt: "You are a helpful assistant.",
 				messages: [{ role: "user", content: "Say hello", timestamp: 1 }],
-			};
+			});
 
 			const first = await streamOpenAICodexResponses(model, firstContext, {
 				apiKey: token,
 				sessionId,
 				transport: "websocket-cached",
 			}).result();
-			const secondContext: Context = {
-				systemPrompt: "You are a helpful assistant.",
+			const secondContext = normalizeContext({
 				messages: [...firstContext.messages, first, { role: "user", content: "Now finish", timestamp: 2 }],
-			};
+			});
 			const eventTypes: string[] = [];
 			const secondStream = streamOpenAICodexResponses(model, secondContext, {
 				apiKey: token,
@@ -2315,10 +2535,10 @@ describe("openai-codex streaming", () => {
 			contextWindow: 400000,
 			maxTokens: 128000,
 		};
-		const context: Context = {
+		const context = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-		};
+		});
 
 		const resultPromise = streamOpenAICodexResponses(model, context, {
 			apiKey: token,
@@ -2357,10 +2577,10 @@ describe("openai-codex streaming", () => {
 			contextWindow: 400000,
 			maxTokens: 128000,
 		};
-		const context: Context = {
+		const context = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-		};
+		});
 
 		const result = await streamOpenAICodexResponses(model, context, {
 			apiKey: token,
@@ -2418,10 +2638,10 @@ describe("openai-codex streaming", () => {
 		const largeText = "compress me ".repeat(400);
 		await streamOpenAICodexResponses(
 			model,
-			{
+			normalizeContext({
 				systemPrompt: "You are a helpful assistant.",
 				messages: [{ role: "user", content: largeText, timestamp: 1 }],
-			},
+			}),
 			{ apiKey: token, transport: "sse" },
 		).result();
 
@@ -2436,10 +2656,10 @@ describe("openai-codex streaming", () => {
 		capturedBody = undefined;
 		await streamOpenAICodexResponses(
 			model,
-			{
+			normalizeContext({
 				systemPrompt: "You are a helpful assistant.",
 				messages: [{ role: "user", content: "hi", timestamp: 1 }],
-			},
+			}),
 			{ apiKey: token, transport: "sse" },
 		).result();
 
@@ -2494,10 +2714,10 @@ describe("openai-codex streaming", () => {
 			contextWindow: 400000,
 			maxTokens: 128000,
 		};
-		const context: Context = {
+		const context = normalizeContext({
 			systemPrompt: "You are a helpful assistant.",
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-		};
+		});
 
 		const retryTimeoutDelays = () =>
 			setTimeoutSpy.mock.calls

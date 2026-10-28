@@ -1,12 +1,20 @@
 import type { ThinkingLevel } from "@draht/agent-core";
 import type { Api, Model } from "@draht/ai";
-import { Text } from "@draht/tui";
+import { type AutocompleteItem, fuzzyFilter, Text } from "@draht/tui";
 import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI, ExtensionContext } from "../extensions/types.ts";
-import { parseModelPattern } from "../model-resolver.ts";
+import { resolveModelReference } from "../model-resolver.ts";
+import { resolveChildModel } from "../polyphase/model-selection.ts";
+import { getPolyphaseSession } from "../polyphase/session.ts";
 import type { SessionEntry } from "../session-manager.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "../tools/truncate.ts";
-import { type AgentConfig, type RunResult, runParallelTasks } from "./subagent.ts";
+import {
+	type AgentConfig,
+	type AgentRunner,
+	childPermissionContext,
+	type RunResult,
+	runParallelTasks,
+} from "./subagent.ts";
 
 export type DuetStrategy = "turns" | "triage";
 
@@ -92,12 +100,9 @@ function uniqueDefaultRole(model: Model<Api>, usedRoles: Set<string>): string {
 	}
 }
 
-/** Resolve comma-separated `[role=]provider/model[:thinking]` participant specifications. */
+/** Resolve comma- or space-separated `[role=]provider/model[:thinking]` participant specifications. */
 export function parseDuetParticipantSpecs(specs: string, availableModels: Model<Api>[]): DuetParticipant[] {
-	const rawSpecs = specs
-		.split(",")
-		.map((spec) => spec.trim())
-		.filter(Boolean);
+	const rawSpecs = specs.split(/[\s,]+/).filter(Boolean);
 
 	if (rawSpecs.length < 2) throw new Error("Duet mode requires at least two models.");
 	if (rawSpecs.length > MAX_DUET_PARTICIPANTS) {
@@ -116,10 +121,16 @@ export function parseDuetParticipantSpecs(specs: string, availableModels: Model<
 		if (explicitRole !== undefined) validateExplicitRole(explicitRole);
 		if (!modelSpec) throw new Error(`Missing model in duet participant "${rawSpec}".`);
 
-		const resolved = parseModelPattern(modelSpec, availableModels, {
-			allowInvalidThinkingLevelFallback: false,
-		});
-		if (!resolved.model) {
+		const resolved = resolveModelReference(
+			{ text: modelSpec, thinkingSuffix: "strict", fuzzy: true },
+			availableModels,
+			() => true,
+		);
+		if (resolved.status === "ambiguous") {
+			const candidates = resolved.candidates.map((model) => modelKey(model)).join(", ");
+			throw new Error(`Duet model "${modelSpec}" matches several providers: use provider/id (${candidates}).`);
+		}
+		if (resolved.status !== "resolved") {
 			throw new Error(`Duet model "${modelSpec}" is unavailable. Authenticate it or use /scoped-models.`);
 		}
 
@@ -140,6 +151,76 @@ export function parseDuetParticipantSpecs(specs: string, availableModels: Model<
 	}
 
 	return participants;
+}
+
+/**
+ * Complete `/duet` arguments in steps: strategy, then a provider, then one of its models. Each
+ * participant slot opens the provider list again until two models are chosen.
+ */
+export function getDuetArgumentCompletions(partial: string, availableModels: Model<Api>[]): AutocompleteItem[] | null {
+	const firstSpace = partial.indexOf(" ");
+	if (firstSpace === -1) {
+		const items = ["status", "off", "turns", "triage"]
+			.filter((option) => option.startsWith(partial))
+			.map((option) =>
+				isDuetStrategy(option)
+					? { value: `${option} `, label: option, continueCompletion: true }
+					: { value: option, label: option },
+			);
+		return items.length > 0 ? items : null;
+	}
+	if (!isDuetStrategy(partial.slice(0, firstSpace))) return null;
+
+	const tokenStart = Math.max(partial.lastIndexOf(" "), partial.lastIndexOf(",")) + 1;
+	const head = partial.slice(0, tokenStart);
+	const token = partial.slice(tokenStart);
+	const equalsIndex = token.indexOf("=");
+	const rolePrefix = equalsIndex === -1 ? "" : token.slice(0, equalsIndex + 1);
+	const query = token.slice(rolePrefix.length);
+	if (query.includes(":")) return null;
+
+	const chosen = new Set(
+		head
+			.slice(firstSpace + 1)
+			.split(/[\s,]+/)
+			.filter(Boolean)
+			.map((spec) => spec.slice(spec.indexOf("=") + 1).split(":")[0]),
+	);
+	const candidates = availableModels.filter((model) => !chosen.has(modelKey(model)));
+	const continueAfterModel = chosen.size + 1 < 2;
+	const toModelItem = (model: Model<Api>): AutocompleteItem => ({
+		value: `${head}${rolePrefix}${modelKey(model)} `,
+		label: model.id,
+		description: model.provider,
+		continueCompletion: continueAfterModel,
+	});
+
+	const slashIndex = query.indexOf("/");
+	if (slashIndex !== -1) {
+		const provider = query.slice(0, slashIndex);
+		const models = candidates.filter((model) => model.provider === provider);
+		const matches = fuzzyFilter(models, query.slice(slashIndex + 1), (model) => `${model.id} ${model.name}`);
+		return matches.length > 0 ? matches.map(toModelItem) : null;
+	}
+
+	const modelCounts = new Map<string, number>();
+	for (const model of candidates) modelCounts.set(model.provider, (modelCounts.get(model.provider) ?? 0) + 1);
+	const providers = fuzzyFilter([...modelCounts.keys()].sort(), query, (provider) => provider);
+	if (providers.length > 0) {
+		return providers.map((provider) => {
+			const count = modelCounts.get(provider) ?? 0;
+			return {
+				value: `${head}${rolePrefix}${provider}/`,
+				label: provider,
+				description: `${count} model${count === 1 ? "" : "s"}`,
+				continueCompletion: true,
+			};
+		});
+	}
+
+	// No provider matches: let a model name typed directly still complete.
+	const matches = fuzzyFilter(candidates, query, (model) => `${model.id} ${model.provider} ${model.name}`);
+	return matches.length > 0 ? matches.map(toModelItem) : null;
 }
 
 export function advanceDuetTurn(state: DuetState): DuetParticipant {
@@ -338,13 +419,16 @@ const DuetDelegateParams = Type.Object({
 	}),
 });
 
-export default function duetBuiltin(pi: ExtensionAPI) {
+/** `options.runner` lets tests inject a scripted `AgentRunner` for `duet_delegate`'s teammates. */
+export default function duetBuiltin(pi: ExtensionAPI, options: { runner?: AgentRunner } = {}) {
+	const runnerOverride = options.runner;
 	let state: DuetState | undefined;
 	let activeTurnParticipant: DuetParticipant | undefined;
 	let pendingTurnParticipant: DuetParticipant | undefined;
 	let runningTurnParticipant: DuetParticipant | undefined;
 	let delegatedForPrompt = false;
 	let selectingParticipant = false;
+	let completionContext: ExtensionContext | undefined;
 
 	pi.registerFlag("duet", {
 		description: "Comma-separated duet models: [role=]provider/model[:thinking]",
@@ -382,14 +466,14 @@ export default function duetBuiltin(pi: ExtensionAPI) {
 		selectingParticipant = true;
 		try {
 			if (!ctx.model || modelKey(ctx.model) !== participant.modelRef) {
-				const selected = await pi.setModel(participant.model, { persistDefault: false });
+				const selected = await pi.setModel(participant.model, { persist: false });
 				if (!selected) {
 					ctx.ui.notify(`No authentication available for ${participant.modelRef}`, "error");
 					return false;
 				}
 			}
 			if (participant.thinkingLevel && ctx.thinkingLevel !== participant.thinkingLevel) {
-				pi.setThinkingLevel(participant.thinkingLevel, { persistDefault: false });
+				pi.setThinkingLevel(participant.thinkingLevel, { persist: false });
 			}
 			return true;
 		} catch (error) {
@@ -533,7 +617,7 @@ export default function duetBuiltin(pi: ExtensionAPI) {
 					visible.push(`... (${lines.length - visible.length} more lines)`);
 				return new Text(theme.fg("toolOutput", visible.join("\n")), 0, 0);
 			},
-			async execute(_toolCallId, params, signal, onUpdate, ctx) {
+			async execute(toolCallId, params, signal, onUpdate, ctx) {
 				if (!state || state.strategy !== "triage") {
 					return {
 						content: [
@@ -589,33 +673,71 @@ export default function duetBuiltin(pi: ExtensionAPI) {
 				}
 				delegatedForPrompt = true;
 
-				const activity = new Map<string, string>();
-				const results = await runParallelTasks(ctx.cwd, items, {
-					signal,
-					makeOnProgress: (role) => (message) => {
-						activity.set(role, message);
-						onUpdate?.({
-							content: [
-								{
-									type: "text" as const,
-									text: [...activity].map(([name, text]) => `${name}: ${text}`).join("\n"),
-								},
-							],
-							details: {
-								results: [],
-								status: `${activity.size}/${items.length} teammates active`,
-							},
-						});
-					},
+				const session = getPolyphaseSession(ctx.sessionManager, pi.getSettings().polyphase);
+				const run = session.store.createRun({
+					id: `duet:${toolCallId}`,
+					kind: "duet",
+					origin: "tool",
+					title: `duet delegate · ${items.length} teammates`,
+					budgetTokens: null,
+					parentSignal: signal,
 				});
+				try {
+					const available = ctx.modelRegistry.getAvailable();
+					const live = items.map((item) => {
+						const choice = resolveChildModel({ agentModel: item.agent.model, available });
+						return run.addAgent({
+							label: item.agent.name,
+							agentType: item.agent.name,
+							task: item.task,
+							model: choice.info,
+						});
+					});
+					const perItem = (i: number) => ({
+						signal: live[i].signal,
+						run: live[i].createRunContext(childPermissionContext(ctx, session, live[i].label)),
+					});
 
-				return {
-					content: [{ type: "text" as const, text: formatDelegateResults(results) }],
-					usage: combineDuetUsage(results),
-					details: {
-						results: results.map((result) => ({ participant: result.agent, exitCode: result.exitCode })),
-					},
-				};
+					const activity = new Map<string, string>();
+					const results = await runParallelTasks(ctx.cwd, items, {
+						signal,
+						runner: runnerOverride,
+						limiter: session.limiter,
+						perItem,
+						makeOnProgress: (role) => (message) => {
+							activity.set(role, message);
+							onUpdate?.({
+								content: [
+									{
+										type: "text" as const,
+										text: [...activity].map(([name, text]) => `${name}: ${text}`).join("\n"),
+									},
+								],
+								details: {
+									results: [],
+									status: `${activity.size}/${items.length} teammates active`,
+								},
+							});
+						},
+					});
+
+					const succeeded = results.some((r) => r.exitCode === 0);
+					const allCancelled = results.every((r) => r.cancelled);
+					run.finish(succeeded ? "done" : allCancelled ? "cancelled" : "failed");
+
+					return {
+						content: [{ type: "text" as const, text: formatDelegateResults(results) }],
+						usage: combineDuetUsage(results),
+						details: {
+							results: results.map((result) => ({ participant: result.agent, exitCode: result.exitCode })),
+						},
+					};
+				} catch (error) {
+					if (run.status === "running") {
+						run.finish("failed", error instanceof Error ? error.message : String(error));
+					}
+					throw error;
+				}
 			},
 		});
 		duetDelegateToolRegistered = true;
@@ -623,7 +745,7 @@ export default function duetBuiltin(pi: ExtensionAPI) {
 	}
 
 	pi.registerCommand("duet", {
-		description: "Configure multi-model collaboration. Usage: /duet [turns|triage] [[role=]model,...] | off | status",
+		description: "Configure multi-model collaboration. Usage: /duet [turns|triage] [[role=]model ...] | off | status",
 		handler: async (args, ctx) => {
 			const trimmed = args.trim();
 			if (!trimmed || trimmed === "status") {
@@ -643,7 +765,7 @@ export default function duetBuiltin(pi: ExtensionAPI) {
 			const firstSpace = trimmed.indexOf(" ");
 			const strategyText = firstSpace === -1 ? trimmed : trimmed.slice(0, firstSpace);
 			if (!isDuetStrategy(strategyText)) {
-				ctx.ui.notify("Usage: /duet [turns|triage] [[role=]provider/model,...] | off | status", "error");
+				ctx.ui.notify("Usage: /duet [turns|triage] [[role=]provider/model ...] | off | status", "error");
 				return;
 			}
 
@@ -660,14 +782,18 @@ export default function duetBuiltin(pi: ExtensionAPI) {
 			}
 		},
 		getArgumentCompletions: (partial) => {
-			const options = ["status", "off", "turns", "triage"];
-			return options
-				.filter((option) => option.startsWith(partial))
-				.map((option) => ({ value: option, label: option }));
+			let availableModels: Model<Api>[] = [];
+			try {
+				availableModels = completionContext?.modelRegistry.getAvailable() ?? [];
+			} catch {
+				// A context from a replaced session throws; complete without models until the next session starts.
+			}
+			return getDuetArgumentCompletions(partial, availableModels);
 		},
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		completionContext = ctx;
 		disableDuet(ctx, false);
 
 		const duetFlag = pi.getFlag("duet");

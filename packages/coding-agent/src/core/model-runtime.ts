@@ -1,36 +1,74 @@
 import { dirname, join } from "node:path";
 import {
+	type AnyModel,
 	type Api,
 	type ApiStreamOptions,
+	type AssistantImages,
 	type AssistantMessage,
 	type AssistantMessageEventStream,
 	type AuthCheck,
 	type AuthInteraction,
+	type AuthOperationOptions,
 	type AuthResult,
 	type AuthType,
+	type ClassifierApi,
+	type ClassifierContext,
+	type ClassifierModel,
+	type ClassifierOptions,
+	type ClassifierResult,
 	type Context,
 	type Credential,
 	type CredentialInfo,
 	type CredentialStore,
+	clampThinkingLevel,
 	createModels,
+	type DeferredCancelOptions,
+	type DeferredFetchOptions,
+	type DeferredHandle,
+	getOpenCodeSessionHeaders,
+	type ImageApi,
+	type ImageModel,
+	type ImagesContext,
+	type ImagesOptions,
+	type LoginOptions,
 	lazyStream,
+	type Message,
 	type Model,
 	type Models,
 	type ModelsApiStreamOptions,
+	type ModelsClassifierOptions,
+	type ModelsDeferredCancelOptions,
+	type ModelsDeferredFetchOptions,
 	ModelsError,
+	type ModelsImagesOptions,
 	type ModelsRefreshOptions,
 	type ModelsRefreshResult,
+	type ModelsRequestTransforms,
 	type ModelsSimpleStreamOptions,
 	type ModelsStore,
-	type ModelsStreamTransforms,
+	type ModelThinkingLevel,
+	type ModelType,
+	type ModelTypeMap,
 	type MutableModels,
+	normalizeContext,
 	type Provider,
 	type ProviderHeaders,
+	type ProviderRequestOptions,
 	type SimpleStreamOptions,
 	type StreamOptions,
 } from "@draht/ai";
 import * as builtinProviderCatalog from "@draht/ai/providers/all";
+import { personalizeOpenRouterCatalog } from "@draht/ai/providers/openrouter";
+import {
+	assertChatModel,
+	assertClassifierInputSupported,
+	assertClassifierModel,
+	assertImageModel,
+	classifierErrorResult,
+	imageErrorResult,
+} from "@draht/ai/utils/model-operations";
 import { getAgentDir } from "../config.ts";
+import { operationSignal, raceWithAbortSignal } from "../utils/abort.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
 import { ModelConfig } from "./model-config.ts";
 import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.ts";
@@ -44,8 +82,22 @@ import {
 	resolveConfiguredModelHeaders,
 	validateExtensionProvider,
 } from "./provider-composer.ts";
-import { withRemoteCatalog } from "./remote-catalog-provider.ts";
+import { withPersonalizedCatalog, withRemoteCatalog } from "./remote-catalog-provider.ts";
 import { RuntimeCredentials } from "./runtime-credentials.ts";
+import {
+	createVirtualModel,
+	findLatestResponse,
+	isVirtualModel,
+	type ModelRoute,
+	type ModelRouteReason,
+	type VirtualModelDefinition,
+	withVirtualModels,
+} from "./virtual-models.ts";
+
+interface RegisteredVirtualModel {
+	model: Model<Api>;
+	route: VirtualModelDefinition["route"];
+}
 
 interface ModelRuntimeSnapshot {
 	all: readonly Model<Api>[];
@@ -67,13 +119,39 @@ export interface CreateModelRuntimeOptions {
 	/** Timeout for the create-time network model refresh. */
 	modelRefreshTimeoutMs?: number;
 	catalogBaseUrl?: string;
+	/** Optional caller cancellation for initial cache restoration and availability checks. */
+	signal?: AbortSignal;
+	/** Skip initial catalog and availability refresh. Static models remain available. */
+	refreshOnCreate?: boolean;
 }
 
-export interface ModelRuntimeAuthOverrides {
+export interface ModelRuntimeAuthOverrides extends AuthOperationOptions {
 	apiKey?: string;
 	env?: Record<string, string>;
 	/** Require this much remaining OAuth-token validity; defaults to five minutes. */
 	minOAuthValidityMs?: number;
+}
+
+export type CredentialSynchronizationOperation = "login" | "logout" | "setRuntimeApiKey" | "removeRuntimeApiKey";
+
+/** Credentials changed successfully, but the local model/auth snapshot could not be synchronized. */
+export class CredentialSynchronizationError extends Error {
+	readonly providerId: string;
+	readonly operation: CredentialSynchronizationOperation;
+	readonly credential: Credential | undefined;
+
+	constructor(
+		providerId: string,
+		operation: CredentialSynchronizationOperation,
+		credential: Credential | undefined,
+		options: ErrorOptions,
+	) {
+		super(`Credential ${operation} committed for ${providerId}, but local synchronization failed`, options);
+		this.name = "CredentialSynchronizationError";
+		this.providerId = providerId;
+		this.operation = operation;
+		this.credential = credential;
+	}
 }
 
 function mergeHeaders(
@@ -100,6 +178,8 @@ export class ModelRuntime implements Models {
 	private readonly builtins = new Map<string, Provider>();
 	private readonly nativeExtensionProviders = new Map<string, Provider>();
 	private readonly extensionProviders = new Map<string, ProviderConfigInput>();
+	/** Virtual models by provider id, then model id. */
+	private readonly virtualModels = new Map<string, Map<string, RegisteredVirtualModel>>();
 	private readonly compositionErrors = new Map<string, string>();
 	private readonly modelsPath: string | undefined;
 	private readonly modelNetworkEnabled: boolean;
@@ -111,8 +191,13 @@ export class ModelRuntime implements Models {
 		storedProviders: new Set(),
 		auth: new Map(),
 	};
-	private availabilityRefresh: Promise<void> | undefined;
+	private availabilityRefreshSeq = 0;
+	/** The most recently queued full availability pass; see {@link queueAvailabilityRefresh}. */
+	private latestAvailabilityRefresh: Promise<void> | undefined;
+	private availabilityErrorSeq = 0;
+	private readonly providerAvailabilitySeq = new Map<string, number>();
 	private availabilityError: string | undefined;
+	private readonly credentialOperations = new Map<string, Promise<unknown>>();
 
 	private constructor(
 		credentials: RuntimeCredentials,
@@ -143,13 +228,19 @@ export class ModelRuntime implements Models {
 				? new FileModelsStore(options.modelsStorePath ?? join(dirname(modelsPath), "models-store.json"))
 				: new InMemoryCodingAgentModelsStore());
 		const builtinModelDataGeneratedAt = builtinProviderCatalog.getBuiltinModelDataGeneratedAt();
-		const providers = builtinProviderCatalog
-			.builtinProviders()
-			.map((provider) =>
-				provider.id === "radius"
-					? provider
-					: withRemoteCatalog(provider, options.catalogBaseUrl, builtinModelDataGeneratedAt),
-			);
+		const providers = builtinProviderCatalog.builtinProviders().map((provider) => {
+			if (provider.id === "radius") return provider;
+			// OpenRouter narrows the catalog to the models, limits and prices of the user's key.
+			if (provider.id === "openrouter") {
+				return withPersonalizedCatalog(
+					provider,
+					personalizeOpenRouterCatalog,
+					options.catalogBaseUrl,
+					builtinModelDataGeneratedAt,
+				);
+			}
+			return withRemoteCatalog(provider, options.catalogBaseUrl, builtinModelDataGeneratedAt);
+		});
 		const runtime = new ModelRuntime(
 			credentials,
 			config,
@@ -161,12 +252,18 @@ export class ModelRuntime implements Models {
 		runtime.configureRadiusProviders();
 		runtime.rebuildProviders();
 		const refreshFromNetwork = runtime.modelNetworkEnabled && options.allowModelNetwork === true;
-		const controller = refreshFromNetwork ? new AbortController() : undefined;
-		const timeout = controller
-			? setTimeout(() => controller.abort(), options.modelRefreshTimeoutMs ?? 15_000)
-			: undefined;
+		const controller =
+			refreshFromNetwork && options.modelRefreshTimeoutMs !== undefined ? new AbortController() : undefined;
+		const timeout = controller ? setTimeout(() => controller.abort(), options.modelRefreshTimeoutMs) : undefined;
+		const signal = controller
+			? options.signal
+				? AbortSignal.any([options.signal, controller.signal])
+				: controller.signal
+			: options.signal;
 		try {
-			await runtime.refresh({ allowNetwork: refreshFromNetwork, signal: controller?.signal });
+			if (options.refreshOnCreate !== false) {
+				await runtime.refresh({ allowNetwork: refreshFromNetwork, signal });
+			}
 		} finally {
 			if (timeout) clearTimeout(timeout);
 		}
@@ -196,30 +293,36 @@ export class ModelRuntime implements Models {
 			...this.nativeExtensionProviders.keys(),
 			...this.config.getProviderIds(),
 			...this.extensionProviders.keys(),
+			...this.virtualModels.keys(),
 		]);
 	}
 
-	private recomposeProvider(providerId: string): void {
+	/** Returns the provider without virtual models, or undefined when only virtual models define it. */
+	private recomposeProvider(providerId: string): Provider | undefined {
+		const provider = this.composeProvider(providerId);
+		const virtualModels = [...(this.virtualModels.get(providerId)?.values() ?? [])].map((entry) => entry.model);
+		if (virtualModels.length > 0) this.models.setProvider(withVirtualModels(providerId, provider, virtualModels));
+		else if (provider) this.models.setProvider(provider);
+		else this.models.deleteProvider(providerId);
+		return provider;
+	}
+
+	/** The provider without virtual models, or undefined when nothing defines it. */
+	private composeProvider(providerId: string): Provider | undefined {
 		const base = this.nativeExtensionProviders.get(providerId) ?? this.builtins.get(providerId);
 		const extension = this.extensionProviders.get(providerId);
-		if (!base && !this.config.getProvider(providerId) && !extension) {
-			this.models.deleteProvider(providerId);
-			this.compositionErrors.delete(providerId);
-			return;
-		}
-		if (base && !this.config.getProvider(providerId) && !extension) {
+		if (!this.config.getProvider(providerId) && !extension) {
 			// No overlays: use the builtin untouched so its auth/login/stream behavior is exact.
-			this.models.setProvider(base);
 			this.compositionErrors.delete(providerId);
-			return;
+			return base;
 		}
 		try {
-			this.models.setProvider(composeModelProvider(providerId, base, this.config, extension));
+			const provider = composeModelProvider(providerId, base, this.config, extension);
 			this.compositionErrors.delete(providerId);
+			return provider;
 		} catch (error) {
 			this.compositionErrors.set(providerId, error instanceof Error ? error.message : String(error));
-			if (base) this.models.setProvider(base);
-			else this.models.deleteProvider(providerId);
+			return base;
 		}
 	}
 
@@ -239,20 +342,22 @@ export class ModelRuntime implements Models {
 		};
 	}
 
-	private async runAvailabilityRefresh(): Promise<void> {
+	/** Resolves true when this pass wrote the snapshot, false when a newer pass superseded it. */
+	private async runAvailabilityRefresh(seq: number, errorSeq: number, signal: AbortSignal): Promise<boolean> {
 		const providers = this.models.getProviders();
 		const [available, checks, credentials] = await Promise.all([
-			this.models.getAvailable(),
+			this.models.getAvailable(undefined, { signal }),
 			Promise.all(
 				providers.map(
 					async (provider): Promise<[string, AuthCheck | undefined]> => [
 						provider.id,
-						await this.models.checkAuth(provider.id),
+						await this.models.checkAuth(provider.id, { signal }),
 					],
 				),
 			),
-			this.credentials.list(),
+			this.credentials.list({ signal }),
 		]);
+		if (seq !== this.availabilityRefreshSeq) return false;
 		const auth = new Map(checks);
 		const configuredProviders = new Set(
 			checks
@@ -266,30 +371,89 @@ export class ModelRuntime implements Models {
 			storedProviders: new Set(credentials.map((entry) => entry.providerId)),
 			auth,
 		};
-		this.availabilityError = undefined;
+		if (errorSeq === this.availabilityErrorSeq) this.availabilityError = undefined;
+		return true;
 	}
 
-	private queueAvailabilityRefresh(after: Promise<void> | undefined): Promise<void> {
-		const refresh = (after ?? Promise.resolve()).catch(() => {}).then(() => this.runAvailabilityRefresh());
-		const recorded = refresh.catch((error) => {
-			this.availabilityError = error instanceof Error ? error.message : String(error);
+	private queueAvailabilityRefresh(signal?: AbortSignal): Promise<void> {
+		const seq = ++this.availabilityRefreshSeq;
+		for (const [providerId, providerSeq] of this.providerAvailabilitySeq) {
+			this.providerAvailabilitySeq.set(providerId, providerSeq + 1);
+		}
+		const errorSeq = ++this.availabilityErrorSeq;
+		const effectiveSignal = operationSignal(signal);
+		const pass: Promise<void> = this.runAvailabilityRefresh(seq, errorSeq, effectiveSignal)
+			.catch((error) => {
+				if (errorSeq === this.availabilityErrorSeq && !effectiveSignal.aborted) {
+					this.availabilityError = error instanceof Error ? error.message : String(error);
+				}
+				throw error;
+			})
+			.then(async (applied) => {
+				if (applied) return;
+				// A newer full pass superseded this one, so this pass wrote nothing. Resolving here
+				// would let `await refresh()` return a snapshot OLDER than the call: an extension's
+				// registerNativeProvider() starts an unawaited refresh, and when that pass is queued
+				// after the caller's own, session restore read a snapshot without the provider and
+				// dropped the session's model. Wait for the pass that won instead.
+				const newer = this.latestAvailabilityRefresh;
+				if (newer !== undefined && newer !== pass) await raceWithAbortSignal(newer, effectiveSignal);
+			});
+		this.latestAvailabilityRefresh = pass;
+		return pass;
+	}
+
+	private async refreshProviderAvailability(providerId: string, signal: AbortSignal): Promise<void> {
+		// Invalidate any full availability pass that started before this credential change.
+		++this.availabilityRefreshSeq;
+		const providerSeq = (this.providerAvailabilitySeq.get(providerId) ?? 0) + 1;
+		this.providerAvailabilitySeq.set(providerId, providerSeq);
+		const errorSeq = ++this.availabilityErrorSeq;
+		try {
+			const [available, auth, credential] = await Promise.all([
+				this.models.getAvailable(providerId, { signal }),
+				this.models.checkAuth(providerId, { signal }),
+				this.credentials.read(providerId, { signal }),
+			]);
+			signal.throwIfAborted();
+			if (this.providerAvailabilitySeq.get(providerId) !== providerSeq) return;
+			const configuredProviders = new Set(this.snapshot.configuredProviders);
+			const storedProviders = new Set(this.snapshot.storedProviders);
+			const authByProvider = new Map(this.snapshot.auth);
+			if (auth) {
+				configuredProviders.add(providerId);
+				authByProvider.set(providerId, auth);
+			} else {
+				configuredProviders.delete(providerId);
+				authByProvider.delete(providerId);
+			}
+			if (credential) storedProviders.add(providerId);
+			else storedProviders.delete(providerId);
+			const all = [...this.models.getModels()];
+			const availableById = new Map(
+				[...this.snapshot.available.filter((model) => model.provider !== providerId), ...available].map((model) => [
+					`${model.provider}\0${model.id}`,
+					model,
+				]),
+			);
+			this.snapshot = {
+				all,
+				available: all.flatMap((model) => availableById.get(`${model.provider}\0${model.id}`) ?? []),
+				configuredProviders,
+				storedProviders,
+				auth: authByProvider,
+			};
+			if (errorSeq === this.availabilityErrorSeq) this.availabilityError = undefined;
+		} catch (error) {
+			if (
+				this.providerAvailabilitySeq.get(providerId) === providerSeq &&
+				errorSeq === this.availabilityErrorSeq &&
+				!signal.aborted
+			) {
+				this.availabilityError = error instanceof Error ? error.message : String(error);
+			}
 			throw error;
-		});
-		const tracked = recorded.finally(() => {
-			if (this.availabilityRefresh === tracked) this.availabilityRefresh = undefined;
-		});
-		this.availabilityRefresh = tracked;
-		return tracked;
-	}
-
-	/** Coalesce concurrent readers onto the pending refresh. */
-	private refreshAvailability(): Promise<void> {
-		return this.availabilityRefresh ?? this.queueAvailabilityRefresh(undefined);
-	}
-
-	/** Mutations must not observe an in-flight refresh started before them. */
-	private forceRefreshAvailability(): Promise<void> {
-		return this.queueAvailabilityRefresh(this.availabilityRefresh);
+		}
 	}
 
 	getProviders(): readonly Provider[] {
@@ -308,24 +472,53 @@ export class ModelRuntime implements Models {
 		return this.models.getModel(providerId, modelId);
 	}
 
-	async checkAuth(providerId: string): Promise<AuthCheck | undefined> {
-		return this.models.checkAuth(providerId);
+	getModelsOfType<TType extends ModelType>(type: TType, providerId?: string): readonly ModelTypeMap[TType][] {
+		return this.models.getModelsOfType(type, providerId);
 	}
 
-	async getAvailable(providerId?: string): Promise<readonly Model<Api>[]> {
+	getModelOfType<TType extends ModelType>(
+		type: TType,
+		providerId: string,
+		modelId: string,
+	): ModelTypeMap[TType] | undefined {
+		return this.models.getModelOfType(type, providerId, modelId);
+	}
+
+	getAllModels(providerId?: string): readonly AnyModel[] {
+		return this.models.getAllModels(providerId);
+	}
+
+	getAvailableOfType<TType extends ModelType>(
+		type: TType,
+		providerId?: string,
+		options?: AuthOperationOptions,
+	): Promise<readonly ModelTypeMap[TType][]> {
+		return this.models.getAvailableOfType(type, providerId, options);
+	}
+
+	getAllAvailable(providerId?: string, options?: AuthOperationOptions): Promise<readonly AnyModel[]> {
+		return this.models.getAllAvailable(providerId, options);
+	}
+
+	async checkAuth(providerId: string, options?: AuthOperationOptions): Promise<AuthCheck | undefined> {
+		return this.models.checkAuth(providerId, options);
+	}
+
+	async getAvailable(providerId?: string, options?: AuthOperationOptions): Promise<readonly Model<Api>[]> {
 		if (providerId) {
-			if (this.availabilityRefresh) {
-				await this.availabilityRefresh;
-				return this.snapshot.available.filter((model) => model.provider === providerId);
-			}
+			const errorSeq = ++this.availabilityErrorSeq;
 			try {
-				return await this.models.getAvailable(providerId);
+				const available = await this.models.getAvailable(providerId, options);
+				if (errorSeq === this.availabilityErrorSeq) this.availabilityError = undefined;
+				return available;
 			} catch (error) {
-				this.availabilityError = error instanceof Error ? error.message : String(error);
+				if (errorSeq === this.availabilityErrorSeq && !options?.signal?.aborted) {
+					this.availabilityError = error instanceof Error ? error.message : String(error);
+				}
 				throw error;
 			}
 		}
-		await this.refreshAvailability();
+		await this.queueAvailabilityRefresh(options?.signal);
 		return this.snapshot.available;
 	}
 
@@ -369,14 +562,18 @@ export class ModelRuntime implements Models {
 		return this.snapshot.auth.get(providerId)?.type === "oauth";
 	}
 
+	isUsingSubscription(providerId: string): boolean {
+		return this.isUsingOAuth(providerId) && this.models.getProvider(providerId)?.auth.oauth?.isSubscription === true;
+	}
+
 	hasConfiguredAuth(providerId: string): boolean {
 		return this.snapshot.configuredProviders.has(providerId);
 	}
 
 	getAuth(providerId: string, overrides?: ModelRuntimeAuthOverrides): Promise<AuthResult | undefined>;
-	getAuth(model: Model<Api>, overrides?: ModelRuntimeAuthOverrides): Promise<AuthResult | undefined>;
+	getAuth(model: AnyModel, overrides?: ModelRuntimeAuthOverrides): Promise<AuthResult | undefined>;
 	async getAuth(
-		providerOrModel: string | Model<Api>,
+		providerOrModel: string | AnyModel,
 		overrides: ModelRuntimeAuthOverrides = {},
 	): Promise<AuthResult | undefined> {
 		if (typeof providerOrModel === "string") return this.models.getAuth(providerOrModel, overrides);
@@ -397,32 +594,71 @@ export class ModelRuntime implements Models {
 		};
 	}
 
-	async setRuntimeApiKey(
+	private enqueueCredentialOperation<T>(providerId: string, signal: AbortSignal, task: () => Promise<T>): Promise<T> {
+		const previous = this.credentialOperations.get(providerId) ?? Promise.resolve();
+		let markStarted: (() => void) | undefined;
+		const started = new Promise<void>((resolve) => {
+			markStarted = resolve;
+		});
+		const operation = (async () => {
+			await previous.catch(() => {});
+			signal.throwIfAborted();
+			markStarted?.();
+			return task();
+		})();
+		const tail = operation.catch(() => {});
+		this.credentialOperations.set(providerId, tail);
+		void tail.then(() => {
+			if (this.credentialOperations.get(providerId) === tail) this.credentialOperations.delete(providerId);
+		});
+		return raceWithAbortSignal(started, signal).then(() => operation);
+	}
+
+	private async synchronizeCredentialState(
 		providerId: string,
-		apiKey: string,
-		refreshOptions: ModelsRefreshOptions = {},
+		operation: CredentialSynchronizationOperation,
+		credential: Credential | undefined,
+		signal: AbortSignal,
 	): Promise<void> {
-		this.credentials.setRuntimeApiKey(providerId, apiKey);
-		const auth = new Map(this.snapshot.auth).set(providerId, { type: "api_key", source: "runtime API key" });
-		const configuredProviders = new Set(this.snapshot.configuredProviders).add(providerId);
-		const storedProviders = new Set(this.snapshot.storedProviders).add(providerId);
-		this.snapshot = {
-			...this.snapshot,
-			auth,
-			configuredProviders,
-			storedProviders,
-			available: this.snapshot.all.filter((model) => configuredProviders.has(model.provider)),
-		};
-		await this.refresh(refreshOptions);
+		try {
+			signal.throwIfAborted();
+			this.recomposeProvider(providerId);
+			const compositionError = this.compositionErrors.get(providerId);
+			if (compositionError) throw new Error(compositionError);
+			const result = await this.models.refresh({ allowNetwork: false, providers: [providerId], signal });
+			if (result.aborted) signal.throwIfAborted();
+			const refreshError = result.errors.get(providerId);
+			if (refreshError) throw refreshError;
+			this.updateModelSnapshot();
+			await this.refreshProviderAvailability(providerId, signal);
+		} catch (cause) {
+			throw new CredentialSynchronizationError(providerId, operation, credential, { cause });
+		}
 	}
 
-	async removeRuntimeApiKey(providerId: string): Promise<void> {
-		this.credentials.removeRuntimeApiKey(providerId);
-		await this.refresh({ allowNetwork: this.modelNetworkEnabled });
+	setRuntimeApiKey(providerId: string, apiKey: string, options: AuthOperationOptions = {}): Promise<void> {
+		const signal = operationSignal(options.signal);
+		return this.enqueueCredentialOperation(providerId, signal, async () => {
+			this.credentials.setRuntimeApiKey(providerId, apiKey);
+			await this.synchronizeCredentialState(
+				providerId,
+				"setRuntimeApiKey",
+				{ type: "api_key", key: apiKey },
+				signal,
+			);
+		});
 	}
 
-	listCredentials(): Promise<readonly CredentialInfo[]> {
-		return this.credentials.list();
+	removeRuntimeApiKey(providerId: string, options: AuthOperationOptions = {}): Promise<void> {
+		const signal = operationSignal(options.signal);
+		return this.enqueueCredentialOperation(providerId, signal, async () => {
+			this.credentials.removeRuntimeApiKey(providerId);
+			await this.synchronizeCredentialState(providerId, "removeRuntimeApiKey", undefined, signal);
+		});
+	}
+
+	listCredentials(options?: AuthOperationOptions): Promise<readonly CredentialInfo[]> {
+		return this.credentials.list(options);
 	}
 
 	getProviderAuthStatus(providerId: string): AuthStatus {
@@ -437,17 +673,37 @@ export class ModelRuntime implements Models {
 		return check ? { configured: true, source: "environment", label: check.source } : { configured: false };
 	}
 
-	private async prepareRequest(
-		model: Model<Api>,
-		options: (StreamOptions & ModelsStreamTransforms) | undefined,
-	): Promise<{ provider: Provider; model: Model<Api>; options: StreamOptions }> {
+	private async prepareRequest<
+		TModel extends AnyModel,
+		TOptions extends ProviderRequestOptions<TModel> & ModelsRequestTransforms,
+	>(
+		model: TModel,
+		options: TOptions | undefined,
+	): Promise<{
+		provider: Provider;
+		model: TModel;
+		options: Omit<TOptions, "transformHeaders"> & ProviderRequestOptions<TModel>;
+	}> {
 		const provider = this.models.getProvider(model.provider);
 		if (!provider) throw new ModelsError("provider", `Unknown provider: ${model.provider}`);
-		const resolution = await this.getAuth(model, { apiKey: options?.apiKey, env: options?.env });
+		const resolution = await this.getAuth(model, {
+			apiKey: options?.apiKey,
+			env: options?.env,
+			signal: options?.signal,
+		});
 		if (!resolution) throw new ModelsError("auth", `Provider is not configured: ${model.provider}`);
 
-		const { transformHeaders, ...providerOptions } = options ?? {};
-		let headers = mergeHeaders(resolution.auth.headers, providerOptions.headers);
+		const { transformHeaders, ...rawProviderOptions } = options ?? {};
+		const providerOptions = rawProviderOptions as Omit<TOptions, "transformHeaders"> & ProviderRequestOptions<TModel>;
+		const requestModel: TModel = resolution.auth.baseUrl ? { ...model, baseUrl: resolution.auth.baseUrl } : model;
+		const sessionId =
+			"sessionId" in providerOptions && typeof providerOptions.sessionId === "string"
+				? providerOptions.sessionId
+				: undefined;
+		let headers = mergeHeaders(
+			mergeHeaders(getOpenCodeSessionHeaders(requestModel, sessionId), resolution.auth.headers),
+			providerOptions.headers,
+		);
 		if (transformHeaders) headers = await transformHeaders(headers ?? {});
 		const env =
 			resolution.env || providerOptions.env
@@ -455,13 +711,13 @@ export class ModelRuntime implements Models {
 				: undefined;
 		return {
 			provider,
-			model: resolution.auth.baseUrl ? { ...model, baseUrl: resolution.auth.baseUrl } : model,
+			model: requestModel,
 			options: {
 				...providerOptions,
 				apiKey: providerOptions.apiKey ?? resolution.auth.apiKey,
 				headers,
 				env,
-			},
+			} as Omit<TOptions, "transformHeaders"> & ProviderRequestOptions<TModel>,
 		};
 	}
 
@@ -470,16 +726,14 @@ export class ModelRuntime implements Models {
 		context: Context,
 		options?: ModelsApiStreamOptions<TApi>,
 	): AssistantMessageEventStream {
+		const transcript = normalizeContext(context);
 		return lazyStream(model, async () => {
+			assertChatModel(model);
 			const prepared = await this.prepareRequest(
 				model,
-				options as (StreamOptions & ModelsStreamTransforms) | undefined,
+				options as (StreamOptions & ModelsRequestTransforms) | undefined,
 			);
-			return prepared.provider.stream(
-				prepared.model as Model<TApi>,
-				context,
-				prepared.options as ApiStreamOptions<TApi>,
-			);
+			return prepared.provider.stream(prepared.model, transcript, prepared.options as ApiStreamOptions<TApi>);
 		});
 	}
 
@@ -492,9 +746,30 @@ export class ModelRuntime implements Models {
 	}
 
 	streamSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): AssistantMessageEventStream {
+		const transcript = normalizeContext(context);
+		if (isVirtualModel(model)) {
+			// Requests outside the agent loop are routed here. Callers sized them before routing, so
+			// cap the output budget to the routed model.
+			return lazyStream(model, async () => {
+				const route = await this.resolveModel(model, transcript.messages, {
+					reason: "direct",
+					thinkingLevel: options?.reasoning ?? "off",
+					signal: options?.signal,
+				});
+				const { maxTokens: limit } = route.model;
+				const maxTokens = options?.maxTokens && limit > 0 ? Math.min(options.maxTokens, limit) : options?.maxTokens;
+				const reasoning = route.thinkingLevel === "off" ? undefined : route.thinkingLevel;
+				// Caller credentials were resolved for the virtual model's provider. Another provider
+				// resolves its own, so they are not sent to the wrong vendor.
+				const { apiKey, headers, env, ...rest } = options ?? {};
+				const auth = route.model.provider === model.provider ? { apiKey, headers, env } : {};
+				return this.streamSimple(route.model, context, { ...rest, ...auth, maxTokens, reasoning });
+			});
+		}
 		return lazyStream(model, async () => {
+			assertChatModel(model);
 			const prepared = await this.prepareRequest(model, options);
-			return prepared.provider.streamSimple(prepared.model, context, prepared.options as SimpleStreamOptions);
+			return prepared.provider.streamSimple(prepared.model, transcript, prepared.options as SimpleStreamOptions);
 		});
 	}
 
@@ -502,23 +777,108 @@ export class ModelRuntime implements Models {
 		return this.streamSimple(model, context, options).result();
 	}
 
-	async login(providerId: string, type: AuthType, interaction: AuthInteraction): Promise<Credential> {
-		const credential = await this.models.login(providerId, type, interaction);
-		await this.refresh({ allowNetwork: this.modelNetworkEnabled });
-		return credential;
+	streamDeferred(
+		model: Model<Api>,
+		handle: DeferredHandle,
+		options?: ModelsDeferredFetchOptions,
+	): AssistantMessageEventStream {
+		return lazyStream(model, async () => {
+			assertChatModel(model);
+			const prepared = await this.prepareRequest(model, options);
+			if (!prepared.provider.fetchDeferred) {
+				throw new ModelsError("provider", `Provider ${model.provider} does not support deferred responses`);
+			}
+			return prepared.provider.fetchDeferred(prepared.model, handle, prepared.options as DeferredFetchOptions);
+		});
 	}
 
-	async logout(providerId: string): Promise<void> {
-		await this.models.logout(providerId);
-		// Reset credential-dependent compatibility projections before the unconfigured provider is skipped by refresh.
-		this.recomposeProvider(providerId);
-		await this.refresh({ allowNetwork: this.modelNetworkEnabled });
+	async fetchDeferred(
+		model: Model<Api>,
+		handle: DeferredHandle,
+		options?: ModelsDeferredFetchOptions,
+	): Promise<AssistantMessage> {
+		return this.streamDeferred(model, handle, options).result();
+	}
+
+	async cancelDeferred(
+		model: Model<Api>,
+		handle: DeferredHandle,
+		options?: ModelsDeferredCancelOptions,
+	): Promise<void> {
+		assertChatModel(model);
+		const prepared = await this.prepareRequest(model, options);
+		if (!prepared.provider.cancelDeferred) {
+			throw new ModelsError("provider", `Provider ${model.provider} does not support deferred responses`);
+		}
+		await prepared.provider.cancelDeferred(prepared.model, handle, prepared.options as DeferredCancelOptions);
+	}
+
+	async generateImages(
+		model: ImageModel<ImageApi>,
+		context: ImagesContext,
+		options?: ModelsImagesOptions,
+	): Promise<AssistantImages> {
+		try {
+			assertImageModel(model);
+			const prepared = await this.prepareRequest(model, options);
+			if (!prepared.provider.generateImages) {
+				throw new ModelsError("provider", `Provider ${model.provider} does not support image generation`);
+			}
+			return await prepared.provider.generateImages(prepared.model, context, prepared.options as ImagesOptions);
+		} catch (error) {
+			return imageErrorResult(model, error, options?.signal?.aborted);
+		}
+	}
+
+	async classify(
+		model: ClassifierModel<ClassifierApi>,
+		context: ClassifierContext,
+		options?: ModelsClassifierOptions,
+	): Promise<ClassifierResult> {
+		try {
+			assertClassifierModel(model);
+			assertClassifierInputSupported(model, context);
+			const prepared = await this.prepareRequest(model, options);
+			if (!prepared.provider.classify) {
+				throw new ModelsError("provider", `Provider ${model.provider} does not support classification`);
+			}
+			return await prepared.provider.classify(prepared.model, context, prepared.options as ClassifierOptions);
+		} catch (error) {
+			return classifierErrorResult(model, error, options?.signal?.aborted);
+		}
+	}
+
+	login(
+		providerId: string,
+		type: AuthType,
+		interaction: AuthInteraction,
+		options?: LoginOptions,
+	): Promise<Credential> {
+		const signal = operationSignal(interaction.signal);
+		return this.enqueueCredentialOperation(providerId, signal, async () => {
+			const credential = await this.models.login(providerId, type, { ...interaction, signal }, options);
+			await this.synchronizeCredentialState(providerId, "login", credential, signal);
+			return credential;
+		});
+	}
+
+	logout(providerId: string, options: AuthOperationOptions = {}): Promise<void> {
+		const signal = operationSignal(options.signal);
+		return this.enqueueCredentialOperation(providerId, signal, async () => {
+			await this.models.logout(providerId, { signal });
+			await this.synchronizeCredentialState(providerId, "logout", undefined, signal);
+		});
 	}
 
 	async refresh(options: ModelsRefreshOptions = {}): Promise<ModelsRefreshResult> {
 		this.config = await ModelConfig.load(this.modelsPath);
 		this.configureRadiusProviders();
-		this.rebuildProviders();
+		if (options.providers) {
+			for (const providerId of new Set(options.providers)) this.recomposeProvider(providerId);
+			this.updateModelSnapshot();
+		} else {
+			this.rebuildProviders();
+		}
 		const refreshOptions = {
 			...options,
 			allowNetwork: options.allowNetwork ?? this.modelNetworkEnabled,
@@ -529,13 +889,28 @@ export class ModelRuntime implements Models {
 			aborted: refreshOptions.signal?.aborted ?? false,
 			errors: new Map(),
 		};
+		const errors = new Map(result.errors);
 		this.updateModelSnapshot();
-		try {
-			await this.forceRefreshAvailability();
-		} catch {
-			// Availability errors are recorded by forceRefreshAvailability; refreshed models remain usable.
+		if (options.providers) {
+			await Promise.all(
+				[...new Set(options.providers)].map(async (providerId) => {
+					try {
+						await this.refreshProviderAvailability(providerId, operationSignal(options.signal));
+					} catch (error) {
+						if (!options.signal?.aborted) {
+							errors.set(providerId, error instanceof Error ? error : new Error(String(error)));
+						}
+					}
+				}),
+			);
+		} else {
+			try {
+				await this.queueAvailabilityRefresh(options.signal);
+			} catch {
+				// Availability errors are recorded by the latest pass; refreshed models remain usable.
+			}
 		}
-		return result;
+		return { aborted: result.aborted || (options.signal?.aborted ?? false), errors };
 	}
 
 	registerNativeProvider(provider: Provider): void {
@@ -544,7 +919,35 @@ export class ModelRuntime implements Models {
 		this.nativeExtensionProviders.set(provider.id, provider);
 		this.recomposeProvider(provider.id);
 		this.updateModelSnapshot();
+		this.markProvisionallyConfigured(
+			provider.id,
+			configuredRequestAuthStatus(this.config.getProvider(provider.id), undefined),
+			provider.auth.oauth && !provider.auth.apiKey ? "oauth" : "api_key",
+		);
 		void this.refresh({ allowNetwork: false });
+	}
+
+	/**
+	 * Mark a newly registered provider as configured when it has a stored credential or a configured
+	 * API key. Availability checks run asynchronously, and callers such as initial model selection
+	 * read the snapshot before they finish. The next availability pass replaces this entry.
+	 */
+	private markProvisionallyConfigured(
+		providerId: string,
+		configuredStatus: AuthStatus | undefined,
+		type: AuthType,
+	): void {
+		if (!this.snapshot.storedProviders.has(providerId) && !configuredStatus?.configured) return;
+		const configuredProviders = new Set(this.snapshot.configuredProviders).add(providerId);
+		const auth = new Map(this.snapshot.auth);
+		// Never clobber a real check result.
+		if (!auth.get(providerId)) auth.set(providerId, { type, source: "configured provider" });
+		this.snapshot = {
+			...this.snapshot,
+			auth,
+			configuredProviders,
+			available: this.snapshot.all.filter((model) => configuredProviders.has(model.provider)),
+		};
 	}
 
 	registerProvider(providerId: string, config: ProviderConfigInput): void {
@@ -562,26 +965,11 @@ export class ModelRuntime implements Models {
 		this.extensionProviders.set(providerId, effective);
 		this.recomposeProvider(providerId);
 		this.updateModelSnapshot();
-		if (
-			this.snapshot.storedProviders.has(providerId) ||
-			configuredRequestAuthStatus(this.config.getProvider(providerId), effective)?.configured
-		) {
-			const configuredProviders = new Set(this.snapshot.configuredProviders).add(providerId);
-			const auth = new Map(this.snapshot.auth);
-			// Provisional entry until the async refresh lands; never clobber a real check result.
-			if (!auth.get(providerId)) {
-				auth.set(providerId, {
-					type: effective.oauth && !effective.apiKey ? "oauth" : "api_key",
-					source: "configured provider",
-				});
-			}
-			this.snapshot = {
-				...this.snapshot,
-				auth,
-				configuredProviders,
-				available: this.snapshot.all.filter((model) => configuredProviders.has(model.provider)),
-			};
-		}
+		this.markProvisionallyConfigured(
+			providerId,
+			configuredRequestAuthStatus(this.config.getProvider(providerId), effective),
+			effective.oauth && !effective.apiKey ? "oauth" : "api_key",
+		);
 		void this.refresh({ allowNetwork: false });
 	}
 
@@ -591,5 +979,88 @@ export class ModelRuntime implements Models {
 		this.recomposeProvider(providerId);
 		this.updateModelSnapshot();
 		void this.refresh({ allowNetwork: false });
+	}
+
+	/**
+	 * Register a virtual model under `definition.provider`, which may also list physical models or
+	 * several virtual models. Re-registering the same provider and id replaces the virtual model.
+	 * Throws when the id belongs to a physical model of that provider.
+	 */
+	registerVirtualModel(definition: VirtualModelDefinition): void {
+		const { provider: providerId, id } = definition;
+		if (!providerId.trim() || !id.trim()) throw new Error("Virtual model provider and id must not be empty.");
+		const existing = this.models.getModel(providerId, id);
+		if (existing && !isVirtualModel(existing)) {
+			throw new Error(`Virtual model ${providerId}/${id} conflicts with a physical model.`);
+		}
+		const models = this.virtualModels.get(providerId) ?? new Map<string, RegisteredVirtualModel>();
+		models.set(id, { model: createVirtualModel(definition), route: (request) => definition.route(request) });
+		this.virtualModels.set(providerId, models);
+		if (!this.recomposeProvider(providerId) && !this.snapshot.configuredProviders.has(providerId)) {
+			// A provider of only virtual models needs no credentials. Mark it configured now: session
+			// restore checks auth before the refresh below lands.
+			const auth = new Map(this.snapshot.auth).set(providerId, { type: "api_key", source: "virtual" });
+			const configuredProviders = new Set(this.snapshot.configuredProviders).add(providerId);
+			this.snapshot = { ...this.snapshot, auth, configuredProviders };
+		}
+		this.updateModelSnapshot();
+		void this.refresh({ allowNetwork: false });
+	}
+
+	unregisterVirtualModel(providerId: string, id: string): void {
+		const models = this.virtualModels.get(providerId);
+		if (!models?.delete(id)) return;
+		if (models.size === 0) this.virtualModels.delete(providerId);
+		this.recomposeProvider(providerId);
+		this.updateModelSnapshot();
+		void this.refresh({ allowNetwork: false });
+	}
+
+	/**
+	 * Ask a virtual model's router for the model and thinking level of one request. The router must
+	 * return a physical catalog model whose provider has credentials; the thinking level is clamped
+	 * to that model. Throws when routing fails.
+	 *
+	 * `previous` reports the latest successful response in `messages`. A retry passes the failed
+	 * response as `options.failed`; `messages` no longer contains it. `options.state` is the router
+	 * state stored by the caller, which also stores the returned state.
+	 */
+	async resolveModel(
+		model: Model<Api>,
+		messages: readonly Message[],
+		options: {
+			reason: ModelRouteReason;
+			thinkingLevel: ModelThinkingLevel;
+			signal?: AbortSignal;
+			failed?: AssistantMessage;
+			state?: unknown;
+		},
+	): Promise<ModelRoute> {
+		const name = `Virtual model ${model.provider}/${model.id}`;
+		const virtual = this.virtualModels.get(model.provider)?.get(model.id);
+		if (!virtual) throw new Error(`${name} is not registered.`);
+		const { failed, ...request } = options;
+		const latest = findLatestResponse(messages);
+		const previousModel = latest && this.getPhysicalModel(latest.provider, latest.model);
+		// A failed routing attempt names the virtual model; there is no physical request to report.
+		const failedModel = failed && this.getPhysicalModel(failed.provider, failed.model);
+		const route = await virtual.route({
+			...request,
+			model,
+			previous: previousModel && { model: previousModel, thinkingLevel: latest?.thinkingLevel },
+			failed: failedModel && failed && { model: failedModel, thinkingLevel: failed.thinkingLevel, message: failed },
+			messages,
+		});
+		const target = this.getPhysicalModel(route.model.provider, route.model.id);
+		const routed = `${name} routed to ${route.model.provider}/${route.model.id}`;
+		if (!target) throw new Error(`${routed}, which is not a physical model.`);
+		if (!this.hasConfiguredAuth(target.provider)) throw new Error(`${routed}, which has no credentials.`);
+		return { model: target, thinkingLevel: clampThinkingLevel(target, route.thinkingLevel), state: route.state };
+	}
+
+	/** A catalog chat model that is not virtual. */
+	getPhysicalModel(providerId: string, modelId: string): Model<Api> | undefined {
+		const model = this.models.getModel(providerId, modelId);
+		return model && !isVirtualModel(model) ? model : undefined;
 	}
 }

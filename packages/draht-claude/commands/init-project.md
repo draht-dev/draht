@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 description: Initialize GSD planning for an existing project (codebase mapping → questioning → domain model → roadmap)
 argument-hint: "[focus area]"
 allowed-tools: Bash, Read, Write, Edit, Task
@@ -14,15 +15,11 @@ Use this when you have an existing codebase and want to add structured planning.
 
 > **Tool note**: Invoke `draht-tools <subcommand>` as `node "${CLAUDE_PLUGIN_ROOT}/bin/draht-tools.cjs" <subcommand>` via the Bash tool.
 
-## Atomic Reasoning
-
-Decompose the work into independently verifiable units before acting; the `atomic-reasoning` skill holds the full discipline — load it when the decomposition is not obvious.
-
 ## Steps
 1. Run `draht-tools init` to check preconditions (git repo, etc.)
-2. Run `draht-tools map-codebase` to build a structural map of the existing code, then `draht-tools map-graph` to produce `.planning/codebase/MAP.json` + `GRAPH_REPORT.md` (map-codebase alone does NOT emit MAP.json)
-3. Analyze the codebase map to understand architecture, tech stack, and conventions: read `.planning/codebase/MAP.json` and run `draht-tools graph-hotspots` + `draht-tools graph-clusters` to surface high-traffic and cohesive modules
-4. Deep questioning phase (3-7 rounds — each round asks the whole frontier: settled-prerequisite questions only, numbered, each with a recommended answer):
+2. Run `draht-tools map-codebase` to generate structural docs and the knowledge graph. If graph generation fails, retry with `draht-tools map-graph --quiet` before querying it
+3. Read `.planning/codebase/GRAPH_REPORT.md` for architecture, tech stack, and conventions. Use `draht-tools graph-query <topic>` and `draht-tools graph-context <file...>` for focused detail; use `graph-hotspots` or `graph-clusters` when needed instead of reading the full `MAP.json`
+4. Clarify material gaps in the problem, scope, constraints, and success criteria; use existing answers and repository evidence before asking:
    - What is this project? Who uses it?
    - What are the current pain points or goals?
    - What is MVP vs aspirational scope?
@@ -31,16 +28,16 @@ Decompose the work into independently verifiable units before acting; the `atomi
 6. Run `draht-tools create-domain-model` to define bounded contexts, entities, and ubiquitous language
 7. Create `.planning/DOMAIN.md` with the same sections as `/new-project`:
    Bounded Contexts, Ubiquitous Language, Context Map, Aggregates, Domain Events.
-   Seed the Ubiquitous Language glossary from `GRAPH_REPORT.md` key concepts / `modules[*].symbols` (start from extracted terms, not zero)
+   Seed the Ubiquitous Language glossary from `GRAPH_REPORT.md` key concepts and focused `draht-tools graph-query <topic>` results (start from extracted terms, not zero)
 8. Create `.planning/TEST-STRATEGY.md` with: Test Framework, Directory Conventions, Coverage Goals, Testing Levels, Excluded
-9. Optional research phase via `draht-tools research`
+9. If research is needed before defining requirements, investigate the open questions and save findings with sources under `.planning/research/<topic>.md`
 10. Run `draht-tools create-requirements` with v1/v2/out-of-scope (map requirements to bounded contexts)
 11. Run `draht-tools create-roadmap` with phases
 12. Run `draht-tools init-state`
-13. Git commit via `draht-tools commit-docs "initialize project planning"`
+13. If committing is authorized, use `draht-tools commit-docs "initialize project planning"`
 
 ## Workflow
-After project initialization, phases are executed one at a time in fresh sessions:
+After project initialization, phases are executed one at a time in dependency order:
 
 ```
 /init-project → /discuss-phase 1 → /plan-phase 1 → /execute-phase 1 → /verify-work 1
@@ -49,9 +46,9 @@ After project initialization, phases are executed one at a time in fresh session
 ```
 
 ## Rules
-- Ask the whole frontier per round — numbered, each with a recommended answer; the user replies by number, and accepted-by-number counts as decided
+- Group related questions and ask only those that change a material decision.
 - Questions that depend on still-open answers wait for a later round
-- Finding facts is your job, never the user's — dispatch a subagent for anything the environment can answer and keep asking the rest of the frontier while it runs
-- When the focus names a solution ("migrate to X"), ask what problem it solves — the existing code may admit a smaller answer
+- Investigate repository facts directly; delegate independent research when useful.
+- Respect explicit requirements; clarify the intended outcome when it is unclear.
 - Respect what already exists — do not propose rewriting working code
 - Stop when you have: current state, goals, MVP scope, constraints, success criteria

@@ -1,13 +1,38 @@
 import { compare, valid } from "semver";
-import { getPiUserAgent } from "./pi-user-agent.ts";
+import { PACKAGE_NAME } from "../config.ts";
+import { getDrahtUserAgent } from "./draht-user-agent.ts";
+import { fetchWithRetry } from "./management-http.ts";
 
-const LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
+/**
+ * draht has no pi.dev-equivalent release service, so the version check reads
+ * the npm registry entry for draht's own published package instead.
+ */
+const LATEST_VERSION_URL = `https://registry.npmjs.org/${encodeURIComponent(PACKAGE_NAME)}/latest`;
 const DEFAULT_VERSION_CHECK_TIMEOUT_MS = 10000;
 
 export interface LatestPiRelease {
 	version: string;
 	packageName?: string;
-	note?: string;
+}
+
+/** Include useful errno details hidden behind Node's generic "fetch failed" error. */
+export function formatVersionCheckError(error: unknown): string {
+	const rootMessage = error instanceof Error && error.message ? error.message : String(error);
+	const cause = error instanceof Error ? error.cause : undefined;
+	const causes = cause instanceof AggregateError ? cause.errors : cause === undefined ? [] : [cause];
+	const codes = causes
+		.map((value) =>
+			typeof value === "object" && value !== null && "code" in value && typeof value.code === "string"
+				? value.code
+				: undefined,
+		)
+		.filter((code): code is string => code !== undefined);
+
+	if (codes.length > 0) return `${rootMessage} (${[...new Set(codes)].join(", ")})`;
+	const causeMessage = causes.find(
+		(value): value is Error => value instanceof Error && Boolean(value.message),
+	)?.message;
+	return causeMessage ? `${rootMessage} (cause: ${causeMessage})` : rootMessage;
 }
 
 export function comparePackageVersions(leftVersion: string, rightVersion: string): number | undefined {
@@ -29,40 +54,42 @@ export function isNewerPackageVersion(candidateVersion: string, currentVersion: 
 
 export async function getLatestPiRelease(
 	currentVersion: string,
-	options: { timeoutMs?: number } = {},
+	options: { timeoutMs?: number; retry?: boolean } = {},
 ): Promise<LatestPiRelease | undefined> {
 	if (process.env.DRAHT_OFFLINE) return undefined;
 
-	const response = await fetch(LATEST_VERSION_URL, {
-		headers: {
-			"User-Agent": getPiUserAgent(currentVersion),
-			accept: "application/json",
+	const response = await fetchWithRetry(
+		LATEST_VERSION_URL,
+		{
+			headers: {
+				"User-Agent": getDrahtUserAgent(currentVersion),
+				accept: "application/vnd.npm.install-v1+json",
+			},
 		},
-		signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_VERSION_CHECK_TIMEOUT_MS),
-	});
+		{
+			maxRetries: options.retry ? 2 : 0,
+			timeoutMs: options.timeoutMs ?? DEFAULT_VERSION_CHECK_TIMEOUT_MS,
+		},
+	);
 	if (!response.ok) return undefined;
 
 	const data = (await response.json()) as {
-		packageName?: unknown;
+		name?: unknown;
 		version?: unknown;
-		note?: unknown;
 	};
 	if (typeof data.version !== "string" || !data.version.trim()) {
 		return undefined;
 	}
-	const packageName =
-		typeof data.packageName === "string" && data.packageName.trim() ? data.packageName.trim() : undefined;
-	const note = typeof data.note === "string" && data.note.trim() ? data.note.trim() : undefined;
+	const packageName = typeof data.name === "string" && data.name.trim() ? data.name.trim() : undefined;
 	return {
 		version: data.version.trim(),
 		packageName,
-		...(note ? { note } : {}),
 	};
 }
 
 export async function getLatestPiVersion(
 	currentVersion: string,
-	options: { timeoutMs?: number } = {},
+	options: { timeoutMs?: number; retry?: boolean } = {},
 ): Promise<string | undefined> {
 	return (await getLatestPiRelease(currentVersion, options))?.version;
 }

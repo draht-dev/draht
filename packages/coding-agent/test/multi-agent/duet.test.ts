@@ -6,6 +6,7 @@ import {
 	combineDuetUsage,
 	createDuetTeammateAgent,
 	type DuetState,
+	getDuetArgumentCompletions,
 	parseDuetParticipantSpecs,
 	restoreDuetTurnFromBranch,
 } from "../../src/core/builtins/duet.ts";
@@ -259,5 +260,54 @@ describe("duet turn taking", () => {
 		expect(prompt).toContain("tester=google/test-model");
 		expect(prompt).toContain("duet_delegate");
 		expect(prompt).toContain("cannot modify files");
+	});
+});
+
+describe("duet argument completions", () => {
+	const values = (partial: string) => getDuetArgumentCompletions(partial, availableModels)?.map((item) => item.value);
+
+	it("completes strategies and opens the provider list after one", () => {
+		const items = getDuetArgumentCompletions("t", availableModels);
+		expect(items?.map((item) => item.value)).toEqual(["turns ", "triage "]);
+		expect(items?.every((item) => item.continueCompletion)).toBe(true);
+		expect(values("o")).toEqual(["off"]);
+	});
+
+	it("lists providers, then the chosen provider's models", () => {
+		expect(values("turns ")).toEqual(["turns anthropic/", "turns google/", "turns openai/", "turns openrouter/"]);
+		expect(values("turns open")).toEqual(["turns openai/", "turns openrouter/"]);
+		expect(values("turns openai/")).toEqual(["turns openai/lead-model "]);
+		expect(values("turns anthropic/rev")).toEqual(["turns anthropic/review-model "]);
+	});
+
+	it("keeps the provider list open until two models are chosen", () => {
+		const first = getDuetArgumentCompletions("triage openai/", availableModels);
+		expect(first?.[0]?.continueCompletion).toBe(true);
+		const second = getDuetArgumentCompletions("triage openai/lead-model anthropic/", availableModels);
+		expect(second?.[0]?.continueCompletion).toBe(false);
+	});
+
+	it("omits chosen models and keeps role prefixes", () => {
+		expect(values("turns openai/lead-model ")).toEqual([
+			"turns openai/lead-model anthropic/",
+			"turns openai/lead-model google/",
+			"turns openai/lead-model openrouter/",
+		]);
+		expect(values("turns lead=openai/lead-model,rev=anth")).toEqual(["turns lead=openai/lead-model,rev=anthropic/"]);
+	});
+
+	it("falls back to model matches when no provider matches", () => {
+		expect(values("turns review")).toEqual(["turns anthropic/review-model "]);
+		expect(values("off ")).toBeUndefined();
+	});
+});
+
+describe("duet participant separators", () => {
+	it("accepts space-separated participants", () => {
+		const participants = parseDuetParticipantSpecs("openai/lead-model  anthropic/review-model", availableModels);
+		expect(participants.map((participant) => participant.modelRef)).toEqual([
+			"openai/lead-model",
+			"anthropic/review-model",
+		]);
 	});
 });

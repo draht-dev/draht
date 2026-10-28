@@ -16,7 +16,7 @@ export default $config({
 		new sst.aws.Astro("Landing", {
 			domain: {
 				name: "draht.dev",
-				dns: sst.aws.dns(),
+				dns: sst.aws.dns({ override: true }),
 			},
 		});
 	},

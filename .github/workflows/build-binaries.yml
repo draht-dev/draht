@@ -7,8 +7,10 @@ on:
 
 env:
   RELEASE_TAG: ${{ github.ref_name }}
-  BUN_PACKAGE_VERSION: 1.3.13-canary.20260425.1
-  BUN_REVISION: 1.3.14-canary.1+ed1c48f2b
+  BUN_PACKAGE_VERSION: 1.4.2
+  BUN_REVISION: 1.4.2+744846f84
+
+permissions: {}
 
 jobs:
   build-runtime:
@@ -17,26 +19,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout immutable release tag
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.RELEASE_TAG }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Install and verify pinned Bun canary
-        run: |
-          npm install --global "bun@${BUN_PACKAGE_VERSION}"
-          test "$(bun --revision)" = "${BUN_REVISION}"
+      # setup-bun installs into ~/.bun/bin. `npm install --global` lands under the
+      # runner's /opt toolcache, which the gateway refuses to exec from ("writable
+      # by others: /opt"), failing the release test suite.
+      - name: Install the pinned Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_PACKAGE_VERSION }}
+
+      - name: Verify the pinned Bun revision
+        run: test "$(bun --revision)" = "${BUN_REVISION}"
 
       - name: Build Draht runtime assets
         run: ./scripts/build-binaries.sh
 
       - name: Upload immutable runtime build output
-        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4.6.2
         with:
           name: draht-runtime-${{ env.RELEASE_TAG }}
           path: |
@@ -56,12 +64,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout immutable release tag
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.RELEASE_TAG }}
 
       - name: Setup Go
-        uses: actions/setup-go@41dfa10bad2bb2ae585af6ee5bb4d7d973ad74ed # v5.1.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go/.go-version
           cache-dependency-path: go/go.sum
@@ -72,7 +80,7 @@ jobs:
         run: ./scripts/build-graph-binaries.sh
 
       - name: Upload immutable graph build output
-        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4.6.2
         with:
           name: draht-graph-${{ env.RELEASE_TAG }}
           path: |
@@ -95,19 +103,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download runtime output
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: draht-runtime-${{ env.RELEASE_TAG }}
           path: release-assets/runtime
 
       - name: Download graph output
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: draht-graph-${{ env.RELEASE_TAG }}
           path: release-assets/graph
 
       - name: Attest every Draht runtime asset
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             release-assets/runtime/draht-*.tar.gz
@@ -116,7 +124,7 @@ jobs:
             release-assets/runtime/DRAHT-SHA256SUMS
 
       - name: Attest every graph asset
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             release-assets/graph/draht-graph-*.tar.gz
@@ -131,7 +139,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout release metadata only
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
@@ -141,13 +149,13 @@ jobs:
           test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "${RELEASE_TAG}")"
 
       - name: Download runtime output
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: draht-runtime-${{ env.RELEASE_TAG }}
           path: release-assets/runtime
 
       - name: Download graph output
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: draht-graph-${{ env.RELEASE_TAG }}
           path: release-assets/graph

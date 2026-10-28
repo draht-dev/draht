@@ -1,14 +1,26 @@
 {
-	"$PLACEHOLDER": "THIS FILE IS A PLACEHOLDER. NOTHING HERE WAS OBSERVED. Do not read a header name out of it and do not ship it.",
-	"$replaceWith": "node scripts/geist-tailscale-serve.mjs --capture-identity --peer NODE --out packages/gateway/src/__tests__/fixtures/tailnet-identity.captured.json",
-	"placeholder": true,
-	"capturedAt": null,
-	"origin": null,
-	"peer": null,
-	"path": "/__geist-identity-capture",
-	"tailscaleVersion": null,
-	"identityHeaders": {
-		"X-Uncaptured-Tailnet-Identity-Header-Placeholder": "PLACEHOLDER-nobody@invalid.example"
-	},
-	"headers": {}
+  "capturedAt": "2026-09-05T10:55:51.208Z",
+  "origin": "https://omf.tail684d49.ts.net",
+  "peer": "nixuc",
+  "path": "/__geist-identity-capture",
+  "tailscaleVersion": "1.98.8",
+  "identityHeaders": {
+    "tailscale-headers-info": "https://tailscale.com/s/serve-headers",
+    "tailscale-user-login": "oskarfreye@github",
+    "tailscale-user-name": "Oskar Freye",
+    "tailscale-user-profile-pic": "https://avatars.githubusercontent.com/u/36474314?v=4"
+  },
+  "headers": {
+    "host": "omf.tail684d49.ts.net",
+    "user-agent": "curl/8.21.0",
+    "accept": "*/*",
+    "tailscale-headers-info": "https://tailscale.com/s/serve-headers",
+    "tailscale-user-login": "oskarfreye@github",
+    "tailscale-user-name": "Oskar Freye",
+    "tailscale-user-profile-pic": "https://avatars.githubusercontent.com/u/36474314?v=4",
+    "x-forwarded-for": "100.106.60.102",
+    "x-forwarded-host": "omf.tail684d49.ts.net",
+    "x-forwarded-proto": "https",
+    "accept-encoding": "gzip"
+  }
 }

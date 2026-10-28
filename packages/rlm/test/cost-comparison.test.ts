@@ -69,11 +69,15 @@ function fakeAssistantMessage(text: string, provider: string, model: string, api
 class FakeModelRouter {
 	private rootCallIndex = 0;
 
-	constructor(
-		private readonly rootContextWindow: number,
-		private readonly rootResponses: string[],
-		private readonly subResponse = "sub-response",
-	) {}
+	private readonly rootContextWindow: number;
+	private readonly rootResponses: string[];
+	private readonly subResponse: string;
+
+	constructor(rootContextWindow: number, rootResponses: string[], subResponse = "sub-response") {
+		this.rootContextWindow = rootContextWindow;
+		this.rootResponses = rootResponses;
+		this.subResponse = subResponse;
+	}
 
 	resolve(role: string): ModelRef {
 		if (role === "rlm-root") return { provider: "anthropic", model: "claude-opus-4-6" };

@@ -16,9 +16,10 @@
  * if the gate were unwired from the ask).
  *
  * Harness hygiene, each item load-bearing:
- *  - `DRAHT_PERMISSION_MODE` is DELETED from the child env. This repo's interactive
- *    shell exports `auto`, under which a plain `echo` is auto-allowed and no prompt
- *    is raised at all — the test would pass while proving nothing.
+ *  - `DRAHT_PERMISSION_MODE` is pinned to `ask` in the child env. Under `auto`,
+ *    the mode a session starts in and the one this repo's interactive shell exports,
+ *    a plain `echo` is auto-allowed and no prompt is raised at all — the test would
+ *    pass while proving nothing.
  *  - The agent dir sits directly under `/tmp` with a short name: a Unix socket path
  *    over ~104 bytes fails to bind with EINVAL, and macOS `os.tmpdir()` already
  *    spends ~50 characters.
@@ -30,6 +31,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { ensureEmittedBuild } from "./emitted-build.ts";
 
 const PKG_ROOT = path.resolve(__dirname, "..");
 const EMITTED_CLI = path.join(PKG_ROOT, "dist", "cli.js");
@@ -49,27 +51,8 @@ async function createTempDir(prefix: string): Promise<string> {
 	return dir;
 }
 
-function buildEmittedBinary(): Promise<void> {
-	return new Promise((resolve, reject) => {
-		const child = spawn("bun", ["run", "build"], {
-			cwd: PKG_ROOT,
-			env: process.env,
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-		let out = "";
-		child.stdout.on("data", (chunk) => {
-			out += chunk;
-		});
-		child.stderr.on("data", (chunk) => {
-			out += chunk;
-		});
-		child.on("error", reject);
-		child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`build failed:\n${out}`))));
-	});
-}
-
 beforeAll(async () => {
-	await buildEmittedBinary();
+	await ensureEmittedBuild();
 }, 300_000);
 
 afterAll(async () => {
@@ -99,7 +82,7 @@ interface RpcSession {
  */
 function startRpc(options: { cwd: string; agentDir: string; script: string }): RpcSession {
 	const env: NodeJS.ProcessEnv = { ...process.env };
-	delete env.DRAHT_PERMISSION_MODE;
+	env.DRAHT_PERMISSION_MODE = "ask";
 	env.DRAHT_STUB_PROVIDER = "1";
 	env.DRAHT_STUB_TOOL_CALLS = options.script;
 	env.DRAHT_CODING_AGENT_DIR = options.agentDir;

@@ -70,6 +70,7 @@ const extensionActions: ExtensionActions = {
 	sendMessage: () => {},
 	sendUserMessage: () => {},
 	appendEntry: () => {},
+	appendUsage: () => {},
 	setSessionName: () => {},
 	getSessionName: () => undefined,
 	setLabel: () => {},
@@ -81,6 +82,7 @@ const extensionActions: ExtensionActions = {
 	setModel: async () => false,
 	getThinkingLevel: () => "off",
 	setThinkingLevel: () => {},
+	getSettings: () => ({}),
 };
 
 const extensionContextActions: ExtensionContextActions = {
@@ -530,7 +532,13 @@ export default function (pi) {
 		const listed = pi.checkpoints.list();
 		const found = pi.checkpoints.get(target);
 		const missing = pi.checkpoints.get("no-such-entry");
-		const restore = await pi.checkpoints.restore({ targetEntryId: target, currentEntryId: current });
+		const restoredChunks = [];
+		const restore = await pi.checkpoints.restore({
+			targetEntryId: target,
+			currentEntryId: current,
+			writeChunkSize: 1,
+			onPathsRestored: (paths) => restoredChunks.push([...paths]),
+		});
 		writeFileSync(${JSON.stringify(observationsPath)}, JSON.stringify({
 			listedEntryIds: listed.map((record) => record.entryId),
 			foundEntryId: found?.entryId,
@@ -539,6 +547,7 @@ export default function (pi) {
 			restoreStatus: restore.status,
 			restored: restore.restored.slice().sort(),
 			deleted: restore.deleted.slice().sort(),
+			restoredChunks,
 		}));
 	});
 }
@@ -560,6 +569,9 @@ export default function (pi) {
 		expect(observed.restoreStatus).toBe("restored");
 		expect(observed.restored).toEqual(["a.txt", "b.txt"]);
 		expect(observed.deleted).toEqual(["c.txt"]);
+		expect(observed.restoredChunks).toHaveLength(3);
+		expect(observed.restoredChunks.every((chunk: string[]) => chunk.length === 1)).toBe(true);
+		expect(observed.restoredChunks.flat().sort()).toEqual(["a.txt", "b.txt", "c.txt"]);
 		// The restore an extension asked for really moved the working tree.
 		expect(snapshotWorkingTree(fixture.repo)).toEqual(fixture.checkpointedTree);
 	}, 60_000);

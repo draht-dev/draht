@@ -22,6 +22,7 @@ Draht runs in four modes: interactive, print or JSON, RPC for process integratio
 - [Quick Start](#quick-start)
 - [Providers & Models](#providers--models)
 - [Duet Mode](#duet-mode)
+- [Polyphase](#polyphase)
 - [Interactive Mode](#interactive-mode)
   - [Editor](#editor)
   - [Commands](#commands)
@@ -32,6 +33,7 @@ Draht runs in four modes: interactive, print or JSON, RPC for process integratio
   - [Attachable Sessions](#attachable-sessions)
   - [Compaction](#compaction)
 - [Settings](#settings)
+- [Token budgets](#token-budgets)
 - [Context Files](#context-files)
 - [Customization](#customization)
   - [Prompt Templates](#prompt-templates)
@@ -113,14 +115,37 @@ See [docs/providers.md](docs/providers.md) for detailed setup instructions.
 Use two or more authenticated models in one session:
 
 ```text
-/duet turns implementer=openai-codex/gpt-5.5,reviewer=anthropic/claude-opus-4-8
-/duet triage lead=openai-codex/gpt-5.5,reviewer=anthropic/claude-opus-4-8
+/duet turns implementer=openai-codex/gpt-6.1-sol,reviewer=anthropic/claude-opus-5-5
+/duet triage lead=openai-codex/gpt-6.1-sol,reviewer=anthropic/claude-opus-5-5
 /duet off
 ```
 
 `turns` alternates the active model across user prompts while sharing the complete session history. `triage` makes the first model the lead and lets it distribute parallel, read-only investigations to the other named roles through `duet_delegate`; the lead then integrates the results and performs edits.
 
 Omit the model list to use models selected by `/scoped-models`. See [docs/duet.md](docs/duet.md) for CLI flags, role syntax, persistence, safety, and cost behavior.
+
+---
+
+## Polyphase
+
+Polyphase gives you live oversight of fanned-out agents: `subagent` calls and model-written
+`workflow` scripts get a live line per agent in the tool row, and all three — `subagent` calls,
+duet triage, and `workflow` scripts — share a one-line dock above the editor and a popup inspector
+(`alt+a` by default).
+
+Say the keyword (`polyphase` by default) in a prompt to let the model write and run a
+multi-phase `workflow` script — a plain async function using `agent()`, `parallel()`, `pipeline()`,
+`phase()`, and `log()`. Save a script under `.draht/workflows/<name>.js` (project, trusted) or
+`<agent-dir>/workflows/<name>.js` (user) to run it directly:
+
+```text
+/review-pr #1234
+/workflow review-pr #1234
+/workflows
+```
+
+See [docs/polyphase.md](docs/polyphase.md) for the script API, model inheritance, budgets, and
+permissions.
 
 ---
 
@@ -159,7 +184,10 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/model` | Switch models |
 | `/scoped-models` | Enable/disable models for Ctrl+P cycling |
 | `/duet [turns\|triage] [models]` | Configure multi-model collaboration |
+| `/workflow [name] [args]` | Run a saved polyphase workflow, or describe a new one |
+| `/workflows [list]` | Open the agent inspector, or list workflow runs and saved workflows |
 | `/settings` | Thinking level, theme, message delivery, transport |
+| `/budget [configure\|status\|new]` | Configure repository token budgets, inspect usage, or start a new shared task |
 | `/resume` | Pick from previous sessions |
 | `/new` | Start a new session |
 | `/name <name>` | Set session display name |
@@ -190,6 +218,7 @@ See `/hotkeys` for the full list. Customize via `~/.draht/agent/keybindings.json
 | Ctrl+L | Open model selector |
 | Ctrl+P / Shift+Ctrl+P | Cycle scoped models forward/backward |
 | Shift+Tab | Cycle thinking level |
+| Alt+M | Switch permission mode (`auto`, `ask`) |
 | Ctrl+Shift+L | Cycle supported context windows |
 | Ctrl+O | Collapse/expand tool output |
 | Ctrl+T | Collapse/expand thinking blocks |
@@ -278,6 +307,14 @@ Use `/settings` to modify common options, or edit JSON files directly:
 | `.draht/settings.json` | Project (overrides global) |
 
 See [docs/settings.md](docs/settings.md) for all options.
+
+---
+
+## Token budgets
+
+Opt-in per-file token limits encourage readable, cohesive code and concise documentation. `/budget` guides you through writing the repository's `.draht/budgets.json`; repositories without that file are not measured. The defaults, 5,000 tokens per code file and 1,500 per documentation file, are ceilings, not targets. Lockfiles, changelogs, and generated files are skipped, files already over a limit may grow by a small allowance, and task totals are optional. Native draht, draht-claude, and draht-codex share the same offline accounting across the repository, subagents, and linked worktrees.
+
+`/budget status` shows limits and usage. Only the user starts a new task, with `/budget new`. Chat responses have no budget. See [docs/budgets.md](docs/budgets.md).
 
 ---
 
@@ -582,19 +619,19 @@ draht -p "Summarize this codebase"
 cat README.md | draht -p "Summarize this text"
 
 # Different model
-draht --provider openai --model gpt-4o "Help me refactor"
+draht --provider openai --model gpt-6-luna "Help me refactor"
 
 # Model with provider prefix (no --provider needed)
-draht --model openai/gpt-4o "Help me refactor"
+draht --model openai/gpt-6.1-sol "Help me refactor"
 
 # Model with thinking level shorthand
 draht --model sonnet:high "Solve this complex problem"
 
 # Limit model cycling
-draht --models "claude-*,gpt-4o"
+draht --models "claude-*,gpt-6.1-sol"
 
 # Start a triage duet
-draht --duet "lead=openai-codex/gpt-5.5,reviewer=anthropic/claude-opus-4-8"
+draht --duet "lead=openai-codex/gpt-6.1-sol,reviewer=anthropic/claude-opus-5-5"
 
 # Read-only mode
 draht --tools read,grep,find,ls -p "Review the code"

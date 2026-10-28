@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve as nodeResolvePath, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,10 +19,19 @@ export interface PathInputOptions {
 	normalizeUnicodeSpaces?: boolean;
 }
 
+export function getFileRevision(path: string): string | undefined {
+	try {
+		const stats = statSync(path, { bigint: true });
+		return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}`;
+	} catch {
+		return undefined;
+	}
+}
+
 /**
- * Returns true if the value is NOT a package source (npm:, git:, etc.)
- * or a remote URL protocol. Bare names, relative paths, and file: URLs
- * are considered local.
+ * Returns true if the value is NOT a package source (npm:, git:, etc.),
+ * a built-in extension (builtin:), or a remote URL protocol. Bare names,
+ * relative paths, and file: URLs are considered local.
  */
 export function isLocalPath(value: string): boolean {
 	const trimmed = value.trim();
@@ -32,11 +42,21 @@ export function isLocalPath(value: string): boolean {
 		trimmed.startsWith("github:") ||
 		trimmed.startsWith("http:") ||
 		trimmed.startsWith("https:") ||
-		trimmed.startsWith("ssh:")
+		trimmed.startsWith("ssh:") ||
+		trimmed.startsWith("builtin:")
 	) {
 		return false;
 	}
 	return true;
+}
+
+/** Convert Git Bash, MSYS, Cygwin, and WSL drive paths to a form native Windows APIs accept. */
+export function normalizeWindowsShellPath(filePath: string): string {
+	if (!filePath.startsWith("/") || filePath.startsWith("//") || filePath.includes("\\")) return filePath;
+	const match = filePath.match(/^\/(?:mnt\/|cygdrive\/)?([a-z])(?:\/(.*))?$/i);
+	if (!match) return filePath;
+	const suffix = match[2]?.replaceAll("/", "\\");
+	return `${match[1].toUpperCase()}:\\${suffix ?? ""}`;
 }
 
 export function normalizePath(input: string, options: PathInputOptions = {}): string {
@@ -46,6 +66,9 @@ export function normalizePath(input: string, options: PathInputOptions = {}): st
 	}
 	if (options.stripAtPrefix && normalized.startsWith("@")) {
 		normalized = normalized.slice(1);
+	}
+	if (process.platform === "win32") {
+		normalized = normalizeWindowsShellPath(normalized);
 	}
 
 	if (options.expandTilde ?? true) {

@@ -11,14 +11,14 @@
  * server. It is only intended for CLI use, not browser environments.
  */
 
-import type { Server } from "node:http";
+import type { createServer, Server } from "node:http";
+import { oauthErrorHtml, oauthSuccessHtml } from "../../utils/oauth-page.ts";
 import { getProviderEnvValue } from "../../utils/provider-env.ts";
-import type { AuthInteraction, OAuthAuth, OAuthCredential } from "../types.ts";
-import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.ts";
+import type { OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "../types.ts";
 import { generatePKCE } from "./pkce.ts";
 
 type NodeApis = {
-	createServer: typeof import("node:http").createServer;
+	createServer: typeof createServer;
 };
 
 let nodeApis: NodeApis | null = null;
@@ -28,7 +28,7 @@ const OAUTH_ISSUER = "https://auth.x.ai";
 const DISCOVERY_URL = `${OAUTH_ISSUER}/.well-known/openid-configuration`;
 const CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 const SCOPE = "openid profile email offline_access grok-cli:access api:access";
-const CALLBACK_HOST = getProviderEnvValue("PI_OAUTH_CALLBACK_HOST") || "127.0.0.1";
+const CALLBACK_HOST = getProviderEnvValue("DRAHT_OAUTH_CALLBACK_HOST") || "127.0.0.1";
 const CALLBACK_PORT = 56121;
 const CALLBACK_PATH = "/callback";
 const REFRESH_SKEW_MS = 2 * 60 * 1000;
@@ -63,8 +63,8 @@ function validateXaiEndpoint(url: string): string {
 	return url;
 }
 
-async function discoverXaiEndpoints(): Promise<XaiDiscovery> {
-	const response = await fetch(DISCOVERY_URL, { headers: { Accept: "application/json" } });
+async function discoverXaiEndpoints(signal: AbortSignal): Promise<XaiDiscovery> {
+	const response = await fetch(DISCOVERY_URL, { headers: { Accept: "application/json" }, signal });
 	if (!response.ok) {
 		throw new Error(`xAI OAuth discovery failed: ${response.status} ${await response.text()}`);
 	}
@@ -183,7 +183,7 @@ async function startCallbackServer(expectedState: string): Promise<CallbackServe
 	});
 }
 
-async function postForm(url: string, body: Record<string, string>): Promise<string> {
+async function postForm(url: string, body: Record<string, string>, signal: AbortSignal): Promise<string> {
 	const response = await fetch(url, {
 		method: "POST",
 		headers: {
@@ -191,7 +191,7 @@ async function postForm(url: string, body: Record<string, string>): Promise<stri
 			Accept: "application/json",
 		},
 		body: new URLSearchParams(body).toString(),
-		signal: AbortSignal.timeout(30_000),
+		signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
 	});
 
 	const responseBody = await response.text();
@@ -222,8 +222,8 @@ function credentialsFromTokenPayload(data: XaiTokenPayload, fallbackRefresh = ""
 /**
  * Login with xAI OAuth (SuperGrok / X Premium+ subscription, authorization code + PKCE)
  */
-async function loginXai(interaction: AuthInteraction): Promise<OAuthCredential> {
-	const discovery = await discoverXaiEndpoints();
+async function loginXai(interaction: ProviderAuthInteraction): Promise<OAuthCredential> {
+	const discovery = await discoverXaiEndpoints(interaction.signal);
 	const { verifier, challenge } = await generatePKCE();
 	const server = await startCallbackServer(verifier);
 	// The manual_code prompt races the local callback server; abort it once
@@ -316,13 +316,17 @@ async function loginXai(interaction: AuthInteraction): Promise<OAuthCredential> 
 		}
 
 		interaction.notify({ type: "progress", message: "Exchanging xAI authorization code..." });
-		const responseBody = await postForm(discovery.tokenEndpoint, {
-			grant_type: "authorization_code",
-			client_id: CLIENT_ID,
-			code,
-			redirect_uri: server.redirectUri,
-			code_verifier: verifier,
-		});
+		const responseBody = await postForm(
+			discovery.tokenEndpoint,
+			{
+				grant_type: "authorization_code",
+				client_id: CLIENT_ID,
+				code,
+				redirect_uri: server.redirectUri,
+				code_verifier: verifier,
+			},
+			interaction.signal,
+		);
 		return credentialsFromTokenPayload(JSON.parse(responseBody) as XaiTokenPayload);
 	} finally {
 		manualAbort.abort();
@@ -333,21 +337,26 @@ async function loginXai(interaction: AuthInteraction): Promise<OAuthCredential> 
 /**
  * Refresh xAI OAuth token
  */
-async function refreshXaiToken(refreshToken: string): Promise<OAuthCredential> {
-	const discovery = await discoverXaiEndpoints();
-	const responseBody = await postForm(discovery.tokenEndpoint, {
-		grant_type: "refresh_token",
-		client_id: CLIENT_ID,
-		refresh_token: refreshToken,
-	});
+async function refreshXaiToken(refreshToken: string, signal: AbortSignal): Promise<OAuthCredential> {
+	const discovery = await discoverXaiEndpoints(signal);
+	const responseBody = await postForm(
+		discovery.tokenEndpoint,
+		{
+			grant_type: "refresh_token",
+			client_id: CLIENT_ID,
+			refresh_token: refreshToken,
+		},
+		signal,
+	);
 	return credentialsFromTokenPayload(JSON.parse(responseBody) as XaiTokenPayload, refreshToken);
 }
 
 export const xaiOAuth: OAuthAuth = {
 	name: "xAI (Grok/X subscription)",
+	isSubscription: true,
 	loginLabel: "Sign in with SuperGrok or X Premium",
 	login: loginXai,
-	refresh: (credential) => refreshXaiToken(credential.refresh),
+	refresh: (credential, signal) => refreshXaiToken(credential.refresh, signal),
 
 	/** Route subscription-authenticated requests through the Grok CLI proxy. */
 	async toAuth(credential) {

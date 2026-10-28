@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+## [2026.10.23-1] - 2026-10-23
+
+### Changed
+
+- bump Node.js for Oct 2026 security releases
+
+### Fixed
+
+- enforce patched Node versions per release line
+
+## [2026.10.8-1] - 2026-10-08
+
+### Changed
+
+- refresh model ids to Opus 5.5, Sonnet 5, Fable 5.1 and GPT-6
+
+## [2026.10.4-1] - 2026-10-04
+
+### Changed
+
+- feat: build with TypeScript 7 and run sources with plain node
+- Mid conversation system messages (badlogic/pi-mono#9548)
+
+### Fixed
+
+- drop stray "pi" product reference from description
+- store credentials under ~/.draht/mom instead of ~/.pi/mom
+- give the session the executor's bash working directory
+
 ## [2026.7.30] - 2026-07-30
 
 ### Changed

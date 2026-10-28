@@ -3,18 +3,23 @@
 draht uses environment variables in three ways:
 
 - Variables such as `DRAHT_OFFLINE` configure the draht process.
-- draht sets `DRAHT_CODING_AGENT` so child processes can detect that they run inside draht.
-- Commands run by the LLM-callable bash tool receive `DRAHT_*` variables describing the current session.
+- draht sets process markers so child processes can identify draht as the launching agent.
+- Commands run by the LLM-callable shell tools receive `DRAHT_*` variables describing the current session.
 
-Provider API-key variables are documented separately in [Providers](providers.md#environment-variables-or-auth-file).
+Provider API-key variables are documented separately in [Providers](providers.md#use-an-api-key-from-the-environment).
 
 ## Process Marker
 
-The CLI and RPC entry points set `DRAHT_CODING_AGENT=true`. Child processes inherit it and can use it to detect that they run inside draht. It is not session-specific and is not set automatically when draht is embedded through the SDK.
+The CLI and RPC entry points set two process markers:
 
-## Bash Tool Session Environment
+- `AI_AGENT=draht` is a generic marker that lets tooling identify draht as the agent that launched the process.
+- `DRAHT_CODING_AGENT=true` is draht-specific and lets child processes detect that they run inside draht.
 
-Commands run by the bash tool receive the current draht session state:
+Child processes inherit both markers. They are not session-specific and are not set automatically when draht is embedded through the SDK.
+
+## Shell Tool Session Environment
+
+Commands run by the `bash` and `powershell` tools receive the current draht session state:
 
 | Variable | Description |
 |----------|-------------|
@@ -24,7 +29,7 @@ Commands run by the bash tool receive the current draht session state:
 | `DRAHT_MODEL` | Currently selected model ID |
 | `DRAHT_REASONING_LEVEL` | Current effective reasoning level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` |
 
-The values are resolved when each command starts. Switching models or changing the reasoning level therefore affects the next bash command without restarting draht. `DRAHT_PROVIDER` and `DRAHT_MODEL` identify the selected draht model, not a different upstream model that a router may choose internally.
+The values are resolved when each command starts. Switching models or changing the reasoning level therefore affects the next shell command without restarting draht. `DRAHT_PROVIDER` and `DRAHT_MODEL` identify the selected draht model, not a different upstream model that a router may choose internally.
 
 When asked which model or provider is running, inspect these variables instead of inferring the answer from the system prompt:
 
@@ -41,11 +46,11 @@ if [ -n "$DRAHT_SESSION_FILE" ]; then
 fi
 ```
 
-These variables are injected into the LLM-callable bash tool. They are not injected into user-entered `!` or `!!` commands.
+These variables are injected into the LLM-callable `bash` and `powershell` tools. They are not injected into user-entered `!` or `!!` commands.
 
-### Custom Bash Tools
+### Custom Shell Tools
 
-Bash tools created with `createBashTool()` expose the session environment by default when registered with draht. Injection happens before `spawnHook`, so a hook receives the variables in `ctx.env`:
+Tools created with `createBashTool()` or `createPowerShellTool()` expose the session environment by default when registered with draht. Injection happens before `spawnHook`, so a hook receives the variables in `ctx.env`:
 
 ```typescript
 const bashTool = createBashTool(cwd, {
@@ -59,13 +64,25 @@ const bashTool = createBashTool(cwd, {
 Disable session metadata independently of the spawn hook:
 
 ```typescript
-const bashTool = createBashTool(cwd, {
+const powershellTool = createPowerShellTool(cwd, {
   exposeSessionEnvironment: false,
   spawnHook: (ctx) => ctx,
 });
 ```
 
 When disabled, draht removes inherited values for these variables so nested draht processes do not expose stale parent-session metadata.
+
+## Polyphase Child Coordination
+
+These variables are internal: draht sets them on a subagent/workflow child process it spawns
+and reads them back in that child; they are not meant to be set by hand. See
+[Orchestrate Agents with Polyphase](polyphase.md).
+
+| Variable | Description |
+|----------|-------------|
+| `DRAHT_POLYPHASE_DEPTH` | Nesting depth of this process: unset or `0` for the user's session, `n` in a child spawned by a process at depth `n-1`. Used to enforce `polyphase.maxDepth` and to exclude the `subagent` tool once the limit is reached. |
+| `DRAHT_POLYPHASE_SCHEMA_FILE` | Path to a JSON Schema file for this agent's structured result. When set, the child registers a `polyphase_result` tool matching that schema; unset in every other process, including a child whose parent did not request structured output. |
+| `DRAHT_POLYPHASE_PERMISSION_BRIDGE` | `1` when the parent answers this child's permission asks over the IPC channel it spawned the child with, so a tool call the child's own gate holds for approval is asked in the parent session instead of blocked. Unset in every other process, including a child whose parent does not serve its asks. |
 
 ## draht Process Configuration
 
@@ -76,13 +93,25 @@ These variables are read by draht itself:
 | `DRAHT_CODING_AGENT_DIR` | Override the config directory; default is `~/.draht/agent` |
 | `DRAHT_CODING_AGENT_SESSION_DIR` | Override session storage; overridden by `--session-dir` |
 | `DRAHT_PACKAGE_DIR` | Override the package directory, useful for Nix/Guix store paths |
-| `DRAHT_OFFLINE` | Disable startup network operations, including update checks, package updates, and install/update telemetry |
-| `DRAHT_SKIP_VERSION_CHECK` | Disable the latest-version request |
-| `DRAHT_TELEMETRY` | Override install/update telemetry and provider attribution headers: `1`/`true`/`yes` or `0`/`false`/`no` |
-| `PI_CACHE_RETENTION` | Set to `long` for extended provider prompt caching where supported |
-| `DRAHT_SHARE_VIEWER_URL` | Override the base URL used by `/share` |
+| `DRAHT_OFFLINE` | Disable automatic network activity, including version checks, package updates, and model catalog refreshes |
+| `DRAHT_SKIP_VERSION_CHECK` | Disable the latest-version request to the npm registry entry for `@draht/coding-agent` |
+| `DRAHT_MODEL_CATALOG_BASE_URL` | Enable the remote model catalog overlay from a self-hosted endpoint; the overlay is off when unset |
+| `DRAHT_TELEMETRY` | Override provider attribution headers (OpenRouter, NVIDIA NIM, Cloudflare): `1`/`true`/`yes` or `0`/`false`/`no` |
+| `DRAHT_CODEMODE_MAX_WORKERS` | Maximum codemode workers alive at once across all sessions in the process; default `2`. Each worker's script may use up to 256 MB. Raise it when one process runs several sessions, such as in-process subagents. Further scripts wait for a free worker. See [Codemode](codemode.md) |
+| `DRAHT_CACHE_RETENTION` | Set to `long` for extended provider prompt caching where supported |
+| `DRAHT_SHARE_VIEWER_URL` | Base URL of a share viewer for `/share`; when unset, `/share` prints the gist URL |
+| `DRAHT_RADIUS_GATEWAY` | Not consulted by the builtin Radius model provider (which always uses `https://radius.pi.dev`, or a per-provider `baseUrl` from provider config) or by `/bug`; currently has no effect on behavior |
+| `DRAHT_BUG_REPORT_GATEWAY` | Override the `/bug` upload destination; default is `https://radius.draht.dev` |
+| `DRAHT_PERMISSION_MODE` | Initial permission mode of the session: `supervised` (`ask`, and every file change asks), `ask`, `auto` (when unset or blank), or `yolo`, in any letter case; any other value, the old name `default` included, starts the session in `ask` with a warning. `/permissions`, `/yolo`, and [`app.permissions.cycle`](keybindings.md#models-and-thinking) change it afterwards; a mode chosen that way outlasts `/new`, `/resume`, `/fork`, and `/reload` when it asks more than the starting mode. A session the gateway starts or resumes receives the gateway daemon's value, except `yolo`, which crosses only when the daemon's `DRAHT_RESUME_ENV_ALLOW` lists the variable. Polyphase children receive the session's current mode in this variable; see [Orchestrate Agents with Polyphase](polyphase.md#permissions) |
+| `DRAHT_NO_ATTACHABLE` | Set to `1`/`true`/`yes` to stop sessions from registering an attach socket; overridden by `--attachable` |
 | `DRAHT_HARDWARE_CURSOR` | Set to `1` to show the hardware cursor; see [Terminal setup](terminal-setup.md) |
+| `DRAHT_CLIPBOARD_OSC52` | Set to `1` to also send copied text to the terminal with OSC 52 after the local clipboard write, as draht does over SSH. Use it when a remote client reaches draht without SSH variables, such as a multiplexer attached from another machine or a remote IDE daemon |
+| `DRAHT_HYPERLINKS` | Override OSC 8 hyperlink detection with `1`, `0`, or `auto` |
+| `DRAHT_PROGRAM_STATUS` | Override OSC 7501 program status detection: `1` always reports, `0` never reports; otherwise draht reports only after the terminal confirms support. See [Terminal setup](terminal-setup.md#program-status) |
+| `DRAHT_IMAGE_PROTOCOL` | Override inline image detection with `kitty`, `iterm2`, `none`, or `auto` |
+| `DRAHT_TRUE_COLOR` | Override truecolor detection with `1`, `0`, or `auto` |
+| `DRAHT_TUI_ESC_TIMEOUT` | How long to wait after a lone ESC before treating it as Escape, in milliseconds; defaults to `100` over SSH and `10` otherwise. Increase if Alt-key input is misread as Escape |
 | `VISUAL`, `EDITOR` | External editor fallback when `externalEditor` is unset |
 | `HTTP_PROXY`, `HTTPS_PROXY` | Proxy outbound HTTP requests |
 
-Provider credentials such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and cloud-provider configuration are listed in [Providers](providers.md#environment-variables-or-auth-file).
+Provider credentials such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and provider-specific configuration are listed in [Providers](providers.md#use-an-api-key-from-the-environment).

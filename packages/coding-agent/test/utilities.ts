@@ -93,7 +93,7 @@ export async function resolveApiKey(provider: string): Promise<string | undefine
 		if (!oauth) return undefined;
 		let credential = entry;
 		if (Date.now() >= credential.expires) {
-			credential = await oauth.refresh(credential);
+			credential = await oauth.refresh(credential, new AbortController().signal);
 			storage[provider] = credential;
 			saveAuthStorage(storage);
 		}
@@ -104,18 +104,18 @@ export async function resolveApiKey(provider: string): Promise<string | undefine
 }
 
 /**
- * Check if a provider has credentials in ~/.pi/agent/auth.json
+ * Check if a provider has credentials in ~/.draht/agent/auth.json
  */
 export function hasAuthForProvider(provider: string): boolean {
 	const storage = loadAuthStorage();
 	return provider in storage;
 }
 
-/** Path to the real pi agent config directory */
-export const PI_AGENT_DIR = join(homedir(), ".pi", "agent");
+/** Path to the real draht agent config directory */
+export const DRAHT_AGENT_DIR = join(homedir(), ".draht", "agent");
 
 /**
- * Get an AuthStorage instance backed by ~/.pi/agent/auth.json
+ * Get an AuthStorage instance backed by ~/.draht/agent/auth.json
  * Use this for tests that need real OAuth credentials.
  */
 export function getRealAuthStorage(): AuthStorage {
@@ -150,6 +150,20 @@ export function assistantMsg(text: string) {
 		stopReason: "stop" as const,
 		timestamp: Date.now(),
 	};
+}
+
+/**
+ * Read a session JSONL file and return one label per record: the message role for
+ * message entries, otherwise the entry type (e.g. "session", "model_change").
+ */
+export function readSessionFileRoles(file: string): string[] {
+	return readFileSync(file, "utf-8")
+		.trim()
+		.split("\n")
+		.map((line) => {
+			const record = JSON.parse(line);
+			return record.message?.role ?? record.type;
+		});
 }
 
 /**

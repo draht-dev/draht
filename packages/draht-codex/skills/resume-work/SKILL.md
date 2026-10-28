@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 name: resume-work
 description: Draht command prompt wrapper for resume-work. Use when the user selects the Draht resume-work workflow or wants to resume from a CONTINUE-HERE handoff document.
 ---

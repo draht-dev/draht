@@ -128,6 +128,7 @@ const extensionActions: ExtensionActions = {
 	sendMessage: () => {},
 	sendUserMessage: () => {},
 	appendEntry: () => {},
+	appendUsage: () => {},
 	setSessionName: () => {},
 	getSessionName: () => undefined,
 	setLabel: () => {},
@@ -139,6 +140,7 @@ const extensionActions: ExtensionActions = {
 	setModel: async () => false,
 	getThinkingLevel: () => "off",
 	setThinkingLevel: () => {},
+	getSettings: () => ({}),
 };
 
 const extensionContextActions: ExtensionContextActions = {

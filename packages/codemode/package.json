@@ -1,0 +1,76 @@
+{
+	"name": "@draht/codemode",
+	"version": "2026.10.23-1",
+	"description": "Sandboxed JavaScript execution where the only capability is calling injected tools",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"source": "./src/index.ts",
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./declarations": {
+			"source": "./src/declarations.ts",
+			"types": "./dist/declarations.d.ts",
+			"import": "./dist/declarations.js"
+		},
+		"./source": {
+			"source": "./src/source.ts",
+			"types": "./dist/source.d.ts",
+			"import": "./dist/source.js"
+		},
+		"./worker": {
+			"source": "./src/runtime/worker.ts",
+			"types": "./dist/runtime/worker.d.ts",
+			"import": "./dist/runtime/worker.js"
+		},
+		"./portable": {
+			"source": "./src/portable.ts",
+			"types": "./dist/portable.d.ts",
+			"import": "./dist/portable.js"
+		},
+		"./cloudflare": {
+			"source": "./src/cloudflare.ts",
+			"types": "./dist/cloudflare.d.ts",
+			"import": "./dist/cloudflare.js"
+		}
+	},
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"scripts": {
+		"clean": "shx rm -rf dist",
+		"build": "tsc -p tsconfig.build.json",
+		"test": "vitest --run",
+		"prepublishOnly": "npm run clean && npm run build"
+	},
+	"keywords": [
+		"draht",
+		"codemode",
+		"sandbox",
+		"quickjs",
+		"wasm",
+		"cloudflare",
+		"durable-objects"
+	],
+	"author": "Oskar Freye",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/draht-dev/draht.git",
+		"directory": "packages/codemode"
+	},
+	"engines": {
+		"node": "^22.23.4 || ^24.22.1 || ^26.12.1"
+	},
+	"dependencies": {
+		"quickjs-wasi": "3.6.2"
+	},
+	"devDependencies": {
+		"shx": "0.3.4",
+		"vitest": "4.1.11"
+	}
+}

@@ -177,6 +177,15 @@ export const DECLARED_CREDENTIAL_ENV: readonly string[] = [
 const BASE_ENV_NAMES: readonly string[] = ["HOME", "LANG", "LC_ALL", "LC_CTYPE", "LOGNAME", "TMPDIR", "TZ", "USER"];
 
 /**
+ * Draht's permission mode, passed on so the operator's `DRAHT_PERMISSION_MODE` reaches the
+ * sessions this daemon starts the same way it reaches the ones started in a terminal. Unset on the
+ * daemon, it stays unset, and the session starts in auto like any other. `yolo` is the exception:
+ * a session started from the board runs with nobody watching it, so dropping every approval there
+ * takes the operator listing the name in `DRAHT_RESUME_ENV_ALLOW`.
+ */
+const FORWARDED_PERMISSION_MODE_ENV = "DRAHT_PERMISSION_MODE";
+
+/**
  * Names that are refused even when an operator declares them.
  *
  * Every one of these changes what code a program loads before its own first
@@ -561,6 +570,15 @@ export function buildChildEnvironment(options: ChildEnvironmentOptions): Record<
 		if (typeof value === "string" && value.length > 0) child[name] = value;
 	}
 
+	const permissionMode = env[FORWARDED_PERMISSION_MODE_ENV];
+	if (
+		typeof permissionMode === "string" &&
+		permissionMode.length > 0 &&
+		permissionMode.trim().toLowerCase() !== "yolo"
+	) {
+		child[FORWARDED_PERMISSION_MODE_ENV] = permissionMode;
+	}
+
 	// Set, never copied: the daemon's own agent directory is what makes the
 	// resumed session's socket land in the directory this daemon watches. A
 	// resume whose child published somewhere else would spawn successfully and
@@ -572,7 +590,12 @@ export function buildChildEnvironment(options: ChildEnvironmentOptions): Record<
 		.map((name) => name.trim())
 		.filter((name) => name.length > 0 && ENV_NAME.test(name));
 
-	for (const name of [...(options.credentialEnv ?? DECLARED_CREDENTIAL_ENV), ...extra]) {
+	// A harness's credentials never carry the permission mode: `yolo` crosses only on the operator's
+	// own `DRAHT_RESUME_ENV_ALLOW` declaration.
+	const credentials = (options.credentialEnv ?? DECLARED_CREDENTIAL_ENV).filter(
+		(name) => name !== FORWARDED_PERMISSION_MODE_ENV,
+	);
+	for (const name of [...credentials, ...extra]) {
 		if (isForbiddenEnvName(name)) continue;
 		const value = env[name];
 		if (typeof value === "string" && value.length > 0) child[name] = value;

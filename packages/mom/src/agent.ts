@@ -3,6 +3,7 @@ import { getModel, type ImageContent, streamSimple } from "@draht/ai/compat";
 import {
 	AgentSession,
 	AuthStorage,
+	CONFIG_DIR_NAME,
 	convertToLlm,
 	createExtensionRuntime,
 	formatSkillsForPrompt,
@@ -24,7 +25,7 @@ import type { ChannelStore } from "./store.js";
 import { createMomTools, setUploadFunction } from "./tools/index.js";
 
 // Hardcoded model for now - TODO: make configurable (issue #63)
-const model = getModel("anthropic", "claude-sonnet-4-5");
+const model = getModel("anthropic", "claude-sonnet-5");
 
 export interface PendingMessage {
 	userName: string;
@@ -48,7 +49,7 @@ async function getAnthropicApiKey(modelRuntime: ModelRuntime): Promise<string> {
 		throw new Error(
 			"No API key found for anthropic.\n\n" +
 				"Set an API key environment variable, or use /login with Anthropic and link to auth.json from " +
-				join(homedir(), ".pi", "mom", "auth.json"),
+				join(homedir(), CONFIG_DIR_NAME, "mom", "auth.json"),
 		);
 	}
 	return key;
@@ -138,6 +139,15 @@ function loadMomSkills(channelDir: string, workspacePath: string): Skill[] {
 	return Array.from(skillMap.values());
 }
 
+/**
+ * Directory the executor runs bash commands in: the container root for Docker
+ * (docker exec), the mom process directory on the host. The prompt text and the
+ * session cwd (rendered as <cwd>) both use it so they never disagree.
+ */
+function getBashWorkingDirectory(sandboxConfig: SandboxConfig): string {
+	return sandboxConfig.type === "docker" ? "/" : process.cwd();
+}
+
 function buildSystemPrompt(
 	workspacePath: string,
 	channelId: string,
@@ -160,11 +170,11 @@ function buildSystemPrompt(
 
 	const envDescription = isDocker
 		? `You are running inside a Docker container (Alpine Linux).
-- Bash working directory: / (use cd or absolute paths)
+- Bash working directory: ${getBashWorkingDirectory(sandboxConfig)} (use cd or absolute paths)
 - Install tools with: apk add <package>
 - Your changes persist across sessions`
 		: `You are running directly on the host machine.
-- Bash working directory: ${process.cwd()}
+- Bash working directory: ${getBashWorkingDirectory(sandboxConfig)}
 - Be careful with system modifications`;
 
 	return `You are mom, a Slack bot assistant. Be concise. No emojis.
@@ -428,6 +438,8 @@ async function createRunner(sandboxConfig: SandboxConfig, channelId: string, cha
 	const memory = getMemory(channelDir);
 	const skills = loadMomSkills(channelDir, workspacePath);
 	const systemPrompt = buildSystemPrompt(workspacePath, channelId, memory, sandboxConfig, [], [], skills);
+	// AgentSession rebuilds the prompt from the resource loader; run() swaps this per run.
+	let currentSystemPrompt = systemPrompt;
 
 	// Create session manager and settings manager
 	// Use a fixed context.jsonl file per channel (not timestamped like coding-agent)
@@ -437,7 +449,7 @@ async function createRunner(sandboxConfig: SandboxConfig, channelId: string, cha
 
 	// Create AuthStorage and ModelRuntime
 	// Auth stored outside workspace so agent can't access it
-	const authStorage = AuthStorage.create(join(homedir(), ".pi", "mom", "auth.json"));
+	const authStorage = AuthStorage.create(join(homedir(), CONFIG_DIR_NAME, "mom", "auth.json"));
 	const modelRuntime = await ModelRuntime.create({ credentials: authStorage });
 
 	// Create agent
@@ -466,7 +478,7 @@ async function createRunner(sandboxConfig: SandboxConfig, channelId: string, cha
 		getPrompts: () => ({ prompts: [], diagnostics: [] }),
 		getThemes: () => ({ themes: [], diagnostics: [] }),
 		getAgentsFiles: () => ({ agentsFiles: [] }),
-		getSystemPrompt: () => systemPrompt,
+		getSystemPrompt: () => currentSystemPrompt,
 		getSystemPromptSource: () => undefined,
 		getAppendSystemPrompt: () => [],
 		getAppendSystemPromptSources: () => [],
@@ -481,7 +493,7 @@ async function createRunner(sandboxConfig: SandboxConfig, channelId: string, cha
 		agent,
 		sessionManager,
 		settingsManager,
-		cwd: process.cwd(),
+		cwd: getBashWorkingDirectory(sandboxConfig),
 		modelRuntime,
 		resourceLoader,
 		baseToolsOverride,
@@ -684,7 +696,10 @@ async function createRunner(sandboxConfig: SandboxConfig, channelId: string, cha
 				ctx.users,
 				skills,
 			);
-			session.agent.state.systemPrompt = systemPrompt;
+			// The transcript carries the prompt: rebuild it so the next turn records the change
+			// as a system message instead of rewriting the leading one.
+			currentSystemPrompt = systemPrompt;
+			session.setActiveToolsByName(session.getActiveToolNames());
 
 			// Set up file upload function
 			setUploadFunction(async (filePath: string, title?: string) => {

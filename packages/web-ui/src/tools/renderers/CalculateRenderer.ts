@@ -10,8 +10,8 @@ interface CalculateParams {
 }
 
 // Calculate tool has undefined details (only uses output)
-export class CalculateRenderer implements ToolRenderer<CalculateParams, undefined> {
-	render(params: CalculateParams | undefined, result: ToolResultMessage<undefined> | undefined): ToolRenderResult {
+export class CalculateRenderer implements ToolRenderer<CalculateParams> {
+	render(params: CalculateParams | undefined, result: ToolResultMessage | undefined): ToolRenderResult {
 		const state = result ? (result.isError ? "error" : "complete") : "inprogress";
 
 		// Full params + full result

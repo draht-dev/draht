@@ -1,7 +1,7 @@
 ---
 name: verifier
 description: Runs lint, typecheck, and tests across the monorepo and reports failures.
-model: anthropic/claude-sonnet-4-6
+model: anthropic/claude-sonnet-5
 tools: bash
 ---
 

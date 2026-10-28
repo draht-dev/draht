@@ -20,6 +20,7 @@ import {
 import type { ExtensionContext } from "../../src/core/extensions/types.ts";
 import {
 	type AgentFSMTransitionEvent,
+	type GatedTool,
 	PermissionGate,
 	parseRules,
 	WORKTREE_DIR_NAME,
@@ -342,9 +343,31 @@ rules:
 			makeCtx(),
 		);
 
-		expect(evaluateSpy).toHaveBeenCalledWith("bash", { command: "rm -rf /" });
+		expect(evaluateSpy).toHaveBeenCalledWith("bash", { command: "rm -rf /" }, undefined);
 		expect(result?.block).toBe(true);
 		expect(result?.reason).toContain("deny");
+	});
+
+	it("hands the gate the tool the session registered, so its trusted read-only hint spares the ask", async () => {
+		const gate = new PermissionGate([], { cwd: process.cwd() });
+		const evaluateSpy = vi.spyOn(gate, "evaluate");
+		const confirm = vi.fn().mockResolvedValue(false);
+		const tool: GatedTool = {
+			annotations: { readOnlyHint: true, openWorldHint: false },
+			sourceInfo: { scope: "temporary" },
+		};
+		const handler = createPermissionGateToolCallHandler(gate, {
+			getTool: (name) => (name === "mcp__docs__lookup" ? tool : undefined),
+		});
+
+		const result = await handler(
+			{ type: "tool_call", toolCallId: "5", toolName: "mcp__docs__lookup", input: { term: "gate" } } as never,
+			makeCtx({ confirm }),
+		);
+
+		expect(evaluateSpy).toHaveBeenCalledWith("mcp__docs__lookup", { term: "gate" }, tool);
+		expect(confirm).not.toHaveBeenCalled();
+		expect(result).toBeUndefined();
 	});
 
 	it("consults ui.confirm for approve-tier decisions and blocks on rejection", async () => {

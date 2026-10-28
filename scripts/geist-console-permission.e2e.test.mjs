@@ -36,9 +36,10 @@
  *
  * ## Harness hygiene, each item paid for by a probe that passed while proving nothing
  *
- *  - `DRAHT_PERMISSION_MODE` is DELETED from the child env. This repo's interactive
- *    shell exports `auto`, under which the scripted `bash` call is auto-allowed and
- *    NO ask is raised at all — the test then renders nothing and asserts nothing.
+ *  - `DRAHT_PERMISSION_MODE` is pinned to `ask` in the child env. Under `auto`,
+ *    the mode a session starts in and the one this repo's interactive shell exports,
+ *    the scripted `bash` call is auto-allowed and NO ask is raised at all — the test
+ *    then waits for a dialog that never renders.
  *  - The agent dir sits directly under /tmp with a short name: a Unix socket path
  *    over ~104 bytes fails to bind with EINVAL, and macOS `os.tmpdir()` already
  *    spends ~50 characters before a uuid.
@@ -418,8 +419,8 @@ before(async () => {
 	]);
 
 	drahtStderr = { text: "" };
-	// Built from scratch rather than inherited: this repo's shell exports
-	// DRAHT_PERMISSION_MODE=auto, under which no ask is raised at all.
+	// Built from scratch rather than inherited, with the mode pinned to `ask`: in
+	// `auto` (an unset variable, or this repo's shell) no ask is raised at all.
 	const draht = track(
 		spawn("node", [DRAHT_CLI, "--attachable", "--mode", "rpc", "--provider", "draht-stub", "--model", "stub-1"], {
 			cwd: sessionCwd,
@@ -431,6 +432,7 @@ before(async () => {
 				DRAHT_STUB_PROVIDER: "1",
 				DRAHT_STUB_PROVIDER_TOKENS_PER_SECOND: "60",
 				DRAHT_STUB_TOOL_CALLS: script,
+				DRAHT_PERMISSION_MODE: "ask",
 			},
 			stdio: ["pipe", "ignore", "pipe"],
 		}),

@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [2026.10.8-1] - 2026-10-08
+
+### Changed
+
+- refresh model ids to Opus 5.5, Sonnet 5, Fable 5.1 and GPT-6
+
+## [2026.10.4-1] - 2026-10-04
+
+### Changed
+
+- feat(coding-agent): codemode and MCP
+- feat: build with TypeScript 7 and run sources with plain node
+
 ## [2026.7.30] - 2026-07-30
 
 ### Changed

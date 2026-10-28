@@ -11,9 +11,10 @@ import { listCanonicalSkills, relativeToSkillsRoot } from "./skill-tree.ts";
 const DIALECT_MARKER_RE = /Task tool|subagent_type|spawn_agent|\$draht|\/draht:|\bClaude\b|\bCodex\b/g;
 
 // Model brand names are allowed everywhere — they name a model, not a host or
-// a dispatch mechanism, and the same names appear identically in both the
-// claude and codex renderings.
-const BRAND_NAME_ALLOWLIST = ["Claude Fable 5", "Claude Sonnet 5", "Claude API"];
+// a dispatch mechanism. The codex rendering may swap a canonical Claude brand
+// name for its GPT-6 counterpart (see scripts/skills-dialect-table.mjs), so
+// the two renderings are not required to show identical brand names.
+const BRAND_NAME_ALLOWLIST = ["Claude Fable 5.1", "Claude Sonnet 5", "Claude API"];
 
 // skills/draht/SKILL.md is the one skill whose job is to describe every
 // host's invocation surface, so its "## Host Invocation" table is allowed to
@@ -44,12 +45,6 @@ function stripBrandNames(content: string): string {
 // Every entry documents exactly why a "../" occurrence is not a real
 // cross-skill reference.
 const TRAVERSAL_ALLOWLIST: Array<{ relPath: string; snippet: string; reason: string }> = [
-	{
-		relPath: "ddd-workflow/SKILL.md",
-		snippet: "'../billing/...'",
-		reason:
-			"pedagogical anti-pattern example (a hypothetical illegal cross-context import) inside inline code — not a real relative reference, and not resolved against anything.",
-	},
 	{
 		relPath: "saga-spawner/SKILL.md",
 		snippet: "npx tsx ../../node_modules/vitest/dist/cli.js",
@@ -152,14 +147,10 @@ describe("portability: no host-dialect markers outside the allowlist", () => {
 		});
 	}
 
-	it("model-tiering/SKILL.md actually contains the brand names the allowlist strips (proves the rule is exercised)", () => {
-		const content = readFileSync(
-			resolve(listCanonicalSkills().find((s) => s.name === "model-tiering")!.skillMdPath),
-			"utf8",
-		);
-		for (const brand of BRAND_NAME_ALLOWLIST) {
-			expect(content).toContain(brand);
-		}
+	it("allows model/API names without hiding host-specific invocation markers", () => {
+		const hostMarkers = ["Claude", "Codex", "Task tool", "subagent_type", "spawn_agent", "$draht", "/draht:"];
+		const content = [...BRAND_NAME_ALLOWLIST, ...hostMarkers].join("\n");
+		expect(stripBrandNames(content).match(DIALECT_MARKER_RE)).toEqual(hostMarkers);
 	});
 
 	it("draht/SKILL.md's Host Invocation section actually contains host markers (proves the allowlist is scoped precisely, not accidentally over-broad)", () => {

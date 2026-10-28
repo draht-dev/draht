@@ -329,7 +329,7 @@ describe("CheckpointManager restore safety", () => {
 			const result = await manager.restore({
 				targetEntryId: "entry-1",
 				currentEntryId: "entry-2",
-				onPathRestored: () => {
+				onPathsRestored: () => {
 					if (existsSync(markerPath())) seenDuringRestore.push(readFileSync(markerPath(), "utf8"));
 				},
 			});
@@ -348,7 +348,7 @@ describe("CheckpointManager restore safety", () => {
 			const result = await manager.restore({
 				targetEntryId: "entry-1",
 				currentEntryId: "entry-2",
-				onPathRestored: () => {
+				onPathsRestored: () => {
 					throw new Error("injected mid-restore failure");
 				},
 			});

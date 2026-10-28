@@ -14,12 +14,13 @@ export const DEFAULT_RATES = { input: 3, output: 15 } as const;
  * Rough cost estimates per million tokens (input/output) by provider.
  */
 const COST_PER_MILLION: Record<string, { input: number; output: number }> = {
-	"anthropic/claude-opus-4-6": { input: 15, output: 75 },
-	"anthropic/claude-sonnet-4-6": { input: 3, output: 15 },
+	"anthropic/claude-opus-5-5": { input: 4, output: 20 },
+	"anthropic/claude-sonnet-5": { input: 2, output: 10 },
 	"google/gemini-2.5-pro": { input: 1.25, output: 10 },
-	"google/gemini-2.5-flash": { input: 0.15, output: 0.6 },
-	"openai/gpt-5.2": { input: 5, output: 15 },
+	"google/gemini-2.5-flash": { input: 0.3, output: 2.5 },
+	"openai/gpt-6.1-sol": { input: 2, output: 10 },
 	"deepseek/deepseek-v3": { input: 0.27, output: 1.1 },
+	"openrouter/deepseek/deepseek-v3.2": { input: 0.28, output: 0.42 },
 };
 
 /**
@@ -39,7 +40,7 @@ function calculateTokenCost(tokens: number, ratePerMillion: number): number {
  * computational cost of extended reasoning/thinking during model inference.
  *
  * @param provider - Provider name (e.g., "anthropic")
- * @param model - Model name (e.g., "claude-opus-4-6")
+ * @param model - Model name (e.g., "claude-opus-5-5")
  * @param inputTokens - Number of input tokens
  * @param outputTokens - Number of output tokens
  * @param reasoningTokens - Number of reasoning/thinking tokens (billed at input rate)

@@ -1,6 +1,8 @@
-node_modules/
+node_modules
 dist/
 .artifacts/
+/.worktrees/
+/.reels-cache/
 *.log
 .DS_Store
 *.tsbuildinfo
@@ -46,7 +48,9 @@ todo.md
 plans/
 .pi/hf-sessions/
 .pi/hf-sessions-backup/
+.draht/settings.json
 collect.sh
+packages/agent/docs/extensions/pi-server-artifact/index.md
 
 # draht-tools living codebase map (regenerated on demand by `draht-tools map-graph` / `map-serve`)
 .planning/codebase/MAP.json

@@ -20,7 +20,7 @@ Decompose the work into independently verifiable units before acting; the `atomi
 1. Run `draht-tools map-codebase $1`
 2. Tool generates the prose docs (STACK.md, ARCHITECTURE.md, CONVENTIONS.md, CONCERNS.md, DOMAIN-HINTS.md) **and**, in the same pass, the **living architecture map** (MAP.json + MAP.html + GRAPH_REPORT.md).
 2a. The living architecture map produced by step 1 (re-run `draht-tools map-graph $1` any time to refresh just the map without rewriting the docs):
-   - `.planning/codebase/MAP.json` — machine-readable map with **entry points** (CLI bins, HTTP routes, library main exports), **sinks** (FS / net / DB / stdout / exec calls), **bounded contexts** (packages), **cross-package dataflow edges**, **symbol-resolved call edges**, **flows** (which sinks each entry point reaches and through which intermediate module), per-module **layer** (presentation / application / domain / infrastructure / support), and exports/imports per file. Agents starting a new task should read MAP.json first instead of re-scanning the tree.
+   - `.planning/codebase/MAP.json` — machine-readable map with **entry points** (CLI bins, HTTP routes, library main exports), **sinks** (FS / net / DB / stdout / exec calls), **bounded contexts** (packages), **cross-package dataflow edges**, **symbol-resolved call edges**, **flows** (which sinks each entry point reaches and through which intermediate module), per-module **layer** (presentation / application / domain / infrastructure / support), and exports/imports per file. Orient with `GRAPH_REPORT.md` and focused `graph-*` queries; load only relevant map slices into context.
    - `.planning/codebase/MAP.html` — interactive layered visualization with four views:
      - **Architecture** — packages drawn as containers in architectural layers, with cross-package dataflow arrows. Thickness encodes import count.
      - **Modules** — every file inside its package container, import edges between them; click a package or sink to highlight.
@@ -50,7 +50,7 @@ Decompose the work into independently verifiable units before acting; the `atomi
    - `## Aggregates` — aggregates and their root entities per context
    - `## Domain Events` — any existing event names or patterns discovered
 6. Create `.planning/TEST-STRATEGY.md` with: Test Framework, Directory Conventions, Coverage Goals, Testing Levels, Excluded
-7. Commit: `draht-tools commit-docs "map existing codebase"`
+7. If committing is authorized: `draht-tools commit-docs "map existing codebase"`
 
 ## Living map for agents
 

@@ -56,9 +56,10 @@
  *     each other.
  *
  * ── HARNESS HYGIENE, each item paid for by a probe that proved nothing ──────────────────────────
- *  • `DRAHT_PERMISSION_MODE` is never inherited: the environment is BUILT, not filtered. This
- *    repo's interactive shell exports `auto`, under which the scripted `bash` call is auto-allowed
- *    and no permission ask — and therefore no `permission_resolution` row — is ever raised.
+ *  • `DRAHT_PERMISSION_MODE` is pinned to `ask`, never inherited: the environment is BUILT,
+ *    not filtered. Under `auto`, the mode a session starts in and the one this repo's interactive
+ *    shell exports, the scripted `bash` call is auto-allowed and no permission ask — and therefore
+ *    no `permission_resolution` row — is ever raised.
  *  • Every temp dir sits directly under `/tmp` with a short name. A Unix socket path over ~104
  *    bytes fails to bind with EINVAL, and macOS `os.tmpdir()` spends ~50 characters before a uuid.
  *  • `DRAHT_CODING_AGENT_DIR` is set for every child, which also disables first-time setup — a
@@ -70,6 +71,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } fr
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { ensureEmittedBuild } from "./emitted-build.ts";
 
 const PKG_ROOT = path.resolve(__dirname, "..");
 const EMITTED_CLI = path.join(PKG_ROOT, "dist", "cli.js");
@@ -191,7 +193,7 @@ async function createSandbox(name: string): Promise<Sandbox> {
  * The child's entire environment, built from nothing rather than filtered from `process.env`.
  *
  * A filter can miss a provider key spelling or the ambient `DRAHT_PERMISSION_MODE`; a
- * from-scratch env cannot.
+ * from-scratch env cannot. The mode is pinned to `ask`, the one that asks.
  */
 function childEnv(sandbox: Sandbox, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
 	return {
@@ -201,6 +203,7 @@ function childEnv(sandbox: Sandbox, extra: Record<string, string> = {}): NodeJS.
 		TERM: "xterm-256color",
 		DRAHT_CODING_AGENT_DIR: sandbox.agentDir,
 		DRAHT_STUB_PROVIDER: "1",
+		DRAHT_PERMISSION_MODE: "ask",
 		HTTP_PROXY: DEAD_PROXY,
 		HTTPS_PROXY: DEAD_PROXY,
 		ALL_PROXY: DEAD_PROXY,
@@ -363,11 +366,6 @@ function sessionEntries(sandbox: Sandbox): Record<string, unknown>[] {
 		.map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
-async function buildEmittedBinary(): Promise<void> {
-	const result = await runProcess("bun", ["run", "build"], { cwd: PKG_ROOT, env: process.env });
-	if (result.code !== 0) throw new Error(`build failed:\n${result.stdout}\n${result.stderr}`);
-}
-
 /**
  * A startup-benchmark run: the real interactive path — TUI init, theme detection, the whole
  * startup banner — that then stops itself and exits 0 instead of waiting for input. It is the
@@ -376,7 +374,7 @@ async function buildEmittedBinary(): Promise<void> {
 const BENCHMARK_ENV = { DRAHT_STARTUP_BENCHMARK: "1" };
 
 beforeAll(async () => {
-	await buildEmittedBinary();
+	await ensureEmittedBuild();
 	const driverDir = await mkdtemp(path.join("/tmp", "d35-drv-"));
 	tempDirs.push(driverDir);
 	driverPath = path.join(driverDir, "ptydrive.py");

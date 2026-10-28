@@ -1,6 +1,7 @@
 ---
+disable-model-invocation: true
 name: quick
-description: Draht command prompt wrapper for quick. Use when the user selects the Draht quick workflow or wants to execute a small ad-hoc task with tracking and review discipline.
+description: Run the Draht quick command when the user explicitly selects it for an ad-hoc task.
 ---
 
 # Draht Command: quick

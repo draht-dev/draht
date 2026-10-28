@@ -1,3 +1,5 @@
+import type { FileSink } from "bun";
+
 /**
  * ProcessStatus — value object representing the lifecycle state of a SessionProcess.
  *
@@ -142,8 +144,8 @@ export class SessionProcess {
 	write(data: string): void {
 		const stdin = this.#proc.stdin;
 		if (stdin && typeof stdin === "object" && "write" in stdin) {
-			(stdin as import("bun").FileSink).write(data);
-			(stdin as import("bun").FileSink).flush();
+			(stdin as FileSink).write(data);
+			(stdin as FileSink).flush();
 		}
 	}
 

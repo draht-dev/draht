@@ -70,10 +70,13 @@ function fakeAssistantMessage(text: string, provider: string, model: string, api
 class FakeModelRouter {
 	private rootCallIndex = 0;
 
-	constructor(
-		private readonly rootResponses: string[],
-		private readonly subResponse = "sub-response",
-	) {}
+	private readonly rootResponses: string[];
+	private readonly subResponse: string;
+
+	constructor(rootResponses: string[], subResponse = "sub-response") {
+		this.rootResponses = rootResponses;
+		this.subResponse = subResponse;
+	}
 
 	resolve(role: string): ModelRef {
 		if (role === "rlm-root") return { provider: "anthropic", model: "claude-opus-4-6" };

@@ -1,6 +1,6 @@
 {
 	"name": "@draht/tools",
-	"version": "2026.7.30",
+	"version": "2026.10.23-1",
 	"description": "Draht Tools — Get Shit Done CLI (canonical source shared by draht-claude and @draht/coding-agent).",
 	"type": "commonjs",
 	"bin": {
@@ -34,6 +34,6 @@
 		"directory": "packages/draht-tools"
 	},
 	"engines": {
-		"node": ">=20.0.0"
+		"node": "^22.23.4 || ^24.22.1 || ^26.12.1"
 	}
 }

@@ -126,6 +126,7 @@ export interface ExtensionSelectorOptions {
 	 */
 	detailRows?: readonly string[];
 	onToggleToolsExpanded?: () => void;
+	description?: string;
 }
 
 /**
@@ -252,6 +253,11 @@ export class ExtensionSelectorComponent extends Container {
 			// No spacer here: the row budget is only a guarantee if every line between the border and
 			// the option list is counted, and the muted detail block already separates itself visually.
 		} else {
+			this.addChild(new Spacer(1));
+		}
+		if (opts?.description) {
+			// Trusted caller-authored prose (e.g. the /bug dialog), not extension input, so it may wrap.
+			this.addChild(new Text(theme.fg("text", opts.description), 1, 0));
 			this.addChild(new Spacer(1));
 		}
 

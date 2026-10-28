@@ -1,27 +1,24 @@
 /**
  * OpenAI Codex (ChatGPT OAuth) flow
  *
- * NOTE: This module uses Node.js crypto and http for the OAuth callback.
+ * NOTE: This module uses Node.js crypto and http (via callback-server.ts) for the OAuth callback.
  * It is only intended for CLI use, not browser environments.
  */
 
-// NEVER convert to top-level imports - breaks browser/Vite builds
-let _randomBytes: typeof import("node:crypto").randomBytes | null = null;
-let _http: typeof import("node:http") | null = null;
+import type { randomBytes } from "node:crypto";
+import { getProviderEnvValue } from "../../utils/provider-env.ts";
+import type { LoginOptions, OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "../types.ts";
+import { startOAuthCallbackServer, waitForCallbackOrManualInput } from "./callback-server.ts";
+import { pollOAuthDeviceCodeFlow } from "./device-code.ts";
+import { generatePKCE } from "./pkce.ts";
+
+// NEVER convert to a top-level runtime import - breaks browser/Vite builds
+let _randomBytes: typeof randomBytes | null = null;
 if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
 	import("node:crypto").then((m) => {
 		_randomBytes = m.randomBytes;
 	});
-	import("node:http").then((m) => {
-		_http = m;
-	});
 }
-
-import { getProviderEnvValue } from "../../utils/provider-env.ts";
-import type { AuthInteraction, OAuthAuth, OAuthCredential } from "../types.ts";
-import { pollOAuthDeviceCodeFlow } from "./device-code.ts";
-import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.ts";
-import { generatePKCE } from "./pkce.ts";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTH_BASE_URL = "https://auth.openai.com";
@@ -42,7 +39,7 @@ type OAuthToken = { access: string; refresh: string; expires: number };
 type TokenOperation = "exchange" | "refresh";
 
 function getCallbackHost(): string {
-	return getProviderEnvValue("PI_OAUTH_CALLBACK_HOST") || "127.0.0.1";
+	return getProviderEnvValue("DRAHT_OAUTH_CALLBACK_HOST") || "127.0.0.1";
 }
 
 type DeviceAuthInfo = {
@@ -149,8 +146,8 @@ async function readTokenResponse(response: Response, operation: TokenOperation):
 async function exchangeAuthorizationCode(
 	code: string,
 	verifier: string,
-	redirectUri: string = REDIRECT_URI,
-	signal?: AbortSignal,
+	redirectUri: string,
+	signal: AbortSignal,
 ): Promise<OAuthToken> {
 	const response = await fetchWithLoginCancellation(TOKEN_URL, {
 		method: "POST",
@@ -168,7 +165,7 @@ async function exchangeAuthorizationCode(
 	return readTokenResponse(response, "exchange");
 }
 
-async function refreshAccessToken(refreshToken: string): Promise<OAuthToken> {
+async function refreshAccessToken(refreshToken: string, signal: AbortSignal): Promise<OAuthToken> {
 	let response: Response;
 	try {
 		response = await fetch(TOKEN_URL, {
@@ -179,6 +176,7 @@ async function refreshAccessToken(refreshToken: string): Promise<OAuthToken> {
 				refresh_token: refreshToken,
 				client_id: CLIENT_ID,
 			}),
+			signal,
 		});
 	} catch (error) {
 		throw new Error(`OpenAI Codex token refresh error: ${error instanceof Error ? error.message : String(error)}`);
@@ -187,7 +185,7 @@ async function refreshAccessToken(refreshToken: string): Promise<OAuthToken> {
 	return readTokenResponse(response, "refresh");
 }
 
-async function startOpenAICodexDeviceAuth(signal?: AbortSignal): Promise<DeviceAuthInfo> {
+async function startOpenAICodexDeviceAuth(signal: AbortSignal): Promise<DeviceAuthInfo> {
 	const response = await fetchWithLoginCancellation(DEVICE_USER_CODE_URL, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
@@ -231,7 +229,7 @@ async function startOpenAICodexDeviceAuth(signal?: AbortSignal): Promise<DeviceA
 	};
 }
 
-async function pollOpenAICodexDeviceAuth(device: DeviceAuthInfo, signal?: AbortSignal): Promise<DeviceTokenSuccess> {
+async function pollOpenAICodexDeviceAuth(device: DeviceAuthInfo, signal: AbortSignal): Promise<DeviceTokenSuccess> {
 	return pollOAuthDeviceCodeFlow<DeviceTokenSuccess>({
 		intervalSeconds: device.intervalSeconds,
 		expiresInSeconds: DEVICE_CODE_TIMEOUT_SECONDS,
@@ -290,7 +288,8 @@ async function pollOpenAICodexDeviceAuth(device: DeviceAuthInfo, signal?: AbortS
 }
 
 async function createAuthorizationFlow(
-	originator: string = "pi",
+	// OpenAI's authorize endpoint rejects unregistered originators such as "draht".
+	originator: string = "codex_cli_rs",
 ): Promise<{ verifier: string; state: string; url: string }> {
 	const { verifier, challenge } = await generatePKCE();
 	const state = createState();
@@ -308,88 +307,6 @@ async function createAuthorizationFlow(
 	url.searchParams.set("originator", originator);
 
 	return { verifier, state, url: url.toString() };
-}
-
-type OAuthServerInfo = {
-	close: () => void;
-	cancelWait: () => void;
-	waitForCode: () => Promise<{ code: string } | null>;
-};
-
-function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
-	if (!_http) {
-		throw new Error("OpenAI Codex OAuth is only available in Node.js environments");
-	}
-
-	let settleWait: ((value: { code: string } | null) => void) | undefined;
-	const waitForCodePromise = new Promise<{ code: string } | null>((resolve) => {
-		let settled = false;
-		settleWait = (value) => {
-			if (settled) return;
-			settled = true;
-			resolve(value);
-		};
-	});
-
-	const server = _http.createServer((req, res) => {
-		try {
-			const url = new URL(req.url || "", "http://localhost");
-			if (url.pathname !== "/auth/callback") {
-				res.statusCode = 404;
-				res.setHeader("Content-Type", "text/html; charset=utf-8");
-				res.end(oauthErrorHtml("Callback route not found."));
-				return;
-			}
-			if (url.searchParams.get("state") !== state) {
-				res.statusCode = 400;
-				res.setHeader("Content-Type", "text/html; charset=utf-8");
-				res.end(oauthErrorHtml("State mismatch."));
-				return;
-			}
-			const code = url.searchParams.get("code");
-			if (!code) {
-				res.statusCode = 400;
-				res.setHeader("Content-Type", "text/html; charset=utf-8");
-				res.end(oauthErrorHtml("Missing authorization code."));
-				return;
-			}
-			res.statusCode = 200;
-			res.setHeader("Content-Type", "text/html; charset=utf-8");
-			res.end(oauthSuccessHtml("OpenAI authentication completed. You can close this window."));
-			settleWait?.({ code });
-		} catch {
-			res.statusCode = 500;
-			res.setHeader("Content-Type", "text/html; charset=utf-8");
-			res.end(oauthErrorHtml("Internal error while processing OAuth callback."));
-		}
-	});
-
-	return new Promise((resolve) => {
-		server
-			.listen(1455, getCallbackHost(), () => {
-				resolve({
-					close: () => server.close(),
-					cancelWait: () => {
-						settleWait?.(null);
-					},
-					waitForCode: () => waitForCodePromise,
-				});
-			})
-			.on("error", (_err: NodeJS.ErrnoException) => {
-				settleWait?.(null);
-				resolve({
-					close: () => {
-						try {
-							server.close();
-						} catch {
-							// ignore
-						}
-					},
-					cancelWait: () => {},
-					waitForCode: async () => null,
-				});
-			});
-	});
 }
 
 function getAccountId(accessToken: string): string | null {
@@ -418,12 +335,12 @@ async function exchangeAuthorizationCodeForCredentials(
 	code: string,
 	verifier: string,
 	redirectUri: string,
-	signal?: AbortSignal,
+	signal: AbortSignal,
 ): Promise<OAuthCredential> {
 	return credentialsFromToken(await exchangeAuthorizationCode(code, verifier, redirectUri, signal));
 }
 
-async function loginOpenAICodexDeviceCode(interaction: AuthInteraction): Promise<OAuthCredential> {
+async function loginOpenAICodexDeviceCode(interaction: ProviderAuthInteraction): Promise<OAuthCredential> {
 	const device = await startOpenAICodexDeviceAuth(interaction.signal);
 	interaction.notify({
 		type: "device_code",
@@ -441,13 +358,21 @@ async function loginOpenAICodexDeviceCode(interaction: AuthInteraction): Promise
 	);
 }
 
-async function loginOpenAICodex(interaction: AuthInteraction): Promise<OAuthCredential> {
-	const { verifier, state, url } = await createAuthorizationFlow();
-	const server = await startLocalOAuthServer(state);
-	const manualAbort = new AbortController();
-	let code: string | undefined;
-	let manualCode: string | undefined;
-	let manualError: Error | undefined;
+async function loginOpenAICodex(
+	interaction: ProviderAuthInteraction,
+	options?: LoginOptions,
+): Promise<OAuthCredential> {
+	const { verifier, state, url } = await createAuthorizationFlow(options?.agentName);
+	// Port 1455 is shared with the Codex CLI; when it is taken, fall back to the pasted redirect URL.
+	const callback = await startOAuthCallbackServer({
+		providerName: "OpenAI",
+		host: getCallbackHost(),
+		port: 1455,
+		path: "/auth/callback",
+		state,
+		complete: async (code) => code,
+		signal: interaction.signal,
+	}).catch(() => undefined);
 
 	interaction.notify({
 		type: "auth_url",
@@ -456,61 +381,38 @@ async function loginOpenAICodex(interaction: AuthInteraction): Promise<OAuthCred
 	});
 
 	try {
-		const manualPromise = interaction
-			.prompt({
-				type: "manual_code",
-				message: "Complete login in your browser, or paste the authorization code / redirect URL here:",
-				placeholder: REDIRECT_URI,
-				signal: manualAbort.signal,
-			})
-			.then((input) => {
-				manualCode = input;
-				server.cancelWait();
-			})
-			.catch((error) => {
-				manualError = error instanceof Error ? error : new Error(String(error));
-				server.cancelWait();
-			});
-
-		const result = await server.waitForCode();
-		if (manualError) throw manualError;
-		if (result?.code) {
-			code = result.code;
-		} else if (manualCode) {
-			const parsed = parseAuthorizationInput(manualCode);
+		const result = await waitForCallbackOrManualInput(interaction, callback, {
+			message: "Complete login in your browser, or paste the authorization code / redirect URL here:",
+			placeholder: REDIRECT_URI,
+		});
+		let code: string | undefined;
+		if (result.type === "callback") {
+			code = result.value;
+		} else {
+			const parsed = parseAuthorizationInput(result.input);
 			if (parsed.state && parsed.state !== state) throw new Error("State mismatch");
 			code = parsed.code;
 		}
 
-		if (!code) {
-			await manualPromise;
-			if (manualError) throw manualError;
-			if (manualCode) {
-				const parsed = parseAuthorizationInput(manualCode);
-				if (parsed.state && parsed.state !== state) throw new Error("State mismatch");
-				code = parsed.code;
-			}
-		}
-
 		if (!code) throw new Error("Missing authorization code");
-		return exchangeAuthorizationCodeForCredentials(code, verifier, REDIRECT_URI, interaction.signal);
+		return await exchangeAuthorizationCodeForCredentials(code, verifier, REDIRECT_URI, interaction.signal);
 	} finally {
-		manualAbort.abort();
-		server.close();
+		callback?.close();
 	}
 }
 
 /**
  * Refresh OpenAI Codex OAuth token
  */
-async function refreshOpenAICodexToken(refreshToken: string): Promise<OAuthCredential> {
-	return credentialsFromToken(await refreshAccessToken(refreshToken));
+async function refreshOpenAICodexToken(refreshToken: string, signal: AbortSignal): Promise<OAuthCredential> {
+	return credentialsFromToken(await refreshAccessToken(refreshToken, signal));
 }
 
 export const openaiCodexOAuth: OAuthAuth = {
 	name: "OpenAI (ChatGPT Plus/Pro)",
+	isSubscription: true,
 
-	async login(interaction) {
+	async login(interaction, options) {
 		const method = await interaction.prompt({
 			type: "select",
 			message: "Select OpenAI Codex login method:",
@@ -527,10 +429,10 @@ export const openaiCodexOAuth: OAuthAuth = {
 			throw new Error(`Unknown OpenAI Codex login method: ${method}`);
 		}
 
-		return loginOpenAICodex(interaction);
+		return loginOpenAICodex(interaction, options);
 	},
 
-	refresh: (credential) => refreshOpenAICodexToken(credential.refresh),
+	refresh: (credential, signal) => refreshOpenAICodexToken(credential.refresh, signal),
 
 	async toAuth(credential) {
 		return { apiKey: credential.access };

@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 description: Create atomic execution plans for a roadmap phase (parallel via architect subagents)
 argument-hint: "<phase-number>"
 allowed-tools: Bash, Read, Write, Edit, Task
@@ -10,31 +11,13 @@ Create atomic execution plans for a roadmap phase, using subagents for parallel 
 
 Phase: $1
 
-## Red Flags — STOP
+> Invoke noninteractive Draht tooling as `node "${CLAUDE_PLUGIN_ROOT}/bin/draht-tools.cjs" <subcommand>`.
 
-A plan is only as good as the tasks inside it. STOP and revise instead of saving if **any** of these is true:
+## Planning constraints
 
-- Any task contains placeholder text: `[TBD]`, `[files]`, `[description]`, "appropriate error handling", "similar to Task N", or `...` in code positions
-- A task's `<test>` section names no concrete test cases (e.g., "test the function" with no inputs/outputs)
-- A task's `<files>` section lists no concrete file paths
-- A task takes more than ~5 minutes of focused work — break it down further
-- The plan introduces new domain terms that are NOT in `.planning/DOMAIN.md` — update DOMAIN.md first
-- A plan touches more than one bounded context without explicit ACL — split per context
-- The first plan is scaffolding/boilerplate while an unproven risk (new integration, unfamiliar API, untested pattern) sits in a later plan — reorder so the risk is proven first
+Use coherent tasks with concrete files, behavior, and verification. Group dependent changes that need to land together; split unrelated outcomes. Task size follows the behavior and dependency structure, not a time limit or fixed count. Resolve uncertainty that could invalidate later work early, and state material assumptions and how to check them.
 
-Run `draht-tools validate-plans $1` after saving. If it reports issues, fix them before commit.
-
-> **Tool note**: Invoke `draht-tools <subcommand>` as `node "${CLAUDE_PLUGIN_ROOT}/bin/draht-tools.cjs" <subcommand>`. For subagents, use the **Task tool** with `subagent_type: "architect"`. Dispatch multiple parallel tasks in a single assistant turn by making multiple Task tool calls at once.
-
-## Atomic Reasoning
-
-Decompose the work into independently verifiable units before acting; the `atomic-reasoning` skill holds the full discipline — load it when the decomposition is not obvious.
-
-**Atomicity test:** a task is atomic only if its `<verify>` can fail while every other task passes. If two tasks can only be checked together, they are one task.
-
-- **Order risk-first**: score each truth by uncertainty (has this codebase done it before?) × blast radius (how much becomes invalid if it's wrong?). The plan proving the highest-scoring truth executes first; boilerplate goes last. Boilerplate never invalidates a phase — the risky part regularly does.
-
-- Write every assumption a plan rests on as an explicit `Assumes:` line (with how to confirm it) in the plan header. Unwritten assumptions become the executor's bugs.
+The `atomic-reasoning` skill can help with difficult decomposition. Respect existing domain vocabulary and architecture; do not require new DDD layers or events solely because a plan crosses directories. Validate the saved plan with `draht-tools validate-plans $1` and resolve its errors before execution.
 
 ## Steps
 1. Run `draht-tools load-phase-context $1` to gather all context
@@ -42,13 +25,13 @@ Decompose the work into independently verifiable units before acting; the `atomi
 2. Optional: `draht-tools research-phase $1` for domain research
 3. Goal-backward planning:
    a. State the goal (outcome, not activity)
-   b. Derive observable truths (3-7 from user perspective)
+   b. Derive the observable outcomes required by the user
    c. From each observable truth, derive the test scenarios that would prove it (specific inputs → expected outputs or state changes)
    d. Map to required artifacts (files, endpoints, schemas)
-      - GRAPH-ORIENT: read `.planning/codebase/MAP.json` (regenerate with `draht-tools map-graph` if absent), then run `draht-tools graph-context <target-files>` for pkg/layer/importers and `draht-tools graph-query <term...>` to locate the code instead of grepping.
-   e. Break into plan groups of 2-5 tasks each
+      - GRAPH-ORIENT: read `.planning/codebase/GRAPH_REPORT.md` (regenerate with `draht-tools map-graph` if absent), then run `draht-tools graph-context <target-files>` for pkg/layer/importers and `draht-tools graph-query <term...>` to locate the code. Load relevant results rather than the full MAP.json.
+   e. Group tasks according to dependencies and coherent outcomes
 4. Identify which plans are independent (no shared files, no dependency edges)
-   - GRAPH-IMPACT: run `draht-tools graph-impact <plan-files>` per plan; plans with disjoint impact sets (reverse-dependents, entry points, sinks) are safe to parallelize — overlapping blast radius means a dependency edge.
+   - GRAPH-IMPACT: run `draht-tools graph-impact <plan-files>` per plan; use affected entry points and dependencies to assess shared risks; serialize conflicting changes. Disjoint file sets alone do not prove independence.
 
 5. **Delegate plan creation to subagents via the Task tool:**
    - For **independent plans**: dispatch multiple `Task` tool calls in parallel (single assistant turn), each with `subagent_type: "architect"`, one per plan.
@@ -87,15 +70,16 @@ Decompose the work into independently verifiable units before acting; the `atomi
    The content must contain real task details (files, actions, tests) — NOT placeholder brackets. If `create-plan` is called without stdin, it writes a useless template.
 
 8. Validate: `draht-tools validate-plans $1` — if it exits non-zero, fix the offending plan before commit.
-9. Commit: `draht-tools commit-docs "create phase $1 plans"`
+9. If committing is authorized: `draht-tools commit-docs "create phase $1 plans"`
+10. Show the user the execution order as a Mermaid `flowchart TD` per the `explainers` skill: one `subgraph` per wave, one node per plan, edges for the dependencies the saved plans declare. Draw it from the saved plan files, not from memory. It goes in your reply, not into the plan files.
 
 ## Plan Format
 Plans use XML task format:
 ```xml
 <task type="auto">
   <n>Task name</n>
-  <context>Bounded context this task belongs to</context>
-  <domain>Aggregates, entities, value objects, or events touched</domain>
+  <context>Relevant project context or module boundary</context>
+  <domain>Existing domain concepts affected, if applicable</domain>
   <files>affected files</files>
   <test>
     RED phase: Write failing tests FIRST.
@@ -112,9 +96,7 @@ Plans use XML task format:
   </action>
   <refactor>
     REFACTOR phase: Improve structure while keeping tests green.
-    - Extract value objects, push logic into domain layer
-    - Ensure naming matches ubiquitous language
-    - Remove duplication across bounded contexts (or make shared kernel explicit)
+    - Apply useful structural improvements within scope; preserve behavior
   </refactor>
   <verify>How to verify (tests pass + manual check if needed)</verify>
   <done>What "done" looks like — expressed as passing test assertions</done>
@@ -130,10 +112,8 @@ This is one step in the per-phase cycle:
 /discuss-phase N → /plan-phase N → /execute-phase N → /verify-work N
 ```
 
-After completing this command, tell the user to start a fresh session (`/clear`) and run `/execute-phase $1`. Do NOT suggest `/next-milestone`.
+After completing this command, identify `/execute-phase $1` as the next step; a fresh session is optional. Do NOT suggest `/next-milestone`.
 
-## Domain Rules for Plans
-- File/module structure should mirror bounded contexts (e.g., `src/billing/`, `src/catalog/`)
-- Never scatter one aggregate's logic across multiple contexts without an explicit ACL
-- If a plan introduces a new domain term, update `.planning/DOMAIN.md` first
-- Cross-context communication should use domain events, not direct imports
+## Domain context
+
+Use established project terms and boundaries. Update an existing domain document when the plan changes the model; do not introduce DDD ceremony for unrelated work.

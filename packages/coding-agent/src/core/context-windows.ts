@@ -3,15 +3,25 @@ import type { Api, Model } from "@draht/ai/compat";
 const OPENAI_STANDARD_CONTEXT_WINDOW = 272000;
 const OPENAI_CODEX_STANDARD_CONTEXT_WINDOW = 372000;
 const OPENAI_EXTENDED_CONTEXT_WINDOW = 1050000;
-const OPENAI_GPT_56_MODEL_IDS = new Set(["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"]);
-const OPENAI_EXTENDED_CONTEXT_MODEL_IDS = new Set(["gpt-5.4", "gpt-5.5", ...OPENAI_GPT_56_MODEL_IDS]);
+// Frontier models whose ChatGPT/Codex backend offers the 372k standard window. models.dev lists the
+// GPT-6 family at 1.05M context, like gpt-5.6, and the catalog caps them at 272k by default.
+const OPENAI_CODEX_EXTENDED_CONTEXT_MODEL_IDS = new Set([
+	"gpt-5.6-luna",
+	"gpt-5.6-sol",
+	"gpt-5.6-terra",
+	"gpt-6-astra",
+	"gpt-6-luna",
+	"gpt-6-sol",
+	"gpt-6.1-sol",
+]);
+const OPENAI_EXTENDED_CONTEXT_MODEL_IDS = new Set(["gpt-5.4", "gpt-5.5", ...OPENAI_CODEX_EXTENDED_CONTEXT_MODEL_IDS]);
 
 /** Return the context-window sizes that draht can safely select for a model. */
 export function getAvailableContextWindows<TApi extends Api>(model: Model<TApi>): number[] {
 	let windows: number[];
 	if (model.provider === "openai" && OPENAI_EXTENDED_CONTEXT_MODEL_IDS.has(model.id)) {
 		windows = [OPENAI_STANDARD_CONTEXT_WINDOW, OPENAI_EXTENDED_CONTEXT_WINDOW];
-	} else if (model.provider === "openai-codex" && OPENAI_GPT_56_MODEL_IDS.has(model.id)) {
+	} else if (model.provider === "openai-codex" && OPENAI_CODEX_EXTENDED_CONTEXT_MODEL_IDS.has(model.id)) {
 		windows = [OPENAI_CODEX_STANDARD_CONTEXT_WINDOW, OPENAI_EXTENDED_CONTEXT_WINDOW];
 	} else {
 		windows = [model.contextWindow];

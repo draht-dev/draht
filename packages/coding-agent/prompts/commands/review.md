@@ -46,6 +46,8 @@ Check domain language compliance and bounded context boundaries.
 
    Each finding carries its label (confirmed/suspected). End with residual risk: what the review did NOT cover (files skipped, paths not traced) — a review that claims total coverage it doesn't have is worse than a scoped one.
 
+   When a finding spans a call path or several files, show that path as a Mermaid diagram per the `explainers` skill, built only from the files and lines the finding cites. Report prose follows the `unslop` skill.
+
 ## Reading STATUS
 - Any `STATUS: BLOCKED` → its findings escalate to Critical in the merged report
 - `STATUS: NEEDS_CONTEXT` → provide missing info and re-dispatch that one agent

@@ -744,7 +744,7 @@ export interface ToolAPI {
 
 Tools are discovered from:
 1. `data/tools/**/index.ts` (workspace-local, recursive)
-2. `~/.pi/mom/tools/**/index.ts` (global, recursive)
+2. `~/.draht/mom/tools/**/index.ts` (global, recursive)
 
 ```typescript
 // loader.ts
@@ -762,7 +762,7 @@ async function loadCustomTools(dataDir: string): Promise<LoadedTool[]> {
   // Discover tool directories
   const toolDirs = [
     path.join(dataDir, "tools"),
-    path.join(os.homedir(), ".pi", "mom", "tools"),
+    path.join(os.homedir(), ".draht", "mom", "tools"),
   ];
   
   for (const dir of toolDirs) {

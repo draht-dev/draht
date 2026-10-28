@@ -34,7 +34,7 @@ Decompose the work into independently verifiable units before acting; the `atomi
 | Create atomic commits | `git-committer` |
 | Strategic steer at a decision point — rare, high-leverage | `advisor` |
 
-`spec-reviewer` and `reviewer` are distinct on purpose. Spec-reviewer ONLY checks "did the diff implement what the spec asked, no more no less". Reviewer evaluates quality. For any task with a written spec, run spec-reviewer **before** reviewer.
+`spec-reviewer` and `reviewer` are distinct on purpose. Spec-reviewer ONLY checks "did the diff implement what the spec asked, no more no less". Reviewer evaluates quality. When both reviews are required, run spec-reviewer before reviewer. Select reviews for the task’s risk and acceptance criteria.
 
 ## Effort Scaling
 
@@ -43,16 +43,16 @@ Match orchestration weight to the task — over-orchestration burns tokens witho
 | Task shape | Dispatch |
 |---|---|
 | Single question or trivial fix | One agent, or handle it directly — no orchestration |
-| One change set to evaluate | 2–4 parallel evaluators (reviewer, security-auditor, verifier) |
+| One change set to evaluate | Only the reviewers needed to resolve material risks or acceptance gaps |
 | Multi-part feature with known decomposition | Fan-out / fan-in |
 | Goal needing iteration until a measurable criterion holds | `/orchestrate-loop` |
 
 ## Model Tiering
 
-Bill volume tokens at the cheaper rate:
+Choose available models from the current provider catalog and measure quality, latency, and cost on the workload:
 
-- **Orchestrator pattern** — run this command on the strongest tier (e.g. Claude Fable 5) and let workers execute on the executor tier (e.g. Claude Sonnet 5): planning quality where it matters, volume tokens at worker rates.
-- **Advisor pattern** — when the session runs on the executor tier, dispatch `advisor` sparingly: once after orientation before committing to an approach, again when stuck or before declaring a hard task done. ~1–3 consults per task; treat its guidance with serious weight.
+- **Orchestrator pattern** — use a capable model for decomposition and assign bounded worker tasks to models that pass the relevant checks. Keep the same model when a cheaper or faster worker has not demonstrated acceptable results.
+- **Advisor pattern** — consult `advisor` when a concrete unresolved decision benefits from another model. Provide the question and evidence; no fixed consultation count is required.
 
 ## Orchestration Modes
 
@@ -63,10 +63,10 @@ Use the `subagent` tool with `tasks: [...]` when sub-tasks don't depend on each 
 Use the `subagent` tool with `chain: [...]` when later work depends on earlier output. Earlier output is interpolated via `{previous}` in the next task. Example: architect produces plan → implementer executes plan → verifier runs tests → reviewer audits the diff.
 
 ### Fan-out / Fan-in
-Architect decomposes into N independent plans → dispatch N implementers in parallel → collect all outputs → single verifier run → single reviewer audit. This is the standard pattern for `/execute-phase` work.
+Architect decomposes independent work → dispatch implementers in parallel → collect results for verification and review. When both reviews are selected, spec review precedes quality review; `/execute-phase` keeps its explicit per-task sequence.
 
 ### Two-Stage Review (spec → quality)
-For any task that has a written spec, follow implementer with **spec-reviewer first, then reviewer**:
+When the requested workflow needs separate spec and quality review, use this order:
 
 ```
 implementer → spec-reviewer → reviewer
@@ -81,12 +81,13 @@ When the work cannot land in one dispatch but success is provable by a determini
 
 ## Reading Subagent Status
 
-Every draht agent ends its response with one of four status lines. Branch on it:
+Require each dispatched agent to end its response with exactly one of these status lines, then branch on it:
 
 - `STATUS: DONE` — check the evidence before proceeding: a `DONE` that quotes no verification output (test counts, command results) is treated as `DONE_WITH_CONCERNS` — re-run the decisive check yourself. Subagent claims are inputs, not verdicts.
 - `STATUS: DONE_WITH_CONCERNS` — note the concerns. If correctness-related, address before moving on; otherwise log and continue.
 - `STATUS: NEEDS_CONTEXT` — provide the missing info and re-dispatch the same agent. Do NOT skip ahead with a guess.
-- `STATUS: BLOCKED` — STOP. Report the blocker. Do not retry the same agent on the same input — adjust inputs (more context, decompose further, different agent) or surface to the user.
+- `STATUS: BLOCKED` from a review agent (`spec-reviewer`, `reviewer`, or `security-auditor`) — send actionable required fixes to the implementer, then repeat the required reviews. Allow at most 3 implementer re-dispatches per task across review stages, or the active workflow's stricter cap. At the cap, stop and report the unresolved findings.
+- `STATUS: BLOCKED` from an implementer or another non-review agent — stop and report the blocker to the user. Do not retry unchanged inputs.
 
 ## Steps
 1. Read the task description and identify sub-tasks
@@ -101,5 +102,5 @@ Every draht agent ends its response with one of four status lines. Branch on it:
 - Every dispatch is a complete brief: objective, expected output format, tool guidance, and task boundaries — subagents cannot see the main conversation
 - Do not nest delegations deeply — one level is usually enough
 - Never retry the same agent on the same input after `BLOCKED` — change something
-- For any spec-driven work, spec-reviewer runs before quality reviewer
-- The agent that produced work never evaluates it — completion verdicts come from a fresh-context evaluator plus your own re-run of the decisive check
+- If both spec and quality review are required, spec-reviewer runs first
+- Use a fresh reviewer for unresolved semantic risks. Reuse auditable check results for unchanged inputs; rerun when state changed or evidence cannot be verified. Required failed checks block completion.

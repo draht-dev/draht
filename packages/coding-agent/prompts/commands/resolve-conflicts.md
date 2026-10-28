@@ -19,11 +19,7 @@ Context: $ARGUMENTS
 - `git status` reports unmerged paths — a merge, rebase, or cherry-pick is mid-flight.
 - The `subagent` tool reported a failed worktree merge-back (its failure notice points here): the agent's work sits on an unmerged `agent/<taskId>` branch. Run `git merge agent/<taskId>` first to enter the conflict, then continue here.
 
-## The Iron Law
-
-> **EVERY HUNK RESOLUTION MUST BE JUSTIFIED BY THE RECOVERED INTENT OF BOTH SIDES. NO INTENT, NO RESOLUTION.**
-
-A conflict is two changes with a reason each. Until you can state both reasons, you are not resolving — you are guessing.
+Resolve conflicts from both sides' intended behavior and the operation's goal. Preserve compatible changes; clarify an unresolved semantic conflict instead of choosing a side blindly.
 
 ## Phase 1 — Map the Conflict
 
@@ -53,19 +49,10 @@ Exit criterion: a one-sentence intent statement per side, per conflicted area. I
 
 ## Phase 4 — Run the Project's Checks
 
-Discover the project's own gates — package scripts, Makefile, CI config — and run them in order: typecheck, then tests, then lint/format. Fix what the merge broke, under the same rule: no invented behaviour.
+Discover the project's own gates — package scripts, Makefile, CI config — and run the required checks for the merged state, respecting repository command restrictions. Fix what the merge broke, under the same rule: no invented behaviour.
 
 ## Phase 5 — Finish the Operation
 
 - Merge: stage the resolved files and commit. The merge commit message names each recorded trade-off — which intent won where, and why.
 - Rebase or cherry-pick: `git rebase --continue` / `git cherry-pick --continue` until every commit is replayed.
 - Never `--no-verify`.
-
-## Red Flags — STOP
-
-Stop immediately if you catch yourself:
-- Resolving a hunk whose "why" you cannot state for both sides
-- Taking one side wholesale because it is newer, bigger, or yours
-- Introducing behaviour that exists on neither side
-- Finishing with failing checks, or reaching for `--no-verify`
-- Running `--abort` without explicit user sign-off

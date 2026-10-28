@@ -2,8 +2,10 @@
  * R35-ALWAYS.3 (same-owner attach) and R35-ALWAYS.4 (hygiene and the cap),
  * proved end to end against emitted artefacts only.
  *
- * Everything below drives the real `packages/coding-agent/dist/cli.js` — the file
- * `bin.draht` points at — and the daemon its own bin starts, over HTTP and a real
+ * Everything below drives the real `packages/coding-agent/dist/cli.js` — the
+ * tsc-emitted entry point gateway spawn-primitive.ts resolves (`bin.draht`
+ * now points at the bundled `dist/bundle/cli.js`, built from this same file)
+ * — and the daemon its own bin starts, over HTTP and a real
  * WebSocket. Nothing here imports `SocketServer`, `listAttachableSessions` or an
  * `AttachBridge`: a package-level test that did could pass while the shipped
  * binary published a socket anybody could dial, which is this repo's recorded

@@ -1,6 +1,6 @@
 ---
 name: saga-spawner
-description: The saga graph reconciliation loop — unattended repo advancement as a Codex cloud routine. The saga is a repository's long-running arc of work; a beat is its smallest independently shippable quantum, and the saga graph is a DAG of beats. The spawner is a stateless controller that diffs the graph (desired state) against merged PRs (actual state) and dispatches /orchestrate-style subagent teams to advance the saga one beat at a time. Use when the user mentions the saga graph, beats, spawner, routines, unattended or autonomous repo work, "work the backlog overnight", a self-optimizing repository, reconciliation runs, or when a cloud routine session must decide what to work on next. Also consult before designing any always-on or scheduled agent workflow for a draht repo.
+description: Saga-graph reconciliation for unattended draht repos — one stateless run diffs .planning/saga-graph.yaml against beat/* PRs and dispatches ready beats up to max_in_flight. Use when a scheduled routine must pick work or the user works with the saga graph.
 ---
 
 # Saga Spawner

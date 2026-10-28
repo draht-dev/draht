@@ -74,7 +74,7 @@ describe("AgentSession dynamic tool registration", () => {
 
 		const bashTool = session.agent.state.tools.find((tool) => tool.name === "bash")!;
 		expect(session.systemPrompt).toContain(
-			"Inspect DRAHT_* environment variables for current model and session details.",
+			"You can inspect DRAHT_* environment variables for current model and session details.",
 		);
 		await bashTool.execute("bash-env", { command: "printf ok" });
 		expect(sessionEnv).toMatchObject({
@@ -153,7 +153,7 @@ describe("AgentSession dynamic tool registration", () => {
 			origin: "top-level",
 		});
 		expect(readTool?.sourceInfo).toMatchObject({
-			path: "<builtin:read>",
+			path: "builtin:read",
 			source: "builtin",
 			scope: "temporary",
 			origin: "top-level",

@@ -33,7 +33,7 @@ export class OrchestratorEngine {
 	private model: string;
 	private stateDir: string;
 
-	constructor(apiKey: string, model = "claude-sonnet-4-20250514", stateDir = ".orchestrator") {
+	constructor(apiKey: string, model = "claude-sonnet-5", stateDir = ".orchestrator") {
 		this.client = new Anthropic({ apiKey });
 		this.model = model;
 		this.stateDir = stateDir;

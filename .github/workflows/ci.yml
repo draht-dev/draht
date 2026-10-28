@@ -10,14 +10,22 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions: {}
+
+# Jobs run on Blacksmith runners (the blacksmith-sh GitHub App is installed on
+# draht-dev), except the Landlock-dependent test shards below. Release and
+# publish workflows stay on GitHub-hosted runners.
+
 jobs:
   build-check:
     name: Build & check
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup
         uses: ./.github/actions/setup
@@ -40,13 +48,15 @@ jobs:
   # This job is deliberately dependency-free so it costs seconds, not a install.
   shard-map:
     name: Shard map
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
     timeout-minutes: 5
     outputs:
       shards: ${{ steps.map.outputs.shards }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup
         uses: ./.github/actions/setup
@@ -61,7 +71,14 @@ jobs:
   test-workspaces:
     name: Test (${{ matrix.shard }})
     needs: shard-map
-    runs-on: ubuntu-latest
+    # Only gateway runs on Blacksmith. The rlm sandbox needs Landlock, which the
+    # Blacksmith kernel lacks (ENOSYS), and rlm's suites run in `rest` and are
+    # reached from coding-agent's rlm-cli test. Those shards, and any shard
+    # added later, stay on GitHub-hosted runners so the fail-closed sandbox
+    # stays covered.
+    runs-on: ${{ matrix.shard == 'gateway' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-latest' }}
+    permissions:
+      contents: read
     timeout-minutes: 30
     strategy:
       # Every shard reports. Without this, the KNOWN RED below would cancel the
@@ -71,10 +88,41 @@ jobs:
         shard: ${{ fromJSON(needs.shard-map.outputs.shards) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup
         uses: ./.github/actions/setup
+
+      - name: Enable and verify Drahtbank isolation
+        if: matrix.shard == 'coding-agent'
+        shell: bash
+        run: |
+          # Permit the namespace launcher on Ubuntu without changing other AppArmor profiles.
+          # Use the distro's profile name so an existing unshare attachment is replaced.
+          if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo apparmor_parser --replace --skip-cache <<'PROFILE'
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile unshare /usr/bin/unshare flags=(unconfined) {
+            userns,
+          }
+          PROFILE
+          fi
+          # Run as the normal runner user; failure must stop this job before the suite.
+          node --input-type=module <<'JS'
+          import { mkdtempSync, rmSync } from "node:fs";
+          import { tmpdir } from "node:os";
+          import { join } from "node:path";
+          import { createIsolation } from "./packages/coding-agent/eval/drahtbank/isolation.mjs";
+          const workspace = mkdtempSync(join(tmpdir(), "drahtbank-ci-"));
+          try {
+            const isolation = await createIsolation(workspace);
+            isolation.dispose();
+            console.log("Drahtbank isolation preflight passed");
+          } finally {
+            rmSync(workspace, { recursive: true, force: true });
+          }
+          JS
 
       - name: Build
         run: bun run build
@@ -98,11 +146,13 @@ jobs:
   # fails if any suite under scripts/ is left out of the root `test` chain.
   test-scripts:
     name: Test (scripts)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup
         uses: ./.github/actions/setup
@@ -122,11 +172,13 @@ jobs:
   # that need a browser installed.
   test-scripts-serial:
     name: Test (scripts, serial)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
     timeout-minutes: 40
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup
         uses: ./.github/actions/setup
@@ -146,7 +198,9 @@ jobs:
 
   go:
     name: Go (draht-graph)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: go
@@ -154,17 +208,17 @@ jobs:
       CGO_ENABLED: "0"
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node.js
         # Needed for internal/graph's parity test, which shells out to
         # `node .../draht-tools.cjs map-graph --quiet` in the untagged pass.
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
 
       - name: Setup Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go/.go-version
           cache-dependency-path: go/go.sum
@@ -210,8 +264,27 @@ jobs:
       # -race REQUIRES a C toolchain, so CGO_ENABLED=1 here and only here.
       # The project's own dev box has no C compiler at all, so this job is
       # the only place this project can get race coverage — keep it, do not
-      # make it continue-on-error. ubuntu-latest ships gcc preinstalled.
+      # make it continue-on-error. The Blacksmith Ubuntu 24.04 image ships gcc.
       - name: go test -race
         env:
           CGO_ENABLED: "1"
         run: go test -count=1 -short -race ./...
+
+  mcp-conformance:
+    name: MCP client conformance
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup
+        uses: ./.github/actions/setup
+        with:
+          system-deps: "false"
+
+      # Run the MCP client from source against the pinned official conformance baseline.
+      - name: MCP client conformance
+        run: bun run test:mcp-conformance

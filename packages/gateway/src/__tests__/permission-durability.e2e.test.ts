@@ -37,9 +37,10 @@
  * a test that did could pass while the shipped binary replayed nothing at all.
  *
  * Harness hygiene, each item paid for by a probe that passed while proving nothing:
- *  - `DRAHT_PERMISSION_MODE` is DELETED from the child env. This repo's interactive shell exports
- *    `auto`, under which the scripted `bash` call is auto-allowed and NO ask is ever raised — so
- *    every assertion below would be about a prompt that never happened.
+ *  - `DRAHT_PERMISSION_MODE` is pinned to `ask` in the child env. Under `auto`, the mode a
+ *    session starts in and the one this repo's interactive shell exports, the scripted `bash` call
+ *    is auto-allowed and NO ask is ever raised — so every assertion below would be about a prompt
+ *    that never happened.
  *  - The agent dir sits directly under /tmp with a short name: a Unix socket path over ~104 bytes
  *    fails to bind with EINVAL, and macOS `os.tmpdir()` spends ~50 characters before a uuid.
  *  - `dist/cli.js` is rebuilt first. The artifact under test is emitted, not committed.
@@ -196,8 +197,8 @@ async function startDrahtSession(
 	const stderr = { text: "" };
 	const rpc: Record<string, unknown>[] = [];
 
-	// Built from scratch rather than inherited: this repo's shell exports
-	// DRAHT_PERMISSION_MODE=auto, and a permission test run under it passes while proving nothing.
+	// Built from scratch rather than inherited, with the mode pinned to `ask`: in `auto` (an
+	// unset variable, or this repo's shell) the scripted call runs unasked and no ask ever comes.
 	const proc = Bun.spawn(
 		["node", DRAHT_CLI, "--attachable", "--mode", "rpc", "--provider", "draht-stub", "--model", "stub-1"],
 		{
@@ -209,6 +210,7 @@ async function startDrahtSession(
 				DRAHT_CODING_AGENT_DIR: agentDir,
 				DRAHT_STUB_PROVIDER: "1",
 				DRAHT_STUB_TOOL_CALLS: script,
+				DRAHT_PERMISSION_MODE: "ask",
 				...extraEnv,
 			},
 			stdin: "pipe",

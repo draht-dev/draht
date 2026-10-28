@@ -4,17 +4,19 @@
 /**
  * Stop-Time Quality Gate Hook (Stop)
  * Runs the draht quality gate when the agent tries to end its turn with
- * uncommitted source changes in a .planning project — so the gate fires even
- * when the command prose that should have invoked it was skipped.
+ * uncommitted JavaScript or TypeScript changes, independently of planning
+ * metadata or whether command prose invoked verification.
  *
- * Loop safety: exits 0 when stop_hook_active is set (we already blocked one
- * stop this turn), so a persistently red gate blocks at most one stop.
- * Opt out per-project with hooks.stopGate: false in .planning/config.json.
+ * Explicit project checks cover every configured language and committed work.
+ * Passing evidence is reused only while its input scope is unchanged. A failed
+ * repeated Stop remains failed; the host retry flag cannot bypass verification.
+ * Token budgets are audited last, after checks that may rewrite files.
  */
 
-const { execSync, spawnSync } = require("node:child_process");
+const { execFileSync, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const { runChecks } = require("./checks-runtime.cjs");
 
 function readStdin() {
 	try {
@@ -24,45 +26,85 @@ function readStdin() {
 	}
 }
 
+function hasSourceChanges(status) {
+	const entries = status.split("\0");
+	for (let index = 0; index < entries.length; index++) {
+		const entry = entries[index];
+		if (!entry) continue;
+		const files = [entry.slice(3)];
+		// In porcelain -z, a rename/copy records destination then original path.
+		if (/[RC]/.test(entry.slice(0, 2))) files.push(entries[++index] || "");
+		if (files.some((file) => /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(file))) return true;
+	}
+	return false;
+}
+
+function failGate(result) {
+	const reason = result.error?.code || result.signal ||
+		(typeof result.status === "number" ? `exit ${result.status}` : "unknown exit");
+	console.error(`Quality gate failed on uncommitted source changes (${reason}) — fix before ending the turn:`);
+	for (const output of [result.stdout, result.stderr, result.error?.message]) {
+		if (output) console.error(String(output).slice(0, 1500));
+	}
+	process.exit(2);
+}
+
 try {
 	const payload = JSON.parse(readStdin() || "{}");
-	if (payload?.stop_hook_active) process.exit(0);
 
 	const cwd = payload?.cwd || process.cwd();
+	const budgets = require("./budgets-runtime.cjs");
+	budgets.beginTask({ cwd });
+	const finish = () => {
+		const { exitCode, message } = budgets.stopBudget({
+			cwd,
+			retry: payload?.stop_hook_active === true,
+			session: typeof payload?.session_id === "string" ? payload.session_id : "",
+		});
+		if (message) console.error(message);
+		process.exit(exitCode);
+	};
+	const project = runChecks({ cwd });
+	if (project.configured || project.status === "failed") {
+		if (project.status === "failed") {
+			console.error(project.summary);
+			for (const check of project.checks) if (check.output) console.error(check.output.slice(0, 1500));
+			process.exit(2);
+		}
+		finish();
+	}
 	const planning = path.join(cwd, ".planning");
-	if (!fs.existsSync(planning)) process.exit(0);
 
-	// Config opt-out
+	// Planning metadata is optional; retain existing projects' explicit opt-out.
 	try {
 		const config = JSON.parse(fs.readFileSync(path.join(planning, "config.json"), "utf-8"));
-		if (config?.hooks?.stopGate === false) process.exit(0);
+		if (config?.hooks?.stopGate === false) finish();
 	} catch { /* no config — gate stays on */ }
 
 	// Only gate when uncommitted source changes exist — a conversational turn
 	// with a clean tree has nothing to verify.
 	let dirty = "";
 	try {
-		dirty = execSync("git status --porcelain 2>/dev/null", { encoding: "utf-8", cwd, timeout: 10000 });
+		dirty = execFileSync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+			encoding: "utf-8", cwd, timeout: 10000, stdio: ["ignore", "pipe", "pipe"],
+		});
 	} catch {
-		process.exit(0); // not a git repo
+		finish(); // not a git repo
 	}
-	const dirtySource = dirty
-		.split("\n")
-		.filter(Boolean)
-		.map((l) => l.slice(3))
-		.filter((f) => /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(f));
-	if (dirtySource.length === 0) process.exit(0);
+	if (!hasSourceChanges(dirty)) finish();
 
-	// --no-tests: types + lint only. Test runs belong to the post-task hook and
-	// /verify-work; a full suite on every turn-end would be unusable.
+	// Run configured types/lint checks, without GSD heuristics or a full test
+	// suite on every turn-end. The gate retains its project strictness policy.
 	const gate = path.join(__dirname, "gsd-quality-gate.cjs");
-	const result = spawnSync("node", [gate, "--no-tests"], { encoding: "utf-8", cwd, timeout: 170000 });
-	if (result.status !== 0 && !result.error) {
-		console.error("Quality gate failed on uncommitted source changes — fix before ending the turn:");
-		console.error((result.stdout || "").slice(0, 1500));
-		process.exit(2);
+	let result;
+	try {
+		result = spawnSync(process.execPath, [gate, "--no-tests", "--checks-only"], { encoding: "utf-8", cwd, timeout: 170000 });
+	} catch (error) {
+		failGate({ error });
 	}
-	process.exit(0);
-} catch {
-	process.exit(0);
+	if (result.error || result.signal || result.status !== 0) failGate(result);
+	finish();
+} catch (error) {
+	console.error(`Quality gate could not run: ${error.message}`);
+	process.exit(2);
 }

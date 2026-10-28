@@ -4,7 +4,15 @@ import { listCanonicalSkills, parseFrontmatterFields, splitFrontmatter } from ".
 
 // Agent Skills frontmatter rules (see the task brief / packages/coding-agent
 // docs/skills.md for the wider spec this repo's skills must satisfy).
-const ALLOWED_KEYS = new Set(["name", "description", "license", "allowed-tools", "metadata", "compatibility"]);
+const ALLOWED_KEYS = new Set([
+	"name",
+	"description",
+	"license",
+	"allowed-tools",
+	"metadata",
+	"compatibility",
+	"disable-model-invocation",
+]);
 const REQUIRED_KEYS = ["description", "name"];
 const NAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const MAX_NAME_LENGTH = 64;
@@ -18,8 +26,8 @@ function isFlatStringMap(value: unknown): boolean {
 describe("spec-validate: skills/*/SKILL.md frontmatter", () => {
 	const skills = listCanonicalSkills();
 
-	it("discovers exactly 38 canonical skills (14 disciplines + 23 commands + draht)", () => {
-		expect(skills.length).toBe(38);
+	it("discovers exactly 41 canonical skills (16 disciplines + 24 commands + draht)", () => {
+		expect(skills.length).toBe(41);
 	});
 
 	for (const skill of skills) {
@@ -34,8 +42,10 @@ describe("spec-validate: skills/*/SKILL.md frontmatter", () => {
 				}
 			});
 
-			it("has exactly name and description present, nothing else", () => {
-				expect(Object.keys(fields).sort()).toEqual(REQUIRED_KEYS);
+			it("has name and description, with only the supported explicit-invocation extension", () => {
+				const keys = Object.keys(fields).filter((key) => key !== "disable-model-invocation");
+				expect(keys.sort()).toEqual(REQUIRED_KEYS);
+				if ("disable-model-invocation" in fields) expect(fields["disable-model-invocation"]).toBe("true");
 			});
 
 			it(`has a name <= ${MAX_NAME_LENGTH} chars, lowercase alnum+hyphen, no edge/consecutive hyphens`, () => {

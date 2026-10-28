@@ -22,7 +22,7 @@ Create a handoff document for session continuity.
    - `## Blockers` — anything waiting on external input or clarification
 4. **Distill lessons before the context is lost**: for anything this session tried that failed, or an approach that worked against expectations, append one dated bullet to `.planning/STATE.md` under `## Lessons` (create the section before `## Blockers` if missing). Lessons name what to do differently — "runner hits TLS issue in PowerShell, use bash", not "had problems with tests".
 5. Update `.planning/STATE.md` last activity timestamp via `draht-tools update-state`
-6. Commit: `draht-tools commit-docs "pause work — handoff"`
+6. If committing is authorized: `draht-tools commit-docs "pause work — handoff"`
 7. Tell the user: "Resume with `/resume-work` in a fresh session."
 
 ## Rules

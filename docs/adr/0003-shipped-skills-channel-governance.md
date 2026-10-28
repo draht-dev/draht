@@ -4,12 +4,14 @@ The shipped channel exists since "feat(coding-agent): add shipped builtin skills
 
 ## Decision: what belongs where
 
-- **Root `skills/`** — provider-neutral portable discipline and command wrappers. Closed-key frontmatter (`name` + `description` only), generated into both plugin packages. The content source of truth.
+- **Root `skills/`** — provider-neutral portable discipline and command wrappers. Closed-key frontmatter (`name` + `description`, with the explicit-invocation exception below), generated into both plugin packages. The content source of truth.
 - **`packages/coding-agent/skills/`** — only two kinds of content: skills the draht runtime must resolve by name because a shipped prompt points at them, and product defaults carrying executable assets that assume the draht runtime. NOT generated, NOT mirrored, NOT part of the plugin payloads.
 
 A discipline may exist in both channels under one name. Root is the content source of truth; the shipped copy is the fallback so the name resolves with nothing installed. Both resolution orders already prefer the canonical copy: the runtime loads shipped skills last, and the skills CLI's dedup lets the root copy win (see ADR 0002).
 
 ## Empirically-tested constraints
+
+Explicit-only workflows also carry `disable-model-invocation: true` and `agents/openai.yaml` with `policy.allow_implicit_invocation: false`. The native loader and Claude honor the frontmatter extension; Codex uses the policy file. Keeping both in the canonical directory preserves activation controls when users install that directory directly. Generation rejects mismatched controls and adds the frontmatter flag to Claude command artifacts. Other hosts may ignore these extensions; explicit-use descriptions remain useful but are not enforcement. No other host-specific frontmatter is admitted by this exception.
 
 - `packages/coding-agent/skills/<name>` sits at directory depth 4 — below the skills CLI's depth-5 fallback cap (skills@1.5.22) — so anything placed there appears in `--full-depth` public listings unless name-shadowed by an identically-named root skill. Nothing non-public may live in the shipped channel; shadowing is the mitigation for dual-channel names.
 - The shipped `atomic-reasoning/SKILL.md` is byte-identical to `skills/atomic-reasoning/SKILL.md` (verified with `cmp` at time of writing). Dual-channel copies are byte-copies, not adaptations.
@@ -40,3 +42,7 @@ The Known gap above is closed by "feat(scripts): gate dual-channel skill byte-co
 ## Update (2026-08-21): blast-radius admitted
 
 `blast-radius` is admitted as a runtime-referenced dual-channel discipline: the shipped `prompts/commands/review.md` points at it by name in its refutation step (a Critical finding whose refutation hinges on library or runtime behavior gets a rung-4 script), and the pointer must resolve with nothing installed — the same admission test the prior occupants passed. The section-10b `DUAL_CHANNEL_SKILLS` allowlist is extended in the same change that creates the shipped copy. Dual-channel occupants as of this update: `atomic-reasoning`, `blast-radius`, `epistemics`, `typescript-discipline`, `unslop`.
+
+## Update (2026-10-02): explainers admitted
+
+`explainers` is admitted as a runtime-referenced dual-channel discipline: the shipped `prompts/commands/why.md`, `review.md`, `verify-work.md`, and `plan-phase.md` point at it by name when their output is a graph, and the pointer must resolve with nothing installed — the same admission test the prior occupants passed. The section-10b `DUAL_CHANNEL_SKILLS` allowlist is extended in the same change that creates the shipped copy. Dual-channel occupants as of this update: `atomic-reasoning`, `blast-radius`, `epistemics`, `explainers`, `typescript-discipline`, `unslop`.

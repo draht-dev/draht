@@ -9,7 +9,7 @@ inputs:
   model:
     description: "Claude model to use"
     required: false
-    default: "claude-sonnet-4-20250514"
+    default: "claude-sonnet-5"
   agents-md-path:
     description: "Path to AGENTS.md file relative to repo root"
     required: false
@@ -35,7 +35,7 @@ runs:
   using: "composite"
   steps:
     - name: Setup Bun
-      uses: oven-sh/setup-bun@v2
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       with:
         bun-version: latest
     - name: Install dependencies

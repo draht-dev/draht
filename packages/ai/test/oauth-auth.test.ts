@@ -2,13 +2,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { InMemoryCredentialStore } from "../src/auth/credential-store.ts";
 import { anthropicOAuth } from "../src/auth/oauth/anthropic.ts";
 import { githubCopilotOAuth } from "../src/auth/oauth/github-copilot.ts";
+import { kimiCodingOAuth } from "../src/auth/oauth/kimi-coding.ts";
+import { openaiChatGPTOAuth } from "../src/auth/oauth/openai-chatgpt.ts";
 import { openaiCodexOAuth } from "../src/auth/oauth/openai-codex.ts";
 import { openRouterOAuth } from "../src/auth/oauth/openrouter.ts";
 import { XAI_OAUTH_BASE_URL, xaiOAuth } from "../src/auth/oauth/xai.ts";
+import { resolveProviderAuth } from "../src/auth/resolve.ts";
+import type { OAuthAuth, OAuthCredential } from "../src/auth/types.ts";
 import { createModels } from "../src/models.ts";
 import * as extensionOAuthCompatibility from "../src/oauth.ts";
 import { anthropicProvider } from "../src/providers/anthropic.ts";
 import { githubCopilotProvider } from "../src/providers/github-copilot.ts";
+import { openaiProvider } from "../src/providers/openai.ts";
+
+const neverAbortedSignal = new AbortController().signal;
 
 function jsonResponse(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -22,11 +29,36 @@ describe.sequential("OAuthAuth adapters", () => {
 
 	afterEach(() => {
 		vi.unstubAllGlobals();
+		vi.restoreAllMocks();
+	});
+
+	it("identifies only subscription-backed OAuth flows as subscriptions", () => {
+		for (const oauth of [
+			anthropicOAuth,
+			openaiChatGPTOAuth,
+			openaiCodexOAuth,
+			githubCopilotOAuth,
+			kimiCodingOAuth,
+			xaiOAuth,
+		]) {
+			expect(oauth.isSubscription).toBe(true);
+		}
+		expect(openRouterOAuth.isSubscription).not.toBe(true);
 	});
 
 	it("anthropic toAuth derives the api key from the access token", async () => {
 		const auth = await anthropicOAuth.toAuth({ type: "oauth", access: "token", refresh: "r", expires: 0 });
 		expect(auth).toEqual({ apiKey: "token" });
+	});
+
+	it("OpenAI exposes ChatGPT OAuth alongside API-key auth", () => {
+		const provider = openaiProvider();
+		expect(provider.auth.apiKey).toBeDefined();
+		expect(provider.auth.oauth).toMatchObject({
+			name: "OpenAI (ChatGPT subscription)",
+			isSubscription: true,
+			loginLabel: "Sign in with ChatGPT",
+		});
 	});
 
 	it("openai-codex toAuth derives the api key from the access token", async () => {
@@ -37,7 +69,7 @@ describe.sequential("OAuthAuth adapters", () => {
 	it("openrouter derives the api key and keeps the permanent credential on refresh", async () => {
 		const credential = { type: "oauth" as const, access: "token", refresh: "", expires: Number.MAX_SAFE_INTEGER };
 		expect(await openRouterOAuth.toAuth(credential)).toEqual({ apiKey: "token" });
-		expect(await openRouterOAuth.refresh(credential)).toBe(credential);
+		expect(await openRouterOAuth.refresh(credential, neverAbortedSignal)).toBe(credential);
 	});
 
 	// draht routes xAI OAuth requests through the Grok CLI proxy (SuperGrok subscription quota)
@@ -80,7 +112,10 @@ describe.sequential("OAuthAuth adapters", () => {
 			),
 		);
 
-		const refreshed = await anthropicOAuth.refresh({ type: "oauth", access: "old", refresh: "old-r", expires: 0 });
+		const refreshed = await anthropicOAuth.refresh(
+			{ type: "oauth", access: "old", refresh: "old-r", expires: 0 },
+			neverAbortedSignal,
+		);
 		expect(refreshed.type).toBe("oauth");
 		expect(refreshed.access).toBe("new-access");
 		expect(refreshed.refresh).toBe("new-refresh");
@@ -99,16 +134,61 @@ describe.sequential("OAuthAuth adapters", () => {
 		});
 		vi.stubGlobal("fetch", fetchMock);
 
-		const refreshed = await githubCopilotOAuth.refresh({
-			type: "oauth",
-			access: "old",
-			refresh: "gh-token",
-			expires: 0,
-			enterpriseUrl: "company.ghe.com",
-		});
+		const refreshed = await githubCopilotOAuth.refresh(
+			{
+				type: "oauth",
+				access: "old",
+				refresh: "gh-token",
+				expires: 0,
+				enterpriseUrl: "company.ghe.com",
+			},
+			neverAbortedSignal,
+		);
 		expect(refreshed.access).toBe("new-token");
 		expect(refreshed.enterpriseUrl).toBe("company.ghe.com");
 		expect(fetchedUrls[0]).toContain("api.company.ghe.com");
+	});
+
+	it("bounds OAuth refreshes and releases the credential-store lock after timeout", async () => {
+		const timeoutController = new AbortController();
+		const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+		let markRefreshStarted: (() => void) | undefined;
+		const refreshStarted = new Promise<void>((resolve) => {
+			markRefreshStarted = resolve;
+		});
+		const credential: OAuthCredential = {
+			type: "oauth",
+			access: "old-access",
+			refresh: "refresh-token",
+			expires: 0,
+		};
+		const oauth: OAuthAuth = {
+			name: "Stalled OAuth",
+			login: async () => credential,
+			refresh: async (_current, signal) => {
+				markRefreshStarted?.();
+				if (!signal) throw new Error("expected a refresh timeout signal");
+				return new Promise<OAuthCredential>((_resolve, reject) => {
+					const rejectAborted = () => reject(signal.reason);
+					signal.addEventListener("abort", rejectAborted, { once: true });
+					if (signal.aborted) rejectAborted();
+				});
+			},
+			toAuth: async (current) => ({ apiKey: current.access }),
+		};
+		const credentials = new InMemoryCredentialStore();
+		await credentials.modify("stalled", async () => credential);
+
+		const auth = resolveProviderAuth({ id: "stalled", auth: { oauth } }, credentials, {
+			env: async () => undefined,
+			fileExists: async () => false,
+		});
+		await refreshStarted;
+		expect(timeout).toHaveBeenCalledWith(15_000);
+
+		timeoutController.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+		await expect(auth).rejects.toMatchObject({ name: "ModelsError", code: "oauth" });
+		await expect(credentials.modify("stalled", async (current) => current)).resolves.toEqual(credential);
 	});
 });
 

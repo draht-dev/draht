@@ -1,7 +1,7 @@
 # DRAHT — Dynamic Routing for Agent & Task Handling
 
 ## Vision
-A custom AI agent harness for DACH freelancing, built on Pi Agent's minimal core (4 tools, extension system, model-agnostic). Draht adds serverless infrastructure, stack-specific extensions, client knowledge persistence, and multi-agent orchestration optimized for solo freelancers scaling to teams.
+A custom local AI agent harness for DACH freelancing, built on Pi Agent's minimal core (4 tools, extension system, model-agnostic). Draht adds supported local extensions, client knowledge persistence, and multi-agent orchestration optimized for solo freelancers scaling to teams. Private infrastructure, business-workflow, and delivery workspaces are examples or internal tools unless the product map explicitly promotes them.
 
 ## Fork Origin
 Forked from [badlogic/pi-mono](https://github.com/badlogic/pi-mono) (Pi Agent by Mario Zechner). MIT licensed.
@@ -11,7 +11,7 @@ draht.dev
 
 ## Goals
 1. Rebrand pi-mono → @draht/ namespace while preserving upstream compatibility
-2. Add SST v4 infrastructure layer (AWS serverless IaC)
+2. Retain the SST v4 infrastructure scaffold as an explicit non-release example
 3. Create stack-specific coding agent extensions (SST Resource Manager)
 4. Provide AGENTS.md template library for common stacks (SST/TS, Astro, Go/gRPC)
 5. Foundation for client knowledge persistence and DACH compliance (future phases)
@@ -36,3 +36,15 @@ draht.dev
 - SST Resource Manager extension is loadable by coding-agent
 - 3 AGENTS.md templates (SST/TS, Astro, Go/gRPC) are usable
 - Existing pi-mono tests still pass after rebrand
+
+## Release Evidence
+
+[`RELEASE-EVIDENCE.md`](RELEASE-EVIDENCE.md) is the governing contract for package,
+feature, release, deployment, and hardware/privacy completion claims. Historical
+phase labels retain their recorded acceptance boundary; E0/E1 fixture or unit
+evidence is never operational evidence.
+
+[`PRODUCT-MAP.md`](PRODUCT-MAP.md) is the authority for workspace classification,
+support ownership, public release inclusion, evidence requirements, and removal
+rules. It excludes the SST scaffold and private satellite workspaces from product
+and hosted-service claims.

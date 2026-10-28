@@ -39,21 +39,16 @@ import type { MiddlewareHandler } from "hono";
  * The identity header name a fronted deployment reads, unless config names
  * another.
  *
- * **This is a placeholder, not an observed header name.** The real one has
- * never been captured on this machine, and a header name authored from memory
- * is fiction that would be trusted as a contract. It is pinned in
- * `src/__tests__/fixtures/tailnet-identity.captured.json`, which also ships as
- * a placeholder, and a test in `tailnet-identity.test.ts` fails for as long as
- * both are unreplaced. Replace them together:
+ * Observed, not authored: captured on 2026-09-05 from a real `tailscale serve`
+ * drive (peer nixuc, tailscale 1.98.8) and pinned in
+ * `src/__tests__/fixtures/tailnet-identity.captured.json`. A test in
+ * `tailnet-identity.test.ts` fails if this default and that capture ever
+ * disagree, or if the capture is replaced by a placeholder again. Re-capture:
  *
  *   node scripts/geist-tailscale-serve.mjs --capture-identity --peer NODE \
  *     --out packages/gateway/src/__tests__/fixtures/tailnet-identity.captured.json
- *
- * Until then the default names a header no proxy will ever send, so the check
- * simply never fires — which is safe (this module cannot grant) but is *not*
- * the feature, and the failing test is what stops it being mistaken for it.
  */
-export const DEFAULT_TAILNET_IDENTITY_HEADER = "X-Uncaptured-Tailnet-Identity-Header-Placeholder";
+export const DEFAULT_TAILNET_IDENTITY_HEADER = "tailscale-user-login";
 
 /** The `tailnet` block of the gateway config (`GatewaySettings.tailnet`). */
 export interface TailnetFrontingSettings {

@@ -1,6 +1,6 @@
 ---
 name: saga-spawner
-description: The saga graph reconciliation loop — unattended repo advancement as a Claude Code cloud routine. The saga is a repository's long-running arc of work; a beat is its smallest independently shippable quantum, and the saga graph is a DAG of beats. The spawner is a stateless controller that diffs the graph (desired state) against merged PRs (actual state) and dispatches /orchestrate-style subagent teams to advance the saga one beat at a time. Use when the user mentions the saga graph, beats, spawner, routines, unattended or autonomous repo work, "work the backlog overnight", a self-optimizing repository, reconciliation runs, or when a cloud routine session must decide what to work on next. Also consult before designing any always-on or scheduled agent workflow for a draht repo.
+description: Saga-graph reconciliation for unattended draht repos — one stateless run diffs .planning/saga-graph.yaml against beat/* PRs and dispatches ready beats up to max_in_flight. Use when a scheduled routine must pick work or the user works with the saga graph.
 ---
 
 # Saga Spawner
@@ -111,7 +111,7 @@ One routine, three triggers combined:
 - **GitHub trigger** — on merged PRs targeting main: a merged `beat/*` PR is precisely the moment dependents unblock; the run picks them up immediately instead of waiting for the next tick. Merges of reconcile PRs activate newly approved audit beats the same way.
 - **API trigger** — the per-routine endpoint for manual pokes: a Herdr session that just merged something, an n8n flow, a deploy hook.
 
-Run this command's session on the strongest tier (e.g. Claude Fable 5) and let workers execute on the executor tier — the spawner is pure steering, its tokens are the ones that decide where all the volume tokens go (`model-tiering`).
+Run this command's session on the strongest tier (e.g. Claude Fable 5.1) and let workers execute on the executor tier — the spawner is pure steering, its tokens are the ones that decide where all the volume tokens go (`model-tiering`).
 
 ## Interaction with other disciplines
 

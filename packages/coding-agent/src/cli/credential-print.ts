@@ -1,11 +1,13 @@
 import type { Api, CredentialInfo, Model } from "@draht/ai";
-import { resolveCliModel } from "../core/model-resolver.ts";
+import { APP_NAME } from "../config.ts";
+import { resolveCliModel, resolveModelReference } from "../core/model-resolver.ts";
 import type { ModelRuntime } from "../core/model-runtime.ts";
 import type { Args } from "./args.ts";
-
-export type CredentialPrintKind = "api_key" | "bearer_token";
+import { AuthCommandError, type AuthCommandKind, getAuthCredential, validateAuthCommandArgs } from "./auth-command.ts";
 
 const DEFAULT_BEARER_TOKEN_MIN_EXPIRY_MS = 30 * 60_000;
+
+type CredentialPrintKind = Exclude<AuthCommandKind, "check">;
 
 export interface CredentialPrintCommand {
 	kind: CredentialPrintKind;
@@ -23,20 +25,20 @@ export function isCredentialPrintHelp(args: string[]): boolean {
 
 export function printCredentialPrintHelp(): void {
 	console.log(`Usage:
-  pi auth print-api-key --model <model> [--provider <provider>]
-  pi auth print-bearer-token --model <model> [--provider <provider>] [--min-expiry <duration>]
+  ${APP_NAME} auth print-api-key --model <model> [--provider <provider>]
+  ${APP_NAME} auth print-bearer-token --model <model> [--provider <provider>] [--min-expiry <duration>]
 
 Prints the configured credential alone on stdout. Provider inference uses configured credentials; specify --provider to select explicitly. Bearer tokens have a 30-minute minimum expiry by default. --min-expiry accepts ms, s, m, or h (for example, 30m).`);
 }
 
-/** Parse the small, extensible `pi auth` command surface before normal startup. */
+/** Parse the small, extensible `auth` command surface before normal startup. */
 export function parseCredentialPrintCommand(args: string[]): CredentialPrintCommand | undefined {
 	if (args[0] !== "auth") return undefined;
 
 	const kind = args[1] === "print-api-key" ? "api_key" : args[1] === "print-bearer-token" ? "bearer_token" : undefined;
 	if (!kind) {
 		throw new CredentialPrintError(
-			`Unknown auth command "${args[1] ?? ""}". Use "pi auth print-api-key" or "pi auth print-bearer-token".`,
+			`Unknown auth command "${args[1] ?? ""}". Use "${APP_NAME} auth print-api-key" or "${APP_NAME} auth print-bearer-token".`,
 		);
 	}
 
@@ -76,7 +78,7 @@ export function validateCredentialPrintArgs(args: Args): void {
 }
 
 /**
- * Resolve one request credential for a specific provider/model pair.
+ * Resolve one configured provider credential.
  *
  * This intentionally calls ModelRuntime.getAuth(), which refreshes and persists
  * OAuth credentials with less than five minutes remaining through the normal request-auth path.
@@ -86,67 +88,72 @@ export async function resolveCredentialForPrint(
 	modelRuntime: ModelRuntime,
 	kind: CredentialPrintKind,
 	minExpiryMs?: number,
+	signal?: AbortSignal,
 ): Promise<string> {
-	validateCredentialPrintArgs(args);
-
+	const { provider: cliProvider, model: cliModel } = validateAuthCommandArgs(args, kind);
 	const credentialTypes = new Map<string, CredentialInfo["type"]>(
-		(await modelRuntime.listCredentials()).map((credential) => [credential.providerId, credential.type]),
+		(await modelRuntime.listCredentials({ signal })).map((credential) => [credential.providerId, credential.type]),
 	);
-	const models: Model<Api>[] = [];
-	if (args.provider) {
-		const resolved = resolveCliModel({ cliProvider: args.provider, cliModel: args.model, modelRuntime });
-		if (resolved.error || !resolved.model) {
-			throw new CredentialPrintError(resolved.error ?? "Unable to resolve the requested provider/model");
+	const providers: Array<{ id: string; model?: Model<Api> }> = [];
+	if (cliProvider) {
+		const provider = modelRuntime.getProvider(cliProvider);
+		if (!provider) {
+			throw new AuthCommandError(`Unknown provider "${cliProvider}". Use --list-models to see available providers.`);
 		}
-		models.push(resolved.model);
+		if (cliModel) {
+			const resolved = resolveCliModel({ cliProvider: provider.id, cliModel, modelRuntime });
+			if (resolved.error || !resolved.model) {
+				throw new AuthCommandError(resolved.error ?? "Unable to resolve the requested provider/model");
+			}
+			providers.push({ id: provider.id, model: resolved.model });
+		} else {
+			providers.push({ id: provider.id });
+		}
 	} else {
+		const models = modelRuntime.getModels();
 		for (const provider of modelRuntime.getProviders()) {
 			if (!credentialTypes.has(provider.id)) continue;
-			const resolved = resolveCliModel({ cliProvider: provider.id, cliModel: args.model, modelRuntime });
-			if (resolved.model && !resolved.error && !resolved.warning?.includes("Using custom model id")) {
-				models.push(resolved.model);
-			}
+			const resolved = resolveModelReference(
+				{ text: cliModel!, provider: provider.id, thinkingSuffix: "strict", fuzzy: true },
+				models,
+				() => true,
+			);
+			if (resolved.status === "resolved") providers.push({ id: provider.id, model: resolved.model });
 		}
-		if (models.length === 0) {
-			throw new CredentialPrintError(`Model "${args.model}" not found. Use --list-models to see available models.`);
+		if (providers.length === 0) {
+			throw new AuthCommandError(`Model "${cliModel}" not found. Use --list-models to see available models.`);
 		}
 	}
 
 	const credentials: Array<{ providerId: string; value: string }> = [];
-	for (const model of models) {
-		const type = credentialTypes.get(model.provider);
+	for (const provider of providers) {
+		const type = credentialTypes.get(provider.id);
 		if (kind === "api_key" && type === "oauth") continue;
 		if (kind === "bearer_token" && type !== "oauth") continue;
-
-		const auth = await modelRuntime.getAuth(
-			model,
-			kind === "bearer_token"
-				? { minOAuthValidityMs: minExpiryMs ?? DEFAULT_BEARER_TOKEN_MIN_EXPIRY_MS }
-				: undefined,
-		);
-		const authorization = Object.entries(auth?.auth.headers ?? {}).find(
-			([name]) => name.toLowerCase() === "authorization",
-		)?.[1];
-		const bearerToken = typeof authorization === "string" ? /^Bearer\s+(.+)$/iu.exec(authorization)?.[1] : undefined;
-		const value = kind === "bearer_token" ? (auth?.auth.apiKey ?? bearerToken) : auth?.auth.apiKey;
-		if (value) credentials.push({ providerId: model.provider, value });
+		const authOptions = {
+			...(kind === "bearer_token" ? { minOAuthValidityMs: minExpiryMs ?? DEFAULT_BEARER_TOKEN_MIN_EXPIRY_MS } : {}),
+			signal,
+		};
+		const auth = provider.model
+			? await modelRuntime.getAuth(provider.model, authOptions)
+			: await modelRuntime.getAuth(provider.id, authOptions);
+		const value = getAuthCredential(auth);
+		if (value) credentials.push({ providerId: provider.id, value });
 	}
 
 	if (credentials.length === 1) return credentials[0].value;
 	if (credentials.length === 0) {
-		const providerId = models[0]?.provider;
+		const providerId = providers[0]?.id;
 		const type = providerId ? credentialTypes.get(providerId) : undefined;
-		if (args.provider && kind === "api_key" && type === "oauth") {
-			throw new CredentialPrintError(`Provider "${providerId}" is configured with OAuth, not an API key`);
+		if (cliProvider && kind === "api_key" && type === "oauth") {
+			throw new AuthCommandError(`Provider "${providerId}" is configured with OAuth, not an API key`);
 		}
-		if (args.provider && kind === "bearer_token" && type !== "oauth") {
-			throw new CredentialPrintError(`Provider "${providerId}" is not configured with an OAuth bearer token`);
+		if (cliProvider && kind === "bearer_token" && type !== "oauth") {
+			throw new AuthCommandError(`Provider "${providerId}" is not configured with an OAuth bearer token`);
 		}
-		throw new CredentialPrintError(
-			`No usable ${kind === "api_key" ? "API key" : "OAuth bearer token"} is configured`,
-		);
+		throw new AuthCommandError(`No usable ${kind === "api_key" ? "API key" : "OAuth bearer token"} is configured`);
 	}
-	throw new CredentialPrintError(
-		`Model "${args.model}" has multiple configured providers (${credentials.map(({ providerId }) => providerId).join(", ")}). Specify --provider.`,
+	throw new AuthCommandError(
+		`Multiple configured providers matched (${credentials.map(({ providerId }) => providerId).join(", ")}). Specify --provider.`,
 	);
 }

@@ -19,13 +19,13 @@ function assertCostWithinTolerance(actual: number, expected: number): void {
  */
 const knownModelFixtures = [
 	{
-		name: "anthropic/claude-opus-4-6",
+		name: "anthropic/claude-opus-5-5",
 		provider: "anthropic",
-		model: "claude-opus-4-6",
+		model: "claude-opus-5-5",
 		inputTokens: 100_000,
 		outputTokens: 50_000,
-		// 0.1M * $15 (input) + 0.05M * $75 (output) = $5.25
-		expectedCost: 5.25,
+		// 0.1M * $4 (input) + 0.05M * $20 (output) = $1.40
+		expectedCost: 1.4,
 	},
 	{
 		name: "google/gemini-2.5-flash",
@@ -33,8 +33,8 @@ const knownModelFixtures = [
 		model: "gemini-2.5-flash",
 		inputTokens: 1_000_000,
 		outputTokens: 500_000,
-		// 1M * $0.15 (input) + 0.5M * $0.6 (output) = $0.45
-		expectedCost: 0.45,
+		// 1M * $0.3 (input) + 0.5M * $2.5 (output) = $1.55
+		expectedCost: 1.55,
 	},
 	{
 		name: "deepseek/deepseek-v3",
@@ -46,13 +46,13 @@ const knownModelFixtures = [
 		expectedCost: 0.355,
 	},
 	{
-		name: "openai/gpt-5.2",
+		name: "openai/gpt-6.1-sol",
 		provider: "openai",
-		model: "gpt-5.2",
+		model: "gpt-6.1-sol",
 		inputTokens: 200_000,
 		outputTokens: 100_000,
-		// 0.2M * $5 (input) + 0.1M * $15 (output) = $2.50
-		expectedCost: 2.5,
+		// 0.2M * $2 (input) + 0.1M * $10 (output) = $1.40
+		expectedCost: 1.4,
 	},
 ];
 
@@ -96,24 +96,24 @@ const unknownModelFixtures = [
  */
 const reasoningTokenFixtures = [
 	{
-		name: "anthropic/claude-sonnet-4-6 with reasoning tokens",
+		name: "anthropic/claude-sonnet-5 with reasoning tokens",
 		provider: "anthropic",
-		model: "claude-sonnet-4-6",
+		model: "claude-sonnet-5",
 		inputTokens: 100_000,
 		outputTokens: 50_000,
 		reasoningTokens: 25_000,
-		// (0.1M + 0.025M) * $3 (input rate for reasoning) + 0.05M * $15 (output) = $1.125
-		expectedCost: 1.125,
+		// (0.1M + 0.025M) * $2 (input rate for reasoning) + 0.05M * $10 (output) = $0.75
+		expectedCost: 0.75,
 	},
 	{
-		name: "openai/gpt-5.2 with reasoning tokens",
+		name: "openai/gpt-6.1-sol with reasoning tokens",
 		provider: "openai",
-		model: "gpt-5.2",
+		model: "gpt-6.1-sol",
 		inputTokens: 200_000,
 		outputTokens: 100_000,
 		reasoningTokens: 50_000,
-		// (0.2M + 0.05M) * $5 (input rate for reasoning) + 0.1M * $15 (output) = $2.75
-		expectedCost: 2.75,
+		// (0.2M + 0.05M) * $2 (input rate for reasoning) + 0.1M * $10 (output) = $1.50
+		expectedCost: 1.5,
 	},
 	{
 		name: "unknown model with reasoning tokens",
@@ -166,22 +166,22 @@ describe("cost tracking", () => {
 		}
 
 		test("backward compatibility: estimateCost without reasoning param still works", () => {
-			// anthropic/claude-sonnet-4-6 with 100000 input, 50000 output → $1.05
-			const cost = estimateCost("anthropic", "claude-sonnet-4-6", 100_000, 50_000);
-			assertCostWithinTolerance(cost, 1.05);
+			// anthropic/claude-sonnet-5 with 100000 input, 50000 output → $0.70
+			const cost = estimateCost("anthropic", "claude-sonnet-5", 100_000, 50_000);
+			assertCostWithinTolerance(cost, 0.7);
 		});
 	});
 
 	describe("edge cases and boundary conditions", () => {
 		test("zero tokens returns $0.00", () => {
-			const cost = estimateCost("anthropic", "claude-opus-4-6", 0, 0);
+			const cost = estimateCost("anthropic", "claude-opus-5-5", 0, 0);
 			expect(cost).toBe(0);
 		});
 
 		test("zero output tokens: only input cost", () => {
-			// anthropic/claude-opus-4-6 with 1M input, 0 output → $15.00 (1M * $15)
-			const cost = estimateCost("anthropic", "claude-opus-4-6", 1_000_000, 0);
-			assertCostWithinTolerance(cost, 15.0);
+			// anthropic/claude-opus-5-5 with 1M input, 0 output → $4.00 (1M * $4)
+			const cost = estimateCost("anthropic", "claude-opus-5-5", 1_000_000, 0);
+			assertCostWithinTolerance(cost, 4.0);
 		});
 
 		test("zero input tokens: only output cost", () => {
@@ -197,16 +197,16 @@ describe("cost tracking", () => {
 		});
 
 		test("single token: very small but non-zero cost", () => {
-			// anthropic/claude-sonnet-4-6 with 1 input, 1 output
-			// (1 / 1_000_000) * $3 + (1 / 1_000_000) * $15 = $0.000003 + $0.000015 = $0.000018
-			const cost = estimateCost("anthropic", "claude-sonnet-4-6", 1, 1);
+			// anthropic/claude-sonnet-5 with 1 input, 1 output
+			// (1 / 1_000_000) * $2 + (1 / 1_000_000) * $10 = $0.000002 + $0.00001 = $0.000012
+			const cost = estimateCost("anthropic", "claude-sonnet-5", 1, 1);
 			expect(cost).toBeGreaterThan(0);
-			expect(cost).toBeCloseTo(0.000018, 9);
+			expect(cost).toBeCloseTo(0.000012, 9);
 		});
 
 		test("zero reasoning tokens has no effect on cost", () => {
-			const costWithoutReasoning = estimateCost("anthropic", "claude-sonnet-4-6", 100_000, 50_000);
-			const costWithZeroReasoning = estimateCost("anthropic", "claude-sonnet-4-6", 100_000, 50_000, 0);
+			const costWithoutReasoning = estimateCost("anthropic", "claude-sonnet-5", 100_000, 50_000);
+			const costWithZeroReasoning = estimateCost("anthropic", "claude-sonnet-5", 100_000, 50_000, 0);
 			expect(costWithZeroReasoning).toBe(costWithoutReasoning);
 		});
 	});

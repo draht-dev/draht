@@ -33,8 +33,9 @@
  * would keep passing with the producer wired to nothing.
  *
  * Harness hygiene, every item paid for by a probe that passed while proving nothing:
- *  - `DRAHT_PERMISSION_MODE` is DELETED from both child environments. This repo's interactive shell
- *    exports `auto`, under which the scripted call is auto-allowed and NO ask is raised at all.
+ *  - `DRAHT_PERMISSION_MODE` is pinned to `ask` in the draht child's environment and deleted
+ *    from the daemon's. Under `auto`, the mode a session starts in and the one this repo's
+ *    interactive shell exports, the scripted call is auto-allowed and NO ask is raised at all.
  *  - The agent dir sits directly under /tmp with a short name: a Unix socket path over ~104 bytes
  *    fails to bind with EINVAL, and macOS `os.tmpdir()` spends ~50 characters before a uuid.
  *  - `dist/cli.js` is rebuilt first. The artifact under test is emitted, not committed, so "it
@@ -190,8 +191,8 @@ async function startDrahtSession(toolCall: {
 	const script = JSON.stringify([{ toolCalls: [toolCall] }]);
 	const stderr = { text: "" };
 
-	// Built from scratch, not inherited: this repo's shell exports DRAHT_PERMISSION_MODE=auto, and
-	// a permission test run under it passes while raising no prompt at all.
+	// Built from scratch rather than inherited, with the mode pinned to `ask`: in `auto` (an
+	// unset variable, or this repo's shell) the scripted call runs unasked and no ask ever comes.
 	const proc = Bun.spawn(
 		["node", DRAHT_CLI, "--attachable", "--mode", "rpc", "--provider", "draht-stub", "--model", "stub-1"],
 		{
@@ -203,6 +204,7 @@ async function startDrahtSession(toolCall: {
 				DRAHT_CODING_AGENT_DIR: agentDir,
 				DRAHT_STUB_PROVIDER: "1",
 				DRAHT_STUB_TOOL_CALLS: script,
+				DRAHT_PERMISSION_MODE: "ask",
 			},
 			stdin: "pipe",
 			stdout: "ignore",
@@ -546,9 +548,9 @@ test("a SHORT benign command arrives verbatim and says `truncated: false` — th
 	// costs the requirement everything it was for. This test is what refuses them.
 	//
 	// It runs the same producer, the same relay and the same wire as the hostile case; the ONLY
-	// difference is the length of the string. Under default permission mode an unmatched bash call
-	// requires approval (permission-gate.ts `defaultDecision`), so a 22-character `echo` is a real
-	// ask with a real frame.
+	// difference is the length of the string. In the `ask` mode this file pins, an unmatched bash
+	// call requires approval (permission-gate.ts `defaultDecision`), so a 22-character `echo` is a
+	// real ask with a real frame.
 	const command = "echo BENIGN-SHORT-OK";
 	expect(command.length).toBeLessThan(100);
 

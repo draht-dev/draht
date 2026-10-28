@@ -19,7 +19,7 @@ Standing rules only. Task-specific playbooks live in `docs/` — read them when 
 - Read files in full before making wide-ranging changes, before editing files you have not already fully inspected, and when the user asks you to investigate or audit something. Do not rely only on search snippets for broad changes.
 - No `any` types unless absolutely necessary
 - Check node_modules for external API type definitions instead of guessing
-- **NEVER use inline imports** - no `await import("./foo.js")`, no `import("pkg").Type` in type positions, no dynamic imports for types. Always use standard top-level imports.
+- **NEVER use inline imports for types or convenience** - no `import("pkg").Type` in type positions, no ad-hoc `await import("./foo.js")` in business logic. Type imports and convenience imports must be top-level. Runtime `import()` is allowed only for deliberate lazy loading of heavy or optional modules (startup cost, optional native deps, worker entry points), and only behind a named loader function or a `*.lazy.ts` module, never inline.
 - NEVER remove or downgrade code to fix type errors from outdated dependencies; upgrade the dependency instead
 - Always ask before removing functionality or code that appears to be intentional
 - Do not preserve backward compatibility unless the user explicitly asks for it

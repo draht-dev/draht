@@ -177,7 +177,11 @@ class HostExecutor implements Executor {
 }
 
 class DockerExecutor implements Executor {
-	constructor(private container: string) {}
+	private container: string;
+
+	constructor(container: string) {
+		this.container = container;
+	}
 
 	async exec(command: string, options?: ExecOptions): Promise<ExecResult> {
 		// Wrap command for docker exec

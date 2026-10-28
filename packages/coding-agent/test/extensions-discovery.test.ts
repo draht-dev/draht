@@ -51,6 +51,26 @@ describe("extensions discovery", () => {
 		expect(result.extensions.map((e) => path.basename(e.path)).sort()).toEqual(["bar.ts", "foo.ts"]);
 	});
 
+	it("marks a project's extensions and their tools as project scope and the agent dir's as user scope", async () => {
+		const project = path.join(tempDir, "project");
+		fs.mkdirSync(path.join(project, ".draht", "extensions"), { recursive: true });
+		fs.writeFileSync(path.join(project, ".draht", "extensions", "local.ts"), extensionCodeWithTool("local_tool"));
+		fs.writeFileSync(path.join(extensionsDir, "global.ts"), extensionCodeWithTool("global_tool"));
+
+		const result = await discoverAndLoadExtensions([], project, tempDir);
+
+		expect(result.errors).toHaveLength(0);
+		const scopes = Object.fromEntries(
+			result.extensions.flatMap((extension) =>
+				[...extension.tools.values()].map((tool) => [
+					tool.definition.name,
+					[extension.sourceInfo.scope, tool.sourceInfo.scope],
+				]),
+			),
+		);
+		expect(scopes).toEqual({ local_tool: ["project", "project"], global_tool: ["user", "user"] });
+	});
+
 	it("loads the coding-agent entrypoint without rewriting pi-ai provider subpaths", async () => {
 		fs.writeFileSync(
 			path.join(extensionsDir, "coding-agent-import.ts"),
@@ -67,6 +87,41 @@ describe("extensions discovery", () => {
 
 		expect(result.errors).toHaveLength(0);
 		expect(result.extensions).toHaveLength(1);
+	});
+
+	it("does not infer package ownership from ancestor manifests", async () => {
+		// Regression for #9863.
+		const dependencyDir = path.join(tempDir, "node_modules", "@draht", "coding-agent");
+		fs.mkdirSync(dependencyDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(tempDir, "package.json"),
+			JSON.stringify({
+				name: "application",
+				type: "module",
+				dependencies: { "@draht/coding-agent": "1.0.0" },
+			}),
+		);
+		fs.writeFileSync(
+			path.join(dependencyDir, "package.json"),
+			JSON.stringify({ name: "@draht/coding-agent", type: "module", exports: "./index.js" }),
+		);
+		fs.writeFileSync(path.join(dependencyDir, "index.js"), "export const physicalDependency = true;");
+		fs.writeFileSync(
+			path.join(extensionsDir, "compiled-esm-extension.js"),
+			`
+				import { physicalDependency } from "@draht/coding-agent";
+				export default function(pi) {
+					if (physicalDependency) pi.registerCommand("physical-dependency", { handler: async () => {} });
+				}
+			`,
+		);
+
+		const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+
+		expect(result.errors).toEqual([]);
+		expect(result.extensions).toHaveLength(1);
+		expect(result.extensions[0].commands.has("physical-dependency")).toBe(true);
+		expect(result.warnings).toEqual([]);
 	});
 
 	it("keeps the type-only pi-ai OAuth compatibility barrel resolvable", async () => {
@@ -374,6 +429,9 @@ describe("extensions discovery", () => {
 	it("registers message and entry renderers", async () => {
 		const extCode = `
 			export default function(pi) {
+				pi.registerMarkdownTransformer((markdown) => {
+					return markdown;
+				});
 				pi.registerMessageRenderer("my-custom-type", (message, options, theme) => {
 					return null; // Use default rendering
 				});
@@ -388,6 +446,7 @@ describe("extensions discovery", () => {
 
 		expect(result.errors).toHaveLength(0);
 		expect(result.extensions).toHaveLength(1);
+		expect(result.extensions[0].markdownTransformer).toBeDefined();
 		expect(result.extensions[0].messageRenderers.has("my-custom-type")).toBe(true);
 		expect(result.extensions[0].entryRenderers?.has("my-entry-type")).toBe(true);
 	});

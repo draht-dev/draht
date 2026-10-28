@@ -1,6 +1,7 @@
+import type * as PhotonNode from "@silvia-odwyer/photon-node";
 import type { PhotonImageType } from "./photon.ts";
 
-type Photon = typeof import("@silvia-odwyer/photon-node");
+type Photon = typeof PhotonNode;
 
 function readOrientationFromTiff(bytes: Uint8Array, tiffStart: number): number {
 	if (tiffStart + 8 > bytes.length) return 1;
@@ -50,8 +51,7 @@ function findJpegTiffOffset(bytes: Uint8Array): number {
 			if (offset + 4 >= bytes.length) return -1;
 			const segmentStart = offset + 4;
 			if (segmentStart + 6 > bytes.length) return -1;
-			if (!hasExifHeader(bytes, segmentStart)) return -1;
-			return segmentStart + 6;
+			if (hasExifHeader(bytes, segmentStart)) return segmentStart + 6;
 		}
 
 		if (offset + 4 > bytes.length) return -1;

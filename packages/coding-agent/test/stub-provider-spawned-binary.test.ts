@@ -7,8 +7,9 @@
  * needs real streamed assistant text with no API key and no network, so the stub
  * has to be selectable from OUTSIDE the process — by environment variable.
  *
- * These tests therefore drive the emitted binary (dist/cli.js, the file both
- * `bin.draht` and the bun-compiled binary are built from), never an in-process
+ * These tests therefore drive the emitted binary (dist/cli.js, the
+ * tsc-emitted entry point both the bundled `bin.draht` (dist/bundle/cli.js)
+ * and the bun-compiled binary are built from), never an in-process
  * import: an in-process test would pass while the product a child process sees
  * stayed broken.
  */
@@ -18,6 +19,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { ensureEmittedBuild } from "./emitted-build.ts";
 
 const PKG_ROOT = path.resolve(__dirname, "..");
 const EMITTED_CLI = path.join(PKG_ROOT, "dist", "cli.js");
@@ -74,18 +76,8 @@ function childEnv(home: string, agentDir: string, extra: Record<string, string> 
 	};
 }
 
-/**
- * Build exactly what `npm run build` builds — compile plus the asset copy — so
- * the binary under test is the emitted one, not a half-built tree that happens
- * to have a cli.js in it.
- */
-async function buildEmittedBinary(): Promise<void> {
-	const result = await run("npm", ["run", "build"], { cwd: PKG_ROOT, env: process.env });
-	if (result.code !== 0) throw new Error(`build failed:\n${result.stdout}\n${result.stderr}`);
-}
-
 beforeAll(async () => {
-	await buildEmittedBinary();
+	await ensureEmittedBuild();
 }, 180_000);
 
 afterAll(async () => {

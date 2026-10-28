@@ -67,7 +67,7 @@ setAppStorage(storage);
 const agent = new Agent({
   initialState: {
     systemPrompt: 'You are a helpful assistant.',
-    model: getModel('anthropic', 'claude-sonnet-4-5-20250929'),
+    model: getModel('anthropic', 'claude-sonnet-5'),
     thinkingLevel: 'off',
     messages: [],
     tools: [],
@@ -173,7 +173,7 @@ import { Agent } from '@draht/agent-core';
 
 const agent = new Agent({
   initialState: {
-    model: getModel('anthropic', 'claude-sonnet-4-5-20250929'),
+    model: getModel('anthropic', 'claude-sonnet-5'),
     systemPrompt: 'You are helpful.',
     thinkingLevel: 'off',
     messages: [],

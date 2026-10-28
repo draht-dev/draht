@@ -9,6 +9,7 @@ import { listPods, removePodCommand, setupPod, switchActivePod } from "./command
 import { promptModel } from "./commands/prompt.js";
 import { getActivePod, loadConfig } from "./config.js";
 import { sshExecStream } from "./ssh.js";
+import type { Pod } from "./types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -49,8 +50,8 @@ Model Management:
 
 Environment:
   HF_TOKEN         HuggingFace token for model downloads
-  PI_API_KEY     API key for vLLM endpoints
-  PI_CONFIG_DIR    Config directory (default: ~/.pi)`);
+  DRAHT_API_KEY       API key for vLLM endpoints
+  DRAHT_CONFIG_DIR    Config directory (default: ~/.draht)`);
 }
 
 // Parse command line arguments
@@ -156,7 +157,7 @@ try {
 			case "shell": {
 				// pi shell [<name>] - open interactive shell
 				const podName = args[1];
-				let podInfo: { name: string; pod: import("./types.js").Pod } | null = null;
+				let podInfo: { name: string; pod: Pod } | null = null;
 
 				if (podName) {
 					const config = loadConfig();
@@ -208,7 +209,7 @@ try {
 					process.exit(1);
 				}
 
-				let podInfo: { name: string; pod: import("./types.js").Pod } | null = null;
+				let podInfo: { name: string; pod: Pod } | null = null;
 
 				if (podName) {
 					const config = loadConfig();
@@ -333,7 +334,7 @@ try {
 					process.exit(1);
 				}
 
-				const apiKey = process.env.PI_API_KEY;
+				const apiKey = process.env.DRAHT_API_KEY;
 
 				// Pass all args after the model name
 				const agentArgs = args.slice(2);

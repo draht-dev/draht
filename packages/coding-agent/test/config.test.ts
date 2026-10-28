@@ -3,7 +3,9 @@ import { tmpdir } from "os";
 import { delimiter, join } from "path";
 import { afterEach, describe, expect, test } from "vitest";
 import {
+	detectInstallChange,
 	detectInstallMethod,
+	findPackageRoot,
 	getSelfUpdateCommand,
 	getSelfUpdateUnavailableInstruction,
 	getUpdateInstruction,
@@ -144,6 +146,19 @@ function createFakeBunScript(bunBin: string): string {
 	const escapedBunBin = bunBin.replaceAll("'", "'\\''");
 	return `#!/bin/sh\nif [ "$1" = "pm" ] && [ "$2" = "bin" ] && [ "$3" = "-g" ]; then\n\tprintf '%s\\n' '${escapedBunBin}'\n\texit 0\nfi\nexit 1\n`;
 }
+
+describe("findPackageRoot", () => {
+	test("skips binary metadata copied into dist", () => {
+		tempDir = mkdtempSync(join(tmpdir(), "pi-package-dir-"));
+		const distDir = join(tempDir, "dist");
+		const bundleDir = join(distDir, "bundle");
+		mkdirSync(bundleDir, { recursive: true });
+		writeFileSync(join(tempDir, "package.json"), "{}");
+		writeFileSync(join(distDir, "package.json"), "{}");
+
+		expect(findPackageRoot(bundleDir)).toBe(tempDir);
+	});
+});
 
 describe("detectInstallMethod", () => {
 	test("detects pnpm from Windows .pnpm install paths", () => {
@@ -415,5 +430,17 @@ describe("detectInstallMethod", () => {
 
 		expect(getSelfUpdateCommand("@draht/coding-agent")).toBeUndefined();
 		expect(getSelfUpdateUnavailableInstruction("@draht/coding-agent")).toContain("the install path is not writable");
+	});
+});
+
+describe("detectInstallChange", () => {
+	// Regression for badlogic/pi-mono#10439: a deleted pnpm install must not read a package.json further up.
+	test("reports a removed install instead of reading a package.json further up", () => {
+		tempDir = mkdtempSync(join(tmpdir(), "draht-install-change-"));
+		const installDir = join(tempDir, "global", "hash");
+		mkdirSync(installDir, { recursive: true });
+		writeFileSync(join(tempDir, "package.json"), JSON.stringify({ version: "0.0.1" }));
+		rmSync(installDir, { recursive: true, force: true });
+		expect(detectInstallChange(join(installDir, "package.json"))).toEqual({ kind: "removed" });
 	});
 });

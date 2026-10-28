@@ -1,16 +1,16 @@
 ---
 name: model-tiering
-description: Cost-efficient model tiering — the advisor pattern (a cheap executor consults a stronger model rarely) and the orchestrator pattern (a strong model plans while cheaper workers execute). Use when choosing which model runs a session vs its subagents, when cost matters on long agentic work, or when the user mentions "Fable", "advisor", "model tiering", "token cost", "cheaper model", or asks which model should drive a workflow.
+description: Choose executor, advisor, and orchestrator models when configuring a workflow's quality, cost, and latency tradeoffs.
 ---
 
 # Model Tiering
 
-Two tiers, two directions of pull. Bill the volume tokens at the cheaper rate and spend the strongest model only where a single decision changes the outcome.
+Use an executor for routine work and a stronger advisor or orchestrator where its judgment improves the result. Select available models from the host's current catalog.
 
-- **Advisor tier** — the strongest model available (Claude Fable 5)
-- **Executor tier** — a fast, capable model (Claude Sonnet 5)
+- **Advisor tier** — a model with stronger performance on the task's difficult decisions
+- **Executor tier** — a faster or cheaper model capable of the implementation work
 
-Reference numbers (SWE-bench Pro): a Sonnet 5 executor with a Fable 5 advisor reaches ~92% of Fable 5's solo score at ~63% of the price, with the advisor consulted roughly once per task. Official reference: <https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool>
+Tiering does not guarantee savings or better results. Compare executor-only, executor-with-advisor, and stronger-model-only runs on representative tasks; measure accepted results, total billed tokens, latency, and retries. Re-evaluate when model versions or workflow prompts change. API behavior and current guidance: <https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool>.
 
 ## Pattern 1 — Advisor: the executor pulls intelligence down
 
@@ -18,9 +18,9 @@ Run the session on the executor tier; dispatch the `advisor` agent (pinned to th
 
 - **Once early** — after orientation (finding files, reading what's there) but BEFORE substantive work: writing, committing to an interpretation, building on an assumption
 - **When stuck** — recurring errors, an approach that is not converging, results that don't fit
-- **Once before declaring done** on hard tasks — after writes and test output exist; make the deliverable durable (commit it) before the consult
+- **Once before declaring done** on hard tasks — after writes and test output exist; save the deliverable before the consult and commit only when the task authorizes it
 
-Treat the advice with serious weight: deviate only on empirical failure or primary-source contradiction. If your evidence points one way and the advisor points another, don't silently switch — surface the conflict in one reconcile consult ("I found X, you suggest Y — which constraint breaks the tie?").
+Weigh the advice heavily; the user's instructions, empirical failure, and primary sources override it. If your evidence points one way and the advisor points another, don't silently switch — surface the conflict in one reconcile consult ("I found X, you suggest Y — which constraint breaks the tie?").
 
 Target ~1–3 consults per task. On short reactive tasks where the next action is dictated by output just read, skip the advisor — its value is highest before the approach crystallizes.
 

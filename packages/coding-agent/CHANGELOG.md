@@ -4,56 +4,819 @@
 
 ### Added
 
-- shipped (builtin) skills: the package now bundles a `skills/` directory that is always discovered (disabled by `--no-skills`; user/project skills with the same name win). First builtin skill: `hexagon-animation`, which generates a randomized 3D hexagon grid animation as a self-contained HTML file
-- shipped builtin skill `atomic-reasoning` — the decomposition discipline the slash commands point at instead of restating it
-- shipped builtin skill `unslop` — a prose-discipline pass that cuts AI tells from deliverables the agent writes (docs, reports, handoffs, commit bodies) and adds voice back, register-aware, with a German-prose section; byte-copy of the canonical root skill so the shipped prompts' pointers resolve with nothing installed
-- working-tree checkpoints: every turn snapshots the tree into `refs/draht/checkpoints/<session>/<entry>` via a temporary index, so the user's index, `HEAD`, stash and reflog are never touched and no `git stash` is used; identical trees dedup, metadata lands in a `<session-file>.checkpoints.jsonl` sidecar that survives `/fork` and `/clone`, non-git directories degrade to a one-time notice, and `draht checkpoint prune [--days <n>] [--max-per-session <n>] [--dry-run]` applies the `checkpoints.*` retention policy
-- duet mode for shared-session model turn-taking and lead/teammate triage with parallel read-only delegation
-- `/grill` command: subject-agnostic whole-frontier interrogation (numbered question rounds with recommended answers, non-blocking fact-finding subagents, output form — spec, tickets, decision record, or notes — chosen at the end)
-- `/why` command: code archaeology for intent and history — builds a code anchor, dispatches one read-only `investigator` subagent per available evidence category (git, review record, `.planning/`, ADRs/changelogs; external systems reported as coverage gaps when no tool is registered) in parallel, and synthesizes a confidence-tiered, citation-backed answer with an explicit Sources Consulted coverage map and a Preserve/Change/Avoid/Risk hook for follow-on changes
-- `investigator` builtin agent — single-category evidence gathering with verbatim citations, null results, contradictions, and cross-category leads; read-only tool set
-- shipped builtin skill `epistemics` — the confidence-calibration discipline `/why` points at (five tiers, cite-or-label-as-inference, null results as evidence, competing hypotheses, coverage-map contract)
-- shipped builtin skill `typescript-discipline` — the TypeScript type-system discipline the `reviewer` agent's Type Safety criteria point at (discriminated unions over optional-field bags, constructive modeling, branded primitives, boundary parsing with trust inside, totality-triggered strengthening, compiler-enforced exhaustiveness), with worked don't/do examples in `references/patterns.md`; byte-copy of the canonical root skill
-- shipped builtin skill `blast-radius` — the impact-analysis evidence ladder `/review`'s refutation step points at (reduce a change's safety argument to the one falsifiable fact it rests on, five rungs from said-so to reproduced-in-the-running-app with mandatory stop-rung disclosure, a where-grep-stops hunt list, a Risks-vs-Cleared report split); byte-copy of the canonical root skill
-- `/resolve-conflicts` command: resolve an in-progress git merge, rebase, or cherry-pick by reconstructing both sides' intent — never by picking a side blind
-- `/triage` command: external issue-report triage — classifies one pasted report or `gh issue view` reference (bug / performance / feature request / question / reroute) after a bounded findings-only `debugger` cause trace, dedupes against GitHub Issues with four typed outcomes (confident duplicate / possibly related / weak resemblance / no match), creates a ticket only behind a seven-condition fail-closed gate with `gh issue close` compensation (no repo access → conservative classification, no confident dedupe → no ticket), and ends with exactly one typed `[triage:*]` verdict marker line that a follow-up `/fix` run can consume
-- `/create-verification-skill` command: interviews the target repo (surface, run, drive, observe, isolate) and generates a committed project-local `verify-<app>` skill — Launch/Doctor/Drive/Evidence/Cleanup/Helpers sections plus a per-feature verification map with a fixed four-section shape — that drives the real app the way a user does and captures proof artifacts; the generated skill is proven end to end once (launch, doctor, drive one mapped feature, capture evidence, clean up, evidence survives cleanup) before handover; also the designated recovery path for failed subagent worktree merge-backs
-- `spec-reviewer` builtin agent — six commands (`/execute-phase`, `/orchestrate`, `/orchestrate-loop`, `/quick`, `/review`, `/verify-work`) dispatch it, but it previously shipped only in the plugin packages; unknown agents hard-fail in the subagent tool, so `/execute-phase` Stage 2 was broken out of the box
-- bundled `draht-tools.cjs` now dispatches `map-graph`/`graph-*`/`map-codebase` to a prebuilt Go `draht-graph` binary when one resolves (`~/.draht/bin`, `$DRAHT_GRAPH_BIN`, or `$PATH`; `DRAHT_GRAPH_ENGINE=auto|go|js`), falling back to the existing JS engine otherwise — install the binary via `npx draht-claude install-graph-engine` or `npx draht-codex install-graph-engine`; see `go/README.md`
-- attachable sessions (experimental, opt-in): `--attachable` exposes a running session on an owner-only Unix socket in `~/.draht/agent/sockets/`, `--list-sessions` lists running ones, and `--attach <session-id>` attaches from another terminal (tmux-style output streaming and input echo). Single user only - the socket and lock are 0600 in a 0700 directory with no other authentication - one live owner per session id, no history replay, and no input while the agent is streaming; see [Attachable Sessions](docs/attachable-sessions.md)
+- Permission rules match tool names with `*` and `?`, so `tool: "mcp__docs__*"` covers every tool of the `docs` MCP server; a deny rule whose glob names `bash` also checks `powershell` commands, and braces or brackets in `tool` are rejected ([#31](https://github.com/draht-dev/draht/issues/31))
+- The permission gate runs unmatched calls to read-only tools (`readOnlyHint`) without asking in the `ask` and `auto` modes when the hint comes from outside the project: a built-in tool, an extension loaded with `-e`, by the SDK, or from the user's extensions and packages, or an MCP server in the global `mcp.json` or registered by such an extension. In `ask` the tool must also declare `openWorldHint: false`. Project extensions, project `mcp.json` servers (also through the MCP resource tools), tools that also declare `destructiveHint`, and calls naming a path outside the project still ask ([#31](https://github.com/draht-dev/draht/issues/31))
+- `supervised` permission mode: like `ask`, and every `write` and `edit` asks, also inside the project; set it with `/permissions supervised` or `DRAHT_PERMISSION_MODE=supervised` ([#31](https://github.com/draht-dev/draht/issues/31))
+- Tool definitions and `pi.getAllTools()` carry `annotationsScope`, the scope of the source a tool's hints come from, `pi.getMcpServers()` reports each server's `extensionScope`, and `discoverAndLoadExtensions` marks a project's extensions as `project` scope ([#31](https://github.com/draht-dev/draht/issues/31))
+- add opt-in token budgets for repositories with `.draht/budgets.json`: 5,000 tokens per code file and 1,500 per documentation file by default, a growth allowance for files already over a limit, skipped lockfiles, changelogs, and generated files, optional shared task totals, edit preflight, completion auditing, and `/budget` for guided setup, status, and user-only task resets
 
-### Fixed
+## [2026.10.23-1] - 2026-10-23
 
-- checkpoints: a file rewritten with unchanged size within the same second as its last `git add` could be captured with its old content, so checkpoints and pre-rewind safety snapshots held stale data and a restore silently skipped the file. The snapshot's temporary index is seeded by copying the real index, and the fresh copy mtime disabled git's racy-timestamp re-check — every cached stat looked safely old. The seed copy now carries the real index's timestamps, so git re-hashes exactly the entries it would have re-hashed against the real index
-- attachable sessions: input from an attached client could crash the whole agent. `AgentSession.prompt()` rejects for ordinary reasons (for example a prompt sent while the agent is already streaming) and the rejection was left floating, so Node's default `--unhandled-rejections=throw` killed the process. The failure is now reported back to the client that sent the input as an `error` frame and the session keeps running
-- attachable sessions: the `.sock` and `.lock` files survived the session. Interactive, print, and rpc mode end in `process.exit()` and never return to `main()`, so the cleanup in its `finally` never ran and a `kill -TERM`ed session stayed listed in `--list-sessions` forever. Cleanup now also runs from `process.on("exit")` and from SIGINT/SIGTERM/SIGHUP handlers that defer to the mode's own shutdown when it owns the signal
-- attachable sessions: the socket outlived the session it pointed at. `/new`, `/resume`, `/fork`, and `/import` dispose the current session, but the socket stayed bound to the disposed object while still advertising the old session id and routing client input into it. The socket now follows session replacement (attached clients receive a `SESSION_REPLACED` error and re-attach with the new id)
-- attachable sessions: two runs resolving to the same session id silently clobbered each other's socket and lock file. The lock is now created exclusively and its PID is consulted: a live owner makes the second run fail with a clear error, a dead owner is reaped
-- attachable sessions: the socket briefly existed with `0777 & ~umask` permissions (mode 0755 under the default umask) before being chmod'ed to 0600. Since Unix-domain permissions are checked at connect time, that was a real window; the socket is now bound under a restrictive umask, the lock file is created 0600, and the socket directory's 0700 mode is re-asserted on every start
-- attachable sessions: sockets left behind by a `SIGKILL`ed or crashed session accumulated forever. Discovery now reaps `.sock`/`.lock` pairs whose recorded PID is dead, and leaves live sessions alone
-- attachable sessions: `--attach` interpolated its argument straight into a socket path. The value is now validated with the same rule the session manager applies to session ids, so it cannot traverse out of the socket directory
-- `--attachable` help text no longer implies other people can attach: the socket is owner-only
+### Added
+
+- validate hybrid prompts with confined model comparisons
+- streamline agent prompts and add deterministic verification
 
 ### Changed
 
-- pruned the boilerplate Atomic Reasoning section from all command prompts; commands keep only command-specific reasoning plus a one-line pointer to the `atomic-reasoning` skill; deleted outright from `/progress`, `/pause-work`, `/resume-work`
-- `/brainstorm`, `/discuss-phase`, `/new-project`, `/init-project` now question in whole-frontier rounds (all settled-prerequisite questions per round, numbered, with recommended answers; accepted-by-number = decided) instead of 1-2 questions at a time
-- `/fix` Phase 1 now gates on a red-capable reproduction loop: ONE named command, already run at least once, invocation and output shown, asserting the exact symptom — built by working down a ladder from failing test to human-in-the-loop steps; no causal theorising until it exists. Phase 3 generates 3-5 ranked falsifiable hypotheses (the user's diagnosis enters as Hypothesis #0) instead of testing a single one, and Phase 4 sweeps tagged `[DEBUG-*]` instrumentation before done. The `debugger` builtin agent carries the same reproduction-first, ranked-hypotheses operating brief
-- `/verify-work` fix plans now hold their reproducing tests to the same red-capable standard as `/fix` Phase 1 (named command, already run, output shown, asserting the exact failing symptom)
-- the `implementer` and `reviewer` builtin agents and the code-writing command prompts (`/execute-phase`, `/fix`, `/quick`, `/review`) now enforce comment discipline: comments only for constraints the code cannot express; above-norm comment density is a review defect
-- the `/pause-work`, `/verify-work`, `/grill`, and `/brainstorm` prompts and the `git-committer` builtin agent now point their prose-producing steps (handoffs and lessons, UAT reports, grill artifacts, spec writing, commit bodies) at the `unslop` skill — one-line pointers, no pattern lists duplicated
-- the `reviewer` builtin agent's Type Safety criteria now name the TypeScript anti-patterns to hunt — optional-field state bags, unbranded interchangeable IDs, non-exhaustive switches, unearned casts — and point at the `typescript-discipline` skill
-- `/verify-work`'s verifier prompt and the `verifier` builtin agent now drive the real app when a project `verify-<app>` skill exists (generated by `/create-verification-skill`): launch, Doctor check, drive one mapped feature as a user would, capture the named evidence artifacts, clean up without removing them — instead of stopping at the test suite; without such a skill the verifier states that test output is the ceiling of its evidence
-- `/review` step 7 now escalates a Critical finding whose refutation hinges on library or runtime behavior to a rung-4 script the orchestrator writes and runs against the real code (the review subagents are scoped to reading the diff) instead of settling it by argument — per the `blast-radius` skill
+- feat(coding-agent): default NVIDIA to Nemotron 3.5 Super VL (badlogic/pi-mono#10910)
+- fix(coding-agent): recovery omits tool results with the truncated tool call
+- fix(coding-agent): grep tool ignores ripgrep config via --no-config
+- fix(coding-agent): activate extension tools registered after the branch recorded its loadout
+- fix(ai,agent,coding-agent,durable): client identity follow-ups
+- feat(ai,agent,coding-agent): move client identity and provider attribution into pi-ai
+- fix(coding-agent): apply /compact instructions to split-turn prefix summary
+- fix(coding-agent): accept mcp.json files with a UTF-8 BOM
+- fix(coding-agent): expose @earendil-works/pi-ai/models in the extension loader
+- fix(coding-agent): queue codemode scripts at the worker limit
+- fix(coding-agent): keep clipboard helpers out of pi's process group so Ctrl+Z does not stop them
+- fix(ai): drop Codex models rejected for ChatGPT accounts (badlogic/pi-mono#11173)
+- fix(coding-agent): render CJK emphasis in HTML export (badlogic/pi-mono#11168)
+- Break single Mermaid diagram into two
+- fix(coding-agent): accept managed install markers with a UTF-8 BOM
+- fix(ai): recover from Copilot request-size overflow
+- fix(coding-agent): resolve Windows shells from installation directories
+- fix(coding-agent): accept Windows Store shell aliases
+- docs(coding-agent): restore extension guide details (badlogic/pi-mono#11039)
+- docs(ai,coding-agent): generate models.json reference from schemas (badlogic/pi-mono#11038)
+- fix(coding-agent): remove fixed output limits from summary requests (badlogic/pi-mono#11036)
+- fix(coding-agent): keep empty quoted prompt template arguments
+- fix(coding-agent): normalize read line-range labels (badlogic/pi-mono#10938)
+- fix(coding-agent): resolve model references through one provider selection policy (badlogic/pi-mono#10913)
+- feat(ai): keep the prompt cache when changing thinking level on OpenAI GPT-6 (badlogic/pi-mono#10930)
+- fix(coding-agent): keep codemode cancellation prompt and bounded
+- docs(coding-agent): restructure NVIDIA RTX llama.cpp prerequisites
+- fix(coding-agent): restore active tools on session resume (badlogic/pi-mono#10887)
+- docs(coding-agent): add NVIDIA RTX llama.cpp setup
+- feat(coding-agent): add PI_CLIPBOARD_OSC52 to force OSC 52 copies
+- fix(codemode): reject // @options: lines that are not the first line
+- fix(coding-agent): retry transient Windows EPERM when acquiring auth lock
+- fix(coding-agent): warn and exit non-zero in print mode on truncated response
+- feat(coding-agent): show elapsed and total time on codemode rows
+- fix(mcp,coding-agent): accept any JSON value as tool structuredContent
+- fix(coding-agent): stop listing MCP resources when connecting
+- fix(coding-agent): expand ~ in resource setting patterns
+- feat(coding-agent): remove the experimental server stack and the client, protocol, and server packages
+- fix(coding-agent): describe pi mcp login --timeout as a limit on the whole sign-in
+- feat(ai,coding-agent): list only the OpenRouter models a key may use (badlogic/pi-mono#10672)
+- fix(coding-agent): make codemode output joining linear
+- fix(coding-agent): emit before_agent_start for runs started by custom messages (badlogic/pi-mono#10739)
+- refactor(codemode,coding-agent): decouple MCP from codemode
+- fix(coding-agent): code mode description says schema tools resolve with their value on failure
+- fix(coding-agent,durable): omit thinking from compaction summaries
+- feat(coding-agent): use pi.dev configuration schemas (badlogic/pi-mono#10751)
+- fix(coding-agent): load symlinked AGENTS.md in nested git worktrees
+- feat(coding-agent): publish configuration schemas (badlogic/pi-mono#9880)
+- feat(tui,coding-agent): use only the terminal cursor when showHardwareCursor is enabled
+- wait for streaming and watcher events instead of fixed sleeps
+- fix: address actionable npm audit findings
+- feat(tui,coding-agent): report program status via OSC 7501
+- fix(coding-agent): cancel MCP OAuth sign-ins and stop refreshing on close
+- fix(coding-agent): strip ANSI sequences split across user bash output chunks
+- fix(coding-agent): read Termux clipboard on Android platform
+- docs(coding-agent): document azure provider id, Foundry models, and deployment mapping
+- fix(coding-agent): ignore Node's own worker messages in image resize
+- fix(coding-agent): keep MCP manager responsive (closes badlogic/pi-mono#10562)
+- feat(ai,coding-agent): add OpenAI Decisions classifier and classifier images
+- fix(codemode,coding-agent): separate codemode output items
+- feat: record response, tool execution, and durable task times
+- fix(coding-agent): mark codemode lookup helpers as async in description
+- fix(coding-agent): apply outputPad to all transcript blocks (badlogic/pi-mono#10557)
+- align documented message types (badlogic/pi-mono#10566)
+- feat(coding-agent): accept +name/-name entries in --tools
+- fix(coding-agent): disable .env autoload in standalone binary
+- feat(coding-agent): use llama.cpp classifier models natively (badlogic/pi-mono#10382)
+- Prune managed installs (badlogic/pi-mono#10511)
+- fix(coding-agent): keep hidden tools out of prompt rules and skills hint
+- fix(coding-agent): close MCP connections that are still connecting on shutdown
+- fix(coding-agent): keep MCP tools with --tools, add tool patterns and --no-mcp
+- fix(mcp): send application_type in OAuth dynamic client registration
+- fix(coding-agent): resolve codemode read calls on images to image blocks
+- fix(coding-agent): keep syntax colors on multiline tokens (badlogic/pi-mono#10356)
+- fix(tui): keep Home/End for the editor in fullscreen mode
+- feat(ai): support Azure Foundry Chat Completions deployments (badlogic/pi-mono#9714)
+- fix(coding-agent): do not report dead terminal stdin errors as crashes
+- fix(coding-agent,durable): fix CI test stub and macOS watch startup race
+- feat(coding-agent): save codemode image() output to temp files
+- fix(coding-agent): keep codemode working after the install is updated or removed
+- fix(ai,coding-agent): persist rotated OAuth tokens when a refresh is cancelled
+- feat(ai): add per-thinking-level sampling parameters (badlogic/pi-mono#9776)
+- fix(coding-agent): default NVIDIA to Nemotron 3 Ultra
+- fix(coding-agent): render MCP tool calls before their server connects
+- fix(tui,coding-agent): convert non-PNG images for Kitty in Image
+- feat(coding-agent): allow project mcp.json to override enabled and exposure of global servers
+- fix(codemode): cap script output so print loops cannot exhaust host memory
+- docs(ai,coding-agent): document Cloudflare Clef classifiers
+- feat(coding-agent): opt-in MCP OAuth client ID metadata documents
+- fix(coding-agent): ignore empty entries in --models
+- fix(coding-agent): pin brace-expansion 5.0.12
+- feat(coding-agent): copy OAuth sign-in URLs with app.message.copy
+- feat(coding-agent): shrink codemode prompt and guide scripts back from errors
+- feat(coding-agent): make fullscreen the default TUI mode
+- docs(coding-agent): add Radius to providers page, rename provider docs sections
+- feat(coding-agent): add models.generateImages() to codemode
+- feat(agent): remove the experimental harness from pi-agent-core
+- feat(coding-agent): offer Radius sign-in and MCP setup in /login
+- feat(coding-agent): add header-only quietStartup mode
+- fix(coding-agent): keep pastel palettes pastel in the system theme (badlogic/pi-mono#10293)
+- fix(coding-agent): restore MCP tools loaded by tool_search on resume and reload
+- fix(coding-agent): rename unconfigured to not configured
+- fix(coding-agent): keep one copy of each rendered user message line
+- fix(coding-agent): store MCP OAuth credentials per server name and URL
+- test(coding-agent): run the official MCP client conformance suite in CI
+- fix(mcp): keep granted scopes on step-up authorization
+- fix(coding-agent): require --model when --provider is given
+- fix(coding-agent): make /mcp login sign-in URL clickable in the TUI
+- feat(coding-agent): add MCP oauth.authServerMetadataUrl and check RFC 9207 iss
+- bump Node.js for Oct 2026 security releases
 
 ### Fixed
 
-- `/fix` Phase 4 now commits the TDD cycle with plain `git commit` (`red:`/`green:`/`refactor:` prefixes); it previously used `draht-tools commit-docs`, which stages only `.planning/` and prefixes the message with `docs:` — so /fix TDD commits contained no source changes and the TDD hooks could never match them
-- subagent worktree merge-back failures are now surfaced instead of silently discarded: `RunResult.merge` carries the merge outcome, single and chain results become errors (`isError`) with a recovery notice naming the unmerged `agent/<taskId>` branch, the literal `git merge` command, and `/resolve-conflicts`; parallel mode reports `merge-failed` per task. Previously a conflicted merge-back stranded the agent's committed work on an unmerged branch behind a success-looking tool result
+- update tests and keybindings schema left stale by the upstream sync
+- stack concurrent extension dialogs, settling each fail-closed on teardown
+- copy complete login URLs with configurable shortcut
+- use mimo-v2.6-pro as Xiaomi default model
+- close own custom ui overlay (badlogic/pi-mono#10999)
+- use claude-sonnet-4.5 in model registry tests
+- strip fake cursor markers in OAuth prompt regression test
+- apply workflow determinism bans before codemode lockdown
+- clear fullscreen selection on transcript rebuild (badlogic/pi-mono#10567)
+- enforce patched Node versions per release line
+- resolve workspace test dependencies
+- avoid stale passes across input boundaries
+- include verification hooks in binary archives
+- support isolated Node runtimes in CI
+- prevent continuation after session disposal
 
-### Removed
+## [2026.10.20-1] - 2026-10-20
 
-- legacy `/build`, `/plan`, `/verify` shipped prompt templates (`prompts/agents/`) — carried the dead `draht commit-task N P T` commit convention and were referenced nowhere; the build agent's Competence Mimics table now lives in the `implementer` builtin agent
+### Fixed
+
+- also switch the permission mode with ctrl+q
+
+## [2026.10.19-1] - 2026-10-19
+
+### Breaking Changes
+
+- rename the default permission mode to ask
+- start sessions in the auto permission mode
+
+### Added
+
+- autocomplete /duet strategy, provider and models
+- pass DRAHT_PERMISSION_MODE on to the sessions it starts
+- cycle the permission mode with alt+m
+- start workflows and duet batches unasked in auto mode
+- take a workflow's budget and time limit from the prompt
+- count command-run usage in the session totals
+
+### Changed
+
+- drop the escaped-quote changelog entry
+- drop the scan-budget claim, note the escaped-quote fix
+- bring the changelog in line with the permission changes
+
+### Fixed
+
+- match deny rules and the danger filter on what the shell runs
+- reserve the permission-mode key, finish the ask rename
+- keep main's deny-scan budget and allow matching exactly
+- ask when a code runner reads a descriptor in auto mode
+- bound the run checks' reader, read heredoc bodies whole
+- give the run checks their own reader, keep main's splitChain
+- close the lexer gaps and keep main's scan budget
+- keep a daemon's yolo out of the sessions it starts unless declared
+- switch alt+m between auto and ask, once per press
+- read executed code the way the shell does, and keep the scan budget
+- ask before auto mode runs code the danger filter cannot read
+- judge the file a tool will open in the permission gate
+- ask the parent session instead of blocking subagent tool calls
+- pass the session's permission mode to polyphase children
+
+## [2026.10.8-1] - 2026-10-08
+
+### Added
+
+- add the workflow tool, saved workflows and the polyphase keyword
+- show live per-agent oversight for subagent calls
+- add the polyphase child stream, run store and workflow runtime
+
+### Changed
+
+- document polyphase
+- refresh model ids to Opus 5.5, Sonnet 5, Fable 5.1 and GPT-6
+
+## [2026.10.4-3] - 2026-10-04
+
+### Fixed
+
+- offer extended context windows for the GPT-6 models
+
+## [2026.10.4-1] - 2026-10-04
+
+### Breaking Changes
+
+- remove the `draht update pi` self-update alias
+
+### Added
+
+- add the explainers discipline skill
+- add an STE-lite controlled register to unslop
+- /bug uploads go to draht's own radius.draht.dev
+- let MCP servers authenticate with a provider login
+- enable tools newly added to defaultTools on reload
+- return up to 1 MiB of bash output to codemode scripts
+- add alternative sign in for the openai provider
+- configurable fullscreen wheel scrolling with auto acceleration
+- remove themes section from startup banner
+- add hidden-message toggle to HTML exports (badlogic/pi-mono#10020)
+- add image input limits (closes badlogic/pi-mono#9631)
+- cache compiled Node CLI modules
+- load session picker progressively
+- format bash tool durations to support hours, minutes, seconds (badlogic/pi-mono#9742)
+- add experimental micro agent
+- add TUI context footer eval (badlogic/pi-mono#9705)
+- allow configuring Anthropic fallback models
+- support per-model compaction token budgets
+- add implementation-backed documentation evals (badlogic/pi-mono#9280)
+- ingest external entries in in-memory sessions (badlogic/pi-mono#8980)
+- adjust TUI selections in thinking-mode, models and scoped models (badlogic/pi-mono#8900)
+- replace lane RPC with Chord service
+- disable pi.dev-only endpoints, rebrand attribution
+- preserve handles across facet reloads
+- expose RPC queue clearing
+- export image MIME detector (badlogic/pi-mono#8600)
+- show llama presets if autoload enabled (badlogic/pi-mono#8558)
+- include context in Radius session shares
+- defer jiti until extension loading
+- defer uncommon syntax grammars
+- share via radius artifacts under experimental (badlogic/pi-mono#8443)
+- make default model and thinking level searchable
+- include paths in settings errors
+- add cache-friendly compaction primitives
+- show compaction usage notices
+- support compaction routing sessions
+- separate remote plugin app fixture
+- simplify remote plugin services
+- prototype remote plugin app
+- host sessions in child processes
+- add configurable default tools
+- configure fullscreen exit output
+- add configurable Harness factory (badlogic/pi-mono#7686)
+- compose experimental CLI commands
+- add scrollbar thumb theme color
+- add comparative Pi eval harness
+
+### Changed
+
+- build the emitted binary once per vitest run
+- expect APP_NAME in the invalid-session-file error
+- make both scoped models available in the thinking-switch test
+- borrow disposeActiveSelector in the permission dialog host
+- describe virtual models as extension-registered routers
+- changelog coverage for the v0.99.2 upstream sync
+- correct CHANGELOG entry for the keybinding replaced by app.models.save/app.thinking.save
+- remove upstream's experimental CLI orphans
+- convert inline type-position import() to top-level import type
+- rebrand remaining pi prose and TUI env wording
+- delete tree.md, already redirected in docs.json
+- account for draht's built-in prompts and subagent tool
+- use draht's .draht dir and name in picked tests
+- put the badlogic/pi-mono#9863 physical dependency under @draht
+- expect draht commands in the extension crash hint
+- feat(coding-agent): stop waiting for MCP servers on the first prompt
+- feat(coding-agent): allow a custom OAuth client name for MCP servers
+- feat(coding-agent): list MCP servers instead of their tools in codemode
+- fix(coding-agent): load codemode worker in Windows binary
+- docs(coding-agent): improve MCP server guide (badlogic/pi-mono#10220)
+- feat(ai,coding-agent): add GPT-6.1 Sol and make it the Codex default
+- feat(coding-agent): report codemode classifier and nested tool usage in session cost
+- feat(ai): expose Jev on Vercel AI Gateway and OpenCode Zen
+- feat(coding-agent): show tool call arguments for MCP and fallback-rendered tools
+- feat(coding-agent): support +name/-name in defaultTools
+- feat(ai,coding-agent): share OAuth callback server and sign-in page
+- refactor(coding-agent): resolve built-in extensions as builtin:<name> paths (badlogic/pi-mono#10159)
+- feat(coding-agent): codemode and MCP
+- feat(coding-agent): Virtual models (badlogic/pi-mono#10035)
+- fix(coding-agent,tui): paste Finder file paths instead of icons (badlogic/pi-mono#10136)
+- feat(coding-agent,tui): System theme (badlogic/pi-mono#10067)
+- fix(ai): upgrade openai SDK to 7.19.0 (badlogic/pi-mono#10044)
+- feat(coding-agent): report prompt disposition in RPC responses
+- feat: build with TypeScript 7 and run sources with plain node
+- feat(tui,coding-agent): add color values and theme styling (badlogic/pi-mono#8398)
+- brand the provider_stream_event extension docs
+- feat(ai,coding-agent): unify image and classifier model infrastructure (badlogic/pi-mono#9948)
+- feat: expose provider stream events to extensions (badlogic/pi-mono#9901)
+- fix(coding-agent): prevent duplicate extension runtimes (closes badlogic/pi-mono#9863)
+- docs(coding-agent): refresh documentation (badlogic/pi-mono#9898)
+- feat(ai,coding-agent): add Grok 4.7 support
+- fix(coding-agent): keep prompt and tool state across context handlers (badlogic/pi-mono#9846)
+- feat: add canonical session context boundaries
+- feat: add transactional replicated state
+- fix(coding-agent): report invalid prompt frontmatter (badlogic/pi-mono#9830)
+- feat(coding-agent): identify extensions in crash stacks
+- feat(ai,coding-agent): add Meta provider with Muse subscription OAuth (badlogic/pi-mono#9096)
+- fix(coding-agent): preserve multiline bug descriptions
+- feat(coding-agent): defer extension loader dependencies
+- feat(coding-agent): add prompt cache warming (badlogic/pi-mono#9668)
+- feat(ai): ship Radius model catalog
+- feat(coding-agent): add bug reporting
+- feat(agent): add Pico storage foundation
+- feat(coding-agent): add event handler unsubscribe (badlogic/pi-mono#9630)
+- fix(coding-agent): toggle summary entries on click
+- Mid conversation system messages (badlogic/pi-mono#9548)
+- fix(coding-agent): avoid transcript scans for exact session IDs (badlogic/pi-mono#9601)
+- fix(coding-agent): export extension event hook types (badlogic/pi-mono#9642)
+- feat(ai): enable Fireworks Messages deferred tool loading
+- fix(ai): preserve Fireworks thinking and native effort levels
+- docs: validate documentation navigation and reachability (badlogic/pi-mono#9380)
+- fix: cap agent retry backoff
+- fix(coding-agent): update runtime dependencies (badlogic/pi-mono#9341)
+- feat(coding-agent): prefer strict sampling for built-in tools by default
+- feat(tui): Simplify clipboard handling (badlogic/pi-mono#9163)
+- fix(coding-agent): make footer debounce tests deterministic
+- fix(coding-agent): keep remote harness dependencies development-only
+- feat(ai): add GPT-6 Astra support
+- fix(coding-agent): selector save keybindings (badlogic/pi-mono#9149)
+- docs(coding-agent): document running pi in Docker Sandboxes (badlogic/pi-mono#9077)
+- fix(coding-agent): use current Copilot model in registry test
+- docs(tui): clarify standalone renderer configuration
+- fix(tui): remove coding-agent config reads from pi-tui
+- fix(coding-agent): isolate concurrent session shares (badlogic/pi-mono#8613)
+- fix(coding-agent): resolve fd/rg release versions without the GitHub API (badlogic/pi-mono#8708)
+- fix(coding-agent): avoid overwriting imported sessions (badlogic/pi-mono#8985)
+- feat(ai): preserve Anthropic per-turn thinking effort
+- fix: remove misleading write byte counts
+- docs(coding-agent): clarify session-scoped model/thinking-level changes (badlogic/pi-mono#9009)
+- feat(ai): add vllmPriority compat flag for vLLM scheduler priority (badlogic/pi-mono#9004)
+- fix(coding-agent): use ctx.cwd for cwd-sensitive tools when available (badlogic/pi-mono#8627)
+- feat: add delta-backed replicated state
+- feat(coding-agent): simplify experimental services and CLI
+- feat: add package-based facet plugins
+- feat: add bundled facet distribution and reload
+- feat: move facet services into Chord
+- state the powershell approval rule per mode accurately
+- correct Unreleased CHANGELOG classification errors
+- fix stale pi/SECURITY.md references in user-facing docs
+- align registerEntryRenderer comment with its actual test and CHANGELOG
+- rebrand Pi->draht prose, fix stale upstream links
+- fix PI_OFFLINE/.pi drift in branded tests
+- fix persistDefault->persist docs, add confirmAsDefault row, restore getPackageDir JSDoc
+- drop unused openai devDependency
+- prune orphaned experimental service scaffolding
+- feat(coding-agent): add mini, a three-process coding agent on the durable harness
+- bump Node floor to 22.19 and cover the full build chain in the profiler
+- feat(coding-agent): add facet-based slash commands
+- feat(agent,coding-agent): unify process-local service lifecycle
+- feat(coding-agent): share fullscreen TUI with experimental client
+- feat(tui): allow disable copy on fullscreen, ctrl + x copies selection (badlogic/pi-mono#8731)
+- fix(coding-agent): remove unnecessary local service tokens
+- feat(extensions): ui prompt events (badlogic/pi-mono#8355)
+- feat(agent): remove remote service events
+- feat(coding-agent): expose experimental TUI service
+- feat(coding-agent): derive facet service routing
+- feat(coding-agent): replace facet attributes with services
+- feat(coding-agent): split tool renderers and theme validation from their implementations
+- feat(agent): expose durable lane operations
+- feat(tui): add terminal capability overrides closes badlogic/pi-mono#8665
+- default model and thinking
+- fix(coding-agent): prevent Windows taskkill spawn crashes
+- feat(agent): separate sessions, branches, and lanes
+- feat(coding-agent): add setup-driven facet generations
+- update provider links to api
+- feat(coding-agent): add optional PowerShell tool (badlogic/pi-mono#8512)
+- feat(coding-agent): update managed installations in place
+- clarify custom footer usage APIs (badlogic/pi-mono#8482)
+- fix(coding-agent): discard failed extension factory state (badlogic/pi-mono#8424)
+- fix: reduce workspace dependency tree
+- fix(coding-agent): remove redundant development dependencies
+- feat(coding-agent): reduce bundled startup work
+- docs(coding-agent): document -- end-of-options delimiter
+- feat(coding-agent): bundle Node runtime (badlogic/pi-mono#8474)
+- feat(agent): simplify plugin service names
+- get rid of theme, only share via radius if logged in
+- fix(slash-commands): order tree above thinking
+- feat(settings-selector): show default, make default searchable for model and thinking (badlogic/pi-mono#8399)
+- get rid of default thinking in settings, ctrl + S is enough
+- get rid of --default and global model
+- feat(agent): implement remote events and client TUI
+- feat(coding-agent): scaffold built-in service surfaces
+- feat(agent): extract session worker services
+- feat(agent): add routed plugin service runtime
+- feat(coding-agent): /thinking command
+- feat(settings-selector): ctrl + s persists /model
+- fix(settings-selector): remove token estimates
+- fix(coding-agent): keep model and thinking level changes session scoped (badlogic/pi-mono#8356)
+- fix(coding-agent): normalize UTF-8 BOMs in text inputs
+- fix(coding-agent): show startup diagnostics in TUI
+- fix(coding-agent): load extensions in Node SEA hosts, closes badlogic/pi-mono#8237
+- feat(ai): generalize openai-completions thinking token budget fields (badlogic/pi-mono#8275)
+- feat(coding-agent): centralize compaction summary requests
+- fix(coding-agent): reduce redundant slow tests
+- feat(agent): thread invocation context through harness APIs
+- fix(ai): update cloudflare gateway sonnet test id (badlogic/pi-mono#8260)
+- fix: register flag type mismatch (badlogic/pi-mono#8123)
+- clarify compaction paths
+- feat(ai): route xAI models through Responses and default to Grok 4.6 (badlogic/pi-mono#8124)
+- read worker metadata in fixture
+- feat(tui): add reusable mouse interaction support
+- fix(coding-agent): collapse fallback tool output
+- clarify Windows paths in settings
+- document model catalog refresh
+- feat(coding-agent): add per-run theme selection (badlogic/pi-mono#7722)
+- fix ascii alignment in compaction docs
+- feat(agent): establish durable harness type contracts
+- document terminal-specific fullscreen mouse behavior (badlogic/pi-mono#7965)
+- fix(tui): apply PI_TUI_ESC_TIMEOUT only to lone ESC
+- fix(tui): prevent split Alt+Enter from interrupting (badlogic/pi-mono#7899)
+- docs(coding-agent): document AI_AGENT process marker
+- change a bullet point in compaction docs
+- change 'reloads' phrasing in compaction docs
+- fix ascii alignment in compaction docs
+- fix(ai): replace Mistral SDK with native transport
+- feat(ai): use additional_tools for deferred tools
+- reconcile keybinding behavior (badlogic/pi-mono#7729)
+- fix(coding-agent): soften PI environment guideline
+- feat(coding-agent): add auth preflight
+- feat(ai): add Qwen Token Plan Individual provider (badlogic/pi-mono#7659)
+- feat(coding-agent): expose tool prompt contributions (badlogic/pi-mono#7671)
+- fix(coding-agent): disable bunfig autoload in compiled binaries (badlogic/pi-mono#7685)
+- feat: extract telemetry package
+- feat(coding-agent): rename UI mode to TUI mode
+- event bus leak fix (badlogic/pi-mono#7656)
+- feat(coding-agent): support AGENTS.override.md (badlogic/pi-mono#7681)
+- feat(coding-agent): render Mermaid diagrams (badlogic/pi-mono#7624)
+- fix: retry transient management HTTP requests (badlogic/pi-mono#7632)
+- fix(ai): separate deferred request options
+- add openai background mode responses (badlogic/pi-mono#7339)
+- fix(coding-agent): update undici to 8.9.0 and brace-expansion to 5.0.9 for npm audit advisories
+- document streamSimple hook contract (badlogic/pi-mono#7576)
+- fix(coding-agent): make model refresh cancellation caller-owned
+- fix(coding-agent): make JSON streaming output linear (badlogic/pi-mono#7394)
+- feat(coding-agent): switch UI modes at runtime (badlogic/pi-mono#7555)
+- feat(ai): add Baseten provider
+- fix(coding-agent): preserve auth header deletion markers (badlogic/pi-mono#7539)
+- feat(coding-agent): set AI_AGENT environment variable (badlogic/pi-mono#7493)
+- fix branch summary diagram (badlogic/pi-mono#7526)
+- Revert "feat(tui): add switchable terminal renderers (badlogic/pi-mono#7440)" (badlogic/pi-mono#7473)
+- feat(tui): add switchable terminal renderers (badlogic/pi-mono#7440)
+- simplify experimental command names
+- model experimental CLI commands
+- refactor(coding-agent): limit experimental parser to transport options
+- refactor(coding-agent): keep thinking validation parser-local
+- rename transport endpoint to address
+- refactor(coding-agent): generalize experimental endpoints
+- feat(coding-agent): add experimental CLI option parser
+- feat(coding-agent): add ui mode setting
+- fix(coding-agent): validate package manifests
+- fix(ai): support streams without finish reasons
+- feat(tui): add alternate-screen renderer
+
+### Fixed
+
+- make a superseded model availability refresh wait for its successor
+- batch checkpoint restore writes, decide Phase 42
+- find shell -c after long and + options
+- never attach a credential to /bug uploads
+- consume wrapper flags that take a separate argument
+- normalize the command head before shell/interpreter lookup
+- close bash -c unwrapping gaps with a quote-aware tokenizer
+- match rm-shaped deny patterns by flag set, not sorted-cluster prefix glob
+- deny bash/powershell calls when a truncated deny scan can't rule out a match
+- build:binary now compiles the bun entry so codemode works in the binary
+- close three bash-tool auto-mode permission gate bypasses
+- never leak the Radius credential to a different bug-report gateway origin
+- fail closed when the permission gate's deny scan is truncated
+- restore detected dark/light as the default theme
+- use draht names for temp files and TUI logs
+- name draht in the self-update help and target
+- name the draht config command in the builtin-replaced warning
+- align MCP tool names with codemode identifiers
+- do not list codemode-hidden tools in the system prompt
+- limit codemode and MCP result previews to wrapped lines
+- validate extension command registration
+- merge remote catalog models in linear time
+- resolve branch model selection with one catalog lookup
+- validate codemode image() base64 and detect image type
+- make /mcp sign-in URL clickable like /login
+- preserve renderer example prompt guidance (badlogic/pi-mono#10193)
+- mark native providers with stored credentials as configured on registration (badlogic/pi-mono#10190)
+- show warning when replaceable builtin replaced (badlogic/pi-mono#10174)
+- serialize MCP OAuth refreshes across processes
+- cached context on reload (badlogic/pi-mono#10158)
+- rebrand PI_TRUE_COLOR and Pi left by clean upstream picks
+- reduce render cost of theme changes and streaming
+- replace removed Together Kimi K2.6 with Kimi K3
+- default OpenCode Go to Kimi K3 after Kimi K2.6 removal
+- save new session file at the first user message
+- honor truecolor in custom themes (fixes badlogic/pi-mono#9973) (badlogic/pi-mono#10039)
+- hide line range for full-file read calls with null offset/limit
+- stop RpcClient skipping listeners on unsubscribe
+- use per-ref cache folders for pinned temporary git extensions
+- require advertised X11 clipboard images
+- avoid Fable split-turn summary refusals (badlogic/pi-mono#9908)
+- reject invalid --mode values
+- update stale test expectations
+- read DRAHT_OFFLINE in the /bug upload guard
+- allow offline bug report exports (badlogic/pi-mono#9841)
+- reject bug reports offline
+- require complete GIF image signatures
+- skip late cache warming refreshes
+- restore OSC 52 clipboard fallback for headless sessions
+- suppress bug hints for expected failures
+- speed up recent session discovery
+- ignore stale tool image conversions (badlogic/pi-mono#8743)
+- close compaction cancellation races
+- clarify copy shortcut description (badlogic/pi-mono#9745)
+- detect llama.cpp chat-template thinking
+- compact oversized trailing tool results
+- suppress repeated Anthropic thinking drop notices
+- send forced system prompts without recording them
+- fail signal-terminated shell commands
+- shorten Anthropic thinking drop notices
+- replace the system prompt when a handler forces it
+- fail closed on user bash hook errors (badlogic/pi-mono#9662)
+- surface clipboard backend failures
+- reject unverified local clipboard writes
+- validate extension tool parameter schemas
+- await queue operations in concurrent tests
+- run input handlers for queued messages
+- collapse empty fullscreen footers
+- embed all session status spinners in the editor border
+- preserve active operation UI during tree navigation
+- allow extensions to stream from custom providers (badlogic/pi-mono#9272)
+- reject tree navigation during compaction (badlogic/pi-mono#9179)
+- select Radius models after catalog discovery
+- download statically linked musl builds of fd and ripgrep on Linux (badlogic/pi-mono#9070)
+- raise branch summary output cap
+- keep skills available with bash-only tools (badlogic/pi-mono#8552)
+- scan past non-EXIF APP1 segments (badlogic/pi-mono#8616)
+- preserve compaction boundary when forking (badlogic/pi-mono#8990)
+- update interactive mode test fixture
+- cancel compaction on session abort
+- remove duplicate auto retry event type
+- tunnel proxied HTTP requests
+- recover mini operations and forward aborts
+- keep theme markers visible (badlogic/pi-mono#8950)
+- settle active turn before in-memory fork (badlogic/pi-mono#8937)
+- allow Chord delta bundle import
+- remove obsolete plugin app fixture
+- correct stale install-telemetry text and drop the dead update note
+- keep powershell behind approval in auto mode and apply bash deny rules to it
+- restore registerEntryRenderer and route powershell through the permission gate
+- externalize @draht/rlm and adapt jiti deferral for the Node bundle
+- compact before post-tool model requests (badlogic/pi-mono#8782)
+- expose https-proxy-agent named export (badlogic/pi-mono#8723)
+- preserve partial Bash output when toggling thinking
+- repair unterminated session files
+- remove explicit tool choice from compaction calls
+- persist default to scoped if non-empty
+- append run-time custom messages after the turn's tool results
+- reject truncated compaction summaries closes badlogic/pi-mono#7048
+- expose finish reason compatibility override (badlogic/pi-mono#8487)
+- use Windows-friendly keybinding defaults
+- update end-of-options CLI test
+- support -- end-of-options, closes badlogic/pi-mono#7269
+- preserve managed state file permissions
+- simplify session sharing links
+- nit ordering in default t.l. per model
+- nit spacing
+- revert token estimate removal
+- show modelid [provider] like /model
+- compact without provider usage
+- report settings diagnostic paths
+- expose tool metadata at stream start (badlogic/pi-mono#7953)
+- preserve branch summary source leaf
+- skip trusted subagent prompts
+- disable tools during summarization
+- reduce redundant git update tests
+- anthropic refusal error and fallbacks (badlogic/pi-mono#8258)
+- load nested markdown skills (badlogic/pi-mono#8255)
+- launch source internal processes natively
+- use agent_settled instead of end (badlogic/pi-mono#8242)
+- emit compaction failed for extensions (badlogic/pi-mono#8241)
+- retry hung model catalog requests
+- use semver.gt for version comparison (badlogic/pi-mono#8239)
+- llama.cpp allow network for model discovery (badlogic/pi-mono#8238)
+- llama.cpp guidance as no default (badlogic/pi-mono#8236)
+- expose sleeping llama.cpp models (badlogic/pi-mono#8235)
+- clarify truncated recovery failure
+- dont load root mds as skills in settings (badlogic/pi-mono#8012)
+- single edit input (badlogic/pi-mono#8011)
+- update Z.AI Coding Plan defaults
+- use APP_NAME in user-facing messages (badlogic/pi-mono#8067)
+- accept array-form `tools` in the subagent example (badlogic/pi-mono#7598)
+- update Cloudflare compat test model
+- show managed-tool startup status in TUI
+- share concurrent model catalog refreshes
+- preserve usage in streaming events (badlogic/pi-mono#7982)
+- preserve extension tools with defaults
+- trigger turn false should not start turn (badlogic/pi-mono#8022)
+- inherit subagent session config (badlogic/pi-mono#7897)
+- small correctness leftovers from the sync
+- preserve TUI wrapper routing (closes badlogic/pi-mono#7731)
+- reduce automatic theme detection delay
+- support Windows fullscreen right-click paste
+- only label known subscriptions in footer
+- support path globs on Windows
+- send prompts queued during compaction
+- normalize Windows shell drive paths
+- keep unit model stores in memory
+- shorten file lock retry delays
+- avoid custom store lock convoys
+- avoid model store read lock contention
+- build error on request info (badlogic/pi-mono#7645)
+- honor output padding for errors
+- recursively merge nested settings, closes badlogic/pi-mono#7572
+- preserve extension auth endpoints
+- test composite OAuth cancellation signal
+- retain heterogeneous auth model types
+- preserve Copilot summary endpoint
+- prevent flaky RPC prompt tests
+- repair tests after model refresh cancellation changes
+- normalize find root results (badlogic/pi-mono#7569)
+- reinstall dependencies if `git clean` fails (badlogic/pi-mono#7570)
+- avoid terminal query leak on fullscreen exit
+- remove obsolete --alt shortcut
+- discover sessions through symlinked directories (badlogic/pi-mono#7552)
+- resume after context-limited length stops (badlogic/pi-mono#7540)
+- prevent auto-compaction race during manual compaction (badlogic/pi-mono#7370)
+- resize images returned by tools (badlogic/pi-mono#7330)
+- --model collects authed providers (badlogic/pi-mono#7366)
+- flash fullscreen copy confirmation
+- bound post-login catalog refresh
+- identify failed model catalogs
+- increase connection attempt timeout (badlogic/pi-mono#7435)
+- preserve existing CLI option values
+- validate Unix transport URLs
+- synchronize model reload regression
+- make model reload test deterministic
+- make child output test deterministic
+- recover stalled availability refreshes
+- read clipboard text on Wayland
+- reject prompts during manual compaction
+- avoid auth read lock contention
+- forward autocompleteMaxVisible to custom editors (badlogic/pi-mono#7369)
+- decouple auth lock error tests
+- custom-compaction through provider via new model runtime complete (badlogic/pi-mono#7325)
+- reload credentials before reads
+- update Doom WAD download source
+- replace deprecated getModel in SDK example (badlogic/pi-mono#7306)
+- redundancy in setToolsExpanded (badlogic/pi-mono#7313)
+
+## [2026.9.5-1] - 2026-09-05
+
+### Added
+
+- geist/0.5 — session_spawn, registry_resync, and the corpus
+- --context-root confines the AGENTS.md ancestor walk
+- session_resume, behind the only spawn left on this daemon
+- the soak log records from the day the default flips
+- Oskar stops typing --attachable
+- the rotating soak log Phase 39 will read
+- same-owner attach, reap-on-start, and a bound on sockets
+- geist/0.4 — and Phase 34's unpaid debt, collected
+- the ask reaches the phone, and the record says what happened
+- the TUI renders a permission ask as rows, not one flattened string
+- permission frames on the attach wire — geist/0.3
+- the permission gate asks with canonical detail, not a sentence
+- relay a permission ask without letting anything infer the answer
+- record a permission resolution in the session's own JSONL
+- neutralize a permission ask instead of deleting from it
+- the stub provider can issue a real tool call
+- add the native /triage command prompt
+- escalate library/runtime refutations in /review to a blast-radius rung-4 script
+- wire verify-work's verifier to drive a project verification skill
+- add the native create-verification-skill command prompt
+- point the reviewer's Type Safety criteria at typescript-discipline
+- add /why code-archaeology command with investigator agent
+- ship unslop builtin and point prose-producing surfaces at it
+- enforce comment discipline across code-writing and review surfaces
+- question in whole-frontier rounds, not one at a time
+- add versatile /grill frontier interrogation command
+- hold fix-plan reproducing tests to the red-capable standard
+- reproduction-first operating brief for the debugger agent
+- gate Phase 1 on a red-capable reproduction loop and rank Phase 3 hypotheses
+- add resolve-conflicts command skill and prompt
+- ship atomic-reasoning as a builtin skill
+- ship spec-reviewer in the builtin agent roster
+- remote control works — fleet, attach bridge, and one served surface
+- add sandbox executor core, dormant and not yet shippable
+- add /rewind restoring conversation and files together
+- wire attachable socket sessions into the CLI
+- add shipped builtin skills with hexagon-animation
+- capture working-tree checkpoints (Phase 41)
+- add duet mode for multi-model shared sessions
+- record symbol signatures behind --symbol-signatures
+- add java, ruby and shell import resolution
+- resolve python/go/rust imports behind --experimental-lang-edges
+- Phase 4 — cross-platform build, release CI, and the opt-in Go engine cutover
+- Phase 3 — GRAPH_REPORT.md, MAP.html viewer, and the graph-* commands
+- Phase 2 — clustering, hotspots, containers, symbols, call graph, flows
+- add Go knowledge-graph engine (Phase 1: AST, concurrency, incremental cache)
+
+### Changed
+
+- make the release gate deterministic on a loaded macOS machine
+- give the local release gate fewer workers and more timeout headroom
+- restore a worker's cwd after a test file deletes it
+- rename the two remaining Pi nav titles in docs.json
+- rebrand upstream package names and pi product references
+- read the manifest-key fixtures through pi-manifest.ts
+- biome formatting for the signal exit-code ports
+- disable bunfig autoload in the package build:binary script
+- expose terminate on extension tool-call blocks and add regression tests
+- fix(coding-agent): download statically linked musl builds of fd and ripgrep on Linux (#9070)
+- fix(coding-agent): scan past non-EXIF APP1 segments (#8616)
+- fix(coding-agent): keep skills available with bash-only tools (#8552)
+- fix(coding-agent): support -- end-of-options, closes #7269
+- fix: expose sleeping llama.cpp models (#8235)
+- fix(coding-agent): collapse fallback tool output closes #7979
+- fix(coding-agent): support path globs on Windows
+- fix(coding-agent): normalize Windows shell drive paths
+- fix(coding-agent): recursively merge nested settings, closes #7572
+- fix(coding-agent): normalize find root results (#7569)
+- fix(coding-agent): read clipboard text on Wayland
+- fix: forward autocompleteMaxVisible to custom editors (#7369)
+- adapt Copilot summary endpoint regression to draht refresh options
+- fix(coding-agent): raise branch summary output cap (#8845)
+- fix(coding-agent): avoid overwriting imported sessions (#8985)
+- fix(coding-agent): preserve compaction boundary when forking (#8990)
+- fix(coding-agent): settle active turn before in-memory fork (#8937)
+- fix(coding-agent): repair unterminated session files (#8345)
+- fix(coding-agent): append run-time custom messages after the turn's tool results (#8537)
+- fix(coding-agent): reject truncated compaction summaries (#7048)
+- fix(coding-agent): compact without provider usage
+- fix(coding-agent): preserve branch summary source leaf
+- fix(coding-agent): disable tools during summarization
+- fix: trigger turn false should not start turn (#8022)
+- fix(coding-agent): send prompts queued during compaction
+- fix(coding-agent): retain heterogeneous auth model types
+- fix(coding-agent): preserve Copilot summary endpoint
+- fix(coding-agent): discover sessions through symlinked directories (#7552)
+- fix(coding-agent): prevent auto-compaction race during manual compaction (#7370)
+- fix(coding-agent): reject prompts during manual compaction
+- fix(coding-agent): tunnel proxied HTTP requests
+- fix(coding-agent): preserve managed state file permissions
+- fix(package-manager): use semver.gt for version comparison (#8239)
+- event bus leak fix (#7656)
+- fix(coding-agent): preserve extension auth endpoints
+- fix(coding-agent): preserve auth header deletion markers (#7539)
+- fix: --model collects authed providers (#7366)
+- fix(coding-agent): bound post-login catalog refresh
+- fix(coding-agent): increase connection attempt timeout (#7435)
+- fix(coding-agent): recover stalled availability refreshes
+- fix(coding-agent): avoid auth read lock contention
+- fix(coding-agent): reload credentials before reads
+- fix(coding-agent): validate package manifests
+- fix(coding-agent): prevent Windows taskkill spawn crashes
+- fix: single edit input (#8011)
+- complete rewind session fixture
+- use portable context fixture root
+- sync model catalog overrides and test references
+- the class-3 closures, and what breaking them on purpose found
+- record the checkpoint stale-snapshot fix
+- preserve the real index's mtime on the snapshot seed copy
+- reproduce stale-stat snapshot of a same-second same-size rewrite
+- route /triage in the draht router and the /fix entry path
+- route /why against /fix, debugging-workflow, and the draht router
+- record this branch's unchangelogged user-visible changes
+- prune the Atomic Reasoning stamp from command prompts
+- retire legacy build/plan/verify agent prompts
+
+### Fixed
+
+- keep the release gate green under an npm banner and a slow sandbox start
+- use the app name in the trust prompt, auth help, and update help
+- map signal-killed bash processes to non-zero exit codes
+- bind trust to project config path
+- preserve physical cwd resource chain
+- the cwd spelling now reaches production, and cut the primitive's comments
+- one canonical-path primitive, and delete the fail-open one
+- gate the project when the real cwd cannot be resolved
+- witness the context-root gate that actually refuses
+- a rewind is one session's business, not the process's
+- a consent dialog you cannot read is not consent
+- an RPC answer is validated against the options it was offered
+- bound wire text by what the producer actually produces
+- skip rlm e2e when unprivileged userns is unavailable
+- correct the /review rung-4 rationale about subagent capabilities
+- keep a silent /attach alive, and correct the ceiling I recorded
+- surface worktree merge-back failures in subagent results
+- commit /fix TDD cycle with plain git, not commit-docs
+- close runtime integrity and backpressure gaps
+- harden graph engine coordination and provenance
+- harden runtime installers
+- support publication locks on Windows
+- coordinate graph publication across processes
+- make signatures private and defaults compatible
+- make SSE client handling concurrent
+- bound cache commits and scope arrow signatures
+- bound cache reads during file growth
+- make symbol signatures safe and explicit
+- harden map serving and cache loading
+- make the regex-pinned cutover actually byte-clean; key the cache on the grammar set
+- make every subcommand discoverable from `help`
 
 ## [2026.7.30] - 2026-07-30
 

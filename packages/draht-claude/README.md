@@ -12,7 +12,7 @@ This bundles everything draht gives its own CLI — slash commands, specialist s
 
 ## What you get
 
-### 23 slash commands
+### Slash commands
 
 **Project lifecycle**
 - `/new-project` — greenfield: questioning → domain model → requirements → roadmap
@@ -32,6 +32,7 @@ This bundles everything draht gives its own CLI — slash commands, specialist s
 - `/progress` — show current position in the roadmap
 
 **Ad-hoc**
+- `/draht:budget [configure|status|new]` — configure this repository's token budgets, inspect usage, or start a new task
 - `/quick <task>` — small tracked task with TDD cycle
 - `/fix <bug>` — diagnose → reproducing test → minimal fix (debugger + implementer subagents)
 - `/review [scope]` — parallel code review + security audit
@@ -64,7 +65,7 @@ All usable via Claude Code's `Task` tool (`subagent_type: <name>`):
 | `security-auditor` | Scans for injection, auth, secrets, unsafe patterns |
 | `advisor` | Strongest-tier strategic steer, consulted rarely when stuck or before committing to an approach |
 
-### 16 bundled skills
+### 17 bundled skills
 
 - **`draht`** — router and catalog for the skill family: what draht is, which skill fits which situation
 - **`gsd-workflow`** — complete GSD methodology reference (directory structure, cycle, hooks, config)
@@ -78,10 +79,12 @@ All usable via Claude Code's `Task` tool (`subagent_type: <name>`):
 - **`verification-gate`** — evidence before claims: run the proving command before saying "done"
 - **`saga-spawner`** — unattended repo advancement as a cloud routine reconciling a saga graph of beats
 - **`cinematic-continuation`** — provider-neutral, time-coded video continuation from bundled distilled style and continuity references
-- **`unslop`** — cut AI tells from prose deliverables, then add voice back so the result is neither slop nor sterile
+- **`unslop`** — cut AI tells from prose deliverables, then add voice back so the result is neither slop nor sterile; includes an STE-lite register (after ASD-STE100) for procedures
+- **`explainers`** — evidence-built Mermaid diagrams and self-contained HTML explainers when a report's content is a graph
 - **`epistemics`** — confidence calibration for investigation findings: five tiers, cite-or-label-as-inference, null results as evidence
 - **`typescript-discipline`** — make illegal states unrepresentable: discriminated unions, branded primitives, boundary parsing, exhaustiveness
 - **`blast-radius`** — impact analysis beyond the diff: reduce the safety argument to one falsifiable fact and prove it on the evidence ladder
+- **`judge`** — the human-judgment queue: how a new test is replayed and mutated into evidence, what a red or green gate card means, and how a reviewer's verdict comes back into the session
 
 ### 4 workflow hook scripts
 
@@ -92,12 +95,58 @@ Invoked from inside commands (not Claude Code lifecycle hooks):
 - `gsd-post-phase.cjs <phase>` — generate phase report, update ROADMAP status
 - `gsd-quality-gate.cjs [--strict]` — lint + typecheck + test + coverage enforcement
 
-### 4 Claude Code lifecycle hooks
+### 6 Claude Code lifecycle hooks
 
 - **SessionStart** — surfaces current phase, status, and CONTINUE-HERE marker when a session opens in a draht project (`session-start.cjs`)
-- **UserPromptSubmit** — prepends a tiny `[draht]` reminder of phase/status before each prompt (`prompt-context.cjs`)
-- **PostToolUse** — after `Edit`/`Write`/`MultiEdit`, runs a fast check over the touched files (`post-edit-check.cjs`)
-- **Stop** — runs the quality gate when a session ends (`stop-quality-gate.cjs`)
+- **UserPromptSubmit** — prepends a tiny `[draht]` reminder of phase/status before each prompt (`prompt-context.cjs`), then delivers any pending judge feedback (`judge-hook.cjs`)
+- **PostToolUse** — after `Edit`/`Write`/`MultiEdit`, runs a fast check over the touched files (`post-edit-check.cjs`) and records which test files the session touched (`judge-hook.cjs`)
+- **PreToolUse** — the red gate: an edit to source that follows a test edit is held while the test is replayed against the code as it stands (`judge-hook.cjs`)
+- **Stop** — runs the quality gate when a session ends (`stop-quality-gate.cjs`), then runs the mutation pass on a gate whose implementation has landed and files the finished turn as a review card (`judge-hook.cjs`)
+- **PermissionRequest** — while the judge TUI is running, parks the prompt as a card and waits for the human swipe (`judge-hook.cjs`)
+
+The judge hooks are inert unless you run the TUI, and inert again where no Python interpreter is available — edits proceed and the normal permission dialog appears exactly as before.
+
+### Token budgets
+
+Opt-in per-file token limits encourage readable, cohesive code and concise documentation. `/draht:budget` guides you through writing the repository's `.draht/budgets.json`; repositories without that file are not measured. The defaults are 5,000 tokens per code file and 1,500 per documentation file. Lockfiles, changelogs, and generated files are skipped, and task totals are optional. Trusted plugin hooks enforce the same offline accounting as native draht, shared by subagents and linked worktrees. Chat responses have no budget.
+
+Add `status` to inspect limits and usage. Only the user starts a new task, by submitting `/draht:budget new` as the whole prompt. See the [budget guide](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/docs/budgets.md).
+
+### The judge queue — reviewing gates, not decisions
+
+A test the agent wrote is a claim, not evidence: the same probabilistic process that gets code wrong also wrote the check meant to catch it. `judge` is a TUI over those claims, and it turns each one into evidence before asking you anything.
+
+**RED** — a test was written and the session reaches for the implementation. The test is replayed in a throwaway worktree against the code as it stands:
+
+| result | meaning |
+|---|---|
+| fails on an assertion | a real red — the test knows what wrong behaviour looks like |
+| fails on an import/compile error | a weak red — proves a module is missing, not that behaviour is checked |
+| passes without the implementation | not a gate; denied without asking anyone |
+| passes with nothing to revert | *already-green* — a test for behaviour that already exists; carded at the end of the turn, never held |
+
+**GREEN** — the implementation landed and the test passes. Single-token mutations are applied to the source lines the change touched and the test is re-run against each; survivors are the mutations your test does not notice. Mutants that fail to compile are discarded rather than counted as kills.
+
+Both stages carry static smells no run can excuse: mock-only assertions, snapshot-only, no assertion, tautologies, `.skip`/`.only`, private-internal access, swallowed exceptions.
+
+`→ real gate` lets the edit through; `← weak gate` denies it and hands the session the evidence plus your comment, so the test gets strengthened before the implementation is written. Permission prompts and finished turns still queue as their own card kinds.
+
+```bash
+npx draht-claude install-judge   # symlink into ~/.local/bin
+judge                            # or: judge open, to pop a cmux split
+judge gates                      # the ledger: kill rates and recurring smells
+```
+
+State lives in `~/.claude/judge/`. Per-repo settings go under `"gates"` in `.planning/config.json` (`enabled`, `testCommand` with `{file}`, `timeout`, `mutants`, `budget`); `JUDGE_GATES=0` disables it outright.
+
+### The draht status line
+
+`statusline/statusline.py` renders `dir · model · context% · 5h · 7d · token burn · judge queue` in the draht foundry palette, sheds detail rather than letting the terminal chop it, and aggregates token burn incrementally from the transcripts under `~/.claude/projects/`:
+
+```bash
+npx draht-claude install-statusline    # writes settings.json (previous line saved)
+npx draht-claude uninstall-statusline  # and restores it
+```
 
 ### Bundled `draht-tools` CLI
 
@@ -124,6 +173,11 @@ npx draht-claude install --path /path/to/plugins/draht
 
 # Check install status
 npx draht-claude status
+
+# Opt into the status line and the judge TUI (also available as install flags:
+# npx draht-claude install --statusline --judge)
+npx draht-claude install-statusline
+npx draht-claude install-judge
 
 # Configure subagent models
 npx draht-claude configure --agent architect --model opus
@@ -207,7 +261,6 @@ Each specialist subagent ships with a default model tuned to its workload:
 | `investigator` | `sonnet` | `/why` — parallel single-category evidence gathering |
 | `speaker` | `haiku` | `/speak` — voice output via ElevenLabs |
 | `git-committer` | `inherit` | `/atomic-commit` — commit staging |
-| `advisor` | `fable` | any command — rare high-leverage strategic consults |
 
 You can override any agent with the `configure` command:
 
@@ -217,7 +270,7 @@ npx draht-claude configure --agent architect --model opus
 npx draht-claude configure --agent implementer --model sonnet
 
 # Use a full model ID
-npx draht-claude configure --agent verifier --model claude-opus-4-7
+npx draht-claude configure --agent verifier --model claude-opus-5-5
 
 # List current assignments
 npx draht-claude configure --list
@@ -229,7 +282,7 @@ npx draht-claude configure --agent architect --reset
 npx draht-claude configure --reset
 ```
 
-Supported values: `opus`, `sonnet`, `haiku`, a full model ID (e.g. `claude-sonnet-4-6`), or `inherit`.
+Supported values: `fable`, `opus`, `sonnet`, `haiku`, a full model ID (e.g. `claude-sonnet-5`), or `inherit`.
 
 ### Hooks
 

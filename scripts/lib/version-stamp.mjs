@@ -59,9 +59,14 @@ export function stampPluginManifests(version, rootDir) {
  * ordering the moment a second release happens on a day that started with a
  * bare version.
  *
+ * The day is the UTC calendar day of `date`, never the releaser's local day:
+ * scripts/promote-daily-release.mjs closes each finished UTC day by tagging
+ * its bare version, so a -N stamped with a local date west of UTC could land
+ * on a day that was already promoted and sort below its bare version.
+ *
  * `existingVersions` is a flat array of version strings with no leading "v"
  * (e.g. git tags with the tag prefix stripped, or package.json version
- * history). Only entries for today's `date` (bare "YYYY.M.D" or
+ * history). Only entries for `date`'s UTC day (bare "YYYY.M.D" or
  * "YYYY.M.D-N") are considered; everything else — other days, malformed
  * strings — is ignored. This function is pure: it never reads git, the
  * filesystem, or the clock itself.
@@ -76,7 +81,7 @@ export function stampPluginManifests(version, rootDir) {
  * whatever was just published, regardless of semver ordering.
  */
 export function computeNextVersion(existingVersions, date) {
-	const base = `${date.getFullYear()}.${date.getMonth() + 1}.${date.getDate()}`;
+	const base = `${date.getUTCFullYear()}.${date.getUTCMonth() + 1}.${date.getUTCDate()}`;
 	const escapedBase = base.replace(/\./g, "\\.");
 	const bareRegex = new RegExp(`^${escapedBase}$`);
 	const suffixRegex = new RegExp(`^${escapedBase}-(\\d+)$`);

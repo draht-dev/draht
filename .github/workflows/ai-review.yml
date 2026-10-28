@@ -25,9 +25,12 @@ concurrency:
   group: ai-review-${{ github.ref }}
   cancel-in-progress: true
 
+permissions: {}
+
 jobs:
   check-secret:
     runs-on: ubuntu-latest
+    permissions: {}
     outputs:
       has-key: ${{ steps.check.outputs.has-key }}
     steps:
@@ -50,7 +53,7 @@ jobs:
       statuses: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Draht AI Review
         uses: ./packages/ci

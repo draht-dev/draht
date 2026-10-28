@@ -12,7 +12,11 @@ import {
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CHECKPOINT_REF_PREFIX, CheckpointManager } from "../src/core/checkpoints/checkpoint-manager.ts";
+import {
+	CHECKPOINT_REF_PREFIX,
+	CheckpointManager,
+	DEFAULT_RESTORE_WRITE_CHUNK_SIZE,
+} from "../src/core/checkpoints/checkpoint-manager.ts";
 
 // ─── Fixture helpers ─────────────────────────────────────────────────────────
 
@@ -115,6 +119,33 @@ describe("CheckpointManager restore (R42-RWD.3, R42-RWD.4, R42-RWD.5)", () => {
 	}
 
 	describe("diff-driven restore (R42-RWD.4)", () => {
+		it("writes hostile path names in bounded NUL-safe chunks", async () => {
+			initRepo(repo);
+			const paths = ["--leading.txt", "literal[abc]*.txt", "line\nbreak.txt", "space name.txt"];
+			for (const path of paths) write(repo, path, `checkpoint:${path}\n`);
+			commitAll(repo, "initial");
+			const manager = createManager();
+			expect((await manager.captureIfChanged("entry-1")).status).toBe("created");
+			for (const path of paths) write(repo, path, `changed:${path}\n`);
+
+			const restoredChunks: string[][] = [];
+			const result = await manager.restore({
+				targetEntryId: "entry-1",
+				currentEntryId: "entry-2",
+				writeChunkSize: 2,
+				onPathsRestored: (restoredPaths) => {
+					restoredChunks.push([...restoredPaths]);
+				},
+			});
+
+			expect(DEFAULT_RESTORE_WRITE_CHUNK_SIZE).toBeGreaterThan(1);
+			expect(result.status).toBe("restored");
+			expect(restoredChunks).toHaveLength(2);
+			expect(restoredChunks.every((chunk) => chunk.length <= 2)).toBe(true);
+			expect(restoredChunks.flat()).toEqual(result.restored);
+			for (const path of paths) expect(readFileSync(join(repo, path), "utf8")).toBe(`checkpoint:${path}\n`);
+		});
+
 		it("restores an edited file, removes a created file, and brings a deleted file back", async () => {
 			const { manager, before } = await seedCheckpoint();
 
@@ -184,6 +215,23 @@ describe("CheckpointManager restore (R42-RWD.3, R42-RWD.4, R42-RWD.5)", () => {
 			expect(snapshotWorkingTree(repo)).toEqual(before);
 		});
 
+		it("rejects an invalid write chunk size before starting the restore", async () => {
+			const { manager } = await seedCheckpoint();
+			write(repo, "tracked.txt", "changed\n");
+			const before = snapshotWorkingTree(repo);
+
+			const result = await manager.restore({
+				targetEntryId: "entry-1",
+				currentEntryId: "entry-2",
+				writeChunkSize: 0,
+			});
+
+			expect(result.status).toBe("failed");
+			expect(result.reason).toContain("positive safe integer");
+			expect(result.safety).toBeUndefined();
+			expect(snapshotWorkingTree(repo)).toEqual(before);
+		});
+
 		it("reports disabled outside a git repository", async () => {
 			const plain = join(root, "plain");
 			mkdirSync(plain, { recursive: true });
@@ -239,7 +287,7 @@ describe("CheckpointManager restore (R42-RWD.3, R42-RWD.4, R42-RWD.5)", () => {
 	});
 
 	describe("rollback on mid-restore failure (R42-RWD.3)", () => {
-		it("rolls the working tree back to the safety snapshot", async () => {
+		it("rolls the working tree back after a deterministic size-1 write failure", async () => {
 			const { manager } = await seedCheckpoint();
 			write(repo, "tracked.txt", "agent overwrote this\n");
 			write(repo, "untracked.txt", "agent overwrote the untracked one too\n");
@@ -251,7 +299,8 @@ describe("CheckpointManager restore (R42-RWD.3, R42-RWD.4, R42-RWD.5)", () => {
 			const result = await manager.restore({
 				targetEntryId: "entry-1",
 				currentEntryId: "entry-2",
-				onPathRestored: () => {
+				writeChunkSize: 1,
+				onPathsRestored: () => {
 					touched++;
 					if (touched === 2) throw new Error("injected mid-restore failure");
 				},
@@ -276,8 +325,8 @@ describe("CheckpointManager restore (R42-RWD.3, R42-RWD.4, R42-RWD.5)", () => {
 			const result = await manager.rewind({
 				targetEntryId: "entry-1",
 				currentEntryId: "entry-2",
-				onPathRestored: (path) => {
-					order.push(`restore:${path}`);
+				onPathsRestored: (paths) => {
+					order.push(`restore:${paths.join(",")}`);
 				},
 				navigate: () => {
 					order.push("navigate");
@@ -299,7 +348,7 @@ describe("CheckpointManager restore (R42-RWD.3, R42-RWD.4, R42-RWD.5)", () => {
 			const result = await manager.rewind({
 				targetEntryId: "entry-1",
 				currentEntryId: "entry-2",
-				onPathRestored: () => {
+				onPathsRestored: () => {
 					throw new Error("injected mid-restore failure");
 				},
 				navigate: () => {

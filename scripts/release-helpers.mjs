@@ -51,6 +51,7 @@ export const EXPECTED_RELEASE_ASSETS = Object.freeze([
 export const SCOPE_TO_PACKAGES = Object.freeze({
 	ai: ["ai"],
 	tui: ["tui"],
+	telemetry: ["telemetry"],
 	agent: ["agent"],
 	"agent-core": ["agent"],
 	"coding-agent": ["coding-agent"],
@@ -69,11 +70,32 @@ const PLUGIN_MANIFESTS = Object.freeze([
 	"packages/draht-codex/.codex-plugin/plugin.json",
 ]);
 
+/**
+ * @draht/ai sends its own version in the detailed User-Agent (DRAHT_AI_VERSION). The constant is source, not
+ * JSON, so binary bundles never read package.json at runtime; the release stamps it with every package version.
+ */
+export const AI_VERSION_MODULE = "packages/ai/src/utils/version.ts";
+const AI_VERSION_PATTERN = /(export const DRAHT_AI_VERSION = ")([^"]*)(";)/;
+
+/** The DRAHT_AI_VERSION value in the @draht/ai version module, or undefined when the module has none. */
+export function readAiVersionConstant(source) {
+	return source.match(AI_VERSION_PATTERN)?.[2];
+}
+
+function stampAiVersionModule(root, version) {
+	const modulePath = join(root, AI_VERSION_MODULE);
+	if (!existsSync(modulePath)) return;
+	const source = readFileSync(modulePath, "utf8");
+	if (!AI_VERSION_PATTERN.test(source)) throw new Error(`${modulePath} has no DRAHT_AI_VERSION constant to stamp`);
+	writeFileSync(modulePath, source.replace(AI_VERSION_PATTERN, `$1${version}$3`));
+}
+
 function readJson(path) {
 	return JSON.parse(readFileSync(path, "utf8"));
 }
 
-function writeJson(path, value, indent = "\t") {
+function writeJson(path, value) {
+	const indent = existsSync(path) && /^ {2}"/m.test(readFileSync(path, "utf8")) ? 2 : "\t";
 	writeFileSync(path, `${JSON.stringify(value, null, indent)}\n`);
 }
 
@@ -90,8 +112,8 @@ export function requiredBunVersion(root) {
 
 export function requiredBunRevision(root) {
 	const value = readJson(join(root, "package.json")).drahtReleaseBunRevision;
-	if (!/^\d+\.\d+\.\d+-canary\.\d+\+[0-9a-f]+$/.test(value ?? "")) {
-		throw new Error("package.json drahtReleaseBunRevision must pin an exact Bun canary revision");
+	if (!/^\d+\.\d+\.\d+(?:-canary\.\d+)?\+[0-9a-f]+$/.test(value ?? "")) {
+		throw new Error("package.json drahtReleaseBunRevision must pin an exact Bun revision (as printed by `bun --revision`)");
 	}
 	return value;
 }
@@ -123,6 +145,11 @@ export function assertReleaseVersions(root, version) {
 		const manifestPath = join(root, relativePath);
 		const actual = readJson(manifestPath).version;
 		if (actual !== version) stale.push(`${manifestPath} has ${actual}; expected ${version}`);
+	}
+	const aiVersionPath = join(root, AI_VERSION_MODULE);
+	if (existsSync(aiVersionPath)) {
+		const actual = readAiVersionConstant(readFileSync(aiVersionPath, "utf8"));
+		if (actual !== version) stale.push(`${aiVersionPath} DRAHT_AI_VERSION is ${actual ?? "missing"}; expected ${version}`);
 	}
 	const lockPath = join(root, "bun.lock");
 	if (existsSync(lockPath)) {
@@ -162,14 +189,15 @@ export function setVersion(root, version) {
 	const rootPackagePath = join(root, "package.json");
 	const rootPackage = readJson(rootPackagePath);
 	rootPackage.version = version;
-	writeJson(rootPackagePath, rootPackage, 2);
+	writeJson(rootPackagePath, rootPackage);
 
 	for (const relativePath of PLUGIN_MANIFESTS) {
 		const manifestPath = join(root, relativePath);
 		const manifest = readJson(manifestPath);
 		manifest.version = version;
-		writeJson(manifestPath, manifest, 2);
+		writeJson(manifestPath, manifest);
 	}
+	stampAiVersionModule(root, version);
 	const lockPath = join(root, "bun.lock");
 	if (existsSync(lockPath)) {
 		let lock = readFileSync(lockPath, "utf8");
@@ -510,6 +538,7 @@ export async function waitForVerifiedRelease({
 	fetchImpl = globalThis.fetch,
 	token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN,
 	verifyAttestation = verifyGithubAttestation,
+	log = (line) => console.log(line),
 }) {
 	let lastError;
 	for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -518,6 +547,7 @@ export async function waitForVerifiedRelease({
 			return await validateReleaseArtifacts({ tag, version, commit, release, fetchImpl, token, verifyAttestation });
 		} catch (error) {
 			lastError = error;
+			log(`  attempt ${attempt}/${attempts}: ${error.message}${token ? "" : " (no GH_TOKEN in the environment)"}`);
 		}
 		if (attempt < attempts) await sleep(intervalMs);
 	}

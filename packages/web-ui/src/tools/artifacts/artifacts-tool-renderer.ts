@@ -12,7 +12,7 @@ import { ArtifactPill } from "./ArtifactPill.js";
 import type { ArtifactsPanel, ArtifactsParams } from "./artifacts.js";
 
 // Helper to extract text from content blocks
-function getTextOutput(result: ToolResultMessage<any> | undefined): string {
+function getTextOutput(result: ToolResultMessage | undefined): string {
 	if (!result) return "";
 	return (
 		result.content
@@ -59,12 +59,12 @@ function getLanguageFromFilename(filename?: string): string {
 	return languageMap[ext || ""] || "text";
 }
 
-export class ArtifactsToolRenderer implements ToolRenderer<ArtifactsParams, undefined> {
+export class ArtifactsToolRenderer implements ToolRenderer<ArtifactsParams> {
 	constructor(public artifactsPanel?: ArtifactsPanel) {}
 
 	render(
 		params: ArtifactsParams | undefined,
-		result: ToolResultMessage<undefined> | undefined,
+		result: ToolResultMessage | undefined,
 		isStreaming?: boolean,
 	): ToolRenderResult {
 		const state = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";

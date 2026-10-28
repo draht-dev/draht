@@ -9,12 +9,8 @@ Plan the next milestone after ALL phases in the current one are complete.
 
 > **Tool note**: Invoke `draht-tools <subcommand>` as `node "${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$HOME/.draht/codex-marketplace/plugins/draht}}/bin/draht-tools.cjs" <subcommand>` via the Bash tool.
 
-## Atomic Reasoning
-
-Decompose the work into independently verifiable units before acting; the `atomic-reasoning` skill holds the full discipline — load it when the decomposition is not obvious.
-
 ## Steps
-1. Run `draht-tools verify-milestone` to ensure every phase in the current milestone is `complete`
+1. Read `.planning/ROADMAP.md` and the current milestone's `*-UAT.md` reports under `.planning/phases/`. Require every phase to be marked `complete` with observed passing acceptance results; summary files alone do not prove completion
 2. If any phase is not complete, STOP and tell the user which phase needs attention
 3. Read all phase reports in `.planning/phase-N-report.md` to extract lessons learned
 4. Read the execution log `.planning/execution-log.jsonl` for failure patterns
@@ -32,11 +28,11 @@ Decompose the work into independently verifiable units before acting; the `atomi
    - Acceptance criteria
 10. Update `.planning/ROADMAP.md` with the new milestone header and phases (status: `pending`)
 11. Update `.planning/REQUIREMENTS.md` with any new requirements
-12. Commit: `draht-tools commit-docs "plan milestone <N>"`
+12. If committing is authorized: `draht-tools commit-docs "plan milestone <N>"`
 
 ## Rules
 - Do not start planning phase details — that happens in `/discuss-phase` + `/plan-phase`
 - Distinguish **verified-complete** (a UAT report shows observed passes) from **believed-complete** (someone said so) — only the former counts toward requirement satisfaction; the latter goes back on the list
 - Respect lessons learned from the previous milestone — don't repeat mistakes
-- Keep the next milestone focused — 3-6 phases is typical
+- Keep the next milestone focused; phase count follows coherent outcomes and dependencies
 - Order the new phases risk-first: the phase carrying the highest uncertainty × blast radius comes earliest, so a wrong bet invalidates the least downstream work

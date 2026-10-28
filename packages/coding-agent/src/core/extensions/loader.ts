@@ -8,78 +8,74 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as _bundledPiAgentCore from "@draht/agent-core";
 import type { Provider } from "@draht/ai";
-import * as _bundledPiAiCompat from "@draht/ai/compat";
-import * as _bundledPiAiOauth from "@draht/ai/oauth";
-import * as _bundledPiAiProviders from "@draht/ai/providers/all";
-import * as _bundledPiAiProvidersFaux from "@draht/ai/providers/faux";
 import type { KeyId } from "@draht/tui";
-import * as _bundledPiTui from "@draht/tui";
-import { createJiti } from "@mariozechner/jiti";
-// Static imports of packages that extensions may use.
-// These MUST be static so Bun bundles them into the compiled binary.
-// The virtualModules option then makes them available to extensions.
-import * as _bundledTypebox from "typebox";
-import * as _bundledTypeboxCompile from "typebox/compile";
-import * as _bundledTypeboxValue from "typebox/value";
+import type { createJiti } from "@mariozechner/jiti";
 import { CONFIG_DIR_NAME, getAgentDir, isBunBinary } from "../../config.ts";
-// NOTE: This import works because loader.ts exports are NOT re-exported from index.ts,
-// avoiding a circular dependency. Extensions can import from @draht/coding-agent.
-import * as _bundledPiCodingAgent from "../../index.ts";
 import { resolvePath } from "../../utils/paths.ts";
 import type { CheckpointRestoreOptions } from "../checkpoints/checkpoint-manager.ts";
 import { createEventBus, type EventBus } from "../event-bus.ts";
 import type { ExecOptions } from "../exec.ts";
 import { execCommand } from "../exec.ts";
-import { createSyntheticSourceInfo } from "../source-info.ts";
+import {
+	type McpServerConfig,
+	McpServerRegistry,
+	mcpNamespace,
+	type RegisteredMcpServer,
+	validateMcpServerConfig,
+} from "../mcp-servers.ts";
+import { readPiManifest } from "../pi-manifest.ts";
+import { createSyntheticSourceInfo, getSyntheticPathSource, isSyntheticPath } from "../source-info.ts";
 import { time } from "../timings.ts";
+import { isValidUsage } from "../usage-totals.ts";
+import type { ModelRouteRequest, VirtualModelDefinition } from "../virtual-models.ts";
 import type {
 	EntryRenderer,
 	Extension,
 	ExtensionAPI,
+	ExtensionContext,
 	ExtensionFactory,
 	ExtensionRuntime,
+	ExtensionVirtualModel,
 	LoadExtensionsResult,
+	MarkdownTransformer,
 	MessageRenderer,
 	ProviderConfig,
 	RegisteredCommand,
 	ToolDefinition,
+	ToolRendererResolver,
 } from "./types.ts";
 
 /** Reason reported by `pi.checkpoints` when the session has no checkpoint storage. */
 const CHECKPOINTS_UNAVAILABLE = "checkpoints are unavailable for this session";
 
-/** Modules available to extensions via virtualModules (for compiled Bun binary) */
-const VIRTUAL_MODULES: Record<string, unknown> = {
-	typebox: _bundledTypebox,
-	"typebox/compile": _bundledTypeboxCompile,
-	"typebox/value": _bundledTypeboxValue,
-	"@sinclair/typebox": _bundledTypebox,
-	"@sinclair/typebox/compile": _bundledTypeboxCompile,
-	"@sinclair/typebox/value": _bundledTypeboxValue,
-	"@draht/agent-core": _bundledPiAgentCore,
-	"@draht/tui": _bundledPiTui,
-	// Extensions resolve the @draht/ai root to the compat entrypoint (a strict
-	// superset of the core entrypoint): existing extensions using the old
-	// global API keep working at runtime until compat is removed.
-	"@draht/ai": _bundledPiAiCompat,
-	"@draht/ai/compat": _bundledPiAiCompat,
-	"@draht/ai/oauth": _bundledPiAiOauth,
-	"@draht/ai/providers/all": _bundledPiAiProviders,
-	// Every @draht/ai subpath an extension may import needs its own entry here and
-	// in getAliases(): the bare "@draht/ai" key below is a PREFIX match, so an
-	// unlisted subpath is rewritten onto the compat entrypoint
-	// ("<compat.js>/providers/faux") and fails to resolve.
-	"@draht/ai/providers/faux": _bundledPiAiProvidersFaux,
-	"@draht/coding-agent": _bundledPiCodingAgent,
-};
-
 const require = createRequire(import.meta.url);
 
+const isNodeSeaBinary =
+	("sea" in process.features && process.features.sea === true) ||
+	process.getBuiltinModule("node:sea")?.isSea() === true;
+declare const DRAHT_BUNDLED_NODE: boolean;
+const isBundledNode = typeof DRAHT_BUNDLED_NODE !== "undefined" && DRAHT_BUNDLED_NODE;
+const isTypeScriptSourceRuntime = !isBunBinary && path.extname(fileURLToPath(import.meta.url)) === ".ts";
+const usesEmbeddedModules = isBunBinary || isNodeSeaBinary || isBundledNode;
+
+let createJitiPromise: Promise<typeof createJiti> | undefined;
+
+function getCreateJiti(): Promise<typeof createJiti> {
+	createJitiPromise ??= import("./jiti-loader.ts").then((module) => module.createJiti);
+	return createJitiPromise;
+}
+
+let virtualModulesPromise: Promise<Record<string, unknown>> | undefined;
+
+function getVirtualModules(): Promise<Record<string, unknown>> {
+	virtualModulesPromise ??= import("./virtual-modules.ts").then((module) => module.VIRTUAL_MODULES);
+	return virtualModulesPromise;
+}
+
 /**
- * Get aliases for jiti (used in Node.js/development mode).
- * In Bun binary mode, virtualModules is used instead.
+ * Get aliases for jiti (used in built Node.js mode).
+ * In compiled binary mode, virtualModules is used instead.
  */
 let _aliases: Record<string, string> | null = null;
 function getAliases(): Record<string, string> {
@@ -110,6 +106,7 @@ function getAliases(): Record<string, string> {
 	// superset of the core entrypoint): existing extensions using the old
 	// global API keep working at runtime until compat is removed.
 	const piAiCompatEntry = resolveWorkspaceOrImport("ai/dist/compat.js", "@draht/ai/compat");
+	const piAiModelsEntry = resolveWorkspaceOrImport("ai/dist/models.js", "@draht/ai/models");
 	const piAiOauthEntry = resolveWorkspaceOrImport("ai/dist/oauth.js", "@draht/ai/oauth");
 	const piAiProvidersEntry = resolveWorkspaceOrImport("ai/dist/providers/all.js", "@draht/ai/providers/all");
 	const piAiProvidersFauxEntry = resolveWorkspaceOrImport("ai/dist/providers/faux.js", "@draht/ai/providers/faux");
@@ -121,6 +118,7 @@ function getAliases(): Record<string, string> {
 		"@draht/ai/providers/all": piAiProvidersEntry,
 		"@draht/ai/providers/faux": piAiProvidersFauxEntry,
 		"@draht/ai/compat": piAiCompatEntry,
+		"@draht/ai/models": piAiModelsEntry,
 		"@draht/ai/oauth": piAiOauthEntry,
 		"@draht/ai": piAiCompatEntry,
 		"typebox/compile": typeboxCompileEntry,
@@ -166,16 +164,25 @@ export function createExtensionRuntime(): ExtensionRuntime {
 	const notInitialized = () => {
 		throw new Error("Extension runtime not initialized. Action methods cannot be called during extension loading.");
 	};
+	const state: { staleMessage?: string } = {};
+	const eventBusUnsubscribers = new Set<() => void>();
+	const assertActive = () => {
+		if (state.staleMessage) {
+			throw new Error(state.staleMessage);
+		}
+	};
 
 	const runtime: ExtensionRuntime = {
 		sendMessage: notInitialized,
 		sendUserMessage: notInitialized,
 		appendEntry: notInitialized,
+		appendUsage: notInitialized,
 		setSessionName: notInitialized,
 		getSessionName: notInitialized,
 		setLabel: notInitialized,
 		getActiveTools: notInitialized,
 		getAllTools: notInitialized,
+		getSettings: notInitialized,
 		setActiveTools: notInitialized,
 		// registerTool() is valid during extension load; refresh is only needed post-bind.
 		refreshTools: () => {},
@@ -186,11 +193,32 @@ export function createExtensionRuntime(): ExtensionRuntime {
 		// Checkpoints need the runner's session binding; until bindCore() runs
 		// there is none, and pi.checkpoints degrades instead of throwing.
 		getCheckpointManager: () => undefined,
-		assertActive: notInitialized,
-		invalidate: notInitialized,
 		flagValues: new Map(),
 		pendingProviderRegistrations: [],
 		pendingNativeProviderRegistrations: [],
+		mcpServers: new McpServerRegistry(),
+		pendingVirtualModelRegistrations: [],
+		createContext: notInitialized,
+		assertActive,
+		invalidate: (message) => {
+			if (state.staleMessage) return;
+			state.staleMessage =
+				message ??
+				"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().";
+			for (const unsubscribe of eventBusUnsubscribers) unsubscribe();
+			eventBusUnsubscribers.clear();
+		},
+		trackEventBusSubscription: (unsubscribe) => {
+			let active = true;
+			const trackedUnsubscribe = () => {
+				if (!active) return;
+				active = false;
+				eventBusUnsubscribers.delete(trackedUnsubscribe);
+				unsubscribe();
+			};
+			eventBusUnsubscribers.add(trackedUnsubscribe);
+			return trackedUnsubscribe;
+		},
 		// Pre-bind: queue registrations so bindCore() can flush them once the
 		// model registry is available. bindCore() replaces both with direct calls.
 		registerProvider: (name, config, extensionPath = "<unknown>") => {
@@ -203,6 +231,14 @@ export function createExtensionRuntime(): ExtensionRuntime {
 			runtime.pendingProviderRegistrations = runtime.pendingProviderRegistrations.filter((r) => r.name !== name);
 			runtime.pendingNativeProviderRegistrations = runtime.pendingNativeProviderRegistrations.filter(
 				(r) => r.provider.id !== name,
+			);
+		},
+		registerVirtualModel: (definition, extensionPath = "<unknown>") => {
+			runtime.pendingVirtualModelRegistrations.push({ definition, extensionPath });
+		},
+		unregisterVirtualModel: (provider, id) => {
+			runtime.pendingVirtualModelRegistrations = runtime.pendingVirtualModelRegistrations.filter(
+				({ definition }) => definition.provider !== provider || definition.id !== id,
 			);
 		},
 	};
@@ -220,16 +256,53 @@ function createExtensionAPI(
 	runtime: ExtensionRuntime,
 	cwd: string,
 	eventBus: EventBus,
-): ExtensionAPI {
+): { api: ExtensionAPI; commit: () => void; discard: () => void } {
+	const pendingFlagValues = new Map<string, boolean | string>();
+	const pendingRuntimeChanges: Array<() => void> = [];
+	const loadingUnsubscribers: Array<() => void> = [];
+	let state: "loading" | "active" | "failed" = "loading";
+	const assertActive = () => {
+		if (state === "failed") {
+			throw new Error(`Extension "${extension.path}" failed to load and its API is no longer active.`);
+		}
+		runtime.assertActive();
+	};
+	const applyRuntimeChange = (change: () => void) => {
+		if (state === "loading") pendingRuntimeChanges.push(change);
+		else change();
+	};
+	const clearPending = () => {
+		pendingFlagValues.clear();
+		pendingRuntimeChanges.length = 0;
+		loadingUnsubscribers.length = 0;
+	};
+
 	const api = {
 		// Registration methods - write to extension
-		on(event: string, handler: HandlerFn): void {
+		on(event: string, handler: HandlerFn): () => void {
+			assertActive();
+			const registeredHandler: HandlerFn = (...args) => handler(...args);
 			const list = extension.handlers.get(event) ?? [];
-			list.push(handler);
+			list.push(registeredHandler);
 			extension.handlers.set(event, list);
+
+			return () => {
+				const handlers = extension.handlers.get(event);
+				if (!handlers) return;
+				const handlerIndex = handlers.indexOf(registeredHandler);
+				if (handlerIndex === -1) return;
+				handlers.splice(handlerIndex, 1);
+				if (handlers.length === 0) extension.handlers.delete(event);
+			};
 		},
 
 		registerTool(tool: ToolDefinition): void {
+			assertActive();
+			if (typeof tool.parameters !== "object" || tool.parameters === null || Array.isArray(tool.parameters)) {
+				throw new Error(
+					`Tool "${tool.name}" registered by extension "${extension.path}" must define an object parameter schema.`,
+				);
+			}
 			extension.tools.set(tool.name, {
 				definition: tool,
 				sourceInfo: extension.sourceInfo,
@@ -238,6 +311,15 @@ function createExtensionAPI(
 		},
 
 		registerCommand(name: string, options: Omit<RegisteredCommand, "name" | "sourceInfo">): void {
+			assertActive();
+			if (typeof name !== "string" || name.length === 0) {
+				throw new Error(
+					`Command registered by extension "${extension.path}" must have a non-empty string name. Use pi.registerCommand("name", { description, handler }).`,
+				);
+			}
+			if (typeof options?.handler !== "function") {
+				throw new Error(`Command "/${name}" registered by extension "${extension.path}" must define handler().`);
+			}
 			extension.commands.set(name, {
 				name,
 				sourceInfo: extension.sourceInfo,
@@ -249,9 +331,10 @@ function createExtensionAPI(
 			shortcut: KeyId,
 			options: {
 				description?: string;
-				handler: (ctx: import("./types.ts").ExtensionContext) => Promise<void> | void;
+				handler: (ctx: ExtensionContext) => Promise<void> | void;
 			},
 		): void {
+			assertActive();
 			extension.shortcuts.set(shortcut, { shortcut, extensionPath: extension.path, ...options });
 		},
 
@@ -259,126 +342,246 @@ function createExtensionAPI(
 			name: string,
 			options: { description?: string; type: "boolean" | "string"; default?: boolean | string },
 		): void {
+			assertActive();
+			if (options.default !== undefined && typeof options.default !== options.type) {
+				throw new Error(
+					`Invalid default for flag "${name}": expected ${options.type}, got ${typeof options.default}`,
+				);
+			}
 			extension.flags.set(name, { name, extensionPath: extension.path, ...options });
 			if (options.default !== undefined && !runtime.flagValues.has(name)) {
-				runtime.flagValues.set(name, options.default);
+				if (state === "loading") {
+					if (!pendingFlagValues.has(name)) pendingFlagValues.set(name, options.default);
+				} else {
+					runtime.flagValues.set(name, options.default);
+				}
 			}
 		},
 
 		registerMessageRenderer<T>(customType: string, renderer: MessageRenderer<T>): void {
+			assertActive();
 			extension.messageRenderers.set(customType, renderer as MessageRenderer);
 		},
 
+		registerMarkdownTransformer(transformer: MarkdownTransformer): void {
+			assertActive();
+			extension.markdownTransformer = transformer;
+		},
+
+		// Unlike the other registration methods, this must stay usable
+		// regardless of runtime state: before the runtime is active (extension
+		// init, before Runner.bindCore() runs) and after it is invalidated
+		// (the session has since been replaced) — see 8783a2f9c, regressed by
+		// b7a944f63's blanket assertActive() wrapper, restored by 76baa1b92.
 		registerEntryRenderer<T>(customType: string, renderer: EntryRenderer<T>): void {
 			extension.entryRenderers ??= new Map();
 			extension.entryRenderers.set(customType, renderer as EntryRenderer);
 		},
 
+		registerToolRenderer(resolver: ToolRendererResolver): void {
+			assertActive();
+			extension.toolRenderers ??= [];
+			extension.toolRenderers.push(resolver);
+		},
+
 		// Flag access - checks extension registered it, reads from runtime
 		getFlag(name: string): boolean | string | undefined {
+			assertActive();
 			if (!extension.flags.has(name)) return undefined;
-			return runtime.flagValues.get(name);
+			return runtime.flagValues.has(name) ? runtime.flagValues.get(name) : pendingFlagValues.get(name);
 		},
 
 		// Action methods - delegate to shared runtime
 		sendMessage(message, options): void {
-			runtime.assertActive();
+			assertActive();
 			runtime.sendMessage(message, options);
 		},
 
 		sendUserMessage(content, options): void {
-			runtime.assertActive();
+			assertActive();
 			runtime.sendUserMessage(content, options);
 		},
 
 		appendEntry(customType: string, data?: unknown): void {
-			runtime.assertActive();
+			assertActive();
 			runtime.appendEntry(customType, data);
 		},
 
+		appendUsage(kind, provider, model, usage, note): void {
+			assertActive();
+			// Validated here, at the API boundary: a usage entry is persisted and re-summed on every
+			// resume, so one malformed value (a NaN, a missing `cost`) would corrupt the session's
+			// totals for good. Extensions are plain JS at runtime; the declared types prove nothing.
+			for (const [name, value] of [
+				["kind", kind],
+				["provider", provider],
+				["model", model],
+			] as const) {
+				if (typeof value !== "string" || value.length === 0) {
+					throw new Error(`pi.appendUsage: ${name} must be a non-empty string`);
+				}
+			}
+			if (note !== undefined && typeof note !== "string") throw new Error("pi.appendUsage: note must be a string");
+			if (!isValidUsage(usage)) {
+				throw new Error("pi.appendUsage: usage must carry finite token counts and a finite cost breakdown");
+			}
+			runtime.appendUsage(kind, provider, model, usage, note);
+		},
+
 		setSessionName(name: string): void {
-			runtime.assertActive();
+			assertActive();
 			runtime.setSessionName(name);
 		},
 
 		getSessionName(): string | undefined {
-			runtime.assertActive();
+			assertActive();
 			return runtime.getSessionName();
 		},
 
 		setLabel(entryId: string, label: string | undefined): void {
-			runtime.assertActive();
+			assertActive();
 			runtime.setLabel(entryId, label);
 		},
 
 		exec(command: string, args: string[], options?: ExecOptions) {
-			runtime.assertActive();
+			assertActive();
 			return execCommand(command, args, options?.cwd ?? cwd, options);
 		},
 
 		getActiveTools(): string[] {
-			runtime.assertActive();
+			assertActive();
 			return runtime.getActiveTools();
 		},
 
 		getAllTools() {
-			runtime.assertActive();
+			assertActive();
 			return runtime.getAllTools();
 		},
 
+		getSettings() {
+			assertActive();
+			return runtime.getSettings();
+		},
+
 		setActiveTools(toolNames: string[]): void {
-			runtime.assertActive();
+			assertActive();
 			runtime.setActiveTools(toolNames);
 		},
 
 		getCommands() {
-			runtime.assertActive();
+			assertActive();
 			return runtime.getCommands();
 		},
 
 		setModel(model, options) {
-			runtime.assertActive();
+			assertActive();
 			return runtime.setModel(model, options);
 		},
 
 		getThinkingLevel() {
-			runtime.assertActive();
+			assertActive();
 			return runtime.getThinkingLevel();
 		},
 
 		setThinkingLevel(level, options) {
-			runtime.assertActive();
+			assertActive();
 			runtime.setThinkingLevel(level, options);
 		},
 
 		registerProvider(providerOrName: Provider | string, config?: ProviderConfig) {
+			assertActive();
 			if (typeof providerOrName === "string") {
 				if (!config) throw new Error("Provider config is required when registering by name");
-				runtime.registerProvider(providerOrName, config, extension.path);
+				applyRuntimeChange(() => runtime.registerProvider(providerOrName, config, extension.path));
 				return;
 			}
-			runtime.registerNativeProvider(providerOrName, extension.path);
+			applyRuntimeChange(() => runtime.registerNativeProvider(providerOrName, extension.path));
 		},
 
 		unregisterProvider(name: string) {
-			runtime.unregisterProvider(name, extension.path);
+			assertActive();
+			applyRuntimeChange(() => runtime.unregisterProvider(name, extension.path));
 		},
 
-		events: eventBus,
+		registerMcpServer(name: string, config: McpServerConfig) {
+			assertActive();
+			const validated = validateMcpServerConfig(name, config);
+			if (typeof validated === "string") {
+				throw new Error(`Invalid MCP server registered by extension "${extension.path}": ${validated}`);
+			}
+			const owner = runtime.mcpServers.get(name)?.extensionPath;
+			if (owner !== undefined && owner !== extension.path) {
+				throw new Error(`MCP server "${name}" is already registered by extension "${owner}"`);
+			}
+			// Names that differ only in `-` and `_` would share a namespace.
+			const clash = runtime.mcpServers
+				.list()
+				.find((server) => server.name !== name && mcpNamespace(server.name) === mcpNamespace(name));
+			if (clash) throw new Error(`MCP server "${name}" conflicts with registered server "${clash.name}"`);
+			const server: RegisteredMcpServer = {
+				name,
+				config: structuredClone(validated),
+				extensionPath: extension.path,
+				// Read when listed: the resource loader settles the extension's source after its factory ran.
+				get extensionScope() {
+					return extension.sourceInfo.scope;
+				},
+			};
+			applyRuntimeChange(() => runtime.mcpServers.register(server));
+		},
+
+		unregisterMcpServer(name: string) {
+			assertActive();
+			applyRuntimeChange(() => runtime.mcpServers.unregister(name, extension.path));
+		},
+
+		getMcpServers() {
+			assertActive();
+			return runtime.mcpServers.list();
+		},
+
+		registerVirtualModel<TState>(model: ExtensionVirtualModel<TState>) {
+			assertActive();
+			// Routing runs after the runner binds, so the context is created per request. The state
+			// comes from the session branch that this router wrote.
+			const definition: VirtualModelDefinition = {
+				...model,
+				route: (request) => model.route(request as ModelRouteRequest<TState>, runtime.createContext()),
+			};
+			applyRuntimeChange(() => runtime.registerVirtualModel(definition, extension.path));
+		},
+
+		unregisterVirtualModel(provider: string, id: string) {
+			assertActive();
+			applyRuntimeChange(() => runtime.unregisterVirtualModel(provider, id));
+		},
+
+		events: {
+			emit(channel, data) {
+				assertActive();
+				eventBus.emit(channel, data);
+			},
+			on(channel, handler) {
+				assertActive();
+				const unsubscribe = runtime.trackEventBusSubscription(eventBus.on(channel, handler));
+				if (state === "loading") loadingUnsubscribers.push(unsubscribe);
+				return unsubscribe;
+			},
+		},
 
 		checkpoints: {
 			list() {
-				runtime.assertActive();
+				assertActive();
 				return runtime.getCheckpointManager()?.list() ?? [];
 			},
 
 			get(entryId: string) {
-				runtime.assertActive();
+				assertActive();
 				return runtime.getCheckpointManager()?.get(entryId);
 			},
 
 			async restore(options: CheckpointRestoreOptions) {
-				runtime.assertActive();
+				assertActive();
 				const manager = runtime.getCheckpointManager();
 				if (!manager) {
 					return { status: "disabled" as const, restored: [], deleted: [], reason: CHECKPOINTS_UNAVAILABLE };
@@ -387,7 +590,7 @@ function createExtensionAPI(
 			},
 
 			async capture(entryId: string) {
-				runtime.assertActive();
+				assertActive();
 				const manager = runtime.getCheckpointManager();
 				if (!manager) return { status: "disabled" as const, reason: CHECKPOINTS_UNAVAILABLE };
 				return manager.captureIfChanged(entryId);
@@ -395,7 +598,25 @@ function createExtensionAPI(
 		},
 	} as ExtensionAPI;
 
-	return api;
+	return {
+		api,
+		commit: () => {
+			if (state !== "loading") return;
+			runtime.assertActive();
+			for (const [name, value] of pendingFlagValues) {
+				if (!runtime.flagValues.has(name)) runtime.flagValues.set(name, value);
+			}
+			for (const apply of pendingRuntimeChanges) apply();
+			state = "active";
+			clearPending();
+		},
+		discard: () => {
+			if (state !== "loading") return;
+			state = "failed";
+			for (const unsubscribe of loadingUnsubscribers) unsubscribe();
+			clearPending();
+		},
+	};
 }
 
 function isCurrentCacheToken(cacheToken: ExtensionCacheToken | undefined): cacheToken is ExtensionCacheToken {
@@ -414,12 +635,18 @@ async function loadExtensionModule(extensionPath: string, cacheToken?: Extension
 		}
 	}
 
-	const jiti = createJiti(import.meta.url, {
+	const createJitiImpl = await getCreateJiti();
+	// Compiled binaries and the bundled Node distribution use embedded modules.
+	// Source TypeScript reuses host modules and root tsconfig paths. Unbundled
+	// Node builds use dist aliases and do not need the bundled virtual modules.
+	const resolutionOptions = usesEmbeddedModules
+		? { virtualModules: await getVirtualModules(), tryNative: false }
+		: isTypeScriptSourceRuntime
+			? { virtualModules: await getVirtualModules(), tsconfigPaths: true }
+			: { alias: getAliases() };
+	const jiti = createJitiImpl(import.meta.url, {
 		moduleCache: false,
-		// In Bun binary: use virtualModules for bundled packages (no filesystem resolution)
-		// Also disable tryNative so jiti handles ALL imports (not just the entry point)
-		// In Node.js/dev: use aliases to resolve to node_modules paths
-		...(isBunBinary ? { virtualModules: VIRTUAL_MODULES, tryNative: false } : { alias: getAliases() }),
+		...resolutionOptions,
 	});
 
 	const module = await jiti.import(extensionPath, { default: true });
@@ -437,11 +664,8 @@ async function loadExtensionModule(extensionPath: string, cacheToken?: Extension
  * Create an Extension object with empty collections.
  */
 function createExtension(extensionPath: string, resolvedPath: string): Extension {
-	const source =
-		extensionPath.startsWith("<") && extensionPath.endsWith(">")
-			? extensionPath.slice(1, -1).split(":")[0] || "temporary"
-			: "local";
-	const baseDir = extensionPath.startsWith("<") ? undefined : path.dirname(resolvedPath);
+	const source = getSyntheticPathSource(extensionPath) ?? "local";
+	const baseDir = isSyntheticPath(extensionPath) ? undefined : path.dirname(resolvedPath);
 
 	return {
 		path: extensionPath,
@@ -455,6 +679,27 @@ function createExtension(extensionPath: string, resolvedPath: string): Extension
 		flags: new Map(),
 		shortcuts: new Map(),
 	};
+}
+
+async function initializeExtension(
+	factory: ExtensionFactory,
+	extensionPath: string,
+	resolvedPath: string,
+	cwd: string,
+	eventBus: EventBus,
+	runtime: ExtensionRuntime,
+): Promise<Extension> {
+	const extension = createExtension(extensionPath, resolvedPath);
+	const load = createExtensionAPI(extension, runtime, cwd, eventBus);
+	try {
+		await factory(load.api);
+		load.commit();
+	} catch (error) {
+		load.discard();
+		throw error;
+	}
+	time(`${extensionPath} factory`, "extensions");
+	return extension;
 }
 
 async function loadExtension(
@@ -473,10 +718,7 @@ async function loadExtension(
 			return { extension: null, error: `Extension does not export a valid factory function: ${extensionPath}` };
 		}
 
-		const extension = createExtension(extensionPath, resolvedPath);
-		const api = createExtensionAPI(extension, runtime, cwd, eventBus);
-		await factory(api);
-		time(`${extensionPath} factory`, "extensions");
+		const extension = await initializeExtension(factory, extensionPath, resolvedPath, cwd, eventBus, runtime);
 
 		return { extension, error: null };
 	} catch (err) {
@@ -495,12 +737,8 @@ export async function loadExtensionFromFactory(
 	runtime: ExtensionRuntime,
 	extensionPath = "<inline>",
 ): Promise<Extension> {
-	const extension = createExtension(extensionPath, extensionPath);
 	const resolvedCwd = resolvePath(cwd);
-	const api = createExtensionAPI(extension, runtime, resolvedCwd, eventBus);
-	await factory(api);
-	time(`${extensionPath} factory`, "extensions");
-	return extension;
+	return initializeExtension(factory, extensionPath, extensionPath, resolvedCwd, eventBus, runtime);
 }
 
 /**
@@ -515,6 +753,7 @@ async function loadExtensionsInternal(
 ): Promise<LoadExtensionsResult> {
 	const extensions: Extension[] = [];
 	const errors: Array<{ path: string; error: string }> = [];
+	const warnings: Array<{ path: string; warning: string }> = [];
 	const cacheToken = useCache ? useExtensionCacheCwd(cwd) : undefined;
 	const resolvedCwd = cacheToken?.cwd ?? resolvePath(cwd);
 	const resolvedEventBus = eventBus ?? createEventBus();
@@ -542,6 +781,7 @@ async function loadExtensionsInternal(
 	return {
 		extensions,
 		errors,
+		warnings,
 		runtime: resolvedRuntime,
 	};
 }
@@ -562,26 +802,6 @@ export async function loadExtensionsCached(
 	runtime?: ExtensionRuntime,
 ): Promise<LoadExtensionsResult> {
 	return loadExtensionsInternal(paths, cwd, eventBus, runtime, true);
-}
-
-interface PiManifest {
-	extensions?: string[];
-	themes?: string[];
-	skills?: string[];
-	prompts?: string[];
-}
-
-function readPiManifest(packageJsonPath: string): PiManifest | null {
-	try {
-		const content = fs.readFileSync(packageJsonPath, "utf-8");
-		const pkg = JSON.parse(content);
-		if (pkg.draht && typeof pkg.draht === "object") {
-			return pkg.draht as PiManifest;
-		}
-		return null;
-	} catch {
-		return null;
-	}
 }
 
 function isExtensionFile(name: string): boolean {
@@ -723,5 +943,23 @@ export async function discoverAndLoadExtensions(
 		addPaths([resolved]);
 	}
 
-	return loadExtensions(allPaths, resolvedCwd, eventBus);
+	const result = await loadExtensions(allPaths, resolvedCwd, eventBus);
+	// No resource loader settles their source here, and the permission gate trusts tool hints by scope:
+	// a project's extensions must not keep the default `temporary`.
+	const isUnder = (file: string, dir: string) => {
+		const relative = path.relative(dir, path.resolve(file));
+		return !relative.startsWith("..") && !path.isAbsolute(relative);
+	};
+	for (const extension of result.extensions) {
+		const scope = isUnder(extension.resolvedPath, localExtDir)
+			? "project"
+			: isUnder(extension.resolvedPath, globalExtDir)
+				? "user"
+				: undefined;
+		if (scope === undefined) continue;
+		extension.sourceInfo = { ...extension.sourceInfo, scope };
+		for (const tool of extension.tools.values()) tool.sourceInfo = extension.sourceInfo;
+		for (const command of extension.commands.values()) command.sourceInfo = extension.sourceInfo;
+	}
+	return result;
 }

@@ -1,6 +1,6 @@
 ---
 name: blast-radius
-description: Impact analysis beyond the diff — find what a change could break somewhere else before it ships, reduce the safety argument to the one falsifiable fact it rests on, and prove that fact by running real code, saying for every fact which rung of the evidence ladder it stopped at. Use for "what could this break", "blast radius of this change", or reviewing a small diff you don't trust yet. Not the uncertainty × blast-radius ordering heuristic in draht's planning commands — that phrase ranks risks for scheduling; this skill is the impact investigation itself.
+description: Find what a change could break beyond the diff and prove the one fact its safety rests on by running real code — use when asked what a change could break, or before shipping one you distrust. Not the uncertainty × blast-radius ordering heuristic in planning commands.
 ---
 
 # Blast Radius
@@ -43,6 +43,7 @@ Any safety fact you can't get to rung 4, say so out loud — don't write it up a
 - **Risks.** Only the real ones. Each names how it breaks, the `file:line`, how likely and how bad, and how to check. Paste the proof for the ones that matter.
 - **Cleared.** What you checked and why it's fine.
 - **Before you merge.** The cheapest test or repro that catches the real bug, including the script you wrote.
+- **Map.** When the risks reach more than two places, add a Mermaid `flowchart LR` from the change to each place it can break, per the `explainers` skill. Build it from `graph-impact` output and the cited `file:line`s; draw unproven paths dashed.
 
 Write it through `unslop`, cite real code, and strip anything private before it goes anywhere public.
 

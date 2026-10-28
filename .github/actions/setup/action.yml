@@ -23,15 +23,39 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Setup Bun
-      uses: oven-sh/setup-bun@v2
-      with:
-        bun-version: latest
-
     - name: Setup Node.js
-      uses: actions/setup-node@v7
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: ${{ inputs.node-version }}
+
+    # Bun comes from oven-sh/setup-bun, not `npm install --global`: the npm
+    # global prefix lives under the runner's /opt toolcache, and /opt is
+    # group- or world-writable there. The gateway refuses to exec a runtime
+    # under such an ancestor ("writable by others: /opt", spawn-primitive.ts
+    # assertSafeExecutablePath), which failed every gateway spawn test.
+    # setup-bun installs into ~/.bun/bin, owned by the runner user. The
+    # version is still the exact manifest pin, and the revision is asserted.
+    - name: Read the manifest-pinned Bun
+      id: bun-pin
+      shell: bash
+      run: |
+        BUN_PACKAGE_VERSION="$(node -p "require('./package.json').packageManager.replace(/^bun@/, '')")"
+        EXPECTED_BUN_REVISION="$(node -p "require('./package.json').drahtReleaseBunRevision")"
+        echo "version=${BUN_PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
+        echo "revision=${EXPECTED_BUN_REVISION}" >> "$GITHUB_OUTPUT"
+
+    - name: Install the manifest-pinned Bun
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      with:
+        bun-version: ${{ steps.bun-pin.outputs.version }}
+
+    - name: Verify the Bun revision
+      shell: bash
+      env:
+        EXPECTED_BUN_REVISION: ${{ steps.bun-pin.outputs.revision }}
+      run: |
+        ACTUAL_BUN_REVISION="$(bun --revision)"
+        test "${ACTUAL_BUN_REVISION}" = "${EXPECTED_BUN_REVISION}"
 
     - name: Install system dependencies
       if: inputs.system-deps == 'true'
@@ -44,4 +68,9 @@ runs:
     - name: Install dependencies
       if: inputs.install == 'true'
       shell: bash
-      run: bun install
+      # Not the release workflows' `--ignore-scripts --linker hoisted`: tests
+      # need the trusted lifecycle scripts (better-sqlite3's native binding)
+      # and the isolated layout a default install produces (per-workspace
+      # node_modules/.bin, e.g. geist-console's vite). Bun still runs only the
+      # scripts of trusted dependencies.
+      run: bun install --frozen-lockfile

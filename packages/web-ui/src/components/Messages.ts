@@ -245,7 +245,7 @@ export class ToolMessage extends LitElement {
 		const toolName = this.tool?.name || this.toolCall.name;
 
 		// Render tool content (renderer handles errors and styling)
-		const result: ToolResultMessageType<any> | undefined = this.aborted
+		const result: ToolResultMessageType | undefined = this.aborted
 			? {
 					role: "toolResult",
 					isError: true,

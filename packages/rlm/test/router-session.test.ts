@@ -77,7 +77,11 @@ class FakeModelRouter {
 	readonly calls: StreamSimpleCall[] = [];
 	private rootCallIndex = 0;
 
-	constructor(private readonly opts: FakeRouterOptions) {}
+	private readonly opts: FakeRouterOptions;
+
+	constructor(opts: FakeRouterOptions) {
+		this.opts = opts;
+	}
 
 	resolve(role: string): ModelRef {
 		if (role === "rlm-root") return { provider: "anthropic", model: "claude-opus-4-6" };

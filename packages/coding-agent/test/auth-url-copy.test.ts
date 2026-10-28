@@ -1,0 +1,41 @@
+import { setKeybindings, type TUI } from "@draht/tui";
+import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { KeybindingsManager } from "../src/core/keybindings.ts";
+import { McpManagerView } from "../src/extensions/mcp/ui.ts";
+import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
+import { stripAnsi } from "../src/utils/ansi.ts";
+
+const { copyToClipboard } = vi.hoisted(() => ({ copyToClipboard: vi.fn(async (_text: string) => {}) }));
+
+vi.mock("../src/utils/clipboard.ts", () => ({ copyToClipboard }));
+vi.mock("../src/utils/open-browser.ts", () => ({ openBrowser: vi.fn() }));
+
+const URL = `https://auth.example.invalid/authorize?${"x".repeat(300)}`;
+const CTRL_X = "\x18";
+
+const tui = { requestRender: vi.fn() } as unknown as TUI;
+
+function rendered(component: { render(width: number): string[] }): string {
+	return stripAnsi(component.render(80).join("\n"));
+}
+
+describe("sign-in URL copy key", () => {
+	beforeAll(() => {
+		initTheme("dark");
+	});
+
+	beforeEach(() => {
+		setKeybindings(new KeybindingsManager());
+		copyToClipboard.mockClear();
+	});
+
+	test("MCP sign-in screen copies the authorization URL", async () => {
+		const view = new McpManagerView(tui, theme, new KeybindingsManager());
+		void view.redirectUrl("Sign in to issues", URL, new AbortController().signal);
+		expect(rendered(view)).toContain("ctrl+x to copy");
+
+		view.handleInput(CTRL_X);
+		await vi.waitFor(() => expect(rendered(view)).toContain("Copied URL to clipboard"));
+		expect(copyToClipboard).toHaveBeenCalledWith(URL);
+	});
+});

@@ -7,8 +7,8 @@ Duet mode lets multiple authenticated models collaborate in one Draht session. C
 Pass two to eight comma-separated models. Optional role names use `role=model`; optional thinking levels use `model:level`.
 
 ```text
-/duet turns implementer=openai-codex/gpt-5.5:high,reviewer=anthropic/claude-opus-4-8:high
-/duet triage lead=openai-codex/gpt-5.5:high,reviewer=anthropic/claude-opus-4-8,tester=google/gemini-3.1-pro-preview
+/duet turns implementer=openai-codex/gpt-6.1-sol:high,reviewer=anthropic/claude-opus-5-5:high
+/duet triage lead=openai-codex/gpt-6.1-sol:high,reviewer=anthropic/claude-opus-5-5,tester=google/gemini-3.1-pro-preview
 /duet status
 /duet off
 ```
@@ -19,7 +19,7 @@ Duet can also start from CLI flags:
 
 ```bash
 draht \
-  --duet "lead=openai-codex/gpt-5.5,reviewer=anthropic/claude-opus-4-8" \
+  --duet "lead=openai-codex/gpt-6.1-sol,reviewer=anthropic/claude-opus-5-5" \
   --duet-strategy triage
 ```
 
@@ -39,4 +39,4 @@ Teammates can read project content and send it to their configured providers. Ch
 
 ## Cost and authentication
 
-Every participant must already be authenticated. Parallel triage assignments make concurrent provider requests and are billed independently. By default, each delegation batch requires approval through Draht's permission gate; explicit permission rules can change that behavior. Draht limits triage to one delegation batch per user prompt and records nested teammate usage in session totals. The lead is instructed to skip delegation when it would only add latency or cost.
+Every participant must already be authenticated. Parallel triage assignments make concurrent provider requests and are billed independently. In the `ask` permission mode, each delegation batch requires approval through Draht's permission gate; `auto`, the mode a session starts in, and `yolo` start it without asking. Explicit permission rules apply in every mode. Draht limits triage to one delegation batch per user prompt and records nested teammate usage in session totals. The lead is instructed to skip delegation when it would only add latency or cost.

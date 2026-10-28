@@ -210,7 +210,7 @@ describe("performRewind scopes (R42-RWD.2, R42-RWD.5, R42-RWD.6)", () => {
 			targetEntryId: "u1",
 			currentEntryId: leaf,
 			navigate: navigate("u1"),
-			onPathRestored: () => {
+			onPathsRestored: () => {
 				throw new Error("injected mid-restore failure");
 			},
 		});

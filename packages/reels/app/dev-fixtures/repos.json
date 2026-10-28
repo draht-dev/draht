@@ -1,0 +1,18 @@
+{
+	"schemaVersion": 1,
+	"repos": [
+		{
+			"name": "draht-mono",
+			"feed": "draht-mono/feed.json",
+			"latest": "2026-09-30T14:12:00Z",
+			"reelCount": 4,
+			"poster": "draht-mono/posters/full.svg"
+		},
+		{
+			"name": "geist-console",
+			"feed": "geist-console/feed.json",
+			"latest": "2026-09-12T09:00:00Z",
+			"reelCount": 1
+		}
+	]
+}

@@ -1,14 +1,26 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import lockfile from "proper-lockfile";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { APP_NAME, ENV_AGENT_DIR, PACKAGE_NAME, VERSION } from "../src/config.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
-import type { ResolvedPaths } from "../src/core/package-manager.ts";
+import { DefaultPackageManager, type ResolvedPaths } from "../src/core/package-manager.ts";
 import { InMemorySettingsStorage, SettingsManager } from "../src/core/settings-manager.ts";
 import { ProjectTrustStore } from "../src/core/trust-manager.ts";
 import { main } from "../src/main.ts";
 import { ConfigSelectorComponent } from "../src/modes/interactive/components/config-selector.ts";
+import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { handlePackageCommand } from "../src/package-manager-cli.ts";
 import { allowNetwork } from "./test-network-env.ts";
 
@@ -27,6 +39,77 @@ describe("package commands", () => {
 	function getNewerPatchVersion(): string {
 		const [major = "0", minor = "0", patch = "0"] = VERSION.split(".");
 		return `${major}.${minor}.${Number.parseInt(patch, 10) + 1}`;
+	}
+
+	function prepareManagedInstall(
+		targetVersion: string,
+		npmExitCode = 0,
+	): { managedRoot: string; npmRecordPath: string } {
+		const managedRoot = join(agentDir, "install");
+		const activeRelease = join(managedRoot, "releases", VERSION);
+		const selfPackageDir = join(activeRelease, "node_modules", ...PACKAGE_NAME.split("/"));
+		mkdirSync(selfPackageDir, { recursive: true });
+		writeFileSync(join(activeRelease, "active.txt"), "active");
+		writeFileSync(join(managedRoot, "current-version"), `${VERSION}\n`);
+		writeFileSync(
+			join(managedRoot, "managed-install.json"),
+			`${JSON.stringify({ kind: "draht-managed-install", schemaVersion: 1, layout: "releases-v1" })}\n`,
+		);
+
+		const binDir = join(tempDir, "managed-bin");
+		const fakeNpmPath = join(tempDir, "managed-npm.cjs");
+		const npmRecordPath = join(tempDir, "managed-npm-record.json");
+		mkdirSync(binDir, { recursive: true });
+		writeFileSync(
+			fakeNpmPath,
+			`const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+fs.writeFileSync(${JSON.stringify(npmRecordPath)}, JSON.stringify(args));
+if (${npmExitCode} !== 0) process.exit(${npmExitCode});
+const binDir = path.join(process.cwd(), "node_modules", ".bin");
+fs.mkdirSync(binDir, { recursive: true });
+const drahtPath = path.join(binDir, process.platform === "win32" ? "${APP_NAME}.cmd" : "${APP_NAME}");
+fs.writeFileSync(
+	drahtPath,
+	process.platform === "win32"
+		? "@echo off\\r\\necho ${targetVersion}\\r\\n"
+		: "#!/bin/sh\\nprintf '%s\\n' ${targetVersion}\\n",
+);
+if (process.platform !== "win32") fs.chmodSync(drahtPath, 0o755);
+`,
+		);
+		const npmPath = join(binDir, process.platform === "win32" ? "npm.cmd" : "npm");
+		writeFileSync(
+			npmPath,
+			process.platform === "win32"
+				? `@echo off\r\n"${originalExecPath}" "${fakeNpmPath}" %*\r\n`
+				: `#!/bin/sh\nexec "${originalExecPath}" "${fakeNpmPath}" "$@"\n`,
+		);
+		chmodSync(npmPath, 0o755);
+
+		vi.stubEnv("DRAHT_INSTALLER_API_BASE", "https://example.test/api/installer/releases");
+		vi.stubEnv("DRAHT_MANAGED_INSTALL_ROOT", managedRoot);
+		process.env.DRAHT_PACKAGE_DIR = selfPackageDir;
+		process.env.PATH = `${binDir}${delimiter}${originalPath ?? ""}`;
+		return { managedRoot, npmRecordPath };
+	}
+
+	function mockManagedUpdate(targetVersion: string): void {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL | Request) => {
+				const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+				if (url === "https://registry.npmjs.org/%40draht%2Fcoding-agent/latest") {
+					return Response.json({ packageName: PACKAGE_NAME, version: targetVersion });
+				}
+				const releaseUrl = `https://example.test/api/installer/releases/${targetVersion}`;
+				if (url === `${releaseUrl}/package.json` || url === `${releaseUrl}/package-lock.json`) {
+					return Response.json({});
+				}
+				throw new Error(`Unexpected fetch: ${url}`);
+			}),
+		);
 	}
 
 	async function runPackageCommandDirectly(args: string[]): Promise<void> {
@@ -82,6 +165,7 @@ describe("package commands", () => {
 
 	afterEach(() => {
 		vi.unstubAllGlobals();
+		vi.unstubAllEnvs();
 		vi.restoreAllMocks();
 		process.chdir(originalCwd);
 		process.exitCode = originalExitCode;
@@ -386,6 +470,7 @@ describe("package commands", () => {
 			authPath: join(agentDir, "auth.json"),
 			modelsPath: join(agentDir, "models.json"),
 			allowModelNetwork: false,
+			signal: expect.any(AbortSignal),
 		});
 		expect(refresh).toHaveBeenCalledWith({
 			allowNetwork: true,
@@ -439,6 +524,67 @@ describe("package commands", () => {
 
 		selector.getResourceList().handleInput(" ");
 		expect(settingsManager.getProjectSettings().packages).toEqual([]);
+	});
+
+	it("toggles built-in extensions in config global mode", async () => {
+		const settingsManager = SettingsManager.fromStorage(new InMemorySettingsStorage(), { projectTrusted: true });
+		const resolvedPaths = await new DefaultPackageManager({
+			cwd: projectDir,
+			agentDir,
+			settingsManager,
+			builtinExtensions: ["llama.cpp", "mcp"],
+		}).resolve();
+		const selector = new ConfigSelectorComponent(
+			{ global: resolvedPaths, project: resolvedPaths },
+			settingsManager,
+			projectDir,
+			agentDir,
+			() => {},
+			() => {},
+			() => {},
+			24,
+			"global",
+		);
+
+		const list = selector.getResourceList();
+		initTheme("dark");
+		expect(list.render(80).join("\n")).toContain("Built-in");
+		expect(list.render(80).join("\n")).toContain("llama.cpp");
+		list.handleInput(" ");
+		expect(settingsManager.getGlobalSettings().extensions).toEqual(["-builtin:llama.cpp"]);
+		list.handleInput(" ");
+		expect(settingsManager.getGlobalSettings().extensions).toEqual(["+builtin:llama.cpp"]);
+	});
+
+	it("cycles project built-in extension overrides in config local mode", async () => {
+		const storage = new InMemorySettingsStorage();
+		storage.withLock("global", () => JSON.stringify({ extensions: ["-builtin:mcp"] }));
+		const settingsManager = SettingsManager.fromStorage(storage, { projectTrusted: true });
+		const resolvedPaths = await new DefaultPackageManager({
+			cwd: projectDir,
+			agentDir,
+			settingsManager,
+			builtinExtensions: ["mcp"],
+		}).resolve();
+		const selector = new ConfigSelectorComponent(
+			{ global: resolvedPaths, project: resolvedPaths },
+			settingsManager,
+			projectDir,
+			agentDir,
+			() => {},
+			() => {},
+			() => {},
+			24,
+			"project",
+		);
+
+		const list = selector.getResourceList();
+		list.handleInput(" ");
+		expect(settingsManager.getProjectSettings().extensions).toEqual(["+builtin:mcp"]);
+		list.handleInput(" ");
+		expect(settingsManager.getProjectSettings().extensions).toEqual(["-builtin:mcp"]);
+		list.handleInput(" ");
+		expect(settingsManager.getProjectSettings().extensions).toEqual([]);
 	});
 
 	it("shows a friendly error for unknown install options", async () => {
@@ -498,10 +644,166 @@ describe("package commands", () => {
 		}
 	});
 
-	it("uses the update check version for forced self updates even when current", async () => {
+	it("retries a transient self-update version check", async () => {
+		const previousSkipVersionCheck = process.env.DRAHT_SKIP_VERSION_CHECK;
+		delete process.env.DRAHT_SKIP_VERSION_CHECK;
+		const fetchMock = vi
+			.fn()
+			.mockRejectedValueOnce(new Error("fetch failed"))
+			.mockRejectedValueOnce(new Error("fetch failed"))
+			.mockResolvedValueOnce(Response.json({ version: VERSION }));
+		vi.stubGlobal("fetch", fetchMock);
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		try {
+			await expect(runPackageCommandDirectly(["update", "--self"])).resolves.toBeUndefined();
+			expect(fetchMock).toHaveBeenCalledTimes(3);
+			expect(errorSpy).not.toHaveBeenCalled();
+		} finally {
+			if (previousSkipVersionCheck === undefined) delete process.env.DRAHT_SKIP_VERSION_CHECK;
+			else process.env.DRAHT_SKIP_VERSION_CHECK = previousSkipVersionCheck;
+			logSpy.mockRestore();
+			errorSpy.mockRestore();
+		}
+	});
+
+	it("updates installer-managed Pi through a staged immutable release", async () => {
+		const targetVersion = getNewerPatchVersion();
+		const { managedRoot, npmRecordPath } = prepareManagedInstall(targetVersion);
+		const abandonedStage = join(managedRoot, "staging", "update-abandoned");
+		mkdirSync(abandonedStage, { recursive: true });
+		writeFileSync(join(abandonedStage, "partial"), "partial");
+		const abandonedLock = join(managedRoot, "update.lock");
+		mkdirSync(abandonedLock);
+		utimesSync(abandonedLock, new Date(0), new Date(0));
+		mockManagedUpdate(targetVersion);
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		await expect(runPackageCommandDirectly(["update", "--self"])).resolves.toBeUndefined();
+
+		expect(readFileSync(join(managedRoot, "current-version"), "utf8")).toBe(`${targetVersion}\n`);
+		expect(existsSync(join(managedRoot, "releases", targetVersion))).toBe(true);
+		expect(existsSync(join(managedRoot, "releases", VERSION, "active.txt"))).toBe(true);
+		expect(readdirSync(join(managedRoot, "staging"))).toEqual([]);
+		expect(JSON.parse(readFileSync(npmRecordPath, "utf8")) as string[]).toEqual(
+			expect.arrayContaining(["ci", "--ignore-scripts"]),
+		);
+		expect(logSpy.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
+			`Updated draht from ${VERSION} to ${targetVersion}`,
+		);
+		expect(errorSpy).not.toHaveBeenCalled();
+		expect(process.exitCode).toBeUndefined();
+	});
+
+	it("accepts a managed install marker with a UTF-8 BOM", async () => {
+		const targetVersion = getNewerPatchVersion();
+		const { managedRoot } = prepareManagedInstall(targetVersion);
+		writeFileSync(
+			join(managedRoot, "managed-install.json"),
+			`\uFEFF${JSON.stringify({ kind: "draht-managed-install", schemaVersion: 1, layout: "releases-v1" })}\r\n`,
+		);
+		mockManagedUpdate(targetVersion);
+		vi.spyOn(console, "log").mockImplementation(() => {});
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		await expect(runPackageCommandDirectly(["update", "--self"])).resolves.toBeUndefined();
+
+		expect(readFileSync(join(managedRoot, "current-version"), "utf8")).toBe(`${targetVersion}\n`);
+		expect(errorSpy).not.toHaveBeenCalled();
+		expect(process.exitCode).toBeUndefined();
+	});
+
+	it("removes older managed releases after an update", async () => {
+		// https://github.com/badlogic/pi-mono/issues/10392
+		const targetVersion = getNewerPatchVersion();
+		const { managedRoot } = prepareManagedInstall(targetVersion);
+		const releasesRoot = join(managedRoot, "releases");
+		mkdirSync(join(releasesRoot, "0.0.1", "node_modules"), { recursive: true });
+		mkdirSync(join(releasesRoot, "0.0.2-beta.1"), { recursive: true });
+		mkdirSync(join(releasesRoot, "not-a-release"), { recursive: true });
+		mockManagedUpdate(targetVersion);
+		vi.spyOn(console, "log").mockImplementation(() => {});
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		await expect(runPackageCommandDirectly(["update", "--self"])).resolves.toBeUndefined();
+
+		expect(readdirSync(releasesRoot).sort()).toEqual([VERSION, "not-a-release", targetVersion].sort());
+		expect(errorSpy).not.toHaveBeenCalled();
+		expect(process.exitCode).toBeUndefined();
+	});
+
+	it("rejects a concurrent managed update", async () => {
+		const targetVersion = getNewerPatchVersion();
+		const { managedRoot, npmRecordPath } = prepareManagedInstall(targetVersion);
+		const releaseLock = await lockfile.lock(join(managedRoot, "update"), { realpath: false });
+		mockManagedUpdate(targetVersion);
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		try {
+			await expect(runPackageCommandDirectly(["update", "--self"])).resolves.toBeUndefined();
+		} finally {
+			await releaseLock();
+		}
+
+		expect(readFileSync(join(managedRoot, "current-version"), "utf8")).toBe(`${VERSION}\n`);
+		expect(existsSync(npmRecordPath)).toBe(false);
+		expect(logSpy.mock.calls.map(([message]) => String(message)).join("\n")).not.toContain("Updated draht from");
+		expect(errorSpy.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
+			"Another managed draht update is already running.",
+		);
+		expect(process.exitCode).toBe(1);
+	});
+
+	it("rejects forced managed reinstalls", async () => {
+		const targetVersion = getNewerPatchVersion();
+		const { npmRecordPath } = prepareManagedInstall(targetVersion);
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		await expect(runPackageCommandDirectly(["update", "--self", "--force"])).resolves.toBeUndefined();
+
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(existsSync(npmRecordPath)).toBe(false);
+		expect(errorSpy.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
+			"Managed draht installations do not support --force",
+		);
+		expect(process.exitCode).toBe(1);
+	});
+
+	it("keeps the managed release active when its update fails", async () => {
+		const targetVersion = getNewerPatchVersion();
+		const { managedRoot } = prepareManagedInstall(targetVersion, 23);
+		mkdirSync(join(managedRoot, "releases", "0.0.1"), { recursive: true });
+		mockManagedUpdate(targetVersion);
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		await expect(runPackageCommandDirectly(["update", "--self"])).resolves.toBeUndefined();
+
+		expect(readFileSync(join(managedRoot, "current-version"), "utf8")).toBe(`${VERSION}\n`);
+		expect(existsSync(join(managedRoot, "releases", targetVersion))).toBe(false);
+		expect(existsSync(join(managedRoot, "releases", "0.0.1"))).toBe(true);
+		expect(readdirSync(join(managedRoot, "staging"))).toEqual([]);
+		expect(logSpy.mock.calls.map(([message]) => String(message)).join("\n")).not.toContain("Updated draht from");
+		expect(errorSpy.mock.calls.map(([message]) => String(message)).join("\n")).toContain("exited with code 23");
+		expect(process.exitCode).toBe(1);
+	});
+
+	it("keeps npm self-updates non-managed when the managed environment is inherited", async () => {
 		const globalPrefix = join(tempDir, "global-prefix");
 		const projectPrefix = join(tempDir, "project-prefix");
 		const selfPackageDir = join(globalPrefix, "lib", "node_modules", "@earendil-works", "pi-coding-agent");
+		const inheritedManagedRoot = join(tempDir, "inherited-managed-install");
+		mkdirSync(join(inheritedManagedRoot, "releases"), { recursive: true });
+		writeFileSync(
+			join(inheritedManagedRoot, "managed-install.json"),
+			JSON.stringify({ kind: "draht-managed-install", schemaVersion: 1, layout: "releases-v1" }),
+		);
+		vi.stubEnv("DRAHT_MANAGED_INSTALL_ROOT", inheritedManagedRoot);
 		const fakeNpmPath = join(tempDir, "fake-npm.cjs");
 		const recordPath = join(tempDir, "self-update.json");
 		mkdirSync(selfPackageDir, { recursive: true });
@@ -626,7 +928,7 @@ else {
 		const activePackageName = PACKAGE_NAME === "@new-scope/pi" ? "@newer-scope/pi" : "@new-scope/pi";
 		vi.stubGlobal(
 			"fetch",
-			vi.fn(async () => Response.json({ packageName: activePackageName, version: "0.73.0" })),
+			vi.fn(async () => Response.json({ name: activePackageName, version: "0.73.0" })),
 		);
 
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -723,7 +1025,7 @@ if(args.includes("install")) process.exit(23);
 		const activePackageName = PACKAGE_NAME === "@new-scope/pi" ? "@newer-scope/pi" : "@new-scope/pi";
 		vi.stubGlobal(
 			"fetch",
-			vi.fn(async () => Response.json({ packageName: activePackageName, version: "0.73.0" })),
+			vi.fn(async () => Response.json({ name: activePackageName, version: "0.73.0" })),
 		);
 
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});

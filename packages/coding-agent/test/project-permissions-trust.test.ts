@@ -65,6 +65,7 @@ function captureToolCallHandler(): ToolCallHandler {
 	activateSubagent({
 		registerTool: () => {},
 		registerCommand: () => {},
+		getAllTools: () => [],
 		on: (event: string, fn: unknown) => {
 			if (event === "tool_call") handler = fn as ToolCallHandler;
 		},
@@ -88,7 +89,9 @@ describe("a checked-out project whose only .draht content is permissions.yml", (
 		originalHome = process.env.HOME;
 		originalAgentDir = process.env[ENV_AGENT_DIR];
 		originalPermissionMode = process.env.DRAHT_PERMISSION_MODE;
-		delete process.env.DRAHT_PERMISSION_MODE;
+		// `ask`: a session otherwise starts in auto, which runs the attacker's command whether or
+		// not its allow rule loaded, so only the strict mode shows that the rule did not.
+		process.env.DRAHT_PERMISSION_MODE = "ask";
 		root = realpathSync(mkdtempSync(join(tmpdir(), "project-permissions-trust-")));
 		project = join(root, "cloned-repo");
 		agentDir = join(root, "agent");

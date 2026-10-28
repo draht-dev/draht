@@ -1,5 +1,12 @@
 # Roadmap
 
+> **Release evidence contract (2026-08-28):** Status words in this roadmap are
+> scoped to each phase's written acceptance. They do not by themselves establish
+> release or operational readiness. [`RELEASE-EVIDENCE.md`](RELEASE-EVIDENCE.md)
+> defines E0 contract/unit, E1 disposable integration, E2 live candidate, E3
+> active deployment, and E4 soak/hardware/privacy evidence. Unit results are E0;
+> disposable integrations with fixtures cap at E1. Neither is operational.
+
 ## Phase 1: Rebrand — `complete`
 **Goal:** All packages renamed to @draht/ namespace, docs updated, builds pass.
 **Requirements:** R1.1, R1.2, R1.3, R1.4, R1.5, R5.1, R5.2, R5.3
@@ -496,7 +503,7 @@ three rounds removing from `confirm`.
 **Acceptance:** End-to-end tests prove: after the agent edits a tracked file, creates a new file, and deletes another, `/rewind` to the prior user message makes the working tree byte-identical to the checkpoint (created file gone, deleted file back); the pre-rewind state is itself recoverable by rewinding forward to the abandoned leaf (redo); a failure injected mid-restore rolls the tree back to the safety snapshot; conversation leaf only moves after file restore succeeds; "conversation only" and "files only" scopes each touch exactly their half; `/tree` navigation and `/fork` to a checkpointed entry offer file restore and honor decline; `pi.checkpoints` (list/get/restore) works from a test extension and `session_before_rewind` can cancel.
 **Status (2026-08-19):** All 8 acceptance criteria verified on real fixture repos, but the phase is NOT complete — two adversarial reviewers blocked it on data-safety, and the follow-up round closed the reported defects while introducing others. Evidence class: production-e2e for the acceptance criteria; the residuals below are unclosed.
 **Residual (blocking, 2026-08-19):**
-- **Performance / test reliability:** `applyTreeDiff` spawns one `git checkout-index` process per path (~25s for 200 paths), and the suite now times out against its own 30s limit. Batching is the obvious fix but conflicts with the per-path `onPathRestored` callback the mid-restore failure-injection tests depend on. **This is an open design decision, not a patch.**
+- **Performance / test reliability (DECIDED 2026-10-01):** `applyTreeDiff` spawned one `git checkout-index` process per path (~25s for 200 paths), timing out the suite against its own 30s limit. Decided: writes are batched through `git checkout-index --stdin -z` in chunks of `writeChunkSize` (default 200), with the per-path callback renamed `onPathsRestored(paths)` to fire per batch and per delete, and `writeChunkSize` validated once at `restore()`'s entry point — see `.planning/DECISIONS-PENDING.md`.
 - **False refusals from the fail-closed guards:** a file→directory swap at the same path, and a case-only rename on a case-insensitive filesystem (macOS — the primary dev platform), both refuse a restore that is actually safe.
 - `clearRestoreMarker` sits inside the try whose catch performs the rollback, so a failed unlink can undo a restore that already succeeded and report it `unrecoverable`.
 - `/fork` still applies the restore from inside the cancelable `session_before_fork`, and can lose queued messages; the recovery notice never reaches the real TUI (`ctx.ui.notify` output is cleared by the selector).
@@ -514,7 +521,7 @@ three rounds removing from `confirm`.
 
 > **Feature:** run the bash tool inside an OS-level sandbox (macOS Seatbelt, Linux Landlock/namespaces) so what a command *can do* is bounded by policy, not string matching — making auto mode safe to stop prompting and closing the interpreter escape hatch (`python -c`, script files, in-language `shutil.rmtree`) that the permission gate documents as unfixable with text matching, for `deny` rules included.
 >
-> **Starting point:** the permission gate (`src/core/multi-agent/permission-gate.ts`) with session modes default/auto/yolo and a heuristic danger filter is complete and honest about its limits — it protects against a confused agent, not an adversarial one. The execution seam already exists (`BashOperations.exec` in `src/core/tools/bash.ts`, designed for pluggable backends), and Phase 28 already proved the OS-boundary pattern in-repo for the RLM REPL (`packages/rlm/src/sandbox.ts`: `sandbox-exec` + SBPL on macOS, `unshare`/bwrap namespaces on Linux, startup self-test, env hygiene). Key posture difference from Phase 28: bash is the agent's primary limb, so sandbox-unavailable degrades to today's permission gate with a notice (never fail-closed), and in-sandbox policy denials escalate to a "rerun unsandboxed?" approval prompt.
+> **Starting point:** the permission gate (`src/core/multi-agent/permission-gate.ts`) with session modes ask/auto/yolo and a heuristic danger filter is complete and honest about its limits — it protects against a confused agent, not an adversarial one. The execution seam already exists (`BashOperations.exec` in `src/core/tools/bash.ts`, designed for pluggable backends), and Phase 28 already proved the OS-boundary pattern in-repo for the RLM REPL (`packages/rlm/src/sandbox.ts`: `sandbox-exec` + SBPL on macOS, `unshare`/bwrap namespaces on Linux, startup self-test, env hygiene). Key posture difference from Phase 28: bash is the agent's primary limb, so sandbox-unavailable degrades to today's permission gate with a notice (never fail-closed), and in-sandbox policy denials escalate to a "rerun unsandboxed?" approval prompt.
 >
 > **Design spec:** `.planning/specs/2026-07-12-bash-sandbox-confinement.md`. All work in `packages/coding-agent`; no new package.
 

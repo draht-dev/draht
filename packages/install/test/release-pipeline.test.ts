@@ -7,27 +7,32 @@ import { computeNextVersion, stampPluginManifests } from "../../../scripts/lib/v
 
 describe("computeNextVersion", () => {
 	it("returns -1 when there is no release today", () => {
-		expect(computeNextVersion([], new Date(2026, 7, 12))).toBe("2026.8.12-1");
+		expect(computeNextVersion([], new Date(Date.UTC(2026, 7, 12)))).toBe("2026.8.12-1");
 	});
 
 	it("increments the suffix when a -N release already exists today", () => {
-		expect(computeNextVersion(["2026.8.12-1"], new Date(2026, 7, 12))).toBe("2026.8.12-2");
+		expect(computeNextVersion(["2026.8.12-1"], new Date(Date.UTC(2026, 7, 12)))).toBe("2026.8.12-2");
 	});
 
 	it("treats a legacy bare version today as suffix 1, so the next release is -2", () => {
 		// Pins the documented transition edge: a bare "YYYY.M.D" produced by the
 		// pre-CalVer-suffix release.mjs counts as "-1" for today's max suffix.
-		expect(computeNextVersion(["2026.8.12"], new Date(2026, 7, 12))).toBe("2026.8.12-2");
+		expect(computeNextVersion(["2026.8.12"], new Date(Date.UTC(2026, 7, 12)))).toBe("2026.8.12-2");
 	});
 
 	it("ignores versions from other days", () => {
-		expect(computeNextVersion(["2026.8.11-5", "2026.8.13-1"], new Date(2026, 7, 12))).toBe("2026.8.12-1");
+		expect(computeNextVersion(["2026.8.11-5", "2026.8.13-1"], new Date(Date.UTC(2026, 7, 12)))).toBe("2026.8.12-1");
+	});
+
+	it("stamps the UTC day, not the releaser's local day", () => {
+		expect(computeNextVersion([], new Date("2026-08-12T23:30:00-07:00"))).toBe("2026.8.13-1");
+		expect(computeNextVersion([], new Date("2026-08-13T00:30:00+02:00"))).toBe("2026.8.12-1");
 	});
 
 	describe("ordering sanity (semver)", () => {
 		it("a second same-day release sorts above the first", () => {
-			const first = computeNextVersion([], new Date(2026, 7, 12));
-			const second = computeNextVersion([first], new Date(2026, 7, 12));
+			const first = computeNextVersion([], new Date(Date.UTC(2026, 7, 12)));
+			const second = computeNextVersion([first], new Date(Date.UTC(2026, 7, 12)));
 
 			expect(first).toBe("2026.8.12-1");
 			expect(second).toBe("2026.8.12-2");
@@ -38,7 +43,7 @@ describe("computeNextVersion", () => {
 			// The comment on computeNextVersion in version-stamp.mjs claims this
 			// degradation as accepted behavior — pin it with a real assertion
 			// instead of trusting the prose.
-			const next = computeNextVersion(["2026.8.12"], new Date(2026, 7, 12));
+			const next = computeNextVersion(["2026.8.12"], new Date(Date.UTC(2026, 7, 12)));
 
 			expect(next).toBe("2026.8.12-2");
 			expect(lt(next, "2026.8.12")).toBe(true);

@@ -10,9 +10,9 @@
  *
  * These tests drive the EMITTED BINARY, never an in-process import: an
  * in-process test would pass while the product a child process sees stayed
- * broken. `DRAHT_PERMISSION_MODE` is deleted from every child environment
- * because this repo's interactive shell exports `auto`; a test that inherited it
- * would prove nothing about permissions.
+ * broken. `DRAHT_PERMISSION_MODE` is pinned to `ask` in every child
+ * environment: under `auto`, the mode a session starts in and the one this repo's
+ * interactive shell exports, a test would prove nothing about permissions.
  */
 
 import { spawn } from "node:child_process";
@@ -20,6 +20,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { ensureEmittedBuild } from "./emitted-build.ts";
 
 const PKG_ROOT = path.resolve(__dirname, "..");
 const EMITTED_CLI = path.join(PKG_ROOT, "dist", "cli.js");
@@ -48,12 +49,12 @@ interface RunResult {
 }
 
 /**
- * The child environment: inherited (the binary needs PATH and HOME), minus the
- * two variables that would let ambient shell state decide the outcome.
+ * The child environment: inherited (the binary needs PATH and HOME), with the
+ * two variables that would let ambient shell state decide the outcome pinned.
  */
 function childEnv(agentDir: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = { ...process.env };
-	delete env.DRAHT_PERMISSION_MODE;
+	env.DRAHT_PERMISSION_MODE = "ask";
 	delete env.DRAHT_STUB_TOOL_CALLS;
 	env.DRAHT_STUB_PROVIDER = "1";
 	env.DRAHT_CODING_AGENT_DIR = agentDir;
@@ -127,31 +128,8 @@ function observedToolCalls(events: Record<string, unknown>[]): ObservedToolCall[
 	return calls;
 }
 
-function buildEmittedBinary(): Promise<RunResult> {
-	return new Promise((resolve, reject) => {
-		const child = spawn("bun", ["run", "build"], {
-			cwd: PKG_ROOT,
-			env: process.env,
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-		let stdout = "";
-		let stderr = "";
-		child.stdout.on("data", (chunk) => {
-			stdout += chunk;
-		});
-		child.stderr.on("data", (chunk) => {
-			stderr += chunk;
-		});
-		child.on("error", reject);
-		child.on("close", (code) => {
-			if (code !== 0) reject(new Error(`build failed:\n${stdout}\n${stderr}`));
-			else resolve({ code, stdout, stderr, timedOut: false });
-		});
-	});
-}
-
 beforeAll(async () => {
-	await buildEmittedBinary();
+	await ensureEmittedBuild();
 }, 300_000);
 
 afterAll(async () => {

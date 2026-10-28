@@ -7,11 +7,13 @@ import test from "node:test";
 import { spawnSync } from "node:child_process";
 
 import {
+	AI_VERSION_MODULE,
 	EXPECTED_RELEASE_ASSETS,
 	assertBunToolchain,
 	assertReleaseVersions,
 	getScopePackages,
 	listGithubReleaseAssets,
+	readAiVersionConstant,
 	missingReleaseAssets,
 	setVersion,
 	validateReleaseArtifacts,
@@ -53,6 +55,48 @@ test("setting package versions synchronizes plugin manifests and dependency vers
 	assert.doesNotMatch(readFileSync(join(root, "bun.lock"), "utf8"), /0\.9\.0/);
 });
 
+function aiVersionModule(version) {
+	return `// The @draht/ai package version.\nexport const DRAHT_AI_VERSION = "${version}";\n`;
+}
+
+test("setting package versions stamps DRAHT_AI_VERSION in the @draht/ai version module", () => {
+	const root = versionFixture();
+	const modulePath = join(root, AI_VERSION_MODULE);
+	mkdirSync(join(modulePath, ".."), { recursive: true });
+	writeFileSync(modulePath, aiVersionModule("0.9.0"));
+	assert.throws(() => assertReleaseVersions(root, "1.0.0"), /DRAHT_AI_VERSION is 0\.9\.0; expected 1\.0\.0/);
+	setVersion(root, "2.0.0");
+	assert.equal(readFileSync(modulePath, "utf8"), aiVersionModule("2.0.0"));
+	assert.equal(readAiVersionConstant(readFileSync(modulePath, "utf8")), "2.0.0");
+	assert.doesNotThrow(() => assertReleaseVersions(root, "2.0.0"));
+});
+
+test("a stale DRAHT_AI_VERSION fails the release version gate even when every manifest is current", () => {
+	const root = versionFixture();
+	setVersion(root, "2.0.0");
+	const modulePath = join(root, AI_VERSION_MODULE);
+	mkdirSync(join(modulePath, ".."), { recursive: true });
+	writeFileSync(modulePath, aiVersionModule("1.9.9"));
+	assert.throws(() => assertReleaseVersions(root, "2.0.0"), /version\.ts DRAHT_AI_VERSION is 1\.9\.9; expected 2\.0\.0/);
+});
+
+test("a version module without DRAHT_AI_VERSION fails stamping instead of being skipped", () => {
+	const root = versionFixture();
+	const modulePath = join(root, AI_VERSION_MODULE);
+	mkdirSync(join(modulePath, ".."), { recursive: true });
+	writeFileSync(modulePath, "export const SOMETHING_ELSE = 1;\n");
+	assert.throws(() => setVersion(root, "2.0.0"), /has no DRAHT_AI_VERSION constant to stamp/);
+});
+
+test("setting package versions keeps each file's existing indentation", () => {
+	const root = versionFixture();
+	writeFileSync(join(root, "package.json"), '{\n\t"name": "root",\n\t"version": "1.0.0"\n}\n');
+	writeFileSync(join(root, "packages/a/package.json"), '{\n  "name": "a",\n  "version": "1.0.0"\n}\n');
+	setVersion(root, "2.0.0");
+	assert.equal(readFileSync(join(root, "package.json"), "utf8"), '{\n\t"name": "root",\n\t"version": "2.0.0"\n}\n');
+	assert.equal(readFileSync(join(root, "packages/a/package.json"), "utf8"), '{\n  "name": "a",\n  "version": "2.0.0"\n}\n');
+});
+
 test("repository uses Bun as its single authoritative dependency lock", () => {
 	assert.equal(existsSync(join(process.cwd(), "package-lock.json")), false, "stale npm lockfile must not coexist with bun.lock");
 	assert.equal(existsSync(join(process.cwd(), "bun.lock")), true);
@@ -61,15 +105,25 @@ test("repository uses Bun as its single authoritative dependency lock", () => {
 	assert.match(releaseScript, /bun install --frozen-lockfile --ignore-scripts --linker hoisted/);
 });
 
-test("release toolchain requires the exact pinned Bun canary revision", () => {
-	assert.doesNotThrow(() => assertBunToolchain(process.cwd(), () => "1.3.14-canary.1+ed1c48f2b"));
+test("release runs the suite on a CI-equivalent install without release credentials, then restores the strict one", () => {
+	const releaseScript = readFileSync(join(process.cwd(), "scripts/release.mjs"), "utf8");
+	const testInstall = releaseScript.indexOf('run("env -u NODE_AUTH_TOKEN -u NPM_CONFIG_TOKEN -u GH_TOKEN -u GITHUB_TOKEN bun install --frozen-lockfile");');
+	const suite = releaseScript.indexOf('run("./test.sh");');
+	const strictAfter = releaseScript.indexOf('run("bun install --frozen-lockfile --ignore-scripts --linker hoisted");', suite);
+	const build = releaseScript.indexOf('run("bun run build");');
+	assert.ok(testInstall !== -1 && testInstall < suite, "the test install must precede ./test.sh");
+	assert.ok(strictAfter > suite && strictAfter < build, "the strict install must be restored before the build");
+});
+
+test("release toolchain requires the exact pinned Bun revision", () => {
+	assert.doesNotThrow(() => assertBunToolchain(process.cwd(), () => "1.4.2+744846f84"));
 	assert.throws(
 		() => assertBunToolchain(process.cwd(), () => "1.4.0-canary.1+wrong"),
 		/Bun revision.*does not match required/,
 	);
 	const workflow = readFileSync(join(process.cwd(), ".github/workflows/build-binaries.yml"), "utf8");
-	assert.match(workflow, /BUN_PACKAGE_VERSION: 1\.3\.13-canary\.20260425\.1/);
-	assert.match(workflow, /BUN_REVISION: 1\.3\.14-canary\.1\+ed1c48f2b/);
+	assert.match(workflow, /BUN_PACKAGE_VERSION: 1\.4\.2/);
+	assert.match(workflow, /BUN_REVISION: 1\.4\.2\+744846f84/);
 });
 
 test("scheduled releases are opt-in, credentialed, and routed through the release script", () => {

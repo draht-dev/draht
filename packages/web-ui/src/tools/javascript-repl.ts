@@ -115,7 +115,7 @@ const javascriptReplSchema = Type.Object({
 
 export type JavaScriptReplParams = Static<typeof javascriptReplSchema>;
 
-interface JavaScriptReplResult {
+type JavaScriptReplResult = {
 	output?: string;
 	files?: Array<{
 		fileName: string;
@@ -123,7 +123,7 @@ interface JavaScriptReplResult {
 		size: number;
 		contentBase64: string;
 	}>;
-}
+};
 
 export function createJavaScriptReplTool(): AgentTool<typeof javascriptReplSchema, JavaScriptReplToolResult> & {
 	runtimeProvidersFactory?: () => SandboxRuntimeProvider[];

@@ -752,3 +752,89 @@ fs.readFileSync = function(path, ...args) {
 		assert.equal(existsSync(lockPath), false);
 	});
 }
+
+// ── opt-in side installs: status line + judge ───────────────────────────────
+// Both write outside the marketplace transaction (settings.json, ~/.local/bin),
+// so the contract under test is: nothing happens without the flag, whatever was
+// there before is preserved, and uninstall only reverts what the installer owns.
+
+function runFlags(f, args, extraEnv = {}) {
+	return spawnSync(process.execPath, [join(f.source, "cli.mjs"), ...args, "--path", f.marketplace], {
+		encoding: "utf8",
+		env: runEnvironment(f, { CLAUDE_CONFIG_DIR: join(f.home, ".claude"), ...extraEnv }),
+	});
+}
+
+function settingsPath(f) {
+	return join(f.home, ".claude", "settings.json");
+}
+
+function writeSettings(f, settings) {
+	mkdirSync(join(f.home, ".claude"), { recursive: true });
+	writeFileSync(settingsPath(f), `${JSON.stringify(settings, null, 2)}\n`);
+}
+
+function readSettings(f) {
+	return existsSync(settingsPath(f)) ? JSON.parse(readFileSync(settingsPath(f), "utf8")) : {};
+}
+
+test("draht-claude install without the opt-in flags touches neither settings.json nor PATH", () => {
+	const f = fixture("draht-claude", { marketplaceExists: false, marketplaceRegistered: false });
+	writeSettings(f, { model: "opus" });
+	const result = runFlags(f, ["install"]);
+	assert.equal(result.status, 0, result.stderr || result.stdout);
+	assert.deepEqual(readSettings(f), { model: "opus" });
+	assert.equal(existsSync(join(f.home, ".local", "bin", "judge")), false);
+	assert.match(result.stdout, /install-statusline/);
+	assert.match(result.stdout, /install-judge/);
+});
+
+test("draht-claude install --statusline wires the status line and saves the previous one", () => {
+	const f = fixture("draht-claude", { marketplaceExists: false, marketplaceRegistered: false });
+	writeSettings(f, { model: "opus", statusLine: { type: "command", command: "my-own-line" } });
+	const result = runFlags(f, ["install", "--statusline"]);
+	assert.equal(result.status, 0, result.stderr || result.stdout);
+	const wired = readSettings(f).statusLine;
+	assert.equal(wired.command, `python3 "${join(f.marketplace, "plugins", "draht", "statusline", "statusline.py")}"`);
+	assert.equal(readSettings(f).model, "opus");
+	const backup = JSON.parse(readFileSync(join(f.home, ".draht", "statusline-backup.json"), "utf8"));
+	assert.equal(backup.statusLine.command, "my-own-line");
+});
+
+test("draht-claude install --judge links the TUI into ~/.local/bin", () => {
+	const f = fixture("draht-claude", { marketplaceExists: false, marketplaceRegistered: false });
+	const result = runFlags(f, ["install", "--judge"]);
+	assert.equal(result.status, 0, result.stderr || result.stdout);
+	const link = join(f.home, ".local", "bin", "judge");
+	assert.equal(lstatSync(link).isSymbolicLink(), true);
+	assert.equal(readFileSync(link, "utf8"), readFileSync(join(f.marketplace, "plugins", "draht", "bin", "judge"), "utf8"));
+});
+
+test("draht-claude install --judge leaves a judge binary it does not own alone", () => {
+	const f = fixture("draht-claude", { marketplaceExists: false, marketplaceRegistered: false });
+	mkdirSync(join(f.home, ".local", "bin"), { recursive: true });
+	writeFileSync(join(f.home, ".local", "bin", "judge"), "#!/bin/sh\necho someone elses judge\n");
+	const result = runFlags(f, ["install", "--judge"]);
+	assert.equal(result.status, 0, result.stderr || result.stdout);
+	assert.match(result.stderr, /not a symlink/);
+	assert.equal(readFileSync(join(f.home, ".local", "bin", "judge"), "utf8"), "#!/bin/sh\necho someone elses judge\n");
+});
+
+test("draht-claude uninstall restores the previous status line and removes the judge link", () => {
+	const f = fixture("draht-claude", { marketplaceExists: false, marketplaceRegistered: false });
+	writeSettings(f, { model: "opus", statusLine: { type: "command", command: "my-own-line" } });
+	assert.equal(runFlags(f, ["install", "--statusline", "--judge"]).status, 0);
+	const result = runFlags(f, ["uninstall"]);
+	assert.equal(result.status, 0, result.stderr || result.stdout);
+	assert.deepEqual(readSettings(f), { model: "opus", statusLine: { type: "command", command: "my-own-line" } });
+	assert.equal(existsSync(join(f.home, ".local", "bin", "judge")), false);
+	assert.equal(existsSync(join(f.home, ".draht", "statusline-backup.json")), false);
+});
+
+test("draht-claude uninstall leaves a status line the installer never wrote in place", () => {
+	const f = fixture("draht-claude", { marketplaceExists: false, marketplaceRegistered: false });
+	writeSettings(f, { statusLine: { type: "command", command: "my-own-line" } });
+	assert.equal(runFlags(f, ["install"]).status, 0);
+	assert.equal(runFlags(f, ["uninstall"]).status, 0);
+	assert.deepEqual(readSettings(f), { statusLine: { type: "command", command: "my-own-line" } });
+});

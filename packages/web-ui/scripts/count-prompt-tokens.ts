@@ -25,7 +25,7 @@ async function countTokens(text: string): Promise<number> {
 			"anthropic-version": "2023-06-01",
 		},
 		body: JSON.stringify({
-			model: "claude-3-5-sonnet-20241022",
+			model: "claude-sonnet-5",
 			messages: [
 				{
 					role: "user",

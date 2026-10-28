@@ -40,6 +40,7 @@ Session continuity:
 
 Ad-hoc:
 
+- `commands/budget.md` - guided configuration of this repository's token budgets
 - `commands/quick.md`
 - `commands/fix.md`
 - `commands/review.md`
@@ -57,7 +58,7 @@ Use the wrappers for picker-driven invocation, and keep the `commands/*.md` file
 
 ### Specialist agent prompts
 
-The plugin ships 9 reference prompts in `agents/`:
+The plugin ships 11 reference prompts in `agents/`:
 
 - `advisor`
 - `architect`
@@ -69,14 +70,33 @@ The plugin ships 9 reference prompts in `agents/`:
 - `git-committer`
 - `security-auditor`
 - `spec-reviewer`
-- `advisor`
+- `speaker`
 
 Codex subagent availability depends on the active Codex feature/configuration. When named Draht agent roles are not registered directly, the command templates can still use generic Codex subagents by pasting the relevant Draht agent prompt into the delegated task.
 
+Each prompt's frontmatter `model:` names a default GPT-6 model by price tier:
+
+| Agent | Default |
+|---|---|
+| `advisor` | `gpt-6-astra` |
+| `architect` | `gpt-6.1-sol` |
+| `reviewer` | `gpt-6.1-sol` |
+| `security-auditor` | `gpt-6.1-sol` |
+| `spec-reviewer` | `gpt-6.1-sol` |
+| `implementer` | `gpt-6.1-sol` |
+| `investigator` | `gpt-6.1-sol` |
+| `verifier` | `gpt-6.1-sol` |
+| `speaker` | `gpt-6-luna` |
+| `debugger` | `inherit` |
+| `git-committer` | `inherit` |
+
+Codex treats agent `model:` as reference metadata — `configure --list` shows it, but Codex does not read it to route a subagent to that model unless you wire the role yourself in `~/.codex/config.toml`.
+
 ### Command prompt wrappers
 
-The plugin ships 17 command prompt wrappers, one per `commands/*.md` template:
+The plugin ships a command prompt wrapper for each `commands/*.md` template:
 
+- `budget`
 - `new-project`
 - `init-project`
 - `map-codebase`
@@ -103,7 +123,7 @@ The plugin ships 17 command prompt wrappers, one per `commands/*.md` template:
 
 ### Support skills
 
-The GSD workflow templates live in `commands/`. Alongside the 23 command wrappers above, the plugin ships 16 support skills (39 skill directories in total), loaded by description match or by name.
+The GSD workflow templates live in `commands/`. Alongside the command wrappers above, support skills load by description match or by name.
 
 Router:
 
@@ -135,11 +155,13 @@ Creative:
 - `loop-workflow`
 - `model-tiering`
 - `saga-spawner`
-- `unslop` — cut AI tells from prose deliverables, then add voice back
+- `unslop` — cut AI tells from prose deliverables, then add voice back; includes an STE-lite register for procedures
+- `explainers` — evidence-built Mermaid diagrams and HTML explainers for graph-shaped reports
 - `epistemics` — confidence calibration for investigation findings
 - `typescript-discipline` — make illegal states unrepresentable
 - `blast-radius` — impact analysis beyond the diff on the evidence ladder
 - `cinematic-continuation` — provider-neutral, time-coded video continuation from bundled distilled style and continuity references
+- `judge` — the gate queue: the tests a session writes are replayed and mutated into evidence, then a reviewer judges whether the gate is real, with the verdict delivered back into the session
 
 ### Hooks and scripts
 
@@ -153,8 +175,15 @@ The plugin includes `hooks/hooks.json` plus these scripts:
 - `prompt-context.cjs` (UserPromptSubmit)
 - `post-edit-check.cjs` (PostToolUse on `Edit`/`Write`/`MultiEdit`)
 - `stop-quality-gate.cjs` (Stop)
+- `judge-hook.cjs` (PostToolUse, PreToolUse, UserPromptSubmit, Stop, PermissionRequest) — the gate queue: a new test is replayed against the code as it stands, and mutated once the implementation lands; inert unless the `judge` TUI in `bin/judge` is running
 
 Codex loads plugin-bundled hooks only after the user reviews and trusts them.
+
+### Token budgets
+
+Opt-in per-file token limits encourage readable, cohesive code and concise documentation. `$draht:budget`, or `budget` in `/skills`, guides you through writing the repository's `.draht/budgets.json`; repositories without that file are not measured. The defaults are 5,000 tokens per code file and 1,500 per documentation file. Lockfiles, changelogs, and generated files are skipped, and task totals are optional. Trusted plugin hooks enforce the same offline accounting as native draht, shared by subagents and linked worktrees. Chat responses have no budget.
+
+Add `status` to inspect limits and usage. Only the user starts a new task, by submitting `$draht:budget new` as the whole prompt. See the [budget guide](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/docs/budgets.md).
 
 ## Installation
 
@@ -202,13 +231,13 @@ node "${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$HOME/.draht/codex-marketplace/plugin
 Reference agent model metadata can be edited in the installed plugin copy:
 
 ```bash
-npx draht-codex configure --agent architect --model gpt-5.5
+npx draht-codex configure --agent architect --model gpt-6-astra
 npx draht-codex configure --list
 npx draht-codex configure --agent architect --reset
 npx draht-codex configure --reset
 ```
 
-This updates the bundled Markdown frontmatter. Codex-native custom agent routing may require user-level `~/.codex/config.toml` agent role configuration.
+This updates the bundled Markdown frontmatter. `--reset` removes the `model:` line, so `--list` then shows `inherit`; `draht-codex update` restores the shipped defaults. Codex-native custom agent routing may require user-level `~/.codex/config.toml` agent role configuration.
 
 ## Relationship to draht-claude
 

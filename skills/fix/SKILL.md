@@ -1,6 +1,7 @@
 ---
+disable-model-invocation: true
 name: fix
-description: Draht command prompt wrapper for fix. Use when the user selects the Draht fix workflow or wants systematic root-cause debugging with TDD discipline.
+description: Run the Draht fix command when the user explicitly selects its root-cause debugging and TDD workflow.
 ---
 
 # Draht Command: fix

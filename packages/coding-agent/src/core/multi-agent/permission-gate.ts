@@ -27,17 +27,27 @@
  *     action: approve
  * ```
  *
- * Rules are evaluated top-to-bottom; the first matching rule wins.
+ * Rules are evaluated top-to-bottom; the first matching rule wins. A rule's
+ * `tool` is a tool name or a glob over tool names, where `*` stands for any
+ * run of characters and `?` for one, matched case-insensitively:
+ * `mcp__docs__*` covers every tool whose name starts with `mcp__docs__`, such
+ * as the tools of the `docs` MCP server.
  *
- * On top of the rules sits a session-level `PermissionMode` (`default` /
+ * On top of the rules sits a session-level `PermissionMode` (`ask` /
  * `auto` / `yolo`, see the type doc) that relaxes how unmatched calls and
  * `approve` outcomes are handled — `deny` rules are never relaxed.
+ *
+ * An unmatched tool the gate has no default for requires approval, unless it
+ * declares itself read-only (`readOnlyHint`) through sources trusted to say
+ * so (`hasTrustedReadOnlyHint`); then it is allowed within the project, in
+ * `ask` and `supervised` only when it also declares `openWorldHint: false`.
  *
  * `pattern` matching against bash commands is textual (no real shell
  * parser), so `deny` and `allow`/`approve` patterns are matched with
  * deliberately asymmetric strategies to stay fail-safe: `deny` scans every
- * chained/wrapped/unwrapped piece of the command it can find (paranoid,
- * over-matching is safe), while `allow`/`approve` require an exact
+ * chained/wrapped/unwrapped piece of the command it can find, plus every
+ * command a shell-aware read finds the shell runs (`collectDenyCandidates`;
+ * paranoid, over-matching is safe), while `allow`/`approve` require an exact
  * chain-shape match and reject anything containing `$(...)`, backticks, or
  * redirection (strict, under-matching just falls through to the default
  * decision instead of silently authorizing more than intended). See the
@@ -51,33 +61,57 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { minimatch } from "minimatch";
 import { parse } from "yaml";
 import { CONFIG_DIR_NAME, getAgentDir } from "../../config.ts";
+import type { SourceInfo, SourceScope } from "../source-info.ts";
+import { resolveToCwd } from "../tools/path-utils.ts";
 
 /** The three permission tiers a rule (or default) can resolve to. */
 export type PermissionAction = "deny" | "allow" | "approve";
 
 /**
- * Session-level permission mode. Modes only relax the gate's *default*
+ * Session-level permission mode. Modes only change the gate's *default*
  * decisions — explicit rules from `permissions.yml` always win first:
  *
- * - `default`: rules as authored; unmatched bash requires approval.
+ * - `supervised`: like `ask`, and unmatched `write`/`edit` calls require
+ *   approval inside the project too.
+ * - `ask`: rules as authored; unmatched bash/powershell requires approval.
+ *   A trusted read-only tool runs unasked only when it also declares
+ *   `openWorldHint: false` (as in `supervised`).
  * - `auto`: unmatched bash is auto-allowed unless it trips the built-in
  *   danger filter (`DANGEROUS_COMMAND_PATTERNS`), in which case it still
- *   requires approval. Explicit `deny`/`approve` rules behave as authored.
+ *   requires approval. `powershell` is excluded from this auto-allow — the
+ *   danger filter is bash-shaped and has no powershell-specific coverage, so
+ *   unmatched powershell calls always require approval, even in auto mode.
+ *   Unmatched `AUTO_ALLOWED_DELEGATION_TOOLS` calls are auto-allowed too.
+ *   Explicit `deny`/`approve` rules behave as authored.
  * - `yolo`: every `approve` (rule-based or default) is downgraded to
  *   `allow`. Explicit `deny` rules still block — yolo is "stop asking",
  *   not "disable the gate".
  */
-export type PermissionMode = "default" | "auto" | "yolo";
+export type PermissionMode = "supervised" | "ask" | "auto" | "yolo";
 
-export const PERMISSION_MODES: readonly PermissionMode[] = ["default", "auto", "yolo"];
+/** Strictest first: `stricterPermissionMode` relies on this order. */
+export const PERMISSION_MODES: readonly PermissionMode[] = ["supervised", "ask", "auto", "yolo"];
+
+/**
+ * The mode a session starts in when `DRAHT_PERMISSION_MODE` names none. A `PermissionGate`
+ * constructed without a mode still uses `ask`, so a caller that forgets to pass the session's
+ * mode never gets a laxer gate than any session but a `supervised` one has. Never `yolo`: `/yolo`
+ * switches back to this mode when nothing else was chosen.
+ */
+export const DEFAULT_SESSION_PERMISSION_MODE: Exclude<PermissionMode, "yolo"> = "auto";
 
 export function isPermissionMode(value: unknown): value is PermissionMode {
 	return typeof value === "string" && (PERMISSION_MODES as readonly string[]).includes(value);
 }
 
+/** Whichever of the two modes asks more. */
+export function stricterPermissionMode(a: PermissionMode, b: PermissionMode): PermissionMode {
+	return PERMISSION_MODES.indexOf(a) <= PERMISSION_MODES.indexOf(b) ? a : b;
+}
+
 /** A single permission rule as authored in `permissions.yml`. */
 export interface PermissionRule {
-	/** Tool identifier this rule applies to (e.g. "bash", "read", "write", "edit"), or "*" for any tool. */
+	/** Tool this rule applies to (e.g. "bash", "read", "write", "edit"), or a glob over tool names ("mcp__docs__*", "*"). */
 	tool: string;
 	/** Glob pattern matched against the bash command string (only meaningful for tools with a `command` arg). */
 	pattern?: string;
@@ -102,10 +136,20 @@ const READ_ONLY_PATH_TOOLS = new Set(["grep", "find", "ls"]);
  * Tools that are safe to run without confirmation because the call itself
  * only delegates: spawned child processes run this same gate over every tool
  * call they actually make. Explicit rules can still `deny`/`approve` these.
- * Duet delegation is deliberately not included because it fans out paid model
- * requests; unmatched duet batches require explicit approval.
+ * Workflows and duet batches are deliberately not included because they fan
+ * out paid model requests; see `AUTO_ALLOWED_DELEGATION_TOOLS`.
+ *
+ * `polyphase_result` is also allowed by default: it returns a value to the parent workflow; no
+ * side effects; children have no UI to approve it.
  */
-const DEFAULT_ALLOWED_TOOLS = new Set(["subagent"]);
+const DEFAULT_ALLOWED_TOOLS = new Set(["subagent", "polyphase_result"]);
+/**
+ * Delegating tools that fan out paid model requests: a workflow run and a duet batch. Like
+ * `DEFAULT_ALLOWED_TOOLS`, they only start child processes that run this same gate over every
+ * tool call they make, so `auto` mode starts them without asking; `ask` mode asks first,
+ * for the spend. Explicit rules can still `deny`/`approve` these.
+ */
+const AUTO_ALLOWED_DELEGATION_TOOLS = new Set(["workflow", "duet_delegate"]);
 
 function isPermissionAction(value: unknown): value is PermissionAction {
 	return typeof value === "string" && (VALID_ACTIONS as readonly string[]).includes(value);
@@ -119,6 +163,12 @@ function validateRule(raw: unknown, index: number): PermissionRule {
 
 	if (typeof record.tool !== "string" || record.tool.length === 0) {
 		throw new Error(`permissions.yml: rule at index ${index} is missing a valid "tool" field`);
+	}
+	// `paths` globs know braces and brackets; in `tool` they would silently never match a tool name.
+	if (/[{}[\]]/.test(record.tool)) {
+		throw new Error(
+			`permissions.yml: rule at index ${index} has braces or brackets in "tool"; only * and ? are wildcards there`,
+		);
 	}
 	if (!isPermissionAction(record.action)) {
 		throw new Error(
@@ -264,13 +314,58 @@ const PASSTHROUGH_PREFIXES = new Set([
 	"chrt",
 	"setsid",
 	"xargs",
+	"timeout",
+	// busybox dispatches to its builtin applet by the same name and arguments
+	// it was given (`busybox rm -rf /` behaves exactly like `rm -rf /`), so it
+	// is a pure passthrough for deny-scan purposes.
+	"busybox",
+	// wsl/wsl.exe runs its arguments as a command inside the Linux subsystem,
+	// same shape as sudo/env.
+	"wsl",
 ]);
 
 /** Shells whose `-c <command>` argument is itself a full command line to unwrap and re-check. */
-const SHELL_C_WRAPPERS = new Set(["bash", "sh", "zsh", "ksh", "dash"]);
+const SHELL_C_WRAPPERS = new Set(["bash", "sh", "zsh", "ksh", "dash", "fish"]);
+
+/**
+ * Every shell the run checks know: the `-c` wrappers and other shells that equally run a script,
+ * stdin, or `-c`. The deny scan keeps to `SHELL_C_WRAPPERS`.
+ */
+const SCRIPT_SHELLS: ReadonlySet<string> = new Set([
+	...SHELL_C_WRAPPERS,
+	"ash",
+	"mksh",
+	"pdksh",
+	"oksh",
+	"yash",
+	"posh",
+	"csh",
+	"tcsh",
+	"elvish",
+	"nu",
+	"xonsh",
+]);
+
+/**
+ * Non-POSIX shells whose command-line argument is itself a full command line
+ * to unwrap and re-check. Catches bash wrapping another shell, e.g.
+ * `bash -c "pwsh -c 'rm -rf ~'"`. Matched by regex rather than a fixed Set so
+ * variants like `pwsh-preview`, `powershell_ise`, and `.exe`/path-prefixed
+ * spellings (normalized by `basenameOfHeadToken`) are all covered.
+ */
+const OTHER_SHELL_WRAPPER_RE = /^(pwsh|powershell|powershell_ise|cmd)([-_].*)?$/;
+
+function isOtherShellWrapperName(basename: string): boolean {
+	return OTHER_SHELL_WRAPPER_RE.test(basename);
+}
 
 /** Constructs that make a command dynamic/opaque enough that allow/approve patterns must never match it. */
 const DANGEROUS_CONSTRUCT_RE = /\$\(|`|<|>/;
+
+/** `true` for the operators that feed one command's output into the next: `|` and `|&`. */
+function isPipeOperator(operator: string | undefined): boolean {
+	return operator === "|" || operator === "|&";
+}
 
 interface ChainSegment {
 	text: string;
@@ -330,15 +425,133 @@ function collapseWhitespace(text: string): string {
 	return text.trim().replace(/\s+/g, " ");
 }
 
-/** Canonicalizes combined single-dash short-flag clusters (`-rf` / `-fr`) by sorting their letters. */
+/**
+ * Canonicalizes combined single-dash short-flag clusters (`-rf` / `-fr`) by
+ * sorting their letters. The sort is case-insensitive: matching elsewhere is
+ * already case-insensitive (`globToRegExp`'s `i` flag), but a case-sensitive
+ * sort would put uppercase letters before lowercase ones (ASCII order), so a
+ * mixed-case cluster like `-Rf` would canonicalize to `-Rf` while `-rf`
+ * canonicalizes to `-fr` — different letter *order*, which the `i` flag
+ * can't paper over. Sorting case-insensitively (while keeping each letter's
+ * original case) gives `-Rf` and `-rf` the same order (`-fR` / `-fr`), so
+ * `-Rf`/`-fR`/`-RF`/... all canonicalize to match a plain `-rf` pattern.
+ */
 function normalizeFlagClusters(text: string): string {
 	return text.replace(/(^|\s)-([A-Za-z]{2,})(?=\s|$)/g, (_match, pre: string, letters: string) => {
-		return `${pre}-${letters.split("").sort().join("")}`;
+		const sorted = [...letters].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+		return `${pre}-${sorted.join("")}`;
 	});
 }
 
 function normalizeForMatch(text: string): string {
 	return normalizeFlagClusters(collapseWhitespace(text));
+}
+
+function tokenize(text: string): string[] {
+	const trimmed = text.trim();
+	return trimmed.length === 0 ? [] : trimmed.split(/\s+/);
+}
+
+/** A combined short-flag cluster token (`-rf`, `-R`), optionally glob-suffixed (`-r*`) by a danger-pattern author. */
+function parseShortFlagClusterToken(token: string): string | undefined {
+	return token.match(/^-([A-Za-z]+)\*?$/)?.[1];
+}
+
+function parseLongFlagToken(token: string): string | undefined {
+	return token.match(/^--([A-Za-z][A-Za-z-]*)$/)?.[1]?.toLowerCase();
+}
+
+interface FlagSet {
+	shortFlags: Set<string>;
+	longFlags: Set<string>;
+}
+
+/** Collects every short/long flag found anywhere in `tokens`, regardless of order, clustering, or position. */
+function extractFlagSet(tokens: string[]): FlagSet {
+	const shortFlags = new Set<string>();
+	const longFlags = new Set<string>();
+	for (const token of tokens) {
+		const letters = parseShortFlagClusterToken(token);
+		if (letters !== undefined) {
+			for (const ch of letters) shortFlags.add(ch.toLowerCase());
+			continue;
+		}
+		const long = parseLongFlagToken(token);
+		if (long !== undefined) longFlags.add(long);
+	}
+	return { shortFlags, longFlags };
+}
+
+interface FlagClusterDenyPattern {
+	command: string;
+	requiredShortFlags: Set<string>;
+	requiredLongFlags: Set<string>;
+}
+
+/**
+ * Parses a deny `pattern` of the shape `<command> <flags...> [*]` (e.g.
+ * `rm -rf *`, `rm -r*`, `chmod -R *`) into a required flag set, for matching
+ * by `flagClusterPatternMatchesCandidate` below. Returns `undefined` for any
+ * pattern that doesn't have this exact "bare command name plus only
+ * flags/wildcard" shape, so those patterns keep using the generic glob
+ * matcher unchanged.
+ */
+function parseFlagClusterPattern(pattern: string): FlagClusterDenyPattern | undefined {
+	const [command, ...rest] = tokenize(pattern);
+	if (command === undefined || /[*?]/.test(command)) return undefined;
+
+	const requiredShortFlags = new Set<string>();
+	const requiredLongFlags = new Set<string>();
+	let sawFlag = false;
+	for (const token of rest) {
+		if (token === "*") continue;
+		const letters = parseShortFlagClusterToken(token);
+		if (letters !== undefined) {
+			sawFlag = true;
+			for (const ch of letters) requiredShortFlags.add(ch.toLowerCase());
+			continue;
+		}
+		const long = parseLongFlagToken(token);
+		if (long !== undefined) {
+			sawFlag = true;
+			requiredLongFlags.add(long);
+			continue;
+		}
+		return undefined;
+	}
+	if (!sawFlag) return undefined;
+	return { command: command.toLowerCase(), requiredShortFlags, requiredLongFlags };
+}
+
+/** `rm`'s two spellings of "recursive"/"force" that are interchangeable for flag-set matching purposes. */
+const SHORT_LONG_FLAG_EQUIVALENTS: ReadonlyMap<string, string> = new Map([
+	["r", "recursive"],
+	["f", "force"],
+]);
+
+function flagClusterPatternMatchesCandidate(flagPattern: FlagClusterDenyPattern, candidateText: string): boolean {
+	const tokens = tokenize(candidateText);
+	const commandToken = tokens[0];
+	if (commandToken === undefined) return false;
+	const commandName = (
+		commandToken.includes("/") ? commandToken.slice(commandToken.lastIndexOf("/") + 1) : commandToken
+	).toLowerCase();
+	if (commandName !== flagPattern.command) return false;
+
+	const { shortFlags, longFlags } = extractFlagSet(tokens.slice(1));
+	const hasShort = (flag: string) =>
+		shortFlags.has(flag) || longFlags.has(SHORT_LONG_FLAG_EQUIVALENTS.get(flag) ?? "");
+	const hasLong = (flag: string) => {
+		if (longFlags.has(flag)) return true;
+		for (const [short, long] of SHORT_LONG_FLAG_EQUIVALENTS) {
+			if (long === flag && shortFlags.has(short)) return true;
+		}
+		return false;
+	};
+
+	for (const flag of flagPattern.requiredShortFlags) if (!hasShort(flag)) return false;
+	for (const flag of flagPattern.requiredLongFlags) if (!hasLong(flag)) return false;
+	return true;
 }
 
 /** Resolves a leading `/some/path/cmd` (or `./cmd`, `../cmd`) first token down to its bare basename. */
@@ -361,32 +574,536 @@ function stripEnvAssignments(text: string): string {
 	return text.replace(/^\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/, "");
 }
 
-/** Strips one leading passthrough-wrapper command (e.g. `sudo`, `env FOO=1`) and its own flags, if present. */
+/**
+ * Flags that consume a separate following argument (rather than being a
+ * standalone `-flag` token) for each passthrough wrapper, so
+ * `stripPassthroughPrefix` doesn't mistake that argument for the start of
+ * the wrapped command.
+ */
+const WRAPPER_FLAGS_WITH_ARG: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+	["timeout", new Set(["-s", "-k", "--signal", "--kill-after"])],
+	["nice", new Set(["-n"])],
+	["ionice", new Set(["-c", "-n", "-p"])],
+	// policy flags (-b/-f/-i/-o/-r) take a priority; -p takes a target pid.
+	["chrt", new Set(["-b", "-f", "-i", "-o", "-r", "-p"])],
+	["stdbuf", new Set(["-i", "-o", "-e"])],
+	["env", new Set(["-u", "-C", "-S", "--split-string"])],
+	["sudo", new Set(["-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", "-U"])],
+]);
+
+/**
+ * Strips one leading passthrough-wrapper command (e.g. `sudo`, `env FOO=1`)
+ * and its own flags, if present, consuming each flag's own separate argument
+ * (`WRAPPER_FLAGS_WITH_ARG`) rather than mistaking it for the wrapped
+ * command. `timeout DURATION cmd...` additionally skips the required
+ * duration positional, which isn't a `-flag` token, so `timeout 5 rm -rf /`
+ * unwraps down to `rm -rf /` instead of leaving the bogus `5 rm -rf /`
+ * behind.
+ */
 function stripPassthroughPrefix(text: string): { stripped: string; changed: boolean } {
 	const trimmed = text.replace(/^\s+/, "");
-	const match = trimmed.match(/^(\S+)((?:\s+-\S+)*)\s+/);
-	if (!match) return { stripped: text, changed: false };
-	const token = match[1];
-	const basename = token.includes("/") ? token.slice(token.lastIndexOf("/") + 1) : token;
-	if (!PASSTHROUGH_PREFIXES.has(basename.toLowerCase())) return { stripped: text, changed: false };
-	return { stripped: trimmed.slice(match[0].length), changed: true };
+	const tokens = tokenizeShellWords(trimmed);
+	const head = tokens[0];
+	if (head === undefined) return { stripped: text, changed: false };
+	const basename = basenameOfHeadToken(head);
+	if (!PASSTHROUGH_PREFIXES.has(basename)) return { stripped: text, changed: false };
+
+	const argFlags = WRAPPER_FLAGS_WITH_ARG.get(basename);
+	let i = 1;
+	while (i < tokens.length) {
+		const token = tokens[i];
+		if (argFlags?.has(token)) {
+			i += 2;
+			continue;
+		}
+		if (/^-/.test(token)) {
+			i++;
+			continue;
+		}
+		break;
+	}
+	if (basename === "timeout" && i < tokens.length) i++;
+
+	return { stripped: tokens.slice(i).map(requoteTokenIfNeeded).join(" "), changed: true };
 }
 
-/** Extracts the inner command line from a `bash -c "..."` / `sh -c '...'` style wrapper, if present. */
-function extractShellDashC(text: string): string | undefined {
+/** Re-wraps a dequoted token in single quotes if it contains whitespace, so rejoining tokens with `" "` doesn't silently merge what was one quoted argument into several unquoted words. */
+function requoteTokenIfNeeded(token: string): string {
+	return /\s/.test(token) ? `'${token.replace(/'/g, `'\\''`)}'` : token;
+}
+
+/**
+ * Minimal POSIX-ish shell word tokenizer: splits `text` on unquoted
+ * whitespace, honoring single quotes (fully literal, no escapes), double
+ * quotes (backslash escapes the next character), and a bare backslash
+ * outside quotes (escapes the next character). This is only used to locate
+ * wrapper flags and the command-body token that follows them, not to
+ * implement real shell grammar (no variable expansion, globbing, etc.).
+ */
+function tokenizeShellWords(text: string): string[] {
+	const tokens: string[] = [];
+	let current = "";
+	let hasCurrent = false;
+	let i = 0;
+	while (i < text.length) {
+		const ch = text[i];
+		if (/\s/.test(ch)) {
+			if (hasCurrent) {
+				tokens.push(current);
+				current = "";
+				hasCurrent = false;
+			}
+			i++;
+			continue;
+		}
+		if (ch === "'") {
+			hasCurrent = true;
+			i++;
+			while (i < text.length && text[i] !== "'") {
+				current += text[i];
+				i++;
+			}
+			i++;
+			continue;
+		}
+		if (ch === '"') {
+			hasCurrent = true;
+			i++;
+			while (i < text.length && text[i] !== '"') {
+				if (text[i] === "\\" && i + 1 < text.length) {
+					current += text[i + 1];
+					i += 2;
+				} else {
+					current += text[i];
+					i++;
+				}
+			}
+			i++;
+			continue;
+		}
+		if (ch === "\\" && i + 1 < text.length) {
+			hasCurrent = true;
+			current += text[i + 1];
+			i += 2;
+			continue;
+		}
+		hasCurrent = true;
+		current += ch;
+		i++;
+	}
+	if (hasCurrent) tokens.push(current);
+	return tokens;
+}
+
+/**
+ * Lowercased basename of a (possibly quoted/escaped, already-tokenized)
+ * command-head token: split on both `/` and `\` (Windows paths), lowercased,
+ * with a trailing `.exe` stripped — so `C:\Windows\System32\cmd.EXE`,
+ * `./cmd`, and `cmd` all normalize to `cmd` for wrapper/interpreter lookup.
+ */
+function basenameOfHeadToken(token: string): string {
+	const parts = token.split(/[/\\]/);
+	const base = (parts[parts.length - 1] ?? token).toLowerCase();
+	return base.endsWith(".exe") ? base.slice(0, -4) : base;
+}
+
+/** Shell options that consume the following token as their own argument, not as part of the command. */
+const SHELL_DASH_O_FLAGS = new Set(["-o", "-O", "+o", "+O", "--rcfile", "--init-file"]);
+
+/**
+ * Extracts the command-body token following a `-c` flag from an
+ * already-tokenized shell invocation, if `text`'s head is in `wrapperSet` and
+ * a `-c` flag (bare or clustered with other short flags, e.g. `-lc`, `-cx`,
+ * `-ce`) appears anywhere before the first non-flag token — including after
+ * `-o pipefail`, `-O extglob`, `--`, or `-l`. Trailing positional arguments
+ * after the body (e.g. `$0` in `bash -c '...' x`) are ignored.
+ */
+function extractShellBodyAfterDashC(text: string, wrapperSet: ReadonlySet<string>): string | undefined {
+	const tokens = tokenizeShellWords(text.trim());
+	const head = tokens[0];
+	if (head === undefined || !wrapperSet.has(basenameOfHeadToken(head))) return undefined;
+
+	let sawDashC = false;
+	for (let i = 1; i < tokens.length; i++) {
+		const token = tokens[i];
+		if (token === "--") continue;
+		if (SHELL_DASH_O_FLAGS.has(token)) {
+			i++;
+			continue;
+		}
+		if (/^-[A-Za-z]+$/.test(token)) {
+			if (token.includes("c")) sawDashC = true;
+			continue;
+		}
+		// Long (`--norc`, `--login`) and `+` options (`+x`) are flags too; skip them
+		// so a later `-c` is still found.
+		if (/^(?:--|\+)[A-Za-z][\w-]*$/.test(token)) continue;
+		return sawDashC ? token : undefined;
+	}
+	return undefined;
+}
+
+/** Extracts the payload of a `<<< '...'` here-string or a `<<DELIM ... DELIM` heredoc, if present anywhere in `text`. */
+function extractHereStringOrHeredocPayload(text: string): string | undefined {
+	const hereString = text.match(/<<<\s*(['"]?)([\s\S]*?)\1\s*$/);
+	if (hereString) return hereString[2];
+	const heredoc = text.match(/<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1[^\n]*\n([\s\S]*?)\n[ \t]*\2\s*$/);
+	return heredoc ? heredoc[3] : undefined;
+}
+
+/** `true` when `text` invokes a known shell with no `-c`, but feeds it a here-string or heredoc body. */
+function feedsBareShellViaHereDocOrString(text: string): boolean {
 	const trimmed = text.trim();
-	const match = trimmed.match(/^(\S+)(?:\s+-\S+)*\s+-c\s+(['"])([\s\S]*)\2\s*$/);
-	if (!match) return undefined;
-	const token = match[1];
-	const basename = token.includes("/") ? token.slice(token.lastIndexOf("/") + 1) : token;
-	if (!SHELL_C_WRAPPERS.has(basename.toLowerCase())) return undefined;
-	return match[3];
+	const tokens = tokenizeShellWords(trimmed);
+	const head = tokens[0];
+	if (head === undefined || !SHELL_C_WRAPPERS.has(basenameOfHeadToken(head))) return false;
+	if (extractShellBodyAfterDashC(trimmed, SHELL_C_WRAPPERS) !== undefined) return false;
+	return /<<<|<</.test(trimmed);
 }
 
-/** Extracts the inner command line from an `eval "..."` / `eval '...'` wrapper, if present. */
+/** `true` when any `|`-joined segment pipes into a known shell with no `-c` (`echo ... | bash`). */
+function pipedIntoBareShell(segments: readonly ChainSegment[]): boolean {
+	return segments.some((seg) => {
+		if (!isPipeOperator(seg.operator)) return false;
+		const trimmed = seg.text.trim();
+		const tokens = tokenizeShellWords(trimmed);
+		const head = tokens[0];
+		if (head === undefined || !SHELL_C_WRAPPERS.has(basenameOfHeadToken(head))) return false;
+		return extractShellBodyAfterDashC(trimmed, SHELL_C_WRAPPERS) === undefined;
+	});
+}
+
+/**
+ * `true` when `command` feeds a bare shell interpreter (`bash`, `sh`, `zsh`,
+ * `dash`, `ksh`, `fish`) via a pipe, here-string, or heredoc, with no `-c`
+ * flag — in the command itself or in any command line it runs (see
+ * `scanExecutedCode`). The deny scan can extract and check the piped/here-doc
+ * text (see `scanDenyCandidates`), but can't prove the absence of danger the
+ * way a plain unwrapped command can — so auto mode must never silently allow it.
+ */
+function commandFeedsBareShellWithoutDashC(command: string): boolean {
+	const feedsShell = (text: string) => {
+		const segments = splitChain(text);
+		return pipedIntoBareShell(segments) || segments.some((seg) => feedsBareShellViaHereDocOrString(seg.text));
+	};
+	if (feedsShell(command)) return true;
+	const executed = scanExecutedCode(command);
+	return (
+		executed.truncated ||
+		pipedIntoBareShell(executed.segments) ||
+		executed.segments.some((seg) => feedsBareShellViaHereDocOrString(seg.text))
+	);
+}
+
+/** Interpreters: each runs a script operand, inline code (`-c`, `-e`), or the program on stdin. */
+const INTERPRETER_RE = /^(python[0-9.]*|pypy[0-9.]*|node|nodejs|bun|deno|ruby|perl|php)$/;
+
+/** The interpreter family `name` belongs to, the key of `INTERPRETER_ARG_FLAGS` and `INTERPRETER_INLINE_FLAGS`. */
+function interpreterFamily(name: string): string {
+	if (name.startsWith("python") || name.startsWith("pypy")) return "python";
+	return name === "nodejs" ? "node" : name;
+}
+
+/** Interpreter flags that take the next word as their own argument (`python3 -W ignore`, `node -r ./x`). */
+const INTERPRETER_ARG_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+	["python", new Set(["-W", "-X", "--check-hash-based-pycs"])],
+	[
+		"node",
+		new Set([
+			"-r",
+			"--require",
+			"--import",
+			"--loader",
+			"--experimental-loader",
+			"-C",
+			"--conditions",
+			"--input-type",
+			"--env-file",
+			"--title",
+		]),
+	],
+	["bun", new Set(["-r", "--require", "--preload", "--cwd", "--env-file", "--tsconfig-override"])],
+	["deno", new Set(["--config", "--import-map", "--location", "--seed", "--v8-flags", "--env-file", "--cert"])],
+	["ruby", new Set(["-I", "-r", "-C", "-E", "-F", "--encoding"])],
+	["perl", new Set(["-I"])],
+	["php", new Set(["-d", "-c", "-z"])],
+]);
+
+/** Interpreter flags that give the program inline or as a module, so it is no script operand and not stdin. */
+const INTERPRETER_INLINE_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+	["python", new Set(["-c", "-m"])],
+	["node", new Set(["-e", "--eval", "-p", "--print"])],
+	["bun", new Set(["-e", "--eval", "-p", "--print"])],
+	["ruby", new Set(["-e"])],
+	["perl", new Set(["-e", "-E"])],
+	["php", new Set(["-r"])],
+]);
+
+/** Operands that name stdin itself. */
+const STDIN_OPERANDS: ReadonlySet<string> = new Set(["-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"]);
+
+/** A descriptor other than stdin by path (`/dev/fd/3`): what a process substitution expands to. */
+const DESCRIPTOR_PATH_RE = /^\/(?:dev\/fd|proc\/(?:self|\d+)\/fd)\/[1-9]\d*$/;
+
+/** A `<(...)` or `>(...)` process substitution: its command, and which way it is wired. */
+type ProcessSubstitution = { direction: "<" | ">"; body: string };
+
+/** A redirection word (`<<EOF`, `<<<`, `>`, `2>&1`, `&>>log`), never a process substitution. */
+const REDIRECTION_RE = /^\d*(?:<<<|<<-?|<>|<|&>>?|>>?|>&)(?!\()/;
+
+/** Where a code runner takes the program it runs from; `code` is the command line a shell's `-c` runs. */
+type ProgramSource =
+	| { kind: "operand"; operand: string }
+	| { kind: "inline"; code?: string }
+	| { kind: "stdin"; fromDescriptor: boolean };
+
+/**
+ * `true` when `words` redirect stdin from a process substitution or another descriptor
+ * (`< <(...)`, `0</dev/fd/3`, `<&3`), or from a connection bash opens itself
+ * (`< /dev/tcp/host/port`), never from a file or stdin itself.
+ */
+function stdinFromDescriptor(words: string[]): boolean {
+	return words.some((word, i) => {
+		const redirection = word.match(/^0?<(?![<>(])(&?)(.*)$/);
+		if (!redirection) return false;
+		const target = redirection[2] === "" ? (words[i + 1] ?? "") : redirection[2];
+		if (redirection[1] === "&") return /^[1-9]\d*$/.test(target);
+		return target.startsWith("<(") || DESCRIPTOR_PATH_RE.test(target) || /^\/dev\/(?:tcp|udp)\//.test(target);
+	});
+}
+
+/**
+ * What can open a command without being its name: `{` and `!`, a subshell's `(`, `coproc`, the
+ * head of a loop that runs its body on the same line (`for x do`, `for ((...)) do`), the reserved
+ * words before a command (`if`, `then`, `do`, ...) and `builtin`, a function header (`f() {`,
+ * `function f {`), a case statement's head (`case $x in`), and a case pattern followed by its
+ * command (`start|stop) ...`, `"a b") ...`). A word and `)` followed by a redirection or nothing
+ * is the end of a subshell, not a case pattern: `(cd x && make) > log`.
+ */
+const COMPOUND_OPENERS: readonly RegExp[] = [
+	/^\s*[{!](?=\s)/,
+	/^\s*\(+/,
+	/^\s*coproc\s+[A-Za-z_]\w*\s+\{(?=\s)/,
+	/^\s*(?:for|select)\s+[A-Za-z_]\w*\s+do(?=\s)/,
+	/^\s*for\s*\(\([\s\S]*?\)\)\s*do(?=\s)/,
+	/^\s*(?:if|then|else|elif|while|until|do|coproc|builtin)(?=\s)/,
+	/^\s*function\s+[^\s(){}]+(?:\s*\(\s*\))?(?:\s*\{(?=\s))?/,
+	/^\s*[A-Za-z_][\w.:-]*\s*\(\s*\)(?:\s*\{(?=\s))?/,
+	/^\s*case\s+\S+\s+in(?=\s|$)/,
+	/^\s*\(?(?:"[^"]*"|'[^']*'|\\.|[^\s()|;&<>"'\\])+(?:\s*\|\s*(?:"[^"]*"|'[^']*'|\\.|[^\s()|;&<>"'\\])+)*\)(?=\s+[^\s<>|&;)])/,
+];
+
+/**
+ * `text` without the `)` that close a subshell around its command (`rm -rf ~)`,
+ * `bash) < <(...)`): every `)` outside quotes with no `(` of its own before it.
+ */
+function stripUnbalancedClosers(text: string): string {
+	let out = "";
+	let depth = 0;
+	let quote: "'" | '"' | undefined;
+	for (let i = 0; i < text.length; i++) {
+		const ch = text[i];
+		if (ch === "\\" && quote !== "'" && i + 1 < text.length) {
+			out += ch + text[i + 1];
+			i++;
+			continue;
+		}
+		if (quote !== undefined) {
+			if (ch === quote) quote = undefined;
+		} else if (ch === "'" || ch === '"') {
+			quote = ch;
+		} else if (ch === "(") {
+			depth++;
+		} else if (ch === ")") {
+			if (depth === 0) continue;
+			depth--;
+		}
+		out += ch;
+	}
+	return out;
+}
+
+/**
+ * `text` without the compound-command syntax in front of its command (`COMPOUND_OPENERS`), and
+ * without the `)` that closes a subshell after it: `if x; then rm -rf ~; fi` runs `rm -rf ~`,
+ * `(rm -rf ~)` too.
+ */
+function stripCompoundOpeners(text: string): string {
+	let stripped = text;
+	for (let guard = 0; guard < 16; guard++) {
+		const opener = COMPOUND_OPENERS.find((re) => re.test(stripped));
+		if (opener === undefined) break;
+		stripped = stripped.replace(opener, "");
+	}
+	return stripUnbalancedClosers(stripped);
+}
+
+/**
+ * `text` as the command it runs: compound-command syntax, leading assignments and passthrough
+ * wrappers (`env`, `nice`, `time`, ...) stripped in whatever order they come. `beforeWrappers`
+ * keeps the first wrapper, for `env -S`.
+ */
+function unwrapCommand(text: string): { working: string; beforeWrappers: string } {
+	let working = text;
+	let beforeWrappers: string | undefined;
+	for (let guard = 0; guard < 8; guard++) {
+		const opened = stripEnvAssignments(stripLeadingBackslashEscape(stripCompoundOpeners(working)));
+		beforeWrappers ??= opened;
+		const { stripped, changed } = stripPassthroughPrefix(opened);
+		const next = changed ? stripped : opened;
+		if (next === working) break;
+		working = next;
+	}
+	return { working, beforeWrappers: beforeWrappers ?? working };
+}
+
+/** `text`'s words once `unwrapCommand` has stripped what runs it without being it. */
+function unwrappedWords(text: string): string[] {
+	return tokenizeShellWords(unwrapCommand(text).working.trim());
+}
+
+/**
+ * Where the shell, interpreter, `source` or `.` that `words` start with takes its program
+ * from: a script operand, inline code (`-c`, `-e`, `-m`; for a shell, with the command line its
+ * `-c` runs), or stdin (no operand, `-` and its spellings, or a shell given `-s`), noting whether
+ * stdin is redirected from a `<(...)` or another descriptor anywhere among the words. `undefined`
+ * when `words` start with anything else. Option arguments (`bash -euo pipefail`,
+ * `python3 -W ignore`) and redirections (`> out.txt`) are skipped, so neither passes for the script.
+ */
+function programSource(words: string[]): ProgramSource | undefined {
+	const head = words[0];
+	if (head === undefined) return undefined;
+	const name = basenameOfHeadToken(head);
+	const isShell = SCRIPT_SHELLS.has(name);
+	if (!isShell && !INTERPRETER_RE.test(name) && name !== "source" && name !== ".") return undefined;
+	const family = interpreterFamily(name);
+	const argFlags = INTERPRETER_ARG_FLAGS.get(family);
+	const inlineFlags = INTERPRETER_INLINE_FLAGS.get(family);
+	const fromDescriptor = stdinFromDescriptor(words);
+	let readsStdin = false;
+	let inlineShell = false;
+	let optionsDone = false;
+	let subcommandSkipped = false;
+	for (let i = 1; i < words.length; i++) {
+		const word = words[i];
+		const redirection = word.match(REDIRECTION_RE);
+		if (redirection) {
+			if (redirection[0] === word) i++;
+			continue;
+		}
+		if (!optionsDone) {
+			if (word === "--") {
+				optionsDone = true;
+				continue;
+			}
+			if (isShell && SHELL_DASH_O_FLAGS.has(word) && !/^[-+][oO]$/.test(word)) {
+				i++;
+				continue;
+			}
+			if (isShell && /^[-+][A-Za-z]+$/.test(word)) {
+				// A cluster: `c` runs the first operand as a command line, `s` the program on stdin,
+				// and each `o` takes the next word as an option name (`-euo pipefail`).
+				if (word.startsWith("-") && word.includes("c")) inlineShell = true;
+				else if (word.startsWith("-") && word.includes("s")) readsStdin = true;
+				i += (word.match(/[oO]/g) ?? []).length;
+				continue;
+			}
+			if (inlineFlags?.has(word)) return { kind: "inline" };
+			if ((family === "perl" || family === "ruby") && /^-[A-Za-z]*[eE][A-Za-z]*$/.test(word))
+				return { kind: "inline" };
+			if (argFlags?.has(word)) {
+				i++;
+				continue;
+			}
+			if (/^-./.test(word) || (isShell && /^\+./.test(word))) continue;
+		}
+		if ((family === "deno" || family === "bun") && !subcommandSkipped && word === "run") {
+			subcommandSkipped = true;
+			continue;
+		}
+		if (inlineShell) return { kind: "inline", code: word };
+		if (readsStdin || STDIN_OPERANDS.has(word)) return { kind: "stdin", fromDescriptor };
+		return { kind: "operand", operand: word };
+	}
+	return inlineShell ? { kind: "inline" } : { kind: "stdin", fromDescriptor };
+}
+
+/**
+ * `true` when a pipe, heredoc or here-string feeds a shell, interpreter or `source` the program
+ * it runs from stdin (`curl ... | python3`, `python3 - <<'EOF'`, `source /dev/stdin <<<...`), in
+ * the command or any command line it runs. The rule `commandFeedsBareShellWithoutDashC` applies
+ * to the shells, and the reason `python* -c*` is a danger pattern: the deny scan can't vet a
+ * program in another language. A runner given a script (`... | python3 -m json.tool`,
+ * `python3 tool.py <<EOF`) reads data, not code.
+ */
+function commandFeedsCodeFromStdin(command: string): boolean {
+	const executed = scanExecutedCode(command);
+	return (
+		executed.truncated ||
+		executed.segments.some((seg) => {
+			if (programSource(unwrappedWords(seg.text))?.kind !== "stdin") return false;
+			return isPipeOperator(seg.operator) || /<<<|<</.test(seg.text);
+		})
+	);
+}
+
+/**
+ * `true` when code runs straight out of a process substitution, in the command or any command
+ * line it runs: a shell, interpreter, `source` or `.` whose script is `<(...)` (`bash <(curl ...)`,
+ * `source <(...)`) or whose stdin is one (`bash < <(...)`), or a `>(...)` that runs what is written
+ * into it (`tee >(sh)`). A descriptor path counts as one, being what `<(...)` expands to
+ * (`bash /dev/fd/3 3< <(curl ...)`, `bash <&3`). The deny scan sees the substitution's command,
+ * never the program it produces. A process substitution that only carries data
+ * (`diff <(ls a) <(ls b)`, `python3 tool.py < <(git log)`) runs nothing.
+ */
+function commandRunsProcessSubstitution(command: string): boolean {
+	const executed = scanExecutedCode(command);
+	if (executed.truncated) return true;
+	const runsOne = executed.segments.some((seg) => {
+		const source = programSource(unwrappedWords(seg.text));
+		if (source?.kind === "operand") {
+			return source.operand.startsWith("<(") || DESCRIPTOR_PATH_RE.test(source.operand);
+		}
+		return source?.kind === "stdin" && source.fromDescriptor;
+	});
+	return (
+		runsOne ||
+		executed.processSubstitutions.some(
+			({ direction, body }) => direction === ">" && programSource(unwrappedWords(body))?.kind === "stdin",
+		)
+	);
+}
+
+/**
+ * Extracts the inner command line from a `pwsh -c "..."` / `powershell
+ * -Command "..."` / `cmd /c "..."` style wrapper, if present. Accepts `-c`,
+ * `-Command`, and `/c` case-insensitively, anywhere among the wrapper's
+ * tokens, rather than the exact flag each shell prefers — for danger
+ * detection, over-matching is the safe direction.
+ */
+function extractOtherShellWrapperArg(text: string): string | undefined {
+	const trimmed = text.trim();
+	if (!headIsOtherShellWrapper(trimmed)) return undefined;
+	const tokens = tokenizeShellWords(trimmed);
+	for (let i = 1; i < tokens.length - 1; i++) {
+		const token = tokens[i].toLowerCase();
+		if (token === "-c" || token === "-command" || token === "/c") return tokens[i + 1];
+	}
+	return undefined;
+}
+
+/**
+ * Extracts the inner command line from an `eval "..."` / `eval '...'` /
+ * `eval <unquoted words...>` wrapper, if present — bash's `eval` joins all of
+ * its arguments with spaces and evaluates the result as a command, whether or
+ * not they were quoted.
+ */
 function extractEvalArg(text: string): string | undefined {
-	const match = text.trim().match(/^eval\s+(['"])([\s\S]*)\1\s*$/i);
-	return match ? match[2] : undefined;
+	const trimmed = text.trim();
+	const quoted = trimmed.match(/^eval\s+(['"])([\s\S]*)\1\s*$/i);
+	if (quoted) return quoted[2];
+	const unquoted = trimmed.match(/^eval\s+(\S[\s\S]*)$/i);
+	return unquoted ? unquoted[1] : undefined;
 }
 
 /** Extracts the contents of every `$(...)` and `` `...` `` command substitution found anywhere in `text`. */
@@ -422,11 +1139,44 @@ function extractSubstitutions(text: string): string[] {
  */
 function extractSimpleEchoOutput(text: string): string | undefined {
 	const match = text.match(/^\s*echo\s+([^$`]+?)\s*$/i);
-	return match?.[1];
+	if (!match) return undefined;
+	const captured = match[1];
+	const quoted = captured.match(/^(['"])([\s\S]*)\1$/);
+	return quoted ? quoted[2] : captured;
 }
 
 const MAX_DENY_CANDIDATES = 50;
 const MAX_DENY_DEPTH = 4;
+
+interface DenyScanResult {
+	candidates: string[];
+	/**
+	 * `true` when the candidate/depth cap cut the scan short before every
+	 * piece of `command` could be enumerated. Callers MUST treat a truncated
+	 * scan as "unknown, not denied" rather than "not denied" — see
+	 * `commandDenyScanTruncated` below.
+	 */
+	truncated: boolean;
+}
+
+/**
+ * `splitChain`'s segments joined back with one space around every operator, so a pattern written
+ * `curl * | *` also matches `curl x|sh`. `splitChain` reads `|&` as a pipe into an empty piece
+ * sent to the background; here it is spelled `|`, so the pattern matches `curl x |& sh` too.
+ */
+function spaceChainOperators(segments: readonly ChainSegment[]): string {
+	const parts: string[] = [];
+	for (let i = 0; i < segments.length; i++) {
+		const seg = segments[i];
+		if (seg.operator === "|" && seg.text === "" && segments[i + 1]?.operator === "&") {
+			parts.push(`| ${segments[i + 1].text.trim()}`);
+			i++;
+			continue;
+		}
+		parts.push(seg.operator === undefined ? seg.text.trim() : `${seg.operator} ${seg.text.trim()}`);
+	}
+	return parts.join(" ");
+}
 
 /**
  * Paranoidly enumerates every independently-executed "piece" of `command` a
@@ -434,32 +1184,57 @@ const MAX_DENY_DEPTH = 4;
  * segment, prefix/wrapper-stripped variants of each segment, and the bodies
  * of any `bash -c` / `eval` / `$(...)` / backtick constructs — recursively,
  * bounded so adversarial input can't cause unbounded work.
+ *
+ * The bound is itself a fail-safe surface: a command with more pieces or
+ * wrapper layers than the cap allows must not be treated as "scanned clean".
+ * `truncated` on the result flags exactly that case.
  */
-function collectDenyCandidates(command: string): string[] {
+function scanDenyCandidates(command: string): DenyScanResult {
 	const seen = new Set<string>();
 	const queue: Array<{ text: string; depth: number }> = [{ text: command, depth: 0 }];
+	let truncated = false;
 
-	while (queue.length > 0 && seen.size < MAX_DENY_CANDIDATES) {
+	while (queue.length > 0) {
+		if (seen.size >= MAX_DENY_CANDIDATES) {
+			truncated = true;
+			break;
+		}
 		const next = queue.shift();
 		if (!next) break;
 		const { text, depth } = next;
 		if (seen.has(text)) continue;
 		seen.add(text);
-		if (depth >= MAX_DENY_DEPTH) continue;
+		if (depth >= MAX_DENY_DEPTH) {
+			truncated = true;
+			continue;
+		}
 
 		const enqueue = (candidate: string) => {
-			if (!seen.has(candidate) && seen.size + queue.length < MAX_DENY_CANDIDATES) {
-				queue.push({ text: candidate, depth: depth + 1 });
+			if (seen.has(candidate)) return;
+			if (seen.size + queue.length >= MAX_DENY_CANDIDATES) {
+				truncated = true;
+				return;
 			}
+			queue.push({ text: candidate, depth: depth + 1 });
 		};
 
-		const segments = splitChain(text).map((s) => s.text);
+		const segmentObjs = splitChain(text);
+		const segments = segmentObjs.map((s) => s.text);
 		const pieces = segments.length > 1 ? segments : [text];
 		for (const seg of segments) enqueue(seg);
+
+		for (let i = 0; i < segmentObjs.length; i++) {
+			if (segmentObjs[i].operator !== "|") continue;
+			const prevText = segmentObjs[i - 1]?.text;
+			if (prevText === undefined) continue;
+			const echoOutput = extractSimpleEchoOutput(prevText);
+			if (echoOutput !== undefined) enqueue(echoOutput);
+		}
 
 		for (const piece of pieces) {
 			let working = stripLeadingBackslashEscape(piece);
 			working = stripEnvAssignments(working);
+			const beforeWrapperStrip = working;
 			for (let guard = 0; guard < 5; guard++) {
 				const { stripped, changed } = stripPassthroughPrefix(working);
 				if (!changed) break;
@@ -470,11 +1245,25 @@ function collectDenyCandidates(command: string): string[] {
 			const basenameResolved = resolveBasenameOfFirstToken(working);
 			enqueue(basenameResolved);
 
-			const shellC = extractShellDashC(working) ?? extractShellDashC(basenameResolved);
+			const shellC =
+				extractShellBodyAfterDashC(working, SHELL_C_WRAPPERS) ??
+				extractShellBodyAfterDashC(basenameResolved, SHELL_C_WRAPPERS);
 			if (shellC !== undefined) enqueue(shellC);
+
+			const hereRedirect = extractHereStringOrHeredocPayload(piece);
+			if (hereRedirect !== undefined) enqueue(hereRedirect);
+
+			const otherShellArg = extractOtherShellWrapperArg(working) ?? extractOtherShellWrapperArg(basenameResolved);
+			if (otherShellArg !== undefined) enqueue(otherShellArg);
 
 			const evalArg = extractEvalArg(working) ?? extractEvalArg(basenameResolved);
 			if (evalArg !== undefined) enqueue(evalArg);
+
+			const findExecArg = extractFindExecArg(working) ?? extractFindExecArg(basenameResolved);
+			if (findExecArg !== undefined) enqueue(findExecArg);
+
+			const envSplitStringArg = extractEnvSplitStringArg(beforeWrapperStrip);
+			if (envSplitStringArg !== undefined) enqueue(envSplitStringArg);
 
 			for (const sub of extractSubstitutions(piece)) {
 				enqueue(sub);
@@ -484,7 +1273,572 @@ function collectDenyCandidates(command: string): string[] {
 		}
 	}
 
-	return [...seen];
+	return { candidates: [...seen], truncated };
+}
+
+/** One layer of shell text, read the way the shell reads it. */
+interface LexedShellText {
+	/**
+	 * The text split at its unquoted chain operators, with heredoc bodies cut out and each process
+	 * substitution collapsed to `<(_)`/`>(_)`.
+	 */
+	segments: ChainSegment[];
+	/** Bodies of the `$(...)` and backtick substitutions the shell runs: outside single quotes, and in unquoted heredoc bodies. */
+	substitutions: string[];
+	/** Process substitutions outside quotes and heredoc bodies, and the way each is wired. */
+	processSubstitutions: ProcessSubstitution[];
+	/**
+	 * `true` when part of the text could not be read: a heredoc whose delimiter line never came or
+	 * whose delimiter could not be read, or substitutions nested past `MAX_LEX_NESTING`.
+	 */
+	unreadable: boolean;
+	/** Where reading stopped: the end of the text, or just past the `)` that closes a `$(`, `<(` or `>(`. */
+	end: number;
+}
+
+/** A heredoc operator and what it takes to end its body. */
+interface HeredocOperator {
+	length: number;
+	delimiter: string;
+	/** Any quote or backslash in the delimiter word: the body is data, nothing in it runs. */
+	quoted: boolean;
+	/** `<<-`: leading tabs are stripped before the delimiter line is compared. */
+	stripTabs: boolean;
+	/** The delimiter word runs into `(`, which this reader cannot follow; the caller fails closed. */
+	unreadable: boolean;
+}
+
+/**
+ * The heredoc operator at `text[i]` (`<<EOF`, `<<-'EOF'`, `<< "E O F"`, `<<\\EOF`, `<<END-OF-DATA`):
+ * the delimiter is the whole shell word after `<<`, quotes and backslashes removed.
+ */
+function heredocAt(text: string, i: number): HeredocOperator | undefined {
+	const operator = text.slice(i).match(/^<<(-?)[ \t]*/);
+	if (!operator) return undefined;
+	let j = i + operator[0].length;
+	let delimiter = "";
+	let quoted = false;
+	while (j < text.length && !/[\s;&|<>()]/.test(text[j])) {
+		const ch = text[j];
+		if (ch === "'" || ch === '"') {
+			quoted = true;
+			const close = text.indexOf(ch, j + 1);
+			const end = close === -1 ? text.length : close;
+			delimiter += text.slice(j + 1, end);
+			j = end + 1;
+		} else if (ch === "\\") {
+			quoted = true;
+			delimiter += text[j + 1] ?? "";
+			j += 2;
+		} else {
+			delimiter += ch;
+			j++;
+		}
+	}
+	if (delimiter === "") return undefined;
+	return { length: j - i, delimiter, quoted, stripTabs: operator[1] === "-", unreadable: text[j] === "(" };
+}
+
+/** The index just past the `)` that closes the arithmetic opened by the `(` at `text[open]`. */
+function arithmeticEnd(text: string, open: number): number {
+	let depth = 0;
+	for (let j = open; j < text.length; j++) {
+		if (text[j] === "(") depth++;
+		else if (text[j] === ")" && --depth === 0) return j + 1;
+	}
+	return text.length;
+}
+
+/**
+ * How deep `lexShellText` follows `$(`, `<(` and `>(` inside one another. Deeper text is reported
+ * unreadable, so the checks ask instead of recursing until the stack overflows.
+ */
+const MAX_LEX_NESTING = 32;
+
+/** The `$(...)` and backtick substitutions in arithmetic or an unquoted heredoc body, which runs them all. */
+function substitutionsIn(text: string, nesting: number): { bodies: string[]; unreadable: boolean } {
+	const bodies: string[] = [];
+	let unreadable = false;
+	let i = 0;
+	while (i < text.length) {
+		if (text[i] === "$" && text[i + 1] === "(" && text[i + 2] !== "(") {
+			const inner = lexShellText(text, i + 2, true, nesting + 1);
+			if (inner.unreadable) unreadable = true;
+			bodies.push(text.slice(i + 2, Math.max(i + 2, inner.end - 1)));
+			i = inner.end;
+		} else if (text[i] === "`") {
+			let j = i + 1;
+			while (j < text.length && text[j] !== "`") j += text[j] === "\\" ? 2 : 1;
+			bodies.push(text.slice(i + 1, j));
+			i = j + 1;
+		} else {
+			i += text[i] === "\\" ? 2 : 1;
+		}
+	}
+	return { bodies, unreadable };
+}
+
+/**
+ * Reads one layer of shell text as the shell would, for the checks that ask whether something is
+ * RUN, and splits it at its unquoted chain operators. Single-quoted text runs nothing; in double
+ * quotes only `$(...)` and backticks run; a quoted heredoc's body is data and an unquoted one runs
+ * only its substitutions; `$((...))` and `((...))` are arithmetic. A `$(`, `<(` or `>(` is read to
+ * the `)` that really closes it, past quotes and heredocs (`untilCloseParen`). Unlike the deny scan,
+ * which over-matches on purpose, a commit message or a file written through a heredoc must not
+ * read as code here. A heredoc that never ends, a delimiter this reader cannot follow, or nesting
+ * past `MAX_LEX_NESTING` is reported, and the checks then ask rather than trust a misread.
+ */
+function lexShellText(text: string, start = 0, untilCloseParen = false, nesting = 0): LexedShellText {
+	if (nesting > MAX_LEX_NESTING) {
+		return { segments: [], substitutions: [], processSubstitutions: [], unreadable: true, end: text.length };
+	}
+	const segments: ChainSegment[] = [];
+	const substitutions: string[] = [];
+	const processSubstitutions: ProcessSubstitution[] = [];
+	const pendingHeredocs: HeredocOperator[] = [];
+	let unreadable = false;
+	let current = "";
+	let operator: string | undefined;
+	let quote: "'" | '"' | undefined;
+	let depth = 0;
+	// Where an escape or a substitution just ended: a `#` there still belongs to that word.
+	let glued = -1;
+	// Open `${` expansions: a `#` inside one (`${x#prefix}`, `${x:- #}`) is never a comment.
+	let braces = 0;
+	const endSegment = (next: string) => {
+		segments.push({ text: current, operator });
+		current = "";
+		operator = next;
+	};
+	/** Reads the `$(`, `<(` or `>(` body that starts at `open` to its closing `)`; returns the index after it. */
+	const readNested = (open: number): number => {
+		const inner = lexShellText(text, open, true, nesting + 1);
+		if (inner.unreadable) unreadable = true;
+		return inner.end;
+	};
+	// Element by element: spreading 100k substitutions into `push` overflows the stack.
+	const collectSubstitutionsIn = (body: string) => {
+		const found = substitutionsIn(body, nesting);
+		for (const substitution of found.bodies) substitutions.push(substitution);
+		if (found.unreadable) unreadable = true;
+	};
+	let i = start;
+	while (i < text.length) {
+		const ch = text[i];
+		if (quote === "'") {
+			current += ch;
+			if (ch === "'") quote = undefined;
+			i++;
+			continue;
+		}
+		if (ch === "\\" && i + 1 < text.length) {
+			current += ch + text[i + 1];
+			i += 2;
+			glued = i;
+			continue;
+		}
+		if (ch === "$" && text[i + 1] === "(") {
+			if (text[i + 2] === "(") {
+				const end = arithmeticEnd(text, i + 1);
+				collectSubstitutionsIn(text.slice(i + 3, end));
+				current += text.slice(i, end);
+				i = end;
+				glued = i;
+				continue;
+			}
+			const end = readNested(i + 2);
+			substitutions.push(text.slice(i + 2, Math.max(i + 2, end - 1)));
+			current += text.slice(i, end);
+			i = end;
+			glued = i;
+			continue;
+		}
+		if (ch === "`") {
+			let j = i + 1;
+			while (j < text.length && text[j] !== "`") j += text[j] === "\\" ? 2 : 1;
+			substitutions.push(text.slice(i + 1, j));
+			current += text.slice(i, j + 1);
+			i = j + 1;
+			continue;
+		}
+		if (quote === '"') {
+			if (ch === '"') quote = undefined;
+			current += ch;
+			i++;
+			continue;
+		}
+		if (ch === "$" && text[i + 1] === "{") {
+			braces++;
+			current += "${";
+			i += 2;
+			continue;
+		}
+		if (ch === "}" && braces > 0) {
+			braces--;
+			current += ch;
+			i++;
+			continue;
+		}
+		if (ch === "#" && braces === 0 && i !== glued && (i === start || /[\s;&|()<>]/.test(text[i - 1]))) {
+			// A comment runs to the end of its line, and an apostrophe in it opens no quote.
+			const newline = text.indexOf("\n", i);
+			i = newline === -1 ? text.length : newline;
+			continue;
+		}
+		if (ch === "$" && text[i + 1] === "$") {
+			// `$$` is the shell's pid: a quote right after it is a plain one, not `$'...'`.
+			current += "$$";
+			i += 2;
+			continue;
+		}
+		if (ch === "$" && text[i + 1] === "'") {
+			// ANSI-C quoting: like single quotes, but a backslash escapes the next character, `\'` too.
+			let j = i + 2;
+			while (j < text.length && text[j] !== "'") j += text[j] === "\\" ? 2 : 1;
+			current += text.slice(i, j + 1);
+			i = j + 1;
+			continue;
+		}
+		if (ch === "'" || ch === '"') {
+			quote = ch;
+			current += ch;
+			i++;
+			continue;
+		}
+		if ((ch === "<" || ch === ">") && text[i + 1] === "(") {
+			const end = readNested(i + 2);
+			processSubstitutions.push({ direction: ch, body: text.slice(i + 2, Math.max(i + 2, end - 1)) });
+			current += `${ch}(_)`;
+			i = end;
+			glued = i;
+			continue;
+		}
+		if (ch === "(" && text[i + 1] === "(") {
+			const end = arithmeticEnd(text, i);
+			collectSubstitutionsIn(text.slice(i + 2, end));
+			current += text.slice(i, end);
+			i = end;
+			continue;
+		}
+		if (ch === "(") {
+			depth++;
+			current += ch;
+			i++;
+			continue;
+		}
+		if (ch === ")") {
+			i++;
+			if (depth > 0) {
+				depth--;
+				current += ch;
+				continue;
+			}
+			if (untilCloseParen) break;
+			current += ch;
+			continue;
+		}
+		if (text.startsWith("<<<", i)) {
+			current += "<<<";
+			i += 3;
+			continue;
+		}
+		const heredoc = ch === "<" && text[i + 1] === "<" ? heredocAt(text, i) : undefined;
+		if (heredoc) {
+			if (heredoc.unreadable) unreadable = true;
+			pendingHeredocs.push(heredoc);
+			current += text.slice(i, i + heredoc.length);
+			i += heredoc.length;
+			continue;
+		}
+		const two = text.slice(i, i + 2);
+		if (two === "&&" || two === "||" || two === "|&") {
+			endSegment(two);
+			i += 2;
+			continue;
+		}
+		// `&>file`, `2>&1` and `<&3` are redirections, not a background `&`. The character before
+		// is the one `current` ends with (testing `current` itself would copy it on every `&`).
+		if (ch === "&" && (text[i + 1] === ">" || text[i - 1] === "<" || text[i - 1] === ">")) {
+			current += ch;
+			i++;
+			continue;
+		}
+		if (ch === ";" || ch === "|" || ch === "&") {
+			endSegment(ch);
+			i++;
+			continue;
+		}
+		if (ch !== "\n") {
+			current += ch;
+			i++;
+			continue;
+		}
+		endSegment(";");
+		i++;
+		// The bodies follow this line, one per heredoc it opened, each up to its delimiter line. An
+		// unquoted body is expanded as a whole once it ends, so a substitution may span its lines.
+		for (const pending of pendingHeredocs.splice(0)) {
+			const bodyStart = i;
+			let bodyEnd = text.length;
+			let terminated = false;
+			while (i < text.length) {
+				const newline = text.indexOf("\n", i);
+				const lineStart = i;
+				const line = text.slice(i, newline === -1 ? text.length : newline).replace(/\r$/, "");
+				i = newline === -1 ? text.length : newline + 1;
+				if ((pending.stripTabs ? line.replace(/^\t+/, "") : line) === pending.delimiter) {
+					bodyEnd = lineStart;
+					terminated = true;
+					break;
+				}
+			}
+			if (!terminated) unreadable = true;
+			if (!pending.quoted) collectSubstitutionsIn(text.slice(bodyStart, bodyEnd));
+		}
+	}
+	segments.push({ text: current, operator });
+	return { segments, substitutions, processSubstitutions, unreadable, end: i };
+}
+
+/** Every command line the shell runs for a command, found by `scanExecutedCode`. */
+interface ExecutedScan {
+	/** The chain segments of the command and of each command line run inside it (`-c` bodies, `eval` arguments, substitutions), lexed. */
+	readonly segments: readonly ChainSegment[];
+	/** The process substitutions among them, and the way each is wired. */
+	readonly processSubstitutions: readonly ProcessSubstitution[];
+	/** Each segment's text, and the command it runs once `unwrapCommand` has stripped what leads it, for deny matching. */
+	readonly commands: readonly string[];
+	/**
+	 * `true` when the scan hit the same bounds as the deny scan, ran into more than
+	 * `MAX_EXECUTED_SEGMENTS` segments, or some text was unreadable (a heredoc that never ended,
+	 * nesting too deep), so something may have been read as data that the shell runs; callers then
+	 * fail closed.
+	 */
+	readonly truncated: boolean;
+}
+
+/** How many segments the executed scan reads before it stops and reports itself truncated. */
+const MAX_EXECUTED_SEGMENTS = 1000;
+
+/** The last command's executed scan: one evaluation asks several checks about the same command. */
+let lastExecutedScan: { command: string; result: ExecutedScan } | undefined;
+
+/**
+ * Finds every command line the shell RUNS for `command`: the command itself and, recursively,
+ * `bash -c` bodies, `eval` arguments, `pwsh -c`/`env -S`/`find -exec` commands and
+ * substitution bodies, each read by `lexShellText`, so neither a heredoc body nor quoted text is
+ * mistaken for one.
+ */
+function scanExecutedCode(command: string): ExecutedScan {
+	if (lastExecutedScan?.command !== command) lastExecutedScan = { command, result: computeExecutedScan(command) };
+	return lastExecutedScan.result;
+}
+
+function computeExecutedScan(command: string): ExecutedScan {
+	const segments: ChainSegment[] = [];
+	const processSubstitutions: ProcessSubstitution[] = [];
+	const commands = new Set<string>();
+	const seen = new Set<string>();
+	const queue: Array<{ text: string; depth: number }> = [{ text: command, depth: 0 }];
+	let truncated = false;
+	// Read by index, not `shift()`: a command with 100k identical substitutions queues every one.
+	for (let head = 0; head < queue.length; head++) {
+		const next = queue[head];
+		if (seen.has(next.text)) continue;
+		if (seen.size >= MAX_DENY_CANDIDATES || next.depth >= MAX_DENY_DEPTH) {
+			truncated = true;
+			break;
+		}
+		seen.add(next.text);
+		const lexed = lexShellText(next.text);
+		if (lexed.unreadable) truncated = true;
+		if (segments.length + lexed.segments.length > MAX_EXECUTED_SEGMENTS) {
+			truncated = true;
+			break;
+		}
+		// Element by element: a long script spread into `push` overflows the stack.
+		for (const seg of lexed.segments) segments.push(seg);
+		for (const substitution of lexed.processSubstitutions) processSubstitutions.push(substitution);
+		const runs = (body: string | undefined) => {
+			if (body !== undefined && !seen.has(body)) queue.push({ text: body, depth: next.depth + 1 });
+		};
+		for (const body of lexed.substitutions) runs(body);
+		for (const { body } of lexed.processSubstitutions) runs(body);
+		for (const seg of lexed.segments) {
+			const { working, beforeWrappers } = unwrapCommand(seg.text);
+			const basenameResolved = resolveBasenameOfFirstToken(working);
+			for (const text of [seg.text, working, basenameResolved]) if (text.trim() !== "") commands.add(text.trim());
+			runs(
+				extractShellBodyAfterDashC(working, SCRIPT_SHELLS) ??
+					extractShellBodyAfterDashC(basenameResolved, SCRIPT_SHELLS),
+			);
+			runs(extractOtherShellWrapperArg(working) ?? extractOtherShellWrapperArg(basenameResolved));
+			runs(extractEvalArg(working) ?? extractEvalArg(basenameResolved));
+			runs(extractFindExecArg(working) ?? extractFindExecArg(basenameResolved));
+			runs(extractEnvSplitStringArg(beforeWrappers));
+			// Past clustered options `extractShellBodyAfterDashC` stops at: `bash -euo pipefail -c '...'`.
+			const source = programSource(tokenizeShellWords(working.trim()));
+			if (source?.kind === "inline") runs(source.code);
+		}
+	}
+	return { segments, processSubstitutions, commands: [...commands], truncated };
+}
+
+/** The last command's deny scan: one evaluation matches the same command against every pattern. */
+let lastDenyScan:
+	| { command: string; result: DenyScanResult; candidates?: readonly string[]; forms?: readonly string[] }
+	| undefined;
+
+function cachedDenyScan(command: string): NonNullable<typeof lastDenyScan> {
+	if (lastDenyScan?.command !== command) lastDenyScan = { command, result: scanDenyCandidates(command) };
+	return lastDenyScan;
+}
+
+/**
+ * What deny rules and the danger filter match: the deny scan's candidates, and the command each
+ * segment the executed scan finds the shell runs. The deny scan over-reads on purpose, but it
+ * loses its place at an apostrophe in a heredoc or a comment, at `\"` or `$'...'`, never looks
+ * inside `<(...)`, and keeps `if ...; then`, `{ ...; }` or `( ... )` in front of a command; the
+ * executed scan reads all of those as the shell does. Only the deny scan's own bounds make a
+ * command truncated.
+ */
+function collectDenyCandidates(command: string): readonly string[] {
+	const scan = cachedDenyScan(command);
+	scan.candidates ??= [...new Set([...scan.result.candidates, ...scanExecutedCode(command).commands])];
+	return scan.candidates;
+}
+
+/**
+ * Every candidate normalized for glob matching, and its chain again with spaced operators, so a
+ * pattern written `curl * | *` also matches `curl x|sh` and `curl x |& sh`.
+ */
+function matchableDenyForms(command: string): readonly string[] {
+	const scan = cachedDenyScan(command);
+	scan.forms ??= collectDenyCandidates(command).flatMap((candidate) => {
+		const plain = normalizeForMatch(candidate);
+		const spaced = normalizeForMatch(spaceChainOperators(splitChain(candidate)));
+		return spaced === plain ? [plain] : [plain, spaced];
+	});
+	return scan.forms;
+}
+
+/**
+ * `true` when `command` has more chained pieces or wrapper layers than
+ * `scanDenyCandidates` could fully enumerate. A truncated scan can never be
+ * trusted to say "no deny/danger match" — the unscanned remainder might hide
+ * one — so callers must fail closed (deny or require approval) rather than
+ * fall through to an auto-allow default.
+ */
+function commandDenyScanTruncated(command: string): boolean {
+	return cachedDenyScan(command).result.truncated;
+}
+
+/**
+ * Raw first whitespace-delimited token of `text`, with at most one matching
+ * pair of surrounding quotes stripped — deliberately *not* run through
+ * `tokenizeShellWords`'s backslash-escape collapsing, so a literal Windows
+ * path separator (`C:\Windows\System32\cmd.exe`) survives for
+ * `basenameOfHeadToken` to split on, instead of being eaten as a POSIX
+ * shell escape character.
+ */
+function rawFirstToken(text: string): string | undefined {
+	const token = text.trimStart().match(/^\S+/)?.[0];
+	if (token === undefined) return undefined;
+	const quoted = token.match(/^(['"])([\s\S]*)\1$/);
+	return quoted ? quoted[2] : token;
+}
+
+/**
+ * `true` when `basename(head(text))` is a recognized `pwsh`/`powershell`/
+ * `cmd` spelling, checking both the POSIX-escape-aware token (`p\wsh` ->
+ * `pwsh`) and the raw token (`C:\Windows\...\cmd.exe` -> `cmd`), since the
+ * two normalizations disagree on what a bare `\` means.
+ */
+function headIsOtherShellWrapper(text: string): boolean {
+	const dequotedHead = tokenizeShellWords(text.trimStart())[0];
+	if (dequotedHead !== undefined && isOtherShellWrapperName(basenameOfHeadToken(dequotedHead))) return true;
+	const raw = rawFirstToken(text);
+	return raw !== undefined && isOtherShellWrapperName(basenameOfHeadToken(raw));
+}
+
+/**
+ * `true` when `command` (bash tool) invokes `pwsh`/`powershell`/`cmd` at any
+ * unwrapped layer, e.g. `pwsh -c "Remove-Item -Recurse ~"` or
+ * `bash -c "cmd /c del ..."`. Auto mode's danger filter
+ * (`DANGEROUS_COMMAND_PATTERNS`) is bash-shaped and has no coverage for these
+ * interpreters' own syntax, the same reason unmatched `powershell` tool calls
+ * always require approval — so a bash-tool call that merely shells out to one
+ * of them must not get a free pass auto mode never meant to give it.
+ */
+function commandInvokesOtherShell(command: string): boolean {
+	return collectDenyCandidates(command).some((candidate) => headIsOtherShellWrapper(candidate));
+}
+
+/**
+ * A shell variable/parameter expansion, command substitution, or backtick substitution in command
+ * position; with `specialParameters`, positional and special parameters (`$1`, `$@`) too.
+ */
+function isDynamicCommandHead(token: string, options: { specialParameters: boolean }): boolean {
+	const pattern = options.specialParameters ? /^(\$\(|\$\{|\$[A-Za-z_0-9@*#?$!-]|`)/ : /^(\$\(|\$\{|\$[A-Za-z_]|`)/;
+	return pattern.test(token);
+}
+
+/**
+ * `true` when any chain segment's command position (after stripping leading
+ * `VAR=val` assignments) is a variable/expansion rather than a literal
+ * command name (`$p`, `${HOME:+pwsh}`, `$(...)`, a backtick substitution), at
+ * any layer the shell runs (`scanExecutedCode`): `bash -c "$(curl ...)"` and `eval "$(curl ...)"`
+ * run another command's output. What actually runs then depends on the
+ * environment or on that output, so no pattern — deny, danger filter, or
+ * interpreter check — can reason about it; auto mode must require approval
+ * instead of silently resolving to whatever the variable happens to hold.
+ */
+function commandHeadIsDynamic(command: string): boolean {
+	// The raw command's segments include heredoc lines, where `$5` or `"$@"` is text: special
+	// parameters count only in what the lexed scan finds the shell runs, past `then`, `{` or `nohup`.
+	const rawHeadIsDynamic = splitChain(command).some((seg) => {
+		const head = tokenizeShellWords(stripEnvAssignments(stripLeadingBackslashEscape(seg.text)).trim())[0];
+		return head !== undefined && isDynamicCommandHead(head, { specialParameters: false });
+	});
+	if (rawHeadIsDynamic) return true;
+	const executed = scanExecutedCode(command);
+	return (
+		executed.truncated ||
+		executed.segments.some((seg) => {
+			const heads = [
+				tokenizeShellWords(stripEnvAssignments(stripLeadingBackslashEscape(seg.text)).trim())[0],
+				unwrappedWords(seg.text)[0],
+			];
+			return heads.some((head) => head !== undefined && isDynamicCommandHead(head, { specialParameters: true }));
+		})
+	);
+}
+
+/** Extracts the `<cmd>` from `find ... -exec <cmd> ... ;`/`+`/`-execdir <cmd> ... ;`, if present. */
+function extractFindExecArg(text: string): string | undefined {
+	const tokens = tokenizeShellWords(text.trim());
+	const head = tokens[0];
+	if (head === undefined || basenameOfHeadToken(head) !== "find") return undefined;
+	const execIndex = tokens.findIndex((token) => token === "-exec" || token === "-execdir");
+	if (execIndex === -1) return undefined;
+	const cmdTokens: string[] = [];
+	for (let i = execIndex + 1; i < tokens.length; i++) {
+		const token = tokens[i];
+		if (token === ";" || token === "+") break;
+		cmdTokens.push(token);
+	}
+	return cmdTokens.length > 0 ? cmdTokens.join(" ") : undefined;
+}
+
+/** Extracts `env -S '<cmd>'` / `env --split-string '<cmd>'`'s argument, which `env` itself parses as a command line. */
+function extractEnvSplitStringArg(text: string): string | undefined {
+	const tokens = tokenizeShellWords(text.trim());
+	const head = tokens[0];
+	if (head === undefined || basenameOfHeadToken(head) !== "env") return undefined;
+	for (let i = 1; i < tokens.length; i++) {
+		if (tokens[i] === "-S" || tokens[i] === "--split-string") return tokens[i + 1];
+	}
+	return undefined;
 }
 
 function globToRegExp(pattern: string): RegExp {
@@ -498,8 +1852,16 @@ function globToRegExp(pattern: string): RegExp {
 }
 
 function matchDenyPattern(command: string, pattern: string): boolean {
+	const candidates = collectDenyCandidates(command);
+	const flagPattern = parseFlagClusterPattern(pattern);
+	if (
+		flagPattern !== undefined &&
+		candidates.some((candidate) => flagClusterPatternMatchesCandidate(flagPattern, candidate))
+	) {
+		return true;
+	}
 	const regex = globToRegExp(normalizeForMatch(pattern));
-	return collectDenyCandidates(command).some((candidate) => regex.test(normalizeForMatch(candidate)));
+	return matchableDenyForms(command).some((form) => regex.test(form));
 }
 
 /**
@@ -581,9 +1943,13 @@ export const DANGEROUS_COMMAND_PATTERNS: readonly string[] = [
 	// work, and the gate cannot see file contents anyway (see the module doc
 	// on interpreter escape hatches).
 	"python* -c*",
+	"pypy* -c*",
 	"node -e*",
 	"node --eval*",
 	"node -p*",
+	"nodejs -e*",
+	"nodejs --eval*",
+	"nodejs -p*",
 	"bun -e*",
 	"bun --eval*",
 	"deno eval*",
@@ -600,38 +1966,50 @@ export function findDangerousPattern(command: string): string | undefined {
 	return DANGEROUS_COMMAND_PATTERNS.find((pattern) => matchDenyPattern(command, pattern));
 }
 
-/** Normalize a (possibly relative or absolute) path into a forward-slash path relative to `cwd`, for glob matching. */
-function toMatchablePath(filePath: string, cwd: string): string {
-	const resolved = isAbsolute(filePath) ? filePath : resolve(cwd, filePath);
-	const rel = relative(cwd, resolved);
-	return rel.split(sep).join("/");
+/**
+ * `filePath` relative to `cwd`, resolved EXACTLY as the built-in tools resolve it (`resolveToCwd`:
+ * `~` expansion, a leading `@`, `file://` URLs). The gate must judge the file the tool will open:
+ * resolved naively, `~/.ssh/id_rsa` read as `<cwd>/~/.ssh/id_rsa`, inside the project, while the
+ * read tool opened the real key.
+ */
+function relativeToProject(filePath: string, cwd: string): string {
+	return relative(resolve(cwd), resolveToCwd(filePath, cwd));
 }
 
-/** Whether `filePath` (relative or absolute) resolves to a location inside `cwd`. */
+/** A path argument as a forward-slash path relative to `cwd`, for glob matching. */
+function toMatchablePath(filePath: string, cwd: string): string {
+	return relativeToProject(filePath, cwd).split(sep).join("/");
+}
+
+/** Whether `filePath` names a location inside `cwd`, as the tool will resolve it. */
 function isWithinProject(filePath: string, cwd: string): boolean {
-	const resolved = isAbsolute(filePath) ? filePath : resolve(cwd, filePath);
-	const rel = relative(cwd, resolved);
+	const rel = relativeToProject(filePath, cwd);
 	return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 /**
  * NOTE: this assumes the tool-call args carry a `command` string under the
- * exact key `command`. If/when this gate is wired into actual tool
- * dispatch, verify every gated tool's argument shape matches these
- * hardcoded key names — a mismatch doesn't error, it just silently fails to
- * match any `pattern`/`paths` rule and falls through to the (fail-safe)
- * default decision. Not currently exploitable: nothing outside this module
- * and its test calls `PermissionGate`/`loadRules` yet.
+ * exact key `command`. Verify every gated tool's argument shape matches
+ * these hardcoded key names — a mismatch doesn't error, it just silently
+ * fails to match any `pattern`/`paths` rule and falls through to the
+ * (fail-safe) default decision.
  */
 function getCommandArg(args: Record<string, unknown>): string | undefined {
 	return typeof args.command === "string" ? args.command : undefined;
 }
 
-/** Prefers `file_path` over `path` when both are present; see the note on `getCommandArg` above. */
-function getPathArg(args: Record<string, unknown>): string | undefined {
-	if (typeof args.file_path === "string") return args.file_path;
-	if (typeof args.path === "string") return args.path;
-	return undefined;
+/**
+ * Every path argument the call carries. Both keys count, whichever the tool reads: the built-in
+ * tools read `path`, others `file_path`. Judging only one of them (`file_path` used to win) let a
+ * call name an outside path in the key its tool reads and an inside one in the key the gate read.
+ */
+function getPathArgs(args: Record<string, unknown>): string[] {
+	const paths: string[] = [];
+	for (const key of ["file_path", "path"] as const) {
+		const value = args[key];
+		if (typeof value === "string" && !paths.includes(value)) paths.push(value);
+	}
+	return paths;
 }
 
 function describeMatch(rule: PermissionRule): string {
@@ -641,8 +2019,62 @@ function describeMatch(rule: PermissionRule): string {
 	return `matched rule (${parts.join(", ")}) -> ${rule.action}`;
 }
 
+/**
+ * A rule whose `tool` names bash (`tool: bash`, or a glob such as `b*`) has a
+ * `pattern` authored against bash command shapes, so only its `deny` half is
+ * safe to reuse for `powershell` calls: a bash `deny` over-matching onto a
+ * powershell command is the fail-safe direction, while a bash
+ * `allow`/`approve` pattern (e.g. `ls *`) under-matching real powershell
+ * syntax would otherwise create the illusion of coverage without actually
+ * vetting powershell-specific danger. Rules whose `tool` names powershell
+ * itself (`tool: powershell`, `tool: "*"`) are unaffected and keep matching
+ * normally.
+ */
+function bashDenyRuleAppliesToPowershell(rule: PermissionRule, toolName: string): boolean {
+	return toolName === "powershell" && rule.action === "deny" && toolPatternMatches(rule.tool, "bash");
+}
+
+/** Whether a rule's `tool` names `toolName` (lowercase): exactly, or as a glob of `*` and `?`, in any letter case. */
+function toolPatternMatches(pattern: string, toolName: string): boolean {
+	return matchesWildcards(pattern.toLowerCase(), toolName);
+}
+
+/**
+ * Whether `text` matches `glob`, where `*` stands for any run of characters and `?` for one, in time
+ * proportional to the product of their lengths. Not `globToRegExp`: a regex of many `*` backtracks
+ * exponentially on a long text it does not match (`*a*a*a*a*a*a*b` takes seconds on 64 characters).
+ */
+function matchesWildcards(glob: string, text: string): boolean {
+	let g = 0;
+	let t = 0;
+	// The last `*` seen, and where in `text` its run ends so far, to widen it when a later part fails.
+	let star = -1;
+	let starEnd = 0;
+	while (t < text.length) {
+		// `*` first: taken as a literal for a `*` in `text`, it would leave no point to widen from.
+		if (glob[g] === "*") {
+			star = g++;
+			starEnd = t;
+		} else if (g < glob.length && (glob[g] === "?" || glob[g] === text[t])) {
+			g++;
+			t++;
+		} else if (star !== -1) {
+			g = star + 1;
+			t = ++starEnd;
+		} else {
+			return false;
+		}
+	}
+	while (glob[g] === "*") g++;
+	return g === glob.length;
+}
+
+function toolMatchesRule(rule: PermissionRule, toolName: string): boolean {
+	return toolPatternMatches(rule.tool, toolName) || bashDenyRuleAppliesToPowershell(rule, toolName);
+}
+
 function ruleMatches(rule: PermissionRule, toolName: string, args: Record<string, unknown>, cwd: string): boolean {
-	if (rule.tool !== "*" && rule.tool.toLowerCase() !== toolName) return false;
+	if (!toolMatchesRule(rule, toolName)) return false;
 
 	if (rule.pattern !== undefined) {
 		const command = getCommandArg(args);
@@ -650,19 +2082,92 @@ function ruleMatches(rule: PermissionRule, toolName: string, args: Record<string
 	}
 
 	if (rule.paths !== undefined) {
-		const filePath = getPathArg(args);
-		if (filePath === undefined) return false;
-		const matchable = toMatchablePath(filePath, cwd);
-		if (!rule.paths.some((pattern) => minimatch(matchable, pattern, { dot: true }))) return false;
+		const filePaths = getPathArgs(args);
+		if (filePaths.length === 0) return false;
+		const globs = rule.paths;
+		const covered = (filePath: string) => {
+			const matchable = toMatchablePath(filePath, cwd);
+			return globs.some((pattern) => minimatch(matchable, pattern, { dot: true }));
+		};
+		// The same asymmetry as `pattern`: a deny rule fires on ANY path it names; an allow/approve
+		// rule only when it covers EVERY path the call names, so it never authorizes one it does not.
+		if (rule.action === "deny" ? !filePaths.some(covered) : !filePaths.every(covered)) return false;
 	}
 
+	return true;
+}
+
+/** What the gate reads about a called tool besides its name: the matching parts of its `ToolInfo`. */
+export interface GatedTool {
+	annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; openWorldHint?: boolean };
+	/** Scope of the source the annotations come from, when the registering extension relays them. */
+	annotationsScope?: SourceScope;
+	/** Where the extension that registered the tool was loaded from. */
+	sourceInfo: Pick<SourceInfo, "scope">;
+}
+
+/**
+ * Whether `tool` declares itself read-only through sources trusted to say so. Hints are not
+ * verified, so a project's own configuration never vouches for one: the extension that registered
+ * the tool must come from outside the project (built in, `-e`, the SDK, the user's own extensions
+ * and packages: scope `temporary` or `user`), and so must any source it relays the hints from
+ * (`annotationsScope`, such as the `mcp.json` that defines an MCP server). Not `source`: a project
+ * package can be named `builtin`. A tool that also declares itself destructive contradicts itself,
+ * so its hint does not count either.
+ */
+function hasTrustedReadOnlyHint(tool: GatedTool): boolean {
+	if (tool.annotations?.readOnlyHint !== true || tool.annotations.destructiveHint === true) return false;
+	return tool.sourceInfo.scope !== "project" && tool.annotationsScope !== "project";
+}
+
+/** Past these bounds the walk over a call's arguments stops, and the call counts as naming a path outside. */
+const MAX_PATH_SCAN_DEPTH = 32;
+const MAX_PATH_SCAN_VALUES = 10_000;
+
+/**
+ * Whether `value` names a file location rather than plain text: an absolute path, one under `~`,
+ * a drive letter, a leading `@` (the tools strip it) or a `file:` URL, or a path climbing with `..`.
+ */
+function looksLikePath(value: string): boolean {
+	return isAbsolute(value) || /^(?:~|@|file:|[A-Za-z]:)/i.test(value) || /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(value);
+}
+
+/**
+ * Whether every string in `args` that looks like a path, at any depth, names a location inside
+ * `cwd`. Tools name their paths under keys of their own (`paths`, `uri`, nested options), so the key
+ * does not decide. A path that does not resolve, and arguments too deep or too many to walk, count
+ * as naming one outside.
+ */
+function argsStayWithinProject(args: Record<string, unknown>, cwd: string): boolean {
+	const pending: { value: unknown; depth: number }[] = [{ value: args, depth: 0 }];
+	let visited = 0;
+	for (let item = pending.pop(); item !== undefined; item = pending.pop()) {
+		if (++visited > MAX_PATH_SCAN_VALUES) return false;
+		const { value, depth } = item;
+		if (typeof value === "string") {
+			const candidate = value.trim();
+			if (!looksLikePath(candidate)) continue;
+			try {
+				if (!isWithinProject(candidate, cwd)) return false;
+			} catch {
+				// `file://host/x` and other URLs no tool can open.
+				return false;
+			}
+		} else if (typeof value === "object" && value !== null) {
+			if (depth >= MAX_PATH_SCAN_DEPTH) return false;
+			for (const child of Object.values(value)) {
+				if (pending.length >= MAX_PATH_SCAN_VALUES) return false;
+				pending.push({ value: child, depth: depth + 1 });
+			}
+		}
+	}
 	return true;
 }
 
 export interface PermissionGateOptions {
 	/** Project root used to determine whether a path is "within the project" for default decisions. Defaults to `process.cwd()`. */
 	cwd?: string;
-	/** Session permission mode; see `PermissionMode`. Defaults to `"default"`. */
+	/** Session permission mode; see `PermissionMode`. Defaults to `"ask"`. */
 	mode?: PermissionMode;
 }
 
@@ -678,12 +2183,31 @@ export class PermissionGate {
 	constructor(rules: PermissionRule[] = [], options: PermissionGateOptions = {}) {
 		this.rules = rules;
 		this.cwd = options.cwd ?? process.cwd();
-		this.mode = options.mode ?? "default";
+		this.mode = options.mode ?? "ask";
 	}
 
-	/** Evaluate a tool call. `args` should carry `command` for bash, or `path`/`file_path` for read/write/edit. */
-	evaluate(toolName: string, args: Record<string, unknown> = {}): PermissionDecision {
+	/**
+	 * Evaluate a tool call. `args` should carry `command` for bash, or `path`/`file_path` for read/write/edit.
+	 * `tool` is the called tool as the session registered it, if known; its hints only inform default decisions.
+	 */
+	evaluate(toolName: string, args: Record<string, unknown> = {}, tool?: GatedTool): PermissionDecision {
 		const normalizedTool = toolName.toLowerCase();
+
+		if (normalizedTool === "bash" || normalizedTool === "powershell") {
+			const command = getCommandArg(args);
+			if (command !== undefined && commandDenyScanTruncated(command)) {
+				const denyRuleApplies = this.rules.some(
+					(rule) => rule.action === "deny" && toolMatchesRule(rule, normalizedTool),
+				);
+				if (denyRuleApplies) {
+					return {
+						action: "deny",
+						reason:
+							"command has more chained/wrapped pieces than the deny scan can fully cover, and a deny rule applies to this tool; failing closed rather than risk missing a match",
+					};
+				}
+			}
+		}
 
 		for (const rule of this.rules) {
 			if (ruleMatches(rule, normalizedTool, args, this.cwd)) {
@@ -691,7 +2215,7 @@ export class PermissionGate {
 			}
 		}
 
-		return this.applyMode(this.defaultDecision(normalizedTool, args));
+		return this.applyMode(this.defaultDecision(normalizedTool, args, tool));
 	}
 
 	/**
@@ -705,16 +2229,26 @@ export class PermissionGate {
 		return decision;
 	}
 
-	private defaultDecision(toolName: string, args: Record<string, unknown>): PermissionDecision {
+	private defaultDecision(toolName: string, args: Record<string, unknown>, tool?: GatedTool): PermissionDecision {
 		if (DEFAULT_ALLOWED_TOOLS.has(toolName)) {
 			return { action: "allow", reason: `no rule matched; "${toolName}" is allowed by default` };
+		}
+
+		if (this.mode === "auto" && AUTO_ALLOWED_DELEGATION_TOOLS.has(toolName)) {
+			return {
+				action: "allow",
+				reason: `auto mode: no rule matched; "${toolName}" only starts agents that run this gate themselves`,
+			};
 		}
 
 		if (toolName === "bash") {
 			if (this.mode === "auto") {
 				const command = getCommandArg(args);
 				if (command === undefined) {
-					return { action: "approve", reason: "auto mode: bash call without a command string requires approval" };
+					return {
+						action: "approve",
+						reason: "auto mode: bash call without a command string requires approval",
+					};
 				}
 				const dangerous = findDangerousPattern(command);
 				if (dangerous !== undefined) {
@@ -723,14 +2257,75 @@ export class PermissionGate {
 						reason: `auto mode: command matched dangerous pattern ${JSON.stringify(dangerous)}, requires approval`,
 					};
 				}
+				if (scanExecutedCode(command).truncated) {
+					return {
+						action: "approve",
+						reason:
+							"auto mode: command nests deeper or runs more pieces than the scan covers, or opens a heredoc that never ends; requires approval",
+					};
+				}
+				if (commandHeadIsDynamic(command)) {
+					return {
+						action: "approve",
+						reason:
+							"auto mode: command position is a variable/parameter expansion, command substitution, or backtick substitution, which can resolve to anything; requires approval",
+					};
+				}
+				if (commandInvokesOtherShell(command)) {
+					return {
+						action: "approve",
+						reason:
+							"auto mode: command invokes a pwsh/powershell/cmd interpreter, which the bash-shaped danger filter has no coverage for; requires approval, same as the powershell tool",
+					};
+				}
+				if (commandDenyScanTruncated(command)) {
+					return {
+						action: "approve",
+						reason:
+							"auto mode: command has more chained/wrapped pieces than the deny scan can fully cover, requires approval",
+					};
+				}
+				if (commandFeedsBareShellWithoutDashC(command)) {
+					return {
+						action: "approve",
+						reason:
+							"auto mode: command feeds a bare shell interpreter via pipe/here-string/heredoc with no -c, which the deny scan can't fully vet; requires approval",
+					};
+				}
+				if (commandFeedsCodeFromStdin(command)) {
+					return {
+						action: "approve",
+						reason:
+							"auto mode: command feeds an interpreter its program through stdin (pipe, heredoc or here-string), which the deny scan can't vet; requires approval",
+					};
+				}
+				if (commandRunsProcessSubstitution(command)) {
+					return {
+						action: "approve",
+						reason:
+							"auto mode: command runs code straight out of a process substitution, which the deny scan can't vet; requires approval",
+					};
+				}
 				return { action: "allow", reason: "auto mode: no rule matched and command passed the danger filter" };
 			}
 			return { action: "approve", reason: "no rule matched; bash commands require approval by default" };
 		}
 
+		if (toolName === "powershell") {
+			// Unlike bash, powershell has no danger filter tuned for its own
+			// syntax (DANGEROUS_COMMAND_PATTERNS is bash-shaped), so auto mode
+			// cannot safely auto-allow it — every unmatched powershell call
+			// requires approval in ask and auto mode (yolo's applyMode still
+			// turns this approve into allow, as for every tool).
+			return { action: "approve", reason: "no rule matched; powershell commands always require approval" };
+		}
+
 		if (PATH_SCOPED_TOOLS.has(toolName)) {
-			const filePath = getPathArg(args);
-			if (filePath !== undefined && isWithinProject(filePath, this.cwd)) {
+			const filePaths = getPathArgs(args);
+			if (filePaths.length > 0 && filePaths.every((filePath) => isWithinProject(filePath, this.cwd))) {
+				if (this.mode === "supervised" && toolName !== "read") {
+					return { action: "approve", reason: "supervised mode: file changes require approval" };
+				}
 				return { action: "allow", reason: "no rule matched; allowed by default within the project" };
 			}
 			return {
@@ -742,13 +2337,36 @@ export class PermissionGate {
 		if (READ_ONLY_PATH_TOOLS.has(toolName)) {
 			// Unlike read/write/edit, these tools treat a missing `path` as the
 			// cwd, so an absent path arg is within the project by definition.
-			const filePath = getPathArg(args) ?? ".";
-			if (isWithinProject(filePath, this.cwd)) {
+			const filePaths = getPathArgs(args);
+			const searched = filePaths.length > 0 ? filePaths : ["."];
+			if (searched.every((filePath) => isWithinProject(filePath, this.cwd))) {
 				return { action: "allow", reason: "no rule matched; read-only tool allowed by default within the project" };
 			}
 			return {
 				action: "approve",
 				reason: "no rule matched; path is outside the project, requires approval",
+			};
+		}
+
+		if (tool !== undefined && hasTrustedReadOnlyHint(tool)) {
+			// In `ask` and `supervised`, only a tool that also stays in a closed world: a read-only tool that
+			// reaches the web can still carry what it read out in a query or URL.
+			if ((this.mode === "ask" || this.mode === "supervised") && tool.annotations?.openWorldHint !== false) {
+				return {
+					action: "approve",
+					reason: `${this.mode} mode: "${toolName}" is read-only but may reach an open world (no openWorldHint: false), requires approval`,
+				};
+			}
+			// Like grep/find/ls: a read-only tool still asks before it reads a path outside the project.
+			if (argsStayWithinProject(args, this.cwd)) {
+				return {
+					action: "allow",
+					reason: `no rule matched; "${toolName}" is read-only by a trusted source's hint, allowed by default within the project`,
+				};
+			}
+			return {
+				action: "approve",
+				reason: `no rule matched; "${toolName}" is read-only by a trusted source's hint, but names a path outside the project, requires approval`,
 			};
 		}
 

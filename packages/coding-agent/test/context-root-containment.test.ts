@@ -20,6 +20,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { normalizeContext } from "@draht/ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseArgs } from "../src/cli/args.ts";
 import { DefaultResourceLoader, loadProjectContextFiles } from "../src/core/resource-loader.ts";
@@ -421,7 +422,11 @@ describe("the stub provider context recording seam", () => {
 		const model = provider.getModels().find((m) => m.id === STUB_MODEL_ID);
 		if (!model) throw new Error("stub model missing");
 		const message = await provider
-			.stream(model, { systemPrompt, messages: [{ role: "user", content: "hi", timestamp: Date.now() }] }, undefined)
+			.stream(
+				model,
+				normalizeContext({ systemPrompt, messages: [{ role: "user", content: "hi", timestamp: Date.now() }] }),
+				undefined,
+			)
 			.result();
 		return JSON.stringify(message.content);
 	}
@@ -435,20 +440,20 @@ describe("the stub provider context recording seam", () => {
 		await provider
 			.stream(
 				model,
-				{
+				normalizeContext({
 					systemPrompt: `first ${IN_ROOT_CANARY}`,
 					messages: [{ role: "user", content: "a", timestamp: Date.now() }],
-				},
+				}),
 				undefined,
 			)
 			.result();
 		await provider
 			.stream(
 				model,
-				{
+				normalizeContext({
 					systemPrompt: `second ${OUT_OF_ROOT_CANARY}`,
 					messages: [{ role: "user", content: "b", timestamp: Date.now() }],
-				},
+				}),
 				undefined,
 			)
 			.result();
@@ -492,7 +497,10 @@ describe("the stub provider context recording seam", () => {
 		const message = await provider
 			.stream(
 				model,
-				{ systemPrompt: "sys", messages: [{ role: "user", content: "hello", timestamp: Date.now() }] },
+				normalizeContext({
+					systemPrompt: "sys",
+					messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+				}),
 				undefined,
 			)
 			.result();

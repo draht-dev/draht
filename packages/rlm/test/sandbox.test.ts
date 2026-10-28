@@ -37,13 +37,18 @@
 // doubles as coverage that the startup self-test the plan requires actually
 // exists and reports correctly.
 
-import type { ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { type ChildProcess, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test } from "vitest";
-import { resolveSandboxedCommand, SandboxUnavailableError, spawnSandboxed } from "../src/sandbox.js";
+import {
+	resolveSandboxedCommand,
+	type SandboxSpawnOptions,
+	SandboxUnavailableError,
+	spawnSandboxed,
+} from "../src/sandbox.js";
 import { HAS_PYTHON3, HAS_USERNS } from "./sandbox-prereqs.js";
 
 // Tests 1-6 spawn the REAL sandboxed python3 subprocess and need both
@@ -51,6 +56,7 @@ import { HAS_PYTHON3, HAS_USERNS } from "./sandbox-prereqs.js";
 // synchronous fail-closed throw against nonexistent wrapper binaries (no
 // process is ever spawned), so it runs everywhere.
 const SKIP_REAL_SPAWN = !HAS_PYTHON3 || !HAS_USERNS;
+const HAS_BWRAP = process.platform === "linux" && spawnSync("bwrap", ["--version"], { stdio: "ignore" }).status === 0;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DRIVER_PATH = join(__dirname, "..", "python", "repl_driver.py");
@@ -132,6 +138,7 @@ interface ScriptRunResult {
 	stdout: string;
 	stderr: string;
 	exitCode: number | null;
+	pid: number | undefined;
 }
 
 /**
@@ -147,10 +154,15 @@ interface ScriptRunResult {
  * `<sandboxed python> <driverPath>`, so pointing it at an arbitrary script
  * reuses the identical command-construction/profile wiring production uses.
  */
-function runSandboxedScript(pythonCode: string, workdir: string, scriptDir: string): Promise<ScriptRunResult> {
+function runSandboxedScript(
+	pythonCode: string,
+	workdir: string,
+	scriptDir: string,
+	overrides: Pick<SandboxSpawnOptions, "pythonBin" | "unshareBin" | "bwrapBin"> = {},
+): Promise<ScriptRunResult> {
 	const scriptPath = join(scriptDir, `probe-${Math.random().toString(36).slice(2)}.py`);
 	writeFileSync(scriptPath, pythonCode);
-	const child = spawnSandboxed({ driverPath: scriptPath, workdir });
+	const child = spawnSandboxed({ driverPath: scriptPath, workdir, ...overrides });
 
 	return new Promise((resolve, reject) => {
 		let stdout = "";
@@ -164,7 +176,7 @@ function runSandboxedScript(pythonCode: string, workdir: string, scriptDir: stri
 			stderr += chunk;
 		});
 		child.once("error", reject);
-		child.once("close", (code) => resolve({ stdout, stderr, exitCode: code }));
+		child.once("close", (code) => resolve({ stdout, stderr, exitCode: code, pid: child.pid }));
 	});
 }
 
@@ -367,4 +379,237 @@ describe("OS-level sandbox (sandbox.ts + sandbox/macos.sb) -- the real security 
 			rmSync(brokenWorkdir, { recursive: true, force: true });
 		}
 	});
+
+	test.skipIf(SKIP_REAL_SPAWN)(
+		"8. raw Python cannot read or mutate outside files, including through a workdir symlink",
+		async () => {
+			workdir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-workdir-"));
+			scriptDir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-script-"));
+			const outside = join(scriptDir, "outside.txt");
+			const created = join(scriptDir, "created.txt");
+			const escapePath = join(workdir, "escape");
+			writeFileSync(outside, "outside marker", { mode: 0o600 });
+			symlinkSync(outside, escapePath);
+			const before = statSync(outside);
+			const { stdout, stderr, exitCode } = await runSandboxedScript(
+				[
+					"import os, json",
+					`outside, created, escape = ${JSON.stringify([outside, created, escapePath])}`,
+					"actions = {",
+					" 'read': lambda: open(outside).read(),",
+					" 'write': lambda: open(outside, 'w').write('changed'),",
+					" 'create': lambda: open(created, 'w').write('created'),",
+					" 'symlink_read': lambda: open(escape).read(),",
+					" 'symlink_write': lambda: open(escape, 'w').write('changed'),",
+					" 'truncate': lambda: os.truncate(outside, 0),",
+					" 'chmod': lambda: os.chmod(outside, 0o777),",
+					" 'utime': lambda: os.utime(outside, (1, 1)),",
+					"}",
+					"results = {}",
+					"for name, action in actions.items():",
+					"    try:",
+					"        action()",
+					"        results[name] = 'allowed'",
+					"    except PermissionError:",
+					"        results[name] = 'blocked'",
+					"print(json.dumps(results))",
+				].join("\n"),
+				workdir,
+				scriptDir,
+			);
+			expect(stderr).toBe("");
+			expect(exitCode).toBe(0);
+			expect(JSON.parse(stdout)).toEqual({
+				read: "blocked",
+				write: "blocked",
+				create: "blocked",
+				symlink_read: "blocked",
+				symlink_write: "blocked",
+				truncate: "blocked",
+				chmod: "blocked",
+				utime: "blocked",
+			});
+			expect(readFileSync(outside, "utf8")).toBe("outside marker");
+			expect(statSync(outside).mode).toBe(before.mode);
+			expect(statSync(outside).mtimeMs).toBe(before.mtimeMs);
+			expect(existsSync(created)).toBe(false);
+		},
+	);
+
+	test.skipIf(SKIP_REAL_SPAWN || process.platform !== "linux")(
+		"9. raw execve and memfd execveat are denied by the kernel",
+		async () => {
+			workdir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-workdir-"));
+			scriptDir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-script-"));
+			for (const useMemfd of [false, true]) {
+				const { stdout, stderr, exitCode } = await runSandboxedScript(
+					[
+						"import ctypes, errno, os, sys",
+						"libc = ctypes.CDLL(None, use_errno=True)",
+						"argv = (ctypes.c_char_p * 4)(sys.executable.encode(), b'-c', b'print(\"exec-escaped\")', None)",
+						"envp = (ctypes.c_char_p * 1)(None)",
+						...(useMemfd
+							? [
+									"fd = os.memfd_create('rlm-exec-probe', 0)",
+									"with open(sys.executable, 'rb') as executable: os.write(fd, executable.read())",
+									"rc = libc.execveat(fd, b'', argv, envp, 0x1000)",
+								]
+							: ["rc = libc.execve(sys.executable.encode(), argv, envp)"]),
+						"assert rc == -1 and ctypes.get_errno() == errno.EPERM, (rc, ctypes.get_errno())",
+						"print('exec-blocked')",
+					].join("\n"),
+					workdir,
+					scriptDir,
+				);
+				expect(stderr).toBe("");
+				expect(exitCode).toBe(0);
+				expect(stdout).toBe("exec-blocked\n");
+			}
+		},
+	);
+
+	test.skipIf(SKIP_REAL_SPAWN || process.platform !== "linux")(
+		"10. Python keeps the monitored PID and cannot restore privileges",
+		async () => {
+			workdir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-workdir-"));
+			scriptDir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-script-"));
+			const { stdout, stderr, exitCode, pid } = await runSandboxedScript(
+				[
+					"import ctypes, errno, json, os",
+					"libc = ctypes.CDLL(None, use_errno=True)",
+					"class Header(ctypes.Structure): _fields_ = [('version', ctypes.c_uint32), ('pid', ctypes.c_int)]",
+					"class Caps(ctypes.Structure): _fields_ = [('effective', ctypes.c_uint32), ('permitted', ctypes.c_uint32), ('inheritable', ctypes.c_uint32)]",
+					"header, caps = Header(0x20080522, 0), (Caps * 2)()",
+					"assert libc.capget(ctypes.byref(header), caps) == 0",
+					"assert all((entry.effective | entry.permitted | entry.inheritable) == 0 for entry in caps)",
+					"assert libc.prctl(39, 0, 0, 0, 0) == 1", // PR_GET_NO_NEW_PRIVS
+					"assert libc.prctl(38, 0, 0, 0, 0) == -1", // cannot clear no_new_privs
+					"caps[0].effective = caps[0].permitted = 1 << 21", // CAP_SYS_ADMIN
+					"assert libc.capset(ctypes.byref(header), caps) == -1 and ctypes.get_errno() == errno.EPERM",
+					"assert libc.unshare(0x10000000) == -1 and ctypes.get_errno() == errno.EPERM",
+					"print(json.dumps({'pid': os.getpid(), 'cwd': os.getcwd()}))",
+				].join("\n"),
+				workdir,
+				scriptDir,
+			);
+			expect(stderr).toBe("");
+			expect(exitCode).toBe(0);
+			expect(JSON.parse(stdout)).toEqual({ pid, cwd: workdir });
+		},
+	);
+
+	test.skipIf(SKIP_REAL_SPAWN || process.platform !== "linux")(
+		"11. Python discovery cannot execute an inherited startup hook",
+		async () => {
+			workdir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-workdir-"));
+			scriptDir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-script-"));
+			const marker = join(scriptDir, "startup-ran");
+			const pythonBin = join(scriptDir, "python-for-discovery");
+			const python = spawnSync("python3", ["-I", "-S", "-c", "import sys; print(sys.executable)"], {
+				encoding: "utf8",
+			});
+			expect(python.status).toBe(0);
+			symlinkSync(python.stdout.trim(), pythonBin);
+			writeFileSync(
+				join(scriptDir, "sitecustomize.py"),
+				`open(${JSON.stringify(marker)}, 'w').write('startup-hook')`,
+			);
+			const previous = process.env.PYTHONPATH;
+			process.env.PYTHONPATH = scriptDir;
+			try {
+				const result = await runSandboxedScript("print('driver-ran')", workdir, scriptDir, { pythonBin });
+				expect(result.stderr).toBe("");
+				expect(result.exitCode).toBe(0);
+				expect(result.stdout).toBe("driver-ran\n");
+				expect(existsSync(marker)).toBe(false);
+			} finally {
+				if (previous === undefined) delete process.env.PYTHONPATH;
+				else process.env.PYTHONPATH = previous;
+			}
+		},
+	);
+
+	test.skipIf(SKIP_REAL_SPAWN || !HAS_BWRAP)(
+		"12. bwrap fallback confines raw Python while preserving scratch file operations",
+		async () => {
+			workdir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-workdir-"));
+			scriptDir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-script-"));
+			const outside = join(scriptDir, "outside.txt");
+			writeFileSync(outside, "outside marker");
+			const { stdout, stderr, exitCode } = await runSandboxedScript(
+				[
+					"import ctypes, errno, os, ssl, statistics, sys",
+					`outside = ${JSON.stringify(outside)}`,
+					"for mode in ('r', 'w'):",
+					"    try:",
+					"        open(outside, mode)",
+					"        raise AssertionError('outside file accessible')",
+					"    except (PermissionError, FileNotFoundError): pass",
+					"os.mkdir('scratch')",
+					"with open('scratch/value', 'w') as target: target.write('scratch marker')",
+					"os.rename('scratch/value', 'scratch/renamed')",
+					"os.link('scratch/renamed', 'scratch/hardlink')",
+					"os.symlink('renamed', 'scratch/symlink')",
+					"assert open('scratch/symlink').read() == 'scratch marker'",
+					"os.truncate('scratch/hardlink', 7)",
+					"assert open('scratch/renamed').read() == 'scratch'",
+					"for path in ('renamed', 'hardlink', 'symlink'): os.unlink('scratch/' + path)",
+					"os.rmdir('scratch')",
+					"libc = ctypes.CDLL(None, use_errno=True)",
+					"argv = (ctypes.c_char_p * 2)(sys.executable.encode(), None)",
+					"envp = (ctypes.c_char_p * 1)(None)",
+					"assert libc.execve(sys.executable.encode(), argv, envp) == -1 and ctypes.get_errno() == errno.EPERM",
+					"print('confined')",
+				].join("\n"),
+				workdir,
+				scriptDir,
+				{ unshareBin: "/nonexistent/unshare-for-bwrap-test" },
+			);
+			expect(stderr).toBe("");
+			expect(exitCode).toBe(0);
+			expect(stdout).toBe("confined\n");
+			expect(readFileSync(outside, "utf8")).toBe("outside marker");
+		},
+	);
+
+	test.skipIf(!HAS_PYTHON3 || process.platform !== "linux")(
+		"13. a kernel that rejects Landlock prevents the driver from running",
+		() => {
+			workdir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-workdir-"));
+			scriptDir = mkdtempSync(join(tmpdir(), "rlm-sandbox-test-script-"));
+			const marker = join(workdir, "driver-ran");
+			const driver = join(scriptDir, "marker-driver.py");
+			const bootstrap = join(__dirname, "..", "python", "linux_sandbox.py");
+			writeFileSync(driver, `open(${JSON.stringify(marker)}, 'w').write('driver-ran')`);
+			// A real outer seccomp filter makes the Landlock syscall return ENOSYS.
+			// This exercises kernel-policy failure without a production test switch.
+			const result = spawnSync(
+				"python3",
+				[
+					"-I",
+					"-S",
+					"-c",
+					[
+						"import ctypes, errno, runpy, sys",
+						"class Filter(ctypes.Structure): _fields_ = [('code', ctypes.c_ushort), ('jt', ctypes.c_ubyte), ('jf', ctypes.c_ubyte), ('k', ctypes.c_uint32)]",
+						"class Program(ctypes.Structure): _fields_ = [('len', ctypes.c_ushort), ('filter', ctypes.POINTER(Filter))]",
+						"filters = (Filter * 4)(Filter(0x20, 0, 0, 0), Filter(0x15, 0, 1, 444), Filter(0x06, 0, 0, 0x00050000 | errno.ENOSYS), Filter(0x06, 0, 0, 0x7fff0000))",
+						"program = Program(4, filters)",
+						"libc = ctypes.CDLL(None, use_errno=True)",
+						"assert libc.prctl(38, 1, 0, 0, 0) == 0",
+						"assert libc.prctl(22, 2, ctypes.byref(program), 0, 0) == 0",
+						`sys.argv = ${JSON.stringify([bootstrap, driver, workdir])}`,
+						"runpy.run_path(sys.argv[0], run_name='__main__')",
+					].join("\n"),
+				],
+				{ encoding: "utf8", timeout: 5000 },
+			);
+			expect(result.error).toBeUndefined();
+			expect(result.status).toBe(1);
+			expect(result.stdout).toBe("");
+			expect(result.stderr).toContain("sandbox_violation");
+			expect(result.stderr).toContain("query Landlock ABI");
+			expect(existsSync(marker)).toBe(false);
+		},
+	);
 });

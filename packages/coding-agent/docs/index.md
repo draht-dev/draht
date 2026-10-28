@@ -1,84 +1,40 @@
-# Pi Documentation
+# draht
 
-Pi is a minimal terminal coding harness. It is designed to stay small at the core while being extended through TypeScript extensions, skills, prompt templates, themes, and pi packages.
+draht is an extensible AI agent that works from your terminal. Give it a goal and a working folder, and it can inspect files, run commands, edit content, and work through multi-step tasks.
 
-## Quick start
+Use draht for software development, research notes, writing projects, data files, or hobby work. You can use draht as is, prompt it to adapt itself to your workflow, or build other applications powered by draht using the SDK.
 
-Install Pi with npm:
+## Start using draht
 
-```bash
-npm install -g --ignore-scripts @draht/coding-agent
-```
+New to draht? Follow the [Quickstart](quickstart.md) to install draht, connect a model, and complete your first task.
 
-`--ignore-scripts` disables dependency lifecycle scripts during install. Pi does not require install scripts for normal npm installs.
+If draht is already installed, choose what you want to do:
 
-On Linux or macOS, you can also use the installer:
+- [Use draht interactively](usage.md) to add files, run commands, direct ongoing work, and export results.
+- [Choose a model](models.md) or connect a subscription, API key, local model, or compatible endpoint. To run local models through a llama.cpp router and manage them with `/llama`, see [llama.cpp](llama-cpp.md).
+- [Continue or branch a session](sessions.md) to resume work or explore another approach without losing history.
+- [Attach to a running session](attachable-sessions.md) from another terminal, or let several models collaborate in one session with [Duet mode](duet.md).
+- [Configure draht](configuration.md) for your preferences, working folders, instructions, and reusable resources.
+- [Understand how draht works](how-pi-works.md), including tools, context, sessions, and the agent loop.
 
-```bash
-curl -fsSL https://pi.dev/install.sh | sh
-```
+## Customize draht
 
-To uninstall pi itself, use npm for curl and npm installs:
+draht can reuse prompts, load specialized instructions, add executable integrations, change its terminal interface, connect model services, and distribute these resources as packages.
+Use the [Quickstart customization chooser](quickstart.md#choose-how-to-customize-draht) to select the smallest mechanism that meets your need.
 
-```bash
-npm uninstall -g @draht/coding-agent
-```
+## Automate or embed draht
 
-For pnpm, Yarn, or Bun installs, use the matching global remove command: `pnpm remove -g @draht/coding-agent`, `yarn global remove @draht/coding-agent`, or `bun uninstall -g @draht/coding-agent`.
+- Use [print mode](cli.md#invocation-and-output) for one-off and scripted tasks.
+- Use [JSON event stream mode](json.md) to consume structured events from one run.
+- Use [RPC mode](rpc.md) to control a separate draht process.
+- Use the [TypeScript SDK](sdk.md) to run draht inside an application.
 
-Then run it in a project directory:
+## Find reference and setup information
 
-```bash
-pi
-```
+Use the reference pages to look up [CLI options](cli.md), [settings](settings.md), [providers](providers.md), [keybindings](keybindings.md), and [environment variables](environment-variables.md).
 
-Authenticate with `/login` for subscription providers, or set an API key such as `ANTHROPIC_API_KEY` before starting pi.
+For platform-specific help, see [Terminal Setup](terminal-setup.md), [Windows](windows.md), [tmux](tmux.md), [Termux on Android](termux.md), or [Containerization](containerization.md).
 
-For the full first-run flow, see [Quickstart](quickstart.md).
+## Work safely
 
-## Start here
-
-- [Quickstart](quickstart.md) - install, authenticate, and run a first session.
-- [Using Pi](usage.md) - interactive mode, slash commands, context files, and CLI reference.
-- [Providers](providers.md) - subscription and API-key setup for built-in providers.
-- [llama.cpp](llama-cpp.md) - run a local router and manage models with `/llama`.
-- [Security](security.md) - project trust, sandbox boundaries, and vulnerability reporting.
-- [Containerization](containerization.md) - sandbox pi with OpenShell, Gondolin, or Docker.
-- [Settings](settings.md) - global and project settings.
-- [Keybindings](keybindings.md) - default shortcuts and custom keybindings.
-- [Sessions](sessions.md) - session management, branching, and tree navigation.
-- [Compaction](compaction.md) - context compaction and branch summarization.
-
-## Customization
-
-- [Extensions](extensions.md) - TypeScript modules for tools, commands, events, and custom UI.
-- [Skills](skills.md) - Agent Skills for reusable on-demand capabilities.
-- [Prompt templates](prompt-templates.md) - reusable prompts that expand from slash commands.
-- [Themes](themes.md) - built-in and custom terminal themes.
-- [Pi packages](packages.md) - bundle and share extensions, skills, prompts, and themes.
-- [Custom models](models.md) - add model entries for supported provider APIs.
-- [Custom providers](custom-provider.md) - implement custom APIs and OAuth flows.
-
-## Programmatic usage
-
-- [SDK](sdk.md) - embed pi in Node.js applications.
-- [RPC mode](rpc.md) - integrate over stdin/stdout JSONL.
-- [JSON event stream mode](json.md) - print mode with structured events.
-- [TUI components](tui.md) - build custom terminal UI for extensions.
-
-## Reference
-
-- [Environment variables](environment-variables.md) - draht process configuration and session metadata available to bash tools.
-- [Session format](session-format.md) - JSONL session file format, entry types, and SessionManager API.
-
-## Platform setup
-
-- [Windows](windows.md)
-- [Termux on Android](termux.md)
-- [tmux](tmux.md)
-- [Terminal setup](terminal-setup.md)
-- [Shell aliases](shell-aliases.md)
-
-## Development
-
-- [Development](development.md) - local setup, project structure, and debugging.
+draht's tools and extensions run with the permissions of the draht process. Project trust controls which project resources draht loads, but it does not sandbox tool calls. Review [Security](security.md) before using untrusted files, repositories, extensions, or unattended automation.

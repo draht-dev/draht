@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { convertMessages } from "../src/api/openai-completions.js";
+import { normalizeContext } from "../src/compat.js";
 import type { AssistantMessage, Context, Model, OpenAICompletionsCompat, Usage } from "../src/types.js";
 
 const emptyUsage: Usage = {
@@ -13,13 +14,20 @@ const emptyUsage: Usage = {
 
 // Compat shape that detectCompat() returns for deepseek.com baseUrls today.
 // Used for tests that exercise convertMessages directly.
-const deepseekCompat: Omit<Required<OpenAICompletionsCompat>, "deferredToolsMode"> & {
-	deferredToolsMode?: OpenAICompletionsCompat["deferredToolsMode"];
+const deepseekCompat: Omit<
+	Required<OpenAICompletionsCompat>,
+	"thinkingTokenBudgetField" | "supportsMidConvoSystemMessages" | "supportsMidConvoToolAdditions" | "vllmPriority"
+> & {
+	supportsMidConvoSystemMessages?: OpenAICompletionsCompat["supportsMidConvoSystemMessages"];
+	supportsMidConvoToolAdditions?: OpenAICompletionsCompat["supportsMidConvoToolAdditions"];
+	thinkingTokenBudgetField?: OpenAICompletionsCompat["thinkingTokenBudgetField"];
+	vllmPriority?: OpenAICompletionsCompat["vllmPriority"];
 } = {
 	supportsStore: false,
 	supportsDeveloperRole: false,
 	supportsReasoningEffort: true,
 	supportsUsageInStreaming: true,
+	supportsFinishReason: true,
 	maxTokensField: "max_completion_tokens",
 	requiresToolResultName: false,
 	requiresAssistantAfterToolResult: false,
@@ -28,6 +36,8 @@ const deepseekCompat: Omit<Required<OpenAICompletionsCompat>, "deferredToolsMode
 	openRouterRouting: {},
 	vercelGatewayRouting: {},
 	zaiToolStream: false,
+	supportsThinkingTokenBudget: false,
+	thinkingTokenBudgetField: undefined,
 	supportsOpenAIGrammarTools: false,
 	supportsStrictMode: true,
 	requiresReasoningContentOnAssistantMessages: false,
@@ -35,6 +45,7 @@ const deepseekCompat: Omit<Required<OpenAICompletionsCompat>, "deferredToolsMode
 	sendSessionAffinityHeaders: false,
 	supportsLongCacheRetention: false,
 	chatTemplateKwargs: {},
+	chatTemplateArgs: {},
 	sessionAffinityFormat: "openai",
 };
 
@@ -103,7 +114,7 @@ describe("openai-completions DeepSeek reasoning_content replay", () => {
 			],
 		};
 
-		const messages = convertMessages(model, context, deepseekCompat);
+		const messages = convertMessages(model, normalizeContext(context), deepseekCompat);
 		const replayedAssistant = messages.find((m) => m.role === "assistant");
 		expect(replayedAssistant).toBeDefined();
 		expect((replayedAssistant as { reasoning_content?: string }).reasoning_content).toBe(
@@ -143,7 +154,7 @@ describe("openai-completions DeepSeek reasoning_content replay", () => {
 			],
 		};
 
-		const messages = convertMessages(model, context, deepseekCompat);
+		const messages = convertMessages(model, normalizeContext(context), deepseekCompat);
 		const replayedAssistant = messages.find((m) => m.role === "assistant");
 		expect(replayedAssistant).toBeDefined();
 		expect((replayedAssistant as { reasoning_content?: string }).reasoning_content).toBe("Let me think about this.");
@@ -198,7 +209,7 @@ describe("openai-completions DeepSeek reasoning_content replay", () => {
 			],
 		};
 
-		const messages = convertMessages(model, context, deepseekCompat);
+		const messages = convertMessages(model, normalizeContext(context), deepseekCompat);
 		const replayedAssistant = messages.find((m) => m.role === "assistant");
 		expect(replayedAssistant).toBeDefined();
 		expect((replayedAssistant as { reasoning_content?: string }).reasoning_content).toBeDefined();
@@ -234,7 +245,7 @@ describe("openai-completions DeepSeek reasoning_content replay", () => {
 			],
 		};
 
-		const messages = convertMessages(model, context, deepseekCompat);
+		const messages = convertMessages(model, normalizeContext(context), deepseekCompat);
 		const replayedAssistant = messages.find((m) => m.role === "assistant");
 		expect(replayedAssistant).toBeDefined();
 		expect((replayedAssistant as { reasoning_content?: string }).reasoning_content).toBe(

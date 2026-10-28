@@ -12,14 +12,10 @@ Description: $ARGUMENTS
 
 > **Tool note**: When this command says `draht-tools <subcommand>`, invoke it as `node "<PLUGIN_ROOT>/bin/draht-tools.cjs" <subcommand>` via your host's shell-execution tool. `<PLUGIN_ROOT>` resolves to the plugin's install directory; the exact environment variable is host-specific.
 
-## Atomic Reasoning
-
-Decompose the work into independently verifiable units before acting; the `atomic-reasoning` skill holds the full discipline — load it when the decomposition is not obvious.
-
 ## Steps
 1. Run `draht-tools init` to check preconditions
 2. If existing code detected, run `draht-tools map-codebase` first
-3. Deep questioning phase (3-7 rounds — each round asks the whole frontier: every question whose prerequisites are settled, numbered, each with a recommended answer)
+3. Clarify material gaps in the problem, scope, constraints, and success criteria; use existing answers and repository evidence before asking:
 4. Run `draht-tools create-project` with gathered info
 5. Run `draht-tools create-domain-model` to define bounded contexts, entities, and ubiquitous language
 6. Create `.planning/DOMAIN.md` with:
@@ -34,14 +30,14 @@ Decompose the work into independently verifiable units before acting; the `atomi
    - `## Coverage Goals` — target coverage percentage and which paths are critical
    - `## Testing Levels` — what is tested at unit level vs integration vs e2e, with examples
    - `## Excluded` — what is explicitly not tested and why (config files, generated code, etc.)
-8. Optional research phase via `draht-tools research`
+8. If research is needed before defining requirements, investigate the open questions and save findings with sources under `.planning/research/<topic>.md`
 9. Run `draht-tools create-requirements` with v1/v2/out-of-scope (map requirements to bounded contexts)
 10. Run `draht-tools create-roadmap` with phases
 11. Run `draht-tools init-state`
-12. Git commit via `draht-tools commit-docs "initialize project planning"`
+12. If committing is authorized, use `draht-tools commit-docs "initialize project planning"`
 
 ## Workflow
-After project initialization, phases are executed one at a time in fresh sessions:
+After project initialization, phases are executed one at a time in dependency order:
 
 ```
 /new-project → /discuss-phase 1 → /plan-phase 1 → /execute-phase 1 → /verify-work 1
@@ -50,15 +46,14 @@ After project initialization, phases are executed one at a time in fresh session
              → /next-milestone (only after ALL phases are complete)
 ```
 
-Start a fresh session (`/clear`) between steps. Do NOT suggest `/next-milestone` until every phase in the milestone is verified.
+Start a fresh session only when context limits make it useful. Do NOT suggest `/next-milestone` until every phase in the milestone is verified.
 
 ## Rules
-- Ask the whole frontier per round — numbered, each with a recommended answer; the user replies by number, and accepted-by-number counts as decided
+- Group related questions and ask only those that change a material decision.
 - Questions that depend on still-open answers wait for a later round
-- Finding facts is your job, never the user's — dispatch a subagent for anything the environment can answer and keep asking the rest of the frontier while it runs
+- Investigate repository facts directly; delegate independent research when useful.
 - Follow threads based on answers
 - Use examples ("Like Stripe Checkout, or custom?")
-- Confirm, don't assume
-- When the description names a solution ("an app with X"), ask what problem it solves — requirements record problems and outcomes; mechanisms stay candidates
-- 3-7 follow-up rounds typical
+- Distinguish user decisions from reasonable implementation assumptions; clarify only blocking ambiguity
+- Respect explicit requirements; clarify the intended outcome when it is unclear.
 - Stop when you have: problem, audience, MVP scope, constraints, success criteria

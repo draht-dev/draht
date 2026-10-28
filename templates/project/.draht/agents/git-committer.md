@@ -1,7 +1,7 @@
 ---
 name: git-committer
 description: Creates atomic git commits for all staged and unstaged changes. Follows conventional commits format.
-model: anthropic/claude-sonnet-4-6
+model: anthropic/claude-sonnet-5
 tools: bash
 ---
 

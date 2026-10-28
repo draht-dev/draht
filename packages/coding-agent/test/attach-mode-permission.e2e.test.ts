@@ -39,9 +39,9 @@
  * prompt when nothing is pending and an ANSWER when something is.
  *
  * Harness hygiene, each item paid for by a probe that passed while proving nothing:
- *  - `DRAHT_PERMISSION_MODE` is DELETED from the child env (the env is BUILT, not inherited). This
- *    repo's interactive shell exports `auto`, under which the scripted `bash` call is auto-allowed
- *    and NO ask is ever raised.
+ *  - `DRAHT_PERMISSION_MODE` is pinned to `ask` in the child env (the env is BUILT, not
+ *    inherited). Under `auto`, the mode a session starts in and the one this repo's interactive
+ *    shell exports, the scripted `bash` call is auto-allowed and NO ask is ever raised.
  *  - Every temp dir sits directly under `/tmp` with a short name: a Unix socket path over ~104
  *    bytes fails to bind with EINVAL, and macOS `os.tmpdir()` spends ~50 characters before a uuid.
  *  - `dist/cli.js` is rebuilt first. The artifact under test is emitted, not committed.
@@ -53,6 +53,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { matchPermissionAnswer } from "../src/cli/attach-mode.ts";
+import { ensureEmittedBuild } from "./emitted-build.ts";
 
 const PKG_ROOT = path.resolve(__dirname, "..");
 const EMITTED_CLI = path.join(PKG_ROOT, "dist", "cli.js");
@@ -78,27 +79,8 @@ async function createTempDir(prefix: string): Promise<string> {
 	return dir;
 }
 
-function buildEmittedBinary(): Promise<void> {
-	return new Promise((resolve, reject) => {
-		const child = spawn("bun", ["run", "build"], {
-			cwd: PKG_ROOT,
-			env: process.env,
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-		let out = "";
-		child.stdout.on("data", (chunk) => {
-			out += chunk;
-		});
-		child.stderr.on("data", (chunk) => {
-			out += chunk;
-		});
-		child.on("error", reject);
-		child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`build failed:\n${out}`))));
-	});
-}
-
 beforeAll(async () => {
-	await buildEmittedBinary();
+	await ensureEmittedBuild();
 }, 300_000);
 
 afterAll(async () => {
@@ -186,8 +168,8 @@ test(
 		const command = `echo approved > ${marker}`;
 		const script = JSON.stringify([{ toolCalls: [{ id: "call-1", name: "bash", arguments: { command } }] }]);
 
-		// BUILT, never inherited: `DRAHT_PERMISSION_MODE=auto` from this repo's shell auto-allows the
-		// scripted call, and the whole test would go green having raised no ask at all.
+		// BUILT, never inherited, with the mode pinned to `ask`: in `auto` (an unset variable, or
+		// this repo's shell) the scripted call runs unasked and the ask this test waits for never comes.
 		const env: NodeJS.ProcessEnv = {
 			PATH: process.env.PATH,
 			HOME: home,
@@ -195,6 +177,7 @@ test(
 			DRAHT_CODING_AGENT_DIR: agentDir,
 			DRAHT_STUB_PROVIDER: "1",
 			DRAHT_STUB_TOOL_CALLS: script,
+			DRAHT_PERMISSION_MODE: "ask",
 		};
 
 		const socketDir = path.join(agentDir, "sockets");
@@ -376,6 +359,7 @@ test(
 			DRAHT_CODING_AGENT_DIR: agentDir,
 			DRAHT_STUB_PROVIDER: "1",
 			DRAHT_STUB_TOOL_CALLS: script,
+			DRAHT_PERMISSION_MODE: "ask",
 		};
 
 		const socketDir = path.join(agentDir, "sockets");

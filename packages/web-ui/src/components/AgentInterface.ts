@@ -275,7 +275,7 @@ export class AgentInterface extends LitElement {
 			return html`<div class="p-4 text-center text-muted-foreground">${i18n("No session available")}</div>`;
 		const state = this.session.state;
 		// Build a map of tool results to allow inline rendering in assistant messages
-		const toolResultsById = new Map<string, ToolResultMessage<any>>();
+		const toolResultsById = new Map<string, ToolResultMessage>();
 		for (const message of state.messages) {
 			if (message.role === "toolResult") {
 				toolResultsById.set(message.toolCallId, message);

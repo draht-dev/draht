@@ -87,9 +87,9 @@ interface DrahtSession {
 /**
  * Start the emitted draht binary as an attachable session.
  *
- * The child's environment is built from scratch rather than inherited. That is
- * not tidiness: this repo's interactive shell exports `DRAHT_PERMISSION_MODE=auto`,
- * and a permission test run under it passes while proving nothing.
+ * The child's environment is built from scratch rather than inherited, so the
+ * developer's shell cannot change what it does. No test here raises an ask, so the
+ * permission mode (`auto` when unset) plays no part.
  */
 async function startDrahtSession(agentDir: string, home: string): Promise<DrahtSession> {
 	const cwd = tempDir("pfw-c-");

@@ -24,10 +24,20 @@ const ROOT = resolve(__dirname, "..");
 // Placeholder substituted with each consumer's plugin-root expression below.
 const PLUGIN_ROOT_TOKEN = "__PLUGIN_ROOT__";
 
+// Token budgets run first for each event they handle. Stop has no budget hook: stop-quality-gate.cjs runs the
+// final budget audit after project checks, which may rewrite files.
+function budgetHook(event) {
+	return {
+		matcher: "",
+		hooks: [{ type: "command", command: `node "${PLUGIN_ROOT_TOKEN}/scripts/budgets-hook.cjs" ${event}`, timeout: 60 }],
+	};
+}
+
 function hooksTemplate() {
 	return {
 		hooks: {
 			SessionStart: [
+				budgetHook("SessionStart"),
 				{
 					matcher: "",
 					hooks: [
@@ -39,6 +49,7 @@ function hooksTemplate() {
 				},
 			],
 			UserPromptSubmit: [
+				budgetHook("UserPromptSubmit"),
 				{
 					matcher: "",
 					hooks: [
@@ -46,10 +57,16 @@ function hooksTemplate() {
 							type: "command",
 							command: `node "${PLUGIN_ROOT_TOKEN}/scripts/prompt-context.cjs"`,
 						},
+						{
+							type: "command",
+							command: `node "${PLUGIN_ROOT_TOKEN}/scripts/judge-hook.cjs" UserPromptSubmit`,
+							timeout: 10,
+						},
 					],
 				},
 			],
 			PostToolUse: [
+				budgetHook("PostToolUse"),
 				{
 					matcher: "Edit|Write|MultiEdit",
 					hooks: [
@@ -57,6 +74,39 @@ function hooksTemplate() {
 							type: "command",
 							command: `node "${PLUGIN_ROOT_TOKEN}/scripts/post-edit-check.cjs"`,
 							timeout: 30,
+						},
+						{
+							type: "command",
+							command: `node "${PLUGIN_ROOT_TOKEN}/scripts/judge-hook.cjs" PostToolUse`,
+							timeout: 10,
+						},
+					],
+				},
+			],
+			// The red gate. A test edit followed by a reach for the implementation
+			// is the one moment where a human's judgement of the test is both
+			// cheapest and most useful, so the edit is held there: the test is
+			// replayed against the code as it stands, and a test that passes with
+			// no implementation is denied without asking anyone. Nothing happens
+			// unless the judge TUI is running, which is why the timeout is an hour
+			// — the hook is blocked for exactly as long as the person takes.
+			PreToolUse: [
+				budgetHook("PreToolUse"),
+				{
+					matcher: "Bash|bash|exec_command|shell_command",
+					hooks: [{
+						type: "command",
+						command: `node "${PLUGIN_ROOT_TOKEN}/scripts/git-safety-hook.cjs"`,
+						timeout: 10,
+					}],
+				},
+				{
+					matcher: "Edit|Write|MultiEdit",
+					hooks: [
+						{
+							type: "command",
+							command: `node "${PLUGIN_ROOT_TOKEN}/scripts/judge-hook.cjs" PreToolUse`,
+							timeout: 3600,
 						},
 					],
 				},
@@ -69,6 +119,30 @@ function hooksTemplate() {
 							type: "command",
 							command: `node "${PLUGIN_ROOT_TOKEN}/scripts/stop-quality-gate.cjs"`,
 							timeout: 180,
+						},
+						{
+							type: "command",
+							command: `node "${PLUGIN_ROOT_TOKEN}/scripts/judge-hook.cjs" Stop`,
+							// Files the review card, but also runs the mutation pass on a
+							// gate whose implementation has landed and waits for that swipe.
+							timeout: 3600,
+						},
+					],
+				},
+			],
+			// The judge queue parks a permission request as a card and waits for
+			// the human swipe, so its timeout is an hour rather than seconds: the
+			// hook is blocked for exactly as long as the person takes. With the
+			// judge TUI not running the hook returns immediately and the host's
+			// own permission dialog appears, so the long timeout never bites.
+			PermissionRequest: [
+				{
+					matcher: "",
+					hooks: [
+						{
+							type: "command",
+							command: `node "${PLUGIN_ROOT_TOKEN}/scripts/judge-hook.cjs" PermissionRequest`,
+							timeout: 3600,
 						},
 					],
 				},

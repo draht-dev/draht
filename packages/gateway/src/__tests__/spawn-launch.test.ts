@@ -8,6 +8,7 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileS
 import { join } from "node:path";
 import { buildSpawnArgv } from "../session/spawn-argv.js";
 import {
+	buildChildEnvironment,
 	DECLARED_CREDENTIAL_ENV,
 	type ResolvedExecutable,
 	type SessionLaunchRequest,
@@ -199,6 +200,38 @@ test("`credentialEnv: []` crosses no credential at all, while the base environme
 	expect(env.get("HOME")).toBe("/tmp");
 	expect(env.get("PATH")).toBe("/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
 }, 120_000);
+
+test("the daemon's permission mode crosses, so a session it starts asks the way a local one would", async () => {
+	const { spawner, dir, request } = harness(BINDS_AND_REPORTS, {
+		env: { HOME: "/tmp", DRAHT_PERMISSION_MODE: "ask" },
+	});
+	const { pid } = await spawner.launch(request);
+	pgids.add(pid);
+
+	expect(childEnv(dir).get("DRAHT_PERMISSION_MODE")).toBe("ask");
+}, 120_000);
+
+test("the daemon's permission mode crosses on its own, except yolo, which needs declaring", () => {
+	const built = (env: NodeJS.ProcessEnv) =>
+		buildChildEnvironment({ env, agentDir: "/tmp/spl-agent", cwd: "/tmp/spl-cwd" }).DRAHT_PERMISSION_MODE;
+
+	expect(built({ DRAHT_PERMISSION_MODE: "ask" })).toBe("ask");
+	expect(built({ DRAHT_PERMISSION_MODE: "auto" })).toBe("auto");
+	expect(built({})).toBeUndefined();
+	// A session started from the board runs with nobody watching it.
+	expect(built({ DRAHT_PERMISSION_MODE: "yolo" })).toBeUndefined();
+	expect(built({ DRAHT_PERMISSION_MODE: " YOLO " })).toBeUndefined();
+	expect(built({ DRAHT_PERMISSION_MODE: "yolo", DRAHT_RESUME_ENV_ALLOW: "DRAHT_PERMISSION_MODE" })).toBe("yolo");
+	// A harness naming it among its credentials is not that declaration.
+	expect(
+		buildChildEnvironment({
+			env: { DRAHT_PERMISSION_MODE: "yolo" },
+			agentDir: "/tmp/spl-agent",
+			cwd: "/tmp/spl-cwd",
+			credentialEnv: ["DRAHT_PERMISSION_MODE"],
+		}).DRAHT_PERMISSION_MODE,
+	).toBeUndefined();
+});
 
 test("a populated `credentialEnv` crosses exactly the names it declares and no others", async () => {
 	const { spawner, dir, request } = harness(

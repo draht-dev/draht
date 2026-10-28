@@ -5,6 +5,7 @@ import { main } from "./main.ts";
 
 process.title = `${APP_NAME}-rpc`;
 process.env.DRAHT_CODING_AGENT = "true";
+process.env.AI_AGENT = APP_NAME;
 process.emitWarning = (() => {}) as typeof process.emitWarning;
 
 configureHttpDispatcher();

@@ -1,5 +1,8 @@
+import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openaiCodexOAuth } from "../src/auth/oauth/openai-codex.ts";
+
+const neverAbortedSignal = new AbortController().signal;
 
 function jsonResponse(body: unknown, status: number = 200): Response {
 	return new Response(JSON.stringify(body), {
@@ -51,7 +54,7 @@ function loginOpenAICodexDeviceCodeForTest(options: {
 	signal?: AbortSignal;
 }) {
 	return openaiCodexOAuth.login({
-		signal: options.signal,
+		signal: options.signal ?? neverAbortedSignal,
 		prompt: async (prompt) => {
 			if (prompt.type !== "select") throw new Error(`Unexpected prompt: ${prompt.type}`);
 			return "device_code";
@@ -220,6 +223,7 @@ describe("OpenAI Codex OAuth", () => {
 
 		await expect(
 			openaiCodexOAuth.login({
+				signal: neverAbortedSignal,
 				prompt: async (prompt) => {
 					if (prompt.type !== "select") throw new Error("Text prompt should not be used");
 					selectPrompts.push(prompt);
@@ -263,6 +267,7 @@ describe("OpenAI Codex OAuth", () => {
 	it("cancels when OpenAI Codex login method selection is cancelled", async () => {
 		await expect(
 			openaiCodexOAuth.login({
+				signal: neverAbortedSignal,
 				prompt: async () => {
 					throw new Error("Login cancelled");
 				},
@@ -467,13 +472,113 @@ describe("OpenAI Codex OAuth", () => {
 		);
 
 		await expect(
-			openaiCodexOAuth.refresh({
-				type: "oauth",
-				access: "invalid-access-token",
-				refresh: "invalid-refresh-token",
-				expires: 0,
-			}),
+			openaiCodexOAuth.refresh(
+				{
+					type: "oauth",
+					access: "invalid-access-token",
+					refresh: "invalid-refresh-token",
+					expires: 0,
+				},
+				neverAbortedSignal,
+			),
 		).rejects.toThrow(/OpenAI Codex token refresh failed \(401\).*Could not validate your token/);
 		expect(consoleError).not.toHaveBeenCalled();
+	});
+
+	it("defaults the browser login originator to one OpenAI's authorize endpoint accepts", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				jsonResponse({ access_token: createAccessToken("acct"), refresh_token: "refresh", expires_in: 3600 }),
+			),
+		);
+
+		let authUrl = "";
+		await openaiCodexOAuth.login({
+			signal: neverAbortedSignal,
+			notify: (event) => {
+				if (event.type === "auth_url") authUrl = event.url;
+			},
+			prompt: async (prompt) => {
+				if (prompt.type === "select") return "browser";
+				if (prompt.type !== "manual_code") throw new Error(`Unexpected prompt: ${prompt.type}`);
+				const state = new URL(authUrl).searchParams.get("state");
+				return `http://localhost:1455/auth/callback?code=pasted-code&state=${state}`;
+			},
+		});
+
+		expect(new URL(authUrl).searchParams.get("originator")).toBe("codex_cli_rs");
+	});
+
+	it("uses the app's agent name as the browser login originator", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				jsonResponse({ access_token: createAccessToken("acct"), refresh_token: "refresh", expires_in: 3600 }),
+			),
+		);
+
+		let authUrl = "";
+		await openaiCodexOAuth.login(
+			{
+				signal: neverAbortedSignal,
+				notify: (event) => {
+					if (event.type === "auth_url") authUrl = event.url;
+				},
+				prompt: async (prompt) => {
+					if (prompt.type === "select") return "browser";
+					if (prompt.type !== "manual_code") throw new Error(`Unexpected prompt: ${prompt.type}`);
+					const state = new URL(authUrl).searchParams.get("state");
+					return `http://localhost:1455/auth/callback?code=pasted-code&state=${state}`;
+				},
+			},
+			{ agentName: "my-app" },
+		);
+
+		expect(new URL(authUrl).searchParams.get("originator")).toBe("my-app");
+	});
+
+	it("falls back to the pasted redirect URL when the fixed callback port is taken", async () => {
+		// Port 1455 is registered with OpenAI; the Codex CLI may hold it. Occupy it unless it already is.
+		const blocker = createServer();
+		await new Promise<void>((resolve) => {
+			blocker.once("error", () => resolve());
+			blocker.listen(1455, "127.0.0.1", () => resolve());
+		});
+		try {
+			let exchangeBody: URLSearchParams | undefined;
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async (input: unknown, init?: RequestInit) => {
+					expect(getUrl(input)).toBe("https://auth.openai.com/oauth/token");
+					exchangeBody = new URLSearchParams(String(init?.body));
+					return jsonResponse({
+						access_token: createAccessToken("acct"),
+						refresh_token: "refresh",
+						expires_in: 3600,
+					});
+				}),
+			);
+
+			let authUrl = "";
+			const credential = await openaiCodexOAuth.login({
+				signal: neverAbortedSignal,
+				notify: (event) => {
+					if (event.type === "auth_url") authUrl = event.url;
+				},
+				prompt: async (prompt) => {
+					if (prompt.type === "select") return "browser";
+					if (prompt.type !== "manual_code") throw new Error(`Unexpected prompt: ${prompt.type}`);
+					const state = new URL(authUrl).searchParams.get("state");
+					return `http://localhost:1455/auth/callback?code=pasted-code&state=${state}`;
+				},
+			});
+
+			expect(credential.accountId).toBe("acct");
+			expect(exchangeBody?.get("code")).toBe("pasted-code");
+			expect(exchangeBody?.get("redirect_uri")).toBe("http://localhost:1455/auth/callback");
+		} finally {
+			blocker.close();
+		}
 	});
 });

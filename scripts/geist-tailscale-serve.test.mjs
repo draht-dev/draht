@@ -313,6 +313,60 @@ test("--capture-identity records the tailnet identity headers and leaves no extr
 	}
 });
 
+test("GEIST_PEER_SSH=openssh drives the peer through the system ssh client, not `tailscale ssh`", async () => {
+	const daemon = await startLoopbackDaemon();
+	try {
+		const { env, log } = newEnv();
+		assert.equal((await run(["--port", String(daemon.port)], env)).code, 0);
+
+		// A stand-in OpenSSH client: records its argv, drops `-o` options, then
+		// hands the drive to the fake tailnet exactly as `tailscale ssh` would.
+		const sshLog = join(workdir, `ssh-${seq}.log`);
+		const fakeSsh = join(workdir, `ssh-${seq}.sh`);
+		writeFileSync(
+			fakeSsh,
+			[
+				"#!/bin/sh",
+				`printf '%s\\n' "$*" >> ${JSON.stringify(sshLog)}`,
+				'while [ "$1" = "-o" ]; do shift 2; done',
+				// The fake tailnet knows peers by bare host name; a real sshd would
+				// accept user@fqdn, so normalise before handing over.
+				'peer=$1; peer=${peer#*@}; peer=${peer%%.*}; shift',
+				// Delegate with its own invocation log so the script's own tailscale
+				// calls can be asserted on separately below.
+				`FAKE_TS_LOG=${JSON.stringify(`${sshLog}.tailscale`)} exec ${JSON.stringify(process.execPath)} ${JSON.stringify(FAKE)} ssh "$peer" "$@"`,
+				"",
+			].join("\n"),
+		);
+		chmodSync(fakeSsh, 0o755);
+
+		const out = join(workdir, `identity-openssh-${seq}.json`);
+		const res = await run(["--port", String(daemon.port), "--capture-identity", "--peer", "peer-phone", "--out", out], {
+			...env,
+			GEIST_PEER_SSH: "openssh",
+			GEIST_PEER_SSH_BIN: fakeSsh,
+			GEIST_PEER_SSH_USER: "oskar",
+		});
+		assert.equal(res.code, 0, `${res.stdout}\n${res.stderr}`);
+
+		const captured = JSON.parse(readFileSync(out, "utf-8"));
+		assert.ok(Object.keys(captured.headers).map((n) => n.toLowerCase()).includes("tailscale-user-login"));
+
+		const sshArgv = readFileSync(sshLog, "utf-8").trim();
+		assert.match(sshArgv, /^-o BatchMode=yes oskar@peer-phone(\.[^ ]+)? sh -lc /);
+		assert.ok(!invocations(log).some((argv) => argv[0] === "ssh"), "tailscale ssh must not be invoked in openssh mode");
+	} finally {
+		await daemon.close();
+	}
+});
+
+test("GEIST_PEER_SSH rejects unknown transports before touching the tailnet", async () => {
+	const { env } = newEnv();
+	const res = await run(["--capture-identity", "--peer", "peer-phone"], { ...env, GEIST_PEER_SSH: "telnet" });
+	assert.equal(res.code, FAILURE_REASONS.USAGE, `${res.stdout}\n${res.stderr}`);
+	assert.match(res.stderr, /GEIST_PEER_SSH must be/);
+});
+
 test("--doctor reports a non-loopback gateway.config.json and prints the exact replacement", async () => {
 	const { env } = newEnv();
 	const bad = join(workdir, "gateway.bad.json");

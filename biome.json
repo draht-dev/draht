@@ -28,6 +28,7 @@
 			"packages/*/src/**/*.ts",
 			"packages/*/test/**/*.ts",
 			"packages/coding-agent/eval/**/*.ts",
+			"packages/ai/catalog/**/*.ts",
 			"packages/coding-agent/examples/**/*.ts",
 			"packages/web-ui/src/**/*.ts",
 			"packages/web-ui/example/**/*.ts",

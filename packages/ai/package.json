@@ -52,8 +52,8 @@
 	],
 	"scripts": {
 		"clean": "shx rm -rf dist",
-		"generate-models": "npx tsx scripts/generate-models.ts --strict",
-		"hydrate-model-data": "npx tsx scripts/generate-models.ts --strict --data-only",
+		"generate-models": "npx tsx catalog/generate.ts --strict",
+		"hydrate-model-data": "npx tsx catalog/generate.ts --strict --data-only",
 		"check:model-data": "npx tsx scripts/check-model-data.ts",
 		"build": "tsc -p tsconfig.build.json && shx rm -rf dist/providers/data && shx cp -r src/providers/data dist/providers/data",
 		"dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",

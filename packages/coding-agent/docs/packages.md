@@ -77,6 +77,26 @@ Paths are relative to the package root. Arrays accept glob patterns and exclusio
 
 The `pi-package` keyword makes the package findable through npm search. draht has no package gallery of its own; optional `image` and `video` manifest fields are accepted but currently unused.
 
+## Show a changelog
+
+After a package update, draht can show what changed. On the next fresh launch, draht reads the package changelog and shows entries newer than the last seen version under "Extension Updates", the same way it shows its own changelog. The first time draht sees a package, it records the version without showing anything.
+
+This applies to packages that load at least one extension. Packages that only provide skills, prompt templates, or themes do not show a changelog.
+
+By default draht reads `CHANGELOG.md` from the package root. Point `draht.changelogPath` at another file inside the package, or set it to `""` to disable the changelog:
+
+```json
+{
+  "name": "my-draht-package",
+  "version": "1.2.0",
+  "draht": {
+    "changelogPath": "./docs/CHANGELOG.md"
+  }
+}
+```
+
+Use version headings in the same format as draht's changelog, such as `## [1.2.0]` or `## 1.2.0 - 2026-01-01`. Entries are matched against the `version` field in `package.json`, so a git package only shows a changelog when that field increases. The `collapseChangelog` setting condenses the section to one line per package, such as `Updated my-draht-package to v1.2.0.` Unlike draht's own changelog, `/changelog` does not show package changelogs, so read the package's changelog file or repository for details.
+
 ## Declare dependencies
 
 Put runtime packages imported by extensions in `dependencies`. draht installs package dependencies when it installs an npm or git source.

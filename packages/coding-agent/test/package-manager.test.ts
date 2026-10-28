@@ -672,6 +672,92 @@ Content`,
 			expect(result.skills.some((r) => r.path === slashSkillPath && r.enabled)).toBe(true);
 		});
 
+		it("should expose manifest changelogPath on package resources", async () => {
+			const pkgDir = join(tempDir, "changelog-manifest-package");
+			const extensionPath = join(pkgDir, "src", "index.ts");
+			const changelogPath = join(pkgDir, "docs", "CHANGELOG.md");
+			mkdirSync(join(pkgDir, "src"), { recursive: true });
+			mkdirSync(join(pkgDir, "docs"), { recursive: true });
+			writeFileSync(extensionPath, "export default function() {}");
+			writeFileSync(changelogPath, "## [1.0.0]\n\n- Initial release");
+			writeFileSync(
+				join(pkgDir, "package.json"),
+				JSON.stringify({
+					name: "changelog-manifest-package",
+					pi: {
+						extensions: ["src/index.ts"],
+						changelogPath: "docs/CHANGELOG.md",
+					},
+				}),
+			);
+
+			const result = await packageManager.resolveExtensionSources([pkgDir]);
+			const extension = result.extensions.find((r) => r.path === extensionPath);
+
+			expect(extension?.metadata.changelogPath).toBe(changelogPath);
+		});
+
+		it("should expose package CHANGELOG.md by convention", async () => {
+			const pkgDir = join(tempDir, "changelog-convention-package");
+			const extensionPath = join(pkgDir, "extensions", "index.ts");
+			const changelogPath = join(pkgDir, "CHANGELOG.md");
+			mkdirSync(join(pkgDir, "extensions"), { recursive: true });
+			writeFileSync(extensionPath, "export default function() {}");
+			writeFileSync(changelogPath, "## [1.0.0]\n\n- Initial release");
+
+			const result = await packageManager.resolveExtensionSources([pkgDir]);
+			const extension = result.extensions.find((r) => r.path === extensionPath);
+
+			expect(extension?.metadata.changelogPath).toBe(changelogPath);
+		});
+
+		it("should still auto-discover resources when pi manifest only declares changelogPath", async () => {
+			const pkgDir = join(tempDir, "changelog-only-manifest-package");
+			const extensionPath = join(pkgDir, "extensions", "index.ts");
+			const changelogPath = join(pkgDir, "CHANGELOG.md");
+			mkdirSync(join(pkgDir, "extensions"), { recursive: true });
+			writeFileSync(extensionPath, "export default function() {}");
+			writeFileSync(changelogPath, "## [1.0.0]\n\n- Initial release");
+			writeFileSync(
+				join(pkgDir, "package.json"),
+				JSON.stringify({
+					name: "changelog-only-manifest-package",
+					pi: {
+						changelogPath: "CHANGELOG.md",
+					},
+				}),
+			);
+
+			const result = await packageManager.resolveExtensionSources([pkgDir]);
+			const extension = result.extensions.find((r) => r.path === extensionPath);
+
+			expect(extension?.metadata.changelogPath).toBe(changelogPath);
+		});
+
+		it("should ignore manifest changelogPath outside the package root", async () => {
+			const pkgDir = join(tempDir, "unsafe-changelog-package");
+			const extensionPath = join(pkgDir, "src", "index.ts");
+			mkdirSync(join(pkgDir, "src"), { recursive: true });
+			writeFileSync(extensionPath, "export default function() {}");
+			writeFileSync(join(tempDir, "CHANGELOG.md"), "## [1.0.0]\n\n- Outside");
+			writeFileSync(join(pkgDir, "CHANGELOG.md"), "## [1.0.0]\n\n- Fallback should not be used");
+			writeFileSync(
+				join(pkgDir, "package.json"),
+				JSON.stringify({
+					name: "unsafe-changelog-package",
+					pi: {
+						extensions: ["src/index.ts"],
+						changelogPath: "../CHANGELOG.md",
+					},
+				}),
+			);
+
+			const result = await packageManager.resolveExtensionSources([pkgDir]);
+			const extension = result.extensions.find((r) => r.path === extensionPath);
+
+			expect(extension?.metadata.changelogPath).toBeUndefined();
+		});
+
 		it("should handle directories with auto-discovery layout", async () => {
 			const pkgDir = join(tempDir, "auto-pkg");
 			mkdirSync(join(pkgDir, "extensions"), { recursive: true });

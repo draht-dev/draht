@@ -16,6 +16,7 @@ import {
 import { layoutRun, type RunLayoutOptions } from "../../src/core/polyphase/render/run-block.ts";
 import type { AgentSnapshotRow, PhaseSnapshot, RunSnapshot } from "../../src/core/polyphase/render/snapshot.ts";
 import type { AgentStatus, PolyphaseDetails, TranscriptItem } from "../../src/core/polyphase/types.ts";
+import { keyHint, keyText } from "../../src/modes/interactive/components/keybinding-hints.ts";
 import { initTheme, theme } from "../../src/modes/interactive/theme/theme.ts";
 
 const NOW = 1_700_000_050_000;
@@ -284,6 +285,8 @@ function makeContext<TArgs>(
 		isError: false,
 		durationMs: undefined,
 		outputPad: 1,
+		keyText,
+		keyHint,
 		...overrides,
 	};
 }
@@ -351,7 +354,7 @@ describe("renderCall previews and the message/legacy renderers never exceed the 
 				details,
 				timestamp: Date.now(),
 			};
-			const component = renderer(message, { expanded: true, outputPad: 0 }, theme);
+			const component = renderer(message, { expanded: true, outputPad: 0, keyText, keyHint }, theme);
 			for (const line of component?.render(width) ?? []) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 		});
 

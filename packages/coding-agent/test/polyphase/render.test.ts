@@ -22,7 +22,7 @@ import { PolyphaseStore } from "../../src/core/polyphase/store.ts";
 import type { AgentStatus, PolyphaseDetails, TranscriptItem } from "../../src/core/polyphase/types.ts";
 import { NO_UI_APPROVAL_SUFFIX } from "../../src/core/polyphase/types.ts";
 import { createUpdatePump } from "../../src/core/polyphase/update-pump.ts";
-import { keyText } from "../../src/modes/interactive/components/keybinding-hints.ts";
+import { keyHint, keyText } from "../../src/modes/interactive/components/keybinding-hints.ts";
 import { ToolExecutionComponent } from "../../src/modes/interactive/components/tool-execution.ts";
 import { initTheme, theme } from "../../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../../src/utils/ansi.ts";
@@ -120,6 +120,8 @@ function makeContext<TArgs>(
 		isError: false,
 		durationMs: undefined,
 		outputPad: 1,
+		keyText,
+		keyHint,
 		...overrides,
 	};
 }
@@ -468,7 +470,7 @@ describe("renderCall/renderResult wiring", () => {
 			details,
 			timestamp: Date.now(),
 		};
-		const component = renderer(message, { expanded: false, outputPad: 0 }, theme);
+		const component = renderer(message, { expanded: false, outputPad: 0, keyText, keyHint }, theme);
 		expect(component).toBeDefined();
 		const text = stripAnsi(component?.render(80).join("\n") ?? "");
 		expect(text).toContain("▶");

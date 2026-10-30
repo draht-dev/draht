@@ -20,10 +20,29 @@ var (
 // symmetry with the rest of the package but is currently unused: the CJS
 // engine applies the identical C-style stripping to every language it scans
 // imports for (typescript/javascript; python/go/rust never call it, since
-// visExtractRawImports operates on raw content). Used by the regex parser and
-// by extract for sinks/routes.
+// visExtractRawImports operates on raw content). Used by extract for
+// sinks/routes.
 func StripComments(src []byte, lang Lang) []byte {
 	out := blockCommentRe.ReplaceAll(src, nil)
+	out = lineCommentRe.ReplaceAll(out, []byte("$1"))
+	return out
+}
+
+// StripCommentsPreserveLines strips the same comments but keeps every
+// newline a block comment spanned, so byte offsets in the result map to the
+// SAME line numbers as the raw source. The import parser uses this variant
+// (lockstep with the CJS engine) because Import.Line feeds user-visible
+// output via star re-export expansion; sinks/routes keep StripComments.
+func StripCommentsPreserveLines(src []byte, lang Lang) []byte {
+	out := blockCommentRe.ReplaceAllFunc(src, func(m []byte) []byte {
+		kept := make([]byte, 0, 4)
+		for _, b := range m {
+			if b == '\n' {
+				kept = append(kept, b)
+			}
+		}
+		return kept
+	})
 	out = lineCommentRe.ReplaceAll(out, []byte("$1"))
 	return out
 }

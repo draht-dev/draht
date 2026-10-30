@@ -44,8 +44,14 @@ before(() => {
 		"export interface SessionOptions { ttl: number }",
 	].join("\n"));
 	write("src/util.ts", "export function formatId(x: string) { return x.trim(); }\n");
-	// Barrel: multi-line named re-export block + star re-export.
+	// Barrel: multi-line named re-export block + star re-export. The leading
+	// multiline block comment regression-tests the newline-preserving comment
+	// strip: a fully-deleted comment used to shift every import/re-export
+	// line computed after it.
 	write("src/index.ts", [
+		"/**",
+		" * Public API barrel.",
+		" */",
 		"export {",
 		"\tresolveAuthToken,",
 		"\tAUTH_HEADER,",
@@ -83,6 +89,9 @@ test("star re-exports expand from the resolved target with via provenance", () =
 	assert.ok(session, "star-expanded export missing");
 	assert.equal(session.kind, "re-export");
 	assert.equal(session.via, "src/session.ts");
+	// Line 8 of index.ts — after the 3-line block comment. A line-shifting
+	// comment strip reported 5 here.
+	assert.equal(session.line, 8, "star re-export line shifted by the leading block comment");
 	assert.ok(barrel.exports.some((e) => e.name === "SessionOptions"), "star-expanded type export missing");
 });
 
@@ -116,7 +125,8 @@ test("graph-query matches multi-term concepts across symbols (module-level cover
 
 test("graph-query surfaces barrel re-exported API names", () => {
 	const out = run(["graph-query", "resolveauthtoken"]);
-	assert.match(out, /auth\.ts|index\.ts/, `expected a hit for re-exported symbol:\n${out}`);
+	assert.match(out, /index\.ts/, `expected the barrel itself as a hit for its re-exported symbol:\n${out}`);
+	assert.match(out, /auth\.ts/, `expected the defining module as a hit:\n${out}`);
 });
 
 test("graph-context reports the barrel's re-exported API", () => {
@@ -140,22 +150,25 @@ test("MAP.html embeds the Insights view", () => {
 });
 
 test("star expansion reaches fixpoint on deep barrel chains (>5 hops)", () => {
-	// b7 —star→ b6 —star→ … —star→ b0 (defines the symbols). A fixed pass
-	// ceiling left the outer barrels empty (greptile P1).
+	// b0 —star→ b1 —star→ … —star→ b7 (defines the symbols). The expansion
+	// loop iterates barrels in SORTED id order, so this orientation forces a
+	// new pass per hop: b0's target b1 is still empty on pass 1, and the
+	// symbol only ratchets outward one barrel per pass. A fixed pass ceiling
+	// left the outer barrels empty (greptile P1).
 	const chainRoot = fs.mkdtempSync(path.join(os.tmpdir(), "draht-chain-test-"));
 	try {
 		fs.mkdirSync(path.join(chainRoot, ".git"));
 		fs.writeFileSync(path.join(chainRoot, "package.json"), JSON.stringify({ name: "chain", version: "1.0.0" }));
 		fs.mkdirSync(path.join(chainRoot, "src"), { recursive: true });
-		fs.writeFileSync(path.join(chainRoot, "src/b0.ts"), "export function deepest() { return 1; }\n");
-		for (let i = 1; i <= 7; i++) {
-			fs.writeFileSync(path.join(chainRoot, `src/b${i}.ts`), `export * from "./b${i - 1}.js";\n`);
+		fs.writeFileSync(path.join(chainRoot, "src/b7.ts"), "export function deepest() { return 1; }\n");
+		for (let i = 0; i <= 6; i++) {
+			fs.writeFileSync(path.join(chainRoot, `src/b${i}.ts`), `export * from "./b${i + 1}.js";\n`);
 		}
 		execFileSync(process.execPath, [CLI, "map-graph", "--quiet"], { cwd: chainRoot, encoding: "utf-8" });
 		const m = JSON.parse(fs.readFileSync(path.join(chainRoot, ".planning/codebase/MAP.json"), "utf-8"));
-		const outer = m.modules.find((x) => x.id === "src/b7.ts");
+		const outer = m.modules.find((x) => x.id === "src/b0.ts");
 		assert.ok(outer.exports.some((e) => e.name === "deepest"), `outer barrel missing deep symbol: ${JSON.stringify(outer.exports)}`);
-		assert.equal(outer.exports.find((e) => e.name === "deepest").via, "src/b0.ts");
+		assert.equal(outer.exports.find((e) => e.name === "deepest").via, "src/b7.ts");
 	} finally {
 		fs.rmSync(chainRoot, { recursive: true, force: true });
 	}

@@ -20,8 +20,10 @@ const FactsSchema = 3
 // initializers and named exports began resolving local declarations, and
 // "x4" -> "x5" when arrow detection became declaration-scoped, and "x5"
 // -> "x6" when initializer sanitization became structural and signatures
-// became opt-in at extraction time.
-const Version = "x6"
+// became opt-in at extraction time, and "x6" -> "x7" when multiline and
+// `from` export lists and `export * as` entries began emitting exports and
+// the import parser's comment strip became newline-preserving.
+const Version = "x7"
 
 // Facts is everything derivable from ONE file in isolation. It is exactly
 // what the cache stores. It deliberately contains NOTHING global: no

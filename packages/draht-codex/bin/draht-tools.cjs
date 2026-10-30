@@ -2195,11 +2195,19 @@ function visBuildMap(root) {
 				loc = content.split("\n").length;
 				if (VIS_CODE_LANGS.has(lang)) {
 					totalLoc.value += loc; // WP2: LOC rollup tracks code modules only, matching stats.files
-					// Use raw content for export/JSDoc extraction (need comments) and stripped for sink/import detection
+					// Use raw content for export/JSDoc extraction (need comments) and stripped for sink/import detection.
 					const stripped = content
 						.replace(/\/\*[\s\S]*?\*\//g, "")
 						.replace(/(^|[^:])\/\/.*$/gm, "$1");
-					parsedImports = visParseImports(stripped, lang);
+					// Import parsing gets a NEWLINE-PRESERVING strip so Import line numbers
+					// (star re-export expansion feeds them into exports/symbols) stay aligned
+					// with the raw source even when a multiline block comment precedes the
+					// statement. Sinks/routes keep the fully-deleting strip (lockstep with
+					// the Go engine's StripComments / StripCommentsPreserveLines pair).
+					const importStripped = content
+						.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ""))
+						.replace(/(^|[^:])\/\/.*$/gm, "$1");
+					parsedImports = visParseImports(importStripped, lang);
 					exports = visExtractExports(content, lang);
 					sinks = visDetectSinks(stripped);
 					sinkSites = visFindSinkSites(content, lang);
@@ -3584,9 +3592,10 @@ function setView(v) {
   $("graph-controls").style.display = (v === "graph") ? "flex" : "none";
   $("flows-sidebar").style.display = (v === "flows") ? "block" : "none";
   // Insights is a document, not a canvas — the legend/camera/export overlays don't apply.
-  $("overlay-left").style.display = (v === "insights") ? "none" : "block";
+  // Clear the inline style (not "block"/"flex") so the stylesheet layout returns intact.
+  $("overlay-left").style.display = (v === "insights") ? "none" : "";
   var ctrls = document.querySelector(".controls");
-  if (ctrls) ctrls.style.display = (v === "insights") ? "none" : "flex";
+  if (ctrls) ctrls.style.display = (v === "insights") ? "none" : "";
   // B3: re-measure the canvas's backing-store size whenever it becomes visible. A resize while
   // the Graph tab was hidden left canvas.width/height stale (clientWidth/height reflow correctly
   // even for display:none, but resizeCanvas() only ran on the debounced window "resize" handler

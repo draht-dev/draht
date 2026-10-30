@@ -57,11 +57,12 @@ All `graph-*` commands are **read-only** (never mutate `MAP.json`), print concis
 | Confidence | per-edge tag | tag **+ `confidence_score`** (EXTRACTED 1.0 · INFERRED 0.8 calls · AMBIGUOUS 0.2), graphify's rubric |
 | IDs | file paths | graphify `ids.py` canonicalization (NFKC → `_` → casefold), e.g. `packages_router_src_router_modelrouter` |
 | Query | ranked search (`graph-query`) | **subgraph traversal** (`kg query`): scored seeds → BFS/DFS with p99-degree hub guard → `NODE`/`EDGE` lines under a token budget |
-| Output | MAP.json (schema v6) + MAP.html + GRAPH_REPORT.md | `graph.json` (node-link, loadable by graphify's own tooling) + KG_REPORT.md + GRAPH_TREE.html/wiki/GraphML |
+| Output | MAP.json (schema v5) + MAP.html + GRAPH_REPORT.md | `graph.json` (node-link, loadable by graphify's own tooling) + KG_REPORT.md + GRAPH_TREE.html/wiki/GraphML |
 
 Both engines are pure deterministic JS — the LLM is only involved in the *narrative* docs
-(`map-codebase`'s STACK/ARCHITECTURE/…), never in indexing. Rebuilds are byte-identical
-(regression-tested), so both graphs are safe to commit or regenerate from hooks.
+(`map-codebase`'s STACK/ARCHITECTURE/…), never in indexing. A no-op rebuild over an existing
+map leaves the file byte-identical (regression-tested; independent fresh builds differ only in
+the `generatedAt`/`buildMs` stamps), so both graphs are safe to commit or regenerate from hooks.
 
 ## Querying the graph (instead of grepping)
 

@@ -1871,6 +1871,10 @@ function visBuildSymbols(exportsArr, content, language) {
 	};
 	if (language === "typescript" || language === "javascript") {
 		addDecl(/^(?:async\s+)?(?:function|class)\s+([A-Za-z_$][\w$]*)|^(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/, (l) => /^\s*(?:async\s+)?class\b/.test(l) ? "class" : /^\s*(?:async\s+)?function\b/.test(l) ? "function" : "const");
+		// `export default class Widget {}` exports only `default`; the name binds
+		// locally. Record it as a non-exported symbol so search still finds the
+		// defining file by its real name.
+		if (syms.length < 60) addDecl(/^export\s+default\s+(?:async\s+)?(?:function\s*\*?\s*|(?:abstract\s+)?class\s+)([A-Za-z_$][\w$]*)/, (l) => /\bclass\b/.test(l) ? "class" : "function");
 	} else if (language === "python") {
 		addDecl(/^(?:class|def)\s+([A-Za-z_][\w]*)/, (l) => /^class\b/.test(l) ? "class" : "def");
 	} else if (language === "go") {
@@ -2417,21 +2421,45 @@ function visBuildMap(root) {
 	if (starReExports.size > 0) {
 		const EXPANSION_CAP = 60;
 		const sortedBarrels = [...starReExports.keys()].sort();
+		// Per-barrel bookkeeping: names added by THIS pass's star expansion
+		// (name → via) and names dropped as ambiguous. Two star targets
+		// providing the same name from DIFFERENT origins make it ambiguous
+		// (ES spec): removed and never re-added. The same origin reached
+		// through different chains is one binding and stays. Explicit exports
+		// are never in starAdded, so they are never removed.
+		const starAdded = new Map(); // barrelId -> Map(name -> via)
+		const starAmbiguous = new Map(); // barrelId -> Set(name)
+		for (const b of sortedBarrels) { starAdded.set(b, new Map()); starAmbiguous.set(b, new Set()); }
 		for (;;) {
 			let changed = false;
 			for (const barrelId of sortedBarrels) {
 				const barrel = moduleByRel.get(barrelId);
 				if (!barrel) continue;
 				const have = new Set(barrel.exports.map((e) => e.name));
+				const added = starAdded.get(barrelId);
+				const amb = starAmbiguous.get(barrelId);
 				for (const star of starReExports.get(barrelId)) {
 					const target = moduleByRel.get(star.target);
 					if (!target) continue;
 					for (const e of target.exports) {
-						if (barrel.exports.length >= EXPANSION_CAP) break;
 						if (e.name === "default") continue; // a bare `export *` never forwards default (ES spec)
-						if (have.has(e.name)) continue;
+						if (amb.has(e.name)) continue;
+						const via = e.via || target.id;
+						if (have.has(e.name)) {
+							if (added.has(e.name) && added.get(e.name) !== via) {
+								const idx = barrel.exports.findIndex((x) => x.name === e.name && x.via === added.get(e.name));
+								if (idx >= 0) barrel.exports.splice(idx, 1);
+								have.delete(e.name);
+								added.delete(e.name);
+								amb.add(e.name);
+								changed = true;
+							}
+							continue;
+						}
+						if (barrel.exports.length >= EXPANSION_CAP) break;
 						have.add(e.name);
-						barrel.exports.push({ name: e.name, kind: "re-export", line: star.line, doc: e.doc, via: e.via || target.id });
+						added.set(e.name, via);
+						barrel.exports.push({ name: e.name, kind: "re-export", line: star.line, doc: e.doc, via });
 						changed = true;
 					}
 				}

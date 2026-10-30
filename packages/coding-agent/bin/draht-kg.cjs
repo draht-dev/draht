@@ -225,6 +225,10 @@ const MAX_SYMBOLS_PER_FILE = 300;
 function parseDecls(rel, content, lang) {
 	const lines = content.split("\n");
 	const d = { classes: [], functions: [], types: [], imports: [], docstring: null };
+	// Brace depth is counted on a comment/string-masked copy (same line
+	// structure): a `{` inside `const marker = "{";` or a comment must not
+	// desynchronize `depth` and hide every later top-level declaration.
+	const maskedLines = stripCode(content, lang).split("\n");
 
 	if (TS_LIKE.has(lang)) {
 		// Leading /** */ or run of // as module rationale
@@ -232,17 +236,25 @@ function parseDecls(rel, content, lang) {
 		if (dm) d.docstring = dm[1].replace(/^\s*\*\s?/gm, "").trim().slice(0, 500) || null;
 
 		let currentClass = null, classDepth = 0, depth = 0;
+		// Open declarations whose body end we are waiting for: each entry
+		// closes (ref.end = line) when depth returns to its pre-decl level.
+		const open = [];
 		for (let i = 0; i < lines.length && d.classes.length + d.functions.length + d.types.length < MAX_SYMBOLS_PER_FILE; i++) {
 			const ln = lines[i];
 			let m;
 			if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)(?:\s+extends\s+([A-Za-z_$][\w$.]*))?(?:\s+implements\s+([\w$,\s.<>]+?))?\s*\{?/)) && /\bclass\b/.test(ln)) {
-				currentClass = { name: m[1], line: i + 1, extends: m[2] ? m[2].split(".")[0] : null, implements: (m[3] || "").split(",").map((x) => x.trim().split("<")[0].split(".")[0]).filter(Boolean), methods: [] };
+				currentClass = { name: m[1], line: i + 1, end: null, isDefault: /^\s*export\s+default\b/.test(ln), extends: m[2] ? m[2].split(".")[0] : null, implements: (m[3] || "").split(",").map((x) => x.trim().split("<")[0].split(".")[0]).filter(Boolean), methods: [] };
 				d.classes.push(currentClass);
 				classDepth = depth;
+				open.push({ ref: currentClass, depth, line: i + 1 });
 			} else if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/))) {
-				d.functions.push({ name: m[1], line: i + 1 });
+				const fn = { name: m[1], line: i + 1, end: null, isDefault: /^\s*export\s+default\b/.test(ln) };
+				d.functions.push(fn);
+				open.push({ ref: fn, depth, line: i + 1 });
 			} else if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)(?::[^=]+)?\s*=\s*(?:async\s*)?(?:\(|function\b|[A-Za-z_$][\w$]*\s*=>)/))) {
-				d.functions.push({ name: m[1], line: i + 1 });
+				const fn = { name: m[1], line: i + 1, end: null };
+				d.functions.push(fn);
+				open.push({ ref: fn, depth, line: i + 1 });
 			} else if (depth === 0 && (m = ln.match(/^\s*export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)/))) {
 				d.types.push({ name: m[1], line: i + 1, kind: "const" });
 			} else if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:interface|enum)\s+([A-Za-z_$][\w$]*)(?:\s+extends\s+([A-Za-z_$][\w$.]*))?/)) && /\b(?:interface|enum)\b/.test(ln)) {
@@ -250,13 +262,24 @@ function parseDecls(rel, content, lang) {
 			} else if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?type\s+([A-Za-z_$][\w$]*)/))) {
 				d.types.push({ name: m[1], line: i + 1, kind: "type" });
 			} else if (currentClass && depth === classDepth + 1 && (m = ln.match(/^\s*(?:public\s+|private\s+|protected\s+|static\s+|readonly\s+|override\s+|abstract\s+|async\s+|get\s+|set\s+|\*\s*)*([A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\(/))) {
-				if (!CALL_KEYWORDS.has(m[1]) && currentClass.methods.length < 80) currentClass.methods.push({ name: m[1], line: i + 1 });
+				if (!CALL_KEYWORDS.has(m[1]) && currentClass.methods.length < 80) {
+					const meth = { name: m[1], line: i + 1, end: null };
+					currentClass.methods.push(meth);
+					open.push({ ref: meth, depth, line: i + 1 });
+				}
 			}
-			// brace depth AFTER matching decls on this line
-			for (const ch of ln) {
+			// brace depth AFTER matching decls on this line (masked copy)
+			for (const ch of maskedLines[i] || "") {
 				if (ch === "{") depth++;
-				else if (ch === "}") { depth--; if (currentClass && depth <= classDepth) currentClass = null; }
+				else if (ch === "}") {
+					depth--;
+					if (currentClass && depth <= classDepth) { currentClass.end = i + 1; currentClass = null; }
+					while (open.length && depth <= open[open.length - 1].depth) open.pop().ref.end = i + 1;
+				}
 			}
+			// A decl whose line opened no net brace (single-line body or
+			// brace-less arrow) ends on its own line.
+			while (open.length && open[open.length - 1].line === i + 1 && depth <= open[open.length - 1].depth) open.pop().ref.end = i + 1;
 		}
 		// imports (content-level, multi-line safe)
 		const impRe = /import\s+(?:(?:([A-Za-z_$][\w$]*)\s*,?\s*)?(?:\*\s*as\s+([A-Za-z_$][\w$]*)|\{([^}]*)\})?\s*from\s*)?["']([^"']+)["']/g;
@@ -314,6 +337,8 @@ function parseDecls(rel, content, lang) {
 		}
 	} else if (lang === "go") {
 		let currentType = null;
+		let depth = 0;
+		const open = [];
 		for (let i = 0; i < lines.length; i++) {
 			const ln = lines[i];
 			let m;
@@ -321,14 +346,26 @@ function parseDecls(rel, content, lang) {
 				currentType = { name: m[1], line: i + 1, extends: null, implements: [], methods: [] };
 				d.classes.push(currentType);
 			} else if ((m = ln.match(/^func\s+\(\s*\w+\s+\*?([A-Za-z_][\w]*)\s*\)\s+([A-Za-z_][\w]*)/))) {
+				const meth = { name: m[2], line: i + 1, end: null };
 				const owner = d.classes.find((c) => c.name === m[1]);
-				if (owner) { if (owner.methods.length < 80) owner.methods.push({ name: m[2], line: i + 1 }); }
-				else d.functions.push({ name: m[2], line: i + 1 });
+				if (owner) { if (owner.methods.length < 80) owner.methods.push(meth); }
+				else d.functions.push(meth);
+				open.push({ ref: meth, depth, line: i + 1 });
 			} else if ((m = ln.match(/^func\s+([A-Za-z_][\w]*)/))) {
-				d.functions.push({ name: m[1], line: i + 1 });
+				const fn = { name: m[1], line: i + 1, end: null };
+				d.functions.push(fn);
+				open.push({ ref: fn, depth, line: i + 1 });
 			} else if ((m = ln.match(/^type\s+([A-Za-z_][\w]*)\s/))) {
 				d.types.push({ name: m[1], line: i + 1, kind: "type" });
 			}
+			for (const ch of maskedLines[i] || "") {
+				if (ch === "{") depth++;
+				else if (ch === "}") {
+					depth--;
+					while (open.length && depth <= open[open.length - 1].depth) open.pop().ref.end = i + 1;
+				}
+			}
+			while (open.length && open[open.length - 1].line === i + 1 && depth <= open[open.length - 1].depth) open.pop().ref.end = i + 1;
 		}
 		// Named (`import foo "path"`), blank (`_`) and dot (`.`) imports all count;
 		// a named alias becomes the local namespace so call binding can resolve
@@ -352,6 +389,7 @@ function parseDecls(rel, content, lang) {
 		// functions. Covers both inherent impls and `impl Trait for Type`.
 		let currentImpl = null; // { name, depth at impl line }
 		let depth = 0;
+		const openFns = [];
 		for (let i = 0; i < lines.length; i++) {
 			const ln = lines[i];
 			let m;
@@ -364,23 +402,27 @@ function parseDecls(rel, content, lang) {
 			} else if (!currentImpl && (m = ln.match(/^\s*impl(?:<[^>]*>)?\s+([A-Za-z_][\w]*)/))) {
 				currentImpl = { name: m[1], depth };
 			} else if ((m = ln.match(/^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_][\w]*)/))) {
+				const fn = { name: m[1], line: i + 1, end: null };
 				const owner = currentImpl ? d.classes.find((c) => c.name === currentImpl.name) : null;
 				if (owner) {
-					if (owner.methods.length < 80) owner.methods.push({ name: m[1], line: i + 1 });
+					if (owner.methods.length < 80) owner.methods.push(fn);
 				} else {
-					d.functions.push({ name: m[1], line: i + 1 });
+					d.functions.push(fn);
 				}
+				openFns.push({ ref: fn, depth, line: i + 1 });
 			}
 			if ((m = ln.match(/^\s*use\s+([\w:]+)/))) {
 				d.imports.push({ spec: m[1], default: null, namespace: m[1].split("::").pop(), names: [], reExport: false, dynamic: false, line: i + 1 });
 			}
-			for (const ch of ln) {
+			for (const ch of maskedLines[i] || "") {
 				if (ch === "{") depth++;
 				else if (ch === "}") {
 					depth--;
 					if (currentImpl && depth <= currentImpl.depth) currentImpl = null;
+					while (openFns.length && depth <= openFns[openFns.length - 1].depth) openFns.pop().ref.end = i + 1;
 				}
 			}
+			while (openFns.length && openFns[openFns.length - 1].line === i + 1 && depth <= openFns[openFns.length - 1].depth) openFns.pop().ref.end = i + 1;
 		}
 	}
 	return d;
@@ -403,8 +445,19 @@ function buildGraph(root) {
 	const edges = [];
 	const perFile = new Map(); // rel -> { lang, decls, stripped, localDefs: Map(name -> nid), importedNames: Map(local -> {spec, resolvedRel|null, imported}) }
 
+	// graphify ids.py canonicalization can collide (src/foo-bar.ts and
+	// src/foo_bar.ts share an id). Parity requires keeping the id scheme, so
+	// collisions merge deterministically (first wins) — but they are counted
+	// and surfaced as a build warning instead of being silent.
+	const idCollisions = [];
 	const addNode = (n) => {
-		if (nodeById.has(n.id)) return nodeById.get(n.id);
+		const existing = nodeById.get(n.id);
+		if (existing) {
+			if (existing.source_file && n.source_file && existing.source_file !== n.source_file) {
+				idCollisions.push({ id: n.id, kept: existing.source_file, dropped: n.source_file });
+			}
+			return existing;
+		}
 		nodeById.set(n.id, n);
 		nodes.push(n);
 		return n;
@@ -462,7 +515,13 @@ function buildGraph(root) {
 			addEdge(fileNid, nid, "defines", { file: rel, line: t.line });
 			localDefs.set(t.name, nid);
 		}
-		perFile.set(rel, { lang, decls, stripped, localDefs, importedNames: new Map(), fileNid });
+		// The file's default binding: `export default function original()` is
+		// imported under ANY local name (`import renamed from …`), so default
+		// imports must resolve through this, never through the importer's name.
+		let defaultNid = null;
+		for (const c of decls.classes) if (c.isDefault && localDefs.has(c.name)) defaultNid = localDefs.get(c.name);
+		for (const f of decls.functions) if (f.isDefault && localDefs.has(f.name)) defaultNid = localDefs.get(f.name);
+		perFile.set(rel, { lang, decls, stripped, localDefs, defaultNid, importedNames: new Map(), fileNid });
 	}
 
 	// -- workspace package resolution (js/ts monorepos)
@@ -531,6 +590,36 @@ function buildGraph(root) {
 		return null;
 	};
 
+	// Resolve an EXPORTED name of a module to the defining symbol node,
+	// following re-export bindings — named (`export { helper } from`,
+	// including aliases) and star — with a cycle guard. A barrel has no
+	// localDef for pass-through names, so consumers importing through it
+	// would otherwise lose their symbol-import and call edges.
+	const resolveExported = (rel, name, seen = new Set()) => {
+		const key = rel + "|" + name;
+		if (seen.has(key)) return null;
+		seen.add(key);
+		const pf = perFile.get(rel);
+		if (!pf) return null;
+		if (pf.localDefs.has(name)) return pf.localDefs.get(name);
+		for (const imp of pf.decls.imports) {
+			if (!imp.reExport) continue;
+			const resolved = resolveSpec(rel, imp.spec);
+			if (!resolved) continue;
+			if (imp.namespace === "*") {
+				const hit = resolveExported(resolved, name, seen);
+				if (hit) return hit;
+			} else {
+				for (const n of imp.names) {
+					if (n.local !== name) continue;
+					const hit = resolveExported(resolved, n.imported, seen);
+					if (hit) return hit;
+				}
+			}
+		}
+		return null;
+	};
+
 	// -- phase 3: import edges
 	for (const rel of rels) {
 		const pf = perFile.get(rel);
@@ -551,7 +640,7 @@ function buildGraph(root) {
 			if (resolved && !imp.dynamic) {
 				const tpf = perFile.get(resolved);
 				for (const n of imp.names) {
-					const tnid = tpf.localDefs.get(n.imported);
+					const tnid = tpf.localDefs.get(n.imported) || resolveExported(resolved, n.imported);
 					if (tnid) {
 						if (!imp.reExport) addEdge(pf.fileNid, tnid, "imports", { file: rel, line: imp.line, context: "import" });
 						pf.importedNames.set(n.local, { rel: resolved, name: n.imported, nid: tnid });
@@ -559,7 +648,7 @@ function buildGraph(root) {
 						pf.importedNames.set(n.local, { rel: resolved, name: n.imported, nid: null });
 					}
 				}
-				if (imp.default) pf.importedNames.set(imp.default, { rel: resolved, name: "default", nid: null });
+				if (imp.default) pf.importedNames.set(imp.default, { rel: resolved, name: "default", nid: tpf.defaultNid || null });
 				if (imp.namespace && imp.namespace !== "*") pf.importedNames.set(imp.namespace, { rel: resolved, name: "*", nid: null });
 			}
 		}
@@ -581,7 +670,11 @@ function buildGraph(root) {
 		if (imp && imp.nid) return { nid: imp.nid, confidence: "EXTRACTED" };
 		if (imp && imp.rel) {
 			const tpf = perFile.get(imp.rel);
-			const t = tpf && tpf.localDefs.get(imp.name === "default" ? name : imp.name);
+			// A default import binds to the TARGET's default declaration,
+			// whatever local name the importer chose.
+			const t = imp.name === "default"
+				? (tpf && tpf.defaultNid)
+				: (tpf && (tpf.localDefs.get(imp.name) || resolveExported(imp.rel, imp.name)));
 			if (t) return { nid: t, confidence: "EXTRACTED" };
 			return null;
 		}
@@ -616,17 +709,23 @@ function buildGraph(root) {
 	for (const rel of rels) {
 		const pf = perFile.get(rel);
 		const lines = pf.stripped.split("\n");
-		// symbol regions: decl line → next decl line
+		// symbol regions: decl line → tracked body end (brace depth), falling
+		// back to open-ended (next-anchor semantics) where no end was tracked.
+		// A top-level call AFTER a function's closing brace belongs to the
+		// file, not to that function.
 		const anchors = [];
 		for (const c of pf.decls.classes) {
-			for (const meth of c.methods) anchors.push({ nid: makeId(fileStem(rel), c.name, meth.name), line: meth.line });
-			anchors.push({ nid: pf.localDefs.get(c.name), line: c.line });
+			for (const meth of c.methods) anchors.push({ nid: makeId(fileStem(rel), c.name, meth.name), line: meth.line, end: meth.end != null ? meth.end : null });
+			anchors.push({ nid: pf.localDefs.get(c.name), line: c.line, end: c.end != null ? c.end : null });
 		}
-		for (const f of pf.decls.functions) anchors.push({ nid: pf.localDefs.get(f.name), line: f.line });
+		for (const f of pf.decls.functions) anchors.push({ nid: pf.localDefs.get(f.name), line: f.line, end: f.end != null ? f.end : null });
 		anchors.sort((a, b) => a.line - b.line);
 		const regionOf = (lineNo) => {
 			let cur = null;
-			for (const a of anchors) { if (a.line <= lineNo) cur = a; else break; }
+			for (const a of anchors) {
+				if (a.line > lineNo) break;
+				if (a.end == null || lineNo <= a.end) cur = a;
+			}
 			return cur ? cur.nid : pf.fileNid;
 		};
 		const seenCalls = new Set();
@@ -655,19 +754,44 @@ function buildGraph(root) {
 				}
 				addEdge(caller, r.nid, "calls", { file: rel, line: i + 1, confidence: r.confidence, score: r.confidence === "INFERRED" ? INFERRED_CALL_SCORE : undefined, context: "call" });
 			}
-			// this.x()/self.x() → own class method
+			// this.x()/self.x() → the ENCLOSING class's method, never an earlier
+			// unrelated class that happens to share the method name.
 			let sm;
 			const selfRe = /\b(?:this|self)\.([A-Za-z_][\w$]*)\s*\(/g;
 			while ((sm = selfRe.exec(ln)) !== null) {
 				const caller = regionOf(i + 1);
+				let owner = null;
 				for (const c of pf.decls.classes) {
-					if (c.line <= i + 1 && c.methods.some((x) => x.name === sm[1])) {
-						const mid = makeId(fileStem(rel), c.name, sm[1]);
-						const key = caller + "|" + mid + "|calls";
-						if (!seenCalls.has(key) && mid !== caller) { seenCalls.add(key); addEdge(caller, mid, "calls", { file: rel, line: i + 1, context: "call" }); }
-						break;
-					}
+					if (c.line > i + 1) continue;
+					if (c.end != null && i + 1 > c.end) continue;
+					if (c.methods.some((x) => x.name === sm[1])) owner = c;
 				}
+				if (owner) {
+					const mid = makeId(fileStem(rel), owner.name, sm[1]);
+					const key = caller + "|" + mid + "|calls";
+					if (!seenCalls.has(key) && mid !== caller) { seenCalls.add(key); addEdge(caller, mid, "calls", { file: rel, line: i + 1, context: "call" }); }
+				}
+			}
+			// ns.member() through a known imported namespace — `import * as util
+			// from './util.js'; util.helper()` must record a call edge; the bare
+			// callRe deliberately excludes dotted names.
+			const nsCallRe = /\b([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\s*\(/g;
+			let nc;
+			while ((nc = nsCallRe.exec(ln)) !== null) {
+				if (nc[1] === "this" || nc[1] === "self") continue;
+				const imp = pf.importedNames.get(nc[1]);
+				if (!imp || imp.name !== "*" || !imp.rel) continue;
+				const tpfNs = perFile.get(imp.rel);
+				const tnid = (tpfNs && tpfNs.localDefs.get(nc[2])) || resolveExported(imp.rel, nc[2]);
+				if (!tnid) continue;
+				const target = nodeById.get(tnid);
+				if (!target || !target._callable) continue;
+				const caller = regionOf(i + 1);
+				if (tnid === caller) continue;
+				const key = caller + "|" + tnid + "|calls";
+				if (seenCalls.has(key)) continue;
+				seenCalls.add(key);
+				addEdge(caller, tnid, "calls", { file: rel, line: i + 1, context: "call" });
 			}
 			newRe.lastIndex = 0;
 			while ((m = newRe.exec(ln)) !== null) {
@@ -721,7 +845,7 @@ function buildGraph(root) {
 		n.norm_label = normalizeId(n.label).replace(/_/g, " ");
 	}
 
-	return { nodes, edges: dedupedEdges, communities };
+	return { nodes, edges: dedupedEdges, communities, idCollisions };
 }
 
 // ---------------------------------------------------------------------------
@@ -996,7 +1120,19 @@ function loadGraph(root) {
 	let raw;
 	try { raw = JSON.parse(fs.readFileSync(jsonPath, "utf-8")); } catch { return null; }
 	const edges = raw.edges || raw.links || [];
-	return { nodes: raw.nodes || [], edges, communities: (raw.graph && raw.graph.communities) || [], path: jsonPath };
+	const nodes = raw.nodes || [];
+	// writeGraph strips each community's `members` from graph.json (they are
+	// derivable); rebuild them from node.community so `kg report` and
+	// `kg export wiki` work from a loaded graph. Nodes are sorted by id in
+	// the file, so the rebuilt lists are deterministic.
+	const communities = (raw.graph && raw.graph.communities) || [];
+	const byIdx = new Map(communities.map((c) => [c.id, c]));
+	for (const c of communities) if (!Array.isArray(c.members)) c.members = [];
+	for (const n of nodes) {
+		const c = byIdx.get(n.community);
+		if (c) c.members.push(n.id);
+	}
+	return { nodes, edges, communities, path: jsonPath };
 }
 
 // ---------------------------------------------------------------------------
@@ -1194,11 +1330,29 @@ function subgraphToText(graph, visited, edgesSeen, edges, deg, tokenBudget, seed
 		eIdx.set(e.source + " " + e.target, e);
 		if (!eIdx.has(e.target + " " + e.source)) eIdx.set(e.target + " " + e.source, e);
 	}
+	// EDGE lines always print the STORED direction (source -> target), never
+	// the traversal direction: a search for a callee must not render
+	// `callee --calls--> caller`.
+	const printed = new Set();
+	const pushEdge = (e) => {
+		if (!e || !e.relation) return;
+		const k = e.source + " " + e.target + " " + e.relation;
+		if (printed.has(k)) return;
+		printed.add(k);
+		const ctx = e.context ? ` context=${e.context}` : "";
+		lines.push(`EDGE ${(byId.get(e.source) || {}).label || e.source} --${e.relation} [${e.confidence || ""}${ctx}]--> ${(byId.get(e.target) || {}).label || e.target}`);
+	};
+	// Edges between seeds first: both endpoints are pre-visited, so the
+	// traversal itself never records them — yet the link between the queried
+	// symbols is usually the answer.
+	if (seedSet.size > 1) {
+		for (const e of edges) {
+			if (e.source !== e.target && seedSet.has(e.source) && seedSet.has(e.target)) pushEdge(e);
+		}
+	}
 	for (const [u, v] of edgesSeen) {
 		if (!visited.has(u) || !visited.has(v)) continue;
-		const e = eIdx.get(u + " " + v) || {};
-		const ctx = e.context ? ` context=${e.context}` : "";
-		lines.push(`EDGE ${(byId.get(u) || {}).label || u} --${e.relation || ""} [${e.confidence || ""}${ctx}]--> ${(byId.get(v) || {}).label || v}`);
+		pushEdge(eIdx.get(u + " " + v));
 	}
 	let output = lines.join("\n");
 	if (output.length > charBudget) {
@@ -1268,6 +1422,11 @@ kgCommands.build = function (root, args) {
 		console.log(`kg build: ${graph.nodes.length} nodes (${codeNodes} in-repo) · ${graph.edges.length} edges · ${graph.communities.length} communities · ${Date.now() - t0}ms`);
 		const pct = (k) => graph.edges.length ? Math.round((byConf[k] / graph.edges.length) * 100) : 0;
 		console.log(`confidence: ${pct("EXTRACTED")}% EXTRACTED · ${pct("INFERRED")}% INFERRED · ${pct("AMBIGUOUS")}% AMBIGUOUS`);
+		if (graph.idCollisions && graph.idCollisions.length) {
+			console.log(`warning: ${graph.idCollisions.length} id collision(s) — graphify ids.py canonicalization merges these (first wins):`);
+			for (const c of graph.idCollisions.slice(0, 5)) console.log(`  ${c.id}: kept ${c.kept}, merged ${c.dropped}`);
+			if (graph.idCollisions.length > 5) console.log(`  … and ${graph.idCollisions.length - 5} more`);
+		}
 		console.log(`→ ${jsonPath}\n→ ${reportPath}`);
 	}
 };

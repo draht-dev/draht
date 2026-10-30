@@ -191,6 +191,99 @@ test("Go aliased/blank/dot imports produce imports_from edges (greptile P1)", ()
 	assert.ok(fromMain.length >= 3, `aliased/blank/named Go imports dropped: ${JSON.stringify(fromMain)}`);
 });
 
+test("braces inside strings do not hide later declarations", () => {
+	write("src/braces.ts", [
+		'const marker = "{";',
+		"export function afterBrace() { return marker; }",
+	].join("\n"));
+	run(["build", "--quiet"]);
+	const g = loadGraph();
+	assert.ok(g.nodes.some((n) => n.id === "src_braces_afterbrace"), "symbol after a string-literal brace lost");
+});
+
+test("this.method() binds to the enclosing class, not an earlier one with the same method", () => {
+	write("src/two.ts", [
+		"export class Alpha {",
+		"\tsave(): void {}",
+		"}",
+		"export class Beta {",
+		"\tsave(): void {}",
+		"\trun(): void { this.save(); }",
+		"}",
+	].join("\n"));
+	run(["build", "--quiet"]);
+	const g = loadGraph();
+	const call = g.edges.find((e) => e.relation === "calls" && e.source === "src_two_beta_run");
+	assert.ok(call, "this.save() call edge missing");
+	assert.equal(call.target, "src_two_beta_save", "this.save() bound to the wrong class");
+});
+
+test("top-level calls after a function body belong to the file, not the function", () => {
+	write("src/toplevel.ts", [
+		"export function alphaFn() { return 1; }",
+		"export function betaFn() { return 2; }",
+		"alphaFn();",
+	].join("\n"));
+	run(["build", "--quiet"]);
+	const g = loadGraph();
+	const call = g.edges.find((e) => e.relation === "calls" && e.target === "src_toplevel_alphafn");
+	assert.ok(call, "top-level call edge missing");
+	assert.equal(call.source, "src_toplevel", `top-level call attributed to ${call.source} instead of the file`);
+});
+
+test("renamed default imports resolve to the target's default declaration", () => {
+	write("src/defmod.ts", "export default function original() { return 1; }\n");
+	write("src/usedef.ts", [
+		'import renamed from "./defmod.js";',
+		"export function useIt() { return renamed(); }",
+	].join("\n"));
+	run(["build", "--quiet"]);
+	const g = loadGraph();
+	const call = g.edges.find((e) => e.relation === "calls" && e.source === "src_usedef_useit");
+	assert.ok(call, "call through renamed default import missing");
+	assert.equal(call.target, "src_defmod_original");
+});
+
+test("imports and calls through a barrel follow the re-export binding", () => {
+	write("src/bhelper.ts", "export function bhelp() { return 1; }\n");
+	write("src/bbarrel.ts", 'export { bhelp } from "./bhelper.js";\n');
+	write("src/busecaller.ts", [
+		'import { bhelp } from "./bbarrel.js";',
+		"export function callThrough() { return bhelp(); }",
+	].join("\n"));
+	run(["build", "--quiet"]);
+	const g = loadGraph();
+	const call = g.edges.find((e) => e.relation === "calls" && e.source === "src_busecaller_callthrough");
+	assert.ok(call, "call through barrel missing");
+	assert.equal(call.target, "src_bhelper_bhelp");
+	assert.ok(g.edges.some((e) => e.relation === "imports" && e.source === "src_busecaller" && e.target === "src_bhelper_bhelp"), "symbol import edge through barrel missing");
+});
+
+test("namespace member calls resolve through the imported module", () => {
+	write("src/nsmod.ts", "export function nsfn() { return 1; }\n");
+	write("src/nsuse.ts", [
+		'import * as nsm from "./nsmod.js";',
+		"export function useNs() { return nsm.nsfn(); }",
+	].join("\n"));
+	run(["build", "--quiet"]);
+	const g = loadGraph();
+	const call = g.edges.find((e) => e.relation === "calls" && e.source === "src_nsuse_usens");
+	assert.ok(call, "namespace member call missing");
+	assert.equal(call.target, "src_nsmod_nsfn");
+});
+
+test("kg query prints edges in stored direction, never traversal direction", () => {
+	const out = run(["query", "nsfn"]);
+	assert.match(out, /EDGE useNs\(\) --calls \[EXTRACTED[^\]]*\]--> nsfn\(\)/, `stored direction lost:\n${out}`);
+	assert.doesNotMatch(out, /EDGE nsfn\(\) --calls/, `reversed call edge printed:\n${out}`);
+});
+
+test("kg report from a loaded graph still lists community members", () => {
+	run(["report"]);
+	const md = fs.readFileSync(path.join(root, ".planning/codebase/KG_REPORT.md"), "utf-8");
+	assert.match(md, /Members: /, "community member samples lost after load (writeGraph strips members)");
+});
+
 test("Rust impl methods belong to their type, not the file (greptile P1)", () => {
 	write("rsrc/widget.rs", [
 		"pub struct Widget { size: u32 }",

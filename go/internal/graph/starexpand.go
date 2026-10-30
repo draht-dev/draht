@@ -65,9 +65,23 @@ func ExpandStarReExports(modules []model.Module, stars map[string][]StarReExport
 
 	// Iterate to the true fixpoint. Termination is guaranteed without a pass
 	// cap: every pass either appends at least one export (total additions are
-	// bounded by expansionCap × #barrels) or sets changed=false and stops —
-	// a fixed ceiling would leave >N-deep barrel chains incomplete.
+	// bounded by expansionCap × #barrels), marks a name ambiguous (bounded by
+	// distinct names), or sets changed=false and stops — a fixed ceiling
+	// would leave >N-deep barrel chains incomplete.
+	//
+	// Per-barrel bookkeeping: names added by THIS pass's star expansion
+	// (name → via) and names dropped as ambiguous. Two star targets providing
+	// the same name from DIFFERENT origins make it ambiguous (ES spec):
+	// removed and never re-added. The same origin reached through different
+	// chains is one binding and stays. Explicit exports are never in
+	// starAdded, so they are never removed.
 	const expansionCap = 60
+	starAdded := make(map[string]map[string]string, len(barrels))
+	starAmbiguous := make(map[string]map[string]bool, len(barrels))
+	for _, bid := range barrels {
+		starAdded[bid] = make(map[string]string)
+		starAmbiguous[bid] = make(map[string]bool)
+	}
 	for {
 		changed := false
 		for _, bid := range barrels {
@@ -79,26 +93,44 @@ func ExpandStarReExports(modules []model.Module, stars map[string][]StarReExport
 			for _, e := range b.Exports {
 				have[e.Name] = true
 			}
+			added := starAdded[bid]
+			amb := starAmbiguous[bid]
 			for _, st := range stars[bid] {
 				t := byID[st.Target]
 				if t == nil {
 					continue
 				}
 				for _, e := range t.Exports {
-					if len(b.Exports) >= expansionCap {
-						break
-					}
 					if e.Name == "default" {
 						continue // a bare `export *` never forwards default (ES spec)
 					}
-					if have[e.Name] {
+					if amb[e.Name] {
 						continue
 					}
-					have[e.Name] = true
 					via := e.Via
 					if via == "" {
 						via = t.ID
 					}
+					if have[e.Name] {
+						if prev, ok := added[e.Name]; ok && prev != via {
+							for i, x := range b.Exports {
+								if x.Name == e.Name && x.Via == prev {
+									b.Exports = append(b.Exports[:i], b.Exports[i+1:]...)
+									break
+								}
+							}
+							delete(have, e.Name)
+							delete(added, e.Name)
+							amb[e.Name] = true
+							changed = true
+						}
+						continue
+					}
+					if len(b.Exports) >= expansionCap {
+						break
+					}
+					have[e.Name] = true
+					added[e.Name] = via
 					b.Exports = append(b.Exports, model.Export{Name: e.Name, Kind: "re-export", Line: st.Line, Doc: e.Doc, Via: via})
 					changed = true
 				}

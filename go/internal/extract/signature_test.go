@@ -6,8 +6,8 @@ import (
 )
 
 func TestSignatureExtractorVersionInvalidatesInitializerSanitizationCache(t *testing.T) {
-	if Version != "x9" {
-		t.Fatalf("Version = %q, want x9 after named default declarations began classifying as `default`", Version)
+	if Version != "x10" {
+		t.Fatalf("Version = %q, want x10 after named default declarations began surfacing as non-exported symbols", Version)
 	}
 }
 

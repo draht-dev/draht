@@ -168,6 +168,35 @@ test("MAP.html embeds the Insights view", () => {
 	assert.ok(html.includes("renderInsights"), "renderInsights missing from MAP.html");
 });
 
+test("star expansion drops names exported ambiguously by two star targets (ES spec)", () => {
+	const ambRoot = fs.mkdtempSync(path.join(os.tmpdir(), "draht-amb-test-"));
+	try {
+		fs.mkdirSync(path.join(ambRoot, ".git"));
+		fs.writeFileSync(path.join(ambRoot, "package.json"), JSON.stringify({ name: "amb", version: "1.0.0" }));
+		fs.mkdirSync(path.join(ambRoot, "src"), { recursive: true });
+		fs.writeFileSync(path.join(ambRoot, "src/x.ts"), "export const dup = 1;\nexport const onlyx = 2;\n");
+		fs.writeFileSync(path.join(ambRoot, "src/y.ts"), "export const dup = 2;\nexport const onlyy = 3;\n");
+		// barrel: two stars whose targets both export `dup` from different origins → ambiguous, dropped
+		fs.writeFileSync(path.join(ambRoot, "src/amb.ts"), 'export * from "./x.js";\nexport * from "./y.js";\n');
+		// two chains to the SAME origin: one binding, not ambiguous — survives
+		fs.writeFileSync(path.join(ambRoot, "src/viaa.ts"), 'export * from "./x.js";\n');
+		fs.writeFileSync(path.join(ambRoot, "src/viab.ts"), 'export * from "./x.js";\n');
+		fs.writeFileSync(path.join(ambRoot, "src/same.ts"), 'export * from "./viaa.js";\nexport * from "./viab.js";\n');
+		execFileSync(process.execPath, [CLI, "map-graph", "--quiet"], { cwd: ambRoot, encoding: "utf-8", env: ENV });
+		const m = JSON.parse(fs.readFileSync(path.join(ambRoot, ".planning/codebase/MAP.json"), "utf-8"));
+		const amb = m.modules.find((x) => x.id === "src/amb.ts");
+		const names = amb.exports.map((e) => e.name);
+		assert.ok(!names.includes("dup"), `ambiguous star export must be dropped: ${names}`);
+		assert.ok(names.includes("onlyx") && names.includes("onlyy"), `unambiguous names lost: ${names}`);
+		const same = m.modules.find((x) => x.id === "src/same.ts");
+		const dupSame = same.exports.find((e) => e.name === "dup");
+		assert.ok(dupSame, `same-origin name wrongly treated as ambiguous: ${JSON.stringify(same.exports)}`);
+		assert.equal(dupSame.via, "src/x.ts");
+	} finally {
+		fs.rmSync(ambRoot, { recursive: true, force: true });
+	}
+});
+
 test("star expansion reaches fixpoint on deep barrel chains (>5 hops)", () => {
 	// b0 —star→ b1 —star→ … —star→ b7 (defines the symbols). The expansion
 	// loop iterates barrels in SORTED id order, so this orientation forces a
@@ -193,6 +222,12 @@ test("star expansion reaches fixpoint on deep barrel chains (>5 hops)", () => {
 		// locally only).
 		assert.ok(!outer.exports.some((e) => e.name === "default"), `default leaked through a bare star re-export: ${JSON.stringify(outer.exports)}`);
 		assert.ok(!outer.exports.some((e) => e.name === "Widget"), `default declaration's local name leaked through a bare star re-export: ${JSON.stringify(outer.exports)}`);
+		// … but the defining file itself still records Widget as a (non-exported)
+		// symbol, so search can find it by its real name.
+		const defining = m.modules.find((x) => x.id === "src/b7.ts");
+		const widget = defining.symbols.find((s) => s.name === "Widget");
+		assert.ok(widget, `named default declaration missing from its own file's symbols: ${JSON.stringify(defining.symbols)}`);
+		assert.equal(widget.exported, false);
 	} finally {
 		fs.rmSync(chainRoot, { recursive: true, force: true });
 	}

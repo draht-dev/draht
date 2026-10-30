@@ -39,6 +39,8 @@ export interface ToolRanker {
 	rank(query: string, documents: readonly ToolSearchDocument[], limit: number): ToolSearchMatch[];
 }
 
+const wordSegmenter = new Intl.Segmenter(undefined, { granularity: "word" });
+
 const STOP_WORDS: ReadonlySet<string> = new Set([
 	"a",
 	"an",
@@ -71,15 +73,22 @@ function stem(term: string): string {
 	return term;
 }
 
-/** Lowercase terms, split at camelCase boundaries and non-alphanumerics, without stop words. */
+/** Unicode word segmentation with identifier boundaries and English stop words/singular forms. */
 export function tokenize(text: string): string[] {
-	return text
+	const normalized = text
+		.normalize("NFC")
 		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
 		.replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
 		.toLowerCase()
-		.split(/[^a-z0-9]+/)
-		.filter((term) => term.length > 0 && !STOP_WORDS.has(term))
-		.map(stem);
+		.replace(/[^\p{L}\p{M}\p{N}]+/gu, " ");
+	// The segmenter costs about 15 times a split. Plain ASCII splits into the same words at spaces, so only other
+	// text, such as Chinese written without spaces, goes through it.
+	const words = /^[a-z0-9 ]*$/.test(normalized)
+		? normalized.split(" ")
+		: Array.from(wordSegmenter.segment(normalized), (segment) => (segment.isWordLike ? segment.segment : ""));
+	return words
+		.filter((word) => word.length > 0 && !STOP_WORDS.has(word))
+		.map((word) => (/^[a-z0-9]+$/.test(word) ? stem(word) : word));
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

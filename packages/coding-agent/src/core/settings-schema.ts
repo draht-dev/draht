@@ -330,6 +330,13 @@ export const SettingsSchema = Type.Object(
 					'Command used for npm package lookup and installation, in argv form such as ["mise", "exec", "node@20", "--", "npm"].',
 			}),
 		),
+		selfUpdateCommand: Type.Optional(
+			Type.Array(Type.String(), {
+				minItems: 1,
+				description:
+					'Command `draht update` runs to update draht itself, in argv form such as ["mise", "use", "-g", "npm:{packageName}@{version}"]. Placeholders: {packageName}, {version}, {installSpec}. DRAHT_SELF_UPDATE_COMMAND takes precedence. Global setting only.',
+			}),
+		),
 		collapseChangelog: Type.Optional(
 			Type.Boolean({
 				description: "Show the condensed changelog after update; use /changelog for the full changelog.",

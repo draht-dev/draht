@@ -95,6 +95,7 @@ These variables are read by draht itself:
 | `DRAHT_PACKAGE_DIR` | Override the package directory, useful for Nix/Guix store paths |
 | `DRAHT_OFFLINE` | Disable automatic network activity, including version checks, package updates, and model catalog refreshes |
 | `DRAHT_SKIP_VERSION_CHECK` | Disable the latest-version request to the npm registry entry for `@draht/coding-agent` |
+| `DRAHT_SELF_UPDATE_COMMAND` | Command `draht update` runs to update draht itself, split on whitespace, with `{packageName}`, `{version}`, and `{installSpec}` placeholders. Takes precedence over the `selfUpdateCommand` setting. See [Custom update command](cli.md#custom-update-command) |
 | `DRAHT_MODEL_CATALOG_BASE_URL` | Enable the remote model catalog overlay from a self-hosted endpoint; the overlay is off when unset |
 | `DRAHT_TELEMETRY` | Override provider attribution headers (OpenRouter, NVIDIA NIM, Cloudflare): `1`/`true`/`yes` or `0`/`false`/`no` |
 | `DRAHT_CODEMODE_MAX_WORKERS` | Maximum codemode workers alive at once across all sessions in the process; default `2`. Each worker's script may use up to 256 MB. Raise it when one process runs several sessions, such as in-process subagents. Further scripts wait for a free worker. See [Codemode](codemode.md) |

@@ -521,6 +521,7 @@ ${chalk.bold("Environment Variables:")}
   ${ENV_SESSION_DIR.padEnd(32)} - Session storage directory (overridden by --session-dir)
   DRAHT_PACKAGE_DIR                   - Override package directory (for Nix/Guix store paths)
   DRAHT_OFFLINE                       - Disable startup network operations when set to 1/true/yes
+  DRAHT_SELF_UPDATE_COMMAND           - Command draht update runs to update draht itself ({packageName}, {version}, {installSpec})
   DRAHT_TELEMETRY                     - Override provider attribution headers (OpenRouter/NVIDIA NIM/Cloudflare) when set to 1/true/yes or 0/false/no
   DRAHT_SHARE_VIEWER_URL              - Base URL for /share command (default: none; the gist URL is shown directly)
 

@@ -297,6 +297,18 @@ Running `draht update` without a target updates draht itself.
 
 Add `--force` to reinstall draht when the selected update includes draht.
 
+`draht update` cannot update draht when another package manager provides it, such as Nix. Update draht with that package manager, for example `nix profile upgrade draht`. Package and model catalog updates still work.
+
+#### Custom update command
+
+If a wrapper or another package manager provides draht, set `DRAHT_SELF_UPDATE_COMMAND` so `draht update` runs its update command:
+
+```sh
+export DRAHT_SELF_UPDATE_COMMAND="mise use -g npm:{packageName}@{version}"
+```
+
+`draht update` runs it only when the npm registry has a newer `@draht/coding-agent` release, replacing `{packageName}`, `{version}`, and `{installSpec}` (`{packageName}@{version}`) with that release. The value is split on spaces. For arguments with spaces, use the `selfUpdateCommand` setting in `~/.draht/agent/settings.json` instead, an argv array such as `["nix", "profile", "upgrade", "draht"]`.
+
 ### Aliases and command options
 
 - `draht uninstall <source>` is an alias for `draht remove <source>`.

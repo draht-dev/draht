@@ -236,25 +236,35 @@ function parseDecls(rel, content, lang) {
 		if (dm) d.docstring = dm[1].replace(/^\s*\*\s?/gm, "").trim().slice(0, 500) || null;
 
 		let currentClass = null, classDepth = 0, depth = 0;
-		// Open declarations whose body end we are waiting for: each entry
-		// closes (ref.end = line) when depth returns to its pre-decl level.
+		// Open declarations whose body end we are waiting for. An entry only
+		// closes once a brace actually OPENED for it (`opened`) and depth has
+		// returned to its pre-decl level — a multiline header (`function run(\n
+		// x,\n) {`) must stay open until its body starts and ends. Entries that
+		// never open a brace (brace-less arrows) close when the next same-level
+		// declaration appears.
 		const open = [];
+		const closeUnopened = (endLine) => {
+			while (open.length && !open[open.length - 1].opened && depth <= open[open.length - 1].depth) open.pop().ref.end = endLine;
+		};
 		for (let i = 0; i < lines.length && d.classes.length + d.functions.length + d.types.length < MAX_SYMBOLS_PER_FILE; i++) {
 			const ln = lines[i];
 			let m;
 			if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)(?:\s+extends\s+([A-Za-z_$][\w$.]*))?(?:\s+implements\s+([\w$,\s.<>]+?))?\s*\{?/)) && /\bclass\b/.test(ln)) {
+				closeUnopened(i);
 				currentClass = { name: m[1], line: i + 1, end: null, isDefault: /^\s*export\s+default\b/.test(ln), extends: m[2] ? m[2].split(".")[0] : null, implements: (m[3] || "").split(",").map((x) => x.trim().split("<")[0].split(".")[0]).filter(Boolean), methods: [] };
 				d.classes.push(currentClass);
 				classDepth = depth;
-				open.push({ ref: currentClass, depth, line: i + 1 });
+				open.push({ ref: currentClass, depth, line: i + 1, opened: false });
 			} else if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/))) {
+				closeUnopened(i);
 				const fn = { name: m[1], line: i + 1, end: null, isDefault: /^\s*export\s+default\b/.test(ln) };
 				d.functions.push(fn);
-				open.push({ ref: fn, depth, line: i + 1 });
+				open.push({ ref: fn, depth, line: i + 1, opened: false });
 			} else if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)(?::[^=]+)?\s*=\s*(?:async\s*)?(?:\(|function\b|[A-Za-z_$][\w$]*\s*=>)/))) {
+				closeUnopened(i);
 				const fn = { name: m[1], line: i + 1, end: null };
 				d.functions.push(fn);
-				open.push({ ref: fn, depth, line: i + 1 });
+				open.push({ ref: fn, depth, line: i + 1, opened: false });
 			} else if (depth === 0 && (m = ln.match(/^\s*export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)/))) {
 				d.types.push({ name: m[1], line: i + 1, kind: "const" });
 			} else if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:interface|enum)\s+([A-Za-z_$][\w$]*)(?:\s+extends\s+([A-Za-z_$][\w$.]*))?/)) && /\b(?:interface|enum)\b/.test(ln)) {
@@ -265,21 +275,21 @@ function parseDecls(rel, content, lang) {
 				if (!CALL_KEYWORDS.has(m[1]) && currentClass.methods.length < 80) {
 					const meth = { name: m[1], line: i + 1, end: null };
 					currentClass.methods.push(meth);
-					open.push({ ref: meth, depth, line: i + 1 });
+					open.push({ ref: meth, depth, line: i + 1, opened: false });
 				}
 			}
 			// brace depth AFTER matching decls on this line (masked copy)
 			for (const ch of maskedLines[i] || "") {
-				if (ch === "{") depth++;
-				else if (ch === "}") {
+				if (ch === "{") {
+					depth++;
+					const top = open[open.length - 1];
+					if (top && !top.opened && depth === top.depth + 1) top.opened = true;
+				} else if (ch === "}") {
 					depth--;
 					if (currentClass && depth <= classDepth) { currentClass.end = i + 1; currentClass = null; }
-					while (open.length && depth <= open[open.length - 1].depth) open.pop().ref.end = i + 1;
+					while (open.length && open[open.length - 1].opened && depth <= open[open.length - 1].depth) open.pop().ref.end = i + 1;
 				}
 			}
-			// A decl whose line opened no net brace (single-line body or
-			// brace-less arrow) ends on its own line.
-			while (open.length && open[open.length - 1].line === i + 1 && depth <= open[open.length - 1].depth) open.pop().ref.end = i + 1;
 		}
 		// imports (content-level, multi-line safe)
 		const impRe = /import\s+(?:(?:([A-Za-z_$][\w$]*)\s*,?\s*)?(?:\*\s*as\s+([A-Za-z_$][\w$]*)|\{([^}]*)\})?\s*from\s*)?["']([^"']+)["']/g;
@@ -350,22 +360,24 @@ function parseDecls(rel, content, lang) {
 				const owner = d.classes.find((c) => c.name === m[1]);
 				if (owner) { if (owner.methods.length < 80) owner.methods.push(meth); }
 				else d.functions.push(meth);
-				open.push({ ref: meth, depth, line: i + 1 });
+				open.push({ ref: meth, depth, line: i + 1, opened: false });
 			} else if ((m = ln.match(/^func\s+([A-Za-z_][\w]*)/))) {
 				const fn = { name: m[1], line: i + 1, end: null };
 				d.functions.push(fn);
-				open.push({ ref: fn, depth, line: i + 1 });
+				open.push({ ref: fn, depth, line: i + 1, opened: false });
 			} else if ((m = ln.match(/^type\s+([A-Za-z_][\w]*)\s/))) {
 				d.types.push({ name: m[1], line: i + 1, kind: "type" });
 			}
 			for (const ch of maskedLines[i] || "") {
-				if (ch === "{") depth++;
-				else if (ch === "}") {
+				if (ch === "{") {
+					depth++;
+					const top = open[open.length - 1];
+					if (top && !top.opened && depth === top.depth + 1) top.opened = true;
+				} else if (ch === "}") {
 					depth--;
-					while (open.length && depth <= open[open.length - 1].depth) open.pop().ref.end = i + 1;
+					while (open.length && open[open.length - 1].opened && depth <= open[open.length - 1].depth) open.pop().ref.end = i + 1;
 				}
 			}
-			while (open.length && open[open.length - 1].line === i + 1 && depth <= open[open.length - 1].depth) open.pop().ref.end = i + 1;
 		}
 		// Named (`import foo "path"`), blank (`_`) and dot (`.`) imports all count;
 		// a named alias becomes the local namespace so call binding can resolve
@@ -409,20 +421,22 @@ function parseDecls(rel, content, lang) {
 				} else {
 					d.functions.push(fn);
 				}
-				openFns.push({ ref: fn, depth, line: i + 1 });
+				openFns.push({ ref: fn, depth, line: i + 1, opened: false });
 			}
 			if ((m = ln.match(/^\s*use\s+([\w:]+)/))) {
 				d.imports.push({ spec: m[1], default: null, namespace: m[1].split("::").pop(), names: [], reExport: false, dynamic: false, line: i + 1 });
 			}
 			for (const ch of maskedLines[i] || "") {
-				if (ch === "{") depth++;
-				else if (ch === "}") {
+				if (ch === "{") {
+					depth++;
+					const top = openFns[openFns.length - 1];
+					if (top && !top.opened && depth === top.depth + 1) top.opened = true;
+				} else if (ch === "}") {
 					depth--;
 					if (currentImpl && depth <= currentImpl.depth) currentImpl = null;
-					while (openFns.length && depth <= openFns[openFns.length - 1].depth) openFns.pop().ref.end = i + 1;
+					while (openFns.length && openFns[openFns.length - 1].opened && depth <= openFns[openFns.length - 1].depth) openFns.pop().ref.end = i + 1;
 				}
 			}
-			while (openFns.length && openFns[openFns.length - 1].line === i + 1 && depth <= openFns[openFns.length - 1].depth) openFns.pop().ref.end = i + 1;
 		}
 	}
 	return d;
@@ -774,11 +788,14 @@ function buildGraph(root) {
 			}
 			// ns.member() through a known imported namespace — `import * as util
 			// from './util.js'; util.helper()` must record a call edge; the bare
-			// callRe deliberately excludes dotted names.
-			const nsCallRe = /\b([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\s*\(/g;
+			// callRe deliberately excludes dotted names. The receiver must START
+			// a reference (`other.util.helper()` is a property chain, not the
+			// import) and must not be shadowed by a module-level declaration.
+			const nsCallRe = /(?:^|[^\w.$])([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\s*\(/g;
 			let nc;
 			while ((nc = nsCallRe.exec(ln)) !== null) {
 				if (nc[1] === "this" || nc[1] === "self") continue;
+				if (pf.localDefs.has(nc[1])) continue;
 				const imp = pf.importedNames.get(nc[1]);
 				if (!imp || imp.name !== "*" || !imp.rel) continue;
 				const tpfNs = perFile.get(imp.rel);

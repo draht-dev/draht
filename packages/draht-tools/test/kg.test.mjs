@@ -272,6 +272,37 @@ test("namespace member calls resolve through the imported module", () => {
 	assert.equal(call.target, "src_nsmod_nsfn");
 });
 
+test("multiline function headers keep their body calls", () => {
+	write("src/mlhelper.ts", "export function mlhelp() { return 1; }\n");
+	write("src/mlfn.ts", [
+		'import { mlhelp } from "./mlhelper.js";',
+		"export function multiHeader(",
+		"\tfirst: string,",
+		"\tsecond: number,",
+		") {",
+		"\treturn mlhelp();",
+		"}",
+	].join("\n"));
+	run(["build", "--quiet"]);
+	const g = loadGraph();
+	const call = g.edges.find((e) => e.relation === "calls" && e.target === "src_mlhelper_mlhelp");
+	assert.ok(call, "call from multiline-header function missing");
+	assert.equal(call.source, "src_mlfn_multiheader", `call attributed to ${call.source} instead of the declaring function`);
+});
+
+test("property chains do not bind as namespace calls", () => {
+	write("src/chmod.ts", "export function chfn() { return 1; }\n");
+	write("src/chuse.ts", [
+		'import * as chns from "./chmod.js";',
+		"const other = { chns: { chfn: () => 0 } };",
+		"export function useChain() { return other.chns.chfn(); }",
+	].join("\n"));
+	run(["build", "--quiet"]);
+	const g = loadGraph();
+	const bogus = g.edges.find((e) => e.relation === "calls" && e.source === "src_chuse_usechain" && e.target === "src_chmod_chfn");
+	assert.ok(!bogus, `property-chain member call wrongly bound to the namespace import: ${JSON.stringify(bogus)}`);
+});
+
 test("kg query prints edges in stored direction, never traversal direction", () => {
 	const out = run(["query", "nsfn"]);
 	assert.match(out, /EDGE useNs\(\) --calls \[EXTRACTED[^\]]*\]--> nsfn\(\)/, `stored direction lost:\n${out}`);

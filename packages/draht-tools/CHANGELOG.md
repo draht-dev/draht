@@ -15,4 +15,4 @@
 - graph-clusters labels are unique and descriptive (dominant layer / ordinal suffixes instead of six identical `packages/ai` rows) ([#2](https://github.com/draht-dev/draht/pull/2))
 - MAP.html search covers `modules[*].symbols` (non-exported declarations and barrel APIs), not just the exported-only symbolIndex ([#2](https://github.com/draht-dev/draht/pull/2))
 - deterministic tie-break on surprising-connection ordering (`score desc, from asc, to asc`) ([#2](https://github.com/draht-dev/draht/pull/2))
-- commented-out `export { X } from` examples no longer count as exports (content-level export passes match a comment-masked copy), and a bare `export *` no longer forwards the target's `default` export ([#2](https://github.com/draht-dev/draht/pull/2))
+- commented-out `export { X } from` examples no longer count as exports (content-level export passes match a comment-masked copy), and a bare `export *` no longer forwards the target's `default` export — including named default declarations (`export default class Widget {}` classifies as `default`, not `Widget`) ([#2](https://github.com/draht-dev/draht/pull/2))

@@ -179,7 +179,7 @@ test("star expansion reaches fixpoint on deep barrel chains (>5 hops)", () => {
 		fs.mkdirSync(path.join(chainRoot, ".git"));
 		fs.writeFileSync(path.join(chainRoot, "package.json"), JSON.stringify({ name: "chain", version: "1.0.0" }));
 		fs.mkdirSync(path.join(chainRoot, "src"), { recursive: true });
-		fs.writeFileSync(path.join(chainRoot, "src/b7.ts"), "export function deepest() { return 1; }\nexport default function hidden() { return 2; }\n");
+		fs.writeFileSync(path.join(chainRoot, "src/b7.ts"), "export function deepest() { return 1; }\nexport default class Widget {}\n");
 		for (let i = 0; i <= 6; i++) {
 			fs.writeFileSync(path.join(chainRoot, `src/b${i}.ts`), `export * from "./b${i + 1}.js";\n`);
 		}
@@ -188,8 +188,11 @@ test("star expansion reaches fixpoint on deep barrel chains (>5 hops)", () => {
 		const outer = m.modules.find((x) => x.id === "src/b0.ts");
 		assert.ok(outer.exports.some((e) => e.name === "deepest"), `outer barrel missing deep symbol: ${JSON.stringify(outer.exports)}`);
 		assert.equal(outer.exports.find((e) => e.name === "deepest").via, "src/b7.ts");
-		// A bare `export *` never forwards the default export (ES spec).
+		// A bare `export *` never forwards the default export (ES spec) — not as
+		// `default` and not under the declaration's local name (`Widget` binds
+		// locally only).
 		assert.ok(!outer.exports.some((e) => e.name === "default"), `default leaked through a bare star re-export: ${JSON.stringify(outer.exports)}`);
+		assert.ok(!outer.exports.some((e) => e.name === "Widget"), `default declaration's local name leaked through a bare star re-export: ${JSON.stringify(outer.exports)}`);
 	} finally {
 		fs.rmSync(chainRoot, { recursive: true, force: true });
 	}

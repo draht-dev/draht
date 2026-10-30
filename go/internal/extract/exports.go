@@ -13,7 +13,7 @@ import (
 // "start/end of the whole file" — each is matched against a single line via
 // FindStringSubmatch, never FindAllString over the whole content).
 var (
-	tsExportRe = regexp.MustCompile(`^\s*export\s+(?:default\s+)?(?:async\s+)?(class|interface|type|function|const|let|enum|var)\s+([A-Za-z_$][\w$]*)`)
+	tsExportRe = regexp.MustCompile(`^\s*export\s+(default\s+)?(?:async\s+)?(class|interface|type|function|const|let|enum|var)\s+([A-Za-z_$][\w$]*)`)
 	// tsNamedBlockRe is content-level (multi-line safe) so `export {\n a,\n b\n}`
 	// blocks — with or without a `from` clause — are captured. Barrels are pure
 	// re-export lists; without this every package index.ts reports exports(0)
@@ -128,7 +128,16 @@ func extractExports(lang string, content []byte) []Export {
 		for i := 0; i < len(lines); i++ {
 			line := lines[i]
 			if m := tsExportRe.FindStringSubmatch(line); m != nil {
-				out = append(out, Export{Name: m[2], Kind: m[1], Line: i + 1, Doc: findLeadingDoc(lines, i)})
+				// `export default class Widget {}` exports ONLY `default` — the
+				// name binds locally, never as an exported binding (ES spec), so
+				// star expansion must not forward it under its local name.
+				if m[1] != "" {
+					if !hasExportName(out, "default") {
+						out = append(out, Export{Name: "default", Kind: "default", Line: i + 1, Doc: findLeadingDoc(lines, i)})
+					}
+				} else {
+					out = append(out, Export{Name: m[3], Kind: m[2], Line: i + 1, Doc: findLeadingDoc(lines, i)})
+				}
 			} else if tsDefaultRe.MatchString(line) && !hasExportName(out, "default") {
 				out = append(out, Export{Name: "default", Kind: "default", Line: i + 1, Doc: findLeadingDoc(lines, i)})
 			} else if m := tsCommandRe.FindStringSubmatch(line); m != nil {

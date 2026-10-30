@@ -24,8 +24,10 @@ const FactsSchema = 3
 // `from` export lists and `export * as` entries began emitting exports and
 // the import parser's comment strip became newline-preserving, and "x7" ->
 // "x8" when the content-level export passes began matching a comment-masked
-// copy (commented-out export examples no longer count as exports).
-const Version = "x8"
+// copy (commented-out export examples no longer count as exports), and "x8"
+// -> "x9" when named default declarations began classifying as `default`
+// instead of their local name.
+const Version = "x9"
 
 // Facts is everything derivable from ONE file in isolation. It is exactly
 // what the cache stores. It deliberately contains NOTHING global: no

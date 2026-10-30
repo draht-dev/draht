@@ -6,8 +6,8 @@ import (
 )
 
 func TestSignatureExtractorVersionInvalidatesInitializerSanitizationCache(t *testing.T) {
-	if Version != "x8" {
-		t.Fatalf("Version = %q, want x8 after the content-level export passes began matching a comment-masked copy", Version)
+	if Version != "x9" {
+		t.Fatalf("Version = %q, want x9 after named default declarations began classifying as `default`", Version)
 	}
 }
 

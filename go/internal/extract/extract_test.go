@@ -39,15 +39,18 @@ export default class Widget {}
 	if _, ok := names["sayHi"]; !ok {
 		t.Fatalf("expected named re-export alias 'sayHi', got %+v", exports)
 	}
-	// `export default class Widget {}` matches exportRe's own (class|...)
-	// alternative BEFORE defaultRe is even tried (verbatim CJS if/else-if
-	// chain, draht-tools.cjs:1432 precedes 1441) — so this yields a "class"
-	// export named "Widget", never a distinct "default" entry.
-	if _, ok := names["Widget"]; !ok {
-		t.Fatalf("expected 'Widget' export (class kind, from 'export default class'), got %+v", exports)
+	// `export default class Widget {}` exports ONLY `default`: the class name
+	// binds locally, never as an exported binding (ES spec). Recording it as a
+	// named export let star expansion forward `Widget` through `export *`.
+	if _, ok := names["Widget"]; ok {
+		t.Fatalf("'export default class Widget' must not yield a named 'Widget' export, got %+v", exports)
 	}
-	if names["Widget"].Kind != "class" {
-		t.Errorf("expected kind 'class' for Widget, got %q", names["Widget"].Kind)
+	d, ok := names["default"]
+	if !ok {
+		t.Fatalf("expected 'default' export from 'export default class', got %+v", exports)
+	}
+	if d.Kind != "default" {
+		t.Errorf("expected kind 'default', got %q", d.Kind)
 	}
 }
 

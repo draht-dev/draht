@@ -1427,13 +1427,20 @@ function visExtractExports(rawContent, language) {
 	};
 
 	if (language === "typescript" || language === "javascript") {
-		const exportRe = /^\s*export\s+(?:default\s+)?(?:async\s+)?(class|interface|type|function|const|let|enum|var)\s+([A-Za-z_$][\w$]*)/;
+		const exportRe = /^\s*export\s+(default\s+)?(?:async\s+)?(class|interface|type|function|const|let|enum|var)\s+([A-Za-z_$][\w$]*)/;
 		const defaultRe = /^\s*export\s+default\s/;
 		const commandRe = /^\s*commands\s*\[\s*["']([^"']+)["']\s*\]\s*=/;
 		for (let i = 0; i < lines.length; i++) {
 			let m;
 			if ((m = exportRe.exec(lines[i]))) {
-				out.push({ name: m[2], kind: m[1], line: i + 1, doc: findLeadingDoc(i) });
+				// `export default class Widget {}` exports ONLY `default` — the
+				// name binds locally, never as an exported binding (ES spec), so
+				// star expansion must not forward it under its local name.
+				if (m[1]) {
+					if (!out.some((e) => e.name === "default")) out.push({ name: "default", kind: "default", line: i + 1, doc: findLeadingDoc(i) });
+				} else {
+					out.push({ name: m[3], kind: m[2], line: i + 1, doc: findLeadingDoc(i) });
+				}
 			} else if (defaultRe.test(lines[i]) && !out.some((e) => e.name === "default")) {
 				out.push({ name: "default", kind: "default", line: i + 1, doc: findLeadingDoc(i) });
 			} else if ((m = commandRe.exec(lines[i]))) {

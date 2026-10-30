@@ -76,6 +76,48 @@ describe("Bm25Ranker", () => {
 		expect(ranker.rank("read", named, 1).map((match) => match.name)).toEqual(["mcp__app__queue_read"]);
 	});
 
+	// https://github.com/earendil-works/pi/issues/11331
+	it("ranks a name match above mentions in descriptions", () => {
+		const documents = [
+			tool("mcp__ci__status", "Deploy status: last deploy, deploy log, deploy errors."),
+			tool(
+				"mcp__ci__deploy_release",
+				"Start a release of the current branch to an environment, run the migrations, switch traffic over, and wait until the new version is live and healthy.",
+			),
+		].map((entry) => createToolSearchDocument(entry));
+		expect(new Bm25Ranker().rank("deploy", documents, 1).map((match) => match.name)).toEqual([
+			"mcp__ci__deploy_release",
+		]);
+	});
+
+	// https://github.com/earendil-works/pi/issues/11331
+	it("ranks a tool first when the query contains its whole name", () => {
+		const peekaboo = { name: "mcp__peekaboo", instructions: "Peekaboo controls macOS apps by app name." };
+		const documents = [
+			tool("mcp__peekaboo__see", "Capture the app window of the peekaboo app and describe the app."),
+			tool("mcp__peekaboo__menu", "Click a menu item of an app."),
+			tool(
+				"mcp__peekaboo__app",
+				"Launch, quit, relaunch, focus, hide, or switch applications. Targets an application by name, bundle identifier, or process ID, and can wait until it is ready.",
+			),
+			tool("mcp__app__queue_read", "Read a queued message of this thread."),
+			tool(
+				"mcp__dev-app__thread_read",
+				"Read durable state and a paginated timeline from any thread. The default view returns user messages, assistant messages and plans.",
+			),
+		].map((entry) =>
+			createToolSearchDocument(entry, entry.name.startsWith("mcp__peekaboo__") ? peekaboo : undefined),
+		);
+		const ranker = new Bm25Ranker();
+		const first = (query: string) => ranker.rank(query, documents, 1).map((match) => match.name);
+		expect(first("peekaboo app")).toEqual(["mcp__peekaboo__app"]);
+		expect(first("open the peekaboo app tool")).toEqual(["mcp__peekaboo__app"]);
+		expect(first("describe app")).toEqual(["mcp__peekaboo__app"]);
+		expect(first("read thread_read state")).toEqual(["mcp__dev-app__thread_read"]);
+		// Without the whole name, mentions in descriptions decide.
+		expect(first("describe window")).toEqual(["mcp__peekaboo__see"]);
+	});
+
 	it("includes the namespace in the search text", () => {
 		const document = createToolSearchDocument(tool("mcp__x__run", "Run it."), {
 			name: "mcp__x",

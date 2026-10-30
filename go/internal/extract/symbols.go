@@ -23,7 +23,7 @@ var (
 	// function hidden()` export only `default`; the name binds locally.
 	// buildSymbols records it as a non-exported symbol so search still finds
 	// the defining file by its real name.
-	tsDefaultDeclRe = regexp.MustCompile(`^export\s+default\s+(?:async\s+)?(?:function\s*\*?\s*|(?:abstract\s+)?class\s+)([A-Za-z_$][\w$]*)`)
+	tsDefaultDeclRe = regexp.MustCompile(`^export\s+default\s+(?:async\s+)?(?:function(?:\s*\*\s*|\s+)|(?:abstract\s+)?class\s+)([A-Za-z_$][\w$]*)`)
 	tsDefaultClsRe  = regexp.MustCompile(`\bclass\b`)
 
 	// tsNamedExportStmtRe matches one assembled `export { ... }` statement in

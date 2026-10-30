@@ -304,6 +304,14 @@ test("property chains do not bind as namespace calls", () => {
 });
 
 test("kg query prints edges in stored direction, never traversal direction", () => {
+	// Self-contained: (re)create the namespace fixture so this test also passes
+	// under --test-name-pattern without the namespace-member test running first.
+	write("src/nsmod.ts", "export function nsfn() { return 1; }\n");
+	write("src/nsuse.ts", [
+		'import * as nsm from "./nsmod.js";',
+		"export function useNs() { return nsm.nsfn(); }",
+	].join("\n"));
+	run(["build", "--quiet"]);
 	const out = run(["query", "nsfn"]);
 	assert.match(out, /EDGE useNs\(\) --calls \[EXTRACTED[^\]]*\]--> nsfn\(\)/, `stored direction lost:\n${out}`);
 	assert.doesNotMatch(out, /EDGE nsfn\(\) --calls/, `reversed call edge printed:\n${out}`);

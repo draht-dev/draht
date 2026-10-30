@@ -1874,7 +1874,7 @@ function visBuildSymbols(exportsArr, content, language) {
 		// `export default class Widget {}` exports only `default`; the name binds
 		// locally. Record it as a non-exported symbol so search still finds the
 		// defining file by its real name.
-		if (syms.length < 60) addDecl(/^export\s+default\s+(?:async\s+)?(?:function\s*\*?\s*|(?:abstract\s+)?class\s+)([A-Za-z_$][\w$]*)/, (l) => /\bclass\b/.test(l) ? "class" : "function");
+		if (syms.length < 60) addDecl(/^export\s+default\s+(?:async\s+)?(?:function(?:\s*\*\s*|\s+)|(?:abstract\s+)?class\s+)([A-Za-z_$][\w$]*)/, (l) => /\bclass\b/.test(l) ? "class" : "function");
 	} else if (language === "python") {
 		addDecl(/^(?:class|def)\s+([A-Za-z_][\w]*)/, (l) => /^class\b/.test(l) ? "class" : "def");
 	} else if (language === "go") {
@@ -2438,6 +2438,28 @@ function visBuildMap(root) {
 				const have = new Set(barrel.exports.map((e) => e.name));
 				const added = starAdded.get(barrelId);
 				const amb = starAmbiguous.get(barrelId);
+				// Retract stale copies first: a downstream barrel can copy a name
+				// in the pass BEFORE its upstream barrel drops that name as
+				// ambiguous. If no current target still provides (name, via),
+				// the copy is withdrawn; if a target provides the name from
+				// another origin, the ambiguity branch below handles it.
+				for (const [name, via] of [...added]) {
+					const stillProvided = starReExports.get(barrelId).some((star) => {
+						const target = moduleByRel.get(star.target);
+						return target && target.exports.some((e) => e.name === name && (e.via || target.id) === via);
+					});
+					if (stillProvided) continue;
+					const sameNameElsewhere = starReExports.get(barrelId).some((star) => {
+						const target = moduleByRel.get(star.target);
+						return target && target.exports.some((e) => e.name === name && e.name !== "default");
+					});
+					if (sameNameElsewhere) continue; // leave for the ambiguity branch
+					const idx = barrel.exports.findIndex((x) => x.name === name && x.via === via);
+					if (idx >= 0) barrel.exports.splice(idx, 1);
+					have.delete(name);
+					added.delete(name);
+					changed = true;
+				}
 				for (const star of starReExports.get(barrelId)) {
 					const target = moduleByRel.get(star.target);
 					if (!target) continue;

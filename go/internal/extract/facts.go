@@ -27,8 +27,10 @@ const FactsSchema = 3
 // copy (commented-out export examples no longer count as exports), and "x8"
 // -> "x9" when named default declarations began classifying as `default`
 // instead of their local name, and "x9" -> "x10" when their local names
-// began appearing as non-exported symbols.
-const Version = "x10"
+// began appearing as non-exported symbols, and "x10" -> "x11" when the
+// default-declaration symbol scan stopped matching identifiers that merely
+// start with "function".
+const Version = "x11"
 
 // Facts is everything derivable from ONE file in isolation. It is exactly
 // what the cache stores. It deliberately contains NOTHING global: no

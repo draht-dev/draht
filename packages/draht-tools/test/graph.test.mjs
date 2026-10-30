@@ -58,6 +58,12 @@ before(() => {
 	// multiline block comment regression-tests the newline-preserving comment
 	// strip: a fully-deleted comment used to shift every import/re-export
 	// line computed after it.
+	// `export default <identifier>`: no declaration — must not fabricate a
+	// symbol even when the identifier starts with the word "function".
+	write("src/defid.ts", [
+		"const functionHandlers = () => 1;",
+		"export default functionHandlers;",
+	].join("\n"));
 	write("src/index.ts", [
 		"/**",
 		" * Public API barrel.",
@@ -195,6 +201,42 @@ test("star expansion drops names exported ambiguously by two star targets (ES sp
 	} finally {
 		fs.rmSync(ambRoot, { recursive: true, force: true });
 	}
+});
+
+test("downstream barrels retract names that later become ambiguous upstream", () => {
+	// Sorted-order trap: aa (processed first) copies `dup` from mm in the pass
+	// BEFORE mm learns of the conflicting second origin (zz9barrel sorts after
+	// mm, so its `dup` only exists in the next pass). Without retraction aa
+	// keeps a stale `dup` that mm itself has dropped.
+	const root2 = fs.mkdtempSync(path.join(os.tmpdir(), "draht-stale-test-"));
+	try {
+		fs.mkdirSync(path.join(root2, ".git"));
+		fs.writeFileSync(path.join(root2, "package.json"), JSON.stringify({ name: "stale", version: "1.0.0" }));
+		fs.mkdirSync(path.join(root2, "src"), { recursive: true });
+		fs.writeFileSync(path.join(root2, "src/z1.ts"), "export const dup = 1;\n");
+		fs.writeFileSync(path.join(root2, "src/z2.ts"), "export const dup = 2;\n");
+		fs.writeFileSync(path.join(root2, "src/cc.ts"), 'export * from "./z1.js";\n');
+		fs.writeFileSync(path.join(root2, "src/zz9barrel.ts"), 'export * from "./z2.js";\n');
+		fs.writeFileSync(path.join(root2, "src/mm.ts"), 'export * from "./cc.js";\nexport * from "./zz9barrel.js";\n');
+		fs.writeFileSync(path.join(root2, "src/aa.ts"), 'export * from "./mm.js";\n');
+		execFileSync(process.execPath, [CLI, "map-graph", "--quiet"], { cwd: root2, encoding: "utf-8", env: ENV });
+		const m = JSON.parse(fs.readFileSync(path.join(root2, ".planning/codebase/MAP.json"), "utf-8"));
+		const mm = m.modules.find((x) => x.id === "src/mm.ts");
+		assert.ok(!mm.exports.some((e) => e.name === "dup"), `ambiguous name kept by mm: ${JSON.stringify(mm.exports)}`);
+		const aa = m.modules.find((x) => x.id === "src/aa.ts");
+		assert.ok(!aa.exports.some((e) => e.name === "dup"), `stale ambiguous copy kept by downstream barrel: ${JSON.stringify(aa.exports)}`);
+		assert.ok(!aa.symbols.some((s) => s.name === "dup"), `stale ambiguous copy mirrored into symbols: ${JSON.stringify(aa.symbols)}`);
+	} finally {
+		fs.rmSync(root2, { recursive: true, force: true });
+	}
+});
+
+test("export default <identifier> does not fabricate a declaration symbol", () => {
+	const map = loadMap();
+	const mod = map.modules.find((m) => m.id === "src/defid.ts");
+	assert.ok(mod, "defid fixture missing");
+	assert.ok(mod.exports.some((e) => e.name === "default"), `default export missing: ${JSON.stringify(mod.exports)}`);
+	assert.ok(!mod.symbols.some((s) => s.name === "Handlers"), `identifier starting with 'function' fabricated a symbol: ${JSON.stringify(mod.symbols)}`);
 });
 
 test("star expansion reaches fixpoint on deep barrel chains (>5 hops)", () => {

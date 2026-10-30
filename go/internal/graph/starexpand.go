@@ -95,6 +95,58 @@ func ExpandStarReExports(modules []model.Module, stars map[string][]StarReExport
 			}
 			added := starAdded[bid]
 			amb := starAmbiguous[bid]
+			// Retract stale copies first: a downstream barrel can copy a name
+			// in the pass BEFORE its upstream barrel drops that name as
+			// ambiguous. If no current target still provides (name, via), the
+			// copy is withdrawn; if a target provides the name from another
+			// origin, the ambiguity branch below handles it.
+			addedNames := make([]string, 0, len(added))
+			for name := range added {
+				addedNames = append(addedNames, name)
+			}
+			sort.Strings(addedNames)
+			for _, name := range addedNames {
+				via := added[name]
+				stillProvided := false
+				sameNameElsewhere := false
+				for _, st := range stars[bid] {
+					t := byID[st.Target]
+					if t == nil {
+						continue
+					}
+					for _, e := range t.Exports {
+						if e.Name != name {
+							continue
+						}
+						if e.Name != "default" {
+							sameNameElsewhere = true
+						}
+						tv := e.Via
+						if tv == "" {
+							tv = t.ID
+						}
+						if tv == via {
+							stillProvided = true
+							break
+						}
+					}
+					if stillProvided {
+						break
+					}
+				}
+				if stillProvided || sameNameElsewhere {
+					continue // present, or left for the ambiguity branch
+				}
+				for i, x := range b.Exports {
+					if x.Name == name && x.Via == via {
+						b.Exports = append(b.Exports[:i], b.Exports[i+1:]...)
+						break
+					}
+				}
+				delete(have, name)
+				delete(added, name)
+				changed = true
+			}
 			for _, st := range stars[bid] {
 				t := byID[st.Target]
 				if t == nil {

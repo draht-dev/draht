@@ -743,7 +743,9 @@ function buildGraph(root) {
 			return cur ? cur.nid : pf.fileNid;
 		};
 		const seenCalls = new Set();
-		const callRe = /(?:^|[^\w.$])([A-Za-z_$][\w$]*)\s*\(/g;
+		// Lookbehind (not a consuming prefix): a consumed delimiter would hide
+		// the NEXT match in nested calls like `outer(inner())`.
+		const callRe = /(?<![\w.$])([A-Za-z_$][\w$]*)\s*\(/g;
 		const newRe = /\bnew\s+([A-Za-z_$][\w$.]*)\s*[(<]/g;
 		for (let i = 0; i < lines.length; i++) {
 			const ln = lines[i];
@@ -791,7 +793,9 @@ function buildGraph(root) {
 			// callRe deliberately excludes dotted names. The receiver must START
 			// a reference (`other.util.helper()` is a property chain, not the
 			// import) and must not be shadowed by a module-level declaration.
-			const nsCallRe = /(?:^|[^\w.$])([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\s*\(/g;
+			// Lookbehind, not a consuming prefix: `util.outer(util.inner())`
+			// must match the inner call too.
+			const nsCallRe = /(?<![\w.$])([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\s*\(/g;
 			let nc;
 			while ((nc = nsCallRe.exec(ln)) !== null) {
 				if (nc[1] === "this" || nc[1] === "self") continue;

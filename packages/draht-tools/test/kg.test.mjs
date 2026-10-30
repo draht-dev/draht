@@ -290,6 +290,23 @@ test("multiline function headers keep their body calls", () => {
 	assert.equal(call.source, "src_mlfn_multiheader", `call attributed to ${call.source} instead of the declaring function`);
 });
 
+test("nested namespace calls are both recorded", () => {
+	write("src/nestmod.ts", [
+		"export function nestOuter(x: number) { return x; }",
+		"export function nestInner() { return 1; }",
+	].join("\n"));
+	write("src/nestuse.ts", [
+		'import * as nn from "./nestmod.js";',
+		"export function useNested() { return nn.nestOuter(nn.nestInner()); }",
+	].join("\n"));
+	run(["build", "--quiet"]);
+	const g = loadGraph();
+	const outer = g.edges.find((e) => e.relation === "calls" && e.source === "src_nestuse_usenested" && e.target === "src_nestmod_nestouter");
+	const inner = g.edges.find((e) => e.relation === "calls" && e.source === "src_nestuse_usenested" && e.target === "src_nestmod_nestinner");
+	assert.ok(outer, "outer namespace call missing");
+	assert.ok(inner, "inner (nested) namespace call missing — consumed delimiter");
+});
+
 test("property chains do not bind as namespace calls", () => {
 	write("src/chmod.ts", "export function chfn() { return 1; }\n");
 	write("src/chuse.ts", [

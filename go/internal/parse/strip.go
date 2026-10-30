@@ -46,3 +46,40 @@ func StripCommentsPreserveLines(src []byte, lang Lang) []byte {
 	out = lineCommentRe.ReplaceAll(out, []byte("$1"))
 	return out
 }
+
+// MaskComments replaces every comment byte with a space, keeping newlines, so
+// the result has the SAME length and line structure as src: byte offsets in
+// the masked copy map one-to-one onto the raw source. The export extractor's
+// content-level passes match against this copy (lockstep with the CJS
+// maskedContent) so a commented-out `// export { X } from "./y"` example is
+// never reported as a public export, while doc extraction keeps reading the
+// raw lines.
+func MaskComments(src []byte, lang Lang) []byte {
+	out := blockCommentRe.ReplaceAllFunc(src, func(m []byte) []byte {
+		masked := make([]byte, len(m))
+		for i, b := range m {
+			if b == '\n' {
+				masked[i] = b
+			} else {
+				masked[i] = ' '
+			}
+		}
+		return masked
+	})
+	// Line comments keep capture group 1 (the "" or single pre-// byte the
+	// CJS replacement writes back as $1) and mask the rest in place — the
+	// replacement is length-preserving, so match offsets found on `out`
+	// stay valid while we overwrite it.
+	for _, m := range lineCommentRe.FindAllSubmatchIndex(out, -1) {
+		start := m[3] // end of group 1 (== m[0] when the group is empty at line start)
+		if start < 0 {
+			start = m[0]
+		}
+		for i := start; i < m[1]; i++ {
+			if out[i] != '\n' {
+				out[i] = ' '
+			}
+		}
+	}
+	return out
+}

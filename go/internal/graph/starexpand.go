@@ -88,6 +88,9 @@ func ExpandStarReExports(modules []model.Module, stars map[string][]StarReExport
 					if len(b.Exports) >= expansionCap {
 						break
 					}
+					if e.Name == "default" {
+						continue // a bare `export *` never forwards default (ES spec)
+					}
 					if have[e.Name] {
 						continue
 					}

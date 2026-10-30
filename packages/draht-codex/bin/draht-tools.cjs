@@ -1452,9 +1452,16 @@ function visExtractExports(rawContent, language) {
 			}
 			return lines.length;
 		};
+		// The content-level passes match against a comment-MASKED copy (every
+		// comment byte replaced by a space, so offsets and lines still map to the
+		// raw source): a commented-out `// export { Admin } from "./x"` example
+		// must not become a public export. Docs still read from the raw lines.
+		const maskedContent = rawContent
+			.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, " "))
+			.replace(/(^|[^:])\/\/.*$/gm, (c, p1) => p1 + " ".repeat(c.length - p1.length));
 		const namedBlockRe = /export\s+(?:type\s+)?\{([^}]*)\}(\s*from\s*["'][^"']+["'])?/g;
 		let nb;
-		while ((nb = namedBlockRe.exec(rawContent)) !== null && out.length <= 200) {
+		while ((nb = namedBlockRe.exec(maskedContent)) !== null && out.length <= 200) {
 			const isReExport = Boolean(nb[2]);
 			const line = lineOf(nb.index);
 			const doc = findLeadingDoc(line - 1);
@@ -1468,7 +1475,7 @@ function visExtractExports(rawContent, language) {
 		// `export * as NS from "./x"` exposes NS as a named export of this module.
 		const starAsRe = /export\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*["'][^"']+["']/g;
 		let sa;
-		while ((sa = starAsRe.exec(rawContent)) !== null && out.length <= 200) {
+		while ((sa = starAsRe.exec(maskedContent)) !== null && out.length <= 200) {
 			out.push({ name: sa[1], kind: "re-export", line: lineOf(sa.index), doc: null });
 		}
 	} else if (language === "python") {
@@ -2414,6 +2421,7 @@ function visBuildMap(root) {
 					if (!target) continue;
 					for (const e of target.exports) {
 						if (barrel.exports.length >= EXPANSION_CAP) break;
+						if (e.name === "default") continue; // a bare `export *` never forwards default (ES spec)
 						if (have.has(e.name)) continue;
 						have.add(e.name);
 						barrel.exports.push({ name: e.name, kind: "re-export", line: star.line, doc: e.doc, via: e.via || target.id });

@@ -3,6 +3,8 @@ package extract
 import (
 	"regexp"
 	"strings"
+
+	"github.com/draht-dev/draht/go/internal/parse"
 )
 
 // The regexes below are verbatim ports of visExtractExports's per-language
@@ -137,8 +139,11 @@ func extractExports(lang string, content []byte) []Export {
 			}
 		}
 		// Named export lists — content-level pass mirroring the CJS namedBlockRe
-		// loop (`while (... .exec(rawContent)) && out.length <= 200`).
-		raw := string(content)
+		// loop. Matches run on a comment-MASKED copy (same length, so offsets
+		// and lines still map to the raw source): a commented-out
+		// `// export { Admin } from "./x"` example must not become a public
+		// export. findLeadingDoc keeps reading the raw lines.
+		raw := string(parse.MaskComments(content, parse.Lang(lang)))
 		lineOf := func(charIdx int) int {
 			pos := 0
 			for i := 0; i < len(lines); i++ {

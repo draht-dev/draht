@@ -11,8 +11,13 @@ import { fileURLToPath } from "node:url";
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../bin/draht-tools.cjs");
 let root;
 
+// DRAHT_GRAPH_ENGINE=js pins every invocation to the CJS engine under test —
+// with the default `auto`, an installed `draht-graph` binary (possibly older)
+// would be exercised instead of this checkout's implementation.
+const ENV = { ...process.env, DRAHT_GRAPH_ENGINE: "js" };
+
 function run(args, opts = {}) {
-	return execFileSync(process.execPath, [CLI, ...args], { cwd: root, encoding: "utf-8", ...opts });
+	return execFileSync(process.execPath, [CLI, ...args], { cwd: root, encoding: "utf-8", env: ENV, ...opts });
 }
 
 function write(rel, content) {
@@ -43,7 +48,12 @@ before(() => {
 		"}",
 		"export interface SessionOptions { ttl: number }",
 	].join("\n"));
-	write("src/util.ts", "export function formatId(x: string) { return x.trim(); }\n");
+	write("src/util.ts", [
+		"// Example (commented out, must NOT become a public export):",
+		"// export { Admin } from \"./internal\";",
+		"/* export { Ghost } from \"./internal\"; */",
+		"export function formatId(x: string) { return x.trim(); }",
+	].join("\n"));
 	// Barrel: multi-line named re-export block + star re-export. The leading
 	// multiline block comment regression-tests the newline-preserving comment
 	// strip: a fully-deleted comment used to shift every import/re-export
@@ -129,6 +139,15 @@ test("graph-query surfaces barrel re-exported API names", () => {
 	assert.match(out, /auth\.ts/, `expected the defining module as a hit:\n${out}`);
 });
 
+test("commented-out export examples are not reported as exports", () => {
+	const map = loadMap();
+	const util = map.modules.find((m) => m.id === "src/util.ts");
+	const names = util.exports.map((e) => e.name);
+	assert.ok(!names.includes("Admin"), `line-commented export example leaked: ${names}`);
+	assert.ok(!names.includes("Ghost"), `block-commented export example leaked: ${names}`);
+	assert.ok(names.includes("formatId"), `real export lost by comment masking: ${names}`);
+});
+
 test("graph-context reports the barrel's re-exported API", () => {
 	const out = run(["graph-context", "src/index.ts"]);
 	assert.match(out, /exports\((?!0\))\d+/, `barrel should not report exports(0):\n${out}`);
@@ -160,15 +179,17 @@ test("star expansion reaches fixpoint on deep barrel chains (>5 hops)", () => {
 		fs.mkdirSync(path.join(chainRoot, ".git"));
 		fs.writeFileSync(path.join(chainRoot, "package.json"), JSON.stringify({ name: "chain", version: "1.0.0" }));
 		fs.mkdirSync(path.join(chainRoot, "src"), { recursive: true });
-		fs.writeFileSync(path.join(chainRoot, "src/b7.ts"), "export function deepest() { return 1; }\n");
+		fs.writeFileSync(path.join(chainRoot, "src/b7.ts"), "export function deepest() { return 1; }\nexport default function hidden() { return 2; }\n");
 		for (let i = 0; i <= 6; i++) {
 			fs.writeFileSync(path.join(chainRoot, `src/b${i}.ts`), `export * from "./b${i + 1}.js";\n`);
 		}
-		execFileSync(process.execPath, [CLI, "map-graph", "--quiet"], { cwd: chainRoot, encoding: "utf-8" });
+		execFileSync(process.execPath, [CLI, "map-graph", "--quiet"], { cwd: chainRoot, encoding: "utf-8", env: ENV });
 		const m = JSON.parse(fs.readFileSync(path.join(chainRoot, ".planning/codebase/MAP.json"), "utf-8"));
 		const outer = m.modules.find((x) => x.id === "src/b0.ts");
 		assert.ok(outer.exports.some((e) => e.name === "deepest"), `outer barrel missing deep symbol: ${JSON.stringify(outer.exports)}`);
 		assert.equal(outer.exports.find((e) => e.name === "deepest").via, "src/b7.ts");
+		// A bare `export *` never forwards the default export (ES spec).
+		assert.ok(!outer.exports.some((e) => e.name === "default"), `default leaked through a bare star re-export: ${JSON.stringify(outer.exports)}`);
 	} finally {
 		fs.rmSync(chainRoot, { recursive: true, force: true });
 	}

@@ -6,8 +6,8 @@ import (
 )
 
 func TestSignatureExtractorVersionInvalidatesInitializerSanitizationCache(t *testing.T) {
-	if Version != "x7" {
-		t.Fatalf("Version = %q, want x7 after re-export export emission and the newline-preserving import strip changed", Version)
+	if Version != "x8" {
+		t.Fatalf("Version = %q, want x8 after the content-level export passes began matching a comment-masked copy", Version)
 	}
 }
 

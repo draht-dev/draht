@@ -198,6 +198,17 @@ test("star expansion drops names exported ambiguously by two star targets (ES sp
 		const dupSame = same.exports.find((e) => e.name === "dup");
 		assert.ok(dupSame, `same-origin name wrongly treated as ambiguous: ${JSON.stringify(same.exports)}`);
 		assert.equal(dupSame.via, "src/x.ts");
+		// Same binding through a NAMED re-exporter and the definer: one origin,
+		// not ambiguous. n2.ts re-exports n1.ts's `shared`; the barrel stars both.
+		fs.writeFileSync(path.join(ambRoot, "src/n1.ts"), "export const shared = 1;\n");
+		fs.writeFileSync(path.join(ambRoot, "src/n2.ts"), 'export { shared } from "./n1.js";\n');
+		fs.writeFileSync(path.join(ambRoot, "src/nbarrel.ts"), 'export * from "./n1.js";\nexport * from "./n2.js";\n');
+		execFileSync(process.execPath, [CLI, "map-graph", "--quiet"], { cwd: ambRoot, encoding: "utf-8", env: ENV });
+		const m2 = JSON.parse(fs.readFileSync(path.join(ambRoot, ".planning/codebase/MAP.json"), "utf-8"));
+		const nb = m2.modules.find((x) => x.id === "src/nbarrel.ts");
+		const shared = nb.exports.find((e) => e.name === "shared");
+		assert.ok(shared, `same binding via named re-export wrongly dropped as ambiguous: ${JSON.stringify(nb.exports)}`);
+		assert.equal(shared.via, "src/n1.ts");
 	} finally {
 		fs.rmSync(ambRoot, { recursive: true, force: true });
 	}

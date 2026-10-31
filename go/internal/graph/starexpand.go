@@ -37,6 +37,76 @@ func StarReExports(mi []ModuleImports, resolver *Resolver) map[string][]StarReEx
 	return out
 }
 
+// AssignNamedReExportVias resolves each named re-export entry (`export { x }
+// from './y'`) to the module that ultimately DEFINES the binding and records
+// it as Via. Without this, a barrel starring both the definer and a named
+// re-exporter of the same binding would see two "origins" and wrongly drop
+// the name as ambiguous — the ES spec treats same-binding routes as one
+// export. MUST run before ExpandStarReExports (lockstep with the CJS
+// resolveOrigin pre-pass). Mutates modules in place.
+func AssignNamedReExportVias(modules []model.Module, mi []ModuleImports, resolver *Resolver) {
+	byID := make(map[string]*model.Module, len(modules))
+	for i := range modules {
+		byID[modules[i].ID] = &modules[i]
+	}
+	type namedRe struct{ local, imported, target string }
+	named := make(map[string][]namedRe, len(mi))
+	for _, m := range mi {
+		fromDir := path.Dir(m.Path)
+		for _, ri := range ResolveImports(m.Imports, fromDir, resolver) {
+			if !ri.Resolved || ri.Import.Kind != parse.KindReExport || ri.Import.Namespace == "*" {
+				continue
+			}
+			for _, n := range ri.Import.Names {
+				local := n.Local
+				if local == "" {
+					local = n.Imported
+				}
+				named[m.Path] = append(named[m.Path], namedRe{local: local, imported: n.Imported, target: ri.Target})
+			}
+		}
+	}
+	var resolveOrigin func(modID, name string, seen map[string]bool) string
+	resolveOrigin = func(modID, name string, seen map[string]bool) string {
+		key := modID + "\x00" + name
+		if seen[key] {
+			return modID
+		}
+		seen[key] = true
+		mod := byID[modID]
+		if mod == nil {
+			return modID
+		}
+		for _, e := range mod.Exports {
+			if e.Name == name && e.Kind != "re-export" {
+				return modID
+			}
+		}
+		for _, nr := range named[modID] {
+			if nr.local != name {
+				continue
+			}
+			if byID[nr.target] == nil {
+				return modID
+			}
+			return resolveOrigin(nr.target, nr.imported, seen)
+		}
+		return modID
+	}
+	for i := range modules {
+		m := &modules[i]
+		for j := range m.Exports {
+			e := &m.Exports[j]
+			if e.Kind != "re-export" || e.Via != "" {
+				continue
+			}
+			if origin := resolveOrigin(m.ID, e.Name, map[string]bool{}); origin != m.ID {
+				e.Via = origin
+			}
+		}
+	}
+}
+
 // ExpandStarReExports ports the CJS star re-export expansion pass
 // (draht-tools.cjs, after the edges loop): `export * from './x'` declares no
 // names, so without this a star barrel's public API is invisible to

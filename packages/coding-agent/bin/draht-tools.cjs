@@ -2412,6 +2412,40 @@ function visBuildMap(root) {
 		}
 	}
 
+	// Named re-export provenance: resolve each `export { x } from './y'` entry to
+	// the module that ultimately DEFINES the binding and record it as `via`.
+	// Without this, a barrel starring both the definer and a named re-exporter of
+	// the same binding would see two "origins" and wrongly drop the name as
+	// ambiguous — the ES spec treats same-binding routes as one export.
+	{
+		const resolveOrigin = (modId, name, seen) => {
+			const key = modId + "\u0000" + name;
+			if (seen.has(key)) return modId;
+			seen.add(key);
+			const mod = moduleByRel.get(modId);
+			const file = perFile.get(modId);
+			if (!mod || !file) return modId;
+			if (mod.exports.some((e) => e.name === name && e.kind !== "re-export")) return modId;
+			const fromDir = path.posix.dirname(modId);
+			for (const imp of file.parsedImports || []) {
+				if (!imp.reExport || imp.namespace === "*") continue;
+				const resolved = resolveSpec(fromDir, imp.specifier);
+				if (!resolved || !moduleByRel.has(resolved)) continue;
+				for (const n of imp.names || []) {
+					if ((n.local || n.imported) === name) return resolveOrigin(resolved, n.imported, seen);
+				}
+			}
+			return modId;
+		};
+		for (const m of modules) {
+			for (const e of m.exports) {
+				if (e.kind !== "re-export" || e.via) continue;
+				const origin = resolveOrigin(m.id, e.name, new Set());
+				if (origin !== m.id) e.via = origin;
+			}
+		}
+	}
+
 	// Star re-export expansion: `export * from './x'` declares no names, so without this pass
 	// a star barrel's public API is invisible to graph-context/graph-query/MAP.html search.
 	// Copy the resolved target's exported names in as kind "re-export" (with `via` = the real

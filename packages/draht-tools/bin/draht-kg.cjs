@@ -201,6 +201,21 @@ function walk(root, maxFiles = 20000) {
 // Comment/string stripping (for call-site scans; decls scan raw lines)
 // ============================================================================
 
+// Comments-only mask (strings and positions preserved): the import scans need
+// string literals intact (specifiers live in them) but must not match
+// commented-out examples.
+function maskComments(content, lang) {
+	let s = content;
+	if (TS_LIKE.has(lang) || lang === "go" || lang === "rust") {
+		s = s.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "));
+		s = s.replace(/(^|[^:])\/\/[^\n]*/g, (m, p1) => p1 + " ".repeat(m.length - p1.length));
+	} else if (lang === "python") {
+		s = s.replace(/("""|''')[\s\S]*?\1/g, (m) => m.replace(/[^\n]/g, " "));
+		s = s.replace(/#[^\n]*/g, (m) => " ".repeat(m.length));
+	}
+	return s;
+}
+
 function stripCode(content, lang) {
 	let s = content;
 	if (TS_LIKE.has(lang) || lang === "go" || lang === "rust") {
@@ -249,7 +264,7 @@ function parseDecls(rel, content, lang) {
 		for (let i = 0; i < lines.length && d.classes.length + d.functions.length + d.types.length < MAX_SYMBOLS_PER_FILE; i++) {
 			const ln = lines[i];
 			let m;
-			if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)(?:\s+extends\s+([A-Za-z_$][\w$.]*))?(?:\s+implements\s+([\w$,\s.<>]+?))?\s*\{?/)) && /\bclass\b/.test(ln)) {
+			if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)(?:\s+extends\s+([A-Za-z_$][\w$.]*))?(?:\s+implements\s+([\w$,\s.<>]+?))?\s*(?:\{|$)/)) && /\bclass\b/.test(ln)) {
 				closeUnopened(i);
 				currentClass = { name: m[1], line: i + 1, end: null, isDefault: /^\s*export\s+default\b/.test(ln), extends: m[2] ? m[2].split(".")[0] : null, implements: (m[3] || "").split(",").map((x) => x.trim().split("<")[0].split(".")[0]).filter(Boolean), methods: [] };
 				d.classes.push(currentClass);
@@ -278,12 +293,20 @@ function parseDecls(rel, content, lang) {
 					open.push({ ref: meth, depth, line: i + 1, opened: false });
 				}
 			}
-			// brace depth AFTER matching decls on this line (masked copy)
+			// brace depth AFTER matching decls on this line (masked copy). Parens
+			// are tracked per open declaration so a `{` inside a parameter list
+			// (an inline object type or default) does not count as the BODY
+			// opening — `f(options?: { shellPath?: string })` must stay open
+			// until the real body brace.
 			for (const ch of maskedLines[i] || "") {
-				if (ch === "{") {
+				const top = open[open.length - 1];
+				if (ch === "(") {
+					if (top && !top.opened) top.pd = (top.pd || 0) + 1;
+				} else if (ch === ")") {
+					if (top && !top.opened && top.pd > 0) top.pd--;
+				} else if (ch === "{") {
 					depth++;
-					const top = open[open.length - 1];
-					if (top && !top.opened && depth === top.depth + 1) top.opened = true;
+					if (top && !top.opened && !top.pd && depth === top.depth + 1) top.opened = true;
 				} else if (ch === "}") {
 					depth--;
 					if (currentClass && depth <= classDepth) { currentClass.end = i + 1; currentClass = null; }
@@ -291,30 +314,34 @@ function parseDecls(rel, content, lang) {
 				}
 			}
 		}
-		// imports (content-level, multi-line safe)
-		const impRe = /import\s+(?:(?:([A-Za-z_$][\w$]*)\s*,?\s*)?(?:\*\s*as\s+([A-Za-z_$][\w$]*)|\{([^}]*)\})?\s*from\s*)?["']([^"']+)["']/g;
+		// imports (content-level, multi-line safe) — matched against a
+		// comment-MASKED copy (strings and positions preserved): a documented
+		// `// import { logger } from './logger'` example must not become a
+		// real dependency.
+		const importSrc = maskComments(content, lang);
+		const impRe = /import\s+(?:type\s+)?(?:(?:([A-Za-z_$][\w$]*)\s*,?\s*)?(?:\*\s*as\s+([A-Za-z_$][\w$]*)|\{([^}]*)\})?\s*from\s*)?["']([^"']+)["']/g;
 		let m2;
-		while ((m2 = impRe.exec(content)) !== null) {
+		while ((m2 = impRe.exec(importSrc)) !== null) {
 			if (!/^import/.test(m2[0])) continue;
 			const names = (m2[3] || "").split(",").map((s) => s.trim().replace(/^type\s+/, "")).filter(Boolean)
 				.map((t) => { const am = t.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/); return am ? { imported: am[1], local: am[2] || am[1] } : null; })
 				.filter(Boolean);
-			d.imports.push({ spec: m2[4], default: m2[1] || null, namespace: m2[2] || null, names, reExport: false, dynamic: false, line: lineAt(content, m2.index) });
+			d.imports.push({ spec: m2[4], default: m2[1] || null, namespace: m2[2] || null, names, reExport: false, dynamic: false, line: lineAt(importSrc, m2.index) });
 		}
 		const reExpRe = /export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']([^"']+)["']/g;
-		while ((m2 = reExpRe.exec(content)) !== null) {
+		while ((m2 = reExpRe.exec(importSrc)) !== null) {
 			const names = m2[1].split(",").map((s) => s.trim().replace(/^type\s+/, "")).filter(Boolean)
 				.map((t) => { const am = t.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/); return am ? { imported: am[1], local: am[2] || am[1] } : null; })
 				.filter(Boolean);
-			d.imports.push({ spec: m2[2], default: null, namespace: null, names, reExport: true, dynamic: false, line: lineAt(content, m2.index) });
+			d.imports.push({ spec: m2[2], default: null, namespace: null, names, reExport: true, dynamic: false, line: lineAt(importSrc, m2.index) });
 		}
 		const starRe = /export\s+\*(?:\s+as\s+[A-Za-z_$][\w$]*)?\s+from\s*["']([^"']+)["']/g;
-		while ((m2 = starRe.exec(content)) !== null) {
-			d.imports.push({ spec: m2[1], default: null, namespace: "*", names: [], reExport: true, dynamic: false, line: lineAt(content, m2.index) });
+		while ((m2 = starRe.exec(importSrc)) !== null) {
+			d.imports.push({ spec: m2[1], default: null, namespace: "*", names: [], reExport: true, dynamic: false, line: lineAt(importSrc, m2.index) });
 		}
 		const dynRe = /(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/g;
-		while ((m2 = dynRe.exec(content)) !== null) {
-			d.imports.push({ spec: m2[1], default: null, namespace: null, names: [], reExport: false, dynamic: true, line: lineAt(content, m2.index) });
+		while ((m2 = dynRe.exec(importSrc)) !== null) {
+			d.imports.push({ spec: m2[1], default: null, namespace: null, names: [], reExport: false, dynamic: true, line: lineAt(importSrc, m2.index) });
 		}
 	} else if (lang === "python") {
 		const dm = content.match(/^(?:#[^\n]*\n|\s*\n)*\s*("""|''')([\s\S]*?)\1/);
@@ -335,14 +362,15 @@ function parseDecls(rel, content, lang) {
 				currentClass = null;
 			}
 		}
+		const importSrc = maskComments(content, lang);
 		const impRe = /^\s*from\s+(\S+)\s+import\s+([^\n(]+|\([^)]*\))|^\s*import\s+([\w.]+)/gm;
 		let m2;
-		while ((m2 = impRe.exec(content)) !== null) {
-			if (m2[3]) d.imports.push({ spec: m2[3], default: null, namespace: m2[3], names: [], reExport: false, dynamic: false, line: lineAt(content, m2.index) });
+		while ((m2 = impRe.exec(importSrc)) !== null) {
+			if (m2[3]) d.imports.push({ spec: m2[3], default: null, namespace: m2[3], names: [], reExport: false, dynamic: false, line: lineAt(importSrc, m2.index) });
 			else {
 				const names = m2[2].replace(/[()]/g, "").split(",").map((s) => s.trim().split(/\s+as\s+/)).filter((p) => p[0])
 					.map((p) => ({ imported: p[0], local: p[1] || p[0] }));
-				d.imports.push({ spec: m2[1], default: null, namespace: null, names, reExport: false, dynamic: false, line: lineAt(content, m2.index) });
+				d.imports.push({ spec: m2[1], default: null, namespace: null, names, reExport: false, dynamic: false, line: lineAt(importSrc, m2.index) });
 			}
 		}
 	} else if (lang === "go") {
@@ -382,9 +410,10 @@ function parseDecls(rel, content, lang) {
 		// Named (`import foo "path"`), blank (`_`) and dot (`.`) imports all count;
 		// a named alias becomes the local namespace so call binding can resolve
 		// through it. Applies to both single-line and block forms.
+		const importSrc = maskComments(content, lang);
 		const impRe = /^import\s+(?:([\w.]+)\s+)?"([^"]+)"|^import\s+\(([^)]*)\)/gm;
 		let m2;
-		while ((m2 = impRe.exec(content)) !== null) {
+		while ((m2 = impRe.exec(importSrc)) !== null) {
 			const entries = [];
 			if (m2[2]) entries.push({ alias: m2[1] || null, spec: m2[2] });
 			else if (m2[3]) {
@@ -392,7 +421,7 @@ function parseDecls(rel, content, lang) {
 			}
 			for (const e of entries) {
 				const ns = e.alias && e.alias !== "_" && e.alias !== "." ? e.alias : e.spec.split("/").pop();
-				d.imports.push({ spec: e.spec, default: null, namespace: ns, names: [], reExport: false, dynamic: false, line: lineAt(content, m2.index) });
+				d.imports.push({ spec: e.spec, default: null, namespace: ns, names: [], reExport: false, dynamic: false, line: lineAt(importSrc, m2.index) });
 			}
 		}
 	} else if (lang === "rust") {
@@ -1787,10 +1816,6 @@ document.getElementById('collapse').onclick=function(){document.querySelectorAll
 	return p;
 }
 
-function slugify(s) {
-	return normalizeId(s).replace(/_/g, "-").slice(0, 60) || "node";
-}
-
 function exportWiki(root, graph) {
 	const dir = path.join(outDir(root), "kg-wiki");
 	fs.mkdirSync(dir, { recursive: true });
@@ -1804,7 +1829,9 @@ function exportWiki(root, graph) {
 		idx.push(`- [${c.name}](community-${c.id}.md) — ${c.size} nodes, cohesion ${c.cohesion}`);
 	}
 	idx.push("", "## God Nodes", "");
-	for (const g of gods) idx.push(`- [${g.label}](${slugify(g.label)}.md) — degree ${g.degree}`);
+	// Filenames carry the unique node id — two god nodes labeled `save()`
+	// must not overwrite each other's page.
+	for (const g of gods) idx.push(`- [${g.label}](${g.id}.md) — degree ${g.degree}`);
 	fs.writeFileSync(path.join(dir, "index.md"), idx.join("\n") + "\n", "utf-8");
 
 	for (const c of communities) {
@@ -1836,7 +1863,7 @@ function exportWiki(root, graph) {
 		conns.sort((a, b) => (adj.deg.get(b[1]) || 0) - (adj.deg.get(a[1]) || 0));
 		for (const [arrow, nb, e] of conns.slice(0, 30)) L.push(`- ${arrow} \`${(byId.get(nb) || {}).label || nb}\` [${e.relation}] [${e.confidence}]`);
 		L.push("", "## Audit Trail", "", `Extraction: deterministic (draht-tools kg). Source: ${g.source_file || "-"}.`);
-		fs.writeFileSync(path.join(dir, `${slugify(g.label)}.md`), L.join("\n") + "\n", "utf-8");
+		fs.writeFileSync(path.join(dir, `${g.id}.md`), L.join("\n") + "\n", "utf-8");
 	}
 	return dir;
 }

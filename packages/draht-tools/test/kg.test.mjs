@@ -290,6 +290,59 @@ test("multiline function headers keep their body calls", () => {
 	assert.equal(call.source, "src_mlfn_multiheader", `call attributed to ${call.source} instead of the declaring function`);
 });
 
+test("commented-out import examples do not become dependencies", () => {
+	write("src/cmtimp.ts", [
+		"// Usage example (must NOT become a dependency):",
+		'// import { bhelp } from "./bhelper.js";',
+		'/* import { bhelp } from "./bhelper.js"; */',
+		"export function cmtOnly() { return 1; }",
+	].join("\n"));
+	run(["build", "--quiet"]);
+	const g = loadGraph();
+	const bogus = g.edges.find((e) => e.source === "src_cmtimp" && (e.relation === "imports_from" || e.relation === "imports"));
+	assert.ok(!bogus, `commented import example created an edge: ${JSON.stringify(bogus)}`);
+});
+
+test("object types in function headers do not end the call region", () => {
+	write("src/hdrtype.ts", [
+		'import { bhelp } from "./bhelper.js";',
+		"export function withOpts(options?: { shellPath?: string }) {",
+		"\treturn bhelp();",
+		"}",
+	].join("\n"));
+	run(["build", "--quiet"]);
+	const g = loadGraph();
+	const call = g.edges.find((e) => e.relation === "calls" && e.source === "src_hdrtype_withopts" && e.target === "src_bhelper_bhelp");
+	assert.ok(call, "call inside a function with an inline object type in its header lost its owner");
+});
+
+test("implements captures the full interface name", () => {
+	write("src/impliface.ts", [
+		"export interface StorageBackend {",
+		"\tsave(): void;",
+		"}",
+		"export class DiskBackend implements StorageBackend {",
+		"\tsave(): void {}",
+		"}",
+	].join("\n"));
+	run(["build", "--quiet"]);
+	const g = loadGraph();
+	const impl = g.edges.find((e) => e.relation === "implements" && e.source === "src_impliface_diskbackend");
+	assert.ok(impl, "implements edge missing");
+	assert.equal(impl.target, "src_impliface_storagebackend", "implements bound to a truncated interface name");
+});
+
+test("default type imports are recorded as dependencies", () => {
+	write("src/typedefimp.ts", [
+		'import type OpenAI from "openai";',
+		"export type Client = OpenAI;",
+	].join("\n"));
+	run(["build", "--quiet"]);
+	const g = loadGraph();
+	const dep = g.edges.find((e) => e.source === "src_typedefimp" && e.relation === "imports_from" && e.target === "openai");
+	assert.ok(dep, `import type X from "pkg" dropped: ${JSON.stringify(g.edges.filter((e) => e.source === "src_typedefimp"))}`);
+});
+
 test("nested namespace calls are both recorded", () => {
 	write("src/nestmod.ts", [
 		"export function nestOuter(x: number) { return x; }",

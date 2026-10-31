@@ -177,7 +177,10 @@ func Build(ctx context.Context, opts Options) (*model.Map, Report, error) {
 
 	// Star re-export expansion (CJS parity): barrels inherit their resolved
 	// targets' exported names before anything downstream (symbolIndex,
-	// hotspots samples, HTML search) reads modules' exports/symbols.
+	// hotspots samples, HTML search) reads modules' exports/symbols. Named
+	// re-export entries get their defining-origin Via first so the expansion's
+	// ambiguity check compares real origins, not intermediate barrels.
+	AssignNamedReExportVias(modules, mi, resolver)
 	ExpandStarReExports(modules, StarReExports(mi, resolver))
 
 	// Language edges are appended AFTER the TS/JS set so that prefix stays

@@ -76,6 +76,7 @@ import {
 // happy-path resume at all: a spawn that succeeds walks exactly one safe path
 // and forwards exactly one declared name.
 import { assertSafeExecutablePath, buildChildEnvironment, SpawnRefusedError } from "../session/spawn-primitive.js";
+import { absoluteTool } from "./helpers/absolute-tool.js";
 
 const REPO_ROOT = resolve(import.meta.dir, "..", "..", "..", "..");
 const DRAHT_CLI = join(REPO_ROOT, "packages", "coding-agent", "dist", "cli.js");
@@ -961,12 +962,12 @@ describe("the deadline, the process-GROUP teardown, and one resume at a time (R3
 			[
 				"#!/bin/sh",
 				"trap '' TERM",
-				`sh -c 'while :; do sleep 1; done' ${marker} &`,
+				`sh -c 'while :; do ${absoluteTool("sleep")} 1; done' ${marker} &`,
 				`echo "$$" > ${pidFile}.tmp`,
 				`echo "$!" >> ${pidFile}.tmp`,
 				// Renamed into place, so a reader never sees one line of two.
-				`mv ${pidFile}.tmp ${pidFile}`,
-				"while :; do sleep 1; done",
+				`${absoluteTool("mv")} ${pidFile}.tmp ${pidFile}`,
+				`while :; do ${absoluteTool("sleep")} 1; done`,
 				"",
 			].join("\n"),
 			{ mode: 0o755 },

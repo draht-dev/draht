@@ -1,7 +1,17 @@
 // The OS process table, read with `ps`: the oracle for process-level claims, since the daemon's own bookkeeping is not.
 
 import { randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import {
+	linkSync,
+	lstatSync,
+	readdirSync,
+	readFileSync,
+	readlinkSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { join } from "node:path";
 
 /** One row of `ps -A -ww -o pid=,ppid=,pgid=,stat=,command=`. */
 export interface ProcessRow {
@@ -290,4 +300,239 @@ export function reapPgids(pgids: Iterable<number>): void {
 /** Nothing else on this box can be carrying it, so a scan for the literal is scoped to this run. */
 export function uniqueMarker(label: string): string {
 	return `${label}-${process.pid}-${Date.now()}-${randomBytes(6).toString("hex")}`;
+}
+
+/** `/proc/<pid>/<entry>` read as `read` says, with "no such process" and "unreadable" kept apart: neither may read as an empty answer. */
+function procEntry<T>(pid: number, entry: "cmdline" | "exe" | "cwd", read: (path: string) => T): T {
+	const path = `/proc/${pid}/${entry}`;
+	try {
+		return read(path);
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code === "ENOENT" || code === "ESRCH") {
+			throw new ProcessTableError(
+				`${path} names no running process, or a zombie or kernel thread that has no ${entry}`,
+			);
+		}
+		throw new ProcessTableError(`${path} could not be read: ${(error as Error).message}`);
+	}
+}
+
+function unsupportedPlatform(what: string): ProcessTableError {
+	return new ProcessTableError(
+		`${what} has a Linux branch and a macOS branch, and this platform is ${process.platform}`,
+	);
+}
+
+/** `ps -o <field>= -p <pid>`, trimmed. An empty answer means no such process, not an empty value. */
+function psField(pid: number, field: "command" | "comm"): string {
+	const out = Bun.spawnSync(["ps", "-ww", "-o", `${field}=`, "-p", String(pid)]);
+	const text = out.stdout.toString().trim();
+	if (!out.success || text.length === 0) {
+		throw new ProcessTableError(
+			`ps -o ${field}= found no process ${pid} (exit ${out.exitCode}): ${out.stderr.toString().trim()}`,
+		);
+	}
+	return text;
+}
+
+/**
+ * The argv the process was exec'd with, element by element, argv[0] included.
+ *
+ * Linux splits `/proc/<pid>/cmdline` on NUL, so empty and spaced elements survive. macOS has only `ps`, which joins the
+ * argv with spaces, so the macOS branch (UNEXECUTED on the box this was written on) splits on whitespace and is exact
+ * only for an argv whose elements hold none.
+ */
+export function argvOf(pid: number): string[] {
+	if (process.platform === "linux") {
+		const raw = procEntry(pid, "cmdline", (path) => readFileSync(path).toString());
+		// A zombie and a kernel thread both read as an empty cmdline; an empty argv would pass a "does not contain" check.
+		if (raw.length === 0)
+			throw new ProcessTableError(`/proc/${pid}/cmdline is empty: a zombie or kernel thread has no argv`);
+		const argv = raw.split("\0");
+		if (argv[argv.length - 1] === "") argv.pop();
+		return argv;
+	}
+	if (process.platform === "darwin") return psField(pid, "command").split(/\s+/);
+	throw unsupportedPlatform("argvOf");
+}
+
+/**
+ * The file the kernel ran, which is not argv[0]: a process started through a symlink reports the link in its argv and
+ * the target here. The macOS branch (UNEXECUTED here) reads `ps -o comm=`, which reports the path `execve` was given,
+ * so it is `realpath`'d to reach the same answer.
+ */
+export function exeOf(pid: number): string {
+	if (process.platform === "linux") return procEntry(pid, "exe", (path) => readlinkSync(path, "utf8"));
+	if (process.platform === "darwin") {
+		const comm = psField(pid, "comm");
+		if (!comm.startsWith("/"))
+			throw new ProcessTableError(`ps -o comm= reported ${JSON.stringify(comm)} for pid ${pid}, not a path`);
+		return realpathSync(comm);
+	}
+	throw unsupportedPlatform("exeOf");
+}
+
+/** The working directory the kernel holds for the process. The macOS branch (UNEXECUTED here) is `lsof -a -d cwd -Fn`. */
+export function cwdOf(pid: number): string {
+	if (process.platform === "linux") return procEntry(pid, "cwd", (path) => readlinkSync(path, "utf8"));
+	if (process.platform === "darwin") {
+		const out = Bun.spawnSync(["lsof", "-a", "-d", "cwd", "-p", String(pid), "-Fn"]);
+		const lines = out.stdout.toString().split("\n");
+		const field = lines.indexOf("fcwd");
+		const path = field === -1 ? undefined : lines[field + 1];
+		if (path === undefined || !path.startsWith("n/")) {
+			throw new ProcessTableError(
+				`lsof found no cwd for pid ${pid} (exit ${out.exitCode}): ${out.stderr.toString().trim() || out.stdout.toString().trim()}`,
+			);
+		}
+		return path.slice(1);
+	}
+	throw unsupportedPlatform("cwdOf");
+}
+
+/** A file this user does not own inside a directory this user does, or the reason none could be made. */
+export type ForeignOwnedFile = { path: string } | { unavailable: string };
+
+export class ForeignOwnedFileUnavailableError extends Error {
+	override readonly name = "ForeignOwnedFileUnavailableError";
+}
+
+const FOREIGN_FILE_NAME = "foreign-owned.yaml";
+
+function isOwnedByAnotherUid(path: string): boolean {
+	return lstatSync(path).uid !== process.getuid?.();
+}
+
+/**
+ * A hard link to an inode somebody else owns: the only way to put a foreign-owned file in a directory we own without
+ * privilege. The kernel may refuse (`fs.protected_hardlinks`, a device boundary), so every refusal is kept for the
+ * reason, and a link that turns out to be ours is removed rather than returned.
+ */
+export function hardlinkForeignFile(
+	candidates: readonly string[],
+	target: string,
+): { path: string } | { failures: string[] } {
+	const failures: string[] = [];
+	for (const candidate of candidates) {
+		try {
+			linkSync(candidate, target);
+		} catch (error) {
+			failures.push(
+				`hard link of ${candidate}: ${(error as NodeJS.ErrnoException).code ?? (error as Error).message}`,
+			);
+			continue;
+		}
+		if (isOwnedByAnotherUid(target)) return { path: target };
+		rmSync(target, { force: true });
+		failures.push(`hard link of ${candidate}: the inode is owned by this user`);
+	}
+	return { failures };
+}
+
+/** `sudo -n install -o 0` creates the file as root in one step; `-n` makes a missing grant a failure instead of a prompt. */
+function sudoInstallForeignFile(dir: string, target: string): { path: string } | { failure: string } {
+	const staging = join(dir, `.foreign-source-${randomBytes(4).toString("hex")}`);
+	try {
+		writeFileSync(staging, "", { mode: 0o600 });
+	} catch (error) {
+		return { failure: `sudo route needs to write ${staging}: ${(error as Error).message}` };
+	}
+	try {
+		const out = Bun.spawnSync(["sudo", "-n", "install", "-o", "0", "-g", "0", "-m", "0600", staging, target], {
+			stdin: "ignore",
+			timeout: 20_000,
+		});
+		if (!out.success) {
+			const said = out.stderr
+				.toString()
+				.trim()
+				.replace(/\s*\n\s*/g, " ");
+			return { failure: `sudo -n install exited ${out.exitCode ?? out.signalCode}: ${said || "no output"}` };
+		}
+		if (!isOwnedByAnotherUid(target)) {
+			rmSync(target, { force: true });
+			return { failure: "sudo -n install ran, but the file it made is owned by this user" };
+		}
+		return { path: target };
+	} catch (error) {
+		return { failure: `sudo could not be run: ${(error as Error).message}` };
+	} finally {
+		rmSync(staging, { force: true });
+	}
+}
+
+function linuxForeignOwnedFile(dir: string, target: string): ForeignOwnedFile {
+	const linked = hardlinkForeignFile(["/etc/passwd"], target);
+	if ("path" in linked) return linked;
+	const installed = sudoInstallForeignFile(dir, target);
+	if ("path" in installed) return installed;
+
+	let hardlinks = "unreadable";
+	try {
+		hardlinks = readFileSync("/proc/sys/fs/protected_hardlinks").toString().trim();
+	} catch {}
+	return {
+		unavailable: `${[...linked.failures, installed.failure].join("; ")} (fs.protected_hardlinks=${hardlinks})`,
+	};
+}
+
+/** UNEXECUTED on the box this was written on: the plan names `/private/var/db` as the source of a service-owned inode. */
+function darwinForeignOwnedFile(target: string): ForeignOwnedFile {
+	const root = "/private/var/db";
+	let candidates: string[];
+	try {
+		candidates = readdirSync(root)
+			.map((name) => join(root, name))
+			.filter((path) => {
+				try {
+					const stats = lstatSync(path);
+					return stats.isFile() && stats.uid !== process.getuid?.();
+				} catch {
+					return false;
+				}
+			})
+			.slice(0, 25);
+	} catch (error) {
+		return { unavailable: `${root} could not be listed: ${(error as Error).message}` };
+	}
+	const linked = hardlinkForeignFile(candidates, target);
+	if ("path" in linked) return linked;
+	return {
+		unavailable:
+			linked.failures.length > 0
+				? linked.failures.join("; ")
+				: `${root} holds no regular file owned by another user that this user can see`,
+	};
+}
+
+function ciIsSet(env: NodeJS.ProcessEnv): boolean {
+	const value = env.CI;
+	return value !== undefined && value !== "" && value !== "0" && value.toLowerCase() !== "false";
+}
+
+/**
+ * `<dir>/foreign-owned.yaml`, owned by a uid that is not ours, in a directory we own.
+ *
+ * Never a copy or a fake: the file is a root-made one (Linux, through `sudo -n`) or a hard link to an inode another
+ * user owns (macOS; Linux too when the kernel allows), and its owner is re-read with `lstat` before it is returned.
+ * With no way to make one the answer is `{unavailable}` and the reason, EXCEPT when `CI` is set: a skip there would
+ * leave the foreign-uid refusal unwitnessed, so it throws. Replaces any file already at that name.
+ *
+ * The macOS route is UNEXECUTED on the box this was written on.
+ */
+export function foreignOwnedFileIn(dir: string, env: NodeJS.ProcessEnv = process.env): ForeignOwnedFile {
+	const target = join(dir, FOREIGN_FILE_NAME);
+	rmSync(target, { force: true });
+	let result: ForeignOwnedFile;
+	if (process.platform === "linux") result = linuxForeignOwnedFile(dir, target);
+	else if (process.platform === "darwin") result = darwinForeignOwnedFile(target);
+	else result = { unavailable: `there is no route to a foreign-owned file on ${process.platform}` };
+
+	if ("unavailable" in result && ciIsSet(env)) {
+		throw new ForeignOwnedFileUnavailableError(
+			`CI is set, so a foreign-owned file in ${dir} is required and not skippable, and none could be made: ${result.unavailable}`,
+		);
+	}
+	return result;
 }

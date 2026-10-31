@@ -7,7 +7,7 @@
 
 ## What is on the branch
 
-Seven commits, rebased on `main`:
+Eight commits, rebased on `main`:
 
 1. Spawn suites runnable on hosts whose child PATH has no coreutils (NixOS).
 2. The dead `command` → `SessionProcess` chain deleted; gate rule D keeps `spawn-primitive.ts` the
@@ -18,6 +18,7 @@ Seven commits, rebased on `main`:
 5. Class-3 suites: `spawn-acceptance`, `spawn-adversarial`, `spawn-posture` (gateway e2e).
 6. Gate rule D rewritten deny-by-default.
 7. The console picker and its browser e2e.
+8. The session-resume and git-probe fixtures resolve `sleep`/`mv` too.
 
 The plan for waves 4-5 is appended to `.planning/phases/36-spawn/PLAN.md`.
 
@@ -26,17 +27,17 @@ The plan for waves 4-5 is appended to `.planning/phases/36-spawn/PLAN.md`.
 ```bash
 cd /home/nix/work/draht-p36
 npm run check                                   # exit 0
-cd packages/gateway && env -u DRAHT_PERMISSION_MODE bun test
-#   804 pass / 4 skip / 4 fail — all four fail identically at 2c0482bad:
-#   reach-transport (no openssl on PATH), fleet-status-honesty x2 and the session-resume
-#   TERM-trap case (fixtures call bare sleep/git under an FHS PATH).
+cd packages/gateway && nix-shell -p openssl --run "env -u DRAHT_PERMISSION_MODE bun test"
+#   816 pass / 4 skip / 0 fail (reach-transport needs openssl; the skips are the foreign-uid
+#   registry file case, two LAN-interface cases and one root-only guard).
 LD_LIBRARY_PATH=$(cat /home/nix/work/chromium-ldpath.txt) \
   node --test --test-concurrency=1 --test-timeout=300000 scripts/geist-console-*.e2e.test.mjs   # 74/0
 ```
 
 The worktree lives under `/home/nix/work`, not `/srv/work`: the spawn primitive refuses any
 group-writable component of the executable path, and `/srv/work` is group-writable. geist-core has three
-status-probe failures on this box at `2c0482bad` too (absolute-git assumption).
+status-probe failures on this box at `2c0482bad` too: `GIT_CANDIDATES` in `status-probe.ts` lists no
+NixOS path, so the fleet status is always `unknown` here (owner question 9 in `DECISIONS-PENDING.md`).
 
 ## Still open — needs Oskar
 

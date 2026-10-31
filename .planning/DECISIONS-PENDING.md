@@ -565,7 +565,9 @@ which stay open above.
    resolver's follow policy.
 9. **NixOS: spawned and resumed sessions get no coreutils, `git` or `rg`.** `DEFAULT_RESUME_PATH` is the
    FHS list; on NixOS it holds only `/bin/sh` and `/usr/bin/env`. The operator override is
-   `DRAHT_RESUME_PATH`. Add `/run/current-system/sw/bin` to the default, or document the override?
+   `DRAHT_RESUME_PATH`. Add `/run/current-system/sw/bin` to the default, or document the override? The
+   same holds for geist-core's `GIT_CANDIDATES` (`status-probe.ts`): no NixOS path, so every fleet row
+   reads `unknown` on NixOS, and three geist-core probe tests fail here.
 10. **A harness with no `credentialEnv` spawns a session that cannot answer.** Refuse it at resolve time
     instead (one line in `resolveHarnessLaunch`)?
 11. **36.3 has a second half the original note missed.** Scoping the child's agent directory keeps

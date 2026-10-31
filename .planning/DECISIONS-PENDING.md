@@ -16,7 +16,7 @@
 > **Status 2026-10-01:** Phase 42 batching is **DECIDED** (see below) — batched writes, default chunk
 > size 200, invalid sizes rejected before anything is mutated.
 >
-> **Status 2026-10-31:** Phase 36 waves 4-5 landed on branch `feat/phase-36-spawn-wire`. The class-3
+> **Status 2026-10-31:** Phase 36 waves 4-5 landed and are merged into local `main` (not pushed). The class-3
 > suites assert the SPAWN posture as shipped; 36.1 (resume) and 36.3 (`auth.json`) are still open and are
 > recorded as residuals on R36-SPAWN.5 and R36-SPAWN.4, not presumed. The orchestrator's six reversible calls
 > and eleven new questions are at the end of this file.

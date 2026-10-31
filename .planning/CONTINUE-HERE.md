@@ -1,9 +1,9 @@
 # CONTINUE HERE
 
-> Rewritten 2026-10-31. **Phase 36 is complete on branch `feat/phase-36-spawn-wire`** (worktree
-> `/home/nix/work/draht-p36`), not yet merged or pushed. A phone can start a session: `session_spawn`
+> Rewritten 2026-10-31. **Phase 36 is complete and merged into local `main`** from branch
+> `feat/phase-36-spawn-wire` (worktree `/home/nix/work/draht-p36`), not yet pushed. A phone can start a session: `session_spawn`
 > on `/attach` launches the registered `draht` in the registered project, and the served console has a
-> project/harness picker. Next is Phase 37 (run lanes), after the merge.
+> project/harness picker. Next is Phase 37 (run lanes).
 
 ## What is on the branch
 
@@ -41,7 +41,8 @@ NixOS path, so the fleet status is always `unknown` here (owner question 9 in `D
 
 ## Still open — needs Oskar
 
-- **Merge and push** `feat/phase-36-spawn-wire`. The first CI run is the first class-3 evidence for the
+- **Push `main`.** Local `main` also holds the unpushed 2026-10-31 upstream sync from another session,
+  so the push waits for that session. The first CI run after it is the first class-3 evidence for the
   registry-owned-by-another-uid FILE case, which needs `sudo -n` on the gateway shard (Blacksmith).
 - **36.1** (resume gets `--no-approve`?) and **36.3** (`auth.json` reachable by the child) — now with a
   second half: a spawned session's `bash` can read the operator's file by absolute path anyway.
@@ -76,7 +77,7 @@ NixOS path, so the fleet status is always `unknown` here (owner question 9 in `D
 
 ## Next
 
-Merge `feat/phase-36-spawn-wire` once approved, then **Phase 37** (run lanes). To restart the loop:
+Push `main` when the upstream sync is pushed, then **Phase 37** (run lanes). To restart the loop:
 
 ```
 /loop /draht:resume-work with /draht:orchestrate

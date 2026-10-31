@@ -355,7 +355,15 @@ Consequential amendments (paste-ready):
 
 ---
 
-## Phase 36.1 — does RESUME also get `--no-approve`, or only SPAWN?
+## Phase 36.1 — does RESUME also get `--no-approve`, or only SPAWN? (DECIDED 2026-10-31)
+
+> **DECIDED (Oskar, 2026-10-31): resume too.** Implemented in `6a9f2917d`; the posture suite resumes a
+> trusted project from the phone and asserts no extension loads and no `SYSTEM.md` reaches the provider.
+>
+> **Follow-up question:** resume does not take `--context-root`, so a resumed session still reads
+> ancestor `AGENTS.md`/`CLAUDE.md` files above the project, up to `/`. A phone spawn excludes them.
+> Give resume `--context-root <the session's cwd>` too? Landing site: the resume argv in
+> `SessionSpawner.resume()`.
 
 **Confidence:** medium — this is a product call, not a correctness one.
 
@@ -419,7 +427,10 @@ the correct failure direction, but it will read as a bug the first time you hit 
 
 ---
 
-## Phase 36.3 — `DRAHT_CODING_AGENT_DIR` crosses into the child, and it is the root for `auth.json`
+## Phase 36.3 — `DRAHT_CODING_AGENT_DIR` crosses into the child, and it is the root for `auth.json` (DECIDED 2026-10-31)
+
+> **DECIDED (Oskar, 2026-10-31): environment-only for v1.** `credentialEnv` scopes the environment; the
+> file half is deferred to the Milestone 6 sandbox (see item 11 below).
 
 **Confidence:** high that this needs an answer; medium on which one.
 
@@ -570,7 +581,7 @@ which stay open above.
    reads `unknown` on NixOS, and three geist-core probe tests fail here.
 10. **A harness with no `credentialEnv` spawns a session that cannot answer.** Refuse it at resolve time
     instead (one line in `resolveHarnessLaunch`)?
-11. **36.3 has a second half the original note missed.** Scoping the child's agent directory keeps
+11. **(Answered by the 36.3 decision: deferred to Milestone 6.) 36.3 has a second half the original note missed.** Scoping the child's agent directory keeps
     `auth.json` out of `DRAHT_CODING_AGENT_DIR`, but a spawned session that runs `bash` can still read
     the operator's file by absolute path — it runs as the same user. Between the two, only the
     permission gate stands (the session runs in the mode the daemon forwards, `auto` when none is set),

@@ -1,13 +1,13 @@
 # CONTINUE HERE
 
-> Rewritten 2026-10-31. **Phase 36 is complete and merged into local `main`** from branch
+> Rewritten 2026-10-31. **Phase 36 is `partial` until CI runs the foreign-uid registry case, and merged into local `main`** from branch
 > `feat/phase-36-spawn-wire` (worktree `/home/nix/work/draht-p36`), not yet pushed. A phone can start a session: `session_spawn`
 > on `/attach` launches the registered `draht` in the registered project, and the served console has a
 > project/harness picker. Next is Phase 37 (run lanes).
 
 ## What is on the branch
 
-Eight commits, rebased on `main`:
+Nine commits, on `main`:
 
 1. Spawn suites runnable on hosts whose child PATH has no coreutils (NixOS).
 2. The dead `command` → `SessionProcess` chain deleted; gate rule D keeps `spawn-primitive.ts` the
@@ -19,6 +19,7 @@ Eight commits, rebased on `main`:
 6. Gate rule D rewritten deny-by-default.
 7. The console picker and its browser e2e.
 8. The session-resume and git-probe fixtures resolve `sleep`/`mv` too.
+9. Decision 36.1: a session resumed from the phone starts untrusted (`--no-approve`), like a spawn.
 
 The plan for waves 4-5 is appended to `.planning/phases/36-spawn/PLAN.md`.
 
@@ -28,7 +29,7 @@ The plan for waves 4-5 is appended to `.planning/phases/36-spawn/PLAN.md`.
 cd /home/nix/work/draht-p36
 npm run check                                   # exit 0
 cd packages/gateway && nix-shell -p openssl --run "env -u DRAHT_PERMISSION_MODE bun test"
-#   816 pass / 4 skip / 0 fail (reach-transport needs openssl; the skips are the foreign-uid
+#   822 pass / 4 skip / 0 fail (reach-transport needs openssl; the skips are the foreign-uid
 #   registry file case, two LAN-interface cases and one root-only guard).
 LD_LIBRARY_PATH=$(cat /home/nix/work/chromium-ldpath.txt) \
   node --test --test-concurrency=1 --test-timeout=300000 scripts/geist-console-*.e2e.test.mjs   # 74/0
@@ -44,8 +45,9 @@ NixOS path, so the fleet status is always `unknown` here (owner question 9 in `D
 - **Push `main`.** Local `main` also holds the unpushed 2026-10-31 upstream sync from another session,
   so the push waits for that session. The first CI run after it is the first class-3 evidence for the
   registry-owned-by-another-uid FILE case, which needs `sudo -n` on the gateway shard (Blacksmith).
-- **36.1** (resume gets `--no-approve`?) and **36.3** (`auth.json` reachable by the child) — now with a
-  second half: a spawned session's `bash` can read the operator's file by absolute path anyway.
+- **Mark Phase 36 `complete`** once that CI run executes the foreign-uid FILE case green (Oskar's call).
+- 36.1 and 36.3 are DECIDED (2026-10-31): resume starts untrusted (`6a9f2917d`); credentials are scoped by
+  environment only in v1, the `auth.json` file half waits for the Milestone 6 sandbox.
 - The six reversible orchestrator calls and eleven new questions under "Phase 36 waves 4–5" in
   `DECISIONS-PENDING.md`. The ones that bite first: the installed `~/.local/bin/draht` cannot be
   declared (symlink chain), and on NixOS spawned sessions get no coreutils unless `DRAHT_RESUME_PATH`

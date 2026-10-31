@@ -6,8 +6,8 @@ import (
 )
 
 func TestSignatureExtractorVersionInvalidatesInitializerSanitizationCache(t *testing.T) {
-	if Version != "x11" {
-		t.Fatalf("Version = %q, want x11 after the default-declaration symbol scan required a separator after `function`", Version)
+	if Version != "x12" {
+		t.Fatalf("Version = %q, want x12 after local alias exports began recording the binding's local name", Version)
 	}
 }
 

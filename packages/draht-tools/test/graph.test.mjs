@@ -219,6 +219,22 @@ test("star expansion drops names exported ambiguously by two star targets (ES sp
 		const rb = m3.modules.find((x) => x.id === "src/rbarrel.ts");
 		assert.ok(!rb.exports.some((e) => e.name === "ra"), `renamed-binding collision not treated as ambiguous: ${JSON.stringify(rb.exports)}`);
 		assert.ok(rb.exports.some((e) => e.name === "rb"), `unrelated name lost: ${JSON.stringify(rb.exports)}`);
+		// LOCAL alias: l1's `export { la as lb }` makes `lb` the SAME binding
+		// as `la`. l2 re-exports `lb as la`; a barrel starring both routes to
+		// one binding must keep `la`, not drop it as ambiguous.
+		fs.writeFileSync(path.join(ambRoot, "src/l1.ts"), "export const la = 1;\nexport { la as lb };\n");
+		fs.writeFileSync(path.join(ambRoot, "src/l2.ts"), 'export { lb as la } from "./l1.js";\n');
+		fs.writeFileSync(path.join(ambRoot, "src/lbarrel.ts"), 'export * from "./l1.js";\nexport * from "./l2.js";\n');
+		execFileSync(process.execPath, [CLI, "map-graph", "--quiet"], { cwd: ambRoot, encoding: "utf-8", env: ENV });
+		const m4 = JSON.parse(fs.readFileSync(path.join(ambRoot, ".planning/codebase/MAP.json"), "utf-8"));
+		const l1 = m4.modules.find((x) => x.id === "src/l1.ts");
+		const lbExport = l1.exports.find((e) => e.name === "lb");
+		assert.equal(lbExport && lbExport.viaName, "la", `local alias export should record the local binding name: ${JSON.stringify(l1.exports)}`);
+		const lb = m4.modules.find((x) => x.id === "src/lbarrel.ts");
+		const laKept = lb.exports.find((e) => e.name === "la");
+		assert.ok(laKept, `same binding through a local alias wrongly dropped as ambiguous: ${JSON.stringify(lb.exports)}`);
+		assert.equal(laKept.via, "src/l1.ts");
+		assert.ok(lb.exports.some((e) => e.name === "lb"), `aliased name lost from barrel: ${JSON.stringify(lb.exports)}`);
 	} finally {
 		fs.rmSync(ambRoot, { recursive: true, force: true });
 	}

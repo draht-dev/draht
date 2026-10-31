@@ -1476,7 +1476,14 @@ function visExtractExports(rawContent, language) {
 				const t = part.trim().replace(/^type\s+/, "");
 				if (!t) continue;
 				const asMatch = t.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
-				if (asMatch) out.push({ name: asMatch[2] || asMatch[1], kind: isReExport ? "re-export" : "named", line, doc });
+				if (asMatch) {
+					const entry = { name: asMatch[2] || asMatch[1], kind: isReExport ? "re-export" : "named", line, doc };
+					// A LOCAL alias (`export { a as b }`, no `from`) exposes one binding
+					// under two names: keep the local name so origin keys compare the
+					// BINDING (`b` ≡ `a`), not the export name.
+					if (!isReExport && asMatch[2] && asMatch[2] !== asMatch[1]) entry.viaName = asMatch[1];
+					out.push(entry);
+				}
 			}
 		}
 		// `export * as NS from "./x"` exposes NS as a named export of this module.
@@ -2425,7 +2432,10 @@ function visBuildMap(root) {
 			const mod = moduleByRel.get(modId);
 			const file = perFile.get(modId);
 			if (!mod || !file) return [modId, name];
-			if (mod.exports.some((e) => e.name === name && e.kind !== "re-export")) return [modId, name];
+			const local = mod.exports.find((e) => e.name === name && e.kind !== "re-export");
+			// A local alias export (`export { a as b }`) terminates resolution, but
+			// the BINDING it stands for is the local name.
+			if (local) return [modId, local.viaName || name];
 			const fromDir = path.posix.dirname(modId);
 			for (const imp of file.parsedImports || []) {
 				if (!imp.reExport || imp.namespace === "*") continue;

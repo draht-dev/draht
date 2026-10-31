@@ -29,8 +29,9 @@ const FactsSchema = 3
 // instead of their local name, and "x9" -> "x10" when their local names
 // began appearing as non-exported symbols, and "x10" -> "x11" when the
 // default-declaration symbol scan stopped matching identifiers that merely
-// start with "function".
-const Version = "x11"
+// start with "function", and "x11" -> "x12" when local alias exports
+// (`export { a as b }`) began recording the binding's local name.
+const Version = "x12"
 
 // Facts is everything derivable from ONE file in isolation. It is exactly
 // what the cache stores. It deliberately contains NOTHING global: no
@@ -55,12 +56,15 @@ type Facts struct {
 }
 
 // Export is one exported declaration. Doc is "" when the CJS emits JSON
-// null (no leading doc comment found).
+// null (no leading doc comment found). LocalName is set only for a LOCAL
+// alias export (`export { a as b }`, no `from`): the binding's local name
+// (`a`), carried to model.Export.ViaName so origin keys compare bindings.
 type Export struct {
-	Name string `json:"name"`
-	Kind string `json:"kind"`
-	Line int    `json:"line"`
-	Doc  string `json:"doc"`
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
+	Line      int    `json:"line"`
+	Doc       string `json:"doc"`
+	LocalName string `json:"ln,omitempty"`
 }
 
 // Symbol is one symbol-level node (exported or not). Sig is the declaration

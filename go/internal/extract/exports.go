@@ -186,7 +186,14 @@ func extractExports(lang string, content []byte) []Export {
 					if name == "" {
 						name = am[1]
 					}
-					out = append(out, Export{Name: name, Kind: kind, Line: lineNo, Doc: doc})
+					exp := Export{Name: name, Kind: kind, Line: lineNo, Doc: doc}
+					// A LOCAL alias (`export { a as b }`, no `from`) exposes one
+					// binding under two names: keep the local name so origin keys
+					// compare the BINDING (`b` ≡ `a`), not the export name.
+					if !isReExport && am[2] != "" && am[2] != am[1] {
+						exp.LocalName = am[1]
+					}
+					out = append(out, exp)
 				}
 			}
 		}

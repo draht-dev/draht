@@ -95,6 +95,11 @@ func AssignNamedReExportVias(modules []model.Module, mi []ModuleImports, resolve
 		}
 		for _, e := range mod.Exports {
 			if e.Name == name && e.Kind != "re-export" {
+				// A local alias export (`export { a as b }`) terminates
+				// resolution, but the BINDING it stands for is the local name.
+				if e.ViaName != "" {
+					return modID, e.ViaName
+				}
 				return modID, name
 			}
 		}

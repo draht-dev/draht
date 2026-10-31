@@ -3,14 +3,29 @@
 # (R36-SPAWN.3), and it refuses rather than repairing the permissions for you.
 # This copy is an EXAMPLE only: the daemon never reads a geist.yaml out of a
 # checked-out project. See packages/geist-protocol/src/config-load.ts.
+#
+# The daemon reads ~/.geist/config.yaml, or the absolute path you give it with
+# `--registry <absolute path>`. It never reads the current directory.
 
 harness:
   default: draht
-  agents:            # ACP launch specs. `cmd` MUST be absolute: a bare name is a
-                     # PATH lookup, and the spawn path never consults PATH.
-                     # `credentialEnv` scopes which env names this harness gets;
-                     # omitting it means "none beyond the built-in minimum".
-    draht:  { cmd: /usr/local/bin/draht-acp }
+  agents:            # `cmd` MUST be absolute: a bare name is a PATH lookup, and the
+                     # spawn path never consults PATH. `credentialEnv` scopes which
+                     # env names this harness gets; omitting it means "none beyond
+                     # the built-in minimum".
+                     #
+                     # ONLY `draht` IS SPAWNABLE IN v1. A spawn runs the executable
+                     # with draht's own flags appended, so this entry names the draht
+                     # CLI, not the `draht-acp` shim (which publishes no socket for a
+                     # spawn to wait on). The installed ~/.local/bin/draht is a symlink
+                     # chain and is refused: declare a path with no symlink in it,
+                     # inside approvedRoots and outside every project root below.
+                     #
+                     # This same map is also the ACP launch-spec table for geist-acp,
+                     # which wants the shim. That conflict is unresolved.
+    draht:  { cmd: /Users/you/dev/draht-mono/packages/coding-agent/dist/cli.js }
+                     # The three below are ACP launch specs only. They may be declared,
+                     # but a spawn naming one is answered `unknown_harness`.
     claude: { cmd: /usr/local/bin/claude-agent-acp, credentialEnv: [ANTHROPIC_API_KEY] }
     codex:  { cmd: /usr/local/bin/codex-acp, credentialEnv: [OPENAI_API_KEY] }
     gemini: { cmd: /usr/local/bin/gemini, args: [--experimental-acp], credentialEnv: [GEMINI_API_KEY] }
@@ -22,5 +37,6 @@ projects:            # explicitly declared projects (spec §3 "yaml" source of t
 workspaceRoots:       # dirs scanned for git-repo subdirectories (spec §3 "workspaceRoots discovery" source)
   - /Users/you/dev
 
-approvedRoots:        # canonical dirs a spawn may enter; anything outside is refused (R36-SPAWN.3)
-  - /Users/you/dev
+approvedRoots:        # canonical dirs a spawn may enter; anything outside is refused (R36-SPAWN.3).
+  - /Users/you/dev    # This covers the draht CLI above and both project roots. A harness executable
+                      # inside any declared project root is refused, wherever approvedRoots reaches.

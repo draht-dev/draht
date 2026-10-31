@@ -2,14 +2,13 @@
 
 > ⚠️ **Experimental** — API is unstable and subject to change.
 
-The draht gateway is a lightweight WebSocket + SSE server that spawns and manages draht coding agent processes, exposing them over HTTP for remote clients.
+The draht gateway is a lightweight WebSocket + SSE server that lists, attaches to, resumes and starts draht coding agent sessions for remote clients.
 
 ## What it does
 
-- Spawns draht agent processes on demand
-- Streams agent stdout to connected WebSocket clients in real time
-- Forwards client stdin to agent processes
-- Exposes a REST API for session lifecycle management
+- Serves the `/attach` WebSocket: the live fleet, attaching to a session's socket, resuming a recorded session (`session_resume`), and, when a registry file exists, starting a new one (`session_spawn`)
+- Creates processes in exactly one place, the spawn primitive. What it runs comes from a registry you own, never from a request body, and no HTTP route creates a process
+- Exposes a REST API for session records: `POST /sessions` creates a placeholder record with no backing process
 - Server-Sent Events for session status fan-out
 
 ## Usage
@@ -23,12 +22,22 @@ bun src/cli.ts --port 7878 --auth <your-token>
 
 # Write a starter config and exit
 bun src/cli.ts --init-config
+
+# Read the spawn registry from an explicit file (absolute path)
+bun src/cli.ts --registry /home/you/.geist/config.yaml --auth <your-token>
 ```
 
-Every value-taking flag (`--port`, `--host`, `--auth`, `--token`) refuses a
-value that is itself a flag, so `--auth --allow-non-loopback` errors instead of
-quietly using the literal string `--allow-non-loopback` as the bearer token and
-dropping the opt-in.
+Every value-taking flag (`--port`, `--host`, `--auth`, `--token`, `--registry`)
+refuses a value that is itself a flag, so `--auth --allow-non-loopback` errors
+instead of quietly using the literal string `--allow-non-loopback` as the bearer
+token and dropping the opt-in.
+
+### Spawn registry
+
+`--registry <absolute path>` names the registry file; without it the daemon reads
+`~/.geist/config.yaml` and never the current directory. In v1 only the `draht`
+harness is spawnable. The contract is `docs/geist/spec.md` §15.2 and §15.3, and
+[`geist.yaml.example`](../../geist.yaml.example) is a starting point.
 
 ### Configuration
 
@@ -52,10 +61,10 @@ degrading silently or crashing inside the bind guard.
 
 ### Security: loopback by default
 
-`POST /sessions/:id/input` drives a `draht` agent process with your user's
-privileges, and that agent runs tools on your behalf. A gateway bound to a
-reachable interface is therefore remote code execution for anyone holding a
-bearer token.
+`session_resume` and `session_spawn` on `/attach` start a `draht` agent process
+with your user's privileges, and that agent runs tools on your behalf. A gateway
+bound to a reachable interface is therefore remote code execution for anyone
+holding a bearer token.
 
 (`POST /sessions` used to accept an arbitrary `command` array and spawn it. That
 path was removed in R32-FLEET.8: no request body chooses what runs, and a body
@@ -141,8 +150,13 @@ Content-Type: application/json
 (empty body)
 ```
 
-This creates a session with `status: "starting"` but no backing process. The
-`draht` process is spawned by the gateway on the first `POST /sessions/:id/input`.
+This creates a session with `status: "starting"` and no backing process, and it
+never will have one: `POST /sessions/:id/input` answers **409**, and
+`/sessions/:id/ws` and `/sessions/:id/stream` carry no output for a record.
+
+Work starts with `session_spawn` on `/attach`, which names a harness id and a
+project id from the registry (see [Spawn registry](#spawn-registry)), or with
+`session_resume` for a recorded session.
 
 A body carrying `command` is **refused with 400**. The route used to spawn any
 array a caller sent, which was remote code execution for any token holder; it was

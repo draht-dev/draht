@@ -128,7 +128,12 @@ describe("Drahtbank runtime evidence", () => {
 		vi.stubEnv("DRAHT_PACKAGE_DIR", join(output, "wrong-package"));
 		vi.stubEnv("GIT_DIR", join(output, "wrong-git-dir"));
 		const report = await runRuntimeChecks(output, { root, timeoutMs: 150_000 });
-		expect(report.errors, readFileSync(join(output, "stderr.txt"), "utf8")).toEqual([]);
+		// The nested run reports through vitest.json, so its failures never reach stderr.
+		const failures = report.results.flatMap((result) => result.failures);
+		expect(
+			report.errors,
+			`${readFileSync(join(output, "stderr.txt"), "utf8")}\n${JSON.stringify(failures, null, 2)}`,
+		).toEqual([]);
 		expect(report).toMatchObject({
 			complete: true,
 			passed: true,

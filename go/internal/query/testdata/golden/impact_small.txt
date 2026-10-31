@@ -1,5 +1,5 @@
 nope.ts: not found
-impact nodejs.ts — 11 modules · 1 packages · 0 entry points · sinks: process:exec, env:read
+impact packages/agent/src/harness/env/nodejs.ts — 11 modules · 1 packages · 0 entry points · sinks: process:exec, env:read
 by package:
   agent-core(11): execution-env.ts node.ts agent-harness.test.ts nodejs-env.test.ts prompt-templates.test.ts (+6)
 clusters affected: packages/agent, packages/agent, packages/agent

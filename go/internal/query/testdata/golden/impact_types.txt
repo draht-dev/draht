@@ -1,4 +1,4 @@
-impact types.ts — 812 modules · 13 packages · 14 entry points · sinks: none
+impact packages/ai/src/types.ts — 812 modules · 13 packages · 14 entry points · sinks: none
 entry points reaching it (14): lib:@draht/agent-core, cli:draht-ai, lib:@draht/ai, cli:coding-agent, lib:@draht/coding-agent, lib:@draht/deploy-guardian, lib:@draht/draht-acp, cli:draht-acp …
 by package:
   coding-agent(390): sdk-codex-cache-probe-tool-loop.ts antigravity-image-gen.ts custom-compaction.ts custom-footer.ts index.ts (+385)

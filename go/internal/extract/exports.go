@@ -3,6 +3,8 @@ package extract
 import (
 	"regexp"
 	"strings"
+
+	"github.com/draht-dev/draht/go/internal/parse"
 )
 
 // The regexes below are verbatim ports of visExtractExports's per-language
@@ -11,16 +13,18 @@ import (
 // "start/end of the whole file" — each is matched against a single line via
 // FindStringSubmatch, never FindAllString over the whole content).
 var (
-	tsExportRe      = regexp.MustCompile(`^\s*export\s+(?:default\s+)?(?:async\s+)?(class|interface|type|function|const|let|enum|var)\s+([A-Za-z_$][\w$]*)`)
-	tsNamedExportRe = regexp.MustCompile(`^\s*export\s*\{([^}]+)\}`)
-	// tsNamedExportFromRe implements design §R2's RE2 workaround for
-	// namedExportRe's `(?!\s+from)`: reject a named-export match when the
-	// text immediately following the matched `}` starts with `\s+from`.
-	tsNamedExportFromRe = regexp.MustCompile(`^\s+from`)
-	tsDefaultRe         = regexp.MustCompile(`^\s*export\s+default\s`)
-	tsCommandRe         = regexp.MustCompile(`^\s*commands\s*\[\s*["']([^"']+)["']\s*\]\s*=`)
-	tsAsClauseRe        = regexp.MustCompile(`^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$`)
-	tsLeadTypeRe        = regexp.MustCompile(`^type\s+`)
+	tsExportRe = regexp.MustCompile(`^\s*export\s+(default\s+)?(?:async\s+)?(class|interface|type|function|const|let|enum|var)\s+([A-Za-z_$][\w$]*)`)
+	// tsNamedBlockRe is content-level (multi-line safe) so `export {\n a,\n b\n}`
+	// blocks — with or without a `from` clause — are captured. Barrels are pure
+	// re-export lists; without this every package index.ts reports exports(0)
+	// (ports the CJS namedBlockRe, draht-tools.cjs visExtractExports).
+	tsNamedBlockRe = regexp.MustCompile(`export\s+(?:type\s+)?\{([^}]*)\}(\s*from\s*["'][^"']+["'])?`)
+	// tsStarAsRe: `export * as NS from "./x"` exposes NS as a named export.
+	tsStarAsRe   = regexp.MustCompile(`export\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*["'][^"']+["']`)
+	tsDefaultRe  = regexp.MustCompile(`^\s*export\s+default\s`)
+	tsCommandRe  = regexp.MustCompile(`^\s*commands\s*\[\s*["']([^"']+)["']\s*\]\s*=`)
+	tsAsClauseRe = regexp.MustCompile(`^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$`)
+	tsLeadTypeRe = regexp.MustCompile(`^type\s+`)
 
 	pyExportRe = regexp.MustCompile(`^(class|def)\s+([A-Za-z_][A-Za-z0-9_]*)`)
 	pyDocRe    = regexp.MustCompile(`^\s*("""|''')(.*)`)
@@ -124,19 +128,15 @@ func extractExports(lang string, content []byte) []Export {
 		for i := 0; i < len(lines); i++ {
 			line := lines[i]
 			if m := tsExportRe.FindStringSubmatch(line); m != nil {
-				out = append(out, Export{Name: m[2], Kind: m[1], Line: i + 1, Doc: findLeadingDoc(lines, i)})
-			} else if m := tsNamedExportRe.FindStringSubmatch(line); m != nil && !tsNamedExportFromRe.MatchString(line[len(m[0]):]) {
-				doc := findLeadingDoc(lines, i)
-				for _, part := range strings.Split(m[1], ",") {
-					t := strings.TrimSpace(part)
-					t = tsLeadTypeRe.ReplaceAllString(t, "")
-					if am := tsAsClauseRe.FindStringSubmatch(t); am != nil {
-						name := am[2]
-						if name == "" {
-							name = am[1]
-						}
-						out = append(out, Export{Name: name, Kind: "named", Line: i + 1, Doc: doc})
+				// `export default class Widget {}` exports ONLY `default` — the
+				// name binds locally, never as an exported binding (ES spec), so
+				// star expansion must not forward it under its local name.
+				if m[1] != "" {
+					if !hasExportName(out, "default") {
+						out = append(out, Export{Name: "default", Kind: "default", Line: i + 1, Doc: findLeadingDoc(lines, i)})
 					}
+				} else {
+					out = append(out, Export{Name: m[3], Kind: m[2], Line: i + 1, Doc: findLeadingDoc(lines, i)})
 				}
 			} else if tsDefaultRe.MatchString(line) && !hasExportName(out, "default") {
 				out = append(out, Export{Name: "default", Kind: "default", Line: i + 1, Doc: findLeadingDoc(lines, i)})
@@ -146,6 +146,62 @@ func extractExports(lang string, content []byte) []Export {
 			if len(out) > 200 {
 				break
 			}
+		}
+		// Named export lists — content-level pass mirroring the CJS namedBlockRe
+		// loop. Matches run on a comment-MASKED copy (same length, so offsets
+		// and lines still map to the raw source): a commented-out
+		// `// export { Admin } from "./x"` example must not become a public
+		// export. findLeadingDoc keeps reading the raw lines.
+		raw := string(parse.MaskComments(content, parse.Lang(lang)))
+		lineOf := func(charIdx int) int {
+			pos := 0
+			for i := 0; i < len(lines); i++ {
+				if pos+len(lines[i])+1 > charIdx {
+					return i + 1
+				}
+				pos += len(lines[i]) + 1
+			}
+			return len(lines)
+		}
+		for _, loc := range tsNamedBlockRe.FindAllStringSubmatchIndex(raw, -1) {
+			if len(out) > 200 {
+				break
+			}
+			names := raw[loc[2]:loc[3]]
+			isReExport := loc[4] != -1
+			lineNo := lineOf(loc[0])
+			doc := findLeadingDoc(lines, lineNo-1)
+			kind := "named"
+			if isReExport {
+				kind = "re-export"
+			}
+			for _, part := range strings.Split(names, ",") {
+				t := strings.TrimSpace(part)
+				t = tsLeadTypeRe.ReplaceAllString(t, "")
+				if t == "" {
+					continue
+				}
+				if am := tsAsClauseRe.FindStringSubmatch(t); am != nil {
+					name := am[2]
+					if name == "" {
+						name = am[1]
+					}
+					exp := Export{Name: name, Kind: kind, Line: lineNo, Doc: doc}
+					// A LOCAL alias (`export { a as b }`, no `from`) exposes one
+					// binding under two names: keep the local name so origin keys
+					// compare the BINDING (`b` ≡ `a`), not the export name.
+					if !isReExport && am[2] != "" && am[2] != am[1] {
+						exp.LocalName = am[1]
+					}
+					out = append(out, exp)
+				}
+			}
+		}
+		for _, loc := range tsStarAsRe.FindAllStringSubmatchIndex(raw, -1) {
+			if len(out) > 200 {
+				break
+			}
+			out = append(out, Export{Name: raw[loc[2]:loc[3]], Kind: "re-export", Line: lineOf(loc[0]), Doc: ""})
 		}
 	case "python":
 		for i := 0; i < len(lines); i++ {

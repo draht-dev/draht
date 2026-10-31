@@ -134,6 +134,8 @@ type CallDirJSON struct {
 // this shape).
 type QueryHit struct {
 	Score    float64 `json:"score"`
+	Matched  int     `json:"matched"`
+	Terms    int     `json:"terms"`
 	Deg      int     `json:"deg"`
 	Path     string  `json:"path"`
 	Line     int     `json:"line"`

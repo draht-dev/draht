@@ -543,7 +543,10 @@ try {
 		pass(`.planning/ check skipped (authoring branch)`);
 	} else {
 		// Main may have advanced independently; only this branch's planning edits count.
-		const base = run("git merge-base main HEAD");
+		// Mid-merge (the pre-commit hook of a merge commit), HEAD is still the pre-merge
+		// commit; include MERGE_HEAD so the base is the one the merge commit will have.
+		const mergeHead = run("git rev-parse -q --verify MERGE_HEAD || true");
+		const base = run(`git merge-base main HEAD ${mergeHead}`);
 		check(run(`git diff ${base} -- .planning/`) === "", `.planning/ unchanged vs merge-base with main`);
 	}
 } catch {

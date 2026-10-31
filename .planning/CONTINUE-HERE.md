@@ -7,7 +7,7 @@
 
 ## What is on the branch
 
-Nine commits, on `main`:
+Ten commits, on `main`:
 
 1. Spawn suites runnable on hosts whose child PATH has no coreutils (NixOS).
 2. The dead `command` → `SessionProcess` chain deleted; gate rule D keeps `spawn-primitive.ts` the
@@ -20,6 +20,7 @@ Nine commits, on `main`:
 7. The console picker and its browser e2e.
 8. The session-resume and git-probe fixtures resolve `sleep`/`mv` too.
 9. Decision 36.1: a session resumed from the phone starts untrusted (`--no-approve`), like a spawn.
+10. A container route to a foreign-owned registry file, so the foreign-uid case runs without sudo.
 
 The plan for waves 4-5 is appended to `.planning/phases/36-spawn/PLAN.md`.
 
@@ -45,7 +46,10 @@ NixOS path, so the fleet status is always `unknown` here (owner question 9 in `D
 - **Push `main`.** Local `main` also holds the unpushed 2026-10-31 upstream sync from another session,
   so the push waits for that session. The first CI run after it is the first class-3 evidence for the
   registry-owned-by-another-uid FILE case, which needs `sudo -n` on the gateway shard (Blacksmith).
-- **Mark Phase 36 `complete`** once that CI run executes the foreign-uid FILE case green (Oskar's call).
+- **Mark Phase 36 `complete`** once that CI run executes the foreign-uid FILE case green (Oskar's call). It
+  already ran here: `cd packages/gateway && DRAHT_TEST_SHORT_ROOT=<a 0700 dir under /home/nix/work>
+  DRAHT_FOREIGN_UID_IMAGE=docker.io/library/python:3.11-slim bun test src/__tests__/spawn-adversarial.e2e.test.ts`
+  (17/17; rootless podman chowns the file to a subuid; the image must already be local).
 - 36.1 and 36.3 are DECIDED (2026-10-31): resume starts untrusted (`6a9f2917d`); credentials are scoped by
   environment only in v1, the `auth.json` file half waits for the Milestone 6 sandbox.
 - The six reversible orchestrator calls and eleven new questions under "Phase 36 waves 4–5" in

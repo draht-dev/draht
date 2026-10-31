@@ -316,6 +316,18 @@ test("object types in function headers do not end the call region", () => {
 	assert.ok(call, "call inside a function with an inline object type in its header lost its owner");
 });
 
+test("generic classes keep their declarations and methods", () => {
+	write("src/genstack.ts", [
+		"export class UndoStack<S> {",
+		"\tpush(state: S): void {}",
+		"}",
+	].join("\n"));
+	run(["build", "--quiet"]);
+	const g = loadGraph();
+	assert.ok(g.nodes.some((n) => n.id === "src_genstack_undostack"), "generic class node missing");
+	assert.ok(g.nodes.some((n) => n.id === "src_genstack_undostack_push"), "generic class method missing");
+});
+
 test("implements captures the full interface name", () => {
 	write("src/impliface.ts", [
 		"export interface StorageBackend {",

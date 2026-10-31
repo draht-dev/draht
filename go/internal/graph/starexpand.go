@@ -15,6 +15,22 @@ type StarReExport struct {
 	Line   int    // 1-based line of the `export * from` statement
 }
 
+// exportOriginKey identifies the BINDING an export entry stands for: the
+// defining module plus the original name there (ViaName when an aliased
+// re-export renamed it). fallback is the entry's own module id, used when
+// Via is unset (a locally defined export).
+func exportOriginKey(e model.Export, fallback string) string {
+	via := e.Via
+	if via == "" {
+		via = fallback
+	}
+	name := e.ViaName
+	if name == "" {
+		name = e.Name
+	}
+	return via + "\x00" + name
+}
+
 // StarReExports collects, per barrel module id, its resolved bare star
 // re-exports (Namespace "*"; `export * as NS` records Namespace NS and is
 // handled by extractExports instead). Ports the starReExports recording in
@@ -66,20 +82,20 @@ func AssignNamedReExportVias(modules []model.Module, mi []ModuleImports, resolve
 			}
 		}
 	}
-	var resolveOrigin func(modID, name string, seen map[string]bool) string
-	resolveOrigin = func(modID, name string, seen map[string]bool) string {
+	var resolveOrigin func(modID, name string, seen map[string]bool) (string, string)
+	resolveOrigin = func(modID, name string, seen map[string]bool) (string, string) {
 		key := modID + "\x00" + name
 		if seen[key] {
-			return modID
+			return modID, name
 		}
 		seen[key] = true
 		mod := byID[modID]
 		if mod == nil {
-			return modID
+			return modID, name
 		}
 		for _, e := range mod.Exports {
 			if e.Name == name && e.Kind != "re-export" {
-				return modID
+				return modID, name
 			}
 		}
 		for _, nr := range named[modID] {
@@ -87,11 +103,11 @@ func AssignNamedReExportVias(modules []model.Module, mi []ModuleImports, resolve
 				continue
 			}
 			if byID[nr.target] == nil {
-				return modID
+				return modID, name
 			}
 			return resolveOrigin(nr.target, nr.imported, seen)
 		}
-		return modID
+		return modID, name
 	}
 	for i := range modules {
 		m := &modules[i]
@@ -100,8 +116,16 @@ func AssignNamedReExportVias(modules []model.Module, mi []ModuleImports, resolve
 			if e.Kind != "re-export" || e.Via != "" {
 				continue
 			}
-			if origin := resolveOrigin(m.ID, e.Name, map[string]bool{}); origin != m.ID {
-				e.Via = origin
+			origin, originName := resolveOrigin(m.ID, e.Name, map[string]bool{})
+			if origin == m.ID {
+				continue
+			}
+			e.Via = origin
+			// The origin BINDING matters too: `export { b as a } from './x'`
+			// exposes x's `b` under the name `a` — a star sibling exposing
+			// x's own `a` is a different binding, hence ambiguous.
+			if originName != e.Name {
+				e.ViaName = originName
 			}
 		}
 	}
@@ -176,7 +200,7 @@ func ExpandStarReExports(modules []model.Module, stars map[string][]StarReExport
 			}
 			sort.Strings(addedNames)
 			for _, name := range addedNames {
-				via := added[name]
+				originKey := added[name]
 				stillProvided := false
 				sameNameElsewhere := false
 				for _, st := range stars[bid] {
@@ -191,11 +215,7 @@ func ExpandStarReExports(modules []model.Module, stars map[string][]StarReExport
 						if e.Name != "default" {
 							sameNameElsewhere = true
 						}
-						tv := e.Via
-						if tv == "" {
-							tv = t.ID
-						}
-						if tv == via {
+						if exportOriginKey(e, t.ID) == originKey {
 							stillProvided = true
 							break
 						}
@@ -208,7 +228,7 @@ func ExpandStarReExports(modules []model.Module, stars map[string][]StarReExport
 					continue // present, or left for the ambiguity branch
 				}
 				for i, x := range b.Exports {
-					if x.Name == name && x.Via == via {
+					if x.Name == name && x.Via != "" && exportOriginKey(x, bid) == originKey {
 						b.Exports = append(b.Exports[:i], b.Exports[i+1:]...)
 						break
 					}
@@ -233,10 +253,11 @@ func ExpandStarReExports(modules []model.Module, stars map[string][]StarReExport
 					if via == "" {
 						via = t.ID
 					}
+					originKey := exportOriginKey(e, t.ID)
 					if have[e.Name] {
-						if prev, ok := added[e.Name]; ok && prev != via {
+						if prev, ok := added[e.Name]; ok && prev != originKey {
 							for i, x := range b.Exports {
-								if x.Name == e.Name && x.Via == prev {
+								if x.Name == e.Name && x.Via != "" && exportOriginKey(x, bid) == prev {
 									b.Exports = append(b.Exports[:i], b.Exports[i+1:]...)
 									break
 								}
@@ -252,8 +273,8 @@ func ExpandStarReExports(modules []model.Module, stars map[string][]StarReExport
 						break
 					}
 					have[e.Name] = true
-					added[e.Name] = via
-					b.Exports = append(b.Exports, model.Export{Name: e.Name, Kind: "re-export", Line: st.Line, Doc: e.Doc, Via: via})
+					added[e.Name] = originKey
+					b.Exports = append(b.Exports, model.Export{Name: e.Name, Kind: "re-export", Line: st.Line, Doc: e.Doc, Via: via, ViaName: e.ViaName})
 					changed = true
 				}
 			}

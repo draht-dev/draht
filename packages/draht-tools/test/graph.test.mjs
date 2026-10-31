@@ -209,6 +209,16 @@ test("star expansion drops names exported ambiguously by two star targets (ES sp
 		const shared = nb.exports.find((e) => e.name === "shared");
 		assert.ok(shared, `same binding via named re-export wrongly dropped as ambiguous: ${JSON.stringify(nb.exports)}`);
 		assert.equal(shared.via, "src/n1.ts");
+		// Alias-renamed re-export: `export { rb as ra }` is a DIFFERENT binding
+		// than r1's own `ra`, even though both originate in r1.ts → ambiguous.
+		fs.writeFileSync(path.join(ambRoot, "src/r1.ts"), "export const ra = 1;\nexport const rb = 2;\n");
+		fs.writeFileSync(path.join(ambRoot, "src/r2.ts"), 'export { rb as ra } from "./r1.js";\n');
+		fs.writeFileSync(path.join(ambRoot, "src/rbarrel.ts"), 'export * from "./r1.js";\nexport * from "./r2.js";\n');
+		execFileSync(process.execPath, [CLI, "map-graph", "--quiet"], { cwd: ambRoot, encoding: "utf-8", env: ENV });
+		const m3 = JSON.parse(fs.readFileSync(path.join(ambRoot, ".planning/codebase/MAP.json"), "utf-8"));
+		const rb = m3.modules.find((x) => x.id === "src/rbarrel.ts");
+		assert.ok(!rb.exports.some((e) => e.name === "ra"), `renamed-binding collision not treated as ambiguous: ${JSON.stringify(rb.exports)}`);
+		assert.ok(rb.exports.some((e) => e.name === "rb"), `unrelated name lost: ${JSON.stringify(rb.exports)}`);
 	} finally {
 		fs.rmSync(ambRoot, { recursive: true, force: true });
 	}

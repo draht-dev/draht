@@ -264,7 +264,7 @@ function parseDecls(rel, content, lang) {
 		for (let i = 0; i < lines.length && d.classes.length + d.functions.length + d.types.length < MAX_SYMBOLS_PER_FILE; i++) {
 			const ln = lines[i];
 			let m;
-			if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)(?:\s+extends\s+([A-Za-z_$][\w$.]*))?(?:\s+implements\s+([\w$,\s.<>]+?))?\s*(?:\{|$)/)) && /\bclass\b/.test(ln)) {
+			if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)(?:<[^>]*>)?(?:\s+extends\s+([A-Za-z_$][\w$.]*)(?:<[^>]*>)?)?(?:\s+implements\s+([\w$,\s.<>]+?))?\s*(?:\{|$)/)) && /\bclass\b/.test(ln)) {
 				closeUnopened(i);
 				currentClass = { name: m[1], line: i + 1, end: null, isDefault: /^\s*export\s+default\b/.test(ln), extends: m[2] ? m[2].split(".")[0] : null, implements: (m[3] || "").split(",").map((x) => x.trim().split("<")[0].split(".")[0]).filter(Boolean), methods: [] };
 				d.classes.push(currentClass);
@@ -1816,6 +1816,17 @@ document.getElementById('collapse').onclick=function(){document.querySelectorAll
 	return p;
 }
 
+function shortHash(s) {
+	let h = 5381;
+	for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+	return h.toString(16);
+}
+
+function wikiFileName(id) {
+	if (id.length <= 100) return id + ".md";
+	return id.slice(0, 80) + "-" + shortHash(id) + ".md";
+}
+
 function exportWiki(root, graph) {
 	const dir = path.join(outDir(root), "kg-wiki");
 	fs.mkdirSync(dir, { recursive: true });
@@ -1830,8 +1841,9 @@ function exportWiki(root, graph) {
 	}
 	idx.push("", "## God Nodes", "");
 	// Filenames carry the unique node id — two god nodes labeled `save()`
-	// must not overwrite each other's page.
-	for (const g of gods) idx.push(`- [${g.label}](${g.id}.md) — degree ${g.degree}`);
+	// must not overwrite each other's page — bounded with a stable hash
+	// suffix so a deep-path id cannot exceed the filesystem's name limit.
+	for (const g of gods) idx.push(`- [${g.label}](${wikiFileName(g.id)}) — degree ${g.degree}`);
 	fs.writeFileSync(path.join(dir, "index.md"), idx.join("\n") + "\n", "utf-8");
 
 	for (const c of communities) {
@@ -1863,7 +1875,7 @@ function exportWiki(root, graph) {
 		conns.sort((a, b) => (adj.deg.get(b[1]) || 0) - (adj.deg.get(a[1]) || 0));
 		for (const [arrow, nb, e] of conns.slice(0, 30)) L.push(`- ${arrow} \`${(byId.get(nb) || {}).label || nb}\` [${e.relation}] [${e.confidence}]`);
 		L.push("", "## Audit Trail", "", `Extraction: deterministic (draht-tools kg). Source: ${g.source_file || "-"}.`);
-		fs.writeFileSync(path.join(dir, `${g.id}.md`), L.join("\n") + "\n", "utf-8");
+		fs.writeFileSync(path.join(dir, wikiFileName(g.id)), L.join("\n") + "\n", "utf-8");
 	}
 	return dir;
 }

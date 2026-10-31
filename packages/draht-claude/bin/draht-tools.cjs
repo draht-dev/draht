@@ -2420,12 +2420,12 @@ function visBuildMap(root) {
 	{
 		const resolveOrigin = (modId, name, seen) => {
 			const key = modId + "\u0000" + name;
-			if (seen.has(key)) return modId;
+			if (seen.has(key)) return [modId, name];
 			seen.add(key);
 			const mod = moduleByRel.get(modId);
 			const file = perFile.get(modId);
-			if (!mod || !file) return modId;
-			if (mod.exports.some((e) => e.name === name && e.kind !== "re-export")) return modId;
+			if (!mod || !file) return [modId, name];
+			if (mod.exports.some((e) => e.name === name && e.kind !== "re-export")) return [modId, name];
 			const fromDir = path.posix.dirname(modId);
 			for (const imp of file.parsedImports || []) {
 				if (!imp.reExport || imp.namespace === "*") continue;
@@ -2435,13 +2435,18 @@ function visBuildMap(root) {
 					if ((n.local || n.imported) === name) return resolveOrigin(resolved, n.imported, seen);
 				}
 			}
-			return modId;
+			return [modId, name];
 		};
 		for (const m of modules) {
 			for (const e of m.exports) {
 				if (e.kind !== "re-export" || e.via) continue;
-				const origin = resolveOrigin(m.id, e.name, new Set());
-				if (origin !== m.id) e.via = origin;
+				const [origin, originName] = resolveOrigin(m.id, e.name, new Set());
+				if (origin === m.id) continue;
+				e.via = origin;
+				// The origin BINDING matters too: `export { b as a } from './x'`
+				// exposes x's `b` under the name `a` — a star sibling exposing
+				// x's own `a` is a different binding, hence ambiguous.
+				if (originName !== e.name) e.viaName = originName;
 			}
 		}
 	}
@@ -2477,10 +2482,10 @@ function visBuildMap(root) {
 				// ambiguous. If no current target still provides (name, via),
 				// the copy is withdrawn; if a target provides the name from
 				// another origin, the ambiguity branch below handles it.
-				for (const [name, via] of [...added]) {
+				for (const [name, originKey] of [...added]) {
 					const stillProvided = starReExports.get(barrelId).some((star) => {
 						const target = moduleByRel.get(star.target);
-						return target && target.exports.some((e) => e.name === name && (e.via || target.id) === via);
+						return target && target.exports.some((e) => e.name === name && (e.via || target.id) + "\u0000" + (e.viaName || e.name) === originKey);
 					});
 					if (stillProvided) continue;
 					const sameNameElsewhere = starReExports.get(barrelId).some((star) => {
@@ -2488,7 +2493,7 @@ function visBuildMap(root) {
 						return target && target.exports.some((e) => e.name === name && e.name !== "default");
 					});
 					if (sameNameElsewhere) continue; // leave for the ambiguity branch
-					const idx = barrel.exports.findIndex((x) => x.name === name && x.via === via);
+					const idx = barrel.exports.findIndex((x) => x.name === name && x.via && x.via + "\u0000" + (x.viaName || x.name) === originKey);
 					if (idx >= 0) barrel.exports.splice(idx, 1);
 					have.delete(name);
 					added.delete(name);
@@ -2501,9 +2506,10 @@ function visBuildMap(root) {
 						if (e.name === "default") continue; // a bare `export *` never forwards default (ES spec)
 						if (amb.has(e.name)) continue;
 						const via = e.via || target.id;
+						const originKey = via + "\u0000" + (e.viaName || e.name);
 						if (have.has(e.name)) {
-							if (added.has(e.name) && added.get(e.name) !== via) {
-								const idx = barrel.exports.findIndex((x) => x.name === e.name && x.via === added.get(e.name));
+							if (added.has(e.name) && added.get(e.name) !== originKey) {
+								const idx = barrel.exports.findIndex((x) => x.name === e.name && x.via && x.via + "\u0000" + (x.viaName || x.name) === added.get(e.name));
 								if (idx >= 0) barrel.exports.splice(idx, 1);
 								have.delete(e.name);
 								added.delete(e.name);
@@ -2514,8 +2520,10 @@ function visBuildMap(root) {
 						}
 						if (barrel.exports.length >= EXPANSION_CAP) break;
 						have.add(e.name);
-						added.set(e.name, via);
-						barrel.exports.push({ name: e.name, kind: "re-export", line: star.line, doc: e.doc, via });
+						added.set(e.name, originKey);
+						const copy = { name: e.name, kind: "re-export", line: star.line, doc: e.doc, via };
+						if (e.viaName) copy.viaName = e.viaName;
+						barrel.exports.push(copy);
 						changed = true;
 					}
 				}

@@ -462,18 +462,69 @@ function sudoInstallForeignFile(dir: string, target: string): { path: string } |
 	}
 }
 
-function linuxForeignOwnedFile(dir: string, target: string): ForeignOwnedFile {
+/** The image a container route runs, opt-in: a local image, so the route never pulls. */
+export const FOREIGN_UID_IMAGE_ENV = "DRAHT_FOREIGN_UID_IMAGE";
+
+/**
+ * Container uid 1 is never this user on the host: a rootful runtime keeps it as uid 1, and a rootless one maps it into
+ * the subuid range. So a file the container chowns to 1 is foreign-owned without this user holding any privilege.
+ */
+function containerForeignFile(
+	dir: string,
+	target: string,
+	env: NodeJS.ProcessEnv,
+): { path: string } | { failure: string } {
+	const image = env[FOREIGN_UID_IMAGE_ENV];
+	if (image === undefined || image === "") return { failure: `${FOREIGN_UID_IMAGE_ENV} is not set` };
+	const runtime = Bun.which("docker") ?? Bun.which("podman");
+	if (runtime === null)
+		return { failure: `${FOREIGN_UID_IMAGE_ENV} is set, but neither docker nor podman is on PATH` };
+	const script = `umask 077 && : > "$1" && chown 1:1 "$1" && chmod 0600 "$1"`;
+	const out = Bun.spawnSync(
+		[
+			runtime,
+			"run",
+			"--rm",
+			"--network",
+			"none",
+			"--pull",
+			"never",
+			"--user",
+			"0",
+			"-v",
+			`${dir}:${dir}`,
+			image,
+		].concat(["sh", "-c", script, "sh", target]),
+		{ stdin: "ignore", timeout: 60_000 },
+	);
+	if (!out.success) {
+		const said = out.stderr
+			.toString()
+			.trim()
+			.replace(/\s*\n\s*/g, " ");
+		return { failure: `${runtime} run ${image} exited ${out.exitCode ?? out.signalCode}: ${said || "no output"}` };
+	}
+	if (!isOwnedByAnotherUid(target)) {
+		rmSync(target, { force: true });
+		return { failure: `${runtime} run ${image} made a file owned by this user` };
+	}
+	return { path: target };
+}
+
+function linuxForeignOwnedFile(dir: string, target: string, env: NodeJS.ProcessEnv): ForeignOwnedFile {
 	const linked = hardlinkForeignFile(["/etc/passwd"], target);
 	if ("path" in linked) return linked;
 	const installed = sudoInstallForeignFile(dir, target);
 	if ("path" in installed) return installed;
+	const contained = containerForeignFile(dir, target, env);
+	if ("path" in contained) return contained;
 
 	let hardlinks = "unreadable";
 	try {
 		hardlinks = readFileSync("/proc/sys/fs/protected_hardlinks").toString().trim();
 	} catch {}
 	return {
-		unavailable: `${[...linked.failures, installed.failure].join("; ")} (fs.protected_hardlinks=${hardlinks})`,
+		unavailable: `${[...linked.failures, installed.failure, contained.failure].join("; ")} (fs.protected_hardlinks=${hardlinks})`,
 	};
 }
 
@@ -514,8 +565,9 @@ function ciIsSet(env: NodeJS.ProcessEnv): boolean {
 /**
  * `<dir>/foreign-owned.yaml`, owned by a uid that is not ours, in a directory we own.
  *
- * Never a copy or a fake: the file is a root-made one (Linux, through `sudo -n`) or a hard link to an inode another
- * user owns (macOS; Linux too when the kernel allows), and its owner is re-read with `lstat` before it is returned.
+ * Never a copy or a fake: the file is a root-made one (Linux, through `sudo -n`), one a container chowned to its uid 1
+ * (Linux, opt-in through {@link FOREIGN_UID_IMAGE_ENV}), or a hard link to an inode another user owns (macOS; Linux
+ * too when the kernel allows), and its owner is re-read with `lstat` before it is returned.
  * With no way to make one the answer is `{unavailable}` and the reason, EXCEPT when `CI` is set: a skip there would
  * leave the foreign-uid refusal unwitnessed, so it throws. Replaces any file already at that name.
  *
@@ -525,7 +577,7 @@ export function foreignOwnedFileIn(dir: string, env: NodeJS.ProcessEnv = process
 	const target = join(dir, FOREIGN_FILE_NAME);
 	rmSync(target, { force: true });
 	let result: ForeignOwnedFile;
-	if (process.platform === "linux") result = linuxForeignOwnedFile(dir, target);
+	if (process.platform === "linux") result = linuxForeignOwnedFile(dir, target, env);
 	else if (process.platform === "darwin") result = darwinForeignOwnedFile(target);
 	else result = { unavailable: `there is no route to a foreign-owned file on ${process.platform}` };
 

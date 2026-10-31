@@ -23,9 +23,12 @@ const GATEWAY_CLI = resolve(import.meta.dir, "..", "..", "cli.ts");
  */
 const MAX_BASE_LENGTH = 40;
 
+/** Moves `shortBase` off `/tmp`, for a host whose container runtime cannot see this process's private `/tmp`. */
+export const SHORT_ROOT_ENV = "DRAHT_TEST_SHORT_ROOT";
+
 /** A canonical `mkdtemp` directory (mode 0700) under `/tmp`, short enough that a session socket inside it can bind. */
 export function shortBase(prefix: string): string {
-	const base = realpathSync(mkdtempSync(`/tmp/${prefix}`));
+	const base = realpathSync(mkdtempSync(join(process.env[SHORT_ROOT_ENV] || "/tmp", prefix)));
 	if (base.length > MAX_BASE_LENGTH) {
 		rmSync(base, { recursive: true, force: true });
 		throw new Error(

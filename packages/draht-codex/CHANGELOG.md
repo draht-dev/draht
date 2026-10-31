@@ -4,7 +4,6 @@
 
 ### Added
 
-- add opt-in token budgets for repositories with `.draht/budgets.json`, enforced by trusted lifecycle hooks with the native defaults and exclusions, guided setup through `$draht:budget`, user-only task resets, and a bundled CLI for validation and status
 - `kg` engine (`bin/draht-kg.cjs`): graphify-parity **symbol-level** knowledge graph — deterministic indexer (`kg build` → `graph.json` in graphify's node-link schema + `KG_REPORT.md`), graphify query semantics (`kg query` seed-scored BFS/DFS traversal with NODE/EDGE output, `kg explain`, `kg path`, `kg affected`), and exports (`kg export tree|wiki|graphml`) ([#2](https://github.com/draht-dev/draht/pull/2))
 - graphify parity for the living map: barrel re-exports (`export { X } from`, multi-line blocks, `export * from` with `via` provenance) now populate each barrel's exports/symbols; MAP.html gains the Insights view (clusters, hotspots, surprising connections, rationale highlights; keyboard `i`) ([#2](https://github.com/draht-dev/draht/pull/2))
 
@@ -14,6 +13,20 @@
 - graph-impact echoes full resolved paths and explains zero-impact barrels instead of printing a bare `index.ts — 0 modules` ([#2](https://github.com/draht-dev/draht/pull/2))
 - graph-clusters labels are unique and descriptive (dominant layer / ordinal suffixes instead of six identical `packages/ai` rows) ([#2](https://github.com/draht-dev/draht/pull/2))
 - MAP.html search covers `modules[*].symbols` (non-exported declarations and barrel APIs), not just the exported-only symbolIndex ([#2](https://github.com/draht-dev/draht/pull/2))
+
+## [2026.10.31-1] - 2026-10-31
+
+### Added
+
+- add opt-in per-file token budgets for draht and the Claude Code and Codex plugins
+
+### Fixed
+
+- generate the budget runtime bundle identically under hoisted and isolated installs
+- pair moved files by shared content and leave deletions of ignored files uncharged
+- keep allowances for files Git ignores temporarily and pair moves by content first
+- harden checks for new worktrees, missing Git, named pipes, stale locks, moves, and ignored files
+- run checks in the compiled binary without Node and preflight Codex apply_patch edits
 
 ## [2026.10.23-1] - 2026-10-23
 

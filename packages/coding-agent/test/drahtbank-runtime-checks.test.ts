@@ -122,13 +122,18 @@ describe("Drahtbank runtime evidence", () => {
 		expect(assessRuntimeChecks(failedSuite, packageRoot).passed).toBe(false);
 	});
 
-	it("runs the real focused source-runtime proofs offline and preserves their evidence", () => {
+	it("runs the real focused source-runtime proofs offline and preserves their evidence", async () => {
 		const output = mkdtempSync(join(tmpdir(), "drahtbank-runtime-"));
 		temporary.push(output);
 		vi.stubEnv("DRAHT_PACKAGE_DIR", join(output, "wrong-package"));
 		vi.stubEnv("GIT_DIR", join(output, "wrong-git-dir"));
-		const report = runRuntimeChecks(output, { root, timeoutMs: 150_000 });
-		expect(report.errors, readFileSync(join(output, "stderr.txt"), "utf8")).toEqual([]);
+		const report = await runRuntimeChecks(output, { root, timeoutMs: 150_000 });
+		// The nested run reports through vitest.json, so its failures never reach stderr.
+		const failures = report.results.flatMap((result) => result.failures);
+		expect(
+			report.errors,
+			`${readFileSync(join(output, "stderr.txt"), "utf8")}\n${JSON.stringify(failures, null, 2)}`,
+		).toEqual([]);
 		expect(report).toMatchObject({
 			complete: true,
 			passed: true,
@@ -146,27 +151,27 @@ describe("Drahtbank runtime evidence", () => {
 		expect(report.stdoutSha256).toBe(hash(readFileSync(join(output, "stdout.txt"), "utf8")));
 		expect(report.vitestSha256).toBe(hash(readFileSync(join(output, "vitest.json"), "utf8")));
 		expect(JSON.parse(readFileSync(join(output, "report.json"), "utf8"))).toEqual(report);
-		expect(() => runRuntimeChecks(output, { root })).toThrow("empty");
+		await expect(runRuntimeChecks(output, { root })).rejects.toThrow("empty");
 	}, 180_000);
 
-	it("refuses existing output before launching or changing evidence", () => {
+	it("refuses existing output before launching or changing evidence", async () => {
 		const output = mkdtempSync(join(tmpdir(), "drahtbank-runtime-existing-"));
 		temporary.push(output);
 		writeFileSync(join(output, "evidence"), "keep");
-		expect(() => runRuntimeChecks(output, { root })).toThrow("empty");
+		await expect(runRuntimeChecks(output, { root })).rejects.toThrow("empty");
 		expect(readFileSync(join(output, "evidence"), "utf8")).toBe("keep");
 	});
 
-	it("records a timed-out runner as incomplete evidence", () => {
+	it("records a timed-out runner as incomplete evidence", async () => {
 		const output = mkdtempSync(join(tmpdir(), "drahtbank-runtime-timeout-"));
 		temporary.push(output);
-		const report = runRuntimeChecks(output, { root, timeoutMs: 1 });
+		const report = await runRuntimeChecks(output, { root, timeoutMs: 1 });
 		expect(report).toMatchObject({ complete: false, passed: false, process: { exitCode: null } });
 		expect(report.process.error).toContain("ETIMEDOUT");
 		expect(report.errors).toContain("Vitest process did not complete successfully");
 	});
 
-	it.each(["hoisted", "package-local"])("resolves real runner packages with %s Vitest", (layout) => {
+	it.each(["hoisted", "package-local"])("resolves real runner packages with %s Vitest", async (layout) => {
 		const fixture = mkdtempSync(join(tmpdir(), "drahtbank-runtime-dependencies-"));
 		temporary.push(fixture);
 		const fixturePackage = join(fixture, "packages/coding-agent");
@@ -207,7 +212,7 @@ describe("Drahtbank runtime evidence", () => {
 			{ cwd: fixture },
 		);
 		// Resolve and fingerprint the real dependencies before exercising the timeout path.
-		const report = runRuntimeChecks(join(fixture, "output"), { root: fixture, timeoutMs: 1 });
+		const report = await runRuntimeChecks(join(fixture, "output"), { root: fixture, timeoutMs: 1 });
 		expect(report.command.slice(1, 3)).toEqual([
 			join(fixture, "node_modules/tsx/dist/cli.mjs"),
 			join(vitestModules, "vitest/dist/cli.js"),

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [2026.10.31-1] - 2026-10-31
+
+### Added
+
+- add opt-in per-file token budgets for draht and the Claude Code and Codex plugins
+
 ## [2026.10.23-1] - 2026-10-23
 
 ### Added

@@ -12,4 +12,4 @@ export interface RuntimeReport {
 }
 export const RUNTIME_CHECKS: RuntimeProof[];
 export function assessRuntimeChecks(value: unknown, packageRoot: string): RuntimeAssessment;
-export function runRuntimeChecks(output: string, options?: {root?: string; timeoutMs?: number}): RuntimeReport;
+export function runRuntimeChecks(output: string, options?: {root?: string; timeoutMs?: number}): Promise<RuntimeReport>;

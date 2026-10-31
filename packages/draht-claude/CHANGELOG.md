@@ -1,10 +1,18 @@
 # Changelog
 
-## [Unreleased]
+## [2026.10.31-1] - 2026-10-31
 
 ### Added
 
-- add opt-in token budgets for repositories with `.draht/budgets.json`, enforced by trusted lifecycle hooks with the native defaults and exclusions, guided setup through `/draht:budget`, user-only task resets, and a bundled CLI for validation and status
+- add opt-in per-file token budgets for draht and the Claude Code and Codex plugins
+
+### Fixed
+
+- generate the budget runtime bundle identically under hoisted and isolated installs
+- pair moved files by shared content and leave deletions of ignored files uncharged
+- keep allowances for files Git ignores temporarily and pair moves by content first
+- harden checks for new worktrees, missing Git, named pipes, stale locks, moves, and ignored files
+- run checks in the compiled binary without Node and preflight Codex apply_patch edits
 
 ## [2026.10.23-1] - 2026-10-23
 

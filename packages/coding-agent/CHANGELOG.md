@@ -1,14 +1,25 @@
 # Changelog
 
-## [Unreleased]
+## [2026.10.31-1] - 2026-10-31
 
 ### Added
 
-- Permission rules match tool names with `*` and `?`, so `tool: "mcp__docs__*"` covers every tool of the `docs` MCP server; a deny rule whose glob names `bash` also checks `powershell` commands, and braces or brackets in `tool` are rejected ([#31](https://github.com/draht-dev/draht/issues/31))
-- The permission gate runs unmatched calls to read-only tools (`readOnlyHint`) without asking in the `ask` and `auto` modes when the hint comes from outside the project: a built-in tool, an extension loaded with `-e`, by the SDK, or from the user's extensions and packages, or an MCP server in the global `mcp.json` or registered by such an extension. In `ask` the tool must also declare `openWorldHint: false`. Project extensions, project `mcp.json` servers (also through the MCP resource tools), tools that also declare `destructiveHint`, and calls naming a path outside the project still ask ([#31](https://github.com/draht-dev/draht/issues/31))
-- `supervised` permission mode: like `ask`, and every `write` and `edit` asks, also inside the project; set it with `/permissions supervised` or `DRAHT_PERMISSION_MODE=supervised` ([#31](https://github.com/draht-dev/draht/issues/31))
-- Tool definitions and `pi.getAllTools()` carry `annotationsScope`, the scope of the source a tool's hints come from, `pi.getMcpServers()` reports each server's `extensionScope`, and `discoverAndLoadExtensions` marks a project's extensions as `project` scope ([#31](https://github.com/draht-dev/draht/issues/31))
-- add opt-in token budgets for repositories with `.draht/budgets.json`: 5,000 tokens per code file and 1,500 per documentation file by default, a growth allowance for files already over a limit, skipped lockfiles, changelogs, and generated files, optional shared task totals, edit preflight, completion auditing, and `/budget` for guided setup, status, and user-only task resets
+- add opt-in per-file token budgets for draht and the Claude Code and Codex plugins
+- trust read-only tools from outside the project, match rule tools with globs, add supervised mode
+
+### Changed
+
+- show the nested runtime-check failures when the evidence test fails
+- list the supervised permission mode in environment variables and keybindings
+
+### Fixed
+
+- run the runtime-checks suite without blocking the caller's event loop
+- generate the budget runtime bundle identically under hoisted and isolated installs
+- pair moved files by shared content and leave deletions of ignored files uncharged
+- keep allowances for files Git ignores temporarily and pair moves by content first
+- harden checks for new worktrees, missing Git, named pipes, stale locks, moves, and ignored files
+- run checks in the compiled binary without Node and preflight Codex apply_patch edits
 
 ## [2026.10.23-1] - 2026-10-23
 

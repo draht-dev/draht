@@ -36,6 +36,9 @@ export interface SessionLauncherOptions {
 	mintSessionId?: () => string;
 }
 
+/** Only draht publishes an attachable socket, so a spawn of any other harness would time out after {@link DEFAULT_HANDSHAKE_DEADLINE_MS}. */
+export const V1_SPAWNABLE_HARNESS_IDS = ["draht"] as const;
+
 /** No `RegistryIdSchema` id can contain it, so `a` + `b.c` and `a.b` + `c` cannot share one key. */
 const PAIR_SEPARATOR = "\u0000";
 

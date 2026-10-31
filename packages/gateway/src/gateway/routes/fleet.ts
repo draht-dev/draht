@@ -17,7 +17,9 @@ import { Hono } from "hono";
 import { upgradeWebSocket } from "hono/bun";
 import type { WSContext } from "hono/ws";
 import pkg from "../../../package.json" with { type: "json" };
-import { SessionResumer } from "../../session/spawn-primitive.js";
+import type { UserRegistry } from "../../session/harness-resolver.js";
+import { SessionLauncher, V1_SPAWNABLE_HARNESS_IDS } from "../../session/session-launcher.js";
+import { SessionResumer, SessionSpawner } from "../../session/spawn-primitive.js";
 import { logger } from "../logger";
 import { decodeWsBearerSubprotocol } from "../ws-bearer";
 
@@ -152,6 +154,18 @@ export interface FleetRoutesOptions {
 	 */
 	resumeSession?: ResumeSessionPort;
 	/**
+	 * The user's registry file, which makes `session_spawn` and `registry` answerable (R36-SPAWN.1).
+	 * Absent means spawning is never offered; when a connection is offered it is decided in `/attach`'s `onOpen`.
+	 */
+	userRegistry?: UserRegistry;
+	/**
+	 * How `session_spawn` is answered, for a test that drives the port by hand.
+	 *
+	 * When present it goes to every bridge and is advertised whether or not a
+	 * registry file exists, exactly as {@link resumeSession} does for resume.
+	 */
+	spawnSession?: AttachSpawnSessionPort;
+	/**
 	 * The daemon's single fleet observer (R35-ALWAYS.10).
 	 *
 	 * Optional so a test can inject one it drives by hand. When absent this
@@ -173,6 +187,10 @@ export interface FleetRoutesOptions {
  * here instead of a second, drifting copy of the contract.
  */
 export type AttachDeviceAuthenticator = NonNullable<AttachBridgeOptions["devices"]>;
+
+/** The bridge's spawn and registry ports, named from its options for the reason {@link AttachDeviceAuthenticator} is. */
+export type AttachSpawnSessionPort = NonNullable<AttachBridgeOptions["spawnSession"]>;
+type AttachRegistryPort = NonNullable<AttachBridgeOptions["registry"]>;
 
 /**
  * How the route asks, per connection, what this daemon's device posture is.
@@ -531,6 +549,12 @@ export function createFleetRoutes(options: FleetRoutesOptions): Hono {
 			statuses,
 		});
 
+	// THE SPAWNER IS THE DAEMON'S ONE AS WELL, AND SHARED BY RESUME AND LAUNCH. It
+	// remembers the pids it started, and `stop()` only signals a process GROUP for
+	// a pid it remembers: a second instance would TERM the bare pid of a child the
+	// first one made, and a grandchild would outlive the deadline.
+	const spawner = new SessionSpawner({ socketDir: options.socketDir, agentDir: dirname(options.socketDir) });
+
 	/**
 	 * How a `session_resume` frame becomes a running session (R35-ALWAYS.9).
 	 *
@@ -560,6 +584,7 @@ export function createFleetRoutes(options: FleetRoutesOptions): Hono {
 	// constructor stores thunks and nothing else — no directory is read, no
 	// process is started — so an unused resumer costs an object.
 	const resumer = new SessionResumer({
+		spawner,
 		socketDir: options.socketDir,
 		agentDir: dirname(options.socketDir),
 		history: () => history.enumerate().rows,
@@ -573,6 +598,16 @@ export function createFleetRoutes(options: FleetRoutesOptions): Hono {
 				.map((session) => session.id),
 	});
 	const resumeSession: ResumeSessionPort = options.resumeSession ?? ((sessionId: string) => resumer.resume(sessionId));
+
+	// One launcher per daemon, for the resumer's reason: built in `onOpen`, each connection would get its own empty in-flight set.
+	const { userRegistry } = options;
+	const launcher =
+		userRegistry === undefined
+			? undefined
+			: new SessionLauncher({ spawner, registry: userRegistry.load, spawnableHarnessIds: V1_SPAWNABLE_HARNESS_IDS });
+	const launchSession: AttachSpawnSessionPort | undefined =
+		launcher && (({ harnessId, projectId }) => launcher.launch(harnessId, projectId));
+	const registrySnapshot: AttachRegistryPort | undefined = launcher && (() => launcher.snapshot());
 
 	/**
 	 * `GET /fleet` — the live fleet, plus the newest resumable history rows
@@ -739,6 +774,13 @@ export function createFleetRoutes(options: FleetRoutesOptions): Hono {
 					// pre-authentication stretch — the one a phone spends on a cold
 					// radio — defended by nothing.
 					stopKeepalive = keepAlive(ws, options.keepaliveMs ?? 0);
+					// Asked per connection, for the reason `devicesFor` is: a registry
+					// written after the daemon started is offered to the next connection
+					// with no restart. Anything at the path offers both ports, even a file
+					// the loader will refuse, so the operator is answered with the rule
+					// instead of silence; nothing there is a daemon that can only say no,
+					// and an absent capability already says so without a round trip.
+					const offered = userRegistry?.present() === true;
 					bridge = new AttachBridge({
 						socketDir: options.socketDir,
 						connection: rendererConnection(ws),
@@ -746,9 +788,11 @@ export function createFleetRoutes(options: FleetRoutesOptions): Hono {
 						// bridge subscribes for its own lifetime and unsubscribes in
 						// `close()`; the observer polls only while somebody is subscribed.
 						fleet,
-						// The daemon's one spawn path, injected as a port because
+						// The daemon's one spawn path, injected as ports because
 						// `@draht/geist-core` may not import this package.
 						resumeSession,
+						spawnSession: options.spawnSession ?? (offered ? launchSession : undefined),
+						registry: offered ? registrySnapshot : undefined,
 						limits,
 						server: { name: "draht-gateway", version: pkg.version },
 						authorize: revocationPolicy(authentication.devices),

@@ -2,18 +2,18 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { GeistConfig } from "@draht/geist-protocol";
 import {
 	HarnessResolutionError,
 	registryProjection,
 	resolveHarnessLaunch,
-	userRegistryProvider,
+	userRegistry,
 } from "../session/harness-resolver.js";
+import { canonicalTempRoot } from "./helpers/temp-root.js";
 
 const cleanup: string[] = [];
-const TEMP_ROOT = process.platform === "linux" ? realpathSync("/run/lock") : realpathSync(tmpdir());
+const TEMP_ROOT = canonicalTempRoot();
 
 /** Use the platform's canonical temporary root so ownership checks see the real path. */
 function tempRoot(prefix: string): string {
@@ -42,6 +42,15 @@ function program(path: string): string {
 
 function directory(path: string): string {
 	mkdirSync(path, { recursive: true });
+	return path;
+}
+
+const VALID_REGISTRY = "harness:\n  default: draht\n  agents:\n    draht: { cmd: /bin/sh }\n";
+
+function registryFile(dir: string, mode: number, body = VALID_REGISTRY, name = "config.yaml"): string {
+	const path = join(dir, name);
+	writeFileSync(path, body);
+	chmodSync(path, mode);
 	return path;
 }
 
@@ -292,21 +301,157 @@ describe("the registry is a provider asked per call", () => {
 		expect(refusal(() => resolveHarnessLaunch("draht", "fr3n", { registry: provider })).code).toBe("unknown_harness");
 		expect(reads).toBe(3);
 	});
+});
 
-	test("userRegistryProvider re-reads the user's file, it does not cache its contents", () => {
-		const home = tempRoot("hr-file-");
-		const path = join(home, "config.yaml");
-		const write = (defaultId: string) => {
-			writeFileSync(path, `harness:\n  default: ${defaultId}\n  agents:\n    ${defaultId}: { cmd: /bin/sh }\n`);
-			chmodSync(path, 0o600);
-		};
+describe("a harness executable inside a declared project is project-controlled code", () => {
+	const inside = (project: string, root: string) =>
+		`the "draht" harness executable is inside project "${project}" (${root}); a project's own files cannot be the harness`;
 
-		write("draht");
-		const provider = userRegistryProvider({ explicit: path });
-		expect(provider().harness.default).toBe("draht");
+	test("one inside the requested project's root is refused, and the same file with the project elsewhere resolves", () => {
+		const base = tempRoot("hr-inproj-");
+		const root = directory(join(base, "work", "fr3n"));
+		const cmd = program(join(root, "node_modules", ".bin", "draht"));
 
-		write("claude");
-		expect(provider().harness.default).toBe("claude");
+		const refused = refusal(() => resolveHarnessLaunch("draht", "fr3n", { registry: () => registry(cmd, root) }));
+		expect(refused.code).toBe("refused");
+		expect(refused.message).toContain(inside("fr3n", root));
+
+		const moved = directory(join(base, "work", "moved"));
+		expect(resolveHarnessLaunch("draht", "fr3n", { registry: () => registry(cmd, moved) }).executable).toBe(cmd);
+	});
+
+	test("one inside ANOTHER declared project's root is refused, and resolves once that project is not declared", () => {
+		const base = tempRoot("hr-otherproj-");
+		const work = directory(join(base, "work", "fr3n"));
+		const other = directory(join(base, "work", "other"));
+		const cmd = program(join(other, "bin", "agent"));
+		const both = registry(cmd, work, { projects: { fr3n: { root: work }, other: { root: other } } });
+		const only = registry(cmd, work);
+
+		const refused = refusal(() => resolveHarnessLaunch("draht", "fr3n", { registry: () => both }));
+		expect(refused.code).toBe("refused");
+		expect(refused.message).toContain(inside("other", other));
+		expect(resolveHarnessLaunch("draht", "fr3n", { registry: () => only }).executable).toBe(cmd);
+	});
+
+	test("a script harness inside a declared project is refused before it becomes an interpreter launch", () => {
+		const base = tempRoot("hr-scriptproj-");
+		const root = directory(join(base, "work", "fr3n"));
+		const script = program(join(root, "tools", "agent.js"));
+
+		expect(
+			refusal(() => resolveHarnessLaunch("draht", "fr3n", { registry: () => registry(script, root) })).message,
+		).toContain(inside("fr3n", root));
+	});
+
+	test("a forbidden root the caller supplied keeps its own message and names no project", () => {
+		const base = tempRoot("hr-callerroot-");
+		const cmd = program(join(base, "bin", "agent"));
+		const config = registry(cmd, directory(join(base, "work", "fr3n")));
+
+		const refused = refusal(() =>
+			resolveHarnessLaunch("draht", "fr3n", { registry: () => config, forbiddenRoots: [join(base, "bin")] }),
+		);
+
+		expect(refused.code).toBe("refused");
+		expect(refused.message).toContain(`the "draht" harness executable is inside a forbidden root: ${cmd}`);
+		expect(refused.message).not.toContain("inside project");
+	});
+
+	test("a project root that is not absolute elsewhere in the registry does not refuse every harness", () => {
+		const base = tempRoot("hr-strayproj-");
+		const work = directory(join(base, "work", "fr3n"));
+		const cmd = program(join(base, "bin", "agent"));
+		const config = registry(cmd, work, { projects: { fr3n: { root: work }, stray: { root: "src" } } });
+
+		expect(resolveHarnessLaunch("draht", "fr3n", { registry: () => config }).executable).toBe(cmd);
+	});
+});
+
+describe("the user registry is an object with a path, a presence check and a loader", () => {
+	test("its path is fixed once: an explicit one wins, otherwise the home's .geist/config.yaml", () => {
+		expect(userRegistry({ explicit: "/x/registry.yaml", home: "/h" }).path).toBe("/x/registry.yaml");
+		expect(userRegistry({ home: "/h" }).path).toBe("/h/.geist/config.yaml");
+	});
+
+	test("nothing there is not present: no file, no directory above it, and a file where a directory should be", () => {
+		const home = tempRoot("hr-absent-");
+		const file = registryFile(home, 0o600);
+
+		expect(userRegistry({ explicit: join(home, "missing.yaml") }).present()).toBe(false);
+		expect(userRegistry({ explicit: join(home, "no-such-dir", "config.yaml") }).present()).toBe(false);
+		expect(userRegistry({ explicit: join(file, "config.yaml") }).present()).toBe(false);
+	});
+
+	test("a dangling link, a file the loader will refuse and a directory are all present", () => {
+		const home = tempRoot("hr-present-");
+		const dangling = join(home, "dangling.yaml");
+		symlinkSync(join(home, "nowhere.yaml"), dangling);
+
+		expect(userRegistry({ explicit: dangling }).present()).toBe(true);
+		expect(userRegistry({ explicit: registryFile(home, 0o644) }).present()).toBe(true);
+		expect(userRegistry({ explicit: directory(join(home, "a-directory")) }).present()).toBe(true);
+	});
+
+	test.skipIf(process.getuid?.() === 0)("a path under a directory that cannot be searched is present", () => {
+		const home = tempRoot("hr-sealed-");
+		const sealed = directory(join(home, "sealed"));
+		const path = registryFile(sealed, 0o600);
+		chmodSync(sealed, 0o000);
+
+		try {
+			expect(userRegistry({ explicit: path }).present()).toBe(true);
+		} finally {
+			chmodSync(sealed, 0o700);
+		}
+	});
+
+	test("a file the loader refuses is a refusal that names the rule, from load and from the resolver", () => {
+		const home = tempRoot("hr-mode-");
+		const path = registryFile(home, 0o644);
+		const { load } = userRegistry({ explicit: path });
+
+		const direct = refusal(() => load());
+		expect(direct.code).toBe("refused");
+		expect(direct.message).toContain(`(mode on file ${path})`);
+
+		const resolved = refusal(() => resolveHarnessLaunch("draht", "fr3n", { registry: load }));
+		expect(resolved.code).toBe("refused");
+		expect(resolved.message).toContain(`(mode on file ${path})`);
+	});
+
+	test("a file that has gone since it was offered is refused, not a fault", () => {
+		const home = tempRoot("hr-gone-");
+		const path = registryFile(home, 0o600);
+		const registryObject = userRegistry({ explicit: path });
+		expect(registryObject.present()).toBe(true);
+
+		rmSync(path);
+
+		const error = refusal(() => registryObject.load());
+		expect(error.code).toBe("refused");
+		expect(error.message).toContain(`(missing on file ${path})`);
+	});
+
+	test("invalid yaml is refused with the loader's own words", () => {
+		const home = tempRoot("hr-yaml-");
+		const path = registryFile(home, 0o600, "harness: [unclosed\n");
+
+		const error = refusal(() => userRegistry({ explicit: path }).load());
+
+		expect(error.code).toBe("refused");
+		expect(error.message).toContain(`Invalid geist config at ${path}`);
+	});
+
+	test("a private file is re-read on every load, and the change is seen", () => {
+		const home = tempRoot("hr-reread-");
+		const path = registryFile(home, 0o600);
+		const { load } = userRegistry({ explicit: path });
+		expect(load().harness.default).toBe("draht");
+
+		registryFile(home, 0o600, "harness:\n  default: claude\n  agents:\n    claude: { cmd: /bin/sh }\n");
+
+		expect(load().harness.default).toBe("claude");
 	});
 });
 

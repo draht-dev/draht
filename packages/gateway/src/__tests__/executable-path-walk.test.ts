@@ -13,7 +13,7 @@ import {
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import {
 	assertSafeExecutablePath,
 	canonicalize,
@@ -21,6 +21,7 @@ import {
 	resolveDrahtExecutable,
 	SpawnRefusedError,
 } from "../session/spawn-primitive.js";
+import { canonicalTempRoot } from "./helpers/temp-root.js";
 
 const uid = process.getuid?.() ?? 0;
 
@@ -29,7 +30,7 @@ const MONOREPO_CANDIDATE = resolve(import.meta.dir, "..", "..", "..", "coding-ag
 
 const cleanup: string[] = [];
 const SHARED_TEMP_ROOT = realpathSync("/tmp");
-const TEST_TEMP_ROOT = process.platform === "linux" ? realpathSync("/run/lock") : SHARED_TEMP_ROOT;
+const TEST_TEMP_ROOT = canonicalTempRoot();
 
 /** `/tmp` is a symlink to `/private/tmp` on macOS, so an unresolved temp path fails the no-follow walk immediately. */
 function fullyResolvedTempRoot(prefix: string): string {
@@ -117,6 +118,27 @@ describe("the sticky exemption is about directories", () => {
 		chmodSync(bin, 0o755);
 		expect(() => assertSafeExecutablePath(bin, uid)).not.toThrow();
 	});
+});
+
+describe("every component must be owned by the caller or by root", () => {
+	// Root owns whatever it creates, so under uid 0 no file in a temp directory can be foreign to the walk.
+	test.skipIf(uid === 0)(
+		"a path we own is refused for another uid, at a component we own, and passes for ours",
+		() => {
+			const root = fullyResolvedTempRoot("xw-ow-");
+			const bin = program(join(root, "draht"));
+
+			expect(() => assertSafeExecutablePath(bin, uid)).not.toThrow();
+
+			const error = refusal(() => assertSafeExecutablePath(bin, uid + 1));
+			expect(error.code).toBe("refused");
+			const prefix = "not owned by this user or root: ";
+			expect(error.message.startsWith(prefix)).toBe(true);
+			const component = error.message.slice(prefix.length);
+			expect(relative(component, bin).startsWith("..")).toBe(false);
+			expect(statSync(component).uid).toBe(uid);
+		},
+	);
 });
 
 describe("a setuid or setgid leaf is refused", () => {

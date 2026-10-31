@@ -6,6 +6,7 @@ import { cors } from "hono/cors";
 import pkg from "../../package.json" with { type: "json" };
 import { attachKeepaliveIntervalMs, DEFAULT_CONFIG, type GatewaySettings } from "../config/config";
 import { EventBus } from "../session/event-bus";
+import type { UserRegistry } from "../session/harness-resolver";
 import { SessionManager } from "../session/session-manager";
 import { assertBindHostAllowed, isLoopbackPeer, nonLoopbackPeerRefusal } from "./bind-host";
 import { bearerAuthMiddleware } from "./middleware/auth";
@@ -44,9 +45,11 @@ export interface GatewayConfig {
 	/**
 	 * Explicit opt-in to a non-loopback bind.
 	 *
-	 * `POST /sessions` spawns an arbitrary `command` array, so a reachable bind
-	 * is remote code execution for any bearer-token holder. Setting this is the
-	 * programmatic equivalent of the CLI's `--allow-non-loopback`.
+	 * The attach wire starts sessions (`session_resume`, and `session_spawn` once a
+	 * registry exists) and every session runs tools as the user who started this
+	 * daemon, so a reachable bind lets any credential holder drive an agent with that
+	 * user's authority. Setting this is the programmatic equivalent of the CLI's
+	 * `--allow-non-loopback`.
 	 */
 	allowNonLoopback?: boolean;
 	/**
@@ -83,6 +86,11 @@ export interface GatewayConfig {
 	 * be spelled `() => store` at every call site.
 	 */
 	devices?: AttachDeviceAuthenticator | AttachDeviceProvider;
+	/**
+	 * The user's registry file, which `session_spawn` and `registry` are answered from (R36-SPAWN.1).
+	 * Absent means spawning is never offered; see `FleetRoutesOptions.userRegistry`.
+	 */
+	userRegistry?: UserRegistry;
 	/**
 	 * Sink for the bind-posture notices — the non-loopback opt-in warning, and
 	 * the first refusal of an off-box request. Defaults to `console.warn`.
@@ -334,6 +342,7 @@ export function createServer(config: GatewayConfig): ServerHandle {
 			sessionsDir: config.sessionsDir ?? resolveSessionsDir(),
 			authToken: config.authToken,
 			devices: deviceProvider(config.devices),
+			userRegistry: config.userRegistry,
 			// Mounted exactly once per `createServer`, so the observer this surface
 			// builds — or the one handed in here — is the process's only one.
 			fleet: config.fleet,

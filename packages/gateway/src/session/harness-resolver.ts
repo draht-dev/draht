@@ -52,10 +52,37 @@ export interface HarnessResolverOptions {
 	spawnableHarnessIds?: readonly string[];
 }
 
-/** The path is fixed once; the FILE is re-checked and re-read on every call, because R36-SPAWN.3 says on every load. */
-export function userRegistryProvider(options: UserRegistryPathOptions = {}): RegistryProvider {
+export interface UserRegistry {
+	readonly path: string;
+	/** Whether anything is at the path, links not followed. Decides if spawning is OFFERED, never if it is allowed. */
+	present(): boolean;
+	load: RegistryProvider;
+}
+
+/** The path is fixed once; the FILE is re-checked and re-read on every `load`, because R36-SPAWN.3 says on every load. */
+export function userRegistry(options: UserRegistryPathOptions = {}): UserRegistry {
 	const path = resolveUserRegistryPath(options);
-	return () => loadGeistConfigFile(path);
+	return {
+		path,
+		present() {
+			try {
+				lstatSync(path);
+				return true;
+			} catch (error) {
+				// Anything but "no such entry" (an unsearchable parent, say) is something there that the loader will name.
+				const code = (error as NodeJS.ErrnoException).code;
+				return code !== "ENOENT" && code !== "ENOTDIR";
+			}
+		},
+		// Refused, not rethrown raw: no program was ever chosen, so the wire must not say `spawn_failed`.
+		load() {
+			try {
+				return loadGeistConfigFile(path);
+			} catch (error) {
+				throw new HarnessResolutionError("refused", error instanceof Error ? error.message : String(error));
+			}
+		},
+	};
 }
 
 export function resolveHarnessLaunch(
@@ -87,7 +114,13 @@ export function resolveHarnessLaunch(
 		approvedRoots: config.approvedRoots ?? [],
 		forbiddenRoots: options.forbiddenRoots ?? [],
 	};
-	const { executable, leadingArgs } = resolveHarnessExecutable(harnessId, spec, uid, roots);
+	// Any declared project, not only the requested one: a binary in project A is A's code in every spawn, B's included.
+	// Relative roots are dropped here (the project-root check below refuses the one that is asked for) so one bad
+	// entry cannot refuse every harness.
+	const declaredProjects = Object.entries(config.projects ?? {}).flatMap(([id, entry]) =>
+		isAbsolute(entry.root) ? [{ id, root: entry.root }] : [],
+	);
+	const { executable, leadingArgs } = resolveHarnessExecutable(harnessId, spec, uid, roots, declaredProjects);
 	const projectRoot = canonicalDirectory(project.root, `the "${projectId}" project root`, roots);
 
 	return {
@@ -145,14 +178,33 @@ function resolveHarnessExecutable(
 	spec: AgentLaunchSpec,
 	uid: number,
 	roots: ExecutableRoots,
+	projects: readonly DeclaredProject[],
 ): { executable: string; leadingArgs: string[] } {
 	const specArgs = [...(spec.args ?? [])];
 	const what = `the "${harnessId}" harness executable`;
 	assertNoParentTraversal(spec.cmd, what);
 	const target = refusing(() => canonicalize(spec.cmd, uid, what, { ...roots, followSymlinks: false }));
+	assertOutsideProjects(target, what, projects);
 	if (!isScript(target)) return { executable: target, leadingArgs: specArgs };
 	const interpreter = refusing(() => canonicalize(realpathSync(process.execPath), uid, "the javascript runtime"));
 	return { executable: interpreter, leadingArgs: [target, ...specArgs] };
+}
+
+interface DeclaredProject {
+	id: string;
+	root: string;
+}
+
+/** Checked apart from the caller's forbidden roots so the operator is told which project holds the file, not that they forbade something. */
+function assertOutsideProjects(canonical: string, what: string, projects: readonly DeclaredProject[]): void {
+	for (const project of projects) {
+		if (isInsideRoot(canonical, canonicalRoot(project.root))) {
+			throw new HarnessResolutionError(
+				"refused",
+				`${what} is inside project "${project.id}" (${project.root}); a project's own files cannot be the harness`,
+			);
+		}
+	}
 }
 
 function refusing<T>(attempt: () => T): T {

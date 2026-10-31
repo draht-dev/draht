@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -117,11 +117,45 @@ export function assessRuntimeChecks(value, packageRoot) {
 	return { complete, passed: errors.length === 0, tests, results, errors };
 }
 
+/**
+ * spawnSync's result shape without blocking the event loop: a Vitest worker that blocks for 60s
+ * cannot answer its RPC heartbeat, and the run fails with "Timeout calling onTaskUpdate".
+ */
+function runProcess(command, args, { cwd, env, timeoutMs, maxBuffer }) {
+	return new Promise((resolveProcess) => {
+		const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+		const output = { stdout: "", stderr: "" };
+		let error = null, settled = false;
+		const stop = (reason) => {
+			error ??= reason;
+			child.kill("SIGKILL");
+		};
+		const timer = setTimeout(() => stop(Object.assign(new Error(`spawn ${command} ETIMEDOUT`), { code: "ETIMEDOUT" })), timeoutMs);
+		const finish = (status, signal) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			resolveProcess({ status, signal, error, stdout: output.stdout, stderr: output.stderr });
+		};
+		for (const name of ["stdout", "stderr"]) {
+			child[name].setEncoding("utf8").on("data", (chunk) => {
+				output[name] += chunk;
+				if (output[name].length > maxBuffer) stop(new Error(`${name} maxBuffer length exceeded`));
+			});
+		}
+		child.on("error", (spawnError) => {
+			error ??= spawnError;
+			if (child.pid === undefined) finish(null, null);
+		});
+		child.on("close", finish);
+	});
+}
+
 function snapshot(root) {
 	return Object.fromEntries(SOURCE_PATHS.map(path => [path, hash(readFileSync(join(root, path)))]));
 }
 
-export function runRuntimeChecks(output, options = {}) {
+export async function runRuntimeChecks(output, options = {}) {
 	const root = resolve(options.root ?? ROOT), packageRoot = join(root, "packages/coding-agent");
 	output = resolve(output);
 	const timeoutMs = options.timeoutMs ?? 180_000;
@@ -144,7 +178,7 @@ export function runRuntimeChecks(output, options = {}) {
 	const command = [process.execPath, ...args];
 	Object.assign(env, { DRAHT_OFFLINE: "1", DRAHT_PACKAGE_DIR: packageRoot, DRAHT_CODING_AGENT_DIR: join(output, "agent-home") });
 	const startedAt = new Date().toISOString(), started = performance.now();
-	const processResult = spawnSync(process.execPath, args, { cwd: packageRoot, env, encoding: "utf8", timeout: timeoutMs, killSignal: "SIGKILL", maxBuffer: 16 * 1024 * 1024 });
+	const processResult = await runProcess(process.execPath, args, { cwd: packageRoot, env, timeoutMs, maxBuffer: 16 * 1024 * 1024 });
 	const elapsedMs = Math.round(performance.now() - started);
 	const stdout = processResult.stdout ?? "", stderr = processResult.stderr ?? "";
 	writeFileSync(join(output, "stdout.txt"), stdout);
@@ -179,7 +213,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
 			console.log("Usage: node runtime-checks.mjs <empty-output-directory> [--repo <path>]");
 		} else {
 			if (rest.length && (rest.length !== 2 || rest[0] !== "--repo" || !rest[1])) throw new Error("Expected optional --repo <path>");
-			const report = runRuntimeChecks(output, { root: rest[1] });
+			const report = await runRuntimeChecks(output, { root: rest[1] });
 			console.log(JSON.stringify({ lane: report.lane, complete: report.complete, passed: report.passed, tests: report.tests, report: join(resolve(output), "report.json") }));
 			process.exitCode = report.passed ? 0 : 1;
 		}

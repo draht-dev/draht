@@ -15,6 +15,11 @@
 >
 > **Status 2026-10-01:** Phase 42 batching is **DECIDED** (see below) — batched writes, default chunk
 > size 200, invalid sizes rejected before anything is mutated.
+>
+> **Status 2026-10-31:** Phase 36 waves 4-5 landed on branch `feat/phase-36-spawn-wire`. The class-3
+> suites assert the SPAWN posture as shipped; 36.1 (resume) and 36.3 (`auth.json`) are still open and are
+> recorded as residuals on R36-SPAWN.5 and R36-SPAWN.4, not presumed. The orchestrator's six reversible calls
+> and eleven new questions are at the end of this file.
 
 ## Phase 34 — which seam relays a permission ask to the phone (RESOLVED 2026-08-21, see below)
 
@@ -520,3 +525,69 @@ the gate's scope must be revisited whenever a new launch path is added, not assu
 bundle) was recorded as **DECIDED** by an advisor without Oskar's approval, and has since shipped in
 `8a6e3b293`. Whether to ratify that decision after the fact is an open question for Oskar, not a blocker
 on anything downstream — nothing here is waiting on it.
+
+---
+
+## Phase 36 waves 4–5 — orchestrator calls and owner questions (2026-10-31)
+
+Phase 36's acceptance landed on branch `feat/phase-36-spawn-wire`. The calls below were made by the
+orchestrator to keep it moving. Each is reversible at the landing site named; none answers 36.1–36.5,
+which stay open above.
+
+**Reversible orchestrator calls (say "revert N" to undo):**
+
+1. **Spawn is offered iff something exists at the registry path, decided per `/attach` connection.** No
+   file: no `session-spawn`/`registry` capability. A present but refused file: both ports, and every
+   frame answers a typed `refused` naming the rule. Landing site: `onOpen` in `routes/fleet.ts`.
+2. **Only `draht` is spawnable in v1** (`V1_SPAWNABLE_HARNESS_IDS`, `session/session-launcher.ts`). The
+   other harnesses would spawn, publish no socket and time out after the handshake deadline. The filter
+   matches a NAME, not an identity: a `draht` entry pointing at `draht-acp` passes it and times out.
+3. **A harness executable inside any declared project root is refused**, not only inside the requested
+   project. Cost: a dev checkout that is also a declared project cannot be the harness. Landing site:
+   `resolveHarnessLaunch` in `session/harness-resolver.ts`.
+4. **`--registry` must be absolute**; without it the daemon reads `~/.geist/config.yaml`, never cwd. A
+   bad HOME yields no registry and one warning; a bad explicit path exits.
+5. **The dead `command` → `SessionProcess` chain is deleted.** `POST /sessions` still refuses a body
+   carrying `command` (400) and still validates `cwd`, which nothing uses any more. Gate rule D now
+   fails `npm run check` on any process-creating API in gateway source outside `spawn-primitive.ts`.
+6. **The console gained a project/harness picker**, because the Goal sentence ("pick project, pick
+   harness") had no renderer.
+
+**Owner questions:**
+
+7. **One `harness.agents` map, two launch contracts.** Spawn appends draht's own CLI flags, so the
+   spawnable `draht` entry must name the draht CLI; the dormant `geist-acp` reads the same map as an ACP
+   stdio launch table, where `draht` names `draht-acp`. Needed before Phase 38 activates `geist-acp`.
+   Landing site: a per-entry kind on `AgentLaunchSpecSchema`, or a separate `spawn:` block.
+8. **The installed draht cannot be declared.** `~/.local/bin/draht` → `~/.draht/runtime/current/draht`
+   is a symlink chain, and the no-follow rule refuses it; today the operator must name a non-symlink
+   path (a release directory changes on every update). Landing site: the `install.sh` layout, or the
+   resolver's follow policy.
+9. **NixOS: spawned and resumed sessions get no coreutils, `git` or `rg`.** `DEFAULT_RESUME_PATH` is the
+   FHS list; on NixOS it holds only `/bin/sh` and `/usr/bin/env`. The operator override is
+   `DRAHT_RESUME_PATH`. Add `/run/current-system/sw/bin` to the default, or document the override?
+10. **A harness with no `credentialEnv` spawns a session that cannot answer.** Refuse it at resolve time
+    instead (one line in `resolveHarnessLaunch`)?
+11. **36.3 has a second half the original note missed.** Scoping the child's agent directory keeps
+    `auth.json` out of `DRAHT_CODING_AGENT_DIR`, but a spawned session that runs `bash` can still read
+    the operator's file by absolute path — it runs as the same user. Between the two, only the
+    permission gate stands (the session runs in the mode the daemon forwards, `auto` when none is set),
+    and only the Milestone 6 sandbox closes it structurally. This weakens the case for scoping the
+    directory alone.
+12. **`registry` answers empty for a refused registry and has no error field**, so a picker cannot say
+    why it is empty. A wire change, due before the Phase 38 1.0 freeze. Landing site: `RegistryFrameSchema`.
+13. **`session_spawn` strips unknown keys rather than refusing them.** Proven inert (a smuggled
+    `command` never runs). Recommendation: leave it.
+14. **`/sessions/:id/ws` and `/sessions/:id/stream` are now no-op endpoints** kept for the Adler client.
+    Keep, or remove with the Adler surface?
+15. **CI assumption:** the registry-owned-by-another-uid FILE case needs `sudo -n` on the gateway shard
+    (Blacksmith ubuntu-2404) and fails under `CI` without it. Unverified until the first CI run.
+16. **Gate rule D is a text scanner, and two shapes still defeat it.** It is deny-by-default now (any
+    `Bun`/`process` member outside a measured allowlist, any module load it cannot read), but a
+    reflective `Function` constructor reached through `.constructor`, and the regex-versus-division
+    ambiguity after `)` or `}`, get past any tokenizer heuristic. Closing them means blanking from a
+    TypeScript AST. Worth it, or is review the backstop for those shapes?
+17. **The attach bridge relays any server frame type from an attached session's own socket**, including
+    `session_spawned` and `registry`, so on a wide screen the attached session's process could answer
+    the page's pending spawn. It runs as the user already, so it gains nothing — but the bridge could
+    drop frame types a session has no business sending. Landing site: the relay in `attach-bridge.ts`.

@@ -28,44 +28,7 @@ describe("SessionManager domain events", () => {
 		expect(cb).toHaveBeenCalledWith({ sessionId: session.id, createdAt: session.createdAt });
 	});
 
-	// 2. create(['echo', 'hi']) emits session:created synchronously
-	test('create(["echo", "hi"]) emits session:created synchronously', () => {
-		const cb = mock((_payload: SessionCreatedPayload) => {});
-		bus.on("session:created", cb);
-
-		manager.create(["echo", "hi"]);
-
-		// synchronous — no await needed
-		expect(cb).toHaveBeenCalledTimes(1);
-	});
-
-	// 3. After proc.ready, emits session:started with { sessionId }
-	test("after proc.ready resolves, emits session:started with { sessionId }", async () => {
-		const cb = mock((_payload: SessionStartedPayload) => {});
-		bus.on("session:started", cb);
-
-		const session = manager.create(["echo", "hi"]);
-		await session.process!.ready;
-
-		expect(cb).toHaveBeenCalledTimes(1);
-		expect(cb).toHaveBeenCalledWith({ sessionId: session.id });
-
-		await session.process!.exited;
-	});
-
-	// 4. After proc.exited, emits session:stopped with { sessionId, exitCode: 0 }
-	test("after proc.exited resolves, emits session:stopped with { sessionId, exitCode: 0 }", async () => {
-		const cb = mock((_payload: SessionStoppedPayload) => {});
-		bus.on("session:stopped", cb);
-
-		const session = manager.create(["echo", "hi"]);
-		await session.process!.exited;
-
-		expect(cb).toHaveBeenCalledTimes(1);
-		expect(cb).toHaveBeenCalledWith({ sessionId: session.id, exitCode: 0 });
-	});
-
-	// 5. destroy() on a no-process session emits session:destroyed
+	// 2. destroy() on a no-process session emits session:destroyed
 	test("destroy(id) on a no-process session emits session:destroyed with { sessionId }", () => {
 		const cb = mock((_payload: SessionDestroyedPayload) => {});
 		bus.on("session:destroyed", cb);
@@ -77,7 +40,7 @@ describe("SessionManager domain events", () => {
 		expect(cb).toHaveBeenCalledWith({ sessionId: session.id });
 	});
 
-	// 6. destroy(nonExistent) emits NO events
+	// 3. destroy(nonExistent) emits NO events
 	test("destroy(nonExistentId) emits NO events", () => {
 		const destroyedCb = mock((_payload: SessionDestroyedPayload) => {});
 		bus.on("session:destroyed", destroyedCb);
@@ -88,8 +51,8 @@ describe("SessionManager domain events", () => {
 		expect(destroyedCb).toHaveBeenCalledTimes(0);
 	});
 
-	// 7. create() with no command does NOT emit session:started or session:stopped
-	test("create() with no command does NOT emit session:started or session:stopped", async () => {
+	// 4. create() does NOT emit session:started or session:stopped
+	test("create() does NOT emit session:started or session:stopped", async () => {
 		const startedCb = mock((_payload: SessionStartedPayload) => {});
 		const stoppedCb = mock((_payload: SessionStoppedPayload) => {});
 		bus.on("session:started", startedCb);
@@ -104,7 +67,7 @@ describe("SessionManager domain events", () => {
 		expect(stoppedCb).toHaveBeenCalledTimes(0);
 	});
 
-	// 8. Creating two sessions emits session:created twice with correct sessionIds
+	// 5. Creating two sessions emits session:created twice with correct sessionIds
 	test("creating two sessions emits session:created twice with correct sessionIds", () => {
 		const payloads: SessionCreatedPayload[] = [];
 		bus.on("session:created", (p) => payloads.push(p));

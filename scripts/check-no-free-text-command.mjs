@@ -29,8 +29,21 @@
  * src of every geist package. Test sources are out of scope: a test writing the
  * operator's own decision file IS the local machine.
  *
- * OUT OF SCOPE: `packages/gateway/src/session/session-process.ts` still wraps
- * `Bun.spawn(command, …)`; the wave-4 command-surface task removes that chain.
+ * RULE D — no process-creating API in a non-test file under packages/gateway/src
+ * other than session/spawn-primitive.ts (R36-SPAWN.1: `session_spawn` is the only
+ * spawn path). The incident: `POST /sessions/:id/input` lazily ran
+ * `["draht", "start"]` through a bare PATH lookup. Rules A and B guard the
+ * request; this one guards the other end, because a spawn that nothing on the
+ * wire selects is still a spawn. Covered: value imports of `child_process` (also
+ * `require`, `import()` and `getBuiltinModule`; `import type` / `export type` and
+ * an import whose every named specifier is marked `type` create nothing and
+ * pass), `Bun.spawn` / `Bun.spawnSync` / `Bun.$`, the names
+ * `spawn` / `spawnSync` taken out of `Bun`, and out of the `bun` module by a static
+ * import that names them or takes the whole module, or by any dynamic
+ * `import("bun")` / `require("bun")`, whose names cannot be read.
+ *
+ * A hand-built alias (`const B = Bun; B.spawn(…)`) is not followed: the rule names
+ * the spellings a person writes, and an alias is a review matter.
  *
  * Usage:
  *   node scripts/check-no-free-text-command.mjs   # exit 1 on any violation
@@ -530,6 +543,93 @@ export function findTrustWriters(source) {
 	return violations.sort((a, b) => a.line - b.line);
 }
 
+// ── rule D — no second process-creating path in the daemon ───────────────────
+
+const PROCESS_SCAN_ROOT = "packages/gateway/src";
+export const SPAWN_PRIMITIVE = `${PROCESS_SCAN_ROOT}/session/spawn-primitive.ts`;
+
+const PROCESS_MODULE = /^(?:node:)?child_process$/;
+const MODULE_SPECIFIER = /\b(?:(?:from|import)\s*|(?:import|require|getBuiltinModule)\s*\(\s*)(["'`])/g;
+const DYNAMIC_LOAD = /^(?:import|require)\s*\(/;
+const MODULE_KEYWORD = /\b(?:import|export)\b/g;
+/**
+ * A whole import/export clause that is `type` and one binding shape, which creates nothing. Anchored at both ends:
+ * `import type from "x"` (a default import NAMED `type`), `import type, { a }`, `import types` and a clause with
+ * anything extra all fall through to "value".
+ */
+const TYPE_ONLY_CLAUSE = /^\s*type(?:\s*\{[^{}]*\}|\s*\*(?:\s+as\s+[A-Za-z_$][\w$]*)?|\s+[A-Za-z_$][\w$]*)\s*$/;
+const TYPE_ONLY_SPECIFIER = /^type\s+(?!as\b)[A-Za-z_$][\w$]*(?:\s+as\s+[A-Za-z_$][\w$]*)?$/;
+const BUN_PROCESS_API = /\bBun\s*\??\s*\.\s*(spawnSync\b|spawn\b|\$)/g;
+const BUN_PROCESS_INDEX = /\bBun\s*\[\s*(["'`])/g;
+const BUN_PROCESS_DESTRUCTURE = /\{[^{}]*(?:\bspawn(?:Sync)?\b|\$)[^{}]*\}\s*=\s*(?:globalThis\s*\.\s*)?Bun\b/g;
+const BUN_PROCESS_NAME = /\bspawn(?:Sync)?\b|\$/;
+
+const SPAWN_ADVICE = `only ${SPAWN_PRIMITIVE.slice(PROCESS_SCAN_ROOT.length + 1)} may create a process in the daemon (R36-SPAWN.1). A session is started by \`session_spawn\`, never by a second spawn path.`;
+
+/**
+ * The binding clause of the import/export statement whose `from` sits at `fromIndex`: everything after the nearest
+ * keyword before it. A `from "…"` belongs to that keyword whatever the previous statement looked like, so a
+ * semicolon-less `export type T = …` above cannot lend its `type` to a value import below.
+ */
+function bindingClauseBefore(codeOnly, fromIndex) {
+	let clauseStart = 0;
+	for (const keyword of codeOnly.slice(0, fromIndex).matchAll(MODULE_KEYWORD)) clauseStart = keyword.index + keyword[0].length;
+	return codeOnly.slice(clauseStart, fromIndex);
+}
+
+/** Whether the clause binds nothing at runtime: `type …` as a whole, or braces holding only `type`-marked names. */
+function bindsNoValue(clause) {
+	if (TYPE_ONLY_CLAUSE.test(clause)) return true;
+	const braced = /^\s*\{([^{}]*)\}\s*$/.exec(clause);
+	if (!braced) return false;
+	const entries = braced[1].split(",").map((entry) => entry.trim()).filter(Boolean);
+	return entries.length > 0 && entries.every((entry) => TYPE_ONLY_SPECIFIER.test(entry));
+}
+
+/** The string literal whose opening quote sits at `open`, read from the text that kept its strings. */
+function literalAt(withStrings, codeOnly, open) {
+	return withStrings.slice(open + 1, codeOnly.indexOf(codeOnly[open], open + 1));
+}
+
+export function findProcessCreators(source) {
+	const withStrings = blankNonCode(source, { blankStrings: false });
+	const codeOnly = blankNonCode(source, { blankStrings: true });
+	const violations = [];
+	const report = (index, message) => violations.push({ line: lineAt(codeOnly, index), message });
+
+	for (const m of codeOnly.matchAll(MODULE_SPECIFIER)) {
+		const specifier = literalAt(withStrings, codeOnly, m.index + m[0].length - 1);
+		const clause = m[0].startsWith("from") ? bindingClauseBefore(codeOnly, m.index) : null;
+		if (PROCESS_MODULE.test(specifier)) {
+			if (clause === null || !bindsNoValue(clause)) report(m.index, `reaches \`${specifier}\` — ${SPAWN_ADVICE}`);
+		} else if (specifier === "bun") {
+			if (DYNAMIC_LOAD.test(m[0])) {
+				// Whole module, so what is taken out of it cannot be read here; the static form is judged by its names.
+				report(m.index, `loads the \`bun\` module dynamically — ${SPAWN_ADVICE}`);
+			} else if (clause !== null && !bindsNoValue(clause)) {
+				const named = clause.match(/\{([^}]*)\}/)?.[1] ?? "";
+				const wholeModule = clause.replace(/\{[^}]*\}/, "").replace(/[\s,]/g, "") !== "";
+				if (wholeModule || BUN_PROCESS_NAME.test(named)) {
+					report(m.index, `takes a process API out of the \`bun\` module (\`${clause.trim()}\`) — ${SPAWN_ADVICE}`);
+				}
+			}
+		}
+	}
+
+	for (const m of codeOnly.matchAll(BUN_PROCESS_API)) {
+		report(m.index, `uses \`Bun.${m[1]}\` — ${SPAWN_ADVICE}`);
+	}
+	for (const m of codeOnly.matchAll(BUN_PROCESS_INDEX)) {
+		const key = literalAt(withStrings, codeOnly, m.index + m[0].length - 1);
+		if (/^(?:spawn|spawnSync|\$)$/.test(key)) report(m.index, `uses \`Bun[${JSON.stringify(key)}]\` — ${SPAWN_ADVICE}`);
+	}
+	for (const m of codeOnly.matchAll(BUN_PROCESS_DESTRUCTURE)) {
+		report(m.index, `takes a process API out of \`Bun\` by destructuring — ${SPAWN_ADVICE}`);
+	}
+
+	return violations.sort((a, b) => a.line - b.line);
+}
+
 // ── repo scan ────────────────────────────────────────────────────────────────
 
 function walk(dir, exts) {
@@ -549,6 +649,11 @@ function walk(dir, exts) {
 
 export function isTestSource(path) {
 	return /(^|\/)(__tests__|__mocks__|test|tests|fixtures)\//.test(path) || /\.(test|spec|e2e)\.[cm]?[jt]sx?$/.test(path);
+}
+
+/** Every non-test code file under the gateway's src, the primitive included: rule D exempts it by name, not by omission. */
+export function processScanFiles(root) {
+	return walk(join(root, PROCESS_SCAN_ROOT), CODE_EXTS).filter((file) => !isTestSource(relative(root, file)));
 }
 
 /** Daemon source roots for rule C: the gateway plus every geist package. */
@@ -594,6 +699,15 @@ export function scanRepo(root = ROOT) {
 		}
 	}
 
+	const processFiles = processScanFiles(root);
+	if (processFiles.length === 0) {
+		add("D", join(root, PROCESS_SCAN_ROOT), 0, `${PROCESS_SCAN_ROOT} is missing or holds no source — the gate's scan target moved and rule D enforces nothing`);
+	}
+	for (const file of processFiles) {
+		if (relative(root, file) === SPAWN_PRIMITIVE) continue;
+		for (const v of findProcessCreators(readFileSync(file, "utf-8"))) add("D", file, v.line, v.message);
+	}
+
 	return violations;
 }
 
@@ -601,6 +715,7 @@ const RULE_TITLES = {
 	A: "a client→server frame names what runs (R36-SPAWN.8)",
 	B: "an HTTP route lets a request body select what runs (R32-FLEET.8, GSEC-12)",
 	C: "the daemon writes project trust (R36-SPAWN.5)",
+	D: "the gateway creates a process outside session/spawn-primitive.ts (R36-SPAWN.1)",
 };
 
 const entry = process.argv[1];
@@ -615,5 +730,5 @@ if (entry && existsSync(entry) && import.meta.url === pathToFileURL(realpathSync
 		console.error(`\n${rules.map((r) => `rule ${r} — ${RULE_TITLES[r]}`).join("\n")}`);
 		process.exit(1);
 	}
-	console.log("check:no-free-text-command: ok (no command-shaped client frame field, no unrefused body key, no daemon trust writer)");
+	console.log("check:no-free-text-command: ok (no command-shaped client frame field, no unrefused body key, no daemon trust writer, no second spawn path)");
 }

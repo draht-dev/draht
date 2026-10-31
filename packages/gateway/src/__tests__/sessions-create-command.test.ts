@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { Hono } from "hono";
+import { DEFAULT_CONFIG, type GatewaySettings } from "../config/config";
 import { createSessionRoutes } from "../gateway/routes/sessions";
 import { createServer } from "../gateway/server";
 import { EventBus } from "../session/event-bus";
@@ -26,34 +27,21 @@ describe("POST /sessions body handling", () => {
 		app.route("/sessions", createSessionRoutes(manager));
 	});
 
-	// Any process that somehow came into existence must not outlive the test.
-	afterEach(async () => {
-		for (const s of manager.list()) {
-			manager.destroy(s.id);
-		}
-		await Bun.sleep(50);
-	});
-
-	test("POST /sessions with no body → 201, status 'starting', no process", async () => {
+	test("POST /sessions with no body → 201, status 'starting'", async () => {
 		const res = await app.request("/sessions", { method: "POST" });
 		expect(res.status).toBe(201);
 		const body = await res.json();
 		expect(body.status).toBe("starting");
-		// Session created without a command should not spawn a process
-		const session = manager.get(body.id);
-		expect(session?.process).toBeUndefined();
 	});
 
-	test("POST /sessions with empty JSON body (no command key) → 201, no process", async () => {
+	test("POST /sessions with empty JSON body (no command key) → 201", async () => {
 		const res = await app.request("/sessions", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({}),
 		});
 		expect(res.status).toBe(201);
-		const body = await res.json();
-		const session = manager.get(body.id);
-		expect(session?.process).toBeUndefined();
+		expect(manager.list()).toHaveLength(1);
 	});
 
 	test("POST /sessions with Content-Type: application/json but empty body → 201 (Adler use case)", async () => {
@@ -67,8 +55,6 @@ describe("POST /sessions body handling", () => {
 		expect(body).toHaveProperty("id");
 		expect(body).toHaveProperty("status", "starting");
 		expect(body).toHaveProperty("createdAt");
-		const session = manager.get(body.id);
-		expect(session?.process).toBeUndefined(); // No process for empty body
 	});
 
 	test("POST /sessions with a well-formed command array → 400, nothing spawned", async () => {
@@ -124,6 +110,52 @@ describe("POST /sessions body handling", () => {
 		expect(res.status).toBe(400);
 		const body = await res.json();
 		expect(body.error).toContain("Invalid JSON");
+	});
+});
+
+/**
+ * `cwd` is validated although the session manager no longer takes one: a record
+ * has no working directory, and a caller that sends a bad one still hears no.
+ */
+describe("POST /sessions cwd handling", () => {
+	const config: GatewaySettings = { ...DEFAULT_CONFIG, allowedPaths: ["/srv/allowed"] };
+	let manager: SessionManager;
+	let app: Hono;
+
+	beforeEach(() => {
+		manager = new SessionManager(new EventBus());
+		app = new Hono();
+		app.route("/sessions", createSessionRoutes(manager, config));
+	});
+
+	function post(body: unknown): Response | Promise<Response> {
+		return app.request("/sessions", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(body),
+		});
+	}
+
+	test("a cwd outside allowedPaths → 403 naming the allowed paths, no session", async () => {
+		const res = await post({ cwd: "/etc" });
+		expect(res.status).toBe(403);
+		expect(await res.json()).toEqual({ error: "cwd path not allowed", allowedPaths: ["/srv/allowed"] });
+		expect(manager.list()).toHaveLength(0);
+	});
+
+	test("an empty or non-string cwd → 400, no session", async () => {
+		for (const cwd of ["", 42, null, ["/srv/allowed"]]) {
+			const res = await post({ cwd });
+			expect({ cwd, status: res.status }).toEqual({ cwd, status: 400 });
+			expect((await res.json()).error).toBe("cwd must be a non-empty string");
+		}
+		expect(manager.list()).toHaveLength(0);
+	});
+
+	test("a cwd inside allowedPaths → 201", async () => {
+		const res = await post({ cwd: "/srv/allowed/project" });
+		expect(res.status).toBe(201);
+		expect(manager.list()).toHaveLength(1);
 	});
 });
 

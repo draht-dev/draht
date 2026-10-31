@@ -9,10 +9,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
 	clientUnionMembers,
 	findCommandShapedClientFields,
+	findProcessCreators,
 	findTrustWriters,
 	findUnrefusedBodyKeyReads,
 	isCommandShaped,
 	isTestSource,
+	processScanFiles,
+	SPAWN_PRIMITIVE,
 	scanRepo,
 	topLevelKeys,
 	trustScanRoots,
@@ -22,6 +25,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const GATE = join(ROOT, "scripts", "check-no-free-text-command.mjs");
 const WIRE = join(ROOT, "packages/geist-protocol/src/wire.ts");
 const SESSIONS_ROUTE = join(ROOT, "packages/gateway/src/gateway/routes/sessions.ts");
+const PRIMITIVE = join(ROOT, SPAWN_PRIMITIVE);
 
 function wire({ attachFields = "", serverFields = "", clientMembers = ["AttachFrameSchema", "InputFrameSchema"], preamble = "" } = {}) {
 	return `${preamble}
@@ -51,7 +55,7 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
 `;
 }
 
-/** A tree scanRepo can be pointed at, carrying one planted violation per rule. */
+/** A tree scanRepo can be pointed at, carrying one planted violation per rule and the files rule D must leave alone. */
 function fixtureRoot(files) {
 	const root = mkdtempSync(join(tmpdir(), "gate-fx-"));
 	for (const [path, contents] of Object.entries(files)) {
@@ -87,6 +91,19 @@ export function grant(cwd: string): void {
 	"packages/geist-core/src/writer.ts": `
 const trustPath = join(agentDir, "trust.json");
 await Bun.write(trustPath, "{}");
+`,
+	"packages/gateway/src/session/launcher.ts": `
+export function start(): void {
+	Bun.spawn(["cat"]);
+}
+`,
+	"packages/gateway/src/session/spawn-primitive.ts": `
+import { spawn } from "node:child_process";
+export const launch = spawn;
+`,
+	"packages/gateway/src/__tests__/launcher.test.ts": `
+import { spawnSync } from "node:child_process";
+spawnSync("true");
 `,
 };
 
@@ -332,6 +349,167 @@ test("rule C scope excludes test sources", () => {
 	assert.equal(isTestSource("packages/gateway/src/session/spawn-primitive.ts"), false);
 });
 
+test("rule D on each way to reach a process API", () => {
+	const cases = [
+		['import { spawn } from "node:child_process";', /reaches `node:child_process`/],
+		['import cp from "child_process";', /reaches `child_process`/],
+		['import * as cp from "node:child_process";', /reaches `node:child_process`/],
+		['import "node:child_process";', /reaches `node:child_process`/],
+		['export { spawn } from "node:child_process";', /reaches `node:child_process`/],
+		['const cp = require("node:child_process");', /reaches `node:child_process`/],
+		['const cp = await import("node:child_process");', /reaches `node:child_process`/],
+		['const cp = process.getBuiltinModule("node:child_process");', /reaches `node:child_process`/],
+		['Bun.spawn(["cat"]);', /uses `Bun.spawn`/],
+		['Bun.spawnSync(["cat"]);', /uses `Bun.spawnSync`/],
+		['Bun . spawn (["cat"]);', /uses `Bun.spawn`/],
+		['Bun?.spawn(["cat"]);', /uses `Bun.spawn`/],
+		['Bun["spawn"](["cat"]);', /uses `Bun\["spawn"\]`/],
+		["await Bun.$`ls`;", /uses `Bun.\$`/],
+		['import { spawn } from "bun";', /out of the `bun` module/],
+		['import { serve, spawnSync as run } from "bun";', /out of the `bun` module/],
+		['import { $ } from "bun";', /out of the `bun` module/],
+		['import * as bun from "bun";', /out of the `bun` module/],
+		['const { spawn } = require("bun");', /loads the `bun` module dynamically/],
+		['const { spawn } = await import("bun");', /loads the `bun` module dynamically/],
+		['const b = require("bun"); b.spawn(["cat"]);', /loads the `bun` module dynamically/],
+		["const b = await import(`bun`);", /loads the `bun` module dynamically/],
+		["const { spawn } = Bun;", /out of `Bun` by destructuring/],
+		["const { spawnSync: run } = globalThis.Bun;", /out of `Bun` by destructuring/],
+	];
+	for (const [source, expected] of cases) {
+		const found = findProcessCreators(`const before = 1;\n${source}\n`);
+		assert.equal(found.length, 1, source);
+		assert.equal(found[0].line, 2, source);
+		assert.match(found[0].message, expected, source);
+		assert.match(found[0].message, /only session\/spawn-primitive\.ts may create a process in the daemon \(R36-SPAWN\.1\)/, source);
+		assert.match(found[0].message, /started by `session_spawn`/, source);
+	}
+});
+
+test("rule D on prose, other Bun APIs and imports that create nothing", () => {
+	const clean = `
+// Bun.spawn(["cat"]) used to live here; import cp from "node:child_process" too
+/* const { spawn } = Bun; */
+const doc = "call Bun.spawn(argv) after import { spawn } from 'node:child_process'";
+const tpl = \`Bun.\${"spawn"} and require("child_process")\`;
+const pattern = /Bun\\.spawn/;
+Bun.serve({ port: 0 });
+const file = Bun.file("x");
+await Bun.write("a", "b");
+import type { FileSink } from "bun";
+import { serve, type Server } from "bun";
+export { serve } from "bun";
+import { exec } from "node:fs";
+import { helper } from "child_process_helper";
+const copy = Array.from("child_process");
+const holder = { from: "child_process" };
+const { serve: start } = Bun;
+const label = Bun.spawnLabel;
+`;
+	assert.deepEqual(findProcessCreators(clean), []);
+});
+
+test("rule D exempts a type-only child_process import and still reports a value one", () => {
+	const typeOnly = [
+		'import type { ChildProcess } from "node:child_process";',
+		'import type { ChildProcess } from "child_process"',
+		'import type * as cp from "node:child_process";',
+		'import type Cp from "node:child_process";',
+		'export type { ChildProcess } from "node:child_process";',
+		'import type {\n\tChildProcess,\n} from "node:child_process";',
+		'import type\n{ ChildProcess } from "node:child_process";',
+		'import type /* c */ { ChildProcess } from "node:child_process";',
+		'export type * from "node:child_process";',
+		'export type * as cp from "node:child_process";',
+		'import { type ChildProcess } from "node:child_process";',
+		'import {\n\ttype ChildProcess as Child,\n\ttype Serializable,\n} from "child_process";',
+		'import type { Subprocess } from "bun";',
+		'import { type Subprocess } from "bun";',
+	];
+	for (const source of typeOnly) {
+		assert.deepEqual(findProcessCreators(`${source}\n`), [], source);
+	}
+
+	const child = /reaches `node:child_process`/;
+	const fromBun = /out of the `bun` module/;
+	const valueImports = [
+		['import { spawn } from "node:child_process";', child],
+		['import { type ChildProcess, spawn } from "node:child_process";', child],
+		['export { spawn } from "node:child_process";', child],
+		// A default binding that happens to be called `type` is a value import, not a type-only one.
+		['import type from "node:child_process";', child],
+		['import type, { spawn } from "node:child_process";', child],
+		['import type, { spawnSync } from "bun";\nspawnSync(["true"]);', fromBun],
+		['import type from "bun";', fromBun],
+		// A binding that merely starts with `type` is not the modifier either.
+		['import types from "node:child_process";\ntypes.spawnSync(["true"]);', child],
+		['import typed from "node:child_process";', child],
+		['import * as typeX from "node:child_process";', child],
+		['import typeof Cp from "node:child_process";', child],
+		['import type Cp, { spawn } from "node:child_process";', child],
+		['import { type as run } from "node:child_process";', child],
+		['import {} from "node:child_process";', child],
+		// Without semicolons a type statement's tokens must not run on into the next statement's `from`.
+		['export type T = { a: number }\nimport { spawnSync } from "node:child_process"', child],
+		['export type { A }\nimport { spawn } from "node:child_process"', child],
+		['export type { A }\nexport { spawn } from "node:child_process"', child],
+		['export type T = { a: number }\r\nimport { spawnSync } from "node:child_process"', child],
+		['export { a }\nimport { spawn } from "bun"', fromBun],
+		['import { type Subprocess, spawn } from "bun";', fromBun],
+		['import /* type */ { spawn } from "node:child_process";', child],
+		['import type /* c */ , { spawn } from "node:child_process";', child],
+		['import {\n\ttype ChildProcess,\n\tspawn,\n} from "node:child_process";', child],
+	];
+	for (const [source, expected] of valueImports) {
+		const found = findProcessCreators(`${source}\n`);
+		assert.equal(found.length, 1, source);
+		assert.match(found[0].message, expected, source);
+	}
+
+	// The exemption is per statement: a type import above does not shelter the value import below it.
+	const mixed = findProcessCreators(
+		'import type { ChildProcess } from "node:child_process";\nimport { spawn } from "node:child_process";\n',
+	);
+	assert.equal(mixed.length, 1);
+	assert.equal(mixed[0].line, 2);
+
+	const swallowed = findProcessCreators('export type T = { a: number }\nimport { spawnSync } from "node:child_process"\n');
+	assert.equal(swallowed.length, 1);
+	assert.equal(swallowed[0].line, 2);
+});
+
+test("rule D over the real tree", () => {
+	const scanned = processScanFiles(ROOT).map((file) => file.slice(ROOT.length + 1));
+	for (const file of [
+		SPAWN_PRIMITIVE,
+		"packages/gateway/src/gateway/routes/sessions.ts",
+		"packages/gateway/src/gateway/routes/ws.ts",
+		"packages/gateway/src/session/session.ts",
+		"packages/gateway/src/session/session-manager.ts",
+	]) {
+		assert.ok(scanned.includes(file), `${file} is not in the set rule D scans`);
+	}
+	assert.deepEqual(
+		scanned.filter((file) => isTestSource(file)),
+		[],
+	);
+	assert.deepEqual(
+		scanRepo(ROOT).filter((v) => v.rule === "D"),
+		[],
+	);
+
+	const primitive = findProcessCreators(readFileSync(PRIMITIVE, "utf-8"));
+	assert.ok(primitive.length > 0, "the detector reads nothing in the one file that creates a process");
+	assert.match(primitive[0].message, /reaches `node:child_process`/);
+
+	const route = readFileSync(SESSIONS_ROUTE, "utf-8");
+	assert.deepEqual(findProcessCreators(route), []);
+	const planted = findProcessCreators(`${route}\nBun.spawn(["cat"]);\n`);
+	assert.equal(planted.length, 1);
+	assert.equal(planted[0].line, route.split("\n").length + 1);
+	assert.match(planted[0].message, /uses `Bun.spawn`/);
+});
+
 test("field names read as tokens, not substrings", () => {
 	assert.deepEqual(
 		topLevelKeys("{ a: 1, b: z.object({ c: 2 }) }").map((f) => f.name),
@@ -351,11 +529,16 @@ test("scanRepo reports a planted violation for every rule", () => {
 		const found = scanRepo(root);
 		const byFile = new Map(found.map((v) => [v.file, v]));
 
-		assert.deepEqual([...new Set(found.map((v) => v.rule))].sort(), ["A", "B", "C"]);
+		assert.deepEqual([...new Set(found.map((v) => v.rule))].sort(), ["A", "B", "C", "D"]);
 		assert.match(byFile.get("packages/geist-protocol/src/wire.ts").message, /client frame `attach` declares `argv`/);
 		assert.match(byFile.get("packages/gateway/src/gateway/routes/sessions.ts").message, /reads the value of a `command` key/);
 		assert.match(byFile.get("packages/gateway/src/session/trust.ts").message, /setProjectTrusted/);
 		assert.match(byFile.get("packages/geist-core/src/writer.ts").message, /targets the project-trust file/);
+		assert.match(byFile.get("packages/gateway/src/session/launcher.ts").message, /uses `Bun.spawn`/);
+		assert.deepEqual(
+			found.filter((v) => v.rule === "D").map((v) => v.file),
+			["packages/gateway/src/session/launcher.ts"],
+		);
 		for (const v of found) assert.ok(v.line > 0, v.file);
 
 		assert.ok(trustScanRoots(root).includes(join(root, "packages/gateway/src")));
@@ -373,6 +556,15 @@ test("scanRepo reports a scan target that moved", () => {
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
+
+	const bare = fixtureRoot({ "packages/elsewhere/src/keep.ts": "export const x = 1;\n" });
+	try {
+		const moved = scanRepo(bare).filter((v) => v.rule === "D");
+		assert.equal(moved.length, 1, "a missing gateway src is not reported");
+		assert.match(moved[0].message, /packages\/gateway\/src is missing or holds no source .* rule D enforces nothing/);
+	} finally {
+		rmSync(bare, { recursive: true, force: true });
+	}
 });
 
 test("the gate exits 1 on a tree with violations", () => {
@@ -384,6 +576,8 @@ test("the gate exits 1 on a tree with violations", () => {
 		assert.match(run.stderr, /\[rule B\] packages\/gateway\/src\/gateway\/routes\/sessions\.ts:\d+/);
 		assert.match(run.stderr, /\[rule C\] packages\/gateway\/src\/session\/trust\.ts:\d+/);
 		assert.match(run.stderr, /\[rule C\] packages\/geist-core\/src\/writer\.ts:\d+/);
+		assert.match(run.stderr, /\[rule D\] packages\/gateway\/src\/session\/launcher\.ts:\d+/);
+		assert.doesNotMatch(run.stderr, /\] packages\/gateway\/src\/(?:session\/spawn-primitive|__tests__\/launcher\.test)\.ts/);
 		assert.doesNotMatch(run.stdout, /ok/);
 	} finally {
 		rmSync(root, { recursive: true, force: true });

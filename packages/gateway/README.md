@@ -8,6 +8,7 @@ The draht gateway is a lightweight WebSocket + SSE server that lists, attaches t
 
 - Serves the `/attach` WebSocket: the live fleet, attaching to a session's socket, resuming a recorded session (`session_resume`), and, when a registry file exists, starting a new one (`session_spawn`)
 - Creates processes in exactly one place, the spawn primitive. What it runs comes from a registry you own, never from a request body, and no HTTP route creates a process
+- Starts every session it creates untrusted, whether spawned or resumed: a standing `trust.json` grant does not load the project's extensions, settings, `SYSTEM.md` or skills into it, so a session resumed from the phone no longer loads them even in a repository you trust locally (`docs/geist/spec.md` §15.3)
 - Exposes a REST API for session records: `POST /sessions` creates a placeholder record with no backing process
 - Server-Sent Events for session status fan-out
 

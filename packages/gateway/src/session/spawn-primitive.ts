@@ -36,7 +36,8 @@
  *    when an operator declares them.
  *  - **R36-SPAWN.5 — project trust is honoured.** A resumed session re-enters a
  *    cwd chosen by a remote frame; a project the operator has explicitly marked
- *    untrusted is refused rather than entered.
+ *    untrusted is refused rather than entered, and one that is trusted is
+ *    entered untrusted all the same (`--no-approve`, as for a spawn).
  *  - **R36-SPAWN.7 — numeric deadlines, and TERM→KILL of the PROCESS TREE.** The
  *    child is spawned into its own process group precisely so a teardown can
  *    reach what it started, and a signal-trapping child is killed anyway.
@@ -64,7 +65,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, resolve as resolvePath, sep } from "node:path";
 import type { HistorySession } from "@draht/geist-core";
-import { buildSpawnArgv } from "./spawn-argv.js";
+import { buildSpawnArgv, NO_APPROVE_FLAG } from "./spawn-argv.js";
 
 /**
  * Where an operator points this daemon at the draht it should resume with.
@@ -846,6 +847,10 @@ export class SessionSpawner {
 	 *                                      falls through to print mode, the process
 	 *                                      answers once and exits, and the socket
 	 *                                      appears and vanishes
+	 *   --no-approve                       a phone started this: no standing
+	 *                                      `trust.json` grant or `defaultProjectTrust`
+	 *                                      loads the project's extensions, settings,
+	 *                                      SYSTEM.md or skills (shared with a spawn)
 	 *
 	 * `stdin` is a pipe that is opened and never written. `"ignore"` gives rpc
 	 * mode an immediate EOF on the channel it reads its requests from.
@@ -869,7 +874,15 @@ export class SessionSpawner {
 		}
 
 		const resolved = this.#resolveExecutable();
-		const argv = [...resolved.leadingArgs, "--session", session.path, "--attachable", "--mode", "rpc"];
+		const argv = [
+			...resolved.leadingArgs,
+			"--session",
+			session.path,
+			"--attachable",
+			"--mode",
+			"rpc",
+			NO_APPROVE_FLAG,
+		];
 		const env = buildChildEnvironment({ env: this.#env, agentDir: this.#agentDir, cwd: session.cwd });
 
 		return this.#startAndAwaitSocket({

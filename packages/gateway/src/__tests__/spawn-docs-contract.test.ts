@@ -31,6 +31,7 @@ import { parseArgs } from "../cli";
 import type { GatewaySettings } from "../config/config";
 import { HarnessResolutionError, resolveHarnessLaunch, userRegistry } from "../session/harness-resolver";
 import { V1_SPAWNABLE_HARNESS_IDS } from "../session/session-launcher";
+import { buildSpawnArgv, NO_APPROVE_FLAG } from "../session/spawn-argv";
 import * as spawnPrimitive from "../session/spawn-primitive";
 
 const REPO = join(import.meta.dir, "..", "..", "..", "..");
@@ -769,6 +770,42 @@ describe("spec §15.3 states what v1 will spawn, and what the example does and d
 		expect(p, "the doc now tells the operator to point `draht` at the shim").not.toMatch(
 			/`draht` entry (?:must|should|can) name (?:the )?(?:ACP )?(?:stdio )?(?:shim|`draht-acp`)/i,
 		);
+	});
+
+	test("it says a session started from the phone starts untrusted, spawn and resume alike, and what that costs a resume", () => {
+		const { body } = section(spec(), "15.3");
+		const p = paragraphWith(body, /starts untrusted/, "the untrusted start");
+		expect(p, "the doc no longer says a resume starts untrusted like a spawn").toMatch(
+			/A session started from the phone starts untrusted, whether it is a spawn or a resume\./,
+		);
+		expect(p, "the doc no longer names the flag both verbs put on the argv").toMatch(
+			/Both put `--no-approve` on the argv \(`NO_APPROVE_FLAG`\)/,
+		);
+		expect(p, "the doc no longer lists what a standing grant fails to load").toMatch(
+			/the project's extensions \(`\.draht\/extensions`\), `\.draht\/settings\.json`, `\.draht\/SYSTEM\.md` or `\.agents\/skills`/,
+		);
+		expect(p, "the doc no longer states the cost to a resumed session").toMatch(
+			/a session you resume from the phone no longer loads those resources, even in a repository you trust locally/,
+		);
+		expect(p, "the doc hedges the untrusted start into a future change").not.toMatch(PROMISE);
+	});
+
+	test("what it says about the untrusted start is still true of the code: one flag, on both argvs", () => {
+		const { body } = section(spec(), "15.3");
+		expect(body.includes("NO_APPROVE_FLAG"), "§15.3 no longer names NO_APPROVE_FLAG").toBe(true);
+		expect(NO_APPROVE_FLAG, "§15.3 promises `--no-approve`, which spawn-argv.ts no longer defines").toBe(
+			"--no-approve",
+		);
+
+		const spawnArgv = buildSpawnArgv({ sessionId: "sdc-session", projectRoot: "/srv/alpha", leadingArgs: [] });
+		expect(spawnArgv, "a spawn no longer starts untrusted").toContain(NO_APPROVE_FLAG);
+
+		const source = readFileSync(SPAWN_PRIMITIVE, "utf-8");
+		const start = source.indexOf("async resume(session");
+		const end = source.indexOf("async launch(");
+		expect(start, "SessionSpawner.resume could not be located in spawn-primitive.ts").toBeGreaterThanOrEqual(0);
+		expect(end, "SessionSpawner.launch could not be located in spawn-primitive.ts").toBeGreaterThan(start);
+		expect(source.slice(start, end), "a resume no longer starts untrusted").toContain("NO_APPROVE_FLAG");
 	});
 
 	test("it admits the map's ACP use is unresolved rather than claiming one entry serves both contracts", () => {

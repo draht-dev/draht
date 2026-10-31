@@ -1,6 +1,7 @@
 /**
  * R36-SPAWN.4, R36-SPAWN.5 and R36-SPAWN.6 at evidence class 3: a real `session_spawn` frame to the emitted daemon,
- * and the posture of the process it starts read back from the OS and from what the provider was sent.
+ * and the posture of the process it starts read back from the OS and from what the provider was sent. A real
+ * `session_resume` frame is held to the same posture (decision 36.1): a phone resumes untrusted, like it spawns.
  *
  * The fixture is the hostile one: `trust.json` records the project as trusted AND `defaultProjectTrust` is `always`,
  * so only the spawn's own flags stand between the project's extension and a running session. Every negative has its
@@ -14,6 +15,9 @@
  * Project A's `AGENTS.md` links OUT of its root and project B's links to a file INSIDE it. A's is refused by two
  * independent rules (no-follow and containment) so it cannot show either rule failing alone; B's is refused by
  * no-follow only. A hand-started session has no context root, so it shows no-follow failing for A as well.
+ *
+ * A resume has no context root either, and this file asserts nothing about the ancestor context files it reads: that
+ * is not part of decision 36.1.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -22,6 +26,7 @@ import {
 	existsSync,
 	lstatSync,
 	mkdirSync,
+	readdirSync,
 	readFileSync,
 	realpathSync,
 	rmSync,
@@ -31,6 +36,7 @@ import {
 import { join, resolve } from "node:path";
 import type { GeistConfig, PermissionRequestFrame } from "@draht/geist-protocol";
 import {
+	argvOf,
 	assertEnvAbsent,
 	descendantsOf,
 	envOf,
@@ -103,6 +109,13 @@ interface SpawnedSession {
 let sessionA: SpawnedSession | undefined;
 let sessionB: SpawnedSession | undefined;
 
+interface RecordedSession {
+	id: string;
+	path: string;
+}
+let recordedA: RecordedSession | undefined;
+let resumedA: SpawnedSession | undefined;
+
 async function until<T>(
 	probe: () => T | undefined | false | null | Promise<T | undefined | false | null>,
 	what: string | (() => string),
@@ -154,26 +167,43 @@ function collect(stream: ReadableStream<Uint8Array>, sink: { text: string }): vo
 	})().catch(() => {});
 }
 
+function handStartedEnv(): Record<string, string> {
+	return {
+		PATH: process.env.PATH ?? "",
+		HOME: home,
+		TMPDIR: home,
+		DRAHT_CODING_AGENT_DIR: agentDir,
+		DRAHT_STUB_PROVIDER: "1",
+	};
+}
+
 /**
  * A user starting draht by hand, with the same interpreter, agent directory and stub as the daemon's spawn, and no
  * posture flags. RPC rather than print mode: the tripwire's `sendUserMessage` on `session_start` makes a `-p` prompt fail
  * with "Agent is already processing". Resolves once the first provider request has been recorded; `prompt` sends one,
- * and without it only an extension can cause that request.
+ * and without it only an extension can cause that request. `session` reopens a recorded session, as a resume does.
  */
-async function runHandStarted(root: string, record: string, options: { prompt: boolean }): Promise<void> {
+async function runHandStarted(
+	root: string,
+	record: string,
+	options: { prompt: boolean; session?: string },
+): Promise<void> {
 	rmSync(record, { force: true });
 	const proc = Bun.spawn(
-		[BUN, DRAHT_CLI, "--mode", "rpc", "--provider", "draht-stub", "--model", "stub-1", "--no-session"],
+		[
+			BUN,
+			DRAHT_CLI,
+			"--mode",
+			"rpc",
+			"--provider",
+			"draht-stub",
+			"--model",
+			"stub-1",
+			...(options.session === undefined ? ["--no-session"] : ["--session", options.session]),
+		],
 		{
 			cwd: root,
-			env: {
-				PATH: process.env.PATH ?? "",
-				HOME: home,
-				TMPDIR: home,
-				DRAHT_CODING_AGENT_DIR: agentDir,
-				DRAHT_STUB_PROVIDER: "1",
-				DRAHT_STUB_RECORD_CONTEXT: record,
-			},
+			env: { ...handStartedEnv(), DRAHT_STUB_RECORD_CONTEXT: record },
 			stdin: "pipe",
 			stdout: "pipe",
 			stderr: "pipe",
@@ -223,6 +253,45 @@ function recordSessionPgids(id: string): ProcessRow[] {
 	return rows;
 }
 
+function sessionFiles(): string[] {
+	const sessions = join(agentDir, "sessions");
+	if (!existsSync(sessions)) return [];
+	return readdirSync(sessions, { recursive: true, encoding: "utf-8" })
+		.filter((entry) => entry.endsWith(".jsonl"))
+		.map((entry) => join(sessions, entry));
+}
+
+/**
+ * A recorded session of `root` that the daemon's history index will list: the emitted binary run once in print mode and
+ * left to exit. `--no-approve` keeps the project's extension from starting a turn inside the seed run.
+ */
+async function seedRecordedSession(root: string): Promise<RecordedSession> {
+	const before = new Set(sessionFiles());
+	const stderr = { text: "" };
+	const proc = Bun.spawn(
+		[BUN, DRAHT_CLI, "--provider", "draht-stub", "--model", "stub-1", "--no-approve", "-p", "seed this session"],
+		{ cwd: root, env: handStartedEnv(), stdin: "ignore", stdout: "ignore", stderr: "pipe" },
+	);
+	handStarted.push(proc);
+	collect(proc.stderr as ReadableStream<Uint8Array>, stderr);
+	const code = await proc.exited;
+	if (code !== 0) throw new Error(`the seed run exited ${code}: ${stderr.text}`);
+
+	const path = sessionFiles().find((candidate) => !before.has(candidate));
+	if (path === undefined)
+		throw new Error(`the seed run wrote no session file under ${agentDir} (stderr: ${stderr.text})`);
+	const header = JSON.parse(readFileSync(path, "utf-8").split("\n")[0] ?? "") as { id: string; cwd: string };
+	expect(header.cwd).toBe(root);
+	return { id: header.id, path };
+}
+
+/** Every process this run started that `--session <path>` names, recorded for the teardown before anything is asserted. */
+function recordResumedPgids(path: string): ProcessRow[] {
+	const rows = descendantsOf(daemon.pid).filter((row) => row.command.includes(`--session ${path}`));
+	for (const row of rows) pgids.add(row.pid);
+	return rows;
+}
+
 async function spawnInto(projectId: string, root: string): Promise<SpawnedSession> {
 	const phone = await AttachClient.open(daemon.wsBase, daemon.token);
 	try {
@@ -246,6 +315,35 @@ async function spawnInto(projectId: string, root: string): Promise<SpawnedSessio
 		expect(row.pid).toBe(child.pid);
 		expect(row.cwd).toBe(root);
 		return { id, pid: child.pid };
+	} finally {
+		phone.close();
+	}
+}
+
+async function resumeFromPhone(recorded: RecordedSession, root: string): Promise<SpawnedSession> {
+	const phone = await AttachClient.open(daemon.wsBase, daemon.token);
+	try {
+		const hello = await phone.hello("spawn-posture-resume");
+		expect(hello.capabilities).toContain("session-resume");
+		const answer = await phone.ask({ type: "session_resume", sessionId: recorded.id }, "session_resumed", 60_000);
+		recordResumedPgids(recorded.path);
+		expect(answer, `daemon stderr: ${daemon.stderr.text}`).toMatchObject({
+			ok: true,
+			code: "resumed",
+			sessionId: recorded.id,
+		});
+
+		const kernel = recordResumedPgids(recorded.path);
+		expect(kernel).toHaveLength(1);
+		const [child] = kernel;
+		expect(isZombie(child)).toBe(false);
+		const row = await until(async () => {
+			const found = await fleetRow(recorded.id);
+			return found?.pid === undefined ? undefined : found;
+		}, `${recorded.id} to reach GET /fleet as a live session`);
+		expect(row.pid).toBe(child.pid);
+		expect(row.cwd).toBe(root);
+		return { id: recorded.id, pid: child.pid };
 	} finally {
 		phone.close();
 	}
@@ -553,5 +651,70 @@ describe("a session spawned through the daemon into a project that is trusted on
 		expect(recorded).toContain(IN_ROOT_B_CANARY);
 		expect(recorded).toContain(USER_CANARY);
 		expect(existsSync(tripwireB), "the granted project's extension ran in the spawned session").toBe(false);
+	}, 180_000);
+});
+
+describe("a session resumed through the daemon into a project that is trusted on disk", () => {
+	test("positive control: a draht reopening a recorded session of that project by hand loads its extension and SYSTEM.md", async () => {
+		expect((JSON.parse(readFileSync(trustPath, "utf-8")) as Record<string, unknown>)[rootA]).toBe(true);
+		recordedA = await seedRecordedSession(rootA);
+		rmSync(tripwireA, { force: true });
+
+		await runHandStarted(rootA, controlRecordPath, { prompt: false, session: recordedA.path });
+
+		const calls = readIfPresent(tripwireA);
+		expect(calls, "the extension did not load when a recorded session was reopened by hand").toBeDefined();
+		expect(calls).toContain("loaded");
+		expect(calls).toContain("session_start");
+		expect(readFileSync(controlRecordPath, "utf-8")).toContain(SYSTEM_A_CANARY);
+		rmSync(tripwireA, { force: true });
+	}, 180_000);
+
+	test("session_resume is answered resumed with --no-approve on the process's argv, and no extension loads and no provider is called before a prompt", async () => {
+		if (recordedA === undefined)
+			throw new Error("this test follows the positive control, which left no recorded session");
+		rmSync(recordPath, { force: true });
+		rmSync(tripwireA, { force: true });
+
+		resumedA = await resumeFromPhone(recordedA, rootA);
+		await Bun.sleep(QUIET_MS);
+
+		expect(existsSync(tripwireA), "the project's extension ran in the resumed session").toBe(false);
+		expect(existsSync(recordPath), "a provider request was made with no prompt sent").toBe(false);
+		expect(argvOf(resumedA.pid)).toEqual([
+			BUN,
+			DRAHT_CLI,
+			"--session",
+			recordedA.path,
+			"--attachable",
+			"--mode",
+			"rpc",
+			"--no-approve",
+		]);
+		await daemonStillAnswers();
+	}, 180_000);
+
+	test("prompted with its ask left unanswered, the resumed session's first provider request lacks the project's SYSTEM.md", async () => {
+		const session = requireSession(resumedA, "session_resume is answered resumed");
+
+		const renderer = await promptSession(session);
+		try {
+			const ask = await awaitAsk(renderer);
+			expect(ask.toolName).toBe("bash");
+		} finally {
+			renderer.close();
+		}
+
+		const recorded = readFileSync(recordPath, "utf-8");
+		expect(
+			recorded.includes(SYSTEM_A_CANARY),
+			"the project's SYSTEM.md reached the provider of a resumed session",
+		).toBe(false);
+		expect(recorded.includes(SECRET_CANARY), "AGENTS.md, a symlink out of the root, reached the provider").toBe(
+			false,
+		);
+		expect(recorded).toContain(IN_ROOT_A_CANARY);
+		expect(recorded).toContain(USER_CANARY);
+		expect(existsSync(tripwireA), "the project's extension ran in the resumed session").toBe(false);
 	}, 180_000);
 });

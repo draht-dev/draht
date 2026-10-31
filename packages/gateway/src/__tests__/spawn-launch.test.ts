@@ -340,6 +340,32 @@ test("a resume declares no credentialEnv and still receives every declared crede
 	for (const name of DECLARED_CREDENTIAL_ENV) expect(env.get(name)).toBe(`value-of-${name}`);
 }, 120_000);
 
+test("the argv a resumed child actually received is the frozen resume array, ending in `--no-approve`", async () => {
+	const { dir, projectRoot, leadingArgs } = harness(BINDS_AND_REPORTS);
+	const spawner = new SessionSpawner({
+		socketDir: dir,
+		agentDir: dir,
+		resolveExecutable: (): ResolvedExecutable => ({
+			executable: "/bin/sh",
+			leadingArgs,
+			target: leadingArgs[0] as string,
+		}),
+	});
+	const path = join(projectRoot, "s.jsonl");
+	const { pid } = await spawner.resume({ id: SESSION_ID, path, cwd: projectRoot });
+	pgids.add(pid);
+
+	expect(lines(join(dir, "argv"))).toEqual([
+		...leadingArgs,
+		"--session",
+		path,
+		"--attachable",
+		"--mode",
+		"rpc",
+		"--no-approve",
+	]);
+}, 120_000);
+
 test("stop() on a launched child reaches its whole group, grandchild included", async () => {
 	const { spawner, dir, request } = harness(BINDS_AND_REPORTS, { stopDeadlineMs: 500 });
 	const { pid } = await spawner.launch(request);

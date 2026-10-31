@@ -23,7 +23,7 @@
  * and opens a full-screen TUI picker, and a bare cross-project session id
  * reaches an interactive fork prompt that EOF-answers "no" and exits 0 — a
  * success code for having started nothing. The daemon uses
- * `--session <absolute .jsonl path> --attachable --mode rpc`, resolved
+ * `--session <absolute .jsonl path> --attachable --mode rpc --no-approve`, resolved
  * daemon-side from its own history index. This file proves the outcome the
  * requirement wanted (a history session becomes live and joins the fleet with no
  * client reconnect), not the mechanism it named.
@@ -77,6 +77,7 @@ import {
 // and forwards exactly one declared name.
 import { assertSafeExecutablePath, buildChildEnvironment, SpawnRefusedError } from "../session/spawn-primitive.js";
 import { absoluteTool } from "./helpers/absolute-tool.js";
+import { argvOf } from "./helpers/process-table.js";
 
 const REPO_ROOT = resolve(import.meta.dir, "..", "..", "..", "..");
 const DRAHT_CLI = join(REPO_ROOT, "packages", "coding-agent", "dist", "cli.js");
@@ -725,19 +726,20 @@ describe("session_resume (R35-ALWAYS.9)", () => {
 		// The trap was armed before the daemon started and is still unsprung.
 		expect(existsSync(shimMarker)).toBe(false);
 
-		// And the child's own argv names the canonical absolute CLI. `ps` is the
-		// only view of another process's argv this platform offers, and it is the
-		// point: what is asserted is what the kernel actually exec'd.
-		const ps = Bun.spawnSync(["ps", "-o", "command=", "-p", String(resumedPid)]);
-		const command = ps.stdout.toString();
-		expect(command).toContain(DRAHT_CLI);
-		expect(command).toContain("--attachable");
-		expect(command).toContain("--mode rpc");
-		// Named by an absolute .jsonl path, which is what keeps it out of the fork
-		// prompt a bare id would have hit.
-		expect(command).toContain(seeded.path);
-		// argv array, never a shell.
-		expect(command).not.toContain("sh -c");
+		// And the child's own argv, whole, after the interpreter the daemon runs
+		// under: the canonical absolute CLI, then the session named by an absolute
+		// .jsonl path (which keeps it out of the fork prompt a bare id would have
+		// hit), then the posture flags. What is asserted is what the kernel
+		// actually exec'd, and an argv array of exactly this shape is never a shell.
+		expect(argvOf(resumedPid).slice(1)).toEqual([
+			DRAHT_CLI,
+			"--session",
+			seeded.path,
+			"--attachable",
+			"--mode",
+			"rpc",
+			"--no-approve",
+		]);
 	});
 
 	test("the resumed session answers a prompt, and its environment carries only what was declared", async () => {

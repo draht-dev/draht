@@ -136,8 +136,8 @@ function normalizeCost(cost: ModelsDevV2Model["cost"]): ModelsDevCost {
 	const perToken = (unit: string | undefined) => unit === undefined || unit === "token";
 	if (!input || !output || !perToken(input.unit) || !perToken(output.unit)) return {};
 
-	// Only context-size overrides map onto pi's cost tiers. Region, service-tier,
-	// and time-based prices have no pi equivalent yet.
+	// Only context-size overrides map onto draht's cost tiers. Region, service-tier,
+	// and time-based prices have no draht equivalent yet.
 	const tiers = new Map<number, NonNullable<ModelsDevCost["tiers"]>[number]>();
 	const tier = (above: number) => {
 		let entry = tiers.get(above);
@@ -210,7 +210,7 @@ export function roundCost(value: number): number {
 	return Number(value.toFixed(6));
 }
 
-/** Converts models.dev prices to pi's cost shape. Missing rates are free. */
+/** Converts models.dev prices to draht's cost shape. Missing rates are free. */
 export function modelsDevCost(cost: ModelsDevCost): ModelCost {
 	const base = {
 		input: cost.input || 0,
@@ -235,7 +235,7 @@ export function modelsDevCost(cost: ModelsDevCost): ModelCost {
 export function modelsDevChatModels(catalog: ModelsDevV2Catalog, provider: string): ModelsDevModel[] {
 	return (
 		Object.values(catalog[provider]?.models ?? {})
-			// Unlike pi models, models.dev v2 always states the type.
+			// Unlike draht models, models.dev v2 always states the type.
 			.filter(({ type }) => type === "chat")
 			.map(normalizeModelsDevModel)
 	);

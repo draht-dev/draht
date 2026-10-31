@@ -1993,7 +1993,7 @@ export class DefaultPackageManager implements PackageManager {
 				"--config.strict-dep-builds=false",
 			];
 		}
-		// npm audit fix would run without --legacy-peer-deps and install pi peers, so skip audit advice.
+		// npm audit fix would run without --legacy-peer-deps and install draht peers, so skip audit advice.
 		return ["install", ...specs, "--prefix", installRoot, "--legacy-peer-deps", "--no-audit", "--no-fund"];
 	}
 

@@ -29,7 +29,7 @@ export default defineProvider({
 						input: source.cost.input || 0,
 						output: source.cost.output || 0,
 						// models.dev reports Vertex cache_read/cache_write values for Gemini 2.5 Flash that
-						// do not match the official Gemini API standard pricing table. pi only accounts
+						// do not match the official Gemini API standard pricing table. draht only accounts
 						// cachedContentTokenCount as cacheRead.
 						cacheRead: model.id === "gemini-2.5-flash" ? 0.03 : source.cost.cacheRead || 0,
 						cacheWrite: 0,

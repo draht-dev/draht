@@ -107,7 +107,7 @@ export interface ModelsDevOptions<TApi extends Api> {
 	map?(model: Model<TApi>, source: ModelsDevModel): ChatModel | undefined;
 }
 
-/** Map one models.dev provider's tool-capable chat models onto pi models. */
+/** Map one models.dev provider's tool-capable chat models onto draht models. */
 export function modelsDevModels<TApi extends Api>(
 	ctx: ProviderContext,
 	sourceProvider: string,

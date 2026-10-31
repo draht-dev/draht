@@ -37,7 +37,7 @@ interface OpencodeApi {
 
 /**
  * The API and base URL models.dev lists for a model. Models served only on a
- * protocol pi does not support fail strict generation and are skipped otherwise.
+ * protocol draht does not support fail strict generation and are skipped otherwise.
  */
 function opencodeApi(ctx: ProviderContext, source: ModelsDevModel): OpencodeApi | undefined {
 	const entry = OPENCODE_PROTOCOLS.map((protocol) =>

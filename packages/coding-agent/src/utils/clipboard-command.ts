@@ -12,7 +12,7 @@ export function runClipboardCommand(
 		// (SIGTSTP to the group) does not stop the clipboard owner (#11179).
 		// Run from / (the current drive root on Windows): clipboard tools ignore the cwd, and WSL cannot start
 		// Windows executables (powershell.exe) when the cwd's \\wsl.localhost\... path
-		// exceeds MAX_PATH (#11592). This also keeps daemons from pinning pi's cwd.
+		// exceeds MAX_PATH (#11592). This also keeps daemons from pinning draht's cwd.
 		const child = spawn(command, args, {
 			stdio: ["pipe", options?.input === undefined ? "pipe" : "ignore", "ignore"],
 			cwd: "/",

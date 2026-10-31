@@ -1,7 +1,7 @@
 import { defineProvider, modelsDevModels } from "../define.ts";
 import { NVIDIA_BASE_URL, normalizeNvidiaModelId } from "../sources/index.ts";
 
-// Listed by NIM but unusable through pi (no tool calls, broken streaming, or retired).
+// Listed by NIM but unusable through draht (no tool calls, broken streaming, or retired).
 const UNSUPPORTED_MODEL_IDS = new Set([
 	"abacusai/dracarys-llama-3.1-70b-instruct",
 	"bytedance/seed-oss-36b-instruct",

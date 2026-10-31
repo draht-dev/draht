@@ -34,7 +34,7 @@ export interface ExecResult {
 	stdout: string;
 	stderr: string;
 	code: number;
-	/** The command was terminated by pi: timeout, abort, or output over `maxBuffer`. */
+	/** The command was terminated by draht: timeout, abort, or output over `maxBuffer`. */
 	killed: boolean;
 	/** Output exceeded `maxBuffer`; stdout and stderr are incomplete and `code` is nonzero. */
 	truncated: boolean;

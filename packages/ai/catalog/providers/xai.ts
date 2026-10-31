@@ -1,6 +1,6 @@
 import { defineProvider, mergeThinking, modelsDevModels } from "../define.ts";
 
-// Retired or unsuitable for pi's built-in catalog.
+// Retired or unsuitable for draht's built-in catalog.
 const EXCLUDED_MODEL_IDS = new Set([
 	"grok-3",
 	"grok-3-fast",

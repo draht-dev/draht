@@ -264,7 +264,7 @@ export type EditorFactory = (tui: TUI, theme: EditorTheme, keybindings: Keybindi
 /**
  * Formats the host's configured keybindings for display.
  * Extensions should use these instead of importing `keyText`/`keyHint`: an import may resolve to another copy of
- * pi-coding-agent, which does not see the host's keybindings.
+ * @draht/coding-agent, which does not see the host's keybindings.
  */
 export interface KeybindingHints {
 	/** Configured keys for a keybinding id, for example `"ctrl+o"`. Empty when the id has no keys. */
@@ -357,7 +357,7 @@ export interface ExtensionUIContext {
 			/** Called with the overlay handle after the overlay is shown. Use to control visibility. */
 			onHandle?: (handle: OverlayHandle) => void;
 			/**
-			 * Report pi as blocked on user input (OSC 7501 program status) while this component is visible.
+			 * Report draht as blocked on user input (OSC 7501 program status) while this component is visible.
 			 * Only applies to inline components, not overlays.
 			 */
 			blocked?: { kind: NonNullable<ProgramStatus["kind"]>; message: string };

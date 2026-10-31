@@ -844,7 +844,7 @@ pi.on("before_provider_headers", (event, ctx) => {
   // Add or override — e.g. a session id for gateway tracing/attribution
   event.headers["x-session-id"] = ctx.sessionManager.getSessionId();
 
-  // Drop a tracking header pi adds for this call
+  // Drop a tracking header draht adds for this call
   event.headers["X-OpenRouter-Title"] = null;
 });
 ```
@@ -905,8 +905,8 @@ Fired before each prompt-cache refresh with draht's decision filled in. The even
 pi.on("cache_warming_decision", (event, ctx) => {
   // event.warmCost: price of this refresh
   // event.missCost: extra price of the next request if the entry is lost
-  // event.continuationProbability: pi's estimate that a request arrives in time
-  // event.action: "warm" | "stop", pi's decision
+  // event.continuationProbability: draht's estimate that a request arrives in time
+  // event.action: "warm" | "stop", draht's decision
 
   if (ctx.model?.provider === "my-provider") {
     return { action: "stop" };
@@ -1078,7 +1078,7 @@ pi.on("user_bash", (event, ctx) => {
   // Option 1: Provide custom operations (e.g., SSH)
   return { operations: remoteBashOps };
 
-  // Option 2: Wrap pi's built-in local bash backend
+  // Option 2: Wrap draht's built-in local bash backend
   const local = createLocalBashOperations();
   return {
     operations: {
@@ -1203,13 +1203,13 @@ ctx.sessionManager.getLeafId()              // Current leaf entry ID
 
 ### ctx.modelRegistry / ctx.model / ctx.thinkingLevel / ctx.scopedModels
 
-Access to models, providers, and resolved authentication. `ctx.modelRegistry.getProvider(id)` returns the effective pi-ai provider, while `getProviderAuth(id)` resolves its current API key, headers, base URL, and provider-scoped environment without requiring a loaded model. `ctx.model` is the active model, and `ctx.thinkingLevel` is its current effective thinking level.
+Access to models, providers, and resolved authentication. `ctx.modelRegistry.getProvider(id)` returns the effective @draht/ai provider, while `getProviderAuth(id)` resolves its current API key, headers, base URL, and provider-scoped environment without requiring a loaded model. `ctx.model` is the active model, and `ctx.thinkingLevel` is its current effective thinking level.
 
 `ctx.scopedModels` is the read-only list of models scoped to the current session — the same set the `/scoped-models` command shows. It is resolved at session start from the `--models` CLI flag and the `enabledModels` setting (matched against the available catalogue with minimatch on `provider/modelId` or a bare `modelId`). It is empty when no scoping is configured, meaning every available model is usable. Each entry is `{ model, thinkingLevel? }`, where `thinkingLevel` is set only when a pattern pinned it (e.g. `anthropic/*:high`). Use it to populate a model picker that mirrors the built-in one instead of enumerating the whole catalogue via `ctx.modelRegistry.getAvailable()`.
 
 #### Streaming model calls
 
-Use `ctx.modelRegistry.streamSimple(model, context, options)` for provider-neutral options such as `reasoning`, or `complete(model, context, options)` to await the final assistant message with API-specific options. Both use configured providers and resolve authentication, including for providers registered with `pi.registerProvider()`. Use these instead of `pi-ai/compat` streaming functions, which cannot see extension provider registrations.
+Use `ctx.modelRegistry.streamSimple(model, context, options)` for provider-neutral options such as `reasoning`, or `complete(model, context, options)` to await the final assistant message with API-specific options. Both use configured providers and resolve authentication, including for providers registered with `pi.registerProvider()`. Use these instead of `@draht/ai/compat` streaming functions, which cannot see extension provider registrations.
 
 `streamSimple()` returns an `AssistantMessageEventStream`. Iterate it for response events and await `.result()` for the final message. Setup failures produce error events and error results.
 
@@ -1246,7 +1246,7 @@ Control flow helpers. `ctx.isIdle()` is false while draht is processing an agent
 
 ### ctx.shutdown()
 
-Request a graceful shutdown of pi.
+Request a graceful shutdown of draht.
 
 - **Interactive mode:** Deferred until the agent becomes idle (after processing all queued steering and follow-up messages).
 - **RPC mode:** Deferred until the next idle state (after completing the current command response, when waiting for the next command).
@@ -1887,7 +1887,7 @@ const result = await pi.exec("git", ["status"], { signal, timeout: 5000 });
 // result.stdout, result.stderr, result.code, result.killed, result.truncated
 ```
 
-Options: `signal` and `timeout` terminate the command, `cwd` sets the working directory, and `maxBuffer` limits stdout and stderr combined (default 256 MiB). When output exceeds `maxBuffer`, pi terminates the command and returns the output up to the limit with `truncated: true`, `killed: true`, and a nonzero `code`. `killed` is true whenever pi terminated the command: timeout, abort, or `maxBuffer`. A command that ignores SIGTERM gets SIGKILL after 5 seconds.
+Options: `signal` and `timeout` terminate the command, `cwd` sets the working directory, and `maxBuffer` limits stdout and stderr combined (default 256 MiB). When output exceeds `maxBuffer`, draht terminates the command and returns the output up to the limit with `truncated: true`, `killed: true`, and a nonzero `code`. `killed` is true whenever draht terminated the command: timeout, abort, or `maxBuffer`. A command that ignores SIGTERM gets SIGKILL after 5 seconds.
 
 ### pi.getActiveTools() / pi.getAllTools() / pi.setActiveTools(names)
 
@@ -2065,7 +2065,7 @@ pi.registerProvider("corporate-ai", {
 });
 ```
 
-The object form accepts a complete pi-ai `Provider`, including native `auth`, `getModels`, `refreshModels`, `filterModels`, `stream`, and `streamSimple` behavior.
+The object form accepts a complete @draht/ai `Provider`, including native `auth`, `getModels`, `refreshModels`, `filterModels`, `stream`, and `streamSimple` behavior.
 
 **Legacy config options:**
 - `name` - Display name for the provider in UI such as `/login`.
@@ -2600,7 +2600,7 @@ The same functions are available as `options.keyHint()`/`options.keyText()` in m
 - `keyHint(keybinding, description)` - Formats a configured keybinding id such as `"app.tools.expand"` or `"tui.select.confirm"`, followed by the description
 - `keyText(keybinding)` - Returns the raw configured key text for a keybinding id, or `""` if the id has no keys
 
-In renderers, use these instead of importing `keyHint()` or `keyText()` from `@draht/coding-agent`. An extension can resolve its own copy of the package, for example from its own `node_modules`, and that copy does not see pi's configured keybindings: `app.*` ids then format as `""`. `rawKeyHint(key, description)` formats a literal key string and is safe to import.
+In renderers, use these instead of importing `keyHint()` or `keyText()` from `@draht/coding-agent`. An extension can resolve its own copy of the package, for example from its own `node_modules`, and that copy does not see draht's configured keybindings: `app.*` ids then format as `""`. `rawKeyHint(key, description)` formats a literal key string and is safe to import.
 
 Use namespaced keybinding ids:
 - Coding-agent ids use the `app.*` namespace, for example `app.tools.expand`, `app.editor.external`, `app.session.rename`
@@ -2924,7 +2924,7 @@ ctx.ui.setHiddenThinkingLabel();  // Restore default
 const unsubscribe = ctx.ui.onTerminalInput((data) => undefined);
 
 // Terminal title
-ctx.ui.setTitle("pi - my-project");
+ctx.ui.setTitle("draht - my-project");
 
 // Editor text
 ctx.ui.setEditorText("Prefill text");

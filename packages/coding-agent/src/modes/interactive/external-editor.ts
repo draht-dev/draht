@@ -24,7 +24,7 @@ export async function editInExternalEditor(options: ExternalEditorOptions): Prom
 		// vim/nvim for the console input buffer until Ctrl+C cancels the pending read.
 		// Null means the editor could not be launched.
 		const exit = await new Promise<number | NodeJS.Signals | null>((resolve) => {
-			// The editor inherits pi's cwd so project-relative paths, integrated terminals,
+			// The editor inherits draht's cwd so project-relative paths, integrated terminals,
 			// and similar editor features keep working. A long cwd can break Windows editors:
 			// Windows rejects working directories over MAX_PATH, and WSL launches Windows
 			// editors (code, notepad.exe) from the cwd's \\wsl.localhost\... path (#11592).

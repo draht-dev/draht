@@ -329,7 +329,7 @@
         return '';
       }
 
-      /** Full prompt text of a system message, mirroring getSystemMessageText() in pi-ai. */
+      /** Full prompt text of a system message, mirroring getSystemMessageText() in @draht/ai. */
       function getSystemMessageText(msg) {
         const parts = [systemContentText(msg.content)];
         for (const value of Object.values(msg.sections || {})) {
@@ -338,7 +338,7 @@
         return parts.filter(part => part.length > 0).join('\n\n');
       }
 
-      /** Text of a later system message, mirroring renderSystemMessageUpdate() in pi-ai. */
+      /** Text of a later system message, mirroring renderSystemMessageUpdate() in @draht/ai. */
       function renderSystemMessageUpdate(msg) {
         const parts = [];
         const text = systemContentText(msg.content);

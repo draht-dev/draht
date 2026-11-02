@@ -3,6 +3,8 @@ import path from "node:path";
 import { Resvg } from "@resvg/resvg-js";
 import type { APIRoute } from "astro";
 import satori from "satori";
+import interRegular from "../fonts/Inter-Regular.ttf?inline";
+import jetbrainsMonoBold from "../fonts/JetBrainsMono-Bold.ttf?inline";
 
 interface GitHubData {
 	stars: number;
@@ -52,54 +54,24 @@ function getLatestVersion(): string {
 	}
 }
 
-async function loadGoogleFont(family: string, weight: number): Promise<ArrayBuffer> {
-	const url = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(family)}:wght@${weight}&display=swap`;
-	const cssRes = await fetch(url, {
-		headers: {
-			// satori's opentype.js parser can read TTF/OTF/WOFF but not WOFF2.
-			// Google Fonts picks the response format from the User-Agent, and
-			// only serves WOFF (not WOFF2) to pre-2015 browsers, so an old
-			// Chrome UA is the minimal way to get a format satori can parse.
-			"User-Agent":
-				"Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/41.0.2272.118 Safari/537.36",
-		},
-	});
-	const css = await cssRes.text();
-	// The response has one @font-face block per unicode subset; take the
-	// "latin" block (U+0000-00FF) so the font covers plain ASCII text.
-	const latinBlock = css.split("@font-face").find((block) => block.includes("U+0000-00FF")) ?? css;
-	const fontUrlMatch = latinBlock.match(/src:\s*url\(([^)]+)\)/);
-	if (!fontUrlMatch) throw new Error(`No font URL found for ${family}`);
-	const fontRes = await fetch(fontUrlMatch[1]);
-	return fontRes.arrayBuffer();
-}
-
-function tryLoadLocalFont(paths: string[]): Buffer | null {
-	for (const fp of paths) {
-		if (fs.existsSync(fp)) {
-			return fs.readFileSync(fp);
-		}
+// Vendored OFL faces (src/fonts): Inter Regular and JetBrains Mono Bold.
+// Inlined into the server bundle so satori never fetches a font host.
+// Satori's parser reads TTF, not WOFF2.
+function bundledFont(dataUri: string): ArrayBuffer {
+	const comma = dataUri.indexOf(",");
+	if (!dataUri.startsWith("data:") || comma === -1) {
+		throw new Error("Bundled font was not inlined as a data URI");
 	}
-	return null;
+	const meta = dataUri.slice(0, comma);
+	if (!meta.includes(";base64")) {
+		throw new Error("Bundled font data URI is not base64");
+	}
+	const bytes = Buffer.from(dataUri.slice(comma + 1), "base64");
+	return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 }
 
-async function loadMonoFont(): Promise<ArrayBuffer> {
-	const local = tryLoadLocalFont([
-		"/System/Library/Fonts/Supplemental/Courier New Bold.ttf",
-		"/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
-	]);
-	if (local) return local.buffer.slice(local.byteOffset, local.byteOffset + local.byteLength) as ArrayBuffer;
-	return loadGoogleFont("JetBrains Mono", 700);
-}
-
-async function loadSansFont(): Promise<ArrayBuffer> {
-	const local = tryLoadLocalFont([
-		"/System/Library/Fonts/Supplemental/Arial.ttf",
-		"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-	]);
-	if (local) return local.buffer.slice(local.byteOffset, local.byteOffset + local.byteLength) as ArrayBuffer;
-	return loadGoogleFont("Inter", 400);
-}
+const monoFont = bundledFont(jetbrainsMonoBold);
+const sansFont = bundledFont(interRegular);
 
 export const GET: APIRoute = async () => {
 	const [github, version] = await Promise.all([fetchGitHubData(), Promise.resolve(getLatestVersion())]);
@@ -108,8 +80,6 @@ export const GET: APIRoute = async () => {
 	const logoPath = path.resolve(process.cwd(), "public/draht-logo.png");
 	const logoBuffer = fs.readFileSync(logoPath);
 	const logoBase64 = `data:image/png;base64,${logoBuffer.toString("base64")}`;
-
-	const [monoFont, sansFont] = await Promise.all([loadMonoFont(), loadSansFont()]);
 
 	// Stats to display
 	const stats = [

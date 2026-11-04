@@ -1,4 +1,4 @@
-import type { OAuthClientMetadataDocument, OAuthClientProvider } from "./flow.ts";
+import type { OAuthAuthorizationRequest, OAuthClientMetadataDocument, OAuthClientProvider } from "./flow.ts";
 import type {
 	AuthorizationServerMetadata,
 	OAuthClientInformationMixed,
@@ -17,6 +17,8 @@ export interface McpOAuthState {
 	tokensExpireAt?: number;
 	codeVerifier?: string;
 	oauthState?: string;
+	/** The pending authorization request's client and authorization server, kept with `codeVerifier`. */
+	authorizationRequest?: OAuthAuthorizationRequest;
 	discovery?: OAuthDiscoveryState;
 }
 
@@ -151,6 +153,10 @@ export class McpOAuthProvider implements OAuthClientProvider {
 		await this.update((value) => ({ ...value, codeVerifier: verifier }));
 	}
 
+	async saveAuthorizationRequest(request: OAuthAuthorizationRequest): Promise<void> {
+		await this.update((value) => ({ ...value, authorizationRequest: request }));
+	}
+
 	async codeVerifier(): Promise<string> {
 		const verifier = (await this.load()).codeVerifier;
 		if (!verifier) throw new Error("No OAuth PKCE code verifier is stored");
@@ -166,9 +172,14 @@ export class McpOAuthProvider implements OAuthClientProvider {
 				delete next.tokensExpireAt;
 				delete next.clientMetadataUrl;
 			}
-			if (kind === "all" || kind === "verifier") delete next.codeVerifier;
+			// The verifier, the request it belongs to, and its `state` go together: the flow drops them once
+			// the code is exchanged, so a completed sign-in cannot be completed again.
+			if (kind === "all" || kind === "verifier") {
+				delete next.codeVerifier;
+				delete next.authorizationRequest;
+				delete next.oauthState;
+			}
 			if (kind === "all" || kind === "discovery") delete next.discovery;
-			if (kind === "all") delete next.oauthState;
 			return next;
 		});
 	}

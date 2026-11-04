@@ -48,7 +48,10 @@ export interface McpSignInRedirect {
 	redirectUrl: string;
 	/** The `state` parameter the authorization response must carry. */
 	state: string;
-	/** The scope requested, if any. Saved with the tokens when the token response names none. */
+	/**
+	 * The scope the flow requested, if any (not a `scope` the authorization endpoint URL itself carries).
+	 * Saved with the tokens when the token response names none.
+	 */
 	scope?: string;
 }
 
@@ -147,7 +150,7 @@ async function startBrowserStep(options: McpSignInOptions, stepUp: boolean): Pro
 	);
 	await authorizeMcp(provider, { ...flowOptions(options), scope, skipRefresh: true });
 	if (!authorizationUrl) throw new Error("OAuth flow did not produce an authorization URL");
-	const requestedScope = authorizationUrl.searchParams.get("scope");
+	const requestedScope = (await store.load())?.authorizationRequest?.scope;
 	return {
 		kind: "redirect",
 		authorizationUrl: authorizationUrl.href,
@@ -166,6 +169,8 @@ function stateForSignIn(stored: McpOAuthState, options: McpSignInOptions): McpOA
 	const { settings, redirectUrl } = options;
 	const next: McpOAuthState = { ...stored };
 	delete next.oauthState;
+	delete next.codeVerifier;
+	delete next.authorizationRequest;
 	// A registered client cannot use another redirect URI, and its tokens belong to it. `cimd` replaces a
 	// registered client. A Client ID Metadata Document is not stored, so tokens without a stored client
 	// belong to the document, which `matchesClient` checked is the configured one.
@@ -192,9 +197,11 @@ function mergeScopes(...scopes: (string | undefined)[]): string | undefined {
 /**
  * Second half of a sign-in: exchanges the authorization code of `response` and saves the tokens. Pass
  * the options given to `startMcpSignIn`, including its `redirectUrl` (not `authorization.redirectUrl`).
- * Fails when the response carries another `state`, when another sign-in started with the store since, or
- * when the exchange would use another redirect URI than the authorization request (the options changed).
- * A redirect URL the user pasted goes through `responseFromRedirectUrl` first, which checks its path.
+ * Fails when the response carries another `state`, when another sign-in started with the store since or
+ * this one already completed, or when the exchange would use another redirect URI, client, authorization
+ * server, or token endpoint than the authorization request (the options or the discovery changed); these
+ * checks run before the stored PKCE verifier is read. A redirect URL the user pasted goes through
+ * `responseFromRedirectUrl` first, which checks its path.
  */
 export async function completeMcpSignIn(
 	options: McpSignInOptions & {
@@ -208,15 +215,24 @@ export async function completeMcpSignIn(
 		if (response.state !== authorization.state) {
 			throw new Error("The authorization response belongs to a different sign-in");
 		}
+		const stored = await options.store.load();
+		// A completed sign-in dropped its state and verifier; the code is spent.
+		if (!stored?.oauthState) throw new Error("No sign-in to this MCP server is pending; sign in again");
 		// The stored PKCE verifier belongs to the latest sign-in; exchanging with it would fail with
 		// `invalid_grant`, which discards the stored tokens.
-		if ((await options.store.load())?.oauthState !== authorization.state) {
+		if (stored.oauthState !== authorization.state) {
 			throw new Error("Another sign-in to this MCP server started since; sign in again");
+		}
+		// Fail closed: without the request's client and authorization server, the exchange cannot be checked.
+		const request = stored.authorizationRequest;
+		if (!request || !stored.codeVerifier) {
+			throw new Error("The authorization request of this sign-in is not stored; sign in again");
 		}
 		await authorizeMcp(createOAuthClientProvider(options, options.redirectUrl), {
 			...flowOptions(options),
 			// Saved with the tokens when the token response names no scope, so it must be the requested one.
-			scope: authorization.scope,
+			scope: request.scope,
+			authorizationRequest: request,
 			authorizationRedirectUrl: authorization.redirectUrl,
 			authorizationCode: response.code,
 			iss: response.iss,

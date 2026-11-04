@@ -45,6 +45,22 @@ export interface OAuthClientMetadataDocument {
 	redirectUrl: string;
 }
 
+/**
+ * What an authorization request was sent with, saved with its PKCE verifier. The code exchange of a
+ * sign-in passes it back (`OAuthFlowOptions.authorizationRequest`), so the code and the verifier never go
+ * to another client or authorization server than the one the user authorized.
+ */
+export interface OAuthAuthorizationRequest {
+	/** `client_id` of the authorization request. */
+	clientId: string;
+	/** The authorization server (its issuer identifier) the request went to. */
+	authorizationServerUrl: string;
+	/** Token endpoint the code is to be exchanged at. */
+	tokenEndpoint: string;
+	/** The `scope` parameter the request carried, if any. */
+	scope?: string;
+}
+
 export interface OAuthClientProvider {
 	readonly redirectUrl: string | URL;
 	readonly clientMetadata: OAuthClientMetadata;
@@ -61,6 +77,8 @@ export interface OAuthClientProvider {
 	saveTokens(tokens: OAuthTokens): void | Promise<void>;
 	redirectToAuthorization(url: URL): void | Promise<void>;
 	saveCodeVerifier(verifier: string): void | Promise<void>;
+	/** Called with the authorization request just before `saveCodeVerifier`; keep it with the verifier. */
+	saveAuthorizationRequest?(request: OAuthAuthorizationRequest): void | Promise<void>;
 	codeVerifier(): string | Promise<string>;
 	addClientAuthentication?: AddClientAuthentication;
 	invalidateCredentials?(kind: "all" | "client" | "tokens" | "verifier" | "discovery"): void | Promise<void>;
@@ -99,6 +117,12 @@ export interface OAuthFlowOptions {
 	 * sending the code when the flow would send another one (RFC 6749 section 4.1.3 requires the same).
 	 */
 	authorizationRedirectUrl?: string;
+	/**
+	 * With `authorizationCode`: the authorization request the code answers. The exchange fails before the
+	 * code verifier is read when the flow would use another client, authorization server, or token endpoint,
+	 * for example after the client settings changed or discovery found another authorization server.
+	 */
+	authorizationRequest?: OAuthAuthorizationRequest;
 }
 
 export type OAuthFlowResult = "AUTHORIZED" | "REDIRECT";
@@ -212,12 +236,16 @@ export async function startAuthorization(
 	return { authorizationUrl: url, codeVerifier: verifier };
 }
 
+function tokenEndpoint(authorizationServerUrl: string | URL, metadata: AuthorizationServerMetadata | undefined): URL {
+	return new URL(metadata?.token_endpoint ?? new URL("/token", authorizationServerUrl));
+}
+
 async function tokenRequest(
 	authorizationServerUrl: string | URL,
 	options: TokenRequestOptions,
 	params: URLSearchParams,
 ): Promise<OAuthTokens> {
-	const url = secureEndpoint(options.metadata?.token_endpoint ?? new URL("/token", authorizationServerUrl));
+	const url = secureEndpoint(tokenEndpoint(authorizationServerUrl, options.metadata));
 	const headers = new Headers({ Accept: "application/json", "content-type": "application/x-www-form-urlencoded" });
 	if (options.resource) params.set("resource", options.resource);
 	if (options.addClientAuthentication) {
@@ -420,6 +448,22 @@ async function runFlow(
 		signal: options.signal,
 	};
 	if (options.authorizationCode) {
+		// Checked before the verifier is read: the code and the verifier go only where the user authorized.
+		const request = options.authorizationRequest;
+		if (request) {
+			const current: [string, string, string][] = [
+				["client", client.client_id, request.clientId],
+				["authorization server", discovered.authorizationServerUrl, request.authorizationServerUrl],
+				["token endpoint", tokenEndpoint(discovered.authorizationServerUrl, metadata).href, request.tokenEndpoint],
+			];
+			for (const [name, actual, expected] of current) {
+				if (actual !== expected) {
+					throw new Error(
+						`The code exchange would use the ${name} ${actual}, but the authorization request used ${expected}; sign in again`,
+					);
+				}
+			}
+		}
 		// RFC 9207: never send a code from another authorization server to this one. Without metadata there
 		// is no issuer to compare with, so any `iss` is rejected.
 		const iss = options.iss;
@@ -434,7 +478,9 @@ async function runFlow(
 		});
 		// A response without `scope` grants the requested scope (RFC 6749 §5.1). Recorded so a step-up can
 		// keep it. Callers pass the options of the authorization request, so `scope` is what was requested.
-		await provider.saveTokens(withScope(tokens, scope));
+		await provider.saveTokens(withScope(tokens, request ? request.scope : scope));
+		// The code is spent: drop the request's verifier and state so the exchange cannot be replayed.
+		await provider.invalidateCredentials?.("verifier");
 		return "AUTHORIZED";
 	}
 	const existing = options.skipRefresh ? undefined : await provider.tokens();
@@ -461,6 +507,13 @@ async function runFlow(
 		scope,
 		state,
 		resource,
+	});
+	await provider.saveAuthorizationRequest?.({
+		clientId: client.client_id,
+		authorizationServerUrl: discovered.authorizationServerUrl,
+		tokenEndpoint: tokenEndpoint(discovered.authorizationServerUrl, metadata).href,
+		// What the request carried, not what the authorization URL holds: the endpoint may name a scope itself.
+		...(scope ? { scope } : {}),
 	});
 	await provider.saveCodeVerifier(authorization.codeVerifier);
 	await provider.redirectToAuthorization(authorization.authorizationUrl);

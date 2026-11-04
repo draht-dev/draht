@@ -153,7 +153,7 @@ describe("runPrintMode", () => {
 		expect(errorSpy).toHaveBeenCalled();
 	});
 
-	// A signal during the final disposal used to hit no handler and kill pi mid-dispose.
+	// A signal during the final disposal used to hit no handler and kill draht mid-dispose.
 	it("waits for the final disposal when SIGTERM arrives during it, and exits on a repeated SIGTERM", async () => {
 		const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
 		const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "done" }));

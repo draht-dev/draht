@@ -528,7 +528,7 @@
         },
         "supportsFinishReason": {
           "type": "boolean",
-          "description": "Whether streamed responses include finish_reason. When false, pi infers stop or toolUse when the stream ends.",
+          "description": "Whether streamed responses include finish_reason. When false, draht infers stop or toolUse when the stream ends.",
           "default": true
         },
         "maxTokensField": {
@@ -660,7 +660,7 @@
               ]
             }
           },
-          "description": "Kwargs sent as chat_template_kwargs when thinkingFormat is \"chat-template\". Use $var with \"thinking.enabled\", \"thinking.effort\", or \"thinking.budget\" for pi-controlled values."
+          "description": "Kwargs sent as chat_template_kwargs when thinkingFormat is \"chat-template\". Use $var with \"thinking.enabled\", \"thinking.effort\", or \"thinking.budget\" for draht-controlled values."
         },
         "chatTemplateArgs": {
           "type": "object",
@@ -709,7 +709,7 @@
               ]
             }
           },
-          "description": "Arguments sent as chat_template_args when thinkingFormat is \"baseten\". Use $var with \"thinking.enabled\", \"thinking.effort\", or \"thinking.budget\" for pi-controlled values."
+          "description": "Arguments sent as chat_template_args when thinkingFormat is \"baseten\". Use $var with \"thinking.enabled\", \"thinking.effort\", or \"thinking.budget\" for draht-controlled values."
         },
         "openRouterRouting": {
           "type": "object",

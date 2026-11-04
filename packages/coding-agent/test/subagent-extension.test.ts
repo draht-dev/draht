@@ -140,7 +140,7 @@ function singleTask(task: string, overrides: Record<string, unknown> = {}): Reco
 }
 
 async function withFixtureInvocation<T>(run: () => Promise<T>): Promise<T> {
-	// The example re-executes process.argv[1] as Pi. Point that invocation at
+	// The example re-executes process.argv[1] as draht. Point that invocation at
 	// the deterministic fixture while retaining the real child_process.spawn.
 	const originalScript = process.argv[1];
 	process.argv[1] = SUBAGENT_FIXTURE_PATH;

@@ -64,7 +64,7 @@ export async function execCommand(
 	let stdout = "";
 	let stderr = "";
 	// Decode across chunks: a multi-byte UTF-8 character can be split between two chunks,
-	// and decoding each chunk separately would corrupt it (earendil-works/pi#11312).
+	// and decoding each chunk separately would corrupt it (badlogic/pi-mono#11312).
 	const stdoutDecoder = new StringDecoder("utf8");
 	const stderrDecoder = new StringDecoder("utf8");
 	let outputBytes = 0;

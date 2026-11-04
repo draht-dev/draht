@@ -136,7 +136,7 @@ describe("collapsible message components", () => {
 						"entry-1",
 					),
 			},
-		])("runs as $messageType on expanded $kind content without Pi's header", ({ messageType, header, create }) => {
+		])("runs as $messageType on expanded $kind content without draht's header", ({ messageType, header, create }) => {
 			seen.length = 0;
 			const component = create();
 			component.setExpanded(true);

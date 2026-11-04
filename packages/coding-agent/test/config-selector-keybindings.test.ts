@@ -49,7 +49,7 @@ describe("selectConfig keybindings", () => {
 	});
 
 	it("uses the user's keybindings.json", async () => {
-		agentDir = mkdtempSync(join(tmpdir(), "pi-config-keys-"));
+		agentDir = mkdtempSync(join(tmpdir(), "draht-config-keys-"));
 		writeFileSync(
 			join(agentDir, "keybindings.json"),
 			JSON.stringify({ "tui.select.up": ["up", "ctrl+p"], "tui.select.down": ["down", "ctrl+n"] }),

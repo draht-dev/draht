@@ -35,7 +35,7 @@ function contextWithInput(inputTokens: number) {
 
 describe("clampMaxTokensToContext", () => {
 	it("leaves 15% of the input unused so an OpenRouter overcount still fits (#10497)", () => {
-		// The failing request from #10497: OpenRouter counted 229,747 input tokens where pi estimated 220,815.
+		// The failing request from #10497: OpenRouter counted 229,747 input tokens where draht estimated 220,815.
 		const maxTokens = clampMaxTokensToContext(modelWith(943_718), contextWithInput(220_815), 943_718);
 		expect(maxTokens).toBe(WINDOW - 220_815 - 33_123);
 		expect(229_747 + maxTokens).toBeLessThanOrEqual(WINDOW);

@@ -1109,7 +1109,7 @@ export interface AfterProviderResponseEvent {
 	headers: Record<string, string>;
 }
 
-/** Fired for a parsed provider stream event before Pi normalizes it. */
+/** Fired for a parsed provider stream event before draht normalizes it. */
 export interface ProviderStreamEvent {
 	type: "provider_stream_event";
 	provider: ProviderId;
@@ -1227,7 +1227,7 @@ export interface AgentSettledEvent {
 
 export type UIPromptKind = "select" | "confirm" | "input" | "editor" | "custom";
 
-/** Fired when Pi starts waiting on a blocking user-facing extension UI prompt. */
+/** Fired when draht starts waiting on a blocking user-facing extension UI prompt. */
 export interface UIPromptStartEvent {
 	type: "ui_prompt_start";
 	reason: "ui_prompt";
@@ -1235,7 +1235,7 @@ export interface UIPromptStartEvent {
 	title?: string;
 }
 
-/** Fired when Pi is no longer waiting on a blocking user-facing extension UI prompt. */
+/** Fired when draht is no longer waiting on a blocking user-facing extension UI prompt. */
 export interface UIPromptEndEvent {
 	type: "ui_prompt_end";
 	reason: "ui_prompt";
@@ -1735,9 +1735,9 @@ export interface MessageRenderOptions extends KeybindingHints {
 /**
  * Markdown surface a transformer runs on.
  * - `user`, `assistant`, `assistant-thinking`: transcript messages (the default types of a transformer)
- * - `custom`: custom messages without a custom renderer, and expanded skill blocks (their content, without Pi's header)
- * - `summary`: expanded branch and compaction summaries (the summary, without Pi's header)
- * - `changelog`: Pi's changelog ("What's New" and `/changelog`), the "Extension Updates" notice, and the release note of
+ * - `custom`: custom messages without a custom renderer, and expanded skill blocks (their content, without draht's header)
+ * - `summary`: expanded branch and compaction summaries (the summary, without draht's header)
+ * - `changelog`: draht's changelog ("What's New" and `/changelog`), the "Extension Updates" notice, and the release note of
  *   the "Update Available" notice
  */
 export type MarkdownMessageType = "user" | "assistant" | "assistant-thinking" | "custom" | "summary" | "changelog";
@@ -1939,7 +1939,7 @@ export interface ExtensionAPI {
 	registerMessageRenderer<T = unknown>(customType: string, renderer: MessageRenderer<T>): void;
 
 	/**
-	 * Register a transformer for Markdown before Pi renders it in interactive mode. By default it runs on user,
+	 * Register a transformer for Markdown before draht renders it in interactive mode. By default it runs on user,
 	 * assistant and thinking Markdown; `options.messageTypes` selects the surfaces instead.
 	 */
 	registerMarkdownTransformer(transformer: MarkdownTransformer, options?: MarkdownTransformerOptions): void;

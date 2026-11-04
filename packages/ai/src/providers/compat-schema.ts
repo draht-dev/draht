@@ -215,7 +215,7 @@ export const OpenAICompletionsCompatSchema = Type.Object(
 		supportsFinishReason: Type.Optional(
 			Type.Boolean({
 				description:
-					"Whether streamed responses include finish_reason. When false, pi infers stop or toolUse when the stream ends.",
+					"Whether streamed responses include finish_reason. When false, draht infers stop or toolUse when the stream ends.",
 				default: true,
 			}),
 		),
@@ -275,13 +275,13 @@ export const OpenAICompletionsCompatSchema = Type.Object(
 		chatTemplateKwargs: Type.Optional(
 			Type.Record(Type.String(), ChatTemplateKwargValueSchema, {
 				description:
-					'Kwargs sent as chat_template_kwargs when thinkingFormat is "chat-template". Use $var with "thinking.enabled", "thinking.effort", or "thinking.budget" for pi-controlled values.',
+					'Kwargs sent as chat_template_kwargs when thinkingFormat is "chat-template". Use $var with "thinking.enabled", "thinking.effort", or "thinking.budget" for draht-controlled values.',
 			}),
 		),
 		chatTemplateArgs: Type.Optional(
 			Type.Record(Type.String(), ChatTemplateKwargValueSchema, {
 				description:
-					'Arguments sent as chat_template_args when thinkingFormat is "baseten". Use $var with "thinking.enabled", "thinking.effort", or "thinking.budget" for pi-controlled values.',
+					'Arguments sent as chat_template_args when thinkingFormat is "baseten". Use $var with "thinking.enabled", "thinking.effort", or "thinking.budget" for draht-controlled values.',
 			}),
 		),
 		openRouterRouting: Type.Optional(OpenRouterRoutingSchema),

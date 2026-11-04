@@ -13,7 +13,7 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 	return { promise, resolve };
 }
 
-// Regression for https://github.com/earendil-works/pi/issues/9221.
+// Regression for https://github.com/badlogic/pi-mono/issues/9221.
 describe("reload during an active session operation", () => {
 	let harness: Harness | undefined;
 

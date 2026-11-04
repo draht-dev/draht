@@ -101,7 +101,7 @@ function buildSSEPayload({
 
 describe("openai-codex streaming", () => {
 	it("streams SSE responses and forwards raw provider events", async () => {
-		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
+		const tempDir = mkdtempSync(join(tmpdir(), "draht-codex-stream-"));
 		process.env.DRAHT_CODING_AGENT_DIR = tempDir;
 
 		const payload = Buffer.from(
@@ -261,7 +261,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("completes after response.completed even when the SSE body stays open", async () => {
-		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
+		const tempDir = mkdtempSync(join(tmpdir(), "draht-codex-stream-"));
 		process.env.DRAHT_CODING_AGENT_DIR = tempDir;
 		const token = mockToken();
 		const encoder = new TextEncoder();
@@ -323,8 +323,8 @@ describe("openai-codex streaming", () => {
 
 	// Regression test for #11708
 	it("removes SSE retry backoff abort listeners after the retry succeeds", async () => {
-		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
-		process.env.PI_CODING_AGENT_DIR = tempDir;
+		const tempDir = mkdtempSync(join(tmpdir(), "draht-codex-stream-"));
+		process.env.DRAHT_CODING_AGENT_DIR = tempDir;
 		const token = mockToken();
 		let calls = 0;
 		const fetchMock = vi.fn(async (input: string | URL) => {
@@ -377,7 +377,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("maps response.incomplete to stopReason length even when the SSE body stays open", async () => {
-		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
+		const tempDir = mkdtempSync(join(tmpdir(), "draht-codex-stream-"));
 		process.env.DRAHT_CODING_AGENT_DIR = tempDir;
 		const token = mockToken();
 		const encoder = new TextEncoder();
@@ -601,7 +601,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("sets session-id/x-client-request-id headers and prompt_cache_key when sessionId is provided", async () => {
-		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
+		const tempDir = mkdtempSync(join(tmpdir(), "draht-codex-stream-"));
 		process.env.DRAHT_CODING_AGENT_DIR = tempDir;
 
 		const payload = Buffer.from(
@@ -904,7 +904,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("preserves gpt-5.5 xhigh reasoning effort from simple options", async () => {
-		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
+		const tempDir = mkdtempSync(join(tmpdir(), "draht-codex-stream-"));
 		process.env.DRAHT_CODING_AGENT_DIR = tempDir;
 		const token = mockToken();
 		const sse = buildSSEPayload({ status: "completed" });
@@ -1089,7 +1089,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it.each(["gpt-5.3-codex", "gpt-5.4", "gpt-5.5"])("clamps %s minimal reasoning effort to low", async (modelId) => {
-		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
+		const tempDir = mkdtempSync(join(tmpdir(), "draht-codex-stream-"));
 		process.env.DRAHT_CODING_AGENT_DIR = tempDir;
 
 		const payload = Buffer.from(
@@ -1196,7 +1196,7 @@ describe("openai-codex streaming", () => {
 	] as const)(
 		"uses the client-sent %s service tier for %s when Codex echoes default",
 		async (modelId, serviceTier, multiplier) => {
-			const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
+			const tempDir = mkdtempSync(join(tmpdir(), "draht-codex-stream-"));
 			process.env.DRAHT_CODING_AGENT_DIR = tempDir;
 			const token = mockToken();
 			const sse = `${[
@@ -1288,7 +1288,7 @@ describe("openai-codex streaming", () => {
 	);
 
 	it("does not set session-id/x-client-request-id headers when sessionId is not provided", async () => {
-		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
+		const tempDir = mkdtempSync(join(tmpdir(), "draht-codex-stream-"));
 		process.env.DRAHT_CODING_AGENT_DIR = tempDir;
 
 		const payload = Buffer.from(

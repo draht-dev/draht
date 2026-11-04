@@ -57,7 +57,7 @@ describe("Mermaid rendering", () => {
 		expect(rendered).not.toContain("```mermaid");
 	});
 
-	it("maps semantic spans through the Pi theme", () => {
+	it("maps semantic spans through the draht theme", () => {
 		const theme = {
 			fg: (_color: string, text: string) => text,
 			getFgAnsi: (color: string) => {
@@ -76,7 +76,7 @@ describe("Mermaid rendering", () => {
 		expect(rendered).toContain("\x1b[38;5;45m");
 	});
 
-	it("applies author class styles over the Pi theme", () => {
+	it("applies author class styles over the draht theme", () => {
 		const theme = {
 			fg: (_color: string, text: string) => text,
 			getFgAnsi: () => "\x1b[39m",

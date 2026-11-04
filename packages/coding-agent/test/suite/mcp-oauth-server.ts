@@ -171,7 +171,7 @@ export async function startOAuthMcpServer(
 		stall,
 		/** Requests to stalled paths, still open unless the client gave up. */
 		stalled,
-		/** A valid access token issued without a sign-in, like one of a pi provider. */
+		/** A valid access token issued without a sign-in, like one of a draht provider. */
 		issueAccessToken: () => issueTokens().access_token,
 		/** Simulates access token expiry. */
 		expireAccessTokens: () => validTokens.clear(),

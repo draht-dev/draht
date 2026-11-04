@@ -72,7 +72,7 @@ export class SkillInvocationMessageComponent extends Box {
 					0,
 					this.markdownTheme,
 					{ color: (text: string) => theme.fg("customMessageText", text) },
-					// Transformers see only the skill content, not Pi's header.
+					// Transformers see only the skill content, not draht's header.
 					{ transform: (markdown, width) => header + transform(markdown, width) },
 				),
 			);

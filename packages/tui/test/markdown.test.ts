@@ -1032,7 +1032,7 @@ Inline \(A_{sf}\)`,
 			);
 		});
 
-		// Regression test for https://github.com/earendil-works/pi/issues/11483
+		// Regression test for https://github.com/badlogic/pi-mono/issues/11483
 		it("falls back to raw source when display math is wider than the content width", () => {
 			const source = [
 				"\\[",
@@ -1055,7 +1055,7 @@ Inline \(A_{sf}\)`,
 			assert.ok(narrow.every((line) => line.length <= 30));
 		});
 
-		// Regression tests for https://github.com/earendil-works/pi/issues/11159
+		// Regression tests for https://github.com/badlogic/pi-mono/issues/11159
 		describe("unclosed display math before tables (#11159)", () => {
 			const table = ["| A | B |", "|---|---|", "| 1 | 2 |"];
 			const renderedTable = ["┌───┬───┐", "│ A │ B │", "├───┼───┤", "│ 1 │ 2 │", "└───┴───┘"];
@@ -1457,7 +1457,7 @@ again, hello world`,
 	});
 
 	describe("Deeply nested blockquotes", () => {
-		// Regression test for https://github.com/earendil-works/pi/issues/11272
+		// Regression test for https://github.com/badlogic/pi-mono/issues/11272
 		it("should render quotes nested deeper than the width allows without exploding", () => {
 			const markdown = new Markdown(`${">".repeat(60)}x`, 1, 0, defaultMarkdownTheme);
 			const lines = markdown.render(80);
@@ -1981,7 +1981,7 @@ bar`,
 	});
 
 	describe("HTML comments", () => {
-		// Regression tests for https://github.com/earendil-works/pi/issues/11710
+		// Regression tests for https://github.com/badlogic/pi-mono/issues/11710
 		function renderPlain(text: string): string[] {
 			return new Markdown(text, 0, 0, defaultMarkdownTheme).render(60).map((line) => stripAnsi(line).trimEnd());
 		}

@@ -544,7 +544,7 @@ describe("Coding Agent Tools", () => {
 			expect(readFileSync(largeOutput.full_output_path!, "utf-8").endsWith("300000\n")).toBe(true);
 		});
 
-		// Regression tests for https://github.com/earendil-works/pi/issues/9577
+		// Regression tests for https://github.com/badlogic/pi-mono/issues/9577
 		it.skipIf(process.platform === "win32")(
 			"should map signal-killed commands to 128 plus the signal number",
 			async () => {
@@ -909,7 +909,7 @@ describe("Coding Agent Tools", () => {
 			expect(output).not.toContain("match two");
 		});
 
-		// https://github.com/earendil-works/pi/issues/11398
+		// https://github.com/badlogic/pi-mono/issues/11398
 		it("should keep context line numbers aligned with ripgrep when a file contains a lone CR", async () => {
 			const testFile = join(testDir, "lone-cr.txt");
 			writeFileSync(testFile, "before\rprogress\nneedle\nafter");
@@ -927,7 +927,7 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("lone-cr.txt-3- after");
 		});
 
-		// https://github.com/earendil-works/pi/issues/9276
+		// https://github.com/badlogic/pi-mono/issues/9276
 		it("should print overlapping context once and keep the last match's trailing context", async () => {
 			const testFile = join(testDir, "rg-context.txt");
 			writeFileSync(testFile, ["a", "match one", "b", "match two", "match three", "c", "match four"].join("\n"));
@@ -950,7 +950,7 @@ describe("Coding Agent Tools", () => {
 			);
 		});
 
-		// https://github.com/earendil-works/pi/issues/9276
+		// https://github.com/badlogic/pi-mono/issues/9276
 		it("should keep counting matches past the byte cap", async () => {
 			const testFile = join(testDir, "byte-cap.txt");
 			const line = `match ${"x".repeat(400)}`;
@@ -969,7 +969,7 @@ describe("Coding Agent Tools", () => {
 			expect(result.details?.truncation?.totalLines).toBe(150);
 		});
 
-		// https://github.com/earendil-works/pi/issues/9276
+		// https://github.com/badlogic/pi-mono/issues/9276
 		it("should report truncation when stored output ends exactly at the byte cap", async () => {
 			const testFile = join(testDir, "x");
 			// 103 rows of 500 bytes plus one of 12 bytes, with newlines, join to exactly 50KB; one more match follows.
@@ -985,7 +985,7 @@ describe("Coding Agent Tools", () => {
 			expect(result.details?.truncation?.totalLines).toBe(105);
 		});
 
-		// https://github.com/earendil-works/pi/issues/9276
+		// https://github.com/badlogic/pi-mono/issues/9276
 		it("should accept a huge context value", async () => {
 			const testFile = join(testDir, "huge-context.txt");
 			writeFileSync(testFile, "before\nneedle\nafter");
@@ -1068,7 +1068,7 @@ describe("Coding Agent Tools", () => {
 			);
 		});
 
-		// https://github.com/earendil-works/pi/issues/11203
+		// https://github.com/badlogic/pi-mono/issues/11203
 		it("should ignore RIPGREP_CONFIG_PATH", async () => {
 			const configFile = join(testDir, "rg-config");
 			const testFile = join(testDir, "fixture.txt");

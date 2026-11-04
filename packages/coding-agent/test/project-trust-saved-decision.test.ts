@@ -112,7 +112,7 @@ async function probeProjectTrust(dirs: Dirs): Promise<boolean> {
 	return (JSON.parse(readFileSync(dirs.probeFile, "utf8")) as { trusted: boolean }).trusted;
 }
 
-// Regression tests for https://github.com/earendil-works/pi/issues/10947
+// Regression tests for https://github.com/badlogic/pi-mono/issues/10947
 describe("saved project trust for projects without trust-requiring resources", () => {
 	it("reports a saved Do not trust decision to extensions", async () => {
 		const dirs = setup();

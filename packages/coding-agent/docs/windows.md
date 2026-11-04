@@ -76,6 +76,31 @@ JSON uses backslashes for escape sequences. When you write a Windows path with b
 
 See [Configure shell commands](shell-aliases.md) for command prefixes, aliases, and the complete shell-resolution behavior.
 
+## Choose a terminal
+
+Windows terminals run draht through a console host (conhost). Some bundle an up-to-date copy; others use the older one built into Windows, which has bugs that affect draht.
+
+We recommend [Windows Terminal](https://aka.ms/terminal). It always ships an up-to-date conhost, and draht is best tested with it.
+
+Last updated: October 2026.
+
+| Terminal | Conhost | Status |
+|---|---|---|
+| [Windows Terminal](https://aka.ms/terminal) | Bundled, current | Recommended |
+| [VS Code](https://code.visualstudio.com), [Tabby](https://tabby.sh), [WezTerm](https://wezterm.org) nightly | Bundled, current | Works |
+| [Alacritty](https://alacritty.org) | Built-in, unless `conpty.dll` and `OpenConsole.exe` from Windows Terminal are next to `alacritty.exe` | Works only with those files |
+| WezTerm 20240203 and older | Bundled, old | Known problems |
+| Classic console (`cmd.exe` or PowerShell without Windows Terminal), mintty (Git Bash), ConEmu, Cmder, [Hyper](https://hyper.is), Windows OpenSSH | Built-in | Known problems |
+
+| Problem | Where | Why |
+|---|---|---|
+| Switching from fullscreen to regular mode, or `Ctrl+G` from fullscreen, crashes the session ([badlogic/pi-mono#9186](https://github.com/badlogic/pi-mono/issues/9186), [microsoft/terminal#17515](https://github.com/microsoft/terminal/issues/17515)). Start with `--tui-mode regular` to avoid it. | Built-in | Conhost crashes when leaving the alternate screen while input is in line mode. |
+| Text such as `;0;rgb:0000/0000/0000` appears in the prompt and BEL opens the external editor ([badlogic/pi-mono#10256](https://github.com/badlogic/pi-mono/issues/10256), [badlogic/pi-mono#10362](https://github.com/badlogic/pi-mono/issues/10362), [badlogic/pi-mono#10742](https://github.com/badlogic/pi-mono/issues/10742)) | Built-in behind another terminal (mintty, OpenSSH) | Conhost drops the start of terminal replies that arrive in pieces. |
+| Fragments such as `79` or `55` appear in the prompt ([badlogic/pi-mono#10717](https://github.com/badlogic/pi-mono/issues/10717), [badlogic/pi-mono#10970](https://github.com/badlogic/pi-mono/issues/10970)) | WezTerm 20240203 | The bundled conhost cuts terminal replies short. |
+| In regular mode, each keystroke redraws the input line on a new row ([badlogic/pi-mono#6300](https://github.com/badlogic/pi-mono/issues/6300)) | Built-in, classic console | Suspected: cursor wraps after full-width lines. |
+
+Microsoft has fixed these bugs in its source, but has not said when the built-in conhost will get the fixes.
+
 ## Configure Windows Terminal
 
 Windows Terminal reserves or rewrites some modified keys. See [Windows Terminal](terminal-setup.md#windows-terminal) to configure `Shift+Enter` and `Alt+Enter`, and [Keybindings](keybindings.md) for draht's Windows and WSL shortcut defaults.

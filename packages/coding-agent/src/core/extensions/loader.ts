@@ -12,6 +12,7 @@ import type { Provider } from "@draht/ai";
 import type { KeyId } from "@draht/tui";
 import type { createJiti } from "@mariozechner/jiti";
 import { CONFIG_DIR_NAME, getAgentDir, isBunBinary } from "../../config.ts";
+import { realPathStrict } from "../../utils/canonical-path.ts";
 import { pathsEqual, resolvePath } from "../../utils/paths.ts";
 import type { CheckpointRestoreOptions } from "../checkpoints/checkpoint-manager.ts";
 import { createEventBus, type EventBus } from "../event-bus.ts";
@@ -656,7 +657,7 @@ async function loadExtensionModule(extensionPath: string, cacheToken?: Extension
 		...resolutionOptions,
 	});
 
-	const module = await jiti.import(extensionPath, { default: true });
+	const module = await jiti.import(realPathStrict(extensionPath) ?? extensionPath, { default: true });
 	const factory = module as ExtensionFactory;
 	if (typeof factory !== "function") {
 		return undefined;

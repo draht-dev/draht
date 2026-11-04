@@ -141,6 +141,18 @@ export function isLoopbackRedirectUri(value: string): boolean {
 	return url.protocol === "http:" && LOOPBACK_HOSTS.includes(url.hostname) && url.search === "" && url.hash === "";
 }
 
+/**
+ * Whether the operator's Client ID Metadata Documents list a redirect URI for the loopback `callbackUrl`:
+ * docs/mcp.md has them list `/callback` on localhost and 127.0.0.1, on any port. Without `callbackUrl`,
+ * draht uses such a URI. The documents' location is never implied: it is `oauth.clientMetadataBaseUrl`.
+ */
+export function isClientMetadataDocumentCallback(callbackUrl: string | undefined): boolean {
+	if (callbackUrl === undefined) return true;
+	if (!isLoopbackRedirectUri(callbackUrl)) return false;
+	const url = new URL(callbackUrl);
+	return url.hostname !== "[::1]" && url.pathname === "/callback";
+}
+
 export interface McpHttpServerConfig extends McpServerConfigBase {
 	type?: "http";
 	url: string;
@@ -195,8 +207,7 @@ function validateOAuth(value: unknown): McpOAuthConfig | string | undefined {
 		if (value.clientId !== undefined || value.clientName !== undefined || value.clientSecret !== undefined) {
 			return 'oauth.clientRegistration "cimd" cannot be combined with oauth.clientId, oauth.clientName, or oauth.clientSecret';
 		}
-		const callback = typeof value.callbackUrl === "string" ? new URL(value.callbackUrl) : undefined;
-		if (callback && (callback.hostname === "[::1]" || callback.pathname !== "/callback")) {
+		if (!isClientMetadataDocumentCallback(typeof value.callbackUrl === "string" ? value.callbackUrl : undefined)) {
 			return 'oauth.clientRegistration "cimd" requires oauth.callbackUrl on localhost or 127.0.0.1 with path /callback';
 		}
 	}

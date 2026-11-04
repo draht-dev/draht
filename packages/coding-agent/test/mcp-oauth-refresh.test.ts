@@ -7,6 +7,7 @@ import {
 	authorizeMcp,
 	McpOAuthAuthorizationRequiredError,
 	McpOAuthProvider,
+	type McpOAuthSettings,
 	type OAuthChallenge,
 	OAuthIssuerMismatchError,
 } from "@draht/mcp/oauth";
@@ -15,7 +16,6 @@ import { InMemoryAuthStorageBackend } from "../src/core/auth-storage.ts";
 import {
 	createMcpAuthProvider,
 	McpOAuthCredentialStore,
-	type McpOAuthSettings,
 	type McpSignInPrompt,
 	signInMcpServer,
 } from "../src/extensions/mcp/oauth.ts";

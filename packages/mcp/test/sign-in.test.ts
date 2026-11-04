@@ -5,6 +5,7 @@ import {
 	type McpAuthorizationResponse,
 	type McpClientMetadataDocuments,
 	type McpOAuthSettings,
+	McpRefreshLockBusyError,
 	McpSignInCancelledError,
 	type McpSignInOptions,
 	type McpSignInRedirect,
@@ -123,13 +124,25 @@ describe("start and complete", () => {
 		]);
 	});
 
-	it("goes to the browser step when the refresh lock cannot be taken", async () => {
+	it("goes to the browser step when another process holds the refresh lock for too long", async () => {
 		const server = await startAuthorizationServer();
-		const options = signInOptions(server, { store: recordingStore({ lockFails: true }).store });
+		const options = signInOptions(server, {
+			store: recordingStore({ lockError: new McpRefreshLockBusyError() }).store,
+		});
 		await signIn(options);
 
 		expect((await startMcpSignIn(options)).kind).toBe("redirect");
 		expect(server.tokenRequests.map((request) => request.get("grant_type"))).toEqual(["authorization_code"]);
+	});
+
+	it("fails when the refresh lock fails for another reason", async () => {
+		const server = await startAuthorizationServer();
+		const lockError = new Error("EACCES: permission denied");
+		const options = signInOptions(server, { store: recordingStore({ lockError }).store });
+
+		await expect(startMcpSignIn(options)).rejects.toBe(lockError);
+		expect(server.registrations).toEqual([]);
+		expect(server.authorizations).toEqual([]);
 	});
 
 	it("refuses to complete with another redirect URI than the authorization request", async () => {
@@ -314,6 +327,28 @@ describe("client metadata documents", () => {
 		expect(server.registrations).toEqual([]);
 	});
 
+	/** Documents that list only the application's https callback route. */
+	const routeDocuments: McpClientMetadataDocuments = {
+		listsRedirectUrl: (redirectUrl) => redirectUrl === ROUTE,
+	};
+
+	// draht: upstream runs this for `auto` and `cimd`; only `cimd` uses a document here.
+	it("refreshes the tokens of a document that lists only an https route", async () => {
+		const server = await startAuthorizationServer({ cimd: true, issParameter: true });
+		const options = signInOptions(server, { clientMetadataDocuments: routeDocuments }, CIMD);
+		const authorization = await signIn(options);
+		expect(new URL(authorization.authorizationUrl).searchParams.get("client_id")).toBe(
+			"https://app.example/oauth/client.json",
+		);
+		expect((await options.store.load())?.clientInformation).toBeUndefined();
+
+		expect(await startMcpSignIn(options)).toEqual({ kind: "authorized" });
+		expect(server.authorizations).toHaveLength(1);
+		expect(server.tokenRequests[1].get("grant_type")).toBe("refresh_token");
+		expect(server.tokenRequests[1].get("client_id")).toBe("https://app.example/oauth/client.json");
+		expect((await options.store.load())?.tokens?.access_token).toBe("access-2");
+	});
+
 	it("fails with cimd when the server does not support documents", async () => {
 		const server = await startAuthorizationServer({ issParameter: true });
 		await expect(startMcpSignIn(loopback(server))).rejects.toThrow("does not support Client ID Metadata Documents");
@@ -350,6 +385,26 @@ describe("cancellation", () => {
 		const completed = completeMcpSignIn({ ...options, authorization, response, signal: controller.signal });
 		setTimeout(() => controller.abort(), 50);
 		await expect(completed).rejects.toBeInstanceOf(McpSignInCancelledError);
+	});
+
+	it("cancels at once while another process holds the refresh lock, and refreshes nothing", async () => {
+		const server = await startAuthorizationServer();
+		const recording = recordingStore();
+		const options = signInOptions(server, { store: recording.store });
+		await signIn(options);
+
+		const release = recording.hold();
+		const controller = new AbortController();
+		const started = startMcpSignIn({ ...options, signal: controller.signal });
+		setTimeout(() => controller.abort(), 50);
+		await expect(started).rejects.toBeInstanceOf(McpSignInCancelledError);
+
+		// The lock arrives after the cancellation: nothing runs under it, and it is released.
+		release();
+		await Promise.all(recording.lockRuns);
+		expect(recording.isLocked()).toBe(false);
+		expect(server.tokenRequests.map((request) => request.get("grant_type"))).toEqual(["authorization_code"]);
+		expect(server.authorizations).toHaveLength(1);
 	});
 
 	it("fails at once with an aborted signal", async () => {

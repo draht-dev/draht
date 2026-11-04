@@ -112,6 +112,28 @@ describe("createMcpAuthProvider", () => {
 		expect(server.tokenRequests).toHaveLength(1);
 	});
 
+	// draht: upstream runs this for `auto` and `cimd`; only `cimd` uses a document here.
+	it("refreshes the tokens of a document that lists only the redirect URI passed", async () => {
+		const server = await startAuthorizationServer({ cimd: true, issParameter: true });
+		const options = { serverUrl: server.serverUrl, store: memoryStore(), redirectUrl: ROUTE, clientName: "app" };
+		const clientMetadataDocuments = { listsRedirectUrl: (redirectUrl: string) => redirectUrl === ROUTE };
+		const settings = { clientRegistration: "cimd" as const, clientMetadataBaseUrl: "https://app.example/oauth" };
+		await signIn({ ...options, settings, clientMetadataDocuments });
+		expect((await options.store.load())?.clientInformation).toBeUndefined();
+
+		const provider = createMcpAuthProvider({
+			...options,
+			clientMetadataDocuments,
+			clientMetadataBaseUrl: settings.clientMetadataBaseUrl,
+			settings: () => settings,
+			onChallenge: () => {},
+		});
+		await provider.onUnauthorized?.(unauthorized(server, "access-1"));
+		expect(await provider.token()).toBe("access-2");
+		expect(server.tokenRequests[1].get("client_id")).toBe("https://app.example/oauth/client.json");
+		expect(server.authorizations).toHaveLength(1);
+	});
+
 	/** Signed in, with a step-up sign-in waiting for the browser, which keeps the tokens meanwhile. */
 	async function pendingSignIn() {
 		const server = await startAuthorizationServer();

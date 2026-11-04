@@ -59,9 +59,15 @@ export function createMcpAuthProvider(
 		clientMetadataBaseUrl: string | undefined;
 		settings: () => McpOAuthSettings;
 		onChallenge: (challenge: OAuthChallenge) => void;
+		/**
+		 * A redirect URI the application signs in with, such as its https callback route. Refreshing tokens
+		 * from a sign-in with a Client ID Metadata Document needs a redirect URI the documents list; a
+		 * refresh never redirects, so any listed one works. Default: the loopback redirect URI of `settings`.
+		 */
+		redirectUrl?: string;
 	},
 ): McpAuthProvider {
-	const { serverUrl, store } = options;
+	const { serverUrl, store, redirectUrl } = options;
 	const baseUrl =
 		options.clientMetadataBaseUrl === undefined
 			? undefined
@@ -81,7 +87,7 @@ export function createMcpAuthProvider(
 				if (state?.tokens?.access_token !== staleToken) return;
 				if (!state?.tokens?.refresh_token) throw new McpOAuthAuthorizationRequiredError();
 				const client = { ...options, settings: options.settings() };
-				const result = await refreshStoredTokens(client, state, { fetch, challenge });
+				const result = await refreshStoredTokens(client, state, { fetch, challenge, redirectUrl });
 				if (result === "REDIRECT") throw new McpOAuthAuthorizationRequiredError();
 			})
 			.finally(() => {
@@ -118,22 +124,28 @@ export function createMcpAuthProvider(
 
 /**
  * Refresh the tokens of `state` with the stored client (or the document it signed in with), or report
- * `REDIRECT` when that is not possible. Never registers a client or prepares an authorization request,
- * so a pending sign-in stays usable. Call while holding the store's refresh lock. Not cancellable: a
- * refresh the server answered may have rotated the refresh token, so its answer must be saved.
+ * `REDIRECT` when that is not possible. `options.redirectUrl` is a redirect URI the application signs in
+ * with, tried before the loopback ones of the settings and the stored client. Never registers a client or
+ * prepares an authorization request, so a pending sign-in stays usable. Call while holding the store's
+ * refresh lock. Not cancellable: a refresh the server answered may have rotated the refresh token, so its
+ * answer must be saved.
  * draht: tokens that do not belong to the client `client.settings` identify as are not refreshed.
  */
 export async function refreshStoredTokens(
 	client: McpOAuthClientOptions,
 	state: McpOAuthState,
-	options: { fetch?: McpFetch; challenge?: OAuthChallenge } = {},
+	options: { fetch?: McpFetch; challenge?: OAuthChallenge; redirectUrl?: string } = {},
 ): Promise<OAuthFlowResult> {
 	if (!matchesClient(state, client.serverUrl, clientMetadataBaseUrl(client.settings))) return "REDIRECT";
-	// Refreshing never redirects the user; the redirect URI only picks the client metadata.
+	// Refreshing never redirects the user; the redirect URI only decides whether tokens without a stored
+	// client can be refreshed with a Client ID Metadata Document, so any URI the documents list works.
+	const candidates = [
+		options.redirectUrl,
+		loopbackSettings(client.settings).fixedRedirectUrl,
+		registeredRedirectUrls(state.clientInformation)[0],
+	].filter((url) => url !== undefined);
 	const redirectUrl =
-		loopbackSettings(client.settings).fixedRedirectUrl ??
-		registeredRedirectUrls(state.clientInformation)[0] ??
-		DEFAULT_REDIRECT_URL;
+		candidates.find((url) => client.clientMetadataDocuments?.listsRedirectUrl(url)) ?? DEFAULT_REDIRECT_URL;
 	return authorizeMcp(createOAuthClientProvider(client, redirectUrl), {
 		serverUrl: client.serverUrl,
 		resourceMetadataUrl: options.challenge?.resourceMetadataUrl,

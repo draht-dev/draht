@@ -1,5 +1,5 @@
 import type { AgentTool } from "@draht/agent-core";
-import { Type } from "@sinclair/typebox";
+import { obj, opt, str } from "@draht/schema";
 import { basename, resolve as resolvePath } from "path";
 
 // This will be set by the agent before running
@@ -9,11 +9,14 @@ export function setUploadFunction(fn: (filePath: string, title?: string) => Prom
 	uploadFn = fn;
 }
 
-const attachSchema = Type.Object({
-	label: Type.String({ description: "Brief description of what you're sharing (shown to user)" }),
-	path: Type.String({ description: "Path to the file to attach" }),
-	title: Type.Optional(Type.String({ description: "Title for the file (defaults to filename)" })),
-});
+const attachSchema = obj(
+	{
+		label: str({ description: "Brief description of what you're sharing (shown to user)" }),
+		path: str({ description: "Path to the file to attach" }),
+		title: opt(str({ description: "Title for the file (defaults to filename)" })),
+	},
+	{ open: true },
+);
 
 export const attachTool: AgentTool<typeof attachSchema> = {
 	name: "attach",

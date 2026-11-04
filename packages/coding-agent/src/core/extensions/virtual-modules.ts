@@ -1,5 +1,4 @@
 import * as bundledPiAgentCore from "@draht/agent-core";
-import * as bundledPiAiCompat from "@draht/ai/compat";
 import * as bundledPiAiModels from "@draht/ai/models";
 import * as bundledPiAiOauth from "@draht/ai/oauth";
 import * as bundledPiAiProviders from "@draht/ai/providers/all";
@@ -11,6 +10,7 @@ import * as bundledTypeboxValue from "typebox/value";
 // This import is safe because loader.ts exports are not re-exported from index.ts.
 // Extensions can therefore import from @draht/coding-agent.
 import * as bundledPiCodingAgent from "../../index.ts";
+import * as bundledPiAiExtensionView from "./pi-ai-extension-view.ts";
 
 /** Modules available to extensions in source and compiled binary runtimes. */
 export const VIRTUAL_MODULES: Record<string, unknown> = {
@@ -23,10 +23,11 @@ export const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@draht/agent-core": bundledPiAgentCore,
 	"@draht/tui": bundledPiTui,
 	// Extensions resolve the @draht/ai root to the compat entrypoint (a strict
-	// superset of the core entrypoint): existing extensions using the old
-	// global API keep working at runtime until compat is removed.
-	"@draht/ai": bundledPiAiCompat,
-	"@draht/ai/compat": bundledPiAiCompat,
+	// superset of the core entrypoint) plus TypeBox's Type, Static and TSchema:
+	// existing extensions using the old global API and @draht/ai's former
+	// TypeBox re-exports keep working.
+	"@draht/ai": bundledPiAiExtensionView,
+	"@draht/ai/compat": bundledPiAiExtensionView,
 	"@draht/ai/models": bundledPiAiModels,
 	"@draht/ai/oauth": bundledPiAiOauth,
 	"@draht/ai/providers/all": bundledPiAiProviders,

@@ -13,5 +13,8 @@ export default defineConfig({
 	},
 	resolve: {
 		alias: [{ find: /^@draht\/telemetry$/, replacement: telemetrySrcIndex }],
+		// Workspace packages without a build (@draht/schema) resolve to their source.
+		conditions: ["source"],
 	},
+	ssr: { resolve: { conditions: ["source"] } },
 });

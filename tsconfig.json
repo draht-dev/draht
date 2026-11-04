@@ -66,6 +66,8 @@
 	"exclude": [
 		"packages/web-ui/**/*",
 		"packages/coding-agent/examples/**/*",
+		"packages/coding-agent/test/subagent-extension.test.ts",
+		"packages/coding-agent/test/suite/regressions/8261-subagent-project-trust.test.ts",
 		"**/dist/**",
 		"packages/router/test/**/*",
 		"packages/invoice/test/**/*",

@@ -1,7 +1,6 @@
 import { stat as fsStat } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import type { Readable } from "node:stream";
-import type { AgentTool } from "@draht/agent-core";
 import { type ChildProcess, spawn } from "child_process";
 import path from "path";
 import { type Static, Type } from "typebox";
@@ -9,7 +8,7 @@ import { ensureTool } from "../../utils/tools-manager.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { resolveToCwd } from "./path-utils.ts";
 import { grepRenderers } from "./renderers/grep.ts";
-import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
+import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import {
 	DEFAULT_MAX_BYTES,
 	formatSize,
@@ -335,6 +334,6 @@ export function createGrepToolDefinition(
 	};
 }
 
-export function createGrepTool(cwd: string, options?: GrepToolOptions): AgentTool<typeof grepSchema> {
+export function createGrepTool(cwd: string, options?: GrepToolOptions): TypeBoxAgentTool<typeof grepSchema> {
 	return wrapToolDefinition(createGrepToolDefinition(cwd, options));
 }

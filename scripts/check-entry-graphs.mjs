@@ -43,10 +43,18 @@ const BUDGETS = {
 			// Request telemetry reaches @draht/ai's telemetry.ts and @draht/telemetry's root (index, noop, metrics, memory).
 			// Request identity reaches utils/identity.ts and its version constant.
 			maxFiles: 20,
-			forbid: ["providers/", "models.generated.ts", "index.ts", "utils/validation.ts", "utils/typebox-helpers.ts"],
+			forbid: ["providers/", "models.generated.ts", "index.ts", "utils/validation.ts", "utils/string-enum.ts"],
 			allow: ["packages/telemetry/src/index.ts"],
 		},
-		"./utils/*": { maxFiles: 3, forbid: ["providers/", "api/", "index.ts"] },
+		"./utils/*": {
+			maxFiles: 3,
+			forbid: ["providers/", "api/", "index.ts"],
+			overrides: {
+				// Tool argument validation runs on @draht/schema: its validator, coercion and format checks (the checks TypeBox's
+				// validator ran by default). TypeBox, an external package, was not counted before.
+				"./utils/validation": { maxFiles: 42, forbid: ["providers/", "api/", "packages/ai/src/index.ts"] },
+			},
+		},
 	},
 	"packages/codemode": {
 		// Node and Bun users never load the Cloudflare entry, which imports the `cloudflare:workers` built-in.
@@ -130,6 +138,8 @@ for (const [pkgDir, budgets] of Object.entries(BUDGETS)) {
 		}
 		const target = typeof declared === "string" ? declared : declared.import;
 		for (const [name, distPath] of expand(pkgDir, entry, target)) {
+			// A wildcard entry's budget applies to every file it exports, unless `overrides` names that file.
+			const limits = budget.overrides?.[name] ?? budget;
 			const source = sourceFor(pkgDir, distPath);
 			if (!source) {
 				console.error(`${pkgDir} export "${name}" points at ${distPath}, which has no source file`);
@@ -137,15 +147,15 @@ for (const [pkgDir, budgets] of Object.entries(BUDGETS)) {
 				continue;
 			}
 			const graph = [...walk(source)].map((file) => relative(ROOT, file).split(sep).join("/"));
-			if (graph.length > budget.maxFiles) {
+			if (graph.length > limits.maxFiles) {
 				console.error(
-					`${pkgDir} export "${name}" reaches ${graph.length} files, budget ${budget.maxFiles}\n` +
+					`${pkgDir} export "${name}" reaches ${graph.length} files, budget ${limits.maxFiles}\n` +
 						graph.map((file) => `    ${file}`).join("\n"),
 				);
 				failures += 1;
 			}
-			for (const pattern of budget.forbid ?? []) {
-				const hit = graph.filter((file) => file.includes(pattern) && !(budget.allow ?? []).some((allowed) => file.endsWith(allowed)));
+			for (const pattern of limits.forbid ?? []) {
+				const hit = graph.filter((file) => file.includes(pattern) && !(limits.allow ?? []).some((allowed) => file.endsWith(allowed)));
 				if (hit.length > 0) {
 					console.error(`${pkgDir} export "${name}" must not reach ${pattern}:\n${hit.map((f) => `    ${f}`).join("\n")}`);
 					failures += 1;

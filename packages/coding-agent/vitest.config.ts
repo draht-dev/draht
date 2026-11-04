@@ -8,6 +8,8 @@ const aiSrcOAuth = fileURLToPath(new URL("../ai/src/oauth.ts", import.meta.url))
 const aiSrcApi = fileURLToPath(new URL("../ai/src/api", import.meta.url));
 const aiSrcProviders = fileURLToPath(new URL("../ai/src/providers", import.meta.url));
 const aiSrcUtils = fileURLToPath(new URL("../ai/src/utils", import.meta.url));
+const schemaSrcIndex = fileURLToPath(new URL("../schema/src/index.ts", import.meta.url));
+const schemaSrcFormats = fileURLToPath(new URL("../schema/src/formats/index.ts", import.meta.url));
 const agentSrcIndex = fileURLToPath(new URL("../agent/src/index.ts", import.meta.url));
 const chordSrcIndex = fileURLToPath(new URL("../chord/src/index.ts", import.meta.url));
 const chordSrcContext = fileURLToPath(new URL("../chord/src/context/index.ts", import.meta.url));
@@ -57,6 +59,8 @@ export default defineConfig({
 			{ find: /^@draht\/ai\/api\/(.+)$/, replacement: `${aiSrcApi}/$1.ts` },
 			{ find: /^@draht\/ai\/providers\/(.+)$/, replacement: `${aiSrcProviders}/$1.ts` },
 			{ find: /^@draht\/ai\/utils\/(.+)$/, replacement: `${aiSrcUtils}/$1.ts` },
+			{ find: /^@draht\/schema$/, replacement: schemaSrcIndex },
+			{ find: /^@draht\/schema\/formats$/, replacement: schemaSrcFormats },
 			{ find: /^@draht\/agent-core$/, replacement: agentSrcIndex },
 			{ find: /^@draht\/chord$/, replacement: chordSrcIndex },
 			{ find: /^@draht\/chord\/context$/, replacement: chordSrcContext },

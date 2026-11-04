@@ -7,6 +7,9 @@
 
 import type { SourceScope } from "./source-info.ts";
 
+/** Namespace of a server's tools, shared with other `@draht/mcp` applications. */
+export { mcpNamespace } from "@draht/mcp";
+
 /**
  * Regular expression for a tool name pattern where `*` matches any characters, as `toolExposure`,
  * `--tools`, and `--exclude-tools` accept them.
@@ -154,11 +157,6 @@ export interface McpHttpServerConfig extends McpServerConfigBase {
 export type McpServerConfig = McpStdioServerConfig | McpHttpServerConfig;
 
 const SERVER_NAME = /^[A-Za-z0-9_-]+$/;
-
-/** Namespace of a server's tools: `mcp__<server>` with `-` replaced by `_`, like the tool names. */
-export function mcpNamespace(server: string): string {
-	return `mcp__${server.replace(/-/g, "_")}`;
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);

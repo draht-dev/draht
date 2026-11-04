@@ -25,6 +25,7 @@ const WORKSPACE = {
 	"@draht/codemode": "packages/codemode/src",
 	"@draht/telemetry": "packages/telemetry/src",
 	"@draht/mcp": "packages/mcp/src",
+	"@draht/schema": "packages/schema/src",
 	"@draht/tui": "packages/tui/src",
 };
 
@@ -33,6 +34,10 @@ const WORKSPACE = {
  * graph it is allowed to reach.
  */
 const BUDGETS = {
+	"packages/schema": {
+		// The format checks (vendored from TypeBox, about 40 KB) load only through ./formats.
+		".": { maxFiles: 10, forbid: ["schema/src/formats/"] },
+	},
 	"packages/ai": {
 		"./models": {
 			// Request telemetry reaches @draht/ai's telemetry.ts and @draht/telemetry's root (index, noop, metrics, memory).

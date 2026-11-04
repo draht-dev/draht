@@ -17,6 +17,8 @@
 			"@draht/telemetry": ["./packages/telemetry/src/index.ts"],
 			"@draht/telemetry/testing": ["./packages/telemetry/src/testing/index.ts"],
 			"@draht/telemetry/render": ["./packages/telemetry/src/render.ts"],
+			"@draht/schema": ["./packages/schema/src/index.ts"],
+			"@draht/schema/formats": ["./packages/schema/src/formats/index.ts"],
 			"@draht/codemode": ["./packages/codemode/src/index.ts"],
 			"@draht/codemode/cloudflare": ["./packages/codemode/src/cloudflare.ts"],
 			"@draht/codemode/declarations": ["./packages/codemode/src/declarations.ts"],

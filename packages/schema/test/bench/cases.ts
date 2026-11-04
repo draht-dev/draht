@@ -235,15 +235,15 @@ export const cases: readonly Case[] = [
 		name: "MCP create_issue (pattern, anyOf, enum)",
 		schema: mcpIssue,
 		valid: {
-			owner: "earendil-works",
-			repo: "pi",
+			owner: "draht-dev",
+			repo: "draht",
 			title: "Bug",
 			body: "...",
 			labels: ["bug"],
 			milestone: null,
 			state: "open",
 		},
-		invalid: { owner: "earendil works", repo: "pi", title: "Bug" },
+		invalid: { owner: "draht dev", repo: "draht", title: "Bug" },
 	},
 	{
 		name: "MCP edit_file ($ref, anyOf)",

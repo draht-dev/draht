@@ -109,7 +109,7 @@ function getAliases(): Record<string, string> {
 	// entrypoint (a strict superset of the core entrypoint) plus TypeBox's Type,
 	// Static and TSchema, so extensions using the old global API and @draht/ai's
 	// former TypeBox re-exports keep working.
-	const piAiCompatEntry = path.resolve(__dirname, "pi-ai-extension-view.js");
+	const piAiCompatEntry = path.resolve(__dirname, "ai-extension-view.js");
 	const piAiModelsEntry = resolveWorkspaceOrImport("ai/dist/models.js", "@draht/ai/models");
 	const piAiOauthEntry = resolveWorkspaceOrImport("ai/dist/oauth.js", "@draht/ai/oauth");
 	const piAiProvidersEntry = resolveWorkspaceOrImport("ai/dist/providers/all.js", "@draht/ai/providers/all");

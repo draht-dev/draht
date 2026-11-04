@@ -15,7 +15,7 @@ import {
 	PartialModelCostSchema,
 	ProviderCompatSchema,
 	ThinkingLevelMapSchema,
-} from "./pi-ai-schemas.ts";
+} from "./ai-schemas.ts";
 
 const SamplingParamsSchema = Type.Record(Type.String(), Type.Unknown());
 const SamplingParamsByThinkingLevelSchema = Type.Object(

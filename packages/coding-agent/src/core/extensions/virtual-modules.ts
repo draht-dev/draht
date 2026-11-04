@@ -10,7 +10,7 @@ import * as bundledTypeboxValue from "typebox/value";
 // This import is safe because loader.ts exports are not re-exported from index.ts.
 // Extensions can therefore import from @draht/coding-agent.
 import * as bundledPiCodingAgent from "../../index.ts";
-import * as bundledPiAiExtensionView from "./pi-ai-extension-view.ts";
+import * as bundledPiAiExtensionView from "./ai-extension-view.ts";
 
 /** Modules available to extensions in source and compiled binary runtimes. */
 export const VIRTUAL_MODULES: Record<string, unknown> = {

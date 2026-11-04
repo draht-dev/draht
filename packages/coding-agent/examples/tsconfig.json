@@ -77,7 +77,7 @@
 				"../../../packages/mcp/src/testing/index.ts"
 			],
 			"@draht/ai": [
-				"../src/core/extensions/pi-ai-extension-view.ts"
+				"../src/core/extensions/ai-extension-view.ts"
 			],
 			"@draht/ai/oauth": [
 				"../../../packages/ai/src/oauth.ts"

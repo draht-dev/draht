@@ -51,11 +51,11 @@
 		"README.md"
 	],
 	"scripts": {
-		"clean": "shx rm -rf dist",
+		"clean": "node ../../scripts/package-files.mjs clean dist",
 		"generate-models": "npx tsx catalog/generate.ts --strict",
 		"hydrate-model-data": "npx tsx catalog/generate.ts --strict --data-only",
 		"check:model-data": "npx tsx scripts/check-model-data.ts",
-		"build": "tsc -p tsconfig.build.json && shx rm -rf dist/providers/data && shx cp -r src/providers/data dist/providers/data",
+		"build": "tsc -p tsconfig.build.json && node ../../scripts/package-files.mjs clean dist/providers/data && node ../../scripts/package-files.mjs copy src/providers/data dist/providers",
 		"dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
 		"dev:tsc": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
 		"test": "vitest --run",

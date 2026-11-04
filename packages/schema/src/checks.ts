@@ -206,36 +206,37 @@ export function guardArray(inner: Check, strict: boolean): Check {
 }
 
 /**
- * An object with only declared properties (`additionalProperties: false`). `entries` is `[key, check, flags]` per
- * property. Declared fields are checked, then the own keys are counted, so unknown keys are found without
- * allocating. A property whose value is `undefined` counts as absent.
+ * An object with declared properties: `entries` is `[key, check, flags]` per property. The value's own keys are
+ * walked with for...in (whose `o[k]` V8 reads from the enum cache, unlike a load by a name from a list), each found
+ * among the declared names; `closed` rejects any other key. A property whose value is `undefined` counts as absent.
  */
-export function closedObject(entries: readonly unknown[], guard: Guard): Check {
+export function declaredObject(
+	entries: readonly unknown[],
+	requiredCount: number,
+	closed: boolean,
+	guard: Guard,
+): Check {
+	const n = entries.length;
 	return (v) => {
 		if (guard !== GUARD_NONE && !isObject(v)) return guard === GUARD_LOOSE;
 		// Guarded: by the check above, or by the caller for GUARD_NONE.
 		const o = v as Record<string, unknown>;
-		let present = 0;
-		for (let i = 0; i < entries.length; i += 3) {
-			const k = entries[i] as string;
+		let required = 0;
+		for (const k in o) {
+			let i = 0;
+			while (i < n && entries[i] !== k) i += 3;
+			if (i === n) {
+				if (closed) return false;
+				continue;
+			}
 			const x = o[k];
+			if (x === undefined) continue;
 			const f = entries[i + 2] as number;
-			if (x === undefined) {
-				if (f & REQUIRED) return false;
-				if (Object.hasOwn(o, k)) present++;
-				continue;
-			}
-			if (f & INHERITED && !Object.hasOwn(o, k)) {
-				if (f & REQUIRED) return false;
-				continue;
-			}
-			present++;
 			const c = f & CODE;
 			if (c !== 0 ? !leafOk(c, x) : !(entries[i + 1] as Check)(x)) return false;
+			if (f & REQUIRED) required++;
 		}
-		let count = 0;
-		for (const _ in o) if (++count > present) return false;
-		return true;
+		return required === requiredCount;
 	};
 }
 

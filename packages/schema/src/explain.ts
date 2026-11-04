@@ -49,7 +49,7 @@ export class Explainer {
 			return;
 		}
 		if (!isSchemaObject(node)) return;
-		const b = this.c.r.baseOf.get(node) ?? base;
+		const b = this.c.r.baseFor(node, base);
 		if (this.ok(node, b, v)) return;
 		const start = out.length;
 		const push = (keyword: string, message: string, at = path) => {

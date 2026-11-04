@@ -1,23 +1,6 @@
-// Values shared across all compiled schemas while one still uses them: leaf checks and regular expressions.
-// Both caches hold their values weakly and drop an entry once its value is collected, so they keep nothing alive.
-
-import type { Check } from "./types.ts";
-
-/** The check shared under `key`, made by `make` when no live schema holds one. */
-export function sharedCheck(key: string, make: () => Check): Check {
-	const hit = checks.get(key)?.deref();
-	if (hit !== undefined) return hit;
-	const check = make();
-	checks.set(key, new WeakRef(check));
-	checkCleanup.register(check, key);
-	return check;
-}
-
-const checks = new Map<string, WeakRef<Check>>();
-
-const checkCleanup = new FinalizationRegistry<string>((key) => {
-	if (checks.get(key)?.deref() === undefined) checks.delete(key);
-});
+// Regular expressions shared across all compiled schemas while one still uses them: tool schemas repeat a few
+// patterns many times, and a RegExp is large once it has run. The cache holds its values weakly and drops an entry
+// once its RegExp is collected, so it keeps nothing alive.
 
 /**
  * The regular expression of a `pattern` source, shared by source. Patterns are ECMAScript regular expressions with
@@ -44,7 +27,7 @@ const regexCleanup = new FinalizationRegistry<string>((source) => {
 	if (regexes.get(source)?.deref() === undefined) regexes.delete(source);
 });
 
-/** The number of entries in both caches (for tests). */
-export function sharedEntries(): { checks: number; regexes: number } {
-	return { checks: checks.size, regexes: regexes.size };
+/** The number of cached regular expressions (for tests). */
+export function sharedRegexCount(): number {
+	return regexes.size;
 }

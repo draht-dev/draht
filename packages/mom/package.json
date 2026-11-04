@@ -19,7 +19,7 @@
 		"prepublishOnly": "bun run clean && bun run build"
 	},
 	"dependencies": {
-		"@anthropic-ai/sandbox-runtime": "^0.0.16",
+		"@anthropic-ai/sandbox-runtime": "^0.0.81",
 		"@draht/agent-core": "workspace:*",
 		"@draht/ai": "workspace:*",
 		"@draht/coding-agent": "workspace:*",

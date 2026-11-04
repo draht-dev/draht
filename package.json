@@ -71,7 +71,7 @@
 		"check:gateway-types": "npm --prefix packages/gateway run typecheck"
 	},
 	"devDependencies": {
-		"@anthropic-ai/sandbox-runtime": "0.0.26",
+		"@anthropic-ai/sandbox-runtime": "0.0.81",
 		"@biomejs/biome": "2.3.5",
 		"@types/node": "^22.20.0",
 		"concurrently": "^9.2.3",

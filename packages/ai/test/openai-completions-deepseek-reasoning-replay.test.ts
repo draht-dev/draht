@@ -48,6 +48,7 @@ const deepseekCompat: Omit<
 	chatTemplateKwargs: {},
 	chatTemplateArgs: {},
 	sessionAffinityFormat: "openai",
+	promptCacheKeyMode: "auto",
 };
 
 function makeDeepSeekModel(): Model<"openai-completions"> {

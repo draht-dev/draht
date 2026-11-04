@@ -31,6 +31,7 @@ const deepseekCompat: Omit<
 	maxTokensField: "max_completion_tokens",
 	requiresToolResultName: false,
 	requiresAssistantAfterToolResult: false,
+	requiresNonNullAssistantContent: false,
 	requiresThinkingAsText: false,
 	thinkingFormat: "openai",
 	openRouterRouting: {},

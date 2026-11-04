@@ -54,6 +54,8 @@ draht supports the xterm `modifyOtherKeys` format used by these versions. Restar
 
 For older versions, upgrade tmux or use draht outside tmux rather than relying on modified Enter shortcuts.
 
-## Color codes appear in the editor with tmux 3.6
+## Known issues
 
-If text such as `c0c/0c0c/0c0c` appears in the editor at startup, upgrade tmux to 3.7 or newer. tmux 3.6 sometimes sends the terminal's color replies to draht as typed text ([tmux#4749](https://github.com/tmux/tmux/issues/4749)). Changing draht's theme does not help.
+| Issue | Affects | Remedy |
+|---|---|---|
+| Text such as `c0c/0c0c/0c0c` appears in the editor at startup ([tmux#4749](https://github.com/tmux/tmux/issues/4749)) | tmux 3.6 | Upgrade tmux. Changing draht's theme does not help. |

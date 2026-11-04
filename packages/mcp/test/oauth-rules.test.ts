@@ -11,13 +11,17 @@
  *   changed; the configured document is chosen before a stored registration.
  * - R4: public clients, RFC 9207 issuer check, PKCE and state, server-specific callback paths, exact
  *   redirect URIs.
- * - R5: the loopback callback checks the browser's Host and origin, and a pasted redirect URL its origin
- *   and path; a failed check does not consume the sign-in's state.
+ * - R5: the loopback callback checks the browser's Host, origin, and path before it looks at the state, so
+ *   a failed check consumes nothing; a valid state on another of its paths does end the sign-in (mix-up
+ *   detection, R4). A pasted redirect URL must match origin and path; a mismatch ends the draht loopback
+ *   sign-in without consuming its state or verifier.
  * - R6: reading a cached token never calls `settings`, which may resolve secrets.
+ * - R7: both halves of a sign-in use one client and authorization server, and complete once: the code and
+ *   the verifier never go to another client, authorization server, or token endpoint.
  */
 
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { get } from "node:http";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -153,6 +157,71 @@ function expectUntouched(server: AuthorizationServer): void {
 	expect(server.tokenRequests).toEqual([]);
 }
 
+/** The `.ts` files at `path`: the file itself, or those in the directory and its subdirectories. */
+function typeScriptFiles(path: string): string[] {
+	if (!statSync(path).isDirectory()) return [path];
+	return readdirSync(path, { recursive: true, encoding: "utf8" })
+		.filter((file) => file.endsWith(".ts"))
+		.map((file) => join(path, file))
+		.sort();
+}
+
+/** Characters after which a `/` starts a regular expression rather than a division. */
+const BEFORE_REGEX = "(,=:[!&|?{};";
+
+/**
+ * `source` without its comments. Strings, template literals, and regular expression literals are kept
+ * whole, so a `//` inside them is not taken for a comment. Good enough for this repository's sources;
+ * nested template literals inside `${}` are not tracked.
+ */
+function withoutComments(source: string): string {
+	let out = "";
+	let previous = "";
+	let i = 0;
+	while (i < source.length) {
+		const char = source[i];
+		const next = source[i + 1];
+		if (char === "/" && next === "/") {
+			const end = source.indexOf("\n", i);
+			i = end === -1 ? source.length : end;
+			continue;
+		}
+		if (char === "/" && next === "*") {
+			const end = source.indexOf("*/", i + 2);
+			i = end === -1 ? source.length : end + 2;
+			out += " ";
+			continue;
+		}
+		const regex = char === "/" && (previous === "" || BEFORE_REGEX.includes(previous));
+		if (char === '"' || char === "'" || char === "`" || regex) {
+			let j = i + 1;
+			let inClass = false;
+			while (j < source.length) {
+				const inner = source[j];
+				if (inner === "\\") {
+					j += 2;
+					continue;
+				}
+				if (regex) {
+					if (inner === "\n") break;
+					if (inner === "[") inClass = true;
+					else if (inner === "]") inClass = false;
+					else if (inner === "/" && !inClass) break;
+				} else if (inner === char) break;
+				j++;
+			}
+			out += source.slice(i, j + 1);
+			i = j + 1;
+			previous = char;
+			continue;
+		}
+		out += char;
+		if (!/\s/.test(char)) previous = char;
+		i++;
+	}
+	return out;
+}
+
 describe("R1: documents only from the operator's validated base, DCR by default", () => {
 	it.each([
 		"https://client.example/team/oauth",
@@ -248,13 +317,35 @@ describe("R1: documents only from the operator's validated base, DCR by default"
 		expectUntouched(server);
 	});
 
-	it("names no document host in the OAuth sources", () => {
-		const dir = join(import.meta.dirname, "../src/oauth");
-		const sources = [
-			...readdirSync(dir).map((file) => join(dir, file)),
-			join(import.meta.dirname, "../src/config.ts"),
-		];
-		for (const source of sources) expect(readFileSync(source, "utf8")).not.toMatch(/https?:\/\/pi\.dev/);
+	it("strips comments but keeps strings, templates, and regular expressions when scanning sources", () => {
+		const code = [
+			'const a = "https://pi.dev/oauth"; // pi.dev',
+			"/* pi.dev */ const b = `https://pi.dev/path`;",
+			"const c = /https?:\\/\\/[/*]/; const d = 'pi.dev'; // https://x",
+		].join("\n");
+		const stripped = withoutComments(`/**\n * https://pi.dev in a doc comment\n */\n${code}\n// pi.dev`);
+		expect(stripped.match(/\bpi\.dev\b/g)).toHaveLength(3);
+		expect(stripped).toContain('"https://pi.dev/oauth"');
+		expect(stripped).toContain("`https://pi.dev/path`");
+		expect(stripped).toContain("/https?:\\/\\/[/*]/;");
+		expect(stripped).toContain("'pi.dev'");
+		expect(stripped).not.toContain("https://x");
+		expect(withoutComments("// https://pi.dev\n/* pi.dev */")).not.toMatch(/pi\.dev/);
+	});
+
+	it("names no document host in the MCP sources outside comments", () => {
+		const root = join(import.meta.dirname, "../..");
+		const sources = ["mcp/src", "coding-agent/src/extensions/mcp", "coding-agent/src/core/mcp-servers.ts"].flatMap(
+			(path) => typeScriptFiles(join(root, path)),
+		);
+		expect(sources).toContain(join(root, "mcp/src/oauth/client-settings.ts"));
+		expect(sources).toContain(join(root, "coding-agent/src/extensions/mcp/oauth.ts"));
+		expect(sources).toContain(join(root, "coding-agent/src/core/mcp-servers.ts"));
+		for (const source of sources) {
+			expect({ source, code: withoutComments(readFileSync(source, "utf8")) }).not.toMatchObject({
+				code: expect.stringMatching(/\bpi\.dev\b/),
+			});
+		}
 	});
 });
 
@@ -568,40 +659,234 @@ describe("R5: the browser callback and pasted URLs come from the sign-in's redir
 		expect(await response).toEqual({ code: "c", state: "s1" });
 	});
 
-	it("rejects a pasted URL on another origin or path, and the sign-in stays completable", async () => {
-		const server = await startAuthorizationServer({ cimd: true });
-		const signInOptions = options(server, CIMD);
+	/**
+	 * draht's loopback sign-in (coding-agent's `signInMcpServer`): listen, start, wait for the browser or a
+	 * pasted redirect URL, complete, and close the callback server whatever happened.
+	 */
+	async function loopbackSignIn(server: AuthorizationServer, paste: (location: URL) => string | undefined) {
+		const store = memoryStore();
+		const loopback = await listenForLoopbackSignIn({ serverUrl: server.serverUrl, store, settings: CIMD });
+		const signInOptions = options(server, CIMD, { store, redirectUrl: loopback.redirectUrl });
 		const authorization = await startRedirect(signInOptions);
 		const location = new URL(await authorizeInBrowser(authorization.authorizationUrl));
-		const stored = await signInOptions.store.load();
-		const variants = [
-			(url: URL) => {
-				url.hostname = "localhost";
-			},
-			(url: URL) => {
-				url.port = "2";
-			},
-			(url: URL) => {
-				url.protocol = "https:";
-			},
-			(url: URL) => {
-				url.pathname = "/callback";
-			},
-		];
-		for (const change of variants) {
-			const pasted = new URL(location);
-			change(pasted);
-			expect(() => responseFromRedirectUrl(pasted.href, authorization)).toThrow(
-				"does not match this sign-in's redirect URI",
-			);
-		}
-		expect(await signInOptions.store.load()).toEqual(stored);
-		await completeMcpSignIn({
-			...signInOptions,
-			authorization,
-			response: responseFromRedirectUrl(location.href, authorization),
+		const pending = await store.load();
+		const outcome = (async () => {
+			try {
+				const response = await waitForLoopbackSignIn({
+					callback: loopback.callback,
+					authorization,
+					promptForRedirectUrl: async (signal) => {
+						const pasted = paste(location);
+						if (pasted !== undefined) return pasted;
+						// No paste: the prompt stays open until the browser's redirect arrives.
+						return new Promise<string>((resolve) => signal.addEventListener("abort", () => resolve("")));
+					},
+				});
+				await completeMcpSignIn({ ...signInOptions, authorization, response });
+			} finally {
+				await loopback.callback.close();
+			}
+		})();
+		return { store, signInOptions, authorization, location, pending, outcome };
+	}
+
+	it.each([
+		["another host", { hostname: "localhost" }],
+		["another port", { port: "2" }],
+		["another scheme", { protocol: "https:" }],
+		["the shared path instead of the server-specific one", { pathname: "/callback" }],
+	] as const)("ends the loopback sign-in on a pasted URL with %s, consuming nothing", async (_, change) => {
+		const server = await startAuthorizationServer({ cimd: true });
+		const signIn = await loopbackSignIn(server, (location) => {
+			const pasted = Object.assign(new URL(location), change);
+			return pasted.href;
 		});
+		await expect(signIn.outcome).rejects.toThrow("does not match this sign-in's redirect URI");
+		expect(server.tokenRequests).toEqual([]);
+		// By design the sign-in is over: the browser's genuine redirect finds no callback server anymore.
+		await expect(fetch(signIn.location)).rejects.toThrow();
+		// The bad paste consumed neither the state nor the verifier: the genuine response still completes.
+		const state = await signIn.store.load();
+		expect(state?.oauthState).toBe(signIn.authorization.state);
+		expect(state?.codeVerifier).toBe(signIn.pending?.codeVerifier);
+		await completeMcpSignIn({
+			...signIn.signInOptions,
+			authorization: signIn.authorization,
+			response: responseFromRedirectUrl(signIn.location.href, signIn.authorization),
+		});
+		expect((await signIn.store.load())?.tokens?.access_token).toBe("access-1");
+	});
+
+	it("completes the loopback sign-in with the genuine pasted URL or the browser's redirect", async () => {
+		const server = await startAuthorizationServer({ cimd: true });
+		const pasted = await loopbackSignIn(server, (location) => location.href);
+		await pasted.outcome;
+		expect((await pasted.store.load())?.tokens?.access_token).toBe("access-1");
+
+		const browser = await loopbackSignIn(server, () => undefined);
+		expect((await fetch(browser.location)).status).toBe(200);
+		await browser.outcome;
+		expect((await browser.store.load())?.tokens?.access_token).toBe("access-2");
+		expect(server.tokenRequests.map((request) => request.get("redirect_uri"))).toEqual([
+			pasted.authorization.redirectUrl,
+			browser.authorization.redirectUrl,
+		]);
+	});
+});
+
+describe("R7: both halves of a sign-in use one client and authorization server, once", () => {
+	it.each([
+		["cimd", CIMD],
+		["a pre-registered client", { clientId: "client-other" }],
+	] as const)("refuses to complete a registered client's sign-in as %s", async (_, completeWith) => {
+		const server = await startAuthorizationServer({ cimd: true, issParameter: true });
+		const store = memoryStore();
+		const authorization = await startRedirect(options(server, {}, { store }));
+		const response = await browse(authorization);
+		await expect(
+			completeMcpSignIn({ ...options(server, completeWith, { store }), authorization, response }),
+		).rejects.toThrow("but the authorization request used client-1; sign in again");
+		expect(server.tokenRequests).toEqual([]);
+		// With the settings it started with, the sign-in still completes.
+		await completeMcpSignIn({ ...options(server, {}, { store }), authorization, response });
+		expect(server.tokenRequests.map((request) => request.get("client_id"))).toEqual(["client-1"]);
+	});
+
+	it("refuses to complete at another authorization server or token endpoint", async () => {
+		const server = await startAuthorizationServer();
+		const other = await startAuthorizationServer();
+		const otherOrigin = new URL(other.serverUrl).origin;
+		const store = memoryStore();
+		const authorization = await startRedirect(options(server, {}, { store }));
+		const response = await browse(authorization);
+
+		const elsewhere = { authServerMetadataUrl: new URL(`${otherOrigin}/.well-known/oauth-authorization-server`) };
+		await expect(
+			completeMcpSignIn({ ...options(server, elsewhere, { store }), authorization, response }),
+		).rejects.toThrow(`would use the authorization server ${otherOrigin}, but`);
+
+		const state = await store.load();
+		const discovery = state?.discovery;
+		const metadata = discovery?.authorizationServerMetadata;
+		if (!state || !discovery || !metadata) throw new Error("Expected cached discovery");
+		await store.save({
+			...state,
+			discovery: {
+				...discovery,
+				authorizationServerMetadata: { ...metadata, token_endpoint: `${otherOrigin}/token` },
+			},
+		});
+		await expect(completeMcpSignIn({ ...options(server, {}, { store }), authorization, response })).rejects.toThrow(
+			`would use the token endpoint ${otherOrigin}/token, but`,
+		);
+		expect(server.tokenRequests).toEqual([]);
+		expect(other.tokenRequests).toEqual([]);
+	});
+
+	it("refuses to complete at the authorization server a refresh rediscovered after invalid_client", async () => {
+		// Without the iss parameter, only the binding tells the two authorization servers apart.
+		const server = await startAuthorizationServer({ cimd: true });
+		const other = await startAuthorizationServer({ cimd: true });
+		const otherOrigin = new URL(other.serverUrl).origin;
+		const store = memoryStore();
+		await signIn(options(server, CIMD, { store }));
+		// A step-up sign-in waits for the browser and keeps the tokens meanwhile.
+		const stepUp = options(server, CIMD, { store, challenge: { error: "insufficient_scope", scope: "more" } });
+		const authorization = await startRedirect(stepUp);
+		const response = await browse(authorization);
+		const pending = await store.load();
+
+		// The refresh fails with invalid_client, and the resource now names another authorization server.
+		server.failNextRefresh("invalid_client");
+		server.useAuthorizationServer(otherOrigin);
+		await expect(
+			provider(server, store, BASE, () => CIMD).onUnauthorized?.(unauthorized(server, "access-1")),
+		).rejects.toBeInstanceOf(McpOAuthAuthorizationRequiredError);
+		const state = await store.load();
+		expect(state?.discovery?.authorizationServerUrl).toBe(otherOrigin);
+		expect(state?.oauthState).toBe(pending?.oauthState);
+		expect(state?.codeVerifier).toBe(pending?.codeVerifier);
+		expect(state?.authorizationRequest).toEqual(pending?.authorizationRequest);
+
+		await expect(completeMcpSignIn({ ...stepUp, authorization, response })).rejects.toThrow(
+			`would use the authorization server ${otherOrigin}, but`,
+		);
+		expect(other.tokenRequests).toEqual([]);
+		expect(server.tokenRequests.map((request) => request.get("grant_type"))).toEqual([
+			"authorization_code",
+			"refresh_token",
+		]);
+	});
+
+	it("fails closed when the authorization request is not stored", async () => {
+		const server = await startAuthorizationServer({ cimd: true, issParameter: true });
+		const signInOptions = options(server, CIMD);
+		const authorization = await startRedirect(signInOptions);
+		const response = await browse(authorization);
+		const stored = await signInOptions.store.load();
+		if (!stored) throw new Error("Expected a pending sign-in");
+		const { authorizationRequest: _dropped, ...withoutRequest } = stored;
+		await signInOptions.store.save(withoutRequest);
+		await expect(completeMcpSignIn({ ...signInOptions, authorization, response })).rejects.toThrow(
+			"The authorization request of this sign-in is not stored",
+		);
+		expect(server.tokenRequests).toEqual([]);
+	});
+
+	it("refuses to complete a completed sign-in again, keeping its tokens", async () => {
+		const server = await startAuthorizationServer({ cimd: true, issParameter: true });
+		const signInOptions = options(server, CIMD);
+		const authorization = await startRedirect(signInOptions);
+		const response = await browse(authorization);
+		await completeMcpSignIn({ ...signInOptions, authorization, response });
+		const state = await signInOptions.store.load();
+		expect(state?.oauthState).toBeUndefined();
+		expect(state?.codeVerifier).toBeUndefined();
+		expect(state?.authorizationRequest).toBeUndefined();
+
+		await expect(completeMcpSignIn({ ...signInOptions, authorization, response })).rejects.toThrow(
+			"No sign-in to this MCP server is pending",
+		);
+		expect(server.tokenRequests).toHaveLength(1);
 		expect((await signInOptions.store.load())?.tokens?.access_token).toBe("access-1");
+	});
+
+	it("refuses to exchange a code again through McpOAuthProvider", async () => {
+		const server = await startAuthorizationServer();
+		const store = memoryStore();
+		const authorization = await startRedirect(options(server, {}, { store }));
+		const response = await browse(authorization);
+		const oauthProvider = new McpOAuthProvider({
+			serverUrl: server.serverUrl,
+			redirectUrl: LOOPBACK,
+			clientMetadata: { client_name: "draht" },
+			store,
+			onRedirect: () => {},
+		});
+		const exchange = { serverUrl: server.serverUrl, authorizationCode: response.code };
+		expect(await authorizeMcp(oauthProvider, exchange)).toBe("AUTHORIZED");
+		await expect(authorizeMcp(oauthProvider, exchange)).rejects.toThrow("No OAuth PKCE code verifier is stored");
+		expect(server.tokenRequests).toHaveLength(1);
+		expect((await store.load())?.tokens?.access_token).toBe("access-1");
+	});
+
+	it("saves the scope the flow requested, not one the authorization endpoint carries", async () => {
+		const server = await startAuthorizationServer({ authorizationEndpointQuery: "?scope=admin" });
+		const unscoped = options(server, {});
+		const authorization = await startRedirect(unscoped);
+		expect(new URL(authorization.authorizationUrl).searchParams.get("scope")).toBe("admin");
+		expect(authorization.scope).toBeUndefined();
+		await completeMcpSignIn({ ...unscoped, authorization, response: await browse(authorization) });
+		expect((await unscoped.store.load())?.tokens).toMatchObject({ access_token: "access-1" });
+		expect((await unscoped.store.load())?.tokens?.scope).toBeUndefined();
+
+		// A requested scope replaces the endpoint's and is saved.
+		const scoped = options(server, { scope: "issues:read" });
+		const requested = await startRedirect(scoped);
+		expect(new URL(requested.authorizationUrl).searchParams.get("scope")).toBe("issues:read");
+		expect(requested.scope).toBe("issues:read");
+		await completeMcpSignIn({ ...scoped, authorization: requested, response: await browse(requested) });
+		expect((await scoped.store.load())?.tokens?.scope).toBe("issues:read");
 	});
 });
 

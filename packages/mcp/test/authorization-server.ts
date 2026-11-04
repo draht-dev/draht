@@ -9,15 +9,20 @@ function json(response: ServerResponse, status: number, body: unknown): void {
 
 /**
  * Authorization server of an MCP server at `<origin>/mcp`: discovery, dynamic client registration,
- * PKCE, and rotating refresh tokens. Token responses name no scope. `cimd` advertises Client ID
- * Metadata Documents, `issParameter` the `iss` parameter of authorization responses. Paths in `stall`
+ * PKCE, and rotating refresh tokens. A code is bound to the `client_id`, `redirect_uri`, and code
+ * challenge of its authorization request and is used once. Token responses name no scope. `cimd`
+ * advertises Client ID Metadata Documents, `issParameter` the `iss` parameter of authorization responses,
+ * `authorizationEndpointQuery` a query the advertised authorization endpoint carries. Paths in `stall`
  * never answer. Close it with `closeServers` from `afterEach`.
  */
-export async function startAuthorizationServer(options: { cimd?: boolean; issParameter?: boolean } = {}) {
+export async function startAuthorizationServer(
+	options: { cimd?: boolean; issParameter?: boolean; authorizationEndpointQuery?: string } = {},
+) {
 	const registrations: Record<string, unknown>[] = [];
 	const authorizations: URLSearchParams[] = [];
 	const tokenRequests: URLSearchParams[] = [];
-	const challenges = new Map<string, string>();
+	const codes = new Map<string, { challenge: string; clientId: string; redirectUri: string }>();
+	let authorizationServer: string | undefined;
 	const refreshTokens = new Set<string>();
 	const stall = new Set<string>();
 	let refreshFailure: { error: string; onRequest?: () => Promise<void> } | undefined;
@@ -34,11 +39,14 @@ export async function startAuthorizationServer(options: { cimd?: boolean; issPar
 		if (stall.has(url.pathname)) return;
 		switch (url.pathname) {
 			case "/.well-known/oauth-protected-resource/mcp":
-				return json(response, 200, { resource: `${origin}/mcp`, authorization_servers: [origin] });
+				return json(response, 200, {
+					resource: `${origin}/mcp`,
+					authorization_servers: [authorizationServer ?? origin],
+				});
 			case "/.well-known/oauth-authorization-server":
 				return json(response, 200, {
 					issuer: origin,
-					authorization_endpoint: `${origin}/authorize`,
+					authorization_endpoint: `${origin}/authorize${options.authorizationEndpointQuery ?? ""}`,
 					token_endpoint: `${origin}/token`,
 					registration_endpoint: `${origin}/register`,
 					response_types_supported: ["code"],
@@ -55,8 +63,13 @@ export async function startAuthorizationServer(options: { cimd?: boolean; issPar
 			case "/authorize": {
 				authorizations.push(url.searchParams);
 				const code = `code-${authorizations.length}`;
-				challenges.set(code, url.searchParams.get("code_challenge") ?? "");
-				const redirect = new URL(url.searchParams.get("redirect_uri") ?? "");
+				const redirectUri = url.searchParams.get("redirect_uri") ?? "";
+				codes.set(code, {
+					challenge: url.searchParams.get("code_challenge") ?? "",
+					clientId: url.searchParams.get("client_id") ?? "",
+					redirectUri,
+				});
+				const redirect = new URL(redirectUri);
 				redirect.searchParams.set("code", code);
 				redirect.searchParams.set("state", url.searchParams.get("state") ?? "");
 				if (options.issParameter) redirect.searchParams.set("iss", origin);
@@ -71,8 +84,15 @@ export async function startAuthorizationServer(options: { cimd?: boolean; issPar
 					const verifier = createHash("sha256")
 						.update(params.get("code_verifier") ?? "")
 						.digest("base64url");
-					if (challenges.get(code) !== verifier) return json(response, 400, { error: "invalid_grant" });
-					challenges.delete(code);
+					const issuedFor = codes.get(code);
+					if (
+						issuedFor?.challenge !== verifier ||
+						issuedFor.clientId !== clientIdOf(request, params) ||
+						issuedFor.redirectUri !== params.get("redirect_uri")
+					) {
+						return json(response, 400, { error: "invalid_grant" });
+					}
+					codes.delete(code);
 					return json(response, 200, issueTokens());
 				}
 				const failure = refreshFailure;
@@ -99,6 +119,10 @@ export async function startAuthorizationServer(options: { cimd?: boolean; issPar
 		/** Parameters of token requests. */
 		tokenRequests,
 		stall,
+		/** Advertises another authorization server in the protected resource metadata. */
+		useAuthorizationServer: (url: string) => {
+			authorizationServer = url;
+		},
 		/** Makes every refresh fail with `invalid_grant`, like a revoked grant. */
 		revokeRefreshTokens: () => refreshTokens.clear(),
 		/** Answers the next refresh with the OAuth `error`, after running `onRequest`. */
@@ -106,6 +130,13 @@ export async function startAuthorizationServer(options: { cimd?: boolean; issPar
 			refreshFailure = { error, onRequest };
 		},
 	};
+}
+
+/** The `client_id` of a token request: from HTTP Basic authentication, or else the body. */
+function clientIdOf(request: IncomingMessage, params: URLSearchParams): string | null {
+	const basic = /^Basic (.+)$/.exec(request.headers.authorization ?? "");
+	if (basic) return decodeURIComponent(Buffer.from(basic[1], "base64").toString().split(":")[0]);
+	return params.get("client_id");
 }
 
 export type AuthorizationServer = Awaited<ReturnType<typeof startAuthorizationServer>>;

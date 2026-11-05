@@ -522,12 +522,13 @@ describe("AttachClient fails closed", () => {
 	});
 
 	test("rawOf keeps the key the parse strips, and throws rather than answer an empty string", async () => {
-		const client = await AttachClient.open(
-			fakeDaemon((ws) => ws.send(JSON.stringify({ type: "fleet", sessions: [], epoch: "e", seq: 0, extra: 1 }))),
-			"t",
-		);
+		// The daemon side holds its frame until the empty-case assertion has run: sent from `open`, it
+		// can arrive before AttachClient.open() resolves on a fast runner, and the empty case never runs.
+		const { promise: daemonSide, resolve: daemonOpened } = Promise.withResolvers<Bun.ServerWebSocket<undefined>>();
+		const client = await AttachClient.open(fakeDaemon(daemonOpened), "t");
 
 		expect(() => client.rawOf("fleet")).toThrow("no fleet frame has arrived (saw: nothing)");
+		(await daemonSide).send(JSON.stringify({ type: "fleet", sessions: [], epoch: "e", seq: 0, extra: 1 }));
 		await client.waitFor((frame) => frame.type === "fleet", "the fleet frame");
 
 		expect(client.frames[0]).not.toHaveProperty("extra");

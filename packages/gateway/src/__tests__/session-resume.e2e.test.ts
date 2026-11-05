@@ -1492,9 +1492,10 @@ describe("the trust lookup key, against the store it mirrors", () => {
 	 * canonicalise it anyway, so a non-canonical recorded cwd cannot be produced
 	 * by running the binary; and `HistoryIndex` memoises headers per file keyed on
 	 * INODE and never invalidates, so an in-place edit would be invisible to a
-	 * daemon that had already enumerated the file. Unlink-then-write gives a new
-	 * inode and moves the directory mtime, which is exactly what both cache levels
-	 * key on.
+	 * daemon that had already enumerated the file. Write-beside-then-rename gives a
+	 * new inode and moves the directory mtime, which is exactly what both cache
+	 * levels key on. (Unlink-then-write does not reliably: the filesystem may hand
+	 * the freed inode straight back.)
 	 */
 	test("an explicit `false` recorded canonically refuses a cwd recorded through a symlink", async () => {
 		const real = realpathSync(tempDir("srSy-"));
@@ -1507,8 +1508,12 @@ describe("the trust lookup key, against the store it mirrors", () => {
 		const header = JSON.parse(lines[0]) as Record<string, unknown>;
 		header.cwd = link;
 		lines[0] = JSON.stringify(header);
-		rmSync(seededThere.path);
-		writeFileSync(seededThere.path, lines.join("\n"));
+		// Write beside the file, then rename over it: the new file is allocated while the old one
+		// still exists, so its inode always differs. Unlink-then-write can get the freed inode back,
+		// and the daemon's per-inode header memo then keeps reporting the old cwd.
+		const rewritten = `${seededThere.path}.rewrite`;
+		writeFileSync(rewritten, lines.join("\n"));
+		renameSync(rewritten, seededThere.path);
 
 		const trustPath = join(agentDir, "trust.json");
 		writeFileSync(trustPath, JSON.stringify({ [real]: false }));

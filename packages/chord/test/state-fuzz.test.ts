@@ -87,7 +87,8 @@ const mutate = (document: MutableDocument, choice: number, value: number): void 
 	}
 };
 
-it("converges across randomized prepared revisions", () => {
+// Deterministic but CPU-bound: 10,000 steps with deep equality checks exceed the default timeout on loaded runners.
+it("converges across randomized prepared revisions", { timeout: 60_000 }, () => {
 	for (let seed = 1; seed <= 100; seed++) {
 		const rng = random(seed);
 		const initial: Document = {

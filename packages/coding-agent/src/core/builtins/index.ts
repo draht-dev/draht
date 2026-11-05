@@ -1,4 +1,5 @@
 import type { InlineExtension } from "../extensions/types.ts";
+import budgetsBuiltin from "./budgets.ts";
 import checkpointsBuiltin from "./checkpoints.ts";
 import completionChecksBuiltin from "./completion-checks.ts";
 import duetBuiltin from "./duet.ts";
@@ -21,4 +22,5 @@ export const CORE_BUILTIN_EXTENSIONS: InlineExtension[] = [
 	{ name: "checkpoints", factory: checkpointsBuiltin },
 	{ name: "polyphase", factory: polyphaseBuiltin },
 	{ name: "completion-checks", factory: completionChecksBuiltin },
+	{ name: "budgets", factory: budgetsBuiltin },
 ];

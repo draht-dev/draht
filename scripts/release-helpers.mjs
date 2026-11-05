@@ -52,6 +52,7 @@ export const SCOPE_TO_PACKAGES = Object.freeze({
 	ai: ["ai"],
 	tui: ["tui"],
 	telemetry: ["telemetry"],
+	schema: ["schema"],
 	agent: ["agent"],
 	"agent-core": ["agent"],
 	"coding-agent": ["coding-agent"],

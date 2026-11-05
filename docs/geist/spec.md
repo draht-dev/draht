@@ -135,12 +135,15 @@ This file is the **registry**: it is yours, it lives at `~/.geist/config.yaml`, 
 ```yaml
 harness:
   default: draht
-  agents:            # ACP launch specs; absolute cmds/args pinned at M3 from the registry
-    draht:  { cmd: /usr/local/bin/draht-acp }
-    claude: { cmd: /usr/local/bin/claude-agent-acp }
-    codex:  { cmd: /usr/local/bin/codex-acp }
-    gemini: { cmd: /usr/local/bin/gemini, args: [--experimental-acp] }
+  agents:
+    draht:  { cmd: /Users/you/dev/draht-mono/packages/coding-agent/dist/cli.js }   # the one spawnable entry in v1: the draht CLI
+    claude: { cmd: /usr/local/bin/claude-agent-acp }   # ACP only: declared, not spawnable in v1
+    codex:  { cmd: /usr/local/bin/codex-acp }          # ACP only: declared, not spawnable in v1
+    gemini: { cmd: /usr/local/bin/gemini, args: [--experimental-acp] }   # ACP only: declared, not spawnable in v1
+approvedRoots: [/Users/you/dev]   # a spawned executable and a project root must each sit inside one
 ```
+
+The `draht` entry names the draht CLI, not the `draht-acp` shim, because a spawn runs it with draht's own flags appended. §15.3 states the conflict this leaves with the ACP launch-spec table.
 
 ### 9.2 WS protocol — r5 plus
 
@@ -207,6 +210,8 @@ Every card on the board arrived one of two ways, and the difference decides what
 
 Nothing the headset or the phone sends names a program. A spawn carries **two opaque ids** — a harness id and a project id — and the daemon resolves both against a registry **you own**: `~/.geist/config.yaml`, or a registry path you hand the daemon explicitly when you start it. There is no path, no command, no argv, no cwd and no environment field anywhere on the wire, so the worst a caller can name is an id that exists or one that does not. Adding a harness means editing your own registry on the dev machine; it is not something a client can do.
 
+**Where the daemon looks, and when it offers to spawn.** `--registry <absolute path>` names the file; a relative path is a startup error, because it would resolve against whichever directory the daemon was started in. With no flag the daemon uses `~/.geist/config.yaml` under its own HOME, and never the current directory. Whether spawning is offered is decided per `/attach` connection by whether anything is at that path, links not followed. With nothing there the daemon advertises neither `session-spawn` nor `registry`, so a renderer is told no before it asks, and the daemon logs one notice at start that names the path. The first connection after a file appears is offered both, with no restart. A file that is there but will be refused still offers both, and a `session_spawn` is then answered `refused` with the rule named; a `registry_resync` against it answers two empty lists, since the `registry` frame has no field to carry a reason. The path is fixed when the daemon starts; the file itself is read afresh for each `session_spawn` and each `registry_resync`.
+
 **The daemon reads no project-supplied config at all.** `resolveConfigPath` in `packages/geist/src/index.ts` prefers `<cwd>/geist.yaml` over `~/.geist/config.yaml` — that is the **CLI's** resolver, written for a person standing in a directory they chose, and it is deliberately **not on the daemon path**. A checked-out repository's own `geist.yaml` is **ignored** by the daemon: not merged, not consulted for a harness id, not consulted for a root. Cloning a repository therefore cannot add an entry to the set of things your dev machine will launch, which is the property the two-opaque-ids wire shape would otherwise hand straight back.
 
 **The registry file is re-checked on every load, and refuses rather than repairs.** Before a byte is read, the supplied path is walked with `lstat` — never `realpath` first, which would silently follow the very symlink the check exists to catch — and the file and its parent directory must each be owned by the **current uid** (not root, not anyone else) and must not be symbolic links; the file must not be group- or world-**accessible**, and the parent must not be group- or world-writable. A file that fails any of those is **refused, with an error naming the rule and the path**. geist never chmods it for you: a file that names executables is not one to quietly repair on somebody's behalf, and repairing it would erase the evidence that it was wrong.
@@ -218,13 +223,25 @@ Nothing the headset or the phone sends names a program. A spawn carries **two op
 **Exactly one `session_spawned` answers exactly one `session_spawn`, and it is sent when the answer is true** — never optimistically on receipt. An early "starting…" spends the one answer the client is waiting on, and the failure that then has to be reported has no frame left to arrive in. `SessionSpawnCodeSchema` closes the set of things that answer may say, so a renderer switches on a code rather than matching on prose:
 
 - `spawned` — a process was started and joined the fleet; the card is on your board.
-- `unknown_harness` — you named a harness this machine's registry does not contain.
+- `unknown_harness` — you named a harness this machine's registry does not contain, or one it declares but does not offer for spawning.
 - `unknown_project` — you named a project this machine's registry does not contain.
-- `refused` — both ids resolved and policy said no: an unapproved root, a cap, a device whose pairing was revoked.
+- `refused` — policy said no, or there was no registry to resolve against: a registry file the daemon refused to read or could not parse (the message names the rule), an unapproved root, a harness executable it will not run, a cap, a device whose pairing was revoked.
 - `spawn_failed` — the process could not be started at all.
 - `timeout` — it started and never joined the fleet inside the deadline. Something may be running that you cannot see, which is worth saying out loud rather than reporting as a plain failure.
 
 On `SessionSpawnedFrameSchema` the `sessionId` is present **only when a process was started**, because the daemon mints it. That is the one shape difference from `session_resumed`, whose id the client supplied and which can therefore always be echoed back; a refusal here has no id to name, and inventing one to keep the shape tidy would be worse than leaving it out.
+
+**In v1 only the `draht` harness is spawnable (`V1_SPAWNABLE_HARNESS_IDS`).** Only a draht session publishes the attachable socket a spawn waits for, so a process from any other harness would start, never join the fleet, and be reported `timeout` once the handshake deadline passed. The other harnesses may be declared in the registry, but they are not offered in `registry`, and a spawn naming one is answered `unknown_harness` at once, with a message that says it is declared but not spawnable.
+
+**The `draht` entry must name the draht CLI, because a spawn runs the executable with draht's own flags appended** (`--session-id`, `--attachable`, `--mode rpc`, `--no-approve`, `--context-root`). `draht-acp` is the ACP stdio shim and publishes no attachable socket, so an entry that names it passes the name check above and then never joins the fleet. The same `harness.agents` map is also the ACP launch-spec table of the dormant `geist-acp`, which wants the shim. In v1 the spawnable `draht` entry names the draht CLI, and how one map serves both launch contracts is unresolved.
+
+**A session started from the phone starts untrusted, whether it is a spawn or a resume.** Both put `--no-approve` on the argv (`NO_APPROVE_FLAG`), so neither a standing `trust.json` grant nor `defaultProjectTrust: "always"` loads the project's extensions (`.draht/extensions`), `.draht/settings.json`, `.draht/SYSTEM.md` or `.agents/skills` into it: a grant records a past local decision, not who is holding the phone now. The cost is that a session you resume from the phone no longer loads those resources, even in a repository you trust locally; start the session yourself in a terminal if you need them.
+
+**The installed `~/.local/bin/draht` cannot be declared.** `install.sh` makes it a symbolic link to `~/.draht/runtime/current/draht`, and `current` is itself a symbolic link, so a declaration of either is refused with the link named: a declared executable is checked with no link followed, and only a link owned by root is exempt. The workaround is to declare a path that contains no symbolic link, under an approved root, such as the built `dist/cli.js` of a checkout in the example of §9.1.
+
+**A harness executable inside any declared project root is refused**, not only one inside the project being spawned into: a binary in project A is A's code in every spawn, B's included. A checkout that is also a declared project therefore cannot be the harness.
+
+**Two numbers bound a spawn.** A spawned process has 30 seconds to publish its socket and join the fleet (`DEFAULT_HANDSHAKE_DEADLINE_MS`); past that it is stopped and the answer is `timeout`. A stop is `SIGTERM` to the process group, then `SIGKILL` to the group after 2 seconds (`DEFAULT_STOP_DEADLINE_MS`), whether or not the process obeyed the TERM, because a child that traps TERM is exactly the case a deadline exists for.
 
 **The picker's data is `registry_resync` → `registry`: the harness ids and the projects you declared, and never an executable path.** A project's `root` does cross the wire — it is where your work is, it already crosses as a fleet row's `cwd`, and a picker showing two projects both called "api" cannot tell them apart without it — but `RegistryProjectSchema` carries that root and nothing that names a program to run. An executable path crosses nothing: it tells a client what to attack and buys the picker nothing, which is the same reason a fleet row does not carry its socket path. `RegistryHarnessSchema` therefore names a harness and whether it is the default, and never its `cmd`. `RegistryFrameSchema` carries those two lists and no third thing, and `RegistryResyncFrameSchema` asks for them with no fields at all, mirroring `fleet_resync`: there is one registry, the daemon owns it, and a client-supplied filter would be a second projection to keep honest.
 

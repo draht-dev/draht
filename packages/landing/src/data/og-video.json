@@ -1,0 +1,14 @@
+{
+  "default": "/og/video/home.mp4",
+  "pages": {
+    "/": "/og/video/home.mp4",
+    "/blog": "/og/video/blog.mp4",
+    "/blog/atomic-reasoning": "/og/video/blog-atomic-reasoning.mp4",
+    "/blog/eight-disciplines-for-coding-agents": "/og/video/blog-eight-disciplines-for-coding-agents.mp4",
+    "/blog/polyphase-live-agent-workflows": "/og/video/blog-polyphase-live-agent-workflows.mp4",
+    "/blog/v2026-5-12-discipline-gates": "/og/video/blog-v2026-5-12-discipline-gates.mp4",
+    "/docs": "/og/video/docs.mp4",
+    "/episodes": "/og/video/episodes.mp4",
+    "/uni": "/og/video/uni.mp4"
+  }
+}

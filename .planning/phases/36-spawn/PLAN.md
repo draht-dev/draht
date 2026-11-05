@@ -1161,3 +1161,650 @@ WHAT THIS DOES NOT CLOSE: this is EVIDENCE CLASS 2 and it closes NOTHING. It is 
 - NEW: `credentialEnv` absent means NO provider credentials at all, which is the safe direction the plan and `geist.yaml.example` both commit to — and it means that a registry written from the example file spawns sessions that start fine and cannot answer. That failure is loud rather than silent, but it will be the first thing that happens on a real phone spawn. Worth deciding whether the daemon should refuse a harness with no `credentialEnv` at resolve time instead, which would be a one-line rule in `resolveHarnessLaunch`.
 
 - OUTSTANDING INTEGRATOR DEBT FROM WAVE 2, not a question but it needs a human to notice: `scripts/check-no-free-text-command.mjs` and `scripts/check-no-free-text-command.test.mjs` exist and root package.json references neither, so `scripts/root-test-script-parity.test.mjs` is RED at HEAD. Wave 2 pre-announced this and named the exact three edits. It is not a wave-3 implementer's failure and should not be reported as one.
+
+---
+
+# Wave 4 — execution plan
+
+> Produced 2026-10-31 at HEAD 2c0482bad, on branch `feat/phase-36-spawn-wire`. Repo root: `/home/nix/work/draht-p36`. The host is Linux (NixOS), with Bun 1.4.4-canary and node 26. Waves 1-3 are landed. The wave-3 tasks are 041a2cdeb, 92c98a050, bdf66e8e0 and 88ac94e5d. Also landed since: 80e7545f7 (guard witnesses), the 2026-08-24 portability commits, and the 2026-10-18 permission-mode forwarding commits d214199d5, 8b0b643a5 and a98142bc6.
+
+## Wave 4 design
+
+Wave 4 wires what waves 1-3 built into the shipped daemon. It deletes the last process-creating surface outside the spawn primitive. Every task is evidence class 2, with one exception: W4-FLEET-JOIN-INVERT is the first test where a real `session_spawn` frame starts a process in the emitted daemon. The acceptance itself is still wave 5.
+
+**What is true at HEAD.** Each point was checked by reading the code.
+
+1. `fleet.ts:562-575` builds one `SessionResumer`. It passes no `spawner`, so the resumer builds its own `SessionSpawner` internally (`SessionResumerOptions.spawner`, spawn-primitive.ts:1143). There is no `SessionLauncher`. The bridge built in `onOpen` (`fleet.ts:742-756`) gets `resumeSession` only.
+2. The bridge advertises `session-spawn` and `registry` iff the matching port is non-null (`#capabilities`, attach-bridge.ts:844-857). With no port, `session_spawn` is answered `refused` / "this daemon cannot spawn sessions". `registry_resync` is answered with two empty arrays, both with no port and with a port that throws (`#registrySnapshot`, :1011). That behaviour has landed and wave 4 leaves it alone.
+3. `geist-core`'s index exports neither `SpawnSessionPort` nor `RegistryPort`. `fleet.ts` should derive both from `AttachBridgeOptions`, the way it already derives `AttachDeviceAuthenticator`.
+4. `SessionLauncher`, `resolveHarnessLaunch` and `userRegistryProvider` have no production callers. `cli.ts` has no `--registry` flag. Spec §15.2 already promises one ("a registry path you hand the daemon explicitly").
+5. **A refused or unparseable registry reaches the wire as `spawn_failed`.** The loader throws `RegistryFileRefusedError`, or a plain `Error` for bad YAML or a bad schema. `resolveHarnessLaunch` does not translate either one. `SessionLauncher` rethrows anything that is not a refusal, on purpose (session-launcher.test › "an error that is not a refusal is not translated into one"). The bridge then answers `spawn_failed`, which is false: no program was ever chosen. Wave 5 needs a typed refusal here.
+6. **Nothing in production refuses a project-local harness binary.** `canonicalize`'s `forbiddenRoots` is only filled by callers, and the launcher's `forbiddenRoots` has no caller. A registry entry naming `<declared project root>/node_modules/.bin/draht` resolves today.
+7. **The registry schema cannot tell which harness publishes an attachable socket.** `AgentLaunchSpec` is `{cmd, args?, credentialEnv?}` and the ids are keys the operator chooses. The same `harness.agents` map is also the ACP launch-spec table used by the dormant `geist-acp`. `geist.yaml.example` and spec §9.1 point `draht` at `/usr/local/bin/draht-acp`, which is an ACP stdio shim and accepts none of the spawn argv's flags.
+   - The example also sets `approvedRoots: [/Users/you/dev]` while every `cmd` is under `/usr/local/bin`. Every harness in the shipped example therefore resolves to `refused`.
+   - `install.sh` installs `~/.local/bin/draht` as a symlink to `~/.draht/runtime/current/draht`, and `current` is itself a symlink. The no-follow rule refuses both.
+8. **The command chain, enumerated.**
+   - Production path: `POST /sessions` calls `manager.create(undefined, cwd)` with no command, always (sessions.ts:185). From there: `SessionManager.create(command?, cwd?)` → `Session.create` → `new SessionProcess` → `Bun.spawn`.
+   - `session.process` is read by:
+     - sessions.ts `POST /:id/input` (:250-256);
+     - routes/ws.ts: `onOpen` and `onMessage`, the exported `notifyWebSocketsProcessAttached` (no callers), and `MAX_MESSAGE_BYTES` (only reachable with a process);
+     - routes/session-stream.ts (the process branch);
+     - `SessionManager.destroy` (`process?.kill()`);
+     - the `session:started` / `session:stopped` emissions.
+
+     In production all of these branches are dead, because no session record ever has a process.
+   - Tests that construct a process: concurrent-sessions, platform-assumptions, session-manager(-events, -destroy-all), session-process(-buffer), session, sessions-input, stdout-backpressure, ws, ws-auth, ws-message-limit. sessions-create-command only asserts `process` is undefined.
+   - No package outside gateway imports any of this. The go `testdata` goldens are a frozen `MAP.json` and are unaffected.
+9. **Root `check` does not run `check-no-free-text-command.mjs`.** Its `.test.mjs` has been in `test:scripts` since 9602ce055, and that test scans the real tree. Two edits are still owed: a `check:no-free-text-command` script, and its entry in the `check` chain. The gate's header still says session-process.ts is out of scope "until wave 4".
+10. **Stale prose.**
+    - packages/gateway/README.md says the gateway "spawns draht agent processes on demand" and spawns on the first `POST /sessions/:id/input`. That route returns 409.
+    - server.ts's `allowNonLoopback` doc says `POST /sessions` spawns an arbitrary `command`.
+    - spec §15.3 says `refused` means "both ids resolved and policy said no", which is no longer the whole story.
+
+**Linux facts that bear on verification.** These were measured on this box.
+
+- `/run/lock` is root-owned 0755 here; on Ubuntu it is 1777. `harness-resolver.test.ts:16` and `executable-path-walk.test.ts:32` put their Linux temp root there, so `mkdtemp` should fail with EACCES on this box.
+- The PATH a spawned child gets (`DEFAULT_RESUME_PATH`) contains only `/bin/sh` and `/usr/bin/env` on NixOS. The fixtures in spawn-launch.test, spawn-deadlines-stop.test and the session-resume.e2e TERM-trap test call `mv` and `sleep`.
+- `sudo` is blocked by no_new_privs.
+- `/etc/os-release` is a symlink into `/nix/store`; `/etc/passwd` is a regular file.
+
+From reading, I predict these suites are red on this box and green on Ubuntu CI. Confirm against the running baseline before attributing any red to wave 4.
+
+**Decisions.** These are reversible orchestrator calls. None of them presumes an answer to DECISIONS-PENDING 36.1–36.5.
+
+- **D4.1 — Offered iff something is at the registry path, decided per `/attach` connection.** At `onOpen`, an `lstat` (no follow) of the resolved registry path decides whether the bridge gets the `spawnSession` and `registry` ports.
+  - Nothing there: no capability. A spawn is answered with the bridge's existing "cannot spawn" refusal.
+  - Something there, even a file that will be refused: both ports. Every frame re-checks the file and answers a typed `refused` that names the rule.
+  - Why this is honest: a capability means "this daemon will answer the verb". A daemon with no registry can only ever say no, and an absent capability already says so without a round trip. A registry that is present but refused can be fixed by the operator, and the refusal names the rule; hiding the capability then would leave the operator no signal.
+  - Per connection rather than once at start, for the device-store reason (`fleet.ts:113-128`): a registry written after the daemon starts is offered on the next connection with no restart.
+- **D4.2 — `V1_SPAWNABLE_HARNESS_IDS = ["draht"]` in fleet.ts, passed to the one launcher.** This is the fail-closed, smallest option. `codex`, `claude` and `gemini` are left out of the `registry` frame, and a spawn of one is answered `unknown_harness` / "declared but not spawnable" at once rather than after 30 s.
+  - Reversal cost: one line, plus one assertion each in W4-DAEMON-WIRING's and W5-ORIGIN-PARITY's tests.
+  - Residual: the filter matches a name, not an identity. A `draht` entry pointing at `draht-acp` still passes it and times out. Wave 4 addresses that in the docs only (D4.7).
+- **D4.3 — Registry load failures become `HarnessResolutionError("refused", <loader message>)` inside the provider.** That is the new `userRegistry().load`. The launcher's existing mapping then answers `refused` with the rule in the message, and `snapshot()` throws as it does today.
+- **D4.4 — A harness executable inside any declared project root is refused.** In `resolveHarnessLaunch`, the executable's `forbiddenRoots` becomes the caller's list plus every absolute `projects.*.root`. The project-root check itself is unchanged.
+  - Any project rather than only the requested one, because a binary inside project A is project-controlled code for every spawn, including into project B.
+  - Reversal: narrow the union to the requested project.
+  - Cost: a dev checkout that is also a declared project cannot be the harness.
+- **D4.5 — One `SessionSpawner` per daemon.** fleet.ts builds it, injects it into the `SessionResumer` (`spawner:`), and passes it to the one `SessionLauncher`. The resumer's internal fallback stays for tests that construct it alone.
+- **D4.6 — Delete the process path, keep every route.**
+  - `POST /sessions` keeps parsing, validating and refusing `command` (400) and `cwd` (400/403). The `cwd` it validates was never used for anything but the process, so `SessionManager.create()` takes no arguments.
+  - `/sessions/:id/input`, `/:id/ws` and `/:id/stream` keep the behaviour they already have for a session with no process.
+  - The `EventBus`/SSE vocabulary (`session:started` / `session:stopped`) stays declared. Removing it would change a wire an external client (Adler) reads.
+- **D4.7 — In the example and spec §9.1, `draht` names the draht CLI.** Use `/Users/you/dev/draht-mono/packages/coding-agent/dist/cli.js`, which sits inside the example's `approvedRoots` and outside its projects. The other three entries stay, commented as ACP-only and not spawnable in v1.
+- **D4.8 — `--registry` must be absolute.**
+  - Relative or missing value: parse error, exit 1.
+  - Flag absent: `~/.geist/config.yaml` via `resolveUserRegistryPath`, never cwd.
+  - Path given or defaulted but nothing there at start: the daemon starts and logs one notice, mirroring the device-store notice.
+
+## Wave 4 ordering constraints
+
+- W4-REGISTRY-SEAM lands before W4-DAEMON-WIRING, which imports `UserRegistry`.
+- W4-COMMAND-SURFACE has no dependency and runs in parallel.
+- W4-FLEET-JOIN-INVERT and W4-DOCS run after W4-DAEMON-WIRING. W4-DOCS also runs after W4-REGISTRY-SEAM, because its layer-2 assertions name both waves' symbols.
+- W4-CHECK-WIRING (integrator) runs after W4-COMMAND-SURFACE: the gate gains rule D there, and must be green on the tree before it joins `check`.
+- W4-LINUX-FIXTURES is conditional, independent and test-only. Run it only if the baseline shows the predicted reds.
+- Wave 4 edits no file in `packages/geist-core`, `packages/geist-protocol` or `packages/coding-agent`, and does not touch `spawn-primitive.ts` or `session-launcher.ts`. The spawn hotspot is quiet this wave.
+- `session-resume.e2e.test.ts` and `fleet-attach.e2e.test.ts` stay read-only. W4-DAEMON-WIRING re-runs session-resume.e2e to prove resume is unchanged, and reports its pass/fail count against the baseline, not against the old macOS figure of 23/0.
+- Every `.planning/` edit, including appending this plan, goes to main. `check:draht` fails any branch whose `.planning/` differs from main.
+
+## Wave 4 collision hotspots
+
+| File | Owner |
+|---|---|
+| `packages/gateway/src/gateway/routes/fleet.ts`, `server.ts`, `cli.ts` | W4-DAEMON-WIRING only |
+| `packages/gateway/src/session/harness-resolver.ts` | W4-REGISTRY-SEAM only. Must not change `HarnessResolutionCode` (the launcher's exhaustive switch), `ResolvedHarnessLaunch`, or the `registryProjection` signature. |
+| `scripts/check-no-free-text-command.mjs` and its `.test.mjs` | W4-COMMAND-SURFACE only |
+| `package.json` (root) | W4-CHECK-WIRING (integrator) only |
+| `docs/geist/spec.md`, `geist.yaml.example`, `packages/gateway/README.md`, `spawn-docs-contract.test.ts` | W4-DOCS only |
+| `spawn-fleet-join.e2e.test.ts` | W4-FLEET-JOIN-INVERT only |
+| `helpers/process-table.ts`, `helpers/attach-journey.ts` | Nobody in wave 4. W4-REGISTRY-SEAM may add a new `helpers/temp-root.ts`. |
+
+## Wave 4 tasks
+
+**Shared rules for every wave-4 and wave-5 task.**
+
+- Use `git grep` or `command grep`. This shell's `grep` is a snapshot function that has silently missed matches.
+- Prefix every spawn with `env -u DRAHT_PERMISSION_MODE`. It is unset here; the prefix keeps parity with the macOS shell. Build daemon and child environments from scratch.
+- Typecheck both ways: `npx tsc --noEmit -p tsconfig.json` from the root, and `npm --prefix packages/gateway run typecheck`. The root config excludes `packages/gateway/src/__tests__`.
+- Lint with `./node_modules/.bin/biome check --write --error-on-warnings <files>`.
+- Run only the named test files.
+- No git writes. The orchestrator commits, with user-facing subjects, because release.mjs turns commit subjects into the changelog.
+- Comment budget: 13.7% in src, 5.9% in tests.
+- Mutation copies are made with `SRC=/home/nix/work/draht-p36; DST=/home/nix/work/m36-<id>; rm -rf "$DST" && mkdir -p "$DST" && rsync -a --exclude .git "$SRC/" "$DST/"`.
+  - Use `/home/nix/work`, not `/tmp` (which gets wiped) or `/srv/work` (group-writable, so the exec walk refuses it).
+  - The `node_modules` links are relative inside the tree, so the copy is self-contained (about 2.1 GB).
+  - Sanity-check isolation first with the named known-failing mutation: it must fail in DST and pass in SRC.
+  - A separate adversarial agent re-runs the matrix. Disclose any mutation that survives.
+
+### W4-REGISTRY-SEAM — The user registry as an object: present, per-frame load, typed refusal, project-local rule
+
+- **Wave** 4 · **Requirement** R36-SPAWN.3, R36-SPAWN.2 · **Evidence class** 2 · **Depends on** nothing
+- **Files** `packages/gateway/src/session/harness-resolver.ts`; `packages/gateway/src/__tests__/harness-resolver.test.ts`; `packages/gateway/src/__tests__/session-launcher.test.ts` (one added case); `packages/gateway/src/__tests__/executable-path-walk.test.ts` (temp-root swap only); new `packages/gateway/src/__tests__/helpers/temp-root.ts`
+- **Test** `harness-resolver.test.ts`
+- **Exports** May add `interface UserRegistry { readonly path: string; present(): boolean; load: RegistryProvider }` and `userRegistry(options?: UserRegistryPathOptions): UserRegistry`. `userRegistryProvider` keeps its signature and becomes `userRegistry(options).load`. No other export changes.
+
+Brief:
+
+- `present()` is an `lstat` of `path` with no follow. A dangling symlink, a 0644 file or a directory all count as present. It decides whether spawning is **offered**, never whether it is allowed.
+- `load()` calls `loadGeistConfigFile(path)` on every call. Any error it throws is rethrown as `HarnessResolutionError("refused", originalMessage)` (D4.3), so the rule text is kept, for example `Refused geist registry (mode on file …)`.
+- In `resolveHarnessLaunch`, the executable's `forbiddenRoots` becomes `options.forbiddenRoots ∪ {every isAbsolute(projects.*.root)}` (D4.4). Filter out relative roots: one bad project must not refuse every harness. The project-root check is unchanged.
+- **Temp-root fix.** `helpers/temp-root.ts` exports a Linux temp root reached through a root-owned link: the first writable of `/run/lock` and `/run/user/<uid>` (both reached via `/var/run`), throwing and naming both if neither is writable. On darwin it keeps `realpath(tmpdir())`. Swap it into the two test files. That is the only edit to executable-path-walk.test.ts.
+
+New cases in `harness-resolver.test.ts`:
+
+- an executable inside the requested project's root is refused, matching `/inside a forbidden root/`;
+- an executable inside another declared project's root is refused;
+- the same executable with that project deleted from the registry resolves. The pair is the test.
+- `present()` is false when nothing is there, and true for a dangling symlink and for a 0644 file;
+- `load()` on a 0644 file throws `HarnessResolutionError` with code `refused` and a message containing `(mode on file`;
+- `load()` on invalid YAML is refused with a message containing `Invalid geist config`;
+- a 0600 file is re-read: edit it and the next `load()` sees the change.
+
+New case in `session-launcher.test.ts`: a launcher over `userRegistry` on a 0644 file answers `{code:"refused"}` with no `sessionId`, and the spawner double was never called.
+
+**Done-check:**
+- `cd /home/nix/work/draht-p36/packages/gateway && env -u DRAHT_PERMISSION_MODE bun test src/__tests__/harness-resolver.test.ts src/__tests__/session-launcher.test.ts src/__tests__/executable-path-walk.test.ts` → 0 fail.
+- Both typechecks, then biome on the five files.
+
+**Mutations to kill:**
+- `load` rethrows the raw error (the launcher then rethrows it) → the launcher case fails.
+- Drop the project-root union → both project-local cases fail.
+- `present()` uses `existsSync` → the dangling-link case fails.
+- Isolation sanity: in DST, make `present()` return `true` always → the "nothing there" case fails.
+
+### W4-COMMAND-SURFACE — Delete the command parameter chain; make "only spawn path" a gate rule
+
+- **Wave** 4 · **Requirement** R36-SPAWN.1, R36-SPAWN.8 · **Evidence class** 2 · **Depends on** nothing
+- **Files**
+  - Delete `packages/gateway/src/session/session-process.ts`.
+  - Edit `packages/gateway/src/session/session.ts`, `packages/gateway/src/session/session-manager.ts`, `packages/gateway/src/gateway/routes/sessions.ts`, `packages/gateway/src/gateway/routes/ws.ts`, `packages/gateway/src/gateway/routes/session-stream.ts`, `scripts/check-no-free-text-command.mjs`, `scripts/check-no-free-text-command.test.mjs`.
+  - Delete these tests (their only subject is a command-created process): `session-process.test.ts`, `session-process-buffer.test.ts`, `stdout-backpressure.test.ts`, `ws.test.ts`, `ws-message-limit.test.ts`, `platform-assumptions.test.ts`.
+  - Edit these tests (delete the process cases, keep the rest unchanged): `session.test.ts`, `session-manager.test.ts`, `session-manager-events.test.ts`, `session-manager-destroy-all.test.ts`, `concurrent-sessions.test.ts`, `sessions-input.test.ts`, `ws-auth.test.ts`, `sessions-create-command.test.ts`.
+- **Test** `scripts/check-no-free-text-command.test.mjs`, plus every edited test file.
+- **Exports**
+  - Removes `SessionProcess`, `ProcessStatus`, `OutputCallback`, `Unsubscribe`, `Session.process`, and `notifyWebSocketsProcessAttached`.
+  - `Session.create()` and `SessionManager.create()` take no arguments.
+  - Must not change `SessionManager.list/get/destroy/destroyAll`, `SessionStatus`, the `EventBus` / `DomainEvent` union, `sse.ts`, `server.ts` or `fleet.ts`.
+
+Brief — production behaviour stays byte-identical for every session a production daemon can hold (D4.6):
+
+- `POST /sessions` still answers 400 with `COMMAND_REJECTED` for any body carrying `command`, and 400/403 for a bad `cwd`. It calls `manager.create()`.
+- `POST /:id/input` keeps its order: 404, then the 400 checks, then 409 `NO_PROCESS` always.
+- `/:id/ws` upgrades, closes 4404 for an unknown id, then stays open and ignores messages. Drop `MAX_MESSAGE_BYTES` (unreachable without a process) and the `as any` stash.
+- `/:id/stream` sends `ready` and closes on abort.
+- `SessionManager.destroy` emits only `session:destroyed`.
+- Update the comments that promise "a later phase" to name `session_spawn`.
+- Keep `cwd` validation in the route even though the manager no longer takes it, and say so in the commit body.
+
+Rules for editing tests:
+
+- A test whose subject is the process is deleted, never turned into a tautology.
+- A test whose assertion is decided before the process branch (auth, 404, missing text, invalid JSON) switches to a session with no process.
+- In sessions-create-command, delete the `process` toBeUndefined lines. The type now guarantees that, and the 400/201 assertions remain.
+
+**Gate rule D.** No process-creating API in a non-test file under `packages/gateway/src` other than `session/spawn-primitive.ts`. Covered: imports of `node:child_process` / `child_process`, and calls to `Bun.spawn` / `Bun.spawnSync`. Comments and strings are blanked first with the gate's own `blankNonCode`.
+- Add it to `scanRepo` and plant one violation in the fixture tree (scanRepo reports a planted violation for every rule).
+- Delete the "OUT OF SCOPE: session-process.ts" header paragraph, and name rule D's incident: the lazy `["draht","start"]` spawn.
+
+**Done-check:**
+- `cd /home/nix/work/draht-p36/packages/gateway && env -u DRAHT_PERMISSION_MODE bun test src/__tests__/session.test.ts src/__tests__/session-manager.test.ts src/__tests__/session-manager-events.test.ts src/__tests__/session-manager-destroy-all.test.ts src/__tests__/concurrent-sessions.test.ts src/__tests__/sessions-input.test.ts src/__tests__/ws-auth.test.ts src/__tests__/sessions-create-command.test.ts src/__tests__/session-stream.test.ts src/__tests__/sse.test.ts src/__tests__/health.test.ts` → 0 fail.
+- `cd /home/nix/work/draht-p36 && node --test scripts/check-no-free-text-command.test.mjs && node scripts/check-no-free-text-command.mjs` → green, exit 0.
+- `git grep -n "SessionProcess\|session-process" -- packages scripts ':!go'` → only historical comments.
+- Both typechecks.
+
+**Mutations to kill:**
+- Re-add `Bun.spawn(["cat"])` in session.ts → rule D exits 1 naming the file and line.
+- Remove the `"command" in bodyObj` refusal → sessions-create-command fails and rule B fires.
+- Isolation sanity: in DST, plant `import { spawn } from "node:child_process"` in routes/ws.ts → the gate exits 1.
+
+### W4-DAEMON-WIRING — One spawner, one launcher, `--registry`, ports per connection
+
+- **Wave** 4 · **Requirement** R36-SPAWN.1 · **Evidence class** 2 · **Depends on** W4-REGISTRY-SEAM
+- **Files** `packages/gateway/src/gateway/routes/fleet.ts`, `packages/gateway/src/gateway/server.ts`, `packages/gateway/src/cli.ts`, new `packages/gateway/src/__tests__/fleet-spawn-wiring.test.ts`, new `packages/gateway/src/__tests__/cli-registry-wiring.test.ts`
+- **Test** both new files
+- **Exports, may add:**
+  - `FleetRoutesOptions.userRegistry?: UserRegistry`. Absent means spawn is never offered, so embedders and existing tests are unchanged.
+  - `FleetRoutesOptions.spawnSession?: AttachSpawnSessionPort`. This is a test seam mirroring `resumeSession?`; when present it goes to every bridge and is advertised.
+  - `export type AttachSpawnSessionPort = NonNullable<AttachBridgeOptions["spawnSession"]>`
+  - `export const V1_SPAWNABLE_HARNESS_IDS = ["draht"] as const`
+  - `GatewayConfig.registry?: UserRegistry`
+  - `ParsedArgs.registryPath?: string`
+  - `export function createRegistryWiring(opts: { explicit?: string; env?: NodeJS.ProcessEnv; log?: Logger }): UserRegistry`
+- **Exports, must not change:** `attachAuthentication`, the device provider types, `resumeSession`'s semantics, or any existing flag.
+
+Brief:
+
+- **fleet.ts.** Build one `SessionSpawner({socketDir, agentDir: dirname(socketDir)})`. Pass it to the existing `SessionResumer` as `spawner:` (D4.5). Build exactly one `SessionLauncher({spawner, registry: userRegistry.load, spawnableHarnessIds: V1_SPAWNABLE_HARNESS_IDS})` when `userRegistry` is given, at the same construction site and with the same one-per-daemon comment discipline as `fleet.ts:549-561`.
+- In `onOpen`, decide D4.1: `offered = userRegistry?.present() === true`. Hand the bridge `spawnSession: options.spawnSession ?? (offered ? adapter over launcher.launch : undefined)` and `registry: offered ? () => launcher.snapshot() : undefined`.
+- **server.ts.** Thread `config.registry` through to `createFleetRoutes`. Correct the stale `allowNonLoopback` doc: the attach wire starts sessions, and every session runs tools as the user.
+- **cli.ts.** `parseArgs` handles `--registry` through `requireValue`, and refuses a non-absolute value with an error naming the flag (D4.8). `gatewayOptions` sets `registry: createRegistryWiring({explicit: parsed.registryPath, env, log})`. That uses `resolveUserRegistryPath({explicit, home: env.HOME})` and logs one warn when `!present()`, with the path and a hint (0600 file in a 0700 directory) and no restart clause.
+
+`cli-registry-wiring.test.ts` (modelled on cli-devices-wiring.test.ts):
+
+- an absolute `--registry` gives `gatewayOptions(...).registry.path` equal to that path;
+- with no flag, the path is `<HOME>/.geist/config.yaml`, using an injected HOME and never cwd. Put a `geist.yaml` in cwd as the decoy.
+- a relative value throws, matching `/--registry/`;
+- `--registry --auth` throws (a flag as a value);
+- the notice is logged exactly once when nothing is there, and not at all when the file exists.
+
+`fleet-spawn-wiring.test.ts` uses in-process `createServer` + `Bun.serve({port:0})` and a WebSocket client authenticated with the operator token. Fixture harnesses are `.js` files run by the daemon's own bun: under the constructed PATH, NixOS has no coreutils.
+
+1. With no registry file, `server_hello` lacks both capabilities, `session_spawn` is answered `refused` / "cannot spawn", and `registry_resync` is answered empty.
+2. After writing a valid 0600 registry with the routes already built, the **next** connection advertises both. `registry_resync` lists `draht` only, although `codex` is declared, and the raw frame text contains no `cmd` path.
+3. `session_spawn {codex}` is answered `unknown_harness` / "not spawnable" in under 2 s, and the codex tripwire never runs.
+4. After `chmod 0644`, a spawn is answered `refused`, the message contains `(mode on file`, the tripwire is absent, and the connection is still open.
+5. Two connections ask for one pair 50 ms apart, against a fixture that appends a line and exits after 1.5 s. One answer is `spawn_failed`, the other `refused` / "already in flight", and the tripwire file has exactly one line. This is the one-launcher-per-daemon proof.
+6. An injected `spawnSession` is advertised with no registry file, and is what answers.
+7. Source level: fleet.ts contains exactly one `new SessionSpawner(`, one `new SessionLauncher(` and one `new SessionResumer(` (each count is 1, not 0), and the resumer call passes `spawner`.
+
+**Done-check:**
+- `cd /home/nix/work/draht-p36/packages/gateway && env -u DRAHT_PERMISSION_MODE bun test src/__tests__/fleet-spawn-wiring.test.ts src/__tests__/cli-registry-wiring.test.ts src/__tests__/cli-devices-wiring.test.ts src/__tests__/cli.test.ts src/__tests__/cli-flag-values.test.ts` → 0 fail.
+- `bun test src/__tests__/session-resume.e2e.test.ts`: pass count no lower than the baseline.
+- Both typechecks.
+
+**Mutations to kill:**
+- Construct the launcher inside `onOpen` → case 5 shows two lines.
+- Hand the ports unconditionally → case 1.
+- Probe presence once at construction → case 2.
+- Drop `spawnableHarnessIds` → cases 2 and 3.
+- Omit `spawner:` on the resumer → case 7.
+- Isolation sanity: in DST, pass no `spawnSession` to the bridge → case 2 fails.
+
+### W4-FLEET-JOIN-INVERT — Invert the wave-3 tripwire
+
+- **Wave** 4 · **Requirement** R36-SPAWN.1 · **Evidence class** 2 (the first real `session_spawn` against the emitted daemon) · **Depends on** W4-DAEMON-WIRING
+- **Files** `packages/gateway/src/__tests__/spawn-fleet-join.e2e.test.ts`
+- **Test** the same file
+- **Exports** none
+
+Brief:
+
+- Write the in-memory `registry` as a 0600 file in a 0700 short `/tmp` directory. JSON is valid YAML.
+- Start the daemon with `--registry <that path>`, with `DRAHT_STUB_PROVIDER=1` and `DRAHT_RESUME_ENV_ALLOW=DRAHT_STUB_PROVIDER` added to its environment.
+- Replace the test at :262-270 ("the daemon neither advertises session-spawn nor answers a spawn frame with a session") with: "the daemon advertises session-spawn and a spawn frame starts a session that joins the fleet".
+  - `hello.capabilities` contains `session-spawn` and `registry`;
+  - the answer is `{ok:true, code:"spawned"}` with a uuid `sessionId`;
+  - GET /fleet carries that id;
+  - `ps` shows its pid alive, not a zombie, with pgid equal to pid;
+  - reap that pgid in `afterAll`.
+- Update the header: the tripwire was inverted in wave 4, and the class-3 acceptance is in `spawn-acceptance.e2e.test.ts`.
+- Leave the other four tests (the in-process launch) unchanged.
+
+**Done-check:** `cd /home/nix/work/draht-p36/packages/gateway && env -u DRAHT_PERMISSION_MODE bun test src/__tests__/spawn-fleet-join.e2e.test.ts` → 5 pass / 0 fail.
+
+**Mutation to kill:** in DST, revert fleet.ts so it passes no ports → the inverted test fails. That is also the isolation sanity check.
+
+### W4-DOCS — Say what the daemon now does, and guard it
+
+- **Wave** 4 · **Requirement** R36-SPAWN.1, R36-SPAWN.3, R36-SPAWN.7 · **Evidence class** 2 · **Depends on** W4-DAEMON-WIRING, W4-REGISTRY-SEAM
+- **Files** `docs/geist/spec.md`, `geist.yaml.example`, `packages/gateway/README.md`, `packages/gateway/src/__tests__/spawn-docs-contract.test.ts`
+- **Test** `spawn-docs-contract.test.ts`
+- **Exports** none
+
+Brief. Cite symbols, never `file:line` (`assertNoLineCitations`).
+
+- **§15.2.** Name `--registry <absolute path>`. With no flag the daemon uses `~/.geist/config.yaml` and never cwd. With nothing at the path, spawn is not offered (no capability) until a file appears, with no restart.
+- **§15.3.**
+  - `refused` also covers a registry file the daemon refused or could not parse, with the rule named.
+  - In v1 only the `draht` harness is spawnable (`V1_SPAWNABLE_HARNESS_IDS`). The others may be declared, are not offered, and are answered `unknown_harness`.
+  - The `draht` entry must name the draht CLI, because the daemon appends draht's own flags. The installed `~/.local/bin/draht` symlink is refused.
+  - An executable inside any declared project root is refused.
+  - The stated deadlines: the handshake is 30 s, and the stop is TERM, then KILL to the process group after 2 s (`DEFAULT_HANDSHAKE_DEADLINE_MS`, `DEFAULT_STOP_DEADLINE_MS`).
+- **§9.1 and `geist.yaml.example`:** apply D4.7, and make `approvedRoots` cover the executables.
+- **README:** fix "What it does", add `--registry` to Usage, and correct the Adler section: input answers 409, and work starts with `session_spawn` on `/attach`.
+
+Contract tests:
+- Layer 1 matches **whole clauses** on each section's own body.
+- Layer 2:
+  - `V1_SPAWNABLE_HARNESS_IDS` equals the ids §15.3 names;
+  - `parseArgs(["--registry", abs, "--auth", "t"], SETTINGS).registryPath === abs`;
+  - the two numbers in §15.3 equal the two constants;
+  - every `cmd` in §9.1 is absolute.
+
+**Done-check:**
+- `cd /home/nix/work/draht-p36/packages/gateway && env -u DRAHT_PERMISSION_MODE bun test src/__tests__/spawn-docs-contract.test.ts` → 0 fail.
+- Point `loadGeistConfigFile` at a 0600 copy of `geist.yaml.example` with `/Users/you` rewritten to a temp root, and confirm it parses (manual check, recorded in the report).
+
+**Mutations to kill:**
+- Invert the spawnable clause ("every declared harness is spawnable") → layer 1 fails.
+- Set `DEFAULT_STOP_DEADLINE_MS` to 3000 in DST → layer 2 fails.
+- Rename `V1_SPAWNABLE_HARNESS_IDS` → layer 2 fails.
+- Isolation sanity: delete the `--registry` sentence → the test fails.
+
+### W4-CHECK-WIRING — Put the gate in `npm run check` (integrator)
+
+- **Wave** 4 · **Requirement** R36-SPAWN.8 · **Evidence class** 2 · **Depends on** W4-COMMAND-SURFACE
+- **Files** `package.json` (root)
+- **Test** `scripts/root-test-script-parity.test.mjs`, plus `npm run check`
+- **Exports** n/a
+
+Brief: two edits. Add `"check:no-free-text-command": "node scripts/check-no-free-text-command.mjs"`, and append ` && npm run check:no-free-text-command` to `check`, after `check:bun-serve-hostname`. `test:scripts` already carries the `.test.mjs`; do not add it twice.
+
+**Done-check:**
+- `cd /home/nix/work/draht-p36 && npm run check:no-free-text-command && node --test scripts/root-test-script-parity.test.mjs`
+- then `npm run check` (full output) → exit 0.
+
+**Mutation to kill:** in DST, add `command: z.array(z.string()).optional(),` to `SessionResumeFrameSchema` → `npm run check` exits non-zero at the gate step, naming the field.
+
+### W4-LINUX-FIXTURES — (conditional) Make the class-2 spawn regression suites run on a host whose child PATH has no coreutils
+
+- **Wave** 4 · **Requirement** R36-SPAWN.7 (evidence hygiene) · **Evidence class** 2 · **Depends on** nothing. Run only if the baseline shows these files red on this box.
+- **Files** `packages/gateway/src/__tests__/spawn-launch.test.ts`, `packages/gateway/src/__tests__/spawn-deadlines-stop.test.ts`
+- **Test** both
+- **Exports** none
+
+Brief: in the sh fixture text, replace every coreutils call (`mv`, `sleep`) with its absolute path, resolved once at module load with `Bun.which`. The PATH under test is untouched, so `spawn-launch.test.ts:201`'s PATH literal still holds. Change no assertion. `session-resume.e2e.test.ts` has the same defect and stays read-only: record its TERM-trap test as environmental on NixOS.
+
+**Done-check:** `cd /home/nix/work/draht-p36/packages/gateway && env -u DRAHT_PERMISSION_MODE bun test src/__tests__/spawn-launch.test.ts src/__tests__/spawn-deadlines-stop.test.ts` → 0 fail on this box. Report the same counts on macOS or CI.
+
+**Mutation to kill:** in DST, make `stop()` signal the bare pid → spawn-deadlines-stop's grandchild case fails. This also proves the fixtures are live again.
+
+---
+
+# Wave 5 — execution plan
+
+## Wave 5 design
+
+Wave 5 is **test-only**: no production file changes. A red that shows a product defect is escalated as a separate fix-round task with its own owner; it is never patched inside a suite. Every suite:
+
+- drives the emitted daemon, started as `process.execPath packages/gateway/src/cli.ts --port <p> --auth <t> --registry <path>`;
+- uses the emitted `packages/coding-agent/dist/cli.js`;
+- sends real frames on `/attach`;
+- proves process-level claims from the OS process table, never from daemon state.
+
+The negatives that are immune to races are **tripwire files**. A refused fixture names an executable that writes a marker as its first act, so "no process created" means: the marker is absent after a quiet period, the set of `descendantsOf(daemonPid)` is unchanged, and GET /health still answers 200. A positive control in the same daemon proves the oracle can see the tripwire firing.
+
+Tripwire and fixture shapes, chosen so they work under the PATH a spawned child gets (on NixOS that PATH has only `/bin/sh` and `/usr/bin/env`):
+- A tripwire is a `#!/bin/sh` script using only `echo`, redirection and `exit`.
+- Anything that needs timers or signals is a `.js` fixture, which the daemon runs on its own bun.
+- Grandchildren are started with an absolute bun path.
+
+### Each acceptance sentence
+
+| # | Acceptance clause | Evidence today (file › test) | What class 3 adds | File | Done-check |
+|---|---|---|---|---|---|
+| S2 | A registered harness id launches exactly the registered canonical executable in the resolved root; the session appears with the same capability shape and answers a prompt | spawn-fleet-join.e2e › "GET /fleet carries the minted id…", "the renderer journey a discovered session gets completes unchanged over the launched one" (in-process launch); spawn-launch › "the argv the child actually received is buildSpawnArgv's…", "the child runs in the project root…"; session-launcher (composition) | A real `session_spawn` frame. The kernel's view of the child: exe, argv element by element, cwd, pgid, ppid = daemon. Row key set; prompt answered | `spawn-acceptance.e2e.test.ts` | W5-ORIGIN-PARITY |
+| S3 | The identical acceptance script passes unchanged against a discovered session | fleet-attach.e2e › "handshake, attach, prompt…" (discovered) and spawn-fleet-join (launched) — two different scripts in two files | One closure, parameterised only by a session id, run over a spawned and a discovered session in one daemon, with their row and metadata key sets compared | `spawn-acceptance.e2e.test.ts` | W5-ORIGIN-PARITY |
+| S4a | Raw `command` array | sessions-create-command › "POST /sessions with a well-formed command array → 400, nothing spawned" (in-process Hono); wire-spawn-frames › "a command, cwd or env smuggled alongside the ids does not survive the decoder" | `POST /sessions` on the emitted daemon returns 400 with no marker. A `command` key smuggled into `session_spawn` is inert: an unknown harness is answered `unknown_harness`; a known one runs only the registered tripwire, never the smuggled one | `spawn-adversarial.e2e.test.ts` | W5-ADVERSARIAL |
+| S4b | Relative command in config | session-resume.e2e › "a relative path is refused before anything is stat'd" (a direct call) | `cmd: draht` is answered `refused`, with a `draht` tripwire both first on the daemon's PATH and in the daemon's cwd, and neither marker written | same | same |
+| S4c | PATH-shadowing binary | session-resume.e2e › "the resumed process was launched from an ABSOLUTE path, never a PATH lookup" (resume origin only) | Refused when the registry would need PATH (S4b). Positive in the parity suite: the spawned child's exe and argv are the canonical ones, its PATH is the constructed one, and the shim is never run | both files | both tasks |
+| S4d | Project-local `./node_modules/.bin/draht` | executable-path-walk / harness-resolver › "a forbidden root wins…" (the test supplies the forbidden root; the daemon does not, until W4-REGISTRY-SEAM) | `cmd: <declared root>/node_modules/.bin/draht` is answered `refused` "inside a forbidden root", with no marker | adversarial | W5-ADVERSARIAL |
+| S4e–h | Symlinked registry path; mode 0644; foreign uid; symlinked parent | config-load.test (loader called in-process; foreign uid only as a stats-level call on `/etc/passwd`; foreign **parent** via `/tmp`) | Per-frame refusals in **one** daemon whose registry is mutated between cases. Each asserts `refused` **plus the rule and scope** from the message, and no marker. A valid control before and after proves re-reading on every load | adversarial | W5-ADVERSARIAL |
+| S4i | Project config naming an unregistered harness | spawn-docs-contract › "it states plainly that the daemon reads NO project-supplied config" (docs only) | The daemon's cwd is a project root holding `geist.yaml` and `.geist/config.yaml` naming `pwned`. A spawn of it is answered `unknown_harness`, `registry_resync` omits it, and the project's `draht` entry never runs | adversarial | W5-ADVERSARIAL |
+| S5 | Env canaries absent in child and grandchild | session-resume.e2e › "the resumed session answers a prompt, and its environment carries only what was declared" (resume origin; no `GITHUB_TOKEN`, no random name); spawn-launch › "`credentialEnv: []` crosses no credential at all…" | Spawn origin. `envOf(child)` and `envOf(grandchild)` each need a positive control. The planted names are `AWS_SECRET_ACCESS_KEY`, `GITHUB_TOKEN`, `SSH_AUTH_SOCK`, `GEIST_CANARY_<random hex>` and an undeclared `ANTHROPIC_API_KEY`; names and values are both searched | `spawn-posture.e2e.test.ts` | W5-POSTURE |
+| S6 | No project extension and no provider call before a local trust grant; a grant delivered as a renderer or model answer is rejected | spawn-argv-posture.e2e › "the posture subset strips the project's context and never loads its extension" (the test passes the flags, not the daemon); spawn-launch › "a launch into a project the operator marked untrusted is refused…"; gate rule C | Through the daemon, despite a standing `trust.json` true **and** `defaultProjectTrust: always`: the extension never loads (tripwire) and no provider request is recorded until the test prompts. A grant written by a model tool call that a renderer approved is real for a hand-started draht (positive control) and ignored by the next phone spawn | posture | W5-POSTURE |
+| S7 | `AGENTS.md` symlinked outside the root is refused; its canary never reaches the first provider request | context-root-containment.test (coding-agent loader); spawn-argv-posture (parent `AGENTS.md`) | The spawned session's recorded first `systemPrompt` holds the in-root `CLAUDE.md` canary (positive control) and lacks the symlink target's, the parent's and `.draht/SYSTEM.md`'s canaries. A fifo `AGENTS.override.md` does not hang the spawn | posture | W5-POSTURE |
+| S8 | A child ignoring SIGTERM is killed within the stated deadline, with no orphaned group members | spawn-deadlines-stop › "a child that traps TERM is alive before the stop deadline and dead soon after it"; session-resume.e2e › "a child that traps TERM and never binds is killed WITH ITS GRANDCHILD…" (resume origin; NixOS-fragile) | Spawn origin over the wire: `timeout` after the 30 s handshake; the gap between the TERM timestamp and death is about 2 s; the group (Z-filtered) is empty; no process anywhere carries the marker; the daemon answers `/health`, `fleet_resync`, and a second connection's spawn (`refused` / in flight) during the wedge | adversarial | W5-ADVERSARIAL |
+| S9 | Source check plus server-side rejection prove no free-text command field | check-no-free-text-command.test › "the gate is green on the real tree" (not in `check` until W4-CHECK-WIRING); sessions-create-command (in-process) | The gate is in `npm run check` (W4) with rule D. `POST /sessions` with `command` is refused 400 by the **emitted** daemon, with no marker and no new descendant | adversarial | W5-ADVERSARIAL |
+
+### How each assertion is made on each platform
+
+| Claim | Linux (this box, Ubuntu CI) | macOS |
+|---|---|---|
+| Process rows, groups, zombies | `ps -A -ww -o pid=,ppid=,pgid=,stat=,command=` (procps), Z-filtered | same (BSD ps) |
+| Exact argv | `/proc/<pid>/cmdline` split on `\0` | `ps -o command= -p` (fixture paths have no spaces) |
+| The executable actually run | `readlink /proc/<pid>/exe` | `ps -o comm= -p` |
+| Working directory | `readlink /proc/<pid>/cwd` | `lsof -a -d cwd -p <pid> -Fn` |
+| Environment | `/proc/<pid>/environ` (any binary, same uid) | `ps -Eww` (bun/node only; SIP binaries show none), with a positive control required |
+| Descendant scope | `ppid = daemon` (`setsid` does not reparent while the daemon lives); after the daemon dies, search `ps -A` for the marker | same |
+| Foreign-uid registry **file** | `sudo -n install -o 0 -g 0 -m 0600` into a 0700 directory (CI). Blocked here (no_new_privs); hardlinks are blocked by `protected_hardlinks=1` | hardlink a service-owned inode from `/private/var/db` into a 0700 directory |
+| Foreign-uid registry **parent** | our own 0600 file in `realpath(/tmp)` (root, 1777) → `foreign-owner on parent` | `realpath(/tmp)` = `/private/tmp` (the loader refuses the `/tmp` link itself) |
+| "No process created" | tripwire file plus an unchanged descendant set. There is no exec oracle without root (no audit or eBPF) | same (dtrace is blocked by SIP) |
+| Socket path | ≤108 bytes; short `/tmp/<prefix>` directories | ≤104 bytes |
+
+If the foreign-uid **file** route is unavailable, the case fails when `CI` is set and is skipped locally with a printed reason. A skip on this box is not evidence; the evidence is CI or macOS. Every registry path is `realpath`'d before use, because the loader has no exemption for root-owned links.
+
+## Wave 5 ordering constraints
+
+- W5-HELPERS lands first. The three suites then run in parallel: each has its own daemon, temp prefix and `uniqueMarker`, and none shares a port or directory.
+- The orchestrator builds packages/coding-agent once before dispatching. Suites build only if `dist/cli.js` is absent. Do not run them alongside session-resume.e2e or spawn-argv-posture.e2e, which rebuild unconditionally.
+- No wave-5 task edits production code, `attach-journey.ts` (`FROZEN_ROW_KEYS` is the R36-SPAWN.8 oracle), `spawn-fleet-join.e2e.test.ts`, `session-resume.e2e.test.ts` or `fleet-attach.e2e.test.ts`.
+- Test literals are written out (`30000`, `2000`, `"/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"`, the nine argv elements), never imported. An import would agree with any later change.
+- CI budget: the gateway shard runs about 384 s of a 30-minute limit, and these three suites add an estimated 3-4 minutes. The wedged-child case alone takes 32 s or more.
+- `afterAll` reaps only recorded pgids (`reapPgids`), plus `pkill -f` on this run's marker. Spawned sessions are detached and outlive the daemon.
+- Closing requirements in REQUIREMENTS.md, ROADMAP.md and STATE.md is the orchestrator's job, on main, after an adversarial reviewer re-runs every mutation matrix.
+
+## Wave 5 collision hotspots
+
+| File | Owner |
+|---|---|
+| `helpers/process-table.ts`, new `helpers/spawn-daemon.ts`, `helpers-process-table.test.ts`, new `helpers-spawn-daemon.test.ts` | W5-HELPERS only. Existing exports keep their behaviour: `psRows`, `envOf`, `assertEnvAbsent`, `liveGroupMembers`, `descendantsOf`, `reapPgids`, `uniqueMarker`. |
+| `spawn-acceptance.e2e.test.ts` | W5-ORIGIN-PARITY |
+| `spawn-adversarial.e2e.test.ts` | W5-ADVERSARIAL |
+| `spawn-posture.e2e.test.ts` | W5-POSTURE |
+| `packages/coding-agent/dist` | read-only for every wave-5 task (orchestrator builds) |
+
+## Wave 5 tasks
+
+### W5-HELPERS — Kernel-view oracles and an emitted-daemon harness
+
+- **Wave** 5 · **Requirement** R36-SPAWN.8 · **Evidence class** 3 (infrastructure) · **Depends on** wave 4 landed
+- **Files** `packages/gateway/src/__tests__/helpers/process-table.ts`, new `packages/gateway/src/__tests__/helpers/spawn-daemon.ts`, `packages/gateway/src/__tests__/helpers-process-table.test.ts`, new `packages/gateway/src/__tests__/helpers-spawn-daemon.test.ts`
+- **Test** both helper test files
+- **Exports, may add:**
+  - in `process-table.ts`: `argvOf(pid): string[]`, `exeOf(pid): string`, `cwdOf(pid): string`, `foreignOwnedFileIn(dir): {path} | {unavailable: string}`, each with explicit per-platform branches as in the table above;
+  - in `spawn-daemon.ts`:
+    - `shortBase(prefix)` — a realpath'd `mkdtemp` under `/tmp`;
+    - `writeRegistry(path, config, mode = 0o600)` — JSON written as YAML, in a 0700 parent;
+    - `shTripwire(path, marker)` and `jsFixture(path, source)`;
+    - `startEmittedDaemon({registry?, env, cwd?})` → `{pid, httpBase, wsBase, stderr, dispose}`. It runs `process.execPath` against the CLI, waits for "draht-gateway listening", and builds its environment from scratch.
+    - `AttachClient` — `open`, `hello`, `send`, `waitFor`, `closed`, `close`;
+    - `descendantPids(pid)`.
+- **Exports, must not change:** any existing export.
+
+Self-tests:
+
+- `argvOf`, `exeOf` and `cwdOf` on a bun child that is spawned **through a symlink to bun** with a known argv and cwd: `exeOf` returns the realpath while argv[0] is the link.
+- `envOf` sees a planted name.
+- `foreignOwnedFileIn` returns a file whose `lstat` uid is not ours, inside a directory we own, or `unavailable`. It throws if `CI` is set and the result is `unavailable`.
+- `writeRegistry`'s output is accepted by `loadGeistConfigFile`. This is the positive control for the writer.
+- `shTripwire` writes its marker when run under `env -i PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`, which proves it needs no coreutils.
+- `startEmittedDaemon` answers `/health` with 200, and after `dispose` its pid is not alive per `ps`.
+
+**Done-check:** `cd /home/nix/work/draht-p36/packages/gateway && env -u DRAHT_PERMISSION_MODE bun test src/__tests__/helpers-process-table.test.ts src/__tests__/helpers-spawn-daemon.test.ts` → 0 fail. On this box the foreign-file probe reports unavailable, with a reason.
+
+**Mutations to kill:**
+- `exeOf` returns argv[0] → the symlinked-bun case fails.
+- `cwdOf` returns `process.cwd()` → fails.
+- `writeRegistry` writes 0644 → the loader control fails.
+- Isolation sanity: drop the Z filter from `liveGroupMembers` → the existing zombie case fails.
+
+### W5-ORIGIN-PARITY — One script, two origins, the kernel's view of the spawn
+
+- **Wave** 5 · **Requirement** R36-SPAWN.8, R36-SPAWN.1, R36-SPAWN.2 · **Evidence class** 3 · **Depends on** W5-HELPERS
+- **Files** new `packages/gateway/src/__tests__/spawn-acceptance.e2e.test.ts`
+- **Test** that file
+- **Exports** none
+
+**Fixture.**
+- One daemon.
+- Registry: `draht → dist/cli.js` and `codex → shTripwire`; default `draht`; one project `sp`; `approvedRoots [REPO_ROOT, base]`.
+- Daemon environment:
+  - PATH with a shim directory first, holding `draht` and `node` tripwires;
+  - `DRAHT_BIN=<tripwire>` — the resume seam, which a launch must ignore;
+  - `DRAHT_STUB_PROVIDER=1` and `DRAHT_RESUME_ENV_ALLOW=DRAHT_STUB_PROVIDER`;
+  - HOME, TMPDIR and `DRAHT_CODING_AGENT_DIR` all inside `base`.
+- A discovered session started by hand: `node dist/cli.js --attachable --mode rpc --provider draht-stub --model stub-1` in project `dp`, with the same agent directory. It is found by its `cwd` in GET /fleet.
+
+**Assertions.**
+1. `server_hello` advertises `session-spawn` and `registry`. `registry_resync` lists harnesses exactly `[{id:"draht", isDefault:true}]` and projects `[{id:"sp"…}]`, and the raw frame text contains neither cmd path.
+2. `session_spawn {draht, sp}` is answered `spawned` with a uuid. For that pid:
+   - the GET /fleet row has the same id;
+   - `ps` shows it alive, not a zombie, with pgid equal to pid and ppid equal to the daemon's pid;
+   - `exeOf` is `realpath(process.execPath)`;
+   - `argvOf` is the literal nine-element array after the interpreter and the canonical `cli.js`;
+   - `cwdOf` is the canonical `sp` root;
+   - `envOf(pid).PATH` equals the literal constructed PATH and lacks the shim directory, with `DRAHT_STUB_PROVIDER` as the positive control;
+   - every shim marker and the `DRAHT_BIN` marker is absent.
+3. `const ACCEPTANCE = (id) => attachJourney({wsBase, token, sessionId: id, prompt, expectOutput: "stub: " + prompt})`, run through `test.each` over the discovered id and the spawned id. Both raw rows' key sets equal `FROZEN_ROW_KEYS` and each other. `origin`, `attachable`, `resumable` and the `session_metadata` key set are equal. Both ids match the uuid pattern.
+4. `session_spawn {codex}` is answered `unknown_harness` / "not spawnable" in under 5 s, and the codex marker is absent.
+5. Two connections ask for one pair 100 ms apart. Exactly one is `spawned` and one is `refused` / "in flight", and exactly one new descendant appears.
+6. GET /health answers 200 after every case.
+
+**Done-check:** `cd /home/nix/work/draht-p36/packages/gateway && env -u DRAHT_PERMISSION_MODE bun test src/__tests__/spawn-acceptance.e2e.test.ts` → 0 fail, on this box and on macOS or CI.
+
+**Mutations to kill:**
+- `launch()` uses `this.#resolveExecutable()` → the `DRAHT_BIN` marker and the argv assertion.
+- Drop `--context-root` from `buildSpawnArgv` → argv.
+- A per-connection launcher → case 5.
+- Remove `V1_SPAWNABLE_HARNESS_IDS` → cases 1 and 4.
+- Add a key to `AttachableSessionSchema` → case 3.
+- Isolation sanity: remove `--attachable` from `buildSpawnArgv` → cases 2 and 3 fail.
+
+### W5-ADVERSARIAL — Every refusal fixture, the wedged child, the server-side command refusal
+
+- **Wave** 5 · **Requirement** R36-SPAWN.2, R36-SPAWN.3, R36-SPAWN.7, R36-SPAWN.8, R36-SPAWN.1 · **Evidence class** 3 · **Depends on** W5-HELPERS
+- **Files** new `packages/gateway/src/__tests__/spawn-adversarial.e2e.test.ts`
+- **Test** that file
+- **Exports** none
+
+**Fixture.**
+- Daemon A runs with `--registry <base>/reg/config.yaml`, its cwd set to project `px`, and the shim directory first on its PATH.
+- `px` contains `geist.yaml` and `.geist/config.yaml` that declare `pwned → tripwire C` and their own `draht → tripwire C`, plus `./draht` (tripwire S).
+- Tripwire A is the registry's control harness. Tripwire B is the smuggled command. Each tripwire has its own marker.
+
+**Running each case.** Every case opens a fresh connection, takes a descendant snapshot, sends one frame, then waits 500 ms. It asserts:
+- the code;
+- the message matches the **rule and scope**;
+- the marker is absent;
+- the descendant set is unchanged;
+- GET /health is 200.
+
+**Cases, in order.**
+1. Control (valid 0600, `draht → A`) → `spawn_failed`, and marker A is present. This is the positive control for the oracle.
+2. 0644 → `refused` `(mode on file`.
+3. The file replaced by a symlink to a valid 0600 file → `(symlink on file`.
+4. `reg/` renamed away and `reg` made a symlink to it → `(symlink on parent`.
+5. A foreign-owned file (helper; CI/macOS) → `(foreign-owner on file`.
+6. `cmd: draht` → `refused` / absolute. Markers S and shim absent.
+7. `cmd` in `px/node_modules/.bin/draht` → "inside a forbidden root".
+8. `cmd` through a symlinked directory → "symlink on the path".
+9. `cmd` in a 0775 directory → refused as writable by others.
+10. `session_spawn {pwned, px}` → `unknown_harness`. `registry_resync` omits `pwned`. Marker C absent.
+11. `session_spawn {draht, px, command:[sh, tripwireB]}` against the control registry → `spawn_failed`. Marker A present, marker B absent.
+12. `session_spawn {nope, px, command:[…]}` → `unknown_harness`, marker B absent.
+13. `POST /sessions {command:[…B]}` → 400 `/command is not accepted/`, marker B absent.
+14. Wedged child.
+    - `draht → wedge.js` traps TERM, appending `Date.now()` to a term log, and starts a TERM-ignoring bun grandchild carrying the marker in the same group. It writes both pids atomically, prints one stderr line, and never binds.
+    - While it runs: both pids are alive and in pgid equal to the child pid; `/health` answers 200; another connection's `fleet_resync` is answered; a second connection's spawn of the same pair is `refused` / "in flight".
+    - The answer is `timeout`, its message contains `30000 ms`, and elapsed time is between 25 and 90 s.
+    - The time from the term-log entry to `liveGroupMembers(pgid)` being empty is at least 1800 ms and at most 3500 ms.
+    - No `ps -A` row carries the marker.
+15. Restore the control → `spawn_failed`, marker A present. This proves every load re-reads and nothing was cached from a refused state.
+16. Daemon B with `--registry <realpath(/tmp)>/<marker>.yaml` (ours, 0600) → `(foreign-owner on parent`.
+17. Starting a daemon with `--registry rel/x.yaml` exits non-zero, with stderr naming `--registry`.
+
+**Done-check:** `cd /home/nix/work/draht-p36/packages/gateway && env -u DRAHT_PERMISSION_MODE bun test src/__tests__/spawn-adversarial.e2e.test.ts` → 0 fail on CI and macOS. On this box: 0 fail, with only case 5 skipped and its reason printed.
+
+**Mutations to kill:**
+- Loader mode mask `0o077` → `0o022` → case 2.
+- Delete the loader's symlink check → cases 3 and 4. They refuse on `mode` instead, so only the rule assertion catches it.
+- Hoist the registry read into the constructor → case 15.
+- `userRegistry().load` rethrows raw → every refusal becomes `spawn_failed`.
+- Drop the project-root union → case 7.
+- `stop()` signals the bare pid → case 14 (the grandchild survives).
+- `DEFAULT_STOP_DEADLINE_MS = 0` → case 14's lower bound.
+- Isolation sanity: in DST, delete the `RegistryFileRefusedError` throw for `foreign-owner` on the parent → case 16 fails.
+
+### W5-POSTURE — Untrusted, scoped, root-contained: through the daemon
+
+- **Wave** 5 · **Requirement** R36-SPAWN.4, R36-SPAWN.5, R36-SPAWN.6 · **Evidence class** 3 · **Depends on** W5-HELPERS
+- **Files** new `packages/gateway/src/__tests__/spawn-posture.e2e.test.ts`
+- **Test** that file
+- **Exports** none
+
+**Fixture.**
+- Agent directory: `trust.json {A: true}`, `settings.json {"defaultProjectTrust":"always"}`, and a user `AGENTS.md` canary (exempt).
+- Project A contains:
+  - `.draht/extensions/tripwire.ts`: its factory writes tripwire A, and on `session_start` it calls `pi.sendUserMessage(...)`. Both APIs exist in `core/extensions/types.ts`.
+  - `.draht/SYSTEM.md` canary;
+  - `AGENTS.md`, a symlink to `outside/secret.md` (out-of-root canary);
+  - `CLAUDE.md` with the in-root canary;
+  - `AGENTS.override.md`, a fifo;
+  - a parent-directory `AGENTS.md` canary.
+- Project B has the same extension and SYSTEM.md shape, with its own markers.
+- Daemon environment:
+  - `DRAHT_PERMISSION_MODE=ask`;
+  - `DRAHT_STUB_PROVIDER=1`;
+  - `DRAHT_STUB_RECORD_CONTEXT=<rec>`;
+  - `DRAHT_STUB_TOOL_CALLS` = one bash call that runs `printf` to write `{A:true, B:true}` to `trust.json`, then `exec <abs bun> -e '<dump env to file; stay alive>' <marker>`;
+  - `DRAHT_RESUME_ENV_ALLOW=DRAHT_STUB_PROVIDER,DRAHT_STUB_TOOL_CALLS,DRAHT_STUB_RECORD_CONTEXT`;
+  - canaries: `AWS_SECRET_ACCESS_KEY`, `GITHUB_TOKEN`, `SSH_AUTH_SOCK`, `GEIST_CANARY_<hex>=<random>`, and `ANTHROPIC_API_KEY`.
+
+**Assertions.**
+1. Positive control: a hand-started `node dist/cli.js -p hi --provider draht-stub --model stub-1 --no-session` in A writes tripwire A. Then delete the tripwire.
+2. `session_spawn {draht, A}` is answered `spawned` within the deadline, which also proves the fifo did not hang it. After the row appears and a 3 s quiet period: tripwire A is absent and `<rec>` is absent (no provider call without a prompt).
+3. A journey with a prompt that answers `permission_request` with `approve`. Then `<rec>`:
+   - contains the in-root `CLAUDE.md` canary and the user `AGENTS.md` canary;
+   - lacks the `secret.md`, parent and `SYSTEM.md` canaries.
+
+   Tripwire A is still absent.
+4. `envOf(child)` with positive control `DRAHT_STUB_PROVIDER=1`: all five canaries are absent by name and by value, and PATH is the literal constructed one. The grandchild is found through `descendantsOf(child)` by its marker, and `envOf(grandchild)` meets the same conditions. The grandchild's own dump agrees with what `/proc` shows.
+5. `trust.json` now records B as true. Positive control: a hand-started draht in B writes tripwire B (the grant is real for local sessions); delete it. Then `session_spawn {draht, B}` → after a quiet period tripwire B is absent. Prompt it and leave the ask unanswered; `<rec>` (reset before) lacks B's `SYSTEM.md` canary.
+
+**Done-check:** `cd /home/nix/work/draht-p36/packages/gateway && env -u DRAHT_PERMISSION_MODE bun test src/__tests__/spawn-posture.e2e.test.ts` → 0 fail on this box and on macOS or CI.
+
+**Mutations to kill:**
+- Remove `--no-approve` from `buildSpawnArgv` → cases 2, 3 and 5.
+- Remove `--context-root` → the parent canary in case 3.
+- `credentialEnv: undefined` in `launch()` → `ANTHROPIC_API_KEY` crosses (case 4).
+- `...process.env` in `buildChildEnvironment` → case 4.
+- resource-loader `lstatSync` → `statSync` → the `secret.md` canary.
+- Isolation sanity: remove `--no-approve` in DST and rebuild coding-agent there → case 2 fails.
+
+### W5-CONSOLE-PICKER — Pick project, pick harness, on the phone (the Goal sentence)
+
+- **Wave** 5 · **Requirement** R36-SPAWN.1, R36-SPAWN.8 (ROADMAP Phase 36 Goal: "Oskar starts a new session from his phone — pick project, pick harness — and it launches on the Mac and attaches through exactly the same path as a discovered session") · **Evidence class** 3 · **Depends on** wave 4 landed (the daemon advertises `session-spawn`/`registry` when started with `--registry`)
+- **Files** `packages/geist-console/bundle/console.js`, `packages/geist-console/bundle/console.css`, `packages/geist-console/bundle/index.html` (only if markup must change), new `scripts/geist-console-spawn-picker.e2e.test.mjs`. Root `package.json` is orchestrator-only (it will add your file to `test:scripts:serial`).
+
+Today the served console (`bundle/console.js`, plain ES modules served byte for byte) lists the fleet, opens attachable sessions, streams, prompts, and answers permissions. It has NO way to start a session. Its header lists seven load-bearing rules; commit ddc09a745 set the principle "the console stops offering what it cannot do".
+
+Build, inside the existing structure and style:
+1. A "New session" affordance on the fleet view, rendered ONLY when the current connection's `server_hello.capabilities` contains BOTH `session-spawn` and `registry`. With either absent there is no such element in the DOM (not merely hidden by CSS).
+2. Opening it sends `registry_resync` on the existing socket and renders the `registry` frame: projects (show `name`, plus `root` as secondary text) and harnesses (preselect the one with `isDefault`). The choices are a closed set from the frame: buttons, radios or `<select>`. There is NO free-text input anywhere in the picker: no `<input type=text>`, `<textarea>`, or contenteditable. `scripts/check-no-free-text-command.mjs` must stay green; read it to learn what it scans. An empty registry (both arrays empty — a refused or unparsable registry answers exactly that) renders an explicit "no projects available on this machine" state, never a blank panel.
+3. Submitting sends exactly `{type:"session_spawn", harnessId, projectId}` and disables the submit until the one `session_spawned` answer arrives (a double tap must not send twice). On `ok:true` with a `sessionId`: open that session through the SAME path a discovered session uses (`openSession`), once the fleet model has the row (it arrives via `fleet_delta`; do not invent a row). On a refusal: render `code` and `message` as TEXT (`textContent`, never `innerHTML`) and keep the picker usable.
+4. Phone viewport first (look at how the existing code uses `VIEWPORTS` and `syncViewport`).
+5. Keep comment density to the file's own style. Add to the header list only if a new rule is genuinely load-bearing.
+
+E2E `scripts/geist-console-spawn-picker.e2e.test.mjs` (`node --test`; model it on `scripts/geist-console-fleet-honesty.e2e.test.mjs` and `scripts/geist-console-permission.e2e.test.mjs`, using `scripts/browser-harness.mjs`). It runs the REAL emitted daemon (`bun packages/gateway/src/cli.ts ... --registry <abs path>`) and the emitted `packages/coding-agent/dist/cli.js` with the keyless stub provider (`DRAHT_STUB_PROVIDER=1`, crossing via `DRAHT_RESUME_ENV_ALLOW=DRAHT_STUB_PROVIDER`). The registry is a 0600 JSON-as-YAML file in a 0700 dir; harness `draht` → the canonical `dist/cli.js`; one project. Read how `packages/gateway/src/__tests__/spawn-fleet-join.e2e.test.ts` (after wave 4) writes its registry and environment, and reuse that shape; do not import gateway test helpers into a scripts test. Cases:
+   a. Daemon WITHOUT a registry file at the path: the fleet view has no "New session" element (DOM query returns null).
+   b. Daemon WITH the registry: tap New session → the project and the default harness are shown → submit → the page ends up attached to a NEW session (its id is not one present before), and a prompt typed into the composer gets the stub's answer (`stub: <prompt>`) rendered. The load-bearing assertion is that the session id the page attached to is in `GET /fleet` with a live pid, verified OUTSIDE the browser (fetch with the operator token) and with `ps`/`kill -0` on the pid.
+   c. A refusal renders as text: make the registry file 0644 between cases (or name a project root that does not exist); submit → the picker shows `refused` and a message naming the rule, nothing new appears in `GET /fleet`, and the picker can be used again.
+   d. No free-text: inside the open picker, `document.querySelectorAll('input:not([type=radio]):not([type=checkbox]):not([type=hidden]), textarea, [contenteditable]')` scoped to the picker is empty.
+   Clean up every spawned pid's process group in `after` (spawned sessions are detached and outlive the daemon); record pids from GET /fleet.
+- **Done-check:** `cd /home/nix/work/draht-p36 && LD_LIBRARY_PATH=$(cat /home/nix/work/chromium-ldpath.txt) node --test --test-timeout=300000 scripts/geist-console-spawn-picker.e2e.test.mjs` → 0 fail. ALSO re-run the three existing console suites, which must stay green (`scripts/geist-console-bundle.e2e.test.mjs` was 29/29 at baseline, plus `geist-console-fleet-honesty.e2e.test.mjs` and `geist-console-permission.e2e.test.mjs`), and `node scripts/check-no-free-text-command.mjs` → exit 0. The LD_LIBRARY_PATH is needed only on this NixOS box (Chromium shared libs).
+- **Mutations to kill:** render the affordance unconditionally → case a; send `session_spawn` without awaiting the answer (no disable) → a double-click test you add in b sends two frames (count frames with a WebSocket wrapper installed via the harness, or count new sessions in GET /fleet); render the refusal message with `innerHTML` → a case-c message containing `<b>` markup renders as an element (plant one through a project `name` field, which is neutralized text, and assert it shows as literal text); open the session by a fabricated row instead of waiting for the fleet → case b's live-pid check.
+
+> Added by the orchestrator: the ROADMAP Goal sentence ("pick project, pick harness") needs a renderer, and the served console had no way to start a session.
+
+---
+
+## Waves 4-5 open questions
+
+- **36.1: does resume get `--no-approve`?** Still open. Landing site: the argv array in `SessionSpawner.resume()`. W5-POSTURE case 5 will show the exposure concretely: a grant written by a model and approved by a renderer is honoured by a hand-started (and therefore a resumed) session.
+- **36.2: local re-grant path.** Deferred. No landing site exists; wave 4 docs record "untrusted for its whole life".
+- **36.3: `auth.json` reachable by the child.** Landing site: `child.DRAHT_CODING_AGENT_DIR = options.agentDir` in `buildChildEnvironment`. R36-SPAWN.4 cannot close while this is open.
+- **36.4: is the child detached?** Landing site: `detached: this.#detached` in `#startAndAwaitSocket`.
+- **36.5: harden `geist-acp`.** Landing site: `packages/geist-acp/src/acp-harness-session.ts:462`. Gate rule D covers `packages/gateway/src` only.
+- **One `harness.agents` map, two launch contracts.** It is ACP stdio for `geist-acp` and draht CLI plus socket for spawn. D4.7 points the example's `draht` entry at the CLI, which is wrong for Phase 38's `geist-acp`. Landing site: a per-entry kind on `AgentLaunchSpecSchema`, or a separate `spawn:` block.
+- **An installed draht cannot be declared.** `~/.local/bin/draht` → `~/.draht/runtime/current/draht`, and `current` is itself a link; the no-follow rule refuses both. Landing site: `followSymlinks: false` in `resolveHarnessExecutable`, or the `install.sh` layout.
+- **How wide is "project-local" (D4.4)?** Every declared project root, or only the requested one. Landing site: the forbidden-root union in `resolveHarnessLaunch`.
+- **`registry` answers empty for a refused registry and has no error field.** Landing site: `RegistryFrameSchema` / `#emitRegistry`. That is a wire change, and it is due before the 1.0 freeze.
+- **`session_spawn` strips unknown keys rather than refusing them** (proven inert in W5-ADVERSARIAL case 11). Landing site: `SessionSpawnFrameSchema.strict()` plus a regenerated corpus. Recommendation: leave it.
+- **No phone picker.** The ROADMAP Goal says "pick project, pick harness", and the console picker (the original W5-CONSOLE-PICKER) is not in this brief. Landing site: `packages/geist-console` plus `scripts/geist-console-spawn-picker.e2e.test.mjs` and root `test:scripts:serial`.
+- **On NixOS, spawned sessions get no coreutils, git or rg on PATH.** Landing site: `DEFAULT_RESUME_PATH`, or operator `DRAHT_RESUME_PATH`.
+- **A harness with no `credentialEnv` spawns a session that cannot answer** (wave 3, still open). Landing site: a one-line refusal in `resolveHarnessLaunch`.
+- **Assumption: passwordless `sudo -n` on the Blacksmith gateway shard.** Landing site: W5-HELPERS `foreignOwnedFileIn`. If it is absent, R36-SPAWN.3's file-scope foreign-uid clause has only macOS evidence.
+
+## Requirement closure map
+
+| Requirement | Closed at class 3 by | Residual that keeps it open |
+|---|---|---|
+| R36-SPAWN.1 | W5-ORIGIN-PARITY case 2 (a real frame starts a process); W4 inverted tripwire; gate rule D in `check` (single spawn site) | The dormant `geist-acp` launch outside the daemon (36.5) — "only spawn path" is daemon-scoped |
+| R36-SPAWN.2 | W5-ADVERSARIAL cases 6-9; W5-ORIGIN-PARITY case 2 (exe, argv and cwd from `/proc` or `ps`) | "Race-safely verified at launch": the walk runs per frame microseconds before `spawn`, with no re-check at exec; an installed draht is undeclarable |
+| R36-SPAWN.3 | W5-ADVERSARIAL cases 2-5, 10, 15, 16 | The file-scope foreign uid is evidenced only on CI or macOS; the "project config" clause holds vacuously by design (stated in §15.2) |
+| R36-SPAWN.4 | W5-POSTURE case 4 (child and grandchild; `credentialEnv` scoping) | **Open:** the `auth.json` file half (DECISIONS-PENDING 36.3) |
+| R36-SPAWN.5 | W5-POSTURE cases 1-3 and 5; gate rule C | **Open for non-spawn origins:** resume posture (36.1) and model-writable `trust.json`; the re-grant path is deferred (36.2) |
+| R36-SPAWN.6 | W5-POSTURE cases 2-3 (symlink, out-of-root ancestor, fifo, canary absent, in-root present) | None for the geist-spawn form |
+| R36-SPAWN.7 | W5-ADVERSARIAL case 14 (handshake, stop, group, daemon responsive) | The spawn and first-output deadlines are witnessed only at class 2 (not configurable on the emitted daemon); orphans after a daemon restart (36.4) |
+| R36-SPAWN.8 | W5-ORIGIN-PARITY case 3 (identical script, frozen row); W5-ADVERSARIAL cases 11-13; W4-CHECK-WIRING | Picker UI absent (Goal sentence); unknown keys stripped, not refused (proven inert) |

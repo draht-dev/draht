@@ -810,8 +810,15 @@ export class ExtensionRunner {
 		return undefined;
 	}
 
+	/** Markdown transformers in extension load order; each one leaves Markdown of unregistered surfaces unchanged. */
 	getMarkdownTransformers(): MarkdownTransformer[] {
-		return this.extensions.flatMap((ext) => (ext.markdownTransformer ? [ext.markdownTransformer] : []));
+		return this.extensions.flatMap((ext): MarkdownTransformer[] => {
+			if (!ext.markdownTransformer) return [];
+			const { transformer, messageTypes } = ext.markdownTransformer;
+			return [
+				(markdown, context) => (messageTypes.has(context.messageType) ? transformer(markdown, context) : markdown),
+			];
+		});
 	}
 
 	/** Renderers of calls to `toolName`: extension resolvers in load order, then `base`. */
@@ -1093,10 +1100,9 @@ export class ExtensionRunner {
 		const boundaryHandlers = snapshotEventHandlers(this.extensions, baseEvent.type);
 		if (baseEvent.type === "agent_before_settle") {
 			// Verify the final state after other settlement handlers have made their edits.
-			const completionChecksPath = `${BUILTIN_PATH_PREFIX}completion-checks`;
+			const finalChecks = [`${BUILTIN_PATH_PREFIX}completion-checks`, `${BUILTIN_PATH_PREFIX}budgets`];
 			boundaryHandlers.sort(
-				(left, right) =>
-					Number(left.ext.path === completionChecksPath) - Number(right.ext.path === completionChecksPath),
+				(left, right) => finalChecks.indexOf(left.ext.path) - finalChecks.indexOf(right.ext.path),
 			);
 		}
 		for (const { ext, handlers } of boundaryHandlers) {

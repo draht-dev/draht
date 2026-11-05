@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { syncBudgetRuntime } from "./sync-budgets-runtime.mjs";
 
 let drifted = false;
 for (const file of ["checks-runtime.cjs", "git-safety.cjs"]) {
@@ -16,5 +17,6 @@ for (const file of ["checks-runtime.cjs", "git-safety.cjs"]) {
 		} else writeFileSync(target, source);
 	}
 }
+if (!await syncBudgetRuntime({ check: process.argv.includes("--check") })) drifted = true;
 if (drifted) process.exitCode = 1;
 else console.log("Checks runtime synchronized across all three hosts");

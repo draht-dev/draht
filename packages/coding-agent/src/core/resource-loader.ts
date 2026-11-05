@@ -9,7 +9,7 @@ import type { ResourceDiagnostic } from "./diagnostics.ts";
 export type { ResourceCollision, ResourceDiagnostic } from "./diagnostics.ts";
 
 import { comparablePath, realPathStrict } from "../utils/canonical-path.ts";
-import { isLocalPath, resolvePath } from "../utils/paths.ts";
+import { isLocalPath, isPathWithin, pathsEqual, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
 import { createEventBus, type EventBus } from "./event-bus.ts";
 import {
@@ -26,7 +26,12 @@ import type {
 	LoadExtensionsResult,
 } from "./extensions/types.ts";
 import { findGitPaths } from "./footer-data-provider.ts";
-import { DefaultPackageManager, type PathMetadata, type ResolvedResource } from "./package-manager.ts";
+import {
+	DefaultPackageManager,
+	type PackageInstallFailure,
+	type PathMetadata,
+	type ResolvedResource,
+} from "./package-manager.ts";
 import type { PromptTemplate } from "./prompt-templates.ts";
 import { loadPromptTemplates } from "./prompt-templates.ts";
 import { SettingsManager } from "./settings-manager.ts";
@@ -35,6 +40,7 @@ import { loadSkills } from "./skills.ts";
 import {
 	BUILTIN_PATH_PREFIX,
 	createSourceInfo,
+	getResourcePathKey,
 	getSyntheticPathSource,
 	isSyntheticPath,
 	type SourceInfo,
@@ -95,6 +101,28 @@ function collectExtensionPackageWarnings(
 		});
 	}
 	return warnings;
+}
+
+/** Describe a package that was skipped because it could not be installed, including how to drop it. */
+function describePackageInstallFailure(failure: PackageInstallFailure): string {
+	const hint =
+		failure.scope === "temporary"
+			? "Check the source and try again."
+			: `Run "${APP_NAME} remove ${failure.source}${failure.scope === "project" ? " --local" : ""}" to remove it from settings.json.`;
+	return `failed to install (${failure.message}). ${hint}`;
+}
+
+/** One-line startup warning for a package that could not be installed. */
+export function formatPackageInstallWarning(failure: PackageInstallFailure): string {
+	return `Extension package "${failure.source}": ${describePackageInstallFailure(failure)}`;
+}
+
+function collectPackageInstallWarnings(
+	...failures: Array<PackageInstallFailure[] | undefined>
+): Array<{ path: string; warning: string }> {
+	return failures.flatMap((entries) =>
+		(entries ?? []).map((failure) => ({ path: failure.source, warning: describePackageInstallFailure(failure) })),
+	);
 }
 
 function mergeExtensionWarnings(
@@ -277,12 +305,12 @@ function findShadowedContextFile(cwd: string): string | undefined {
 	const mainRepoRoot = dirname(commonGitDir);
 	// False for an ordinary repo, where the two are the same dir, and for a sibling
 	// worktree (`git worktree add ../feat`), whose main repo is not an ancestor.
-	if (!worktreeRoot.startsWith(`${mainRepoRoot}${sep}`)) return undefined;
+	if (!isPathWithin(mainRepoRoot, worktreeRoot) || pathsEqual(worktreeRoot, mainRepoRoot)) return undefined;
 	// dirname of the common git dir is the main worktree root only when that dir is
 	// itself checked out from the same repo. In a bare layout (`proj/.bare` +
 	// `proj/main`) it is just the directory holding `.bare`, which tracks nothing; a
 	// submodule's gitdir has no `commondir`, so it lands under `.git/modules`.
-	if (comparablePath(join(mainRepoRoot, ".git")) !== commonGitDir) return undefined;
+	if (!pathsEqual(comparablePath(join(mainRepoRoot, ".git")), commonGitDir)) return undefined;
 	const worktreeContextFile = loadContextFileFromDir(worktreeRoot);
 	return worktreeContextFile ? join(mainRepoRoot, basename(worktreeContextFile.path)) : undefined;
 }
@@ -341,7 +369,7 @@ export function loadProjectContextFiles(options: {
 		const isShadowed =
 			shadowedContextFile !== undefined &&
 			contextFile !== null &&
-			join(comparablePath(currentDir), basename(contextFile.path)) === shadowedContextFile;
+			pathsEqual(join(comparablePath(currentDir), basename(contextFile.path)), shadowedContextFile);
 		if (contextFile && !isShadowed && !seenPaths.has(contextFile.path)) {
 			ancestorContextFiles.unshift(contextFile);
 			seenPaths.add(contextFile.path);
@@ -626,6 +654,10 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const cliExtensionPaths = await this.packageManager.resolveExtensionSources(this.additionalExtensionPaths, {
 			temporary: true,
 		});
+		const installWarnings = collectPackageInstallWarnings(
+			resolvedPaths.installFailures,
+			cliExtensionPaths.installFailures,
+		);
 		// Kept on the instance so post-reload passes (extendResources) can still resolve package metadata.
 		this.resourceMetadataByPath = new Map();
 		const metadataByPath = this.resourceMetadataByPath;
@@ -680,7 +712,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 		const packageWarnings = collectExtensionPackageWarnings(extensionPaths, metadataByPath);
 		const extensionsResult = await this.loadFinalExtensionSet(extensionPaths, preTrustExtensions);
-		mergeExtensionWarnings(extensionsResult, packageWarnings);
+		mergeExtensionWarnings(extensionsResult, [...installWarnings, ...packageWarnings]);
 		for (const p of this.additionalExtensionPaths) {
 			if (isLocalPath(p)) {
 				const resolved = this.resolveResourcePath(p);
@@ -793,8 +825,12 @@ export class DefaultResourceLoader implements ResourceLoader {
 			]),
 		);
 		const packageWarnings = collectExtensionPackageWarnings(extensionPaths, metadataByPath);
+		const installWarnings = collectPackageInstallWarnings(
+			resolvedPaths.installFailures,
+			cliExtensionPaths.installFailures,
+		);
 		const extensionsResult = await loadExtensionsCached(extensionPaths, this.cwd, this.eventBus);
-		mergeExtensionWarnings(extensionsResult, packageWarnings);
+		mergeExtensionWarnings(extensionsResult, [...installWarnings, ...packageWarnings]);
 		if (!options.includeInlineFactories) {
 			return extensionsResult;
 		}
@@ -810,6 +846,10 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 	private resolveExtensionLoadPath(path: string): string {
 		return isSyntheticPath(path) ? path : resolvePath(path, this.cwd, { normalizeUnicodeSpaces: true });
+	}
+
+	private getExtensionPathKey(path: string): string {
+		return getResourcePathKey(this.resolveExtensionLoadPath(path));
 	}
 
 	/** Load extension paths: files from disk and `builtin:<name>` paths from the built-in extensions. */
@@ -854,26 +894,26 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const preloadedByPath = new Map(
 			preloaded
 				.filter((extension) => !extension.path.startsWith("<inline:"))
-				.map((extension) => [extension.resolvedPath, extension]),
+				.map((extension) => [getResourcePathKey(extension.resolvedPath), extension]),
 		);
 		const failedPreloadPaths = new Set(
-			(preTrustExtensions?.errors ?? []).map((error) => this.resolveExtensionLoadPath(error.path)),
+			(preTrustExtensions?.errors ?? []).map((error) => this.getExtensionPathKey(error.path)),
 		);
 		const remainingPaths = extensionPaths.filter((path) => {
-			const resolvedPath = this.resolveExtensionLoadPath(path);
-			return !preloadedByPath.has(resolvedPath) && !failedPreloadPaths.has(resolvedPath);
+			const pathKey = this.getExtensionPathKey(path);
+			return !preloadedByPath.has(pathKey) && !failedPreloadPaths.has(pathKey);
 		});
 		const remainingExtensions = await this.loadExtensionPaths(remainingPaths, preTrustExtensions?.runtime);
 		const loadedByPath = new Map(preloadedByPath);
 		for (const extension of remainingExtensions.extensions) {
-			loadedByPath.set(extension.resolvedPath, extension);
+			loadedByPath.set(getResourcePathKey(extension.resolvedPath), extension);
 		}
 
 		const inlineExtensions = preTrustExtensions
 			? { extensions: preloaded.filter((extension) => extension.path.startsWith("<inline:")), errors: [] }
 			: await this.loadExtensionFactories(remainingExtensions.runtime);
 		const orderedExtensions = extensionPaths
-			.map((path) => loadedByPath.get(this.resolveExtensionLoadPath(path)))
+			.map((path) => loadedByPath.get(this.getExtensionPathKey(path)))
 			.filter((extension): extension is Extension => extension !== undefined);
 		orderedExtensions.push(...inlineExtensions.extensions);
 
@@ -1043,11 +1083,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const normalizedResourcePath = resolve(resourcePath);
 		if (extraSourceInfos) {
 			for (const [sourcePath, sourceInfo] of extraSourceInfos.entries()) {
-				const normalizedSourcePath = resolve(sourcePath);
-				if (
-					normalizedResourcePath === normalizedSourcePath ||
-					normalizedResourcePath.startsWith(`${normalizedSourcePath}${sep}`)
-				) {
+				if (isPathWithin(sourcePath, normalizedResourcePath)) {
 					return { ...sourceInfo, path: resourcePath };
 				}
 			}
@@ -1060,11 +1096,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 			}
 
 			for (const [sourcePath, metadata] of metadataByPath.entries()) {
-				const normalizedSourcePath = resolve(sourcePath);
-				if (
-					normalizedResourcePath === normalizedSourcePath ||
-					normalizedResourcePath.startsWith(`${normalizedSourcePath}${sep}`)
-				) {
+				if (isPathWithin(sourcePath, normalizedResourcePath)) {
 					return createSourceInfo(resourcePath, metadata);
 				}
 			}
@@ -1125,9 +1157,9 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 		for (const p of [...primary, ...additional]) {
 			const resolved = this.resolveResourcePath(p);
-			const canonicalPath = comparablePath(resolved);
-			if (seen.has(canonicalPath)) continue;
-			seen.add(canonicalPath);
+			const pathKey = getResourcePathKey(resolved);
+			if (seen.has(pathKey)) continue;
+			seen.add(pathKey);
 			merged.push(resolved);
 		}
 

@@ -95,6 +95,7 @@ These variables are read by draht itself:
 | `DRAHT_PACKAGE_DIR` | Override the package directory, useful for Nix/Guix store paths |
 | `DRAHT_OFFLINE` | Disable automatic network activity, including version checks, package updates, and model catalog refreshes |
 | `DRAHT_SKIP_VERSION_CHECK` | Disable the latest-version request to the npm registry entry for `@draht/coding-agent` |
+| `DRAHT_SELF_UPDATE_COMMAND` | Command `draht update` runs to update draht itself, split on whitespace, with `{packageName}`, `{version}`, and `{installSpec}` placeholders. Takes precedence over the `selfUpdateCommand` setting. See [Custom update command](cli.md#custom-update-command) |
 | `DRAHT_MODEL_CATALOG_BASE_URL` | Enable the remote model catalog overlay from a self-hosted endpoint; the overlay is off when unset |
 | `DRAHT_TELEMETRY` | Override provider attribution headers (OpenRouter, NVIDIA NIM, Cloudflare): `1`/`true`/`yes` or `0`/`false`/`no` |
 | `DRAHT_CODEMODE_MAX_WORKERS` | Maximum codemode workers alive at once across all sessions in the process; default `2`. Each worker's script may use up to 256 MB. Raise it when one process runs several sessions, such as in-process subagents. Further scripts wait for a free worker. See [Codemode](codemode.md) |
@@ -104,6 +105,7 @@ These variables are read by draht itself:
 | `DRAHT_BUG_REPORT_GATEWAY` | Override the `/bug` upload destination; default is `https://radius.draht.dev` |
 | `DRAHT_PERMISSION_MODE` | Initial permission mode of the session: `supervised` (`ask`, and every file change asks), `ask`, `auto` (when unset or blank), or `yolo`, in any letter case; any other value, the old name `default` included, starts the session in `ask` with a warning. `/permissions`, `/yolo`, and [`app.permissions.cycle`](keybindings.md#models-and-thinking) change it afterwards; a mode chosen that way outlasts `/new`, `/resume`, `/fork`, and `/reload` when it asks more than the starting mode. A session the gateway starts or resumes receives the gateway daemon's value, except `yolo`, which crosses only when the daemon's `DRAHT_RESUME_ENV_ALLOW` lists the variable. Polyphase children receive the session's current mode in this variable; see [Orchestrate Agents with Polyphase](polyphase.md#permissions) |
 | `DRAHT_NO_ATTACHABLE` | Set to `1`/`true`/`yes` to stop sessions from registering an attach socket; overridden by `--attachable` |
+| `DRAHT_CLEAR_ON_SHRINK` | Set to `1` to clear empty rows when rendered content shrinks; the `terminal.clearOnShrink` setting takes precedence. See [Settings](settings.md) |
 | `DRAHT_HARDWARE_CURSOR` | Set to `1` to show the hardware cursor; see [Terminal setup](terminal-setup.md) |
 | `DRAHT_CLIPBOARD_OSC52` | Set to `1` to also send copied text to the terminal with OSC 52 after the local clipboard write, as draht does over SSH. Use it when a remote client reaches draht without SSH variables, such as a multiplexer attached from another machine or a remote IDE daemon |
 | `DRAHT_HYPERLINKS` | Override OSC 8 hyperlink detection with `1`, `0`, or `auto` |

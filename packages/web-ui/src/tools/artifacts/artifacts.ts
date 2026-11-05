@@ -1,7 +1,7 @@
 import { icon } from "@mariozechner/mini-lit";
 import "@mariozechner/mini-lit/dist/MarkdownBlock.js";
 import type { Agent, AgentMessage, AgentTool } from "@draht/agent-core";
-import { StringEnum, type ToolCall } from "@draht/ai/compat";
+import type { ToolCall } from "@draht/ai/compat";
 import { Button } from "@mariozechner/mini-lit/dist/Button.js";
 import { html, LitElement, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
@@ -40,7 +40,10 @@ export interface Artifact {
 
 // JSON-schema friendly parameters object (LLM-facing)
 const artifactsParamsSchema = Type.Object({
-	command: StringEnum(["create", "update", "rewrite", "get", "delete", "logs"], {
+	// { type: "string", enum } rather than Type.Union of literals: Google and other providers reject anyOf/const.
+	command: Type.Unsafe<"create" | "update" | "rewrite" | "get" | "delete" | "logs">({
+		type: "string",
+		enum: ["create", "update", "rewrite", "get", "delete", "logs"],
 		description: "The operation to perform",
 	}),
 	filename: Type.String({ description: "Filename including extension (e.g., 'index.html', 'script.js')" }),

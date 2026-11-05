@@ -33,6 +33,7 @@ Draht runs in four modes: interactive, print or JSON, RPC for process integratio
   - [Attachable Sessions](#attachable-sessions)
   - [Compaction](#compaction)
 - [Settings](#settings)
+- [Token budgets](#token-budgets)
 - [Context Files](#context-files)
 - [Customization](#customization)
   - [Prompt Templates](#prompt-templates)
@@ -186,6 +187,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/workflow [name] [args]` | Run a saved polyphase workflow, or describe a new one |
 | `/workflows [list]` | Open the agent inspector, or list workflow runs and saved workflows |
 | `/settings` | Thinking level, theme, message delivery, transport |
+| `/budget [configure\|status\|new]` | Configure repository token budgets, inspect usage, or start a new shared task |
 | `/resume` | Pick from previous sessions |
 | `/new` | Start a new session |
 | `/name <name>` | Set session display name |
@@ -305,6 +307,14 @@ Use `/settings` to modify common options, or edit JSON files directly:
 | `.draht/settings.json` | Project (overrides global) |
 
 See [docs/settings.md](docs/settings.md) for all options.
+
+---
+
+## Token budgets
+
+Opt-in per-file token limits encourage readable, cohesive code and concise documentation. `/budget` guides you through writing the repository's `.draht/budgets.json`; repositories without that file are not measured. The defaults, 5,000 tokens per code file and 1,500 per documentation file, are ceilings, not targets. Lockfiles, changelogs, and generated files are skipped, files already over a limit may grow by a small allowance, and task totals are optional. Native draht, draht-claude, and draht-codex share the same offline accounting across the repository, subagents, and linked worktrees.
+
+`/budget status` shows limits and usage. Only the user starts a new task, with `/budget new`. Chat responses have no budget. See [docs/budgets.md](docs/budgets.md).
 
 ---
 

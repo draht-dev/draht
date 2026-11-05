@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AttachBridgeOptions } from "@draht/geist-core";
 import type { GeistConfig, SessionSpawnCode } from "@draht/geist-protocol";
+import { userRegistry } from "../session/harness-resolver.js";
 import { SessionLauncher, type SessionLaunchPort } from "../session/session-launcher.js";
 import {
 	type SessionLaunchRequest,
@@ -138,6 +139,22 @@ describe("an id that does not resolve starts no process", () => {
 
 		expect(outcome.code).toBe("refused");
 		expect(outcome.message).toContain("forbidden root");
+		expect(spawner.requests).toHaveLength(0);
+	});
+
+	test("a registry file the loader refuses is a refusal that names the rule, not a thrown error", async () => {
+		const dir = tempRoot("sl-regmode-");
+		const path = join(dir, "config.yaml");
+		writeFileSync(path, "harness:\n  default: draht\n  agents:\n    draht: { cmd: /bin/sh }\n");
+		chmodSync(path, 0o644);
+		const spawner = accepting();
+		const launcher = new SessionLauncher({ spawner, registry: userRegistry({ explicit: path }).load });
+
+		const outcome = await launcher.launch("draht", "fr3n");
+
+		expect(outcome.code).toBe("refused");
+		expect(outcome.message).toContain(`(mode on file ${path})`);
+		expect(outcome.sessionId).toBeUndefined();
 		expect(spawner.requests).toHaveLength(0);
 	});
 
@@ -338,31 +355,42 @@ describe("one pair, one spawn in flight, daemon-wide", () => {
 		expect((await slow).code).toBe("spawned");
 	});
 
-	test("two pairs that would concatenate to one key are still two pairs", async () => {
-		const base = tempRoot("sl-sep-");
-		const config: GeistConfig = {
-			harness: { default: "c", agents: { "b.c": { cmd: program(join(base, "bin", "bc")) } } },
-			projects: { a: { root: directory(join(base, "a")) } },
-		};
-		config.harness.agents.c = { cmd: program(join(base, "bin", "c")) };
-		config.projects = { ...config.projects, "a.b": { root: directory(join(base, "ab")) } };
-		let release = (): void => {};
-		const gate = new Promise<void>((resolve) => {
-			release = resolve;
-		});
-		const spawner = recordingSpawner(async () => {
-			await gate;
-			return { pid: 9 };
-		});
-		const launcher = new SessionLauncher({ spawner, registry: () => config });
+	// Every character RegistryIdSchema admits, so no separator drawn from the id alphabet survives.
+	test.each([..."ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"])(
+		"two pairs that would concatenate to one key through %p are still two pairs",
+		async (joint) => {
+			const base = tempRoot("sl-sep-");
+			const config: GeistConfig = {
+				harness: {
+					default: "c",
+					agents: {
+						[`b${joint}c`]: { cmd: program(join(base, "bin", "bc")) },
+						c: { cmd: program(join(base, "bin", "c")) },
+					},
+				},
+				projects: {
+					a: { root: directory(join(base, "a")) },
+					[`a${joint}b`]: { root: directory(join(base, "ab")) },
+				},
+			};
+			let release = (): void => {};
+			const gate = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const spawner = recordingSpawner(async () => {
+				await gate;
+				return { pid: 9 };
+			});
+			const launcher = new SessionLauncher({ spawner, registry: () => config });
 
-		const first = launcher.launch("b.c", "a");
-		const second = launcher.launch("c", "a.b");
-		release();
+			const first = launcher.launch(`b${joint}c`, "a");
+			const second = launcher.launch("c", `a${joint}b`);
+			release();
 
-		expect((await first).code).toBe("spawned");
-		expect((await second).code).toBe("spawned");
-	});
+			expect((await first).code).toBe("spawned");
+			expect((await second).code).toBe("spawned");
+		},
+	);
 
 	test("the pair is launchable again after a failure", async () => {
 		const { config } = world("sl-rel-");

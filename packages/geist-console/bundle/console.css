@@ -277,6 +277,122 @@ body[data-keyboard="up"] #decision-record {
 	color: var(--ink-dim);
 }
 
+/* --- new session --------------------------------------------------------- */
+
+/*
+ * Built by console.js only on a connection whose daemon declared it can spawn,
+ * so there is no hidden-by-default rule here to get wrong: no section, no rules
+ * matched. Full width on the phone, because this is the one control on the fleet
+ * view that is not a row.
+ */
+#spawn {
+	display: flex;
+	flex-direction: column;
+	gap: var(--gap);
+	min-width: 0;
+}
+
+#new-session {
+	width: 100%;
+	font-weight: 600;
+}
+
+#new-session[aria-expanded="true"] {
+	background: var(--selected);
+}
+
+#new-session:disabled,
+#spawn-submit:disabled {
+	cursor: default;
+	opacity: 0.55;
+}
+
+#spawn-picker {
+	display: flex;
+	flex-direction: column;
+	gap: var(--gap);
+	min-width: 0;
+}
+
+.spawn-group {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	min-width: 0;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+
+/* Typed as .pane-title; a legend also needs its default inline padding off, and sits outside the group's gap. */
+.spawn-group legend {
+	padding: 0;
+	margin-bottom: 6px;
+}
+
+/* The whole label is the target, not the radio inside it: a 20px circle is not a thumb target. */
+.spawn-choice {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-width: 0;
+	min-height: var(--touch);
+	padding: 8px 12px;
+	border: 1px solid var(--hairline);
+	border-radius: var(--radius);
+	background: var(--field);
+	cursor: pointer;
+	overflow-wrap: anywhere;
+}
+
+.spawn-choice:has(input:checked) {
+	background: var(--selected);
+	border-color: color-mix(in srgb, var(--spectra-a) 45%, transparent);
+}
+
+.spawn-choice input {
+	flex: none;
+	width: 20px;
+	height: 20px;
+	margin: 0;
+	accent-color: var(--spectra-a);
+}
+
+.spawn-group:disabled .spawn-choice {
+	cursor: default;
+	opacity: 0.55;
+}
+
+.spawn-choice-name {
+	display: block;
+	font-weight: 600;
+}
+
+.spawn-choice-detail {
+	display: block;
+	font-size: 12px;
+	color: var(--ink-dim);
+}
+
+#spawn-submit {
+	background: var(--spectra-gradient);
+	border-color: transparent;
+	color: var(--smoke-900);
+	font-weight: 600;
+}
+
+#spawn-result[data-state="pending"] {
+	color: var(--status-warn);
+}
+
+#spawn-result[data-state="ok"] {
+	color: var(--status-ok);
+}
+
+#spawn-result[data-state="failed"] {
+	color: var(--status-danger);
+}
+
 #token-form {
 	display: flex;
 	flex-direction: column;

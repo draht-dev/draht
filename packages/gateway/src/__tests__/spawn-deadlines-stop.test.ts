@@ -12,6 +12,7 @@ import {
 	SessionSpawner,
 	SpawnRefusedError,
 } from "../session/spawn-primitive.js";
+import { absoluteTool } from "./helpers/absolute-tool.js";
 import {
 	descendantsOf,
 	isProcessAlive,
@@ -103,11 +104,15 @@ async function waitForFile(path: string, timeoutMs: number): Promise<void> {
 	}
 }
 
+const MV = absoluteTool("mv");
+const SLEEP = absoluteTool("sleep");
+const DD = absoluteTool("dd");
+
 const FORKS_A_GRANDCHILD = `#!/bin/sh
-sleep 3600 &
+${SLEEP} 3600 &
 echo "$$" > PIDFILE.tmp
 echo "$!" >> PIDFILE.tmp
-mv PIDFILE.tmp PIDFILE
+${MV} PIDFILE.tmp PIDFILE
 wait
 `;
 
@@ -115,39 +120,39 @@ wait
 const TRAPS_TERM = `#!/bin/sh
 trap 'echo t >> DIR/terms' TERM
 echo "$$" > PIDFILE.tmp
-mv PIDFILE.tmp PIDFILE
-while true; do sleep 0.2; done
+${MV} PIDFILE.tmp PIDFILE
+while true; do ${SLEEP} 0.2; done
 `;
 
 const SILENT_AND_BINDS_NOTHING = `#!/bin/sh
 echo "$$" > PIDFILE.tmp
-mv PIDFILE.tmp PIDFILE
-exec sleep 3600
+${MV} PIDFILE.tmp PIDFILE
+exec ${SLEEP} 3600
 `;
 
 const SPOKE_ONCE = "draht stub: loading extensions, no socket yet";
 
 const SPEAKS_THEN_GOES_QUIET = `#!/bin/sh
 echo "$$" > PIDFILE.tmp
-mv PIDFILE.tmp PIDFILE
+${MV} PIDFILE.tmp PIDFILE
 echo "${SPOKE_ONCE}" >&2
-exec sleep 3600
+exec ${SLEEP} 3600
 `;
 
 const FLOODS_STDOUT = `#!/bin/sh
 echo "$$" > PIDFILE.tmp
-mv PIDFILE.tmp PIDFILE
-dd if=/dev/zero bs=1048576 count=128 2>/dev/null
+${MV} PIDFILE.tmp PIDFILE
+${DD} if=/dev/zero bs=1048576 count=128 2>/dev/null
 : > DIR/flooded
-exec sleep 3600
+exec ${SLEEP} 3600
 `;
 
 /** Publishes the lock and socket `resume` waits for, then exits leaving its group behind it. */
 const BINDS_THEN_EXITS = `#!/bin/sh
-sleep 3600 &
+${SLEEP} 3600 &
 echo "$$" > PIDFILE.tmp
 echo "$!" >> PIDFILE.tmp
-mv PIDFILE.tmp PIDFILE
+${MV} PIDFILE.tmp PIDFILE
 echo "$$" > DIR/sds-session.lock
 : > DIR/sds-session.sock
 exit 0

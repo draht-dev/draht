@@ -9,8 +9,7 @@ import { SessionManager } from "../session/session-manager";
  *  1. No auth header → rejected before upgrade (non-101)
  *  2. Wrong token    → rejected before upgrade (non-101)
  *  3. Valid auth + non-existent session → 101 upgrade then close 4404
- *  4. Valid auth + stopped session     → 101 upgrade then close 1000/1001
- *  5. Valid auth + running session     → 101 upgrade, socket stays OPEN
+ *  4. Valid auth + existing session     → 101 upgrade, socket stays OPEN and ignores messages
  */
 describe("WebSocket auth", () => {
 	const AUTH_TOKEN = "ws-test-secret";
@@ -120,32 +119,11 @@ describe("WebSocket auth", () => {
 		expect(result.closeCode).toBe(4404);
 	});
 
-	test("case 4: correct token, stopped session → upgrade succeeds then closes for exited process", async () => {
+	test("case 4: correct token, existing session → WebSocket stays OPEN and ignores messages", async () => {
 		const manager = new SessionManager(new EventBus());
 		const { url } = startServer(manager);
 
-		// Create session with a process, then kill it and wait for stopped
-		const session = manager.create(["sh", "-c", "exit 0"]);
-		await session.process!.exited;
-		// status should now be 'stopped'
-
-		// NEW BEHAVIOR: We now allow WebSocket connections to sessions in any status
-		// This supports no-process sessions created by Adler
-		const result = await wsConnect(`${url}/sessions/${session.id}/ws`, {
-			Authorization: `Bearer ${AUTH_TOKEN}`,
-		});
-		// Bun may expose the server's 1001 close code or normalize it to 1000.
-		expect(result.opened).toBe(true);
-		expect(result.closeCode).toBeDefined();
-		expect([1000, 1001]).toContain(result.closeCode as number);
-	});
-
-	test("case 5: correct token, running session → WebSocket stays OPEN", async () => {
-		const manager = new SessionManager(new EventBus());
-		const { url } = startServer(manager);
-
-		const session = manager.create(["cat"]);
-		await session.process!.ready;
+		const session = manager.create();
 
 		// Connect and wait briefly to confirm it stays open
 		const result = await new Promise<{ opened: boolean; closeCode?: number }>((resolve) => {
@@ -154,18 +132,23 @@ describe("WebSocket auth", () => {
 			});
 
 			let opened = false;
+			let closedByServer: number | undefined;
 
 			ws.addEventListener("open", () => {
 				opened = true;
+				// One byte past the 64 KiB the stdin forwarder used to close a socket for.
+				ws.send("A".repeat(64 * 1024 + 1));
 				// Give it 300ms to confirm it stays open
 				setTimeout(() => {
 					ws.close(1000, "test done");
-					resolve({ opened });
+					resolve({ opened, closeCode: closedByServer });
 				}, 300);
 			});
 
 			ws.addEventListener("close", (evt: CloseEvent) => {
-				if (!opened) {
+				if (opened) {
+					closedByServer = evt.code;
+				} else {
 					resolve({ opened: false, closeCode: evt.code });
 				}
 			});
@@ -181,6 +164,7 @@ describe("WebSocket auth", () => {
 		});
 
 		expect(result.opened).toBe(true);
+		expect(result.closeCode).toBeUndefined();
 
 		// Clean up
 		manager.destroy(session.id);

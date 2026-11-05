@@ -4,7 +4,21 @@
 
 ### Added
 
-- Add the `test-audit` skill and campaign guide for behavior-focused test authoring and coverage audits ([#16](https://github.com/draht-dev/draht/pull/16))
+- Add the `test-audit` skill and campaign guide for behavior-focused test authoring and coverage audits ([#34](https://github.com/draht-dev/draht/pull/34))
+
+## [2026.10.31-1] - 2026-10-31
+
+### Added
+
+- add opt-in per-file token budgets for draht and the Claude Code and Codex plugins
+
+### Fixed
+
+- generate the budget runtime bundle identically under hoisted and isolated installs
+- pair moved files by shared content and leave deletions of ignored files uncharged
+- keep allowances for files Git ignores temporarily and pair moves by content first
+- harden checks for new worktrees, missing Git, named pipes, stale locks, moves, and ignored files
+- run checks in the compiled binary without Node and preflight Codex apply_patch edits
 
 ## [2026.10.23-1] - 2026-10-23
 

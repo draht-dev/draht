@@ -14,14 +14,14 @@ This catalog routes to sibling skills; it does not activate them all.
 ## Two Kinds of Sibling Skills
 
 - **16 support skills** — load the relevant discipline or explicitly chosen workflow: `atomic-reasoning`, `blast-radius`, `brainstorming`, `ddd-workflow`, `debugging-workflow`, `epistemics`, `explainers`, `gsd-workflow`, `judge`, `loop-workflow`, `model-tiering`, `saga-spawner`, `tdd-workflow`, `typescript-discipline`, `unslop`, `verification-gate`.
-- **23 command skills** — explicit actions, including ad-hoc work and optional GSD lifecycle stages: `new-project`, `init-project`, `map-codebase`, `discuss-phase`, `plan-phase`, `execute-phase`, `verify-work`, `next-milestone`, `pause-work`, `resume-work`, `progress`, `quick`, `fix`, `review`, `atomic-commit`, `orchestrate`, `orchestrate-loop`, `resolve-conflicts`, `grill`, `why`, `create-verification-skill`, `triage`, `speak`.
+- **24 command skills** — explicit actions, including ad-hoc work and optional GSD lifecycle stages: `new-project`, `init-project`, `map-codebase`, `discuss-phase`, `plan-phase`, `execute-phase`, `verify-work`, `next-milestone`, `pause-work`, `resume-work`, `progress`, `quick`, `fix`, `review`, `atomic-commit`, `orchestrate`, `orchestrate-loop`, `resolve-conflicts`, `grill`, `why`, `create-verification-skill`, `triage`, `speak`, `budget`.
 
 Every skill's frontmatter `name` matches its directory name, so `skills/<name>/` and the name you invoke are always the same string.
 
 ## Repository Layout
 
 - `skills/<name>/SKILL.md` — every skill has one; frontmatter (`name`, `description`) plus instructions.
-- `skills/<name>/command.md` — the 23 command skills only. This is the full prompt template; the command skill's `SKILL.md` is a thin wrapper that reads it.
+- `skills/<name>/command.md` — the 24 command skills only. This is the full prompt template; the command skill's `SKILL.md` is a thin wrapper that reads it.
 - The 16 support skills have no `command.md` — their `SKILL.md` is self-contained.
 - This file, `skills/draht/SKILL.md`, is itself a plain skill (no `command.md`) — it is discovered and loaded the same way any discipline skill is.
 
@@ -53,6 +53,7 @@ An explicitly selected command may use supporting disciplines; ordinary requests
 | Pausing work and writing a handoff document | `pause-work` |
 | Resuming a paused project from its handoff document | `resume-work` |
 | Checking current position in the roadmap | `progress` |
+| Guided setup of repository code and documentation budgets in `.draht/budgets.json` | `budget` |
 | Complete an ad-hoc task directly with relevant verification | `quick` |
 | Diagnosing and fixing one specific bug end to end | `fix` |
 | Code review and security audit of recent changes | `review` |
@@ -102,8 +103,8 @@ A few sibling pairs are easy to reach for incorrectly:
 
 | Host | How to invoke a draht skill |
 |---|---|
-| Claude Code | `/draht:<command>` slash commands for the 23 command skills (for example `/draht:plan-phase`); the 16 discipline skills load automatically by description match or on request |
-| Codex | `$draht:<command>` prompts, or `/skills` and pick the wrapper, for the 23 command skills; discipline skills load automatically or by name |
+| Claude Code | `/draht:<command>` slash commands for the 24 command skills (for example `/draht:plan-phase`); the 16 discipline skills load automatically by description match or on request |
+| Codex | `$draht:<command>` prompts, or `/skills` and pick the wrapper, for the 24 command skills; discipline skills load automatically or by name |
 | Any Agent-Skills-compatible host | invoke the sibling skill directly by name — every `SKILL.md` in this tree is self-contained and portable |
 | draht CLI (`@draht/coding-agent`) | work directly with the coding tools, or explicitly invoke a bundled command |
 

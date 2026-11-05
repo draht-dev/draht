@@ -1,12 +1,13 @@
 {
 	"name": "@draht/telemetry",
-	"version": "2026.10.23-1",
+	"version": "2026.11.5-1",
 	"description": "Vendor-neutral telemetry contracts and typed schema utilities for draht",
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
 	"exports": {
 		".": {
+			"source": "./src/index.ts",
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
 		},
@@ -15,6 +16,7 @@
 			"import": "./dist/render.js"
 		},
 		"./testing": {
+			"source": "./src/testing/index.ts",
 			"types": "./dist/testing/index.d.ts",
 			"import": "./dist/testing/index.js"
 		}
@@ -23,7 +25,7 @@
 		"dist"
 	],
 	"scripts": {
-		"clean": "shx rm -rf dist",
+		"clean": "node ../../scripts/package-files.mjs clean dist",
 		"build": "tsc -p tsconfig.build.json",
 		"dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
 		"test": "vitest --run",

@@ -93,20 +93,6 @@ describe("Concurrent session operations — SessionManager", () => {
 		manager.destroy(session.id); // second call is no-op
 		expect(destroyedCount).toBe(1);
 	});
-
-	test("create + process lifecycle concurrent with destroy — process killed, no zombie", async () => {
-		const session = manager.create(["cat"]);
-		const proc = session.process!;
-		await proc.ready;
-
-		// Destroy immediately after process is running
-		manager.destroy(session.id);
-
-		// Process must exit
-		await proc.exited;
-		expect(proc.status).toBe("stopped");
-		expect(manager.get(session.id)).toBeUndefined();
-	});
 });
 
 describe("Concurrent session operations — HTTP routes", () => {

@@ -25,7 +25,9 @@ describe.each(hooks)("$name stop quality gate", (hook) => {
 		mkdirSync(scripts);
 		script = join(scripts, "stop-quality-gate.cjs");
 		copyFileSync(hook.path, script);
-		copyFileSync(join(dirname(hook.path), "checks-runtime.cjs"), join(scripts, "checks-runtime.cjs"));
+		for (const runtime of ["checks-runtime.cjs", "budgets-runtime.cjs", "budgets-cl100k.json.gz"]) {
+			copyFileSync(join(dirname(hook.path), runtime), join(scripts, runtime));
+		}
 		marker = join(fixture, "gate-run.json");
 		writeFileSync(
 			join(scripts, "gsd-quality-gate.cjs"),

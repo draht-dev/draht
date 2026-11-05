@@ -17,29 +17,6 @@ function authHeaders() {
 }
 
 describe("Session input endpoint", () => {
-	test("POST /sessions/:id/input with text → 200", async () => {
-		const bus = new EventBus();
-		const manager = new SessionManager(bus);
-		const { app } = createServer({ port: 7878, authToken: AUTH_TOKEN, manager });
-
-		// Create session with a process that echoes input
-		const session = manager.create(["cat"]);
-		await session.process!.ready;
-
-		const res = await app.request(`/sessions/${session.id}/input`, {
-			method: "POST",
-			headers: authHeaders(),
-			body: JSON.stringify({ text: "hello\n" }),
-		});
-
-		expect(res.status).toBe(200);
-		const body = await res.json();
-		expect(body).toHaveProperty("success", true);
-
-		// Clean up
-		manager.destroy(session.id);
-	});
-
 	test("POST /sessions/:id/input with non-existent session → 404", async () => {
 		const bus = new EventBus();
 		const manager = new SessionManager(bus);
@@ -62,16 +39,15 @@ describe("Session input endpoint", () => {
 	// the operator token. It was deleted rather than hardened, because a session
 	// RECORD is not a session: POST /sessions creates a record and never a
 	// process (R32-FLEET.8), so a record with nothing to type into should say so.
-	// The only spawn left on this daemon is the resume primitive, which resolves
-	// an id against the daemon's own history index and builds its own argv.
-	test("POST /sessions/:id/input with no-process session → 409, and starts nothing", async () => {
+	// The only spawn on this daemon is the spawn primitive, reached by `session_spawn`
+	// and `session_resume`, which choose the program from the user's registry and
+	// the daemon's own history index.
+	test("POST /sessions/:id/input with no-process session → 409 naming where work starts", async () => {
 		const bus = new EventBus();
 		const manager = new SessionManager(bus);
 		const { app } = createServer({ port: 7878, authToken: AUTH_TOKEN, manager });
 
-		// Create session without a process
 		const session = manager.create();
-		expect(session.process).toBeUndefined();
 
 		const res = await app.request(`/sessions/${session.id}/input`, {
 			method: "POST",
@@ -83,11 +59,9 @@ describe("Session input endpoint", () => {
 		expect(res.status).toBe(409);
 		const body = (await res.json()) as { error: string };
 		expect(body.error).toContain("never a process");
-		expect(body.error).toContain("attach wire");
-
-		// The load-bearing half: refusing is only honest if nothing was started.
-		expect(session.process).toBeUndefined();
-		expect(session.status).not.toBe("running");
+		expect(body.error).toContain(
+			"Start work with session_spawn on /attach, or resume a recorded draht session with session_resume",
+		);
 
 		manager.destroy(session.id);
 	});
@@ -97,8 +71,7 @@ describe("Session input endpoint", () => {
 		const manager = new SessionManager(bus);
 		const { app } = createServer({ port: 7878, authToken: AUTH_TOKEN, manager });
 
-		const session = manager.create(["cat"]);
-		await session.process!.ready;
+		const session = manager.create();
 
 		const res = await app.request(`/sessions/${session.id}/input`, {
 			method: "POST",
@@ -118,8 +91,7 @@ describe("Session input endpoint", () => {
 		const manager = new SessionManager(bus);
 		const { app } = createServer({ port: 7878, authToken: AUTH_TOKEN, manager });
 
-		const session = manager.create(["cat"]);
-		await session.process!.ready;
+		const session = manager.create();
 
 		const res = await app.request(`/sessions/${session.id}/input`, {
 			method: "POST",
@@ -139,8 +111,7 @@ describe("Session input endpoint", () => {
 		const manager = new SessionManager(bus);
 		const { app } = createServer({ port: 7878, authToken: AUTH_TOKEN, manager });
 
-		const session = manager.create(["cat"]);
-		await session.process!.ready;
+		const session = manager.create();
 
 		const res = await app.request(`/sessions/${session.id}/input`, {
 			method: "POST",

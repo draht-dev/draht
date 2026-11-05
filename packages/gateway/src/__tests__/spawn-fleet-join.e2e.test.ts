@@ -1,15 +1,16 @@
 /**
  * R36-SPAWN.8 — a process `SessionSpawner.launch()` starts joins the fleet as an ordinary session.
  *
- * THE ATTACH HALF IS THE REAL PUBLIC PROTOCOL against the emitted daemon; THE SPAWN HALF IS AN
- * IN-PROCESS LIBRARY CALL, because nothing in the shipped daemon starts a process from a
- * `session_spawn` frame yet. EVIDENCE CLASS 2: the class-3 acceptance is this same journey driven
- * over a real spawn frame, and it belongs to the wave that wires `gateway/routes/fleet.ts`.
+ * THE ATTACH HALF IS THE REAL PUBLIC PROTOCOL against the emitted daemon. THE SPAWN HALF IS BOTH AN
+ * IN-PROCESS LIBRARY CALL (the journey below) AND A REAL `session_spawn` FRAME sent to that daemon,
+ * which is started with `--registry`.
+ *
+ * Sessions the daemon spawns are detached and outlive it, so `afterAll` reaps their groups by pid.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
 	FleetFrameSchema,
@@ -27,6 +28,7 @@ import { assertFrozenRowShape, attachJourney } from "./helpers/attach-journey.js
 import {
 	isZombie,
 	liveGroupMembers,
+	psRows,
 	reapPgids,
 	rowFor,
 	uniqueMarker,
@@ -40,6 +42,9 @@ const TOKEN = "spawn-fleet-join-e2e-token";
 const HARNESS_ID = "draht";
 const PROJECT_ID = "fixture";
 const PROMPT = "does the fleet see me";
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// Not `credentialEnv`, which is empty here: the stub is the OPERATOR's declaration about the daemon's own env.
+const STUB_PROVIDER_ENV = { DRAHT_STUB_PROVIDER: "1", DRAHT_RESUME_ENV_ALLOW: "DRAHT_STUB_PROVIDER" };
 
 const cleanup: string[] = [];
 const children: Bun.Subprocess[] = [];
@@ -141,6 +146,8 @@ async function askToSpawn(): Promise<{ hello: ServerHelloFrame; answer: SessionS
 		const answer = (await until(
 			() => frames.find((frame) => frame.type === "session_spawned"),
 			() => `session_spawned (saw: ${frames.map((frame) => frame.type).join(", ")})`,
+			// Past the spawner's 30 s handshake deadline, so a slow child is answered by its typed refusal, not by this timeout.
+			45_000,
 		)) as SessionSpawnedFrame;
 		return { hello, answer };
 	} finally {
@@ -164,10 +171,26 @@ beforeAll(async () => {
 	projectRoot = join(tempDir("sfjP-"), marker);
 	mkdirSync(projectRoot);
 
+	const registry: GeistConfig = {
+		harness: { default: HARNESS_ID, agents: { [HARNESS_ID]: { cmd: DRAHT_CLI } } },
+		projects: { [PROJECT_ID]: { root: projectRoot } },
+		approvedRoots: [REPO_ROOT, realpathSync("/tmp")],
+	};
+	// The loader refuses a registry that is not a 0600 file in a 0700 directory; mkdtemp makes the directory. JSON is valid YAML.
+	const registryPath = join(tempDir("sfjR-"), "config.yaml");
+	writeFileSync(registryPath, JSON.stringify(registry));
+	chmodSync(registryPath, 0o600);
+
 	const port = freeLoopbackPort();
 	daemonStderr = { text: "" };
-	const daemon = Bun.spawn(["bun", GATEWAY_CLI, "--port", String(port), "--auth", TOKEN], {
-		env: { PATH: process.env.PATH ?? "", HOME: home, TMPDIR: home, DRAHT_CODING_AGENT_DIR: agentDir },
+	const daemon = Bun.spawn(["bun", GATEWAY_CLI, "--port", String(port), "--auth", TOKEN, "--registry", registryPath], {
+		env: {
+			PATH: process.env.PATH ?? "",
+			HOME: home,
+			TMPDIR: home,
+			DRAHT_CODING_AGENT_DIR: agentDir,
+			...STUB_PROVIDER_ENV,
+		},
 		stdin: "ignore",
 		stdout: "ignore",
 		stderr: "pipe",
@@ -181,24 +204,9 @@ beforeAll(async () => {
 	httpBase = `http://127.0.0.1:${port}`;
 	wsBase = `ws://127.0.0.1:${port}`;
 
-	const registry: GeistConfig = {
-		harness: { default: HARNESS_ID, agents: { [HARNESS_ID]: { cmd: DRAHT_CLI } } },
-		projects: { [PROJECT_ID]: { root: projectRoot } },
-		approvedRoots: [REPO_ROOT, realpathSync("/tmp")],
-	};
 	const resolved = resolveHarnessLaunch(HARNESS_ID, PROJECT_ID, { registry: () => registry });
 
-	spawner = new SessionSpawner({
-		socketDir,
-		agentDir,
-		env: {
-			HOME: home,
-			TMPDIR: home,
-			// Not `credentialEnv`, which is empty here: the stub is the OPERATOR's declaration about the daemon's own env.
-			DRAHT_STUB_PROVIDER: "1",
-			DRAHT_RESUME_ENV_ALLOW: "DRAHT_STUB_PROVIDER",
-		},
-	});
+	spawner = new SessionSpawner({ socketDir, agentDir, env: { HOME: home, TMPDIR: home, ...STUB_PROVIDER_ENV } });
 
 	sessionId = randomUUID();
 	idWasOnTheFleetBeforeLaunch = (await fleetRow(sessionId)) !== undefined;
@@ -259,15 +267,44 @@ describe("a launched session is a fleet member like any other (R36-SPAWN.8)", ()
 		await daemonStillAnswers();
 	}, 180_000);
 
-	// TRIPWIRE, EXPECTED TO BE INVERTED by the wave that wires `spawnSession` into fleet.ts.
-	test("the daemon neither advertises session-spawn nor answers a spawn frame with a session", async () => {
+	test("the daemon advertises session-spawn and a spawn frame starts a session that joins the fleet", async () => {
 		const { hello, answer } = await askToSpawn();
-		expect(hello.capabilities).not.toContain("session-spawn");
-		expect(answer.ok).toBe(false);
-		expect(answer.code).toBe("refused");
-		expect(answer.sessionId).toBeUndefined();
+		// The child is detached and outlives the daemon, so its group is recorded before any expect can throw.
+		if (answer.sessionId !== undefined) {
+			for (const row of psRows()) {
+				if (row.command.includes(`--session-id ${answer.sessionId}`)) pgids.add(row.pid);
+			}
+		}
+
+		expect(hello.capabilities).toContain("session-spawn");
+		expect(hello.capabilities).toContain("registry");
+		expect(answer.ok).toBe(true);
+		expect(answer.code).toBe("spawned");
+		const spawnedId = answer.sessionId ?? "";
+		expect(spawnedId).toMatch(UUID);
+		expect(spawnedId).not.toBe(sessionId);
+
+		const raw = await until(
+			() => fleetRow(spawnedId),
+			() => `${spawnedId} to reach GET /fleet (daemon stderr: ${daemonStderr.text})`,
+			60_000,
+		);
+		assertFrozenRowShape(raw, { where: `GET /fleet row for ${spawnedId}`, requirePid: true });
+		expect(raw.origin).toBe("socket");
+		expect(raw.attachable).toBe(true);
+		expect(raw.cwd).toBe(projectRoot);
+		expect(typeof raw.pid).toBe("number");
+		const pid = raw.pid as number;
+		pgids.add(pid);
+
+		const row = rowFor(pid);
+		if (row === undefined) throw new Error(`pid ${pid} is not in ps -A`);
+		expect(isZombie(row)).toBe(false);
+		expect(row.pgid).toBe(pid);
+		// The pid on the row is the process that frame started, not a bystander that happens to be alive.
+		expect(row.command).toContain(`--session-id ${spawnedId}`);
 		await daemonStillAnswers();
-	}, 60_000);
+	}, 150_000);
 
 	test("stop() takes the whole group down and the id stops being a live fleet member", async () => {
 		await spawner.stop(launchedPid);

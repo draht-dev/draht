@@ -17,13 +17,13 @@ multiple draht sessions from anywhere.
 ### 1. `@draht/gateway` (Bun + TypeScript)
 
 A WebSocket/HTTP server that:
-- Spawns and manages draht coding agent processes
-- Streams agent output (stdout/events) to connected clients in real-time
+- Starts draht coding agent sessions only through the spawn primitive: `session_resume` for a recorded session, `session_spawn` for a harness and project id declared in the user-owned registry. No HTTP route creates a process
+- Relays an attached session's output to connected clients in real-time over `/attach`; the session publishes its own socket, so the gateway does not own its stdout
 - Accepts user input from clients and forwards to the correct agent session
 - Supports multiple simultaneous sessions
 - Auth via bearer token (configurable)
 - REST API: `POST /sessions`, `GET /sessions`, `DELETE /sessions/:id`
-- WebSocket: per-session bidirectional stream
+- WebSocket: `/attach` carries the fleet and each attached session's stream
 - SSE: event stream for session lifecycle events
 - CLI: `draht-gateway --port 7878 --auth <token>`
 - Binds to `127.0.0.1` (loopback) by default; a non-loopback bind requires the explicit `--allow-non-loopback` flag, enforced both in the CLI and in `createServer`/`startGateway`
@@ -66,6 +66,6 @@ Features:
 ## Success Criteria
 
 - `draht gateway start` runs and accepts WebSocket connections
-- Flutter app connects, lists sessions, spawns a new one, streams output
+- Flutter app connects, lists sessions, starts one with `session_spawn`, streams its output over `/attach`
 - App runs on Meta Quest 3 as standalone Android app
 - Gateway ships as `packages/gateway` in the draht monorepo

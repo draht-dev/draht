@@ -18,7 +18,9 @@ describe("parseGeistConfig", () => {
 		// Every cmd is ABSOLUTE — the example is the thing operators copy, so a bare
 		// `draht-acp` in it would be a PATH lookup shipped as the recommendation
 		// (R36-SPAWN.2). AgentLaunchSpecSchema.cmd refuses it now.
-		expect(config.harness.agents.draht).toEqual({ cmd: "/usr/local/bin/draht-acp" });
+		expect(config.harness.agents.draht).toEqual({
+			cmd: "/Users/you/dev/draht-mono/packages/coding-agent/dist/cli.js",
+		});
 		expect(config.harness.agents.claude).toEqual({
 			cmd: "/usr/local/bin/claude-agent-acp",
 			credentialEnv: ["ANTHROPIC_API_KEY"],

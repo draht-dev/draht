@@ -1,5 +1,6 @@
 ---
 import FontHead from "../components/FontHead.astro";
+import OgVideo from "../components/OgVideo.astro";
 
 interface Props {
 	title: string;
@@ -27,6 +28,7 @@ const canonicalUrl = new URL(Astro.url.pathname, "https://draht.dev");
 		<meta property="og:image" content={new URL(ogImage, "https://draht.dev").toString()} />
 		<meta property="og:url" content={canonicalUrl.toString()} />
 		<meta property="og:site_name" content="Draht" />
+		<OgVideo origin="https://draht.dev" />
 
 		<meta name="twitter:card" content="summary_large_image" />
 		<meta name="twitter:title" content={title} />

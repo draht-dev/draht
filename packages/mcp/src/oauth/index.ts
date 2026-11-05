@@ -1,9 +1,18 @@
+export { createMcpAuthProvider, type McpAuthProvider } from "./auth-provider.ts";
 export {
 	type OAuthCallback,
 	type OAuthCallbackPage,
 	OAuthCallbackServer,
 	type OAuthCallbackServerOptions,
 } from "./callback.ts";
+export { parseClientMetadataBaseUrl } from "./client-metadata-base.ts";
+export {
+	clientMetadataBaseUrl,
+	type McpClientMetadataDocuments,
+	type McpOAuthClientOptions,
+	type McpOAuthServerStore,
+	type McpOAuthSettings,
+} from "./client-settings.ts";
 export {
 	buildAuthorizationServerDiscoveryUrls,
 	discoverAuthorizationServerMetadata,
@@ -15,6 +24,7 @@ export {
 } from "./discovery.ts";
 export {
 	McpOAuthAuthorizationRequiredError,
+	McpRefreshLockBusyError,
 	OAuthError,
 	OAuthInsecureEndpointError,
 	OAuthIssuerMismatchError,
@@ -25,6 +35,7 @@ export {
 	adaptOAuthProvider,
 	authorizeMcp,
 	exchangeAuthorizationCode,
+	type OAuthAuthorizationRequest,
 	type OAuthClientMetadataDocument,
 	type OAuthClientProvider,
 	type OAuthFlowOptions,
@@ -36,12 +47,27 @@ export {
 	type TokenRequestOptions,
 } from "./flow.ts";
 export {
+	listenForLoopbackSignIn,
+	type McpLoopbackCallback,
+	responseFromRedirectUrl,
+	waitForLoopbackSignIn,
+} from "./loopback.ts";
+export {
 	McpOAuthProvider,
 	type McpOAuthProviderOptions,
 	type McpOAuthState,
 	type McpOAuthStateStore,
 	MemoryOAuthStateStore,
 } from "./provider.ts";
+export {
+	completeMcpSignIn,
+	type McpAuthorizationResponse,
+	McpSignInCancelledError,
+	type McpSignInOptions,
+	type McpSignInRedirect,
+	type McpSignInStart,
+	startMcpSignIn,
+} from "./sign-in.ts";
 export type {
 	AuthorizationServerMetadata,
 	OAuthChallenge,

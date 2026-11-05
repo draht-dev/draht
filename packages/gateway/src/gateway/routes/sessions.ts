@@ -23,9 +23,9 @@ interface SerializedSession {
  * caller-supplied `command: string[]` and hand it to `Bun.spawn` (R32-FLEET.8,
  * GSEC-12): with only a shape check in front of it, any bearer-token holder
  * could run any binary as the gateway's user. The field is gone rather than
- * narrowed — the harness-id + project selection that replaces it is resolved
- * against the registry in a later phase, and until that exists no request body
- * may influence what gets executed.
+ * narrowed — what runs is chosen by `session_spawn` on the attach wire (a
+ * harness id and a project id, resolved against the user-owned registry), so no
+ * request body may influence what gets executed.
  */
 interface CreateSessionBody {
 	cwd?: string;
@@ -74,16 +74,18 @@ const COMMAND_REJECTED =
  *
  * The consequence is deliberate: there is now NO route on this daemon that
  * creates a process from an HTTP request. The only spawn is
- * `session/spawn-primitive.ts`, reached only by `session_resume`.
+ * `session/spawn-primitive.ts`, reached only by `session_spawn` and
+ * `session_resume` on the attach wire, and `scripts/check-no-free-text-command.mjs`
+ * (rule D) fails the build if a second spawn path appears.
  */
 const NO_PROCESS =
 	"this session has no process: POST /sessions creates a session record, never a process. " +
-	"Nothing can be typed into it. Resume a recorded draht session over the attach wire instead.";
+	"Nothing can be typed into it. Start work with session_spawn on /attach, or resume a recorded draht session with session_resume.";
 
 /**
  * Expected JSON body for POST /sessions/:id/input.
  *
- * `text` — The input text to send to the session's stdin.
+ * `text` — The input text. Validated, then refused: a session record has no stdin.
  */
 interface SendInputBody {
 	text: string;
@@ -116,8 +118,8 @@ function serializeSession(session: Session): SerializedSession {
  *   GET    /          → List all sessions; returns 200 + { sessions: [...] }
  *   GET    /:id       → Get one session; 200 or 404
  *   DELETE /:id       → Destroy a session; 204 or 404
- *   POST   /:id/input → Send input to a session; requires JSON body `{ text: string }`;
- *                       returns 200, 404, or 409 when the session has no process.
+ *   POST   /:id/input → Requires JSON body `{ text: string }`; returns 404 or 400 for
+ *                       a bad request, otherwise 409: a session has no process.
  *
  * NO HANDLER IN THIS FILE STARTS A PROCESS. `POST /` never did; `POST /:id/input`
  * used to, lazily and through a bare PATH lookup, and no longer does — see
@@ -134,8 +136,6 @@ export function createSessionRoutes(manager: SessionManager, config?: GatewaySet
 	// `command` is refused.
 	app.post("/", async (c): Promise<Response> => {
 		console.log(`[SESSION CREATE] Received session creation request`);
-
-		let cwd: string | undefined;
 
 		const contentType = c.req.header("Content-Type") ?? "";
 		console.log(`[SESSION CREATE] Content-Type: ${contentType}`);
@@ -158,11 +158,12 @@ export function createSessionRoutes(manager: SessionManager, config?: GatewaySet
 						return c.json({ error: COMMAND_REJECTED }, 400);
 					}
 
+					// Validated for the 400/403 contract; the value is not used.
 					if ("cwd" in bodyObj) {
-						if (typeof bodyObj.cwd !== "string" || bodyObj.cwd.length === 0) {
+						const cwd = bodyObj.cwd;
+						if (typeof cwd !== "string" || cwd.length === 0) {
 							return c.json({ error: "cwd must be a non-empty string" }, 400);
 						}
-						cwd = bodyObj.cwd;
 
 						// Validate path against allowed paths
 						if (config && !isPathAllowed(cwd, config)) {
@@ -180,12 +181,8 @@ export function createSessionRoutes(manager: SessionManager, config?: GatewaySet
 			// Empty body with Content-Type: application/json is OK, creates no-process session
 		}
 
-		// `undefined` command, unconditionally: this route creates a session
-		// record, never a process (R32-FLEET.8).
-		const session = manager.create(undefined, cwd);
-		console.log(
-			`[SESSION CREATE] Created session ${session.id}, status: ${session.status}, hasProcess: ${!!session.process}`,
-		);
+		const session = manager.create();
+		console.log(`[SESSION CREATE] Created session ${session.id}, status: ${session.status}`);
 		return c.json(serializeSession(session), 201);
 	});
 
@@ -213,7 +210,7 @@ export function createSessionRoutes(manager: SessionManager, config?: GatewaySet
 		return new Response(null, { status: 204 });
 	});
 
-	// POST /:id/input — send input to a session's stdin
+	// POST /:id/input — validate the request, then refuse: a session has no stdin
 	app.post("/:id/input", async (c): Promise<Response> => {
 		const sessionId = c.req.param("id");
 		console.log(`[INPUT] Received input request for session ${sessionId}`);
@@ -247,17 +244,8 @@ export function createSessionRoutes(manager: SessionManager, config?: GatewaySet
 		console.log(`[INPUT] Received text for session ${sessionId}:`, text.slice(0, 50));
 
 		// NO LAZY SPAWN. See NO_PROCESS above.
-		if (!session.process) {
-			console.log(`[INPUT] Session ${sessionId} has no process; refusing rather than spawning`);
-			return c.json({ error: NO_PROCESS }, 409);
-		}
-
-		console.log(`[INPUT] Writing to process stdin...`);
-		session.process.write(text);
-		console.log(`[INPUT] Input written successfully`);
-
-		// Return 200 (Adler expects 200, not 204)
-		return c.json({ success: true }, 200);
+		console.log(`[INPUT] Session ${sessionId} has no process; refusing rather than spawning`);
+		return c.json({ error: NO_PROCESS }, 409);
 	});
 
 	return app;

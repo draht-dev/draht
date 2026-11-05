@@ -1,0 +1,26 @@
+# draht
+
+> draht is an open source (MIT) AI coding agent for the terminal, published on npm as @draht/coding-agent. It is a fork of the pi coding agent by Mario Zechner, as are @draht/router and @draht/chord.
+
+- Run: `npx @draht/coding-agent`, or `npm install -g @draht/coding-agent` then `draht`
+- Auth: API keys (e.g. ANTHROPIC_API_KEY) or `/login` with Claude Pro/Max, ChatGPT Plus/Pro (Codex), GitHub Copilot, Gemini CLI, Antigravity
+- Default tools: read, write, edit, bash
+- Features: duet mode, Polyphase workflows, RLM (`draht rlm` for inputs larger than the context window), codemode, specialist subagents, virtual models, session tree, MCP servers, extensions, skills, prompt templates, themes, SDK and RPC mode
+- Opinionated prompts: slash commands such as /new-project, /plan-phase, /execute-phase, /verify-work, /fix, /review, /orchestrate; optional skills tdd-workflow, ddd-workflow, gsd-workflow (TDD, DDD and GSD are all optional), shipped in the npm package and in the plugins
+- Plugins: `npx draht-claude install` (Claude Code), `npx draht-codex install` (Codex)
+- License: MIT
+
+## Docs
+
+- [README](https://github.com/draht-dev/draht/blob/main/README.md)
+- [Coding agent README](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/README.md)
+- [Providers](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/docs/providers.md)
+- [Duet mode](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/docs/duet.md)
+- [RLM](https://github.com/draht-dev/draht/blob/main/packages/rlm/README.md)
+- [Slash commands](https://github.com/draht-dev/draht/tree/main/packages/coding-agent/prompts/commands)
+- [MCP](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/docs/mcp.md)
+- [SDK](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/docs/sdk.md)
+
+## Upstream
+
+- [pi by Mario Zechner](https://github.com/earendil-works/pi-mono)

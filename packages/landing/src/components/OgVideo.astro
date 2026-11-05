@@ -1,0 +1,44 @@
+---
+// og:video for the current page. Clips and the manifest are rendered by
+// og-video/ (Remotion): `cd og-video && bun run collect && bun run render`.
+// Pages without their own clip fall back to the site's home clip.
+import manifestJson from "../data/og-video.json";
+
+interface Props {
+  /** Origin for absolute URLs; defaults to Astro.site. */
+  origin?: string;
+  /** Also emit og:image/twitter:image from the clip's poster frame. */
+  poster?: boolean;
+}
+
+interface Manifest {
+  default: string;
+  pages: Record<string, string | undefined>;
+  defaultPoster?: string;
+  posters?: Record<string, string | undefined>;
+}
+
+const manifest: Manifest = manifestJson;
+const origin = Astro.props.origin ?? Astro.site?.toString() ?? Astro.url.origin;
+const path = Astro.url.pathname.replace(/\/index\.html$/, "").replace(/\.html$/, "").replace(/\/+$/, "") || "/";
+const video = new URL(manifest.pages[path] ?? manifest.default, origin).toString();
+const posterPath = Astro.props.poster ? (manifest.posters?.[path] ?? manifest.defaultPoster) : undefined;
+const poster = posterPath ? new URL(posterPath, origin).toString() : undefined;
+---
+
+<meta property="og:video" content={video} />
+<meta property="og:video:secure_url" content={video} />
+<meta property="og:video:type" content="video/mp4" />
+<meta property="og:video:width" content="1200" />
+<meta property="og:video:height" content="630" />
+{
+  poster && (
+    <>
+      <meta property="og:image" content={poster} />
+      <meta property="og:image:type" content="image/jpeg" />
+      <meta property="og:image:width" content="1200" />
+      <meta property="og:image:height" content="630" />
+      <meta name="twitter:image" content={poster} />
+    </>
+  )
+}

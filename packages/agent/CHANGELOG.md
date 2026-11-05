@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [2026.11.5-1] - 2026-11-05
+
+### Changed
+
+- feat(agent): pi-schema's Static types TypeBox-built schemas too, without depending on TypeBox
+- feat(ai,agent,coding-agent): validate tool arguments with pi-schema, drop TypeBox
+- Anthropic message threads (badlogic/pi-mono#11545)
+- fix: remove vulnerable dependency chains
+- fix(ai,chord,durable,coding-agent): parse streamed tool-call arguments incrementally (fixes badlogic/pi-mono#9265)
+
+### Fixed
+
+- rebrand pi references left by the 2026-11-01 upstream sync
+
 ## [2026.10.23-1] - 2026-10-23
 
 ### Changed

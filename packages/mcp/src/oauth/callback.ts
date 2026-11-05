@@ -140,6 +140,10 @@ export class OAuthCallbackServer {
 			this.reply(response, 400, { ok: false, message: "Invalid or expired OAuth state" });
 			return;
 		}
+		// Everything above (Host, origin, unknown path, unknown state) fails without touching the pending
+		// sign-in. From here on the state is consumed, by design also on the wrong one of this server's paths:
+		// a valid state on another redirect URI means an authorization server mixed up the response (RFC 9700
+		// section 4.4.2.2), so the sign-in fails instead of waiting for a second response with the same state.
 		clearTimeout(pending.timer);
 		this.pending.delete(state);
 		if (pending.path !== undefined && url.pathname !== pending.path) {

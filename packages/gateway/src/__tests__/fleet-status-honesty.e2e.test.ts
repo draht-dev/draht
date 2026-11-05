@@ -68,6 +68,7 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { AttachableSessionSchema, FleetFrameSchema } from "@draht/geist-protocol";
+import { absoluteTool } from "./helpers/absolute-tool.js";
 
 const REPO_ROOT = resolve(import.meta.dir, "..", "..", "..", "..");
 const DRAHT_CLI = join(REPO_ROOT, "packages", "coding-agent", "dist", "cli.js");
@@ -456,7 +457,7 @@ describe("a git that never answers (R35-ALWAYS.8)", () => {
 	const blocking = (extra: string): string =>
 		`${extra}echo "$PWD" >> ${probeLog}\n` +
 		`echo $$ >> ${probePids}\n` +
-		"sleep 3600 &\n" +
+		`${absoluteTool("sleep")} 3600 &\n` +
 		`echo $! >> ${probePids}\n` +
 		"wait\n";
 

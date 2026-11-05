@@ -94,7 +94,6 @@ async function initializeTools(api: ExtensionAPI) {
 		createGrepToolDefinition(workspace, {
 			operations: {
 				isDirectory: async (path) => (await isolation.fs({ op: "stat", path })).isDirectory,
-				readFile: async (path) => (await readFile(path)).toString("utf8"),
 				spawn: (args) => {
 					const child = isolation.spawn([isolation.resolveExecutable("rg"), ...args]);
 					child.stdin.end();

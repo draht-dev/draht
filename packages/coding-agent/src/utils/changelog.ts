@@ -194,11 +194,23 @@ export function compareVersions(v1: ChangelogEntry, v2: ChangelogEntry): number 
 }
 
 /**
- * Get entries newer than lastVersion
+ * Get entries newer than lastVersion, or undefined when lastVersion has no major.minor.patch to compare against
  */
-export function getNewEntries(entries: ChangelogEntry[], lastVersion: string): ChangelogEntry[] {
+export function getNewEntries(entries: ChangelogEntry[], lastVersion: string): ChangelogEntry[] | undefined {
+	// Read the leading major.minor.patch, like the changelog headings, so a prerelease such as
+	// 0.1.5-20261020.7 counts as 0.1.5 and its notes are not shown again on every launch (badlogic/pi-mono#11703).
+	// A bare numeric "-N" (draht intraday release, e.g. 2026.10.31-1) is a release, not a prerelease:
+	// it is kept as the suffix so 2026.10.31-2 notes still show after 2026.10.31-1.
+	// Alternatives considered: plain string comparison orders 0.10.0 before 0.9.0; numeric localeCompare
+	// works by accident and is locale-dependent; strict semver orders 0.1.5-x before 0.1.5, which repeats
+	// the [0.1.5] notes forever.
+	const parts = lastVersion.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:-(\d+)(?=$|\+))?/);
+	if (!parts) return undefined;
 	const last: ChangelogEntry = {
-		...parseVersion(lastVersion),
+		major: Number(parts[1]),
+		minor: Number(parts[2]),
+		patch: Number(parts[3]),
+		suffix: parts[4] ? Number(parts[4]) : 0,
 		content: "",
 	};
 

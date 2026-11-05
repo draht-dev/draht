@@ -21,6 +21,7 @@ import {
 } from "./errors.ts";
 import {
 	type AuthorizationServerMetadata,
+	isHttpUrl,
 	type OAuthClientInformation,
 	type OAuthClientInformationFull,
 	type OAuthClientInformationMixed,
@@ -44,6 +45,22 @@ export interface OAuthClientMetadataDocument {
 	redirectUrl: string;
 }
 
+/**
+ * What an authorization request was sent with, saved with its PKCE verifier. The code exchange of a
+ * sign-in passes it back (`OAuthFlowOptions.authorizationRequest`), so the code and the verifier never go
+ * to another client or authorization server than the one the user authorized.
+ */
+export interface OAuthAuthorizationRequest {
+	/** `client_id` of the authorization request. */
+	clientId: string;
+	/** The authorization server (its issuer identifier) the request went to. */
+	authorizationServerUrl: string;
+	/** Token endpoint the code is to be exchanged at. */
+	tokenEndpoint: string;
+	/** The `scope` parameter the request carried, if any. */
+	scope?: string;
+}
+
 export interface OAuthClientProvider {
 	readonly redirectUrl: string | URL;
 	readonly clientMetadata: OAuthClientMetadata;
@@ -60,6 +77,8 @@ export interface OAuthClientProvider {
 	saveTokens(tokens: OAuthTokens): void | Promise<void>;
 	redirectToAuthorization(url: URL): void | Promise<void>;
 	saveCodeVerifier(verifier: string): void | Promise<void>;
+	/** Called with the authorization request just before `saveCodeVerifier`; keep it with the verifier. */
+	saveAuthorizationRequest?(request: OAuthAuthorizationRequest): void | Promise<void>;
 	codeVerifier(): string | Promise<string>;
 	addClientAuthentication?: AddClientAuthentication;
 	invalidateCredentials?(kind: "all" | "client" | "tokens" | "verifier" | "discovery"): void | Promise<void>;
@@ -88,6 +107,22 @@ export interface OAuthFlowOptions {
 	 * server asks for scopes the current grant lacks (a refresh keeps the old scope).
 	 */
 	skipRefresh?: boolean;
+	/**
+	 * Only refresh the stored tokens: return `REDIRECT` instead of registering a client or preparing an
+	 * authorization request, so a pending authorization (its `state` and PKCE verifier) stays usable.
+	 */
+	refreshOnly?: boolean;
+	/**
+	 * With `authorizationCode`: the redirect URI the authorization request used. The exchange fails before
+	 * sending the code when the flow would send another one (RFC 6749 section 4.1.3 requires the same).
+	 */
+	authorizationRedirectUrl?: string;
+	/**
+	 * With `authorizationCode`: the authorization request the code answers. The exchange fails before the
+	 * code verifier is read when the flow would use another client, authorization server, or token endpoint,
+	 * for example after the client settings changed or discovery found another authorization server.
+	 */
+	authorizationRequest?: OAuthAuthorizationRequest;
 }
 
 export type OAuthFlowResult = "AUTHORIZED" | "REDIRECT";
@@ -186,6 +221,8 @@ export async function startAuthorization(
 		throw new Error("Authorization server does not support PKCE S256");
 	}
 	const url = new URL(metadata?.authorization_endpoint ?? new URL("/authorize", authorizationServerUrl));
+	// Callers open this URL with the platform URL handler, which also launches files and custom protocols.
+	if (!isHttpUrl(url)) throw new Error(`Invalid authorization endpoint ${url.href}`);
 	const { verifier, challenge } = await pkce();
 	url.searchParams.set("response_type", "code");
 	url.searchParams.set("client_id", options.clientInformation.client_id);
@@ -199,12 +236,16 @@ export async function startAuthorization(
 	return { authorizationUrl: url, codeVerifier: verifier };
 }
 
+function tokenEndpoint(authorizationServerUrl: string | URL, metadata: AuthorizationServerMetadata | undefined): URL {
+	return new URL(metadata?.token_endpoint ?? new URL("/token", authorizationServerUrl));
+}
+
 async function tokenRequest(
 	authorizationServerUrl: string | URL,
 	options: TokenRequestOptions,
 	params: URLSearchParams,
 ): Promise<OAuthTokens> {
-	const url = secureEndpoint(options.metadata?.token_endpoint ?? new URL("/token", authorizationServerUrl));
+	const url = secureEndpoint(tokenEndpoint(authorizationServerUrl, options.metadata));
 	const headers = new Headers({ Accept: "application/json", "content-type": "application/x-www-form-urlencoded" });
 	if (options.resource) params.set("resource", options.resource);
 	if (options.addClientAuthentication) {
@@ -317,7 +358,17 @@ export function stepUpScope(granted: string | undefined, challenged: string | un
 	return [...new Set(scopes)].join(" ");
 }
 
-async function runFlow(provider: OAuthClientProvider, options: OAuthFlowOptions): Promise<OAuthFlowResult> {
+/** What a flow used, for deciding what to invalidate after it failed. */
+interface FlowUse {
+	/** `client_id` of the stored client the flow used; `undefined` when none was stored. */
+	storedClientId?: string;
+}
+
+async function runFlow(
+	provider: OAuthClientProvider,
+	options: OAuthFlowOptions,
+	use: FlowUse = {},
+): Promise<OAuthFlowResult> {
 	const metadataUrl = options.authorizationServerMetadataUrl && secureEndpoint(options.authorizationServerMetadataUrl);
 	// With a configured metadata URL, discovery is not cached, so changing the URL applies at once.
 	const cached = metadataUrl ? undefined : await provider.discoveryState?.();
@@ -351,15 +402,33 @@ async function runFlow(provider: OAuthClientProvider, options: OAuthFlowOptions)
 	// `||`, not `??`: an empty scope (for example from `scopes_supported: []`) falls through to the next source.
 	const scope =
 		options.scope || discovered.resourceMetadata?.scopes_supported?.join(" ") || provider.clientMetadata.scope;
+	// draht: the configured Client ID Metadata Document is selected before a stored registration, so switching
+	// to `cimd` never reuses a dynamically registered client (upstream asks for the stored client first).
 	const clientDocument = provider.clientMetadataDocument?.(metadata);
 	const stored = clientDocument ? undefined : await provider.clientInformation();
+	use.storedClientId = stored?.client_id;
 	if (clientDocument) {
 		const url = new URL(clientDocument.url);
 		if (url.protocol !== "https:" || url.pathname === "/") throw new Error("Invalid OAuth client metadata URL");
 	}
+	// The document's redirect URI may differ from the provider's, for example by a server-specific path.
+	const redirectUrl = clientDocument?.redirectUrl ?? String(provider.redirectUrl);
+	// Checked first: another redirect URI also explains a client that is missing for the exchange.
+	if (options.authorizationCode && options.authorizationRedirectUrl !== undefined) {
+		if (redirectUrl !== options.authorizationRedirectUrl) {
+			throw new Error(
+				`The code exchange would use the redirect URI ${redirectUrl}, but the authorization request used ${options.authorizationRedirectUrl}`,
+			);
+		}
+	}
 	let client = stored ?? (clientDocument && { client_id: clientDocument.url });
 	if (!client) {
-		if (options.authorizationCode) throw new Error("OAuth client information is missing during code exchange");
+		if (options.refreshOnly) return "REDIRECT";
+		if (options.authorizationCode) {
+			throw new Error(
+				"OAuth client information is missing during code exchange: the authorization request's client was removed, or the client settings changed",
+			);
+		}
 		if (!provider.saveClientInformation) throw new Error("OAuth client information cannot be persisted");
 		client = await registerClient(discovered.authorizationServerUrl, {
 			metadata,
@@ -370,8 +439,6 @@ async function runFlow(provider: OAuthClientProvider, options: OAuthFlowOptions)
 		});
 		await provider.saveClientInformation(client);
 	}
-	// The document's redirect URI may differ from the provider's, for example by a server-specific path.
-	const redirectUrl = clientDocument?.redirectUrl ?? provider.redirectUrl;
 	const tokenOptions: TokenRequestOptions = {
 		metadata,
 		clientInformation: client,
@@ -381,6 +448,22 @@ async function runFlow(provider: OAuthClientProvider, options: OAuthFlowOptions)
 		signal: options.signal,
 	};
 	if (options.authorizationCode) {
+		// Checked before the verifier is read: the code and the verifier go only where the user authorized.
+		const request = options.authorizationRequest;
+		if (request) {
+			const current: [string, string, string][] = [
+				["client", client.client_id, request.clientId],
+				["authorization server", discovered.authorizationServerUrl, request.authorizationServerUrl],
+				["token endpoint", tokenEndpoint(discovered.authorizationServerUrl, metadata).href, request.tokenEndpoint],
+			];
+			for (const [name, actual, expected] of current) {
+				if (actual !== expected) {
+					throw new Error(
+						`The code exchange would use the ${name} ${actual}, but the authorization request used ${expected}; sign in again`,
+					);
+				}
+			}
+		}
 		// RFC 9207: never send a code from another authorization server to this one. Without metadata there
 		// is no issuer to compare with, so any `iss` is rejected.
 		const iss = options.iss;
@@ -395,7 +478,9 @@ async function runFlow(provider: OAuthClientProvider, options: OAuthFlowOptions)
 		});
 		// A response without `scope` grants the requested scope (RFC 6749 §5.1). Recorded so a step-up can
 		// keep it. Callers pass the options of the authorization request, so `scope` is what was requested.
-		await provider.saveTokens(withScope(tokens, scope));
+		await provider.saveTokens(withScope(tokens, request ? request.scope : scope));
+		// The code is spent: drop the request's verifier and state so the exchange cannot be replayed.
+		await provider.invalidateCredentials?.("verifier");
 		return "AUTHORIZED";
 	}
 	const existing = options.skipRefresh ? undefined : await provider.tokens();
@@ -413,6 +498,7 @@ async function runFlow(provider: OAuthClientProvider, options: OAuthFlowOptions)
 			if (error instanceof OAuthError && error.code !== "server_error") throw error;
 		}
 	}
+	if (options.refreshOnly) return "REDIRECT";
 	const state = await provider.state?.();
 	const authorization = await startAuthorization(discovered.authorizationServerUrl, {
 		metadata,
@@ -422,17 +508,34 @@ async function runFlow(provider: OAuthClientProvider, options: OAuthFlowOptions)
 		state,
 		resource,
 	});
+	await provider.saveAuthorizationRequest?.({
+		clientId: client.client_id,
+		authorizationServerUrl: discovered.authorizationServerUrl,
+		tokenEndpoint: tokenEndpoint(discovered.authorizationServerUrl, metadata).href,
+		// What the request carried, not what the authorization URL holds: the endpoint may name a scope itself.
+		...(scope ? { scope } : {}),
+	});
 	await provider.saveCodeVerifier(authorization.codeVerifier);
 	await provider.redirectToAuthorization(authorization.authorizationUrl);
 	return "REDIRECT";
 }
 
 export async function authorizeMcp(provider: OAuthClientProvider, options: OAuthFlowOptions): Promise<OAuthFlowResult> {
+	const use: FlowUse = {};
 	try {
-		return await runFlow(provider, options);
+		return await runFlow(provider, options, use);
 	} catch (error) {
 		if (error instanceof OAuthError && ["invalid_client", "unauthorized_client"].includes(error.code)) {
-			await provider.invalidateCredentials?.("all");
+			// A refresh keeps a pending authorization's `state` and verifier: they are the user's sign-in. A client
+			// stored meanwhile (by a sign-in that completed) is not the one the server rejected, so it stays.
+			if (options.refreshOnly) {
+				if ((await provider.clientInformation())?.client_id === use.storedClientId) {
+					for (const kind of ["client", "tokens", "discovery"] as const)
+						await provider.invalidateCredentials?.(kind);
+				}
+			} else {
+				await provider.invalidateCredentials?.("all");
+			}
 			return runFlow(provider, options);
 		}
 		if (error instanceof OAuthError && error.code === "invalid_grant") {

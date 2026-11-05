@@ -1,7 +1,7 @@
 import { readFileSync, rmSync } from "node:fs";
 import { fauxAssistantMessage, fauxToolCall } from "@draht/ai";
 import type { SystemMessage, ToolResultMessage } from "@draht/ai/compat";
-import { type JsonRpcRequest, LATEST_PROTOCOL_VERSION } from "@draht/mcp";
+import { createMcpToolName, type JsonRpcRequest, LATEST_PROTOCOL_VERSION } from "@draht/mcp";
 import { createInMemoryTransportPair } from "@draht/mcp/testing";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +10,6 @@ import type { SessionManager } from "../../src/core/session-manager.ts";
 import { createCodemodeExtension } from "../../src/extensions/codemode/index.ts";
 import type { McpExposure, McpServerEntry } from "../../src/extensions/mcp/config.ts";
 import { createMcpExtension, MCP_SERVERS_SECTION } from "../../src/extensions/mcp/index.ts";
-import { createMcpToolName } from "../../src/extensions/mcp/tools.ts";
 import { createToolSearchExtension } from "../../src/extensions/tool-search/index.ts";
 import { TOOL_SEARCH_DESCRIPTION } from "../../src/extensions/tool-search/tool.ts";
 import { createTestExtensionsResult, createTestResourceLoader } from "../utilities.ts";

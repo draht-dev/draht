@@ -6,6 +6,7 @@ export interface PiManifest {
 	skills?: string[];
 	prompts?: string[];
 	themes?: string[];
+	changelogPath?: string;
 }
 
 const RESOURCE_FIELDS = ["extensions", "skills", "prompts", "themes"] as const;
@@ -21,6 +22,9 @@ function validateManifest(raw: Record<string, unknown>): PiManifest {
 		if (Array.isArray(entries) && entries.every((entry) => typeof entry === "string")) {
 			manifest[field] = entries;
 		}
+	}
+	if (typeof raw.changelogPath === "string") {
+		manifest.changelogPath = raw.changelogPath;
 	}
 	return manifest;
 }

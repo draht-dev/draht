@@ -1,0 +1,28 @@
+{
+  "name": "og-video",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Remotion motion cards rendered to an og:video MP4 for every public page.",
+  "scripts": {
+    "collect": "bun scripts/collect.ts",
+    "render": "bun scripts/render.ts",
+    "studio": "remotion studio src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/bundler": "4.0.539",
+    "@remotion/cli": "4.0.539",
+    "@remotion/fonts": "4.0.539",
+    "@remotion/layout-utils": "4.0.539",
+    "@remotion/renderer": "4.0.539",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "remotion": "4.0.539"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "@types/react": "^19.1.5",
+    "typescript": "^5.9.3"
+  }
+}

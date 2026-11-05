@@ -1,6 +1,14 @@
 # Changelog
 
-## [Unreleased]
+## [2026.11.5-1] - 2026-11-05
+
+### Changed
+
+- feat(ai,agent,coding-agent): validate tool arguments with pi-schema, drop TypeBox
+
+### Fixed
+
+- bump @anthropic-ai/sandbox-runtime to 0.0.81
 
 ## [2026.10.23-1] - 2026-10-23
 

@@ -1,6 +1,33 @@
 # Changelog
 
-## [Unreleased]
+## [2026.11.5-1] - 2026-11-05
+
+### Changed
+
+- fix(tui): prevent cursor marker leaks (badlogic/pi-mono#9441)
+- fix(tui): detect Alacritty for OSC 8 hyperlinks without TERM_PROGRAM (badlogic/pi-mono#11777)
+- fix(tui): hide HTML comments in Markdown rendering (badlogic/pi-mono#11755)
+- fix(coding-agent,tui): reuse syntax highlighting and rendered Markdown blocks
+- fix: remove vulnerable dependency chains
+- fix(tui): detect Orca terminals as Kitty-image capable (badlogic/pi-mono#9329)
+- fix(tui): drop space after styled word at wrap boundary, reset strikethrough at line end (badlogic/pi-mono#11591)
+- fix(tui): treat ESC+Return with native Shift held as Shift+Enter
+- fix(tui): stop writing OSC 133 prompt markers in regular mode (badlogic/pi-mono#11565)
+- fix(tui,coding-agent): handle selection page keys in all scrolling lists
+- fix(tui): stop bare URLs at CJK punctuation (badlogic/pi-mono#10934)
+- fix(tui): fall back to raw LaTeX when display math is wider than the content width (badlogic/pi-mono#11487)
+- fix(tui): recognize kitty F1-F12 sequences and ignore F13+ keys (badlogic/pi-mono#11468)
+- fix: harden handling of untrusted URLs, terminal text, and streamed data
+- fix(tui): bound image line search by tallest registered image
+- fix(tui): crop boxed images scrolled above the fullscreen viewport
+- fix(tui): use iterm2 word characters for fullscreen double-click selection (badlogic/pi-mono#11340)
+- docs(tui): remove stale comment about Rex's Kitty images
+- fix(tui): stop nested blockquote rendering from growing exponentially (badlogic/pi-mono#11321)
+- fix(tui,coding-agent): rank contiguous fuzzy matches and search session fields separately
+
+### Fixed
+
+- rebrand pi references left by the 2026-11-01 upstream sync
 
 ## [2026.10.23-1] - 2026-10-23
 

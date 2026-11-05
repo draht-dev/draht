@@ -1,6 +1,13 @@
 # Changelog
 
-## [Unreleased]
+## [2026.11.5-1] - 2026-11-05
+
+### Changed
+
+- feat(chord): telemetry from pages and workers stored by the server, who a span was for
+- feat(chord): telemetry, spans across hosts (slice 9)
+- fix: remove vulnerable dependency chains
+- fix(ai): resolve pi-telemetry from source in workspace tests
 
 ## [2026.10.23-1] - 2026-10-23
 

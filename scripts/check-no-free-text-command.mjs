@@ -29,8 +29,21 @@
  * src of every geist package. Test sources are out of scope: a test writing the
  * operator's own decision file IS the local machine.
  *
- * OUT OF SCOPE: `packages/gateway/src/session/session-process.ts` still wraps
- * `Bun.spawn(command, …)`; the wave-4 command-surface task removes that chain.
+ * RULE D — no process-creating API in a file under packages/gateway/src, other
+ * than session/spawn-primitive.ts and src/__tests__ (R36-SPAWN.1: `session_spawn`
+ * is the only spawn path). The incident: `POST /sessions/:id/input` lazily ran
+ * `["draht", "start"]` through a bare PATH lookup. Rules A and B guard the
+ * request; this one guards the other end, because a spawn that nothing on the
+ * wire selects is still a spawn.
+ *
+ * It is deny-by-default, because a list of spellings never converges: every `Bun`
+ * and every `process` must be followed by `.` and a member the gateway uses today
+ * (BUN_MEMBERS, PROCESS_MEMBERS); a module is loaded only through one plain string
+ * literal with no escape, by `import`, `require` or `getBuiltinModule`, and a
+ * value import from `bun` names only allowlisted members. What it cannot read it
+ * reports: a cast, `!`, a bracket, an alias, `globalThis`, `eval`, `Function`, an
+ * identifier escape. Modules that start a process or run text stay a list
+ * (PROCESS_MODULE); `import type` / `export type` of them creates nothing and passes.
  *
  * Usage:
  *   node scripts/check-no-free-text-command.mjs   # exit 1 on any violation
@@ -86,9 +99,14 @@ const WRITE_FLAG = /["'][aw]\+?["']|O_WRONLY|O_APPEND|O_CREAT|O_TRUNC/;
 
 // ── source scanning ──────────────────────────────────────────────────────────
 
-function regexCanStart(prev) {
+/** Keywords after which a `/` opens a regex although they end in a word character. */
+const KEYWORDS_BEFORE_REGEX = new Set(["return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await"]);
+
+function regexCanStart(prev, word) {
 	if (prev === "") return true;
-	return !/[)\]}\w$'"`]/.test(prev);
+	if (prev === "++" || prev === "--") return false;
+	if (/[\w$]/.test(prev)) return KEYWORDS_BEFORE_REGEX.has(word);
+	return !/[)\]}'"`]/.test(prev);
 }
 
 /**
@@ -96,17 +114,43 @@ function regexCanStart(prev) {
  * preserving every offset and line break, so two blankings of one file can be
  * read against each other by index: call sites are located in the blanked text
  * where prose cannot trip the gate, while quoted keys and path literals are
- * read from the same offsets in the text that kept its strings.
+ * read from the same offsets in the text that kept its strings. A template's
+ * `${…}` is code and is kept in both.
  */
 export function blankNonCode(text, { blankStrings = true } = {}) {
 	const out = text.split("");
 	const n = text.length;
 	let i = 0;
 	let prev = "";
+	const braces = [];
 
 	const blank = (from, to) => {
 		for (let k = from; k < to && k < n; k++) {
 			if (out[k] !== "\n") out[k] = " ";
+		}
+	};
+
+	const wordBefore = (index) => {
+		let end = index;
+		while (end > 0 && /\s/.test(out[end - 1])) end--;
+		let start = end;
+		while (start > 0 && /[\w$]/.test(out[start - 1])) start--;
+		return out[start - 1] === "." ? "" : out.slice(start, end).join("");
+	};
+
+	const templateChunk = (from) => {
+		let j = from;
+		while (j < n && text[j] !== "`" && !(text[j] === "$" && text[j + 1] === "{")) {
+			j += text[j] === "\\" ? 2 : 1;
+		}
+		if (blankStrings) blank(from, j);
+		if (text[j] === "$") {
+			braces.push("${");
+			i = j + 2;
+			prev = "{";
+		} else {
+			i = j + 1;
+			prev = "`";
 		}
 	};
 
@@ -140,16 +184,20 @@ export function blankNonCode(text, { blankStrings = true } = {}) {
 			continue;
 		}
 		if (c === "`") {
-			let j = i + 1;
-			while (j < n && text[j] !== "`") {
-				j += text[j] === "\\" ? 2 : 1;
-			}
-			if (blankStrings) blank(i + 1, j);
-			i = j + 1;
-			prev = "`";
+			templateChunk(i + 1);
 			continue;
 		}
-		if (c === "/" && regexCanStart(prev)) {
+		if (c === "{") braces.push("{");
+		if (c === "}" && braces.pop() === "${") {
+			templateChunk(i + 1);
+			continue;
+		}
+		if ((c === "+" || c === "-") && c2 === c) {
+			prev = c + c;
+			i += 2;
+			continue;
+		}
+		if (c === "/" && regexCanStart(prev, /[\w$]/.test(prev) ? wordBefore(i) : "")) {
 			let j = i + 1;
 			let inClass = false;
 			while (j < n && text[j] !== "\n") {
@@ -530,16 +578,153 @@ export function findTrustWriters(source) {
 	return violations.sort((a, b) => a.line - b.line);
 }
 
+// ── rule D — no second process-creating path in the gateway ──────────────────
+
+const PROCESS_SCAN_ROOT = "packages/gateway/src";
+const PROCESS_TEST_DIR = `${PROCESS_SCAN_ROOT}/__tests__/`;
+export const SPAWN_PRIMITIVE = `${PROCESS_SCAN_ROOT}/session/spawn-primitive.ts`;
+
+/** What non-test gateway source takes out of `Bun` and `process` today; growing either is a reviewed change. */
+export const BUN_MEMBERS = new Set(["file", "serve"]);
+export const PROCESS_MEMBERS = new Set(["argv", "env", "execPath", "exit", "getuid", "kill", "on", "platform", "stderr"]);
+
+const PROCESS_MODULE =
+	/^(?:(?:node:)?(?:child_process|cluster|module|process|vm|worker_threads|repl|inspector)|node:test|bun:ffi)$|^(?:data|blob|https?):/;
+const STATIC_SPECIFIER = /(?<![\w$])(?:from|import)\s*(["'])/g;
+const MODULE_LOAD = /(?<![\w$])(import|require|getBuiltinModule)(?![\w$])(\s*(?:\?\.\s*)?\()?/g;
+const MODULE_KEYWORD = /\b(?:import|export)\b/g;
+/**
+ * A whole import/export clause that is `type` and one binding shape, which creates nothing. Anchored at both ends:
+ * `import type from "x"` (a default import NAMED `type`), `import type, { a }`, `import types` and a clause with
+ * anything extra all fall through to "value".
+ */
+const TYPE_ONLY_CLAUSE = /^\s*type(?:\s*\{[^{}]*\}|\s*\*(?:\s+as\s+[A-Za-z_$][\w$]*)?|\s+[A-Za-z_$][\w$]*)\s*$/;
+const TYPE_ONLY_SPECIFIER = /^type\s+(?!as\b)[A-Za-z_$][\w$]*(?:\s+as\s+[A-Za-z_$][\w$]*)?$/;
+const NAMED_IMPORT = /^([A-Za-z_$][\w$]*)(?:\s+as\s+[A-Za-z_$][\w$]*)?$/;
+/** Names that reach any API by a computed name or by text: free uses only, a property of something else is not the global. */
+const UNREADABLE_NAME = /(?<![\w$])(?:(?<=\.\.\.\s*)|(?<!\.\s*))(globalThis|global|self|eval|Function|Worker|module)(?![\w$])/g;
+
+const memberAfter = (name) => new RegExp(`(?<![\\w$])${name}(?![\\w$])(?:\\s*\\??\\s*\\.\\s*([A-Za-z_$][\\w$]*))?`, "g");
+const listOf = (members, prefix = "") => [...members].sort().map((member) => `\`${prefix}${member}\``).join(", ");
+
+const SPAWN_ADVICE = `only ${SPAWN_PRIMITIVE.slice(PROCESS_SCAN_ROOT.length + 1)} may create a process in ${PROCESS_SCAN_ROOT} (R36-SPAWN.1; the daemon's git status probe lives in geist-core and is out of scope). A session is started by \`session_spawn\`, never by a second spawn path.`;
+const BUN_NOTE = `\`Bun\` may be followed only by ${listOf(BUN_MEMBERS, ".")}; every other use is reported, including a cast, \`!\`, a bracket, destructuring, an alias, \`Bun\` passed as a value and a type-position use such as \`typeof Bun.spawn\``;
+const PROCESS_NOTE = `\`process\` may be followed only by ${listOf(PROCESS_MEMBERS, ".")}; it also reaches \`process.binding\`, \`process.dlopen\` and \`process.getBuiltinModule\``;
+
+/**
+ * The binding clause of the import/export statement whose `from` sits at `fromIndex`: everything after the nearest
+ * keyword before it. A `from "…"` belongs to that keyword whatever the previous statement looked like, so a
+ * semicolon-less `export type T = …` above cannot lend its `type` to a value import below.
+ */
+function bindingClauseBefore(codeOnly, withStrings, fromIndex) {
+	let clauseStart = 0;
+	for (const keyword of codeOnly.slice(0, fromIndex).matchAll(MODULE_KEYWORD)) clauseStart = keyword.index + keyword[0].length;
+	return withStrings.slice(clauseStart, fromIndex);
+}
+
+/** Whether the clause binds nothing at runtime: `type …` as a whole, or braces holding only `type`-marked names. */
+function bindsNoValue(clause) {
+	if (TYPE_ONLY_CLAUSE.test(clause)) return true;
+	const braced = /^\s*\{([^{}]*)\}\s*$/.exec(clause);
+	if (!braced) return false;
+	const entries = braced[1].split(",").map((entry) => entry.trim()).filter(Boolean);
+	return entries.length > 0 && entries.every((entry) => TYPE_ONLY_SPECIFIER.test(entry));
+}
+
+/** What a value import from `bun` takes that is not an allowlisted member named by its plain identifier. */
+function bunImportOffenders(clause) {
+	const braced = /\{([^{}]*)\}/.exec(clause);
+	const outside = clause.replace(/\{[^{}]*\}/, "").replace(/[\s,]+/g, " ").trim();
+	const entries = (braced?.[1] ?? "").split(",").map((entry) => entry.trim()).filter(Boolean);
+	const offending = entries.filter((entry) => {
+		if (TYPE_ONLY_SPECIFIER.test(entry)) return false;
+		const name = NAMED_IMPORT.exec(entry)?.[1];
+		return name === undefined || !BUN_MEMBERS.has(name);
+	});
+	return outside === "" ? offending : [outside, ...offending];
+}
+
+/** The string literal whose opening quote sits at `open`, read from the text that kept its strings. */
+function literalAt(withStrings, codeOnly, open) {
+	return withStrings.slice(open + 1, codeOnly.indexOf(codeOnly[open], open + 1));
+}
+
+/** The text of the one plain string literal that is the first argument of the call opened at `open`, or null. */
+function plainLiteralArgument(withStrings, codeOnly, open) {
+	const args = bracketedText(codeOnly, open);
+	const first = splitTopLevel(args.text)[0];
+	if (!first || !/^(["'`])[ \n]*\1$/.test(first.value)) return null;
+	return withStrings.slice(args.start + first.index + 1, args.start + first.index + first.value.length - 1);
+}
+
+export function findProcessCreators(source) {
+	const withStrings = blankNonCode(source, { blankStrings: false });
+	const codeOnly = blankNonCode(source, { blankStrings: true });
+	const violations = [];
+	const report = (index, message) => violations.push({ line: lineAt(codeOnly, index), message });
+
+	/** `clause`: the binding clause of a static `from`, null for a bare `import "x"`, undefined for a call. */
+	const judgeSpecifier = (index, specifier, clause) => {
+		if (specifier.includes("\\")) {
+			report(index, `names the module \`${specifier}\` with a backslash escape, which this gate cannot read — ${SPAWN_ADVICE}`);
+		} else if (PROCESS_MODULE.test(specifier)) {
+			if (typeof clause !== "string" || !bindsNoValue(clause)) report(index, `reaches \`${specifier}\` — ${SPAWN_ADVICE}`);
+		} else if (specifier === "bun") {
+			if (clause === undefined) {
+				// Whole module, so what is taken out of it cannot be read here; the static form is judged by its names.
+				report(index, `loads the \`bun\` module dynamically — ${SPAWN_ADVICE}`);
+			} else if (clause !== null && !bindsNoValue(clause)) {
+				const offenders = bunImportOffenders(clause);
+				if (offenders.length > 0) {
+					report(index, `takes \`${offenders.join("`, `")}\` out of the \`bun\` module — only ${listOf(BUN_MEMBERS)} may leave it, named by their plain identifiers. ${SPAWN_ADVICE}`);
+				}
+			}
+		}
+	};
+
+	for (const m of codeOnly.matchAll(/\\/g)) {
+		report(m.index, `spells an identifier with a backslash escape, which this gate cannot read — ${SPAWN_ADVICE}`);
+	}
+
+	for (const m of codeOnly.matchAll(STATIC_SPECIFIER)) {
+		const specifier = literalAt(withStrings, codeOnly, m.index + m[0].length - 1);
+		judgeSpecifier(m.index, specifier, m[0].startsWith("from") ? bindingClauseBefore(codeOnly, withStrings, m.index) : null);
+	}
+
+	for (const m of codeOnly.matchAll(MODULE_LOAD)) {
+		const [, name, call] = m;
+		if (name === "import" && !call) continue;
+		const specifier = call ? plainLiteralArgument(withStrings, codeOnly, m.index + m[0].length - 1) : null;
+		if (specifier === null) report(m.index, `reaches a module through \`${name}\` without one plain string literal naming it — ${SPAWN_ADVICE}`);
+		else judgeSpecifier(m.index, specifier, undefined);
+	}
+
+	for (const [name, members, note] of [
+		["Bun", BUN_MEMBERS, BUN_NOTE],
+		["process", PROCESS_MEMBERS, PROCESS_NOTE],
+	]) {
+		for (const m of codeOnly.matchAll(memberAfter(name))) {
+			if (m[1] === undefined) report(m.index, `uses \`${name}\` in a form this gate cannot read — ${note}. ${SPAWN_ADVICE}`);
+			else if (!members.has(m[1])) report(m.index, `uses \`${name}.${m[1]}\` — ${note}. ${SPAWN_ADVICE}`);
+		}
+	}
+	for (const m of codeOnly.matchAll(UNREADABLE_NAME)) {
+		report(m.index, `uses \`${m[1]}\`, which reaches any API by a name this gate cannot read — ${SPAWN_ADVICE}`);
+	}
+
+	return violations.sort((a, b) => a.line - b.line);
+}
+
 // ── repo scan ────────────────────────────────────────────────────────────────
 
-function walk(dir, exts) {
+function walk(dir, exts, skip = SKIP_DIRS) {
 	if (!existsSync(dir)) return [];
 	const out = [];
 	for (const entry of readdirSync(dir, { withFileTypes: true })) {
 		const full = join(dir, entry.name);
 		if (entry.isDirectory()) {
-			if (SKIP_DIRS.has(entry.name)) continue;
-			out.push(...walk(full, exts));
+			if (skip.has(entry.name)) continue;
+			out.push(...walk(full, exts, skip));
 		} else if (exts.some((e) => entry.name.endsWith(e))) {
 			out.push(full);
 		}
@@ -549,6 +734,14 @@ function walk(dir, exts) {
 
 export function isTestSource(path) {
 	return /(^|\/)(__tests__|__mocks__|test|tests|fixtures)\//.test(path) || /\.(test|spec|e2e)\.[cm]?[jt]sx?$/.test(path);
+}
+
+/**
+ * Every code file under the gateway's src except src/__tests__, the primitive included: rule D exempts it by name, not
+ * by omission. A `fixtures/`, `build/` or `*.test.ts` anywhere else is source like any other.
+ */
+export function processScanFiles(root) {
+	return walk(join(root, PROCESS_SCAN_ROOT), CODE_EXTS, new Set([".git"])).filter((file) => !relative(root, file).startsWith(PROCESS_TEST_DIR));
 }
 
 /** Daemon source roots for rule C: the gateway plus every geist package. */
@@ -594,6 +787,15 @@ export function scanRepo(root = ROOT) {
 		}
 	}
 
+	const processFiles = processScanFiles(root);
+	if (processFiles.length === 0) {
+		add("D", join(root, PROCESS_SCAN_ROOT), 0, `${PROCESS_SCAN_ROOT} is missing or holds no source — the gate's scan target moved and rule D enforces nothing`);
+	}
+	for (const file of processFiles) {
+		if (relative(root, file) === SPAWN_PRIMITIVE) continue;
+		for (const v of findProcessCreators(readFileSync(file, "utf-8"))) add("D", file, v.line, v.message);
+	}
+
 	return violations;
 }
 
@@ -601,6 +803,7 @@ const RULE_TITLES = {
 	A: "a client→server frame names what runs (R36-SPAWN.8)",
 	B: "an HTTP route lets a request body select what runs (R32-FLEET.8, GSEC-12)",
 	C: "the daemon writes project trust (R36-SPAWN.5)",
+	D: "the gateway creates a process outside session/spawn-primitive.ts (R36-SPAWN.1)",
 };
 
 const entry = process.argv[1];
@@ -615,5 +818,5 @@ if (entry && existsSync(entry) && import.meta.url === pathToFileURL(realpathSync
 		console.error(`\n${rules.map((r) => `rule ${r} — ${RULE_TITLES[r]}`).join("\n")}`);
 		process.exit(1);
 	}
-	console.log("check:no-free-text-command: ok (no command-shaped client frame field, no unrefused body key, no daemon trust writer)");
+	console.log("check:no-free-text-command: ok (no command-shaped client frame field, no unrefused body key, no daemon trust writer, no second spawn path)");
 }

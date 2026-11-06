@@ -23,7 +23,7 @@
  * and opens a full-screen TUI picker, and a bare cross-project session id
  * reaches an interactive fork prompt that EOF-answers "no" and exits 0 — a
  * success code for having started nothing. The daemon uses
- * `--session <absolute .jsonl path> --attachable --mode rpc`, resolved
+ * `--session <absolute .jsonl path> --attachable --mode rpc --no-approve`, resolved
  * daemon-side from its own history index. This file proves the outcome the
  * requirement wanted (a history session becomes live and joins the fleet with no
  * client reconnect), not the mechanism it named.
@@ -76,6 +76,8 @@ import {
 // happy-path resume at all: a spawn that succeeds walks exactly one safe path
 // and forwards exactly one declared name.
 import { assertSafeExecutablePath, buildChildEnvironment, SpawnRefusedError } from "../session/spawn-primitive.js";
+import { absoluteTool } from "./helpers/absolute-tool.js";
+import { argvOf } from "./helpers/process-table.js";
 
 const REPO_ROOT = resolve(import.meta.dir, "..", "..", "..", "..");
 const DRAHT_CLI = join(REPO_ROOT, "packages", "coding-agent", "dist", "cli.js");
@@ -724,19 +726,20 @@ describe("session_resume (R35-ALWAYS.9)", () => {
 		// The trap was armed before the daemon started and is still unsprung.
 		expect(existsSync(shimMarker)).toBe(false);
 
-		// And the child's own argv names the canonical absolute CLI. `ps` is the
-		// only view of another process's argv this platform offers, and it is the
-		// point: what is asserted is what the kernel actually exec'd.
-		const ps = Bun.spawnSync(["ps", "-o", "command=", "-p", String(resumedPid)]);
-		const command = ps.stdout.toString();
-		expect(command).toContain(DRAHT_CLI);
-		expect(command).toContain("--attachable");
-		expect(command).toContain("--mode rpc");
-		// Named by an absolute .jsonl path, which is what keeps it out of the fork
-		// prompt a bare id would have hit.
-		expect(command).toContain(seeded.path);
-		// argv array, never a shell.
-		expect(command).not.toContain("sh -c");
+		// And the child's own argv, whole, after the interpreter the daemon runs
+		// under: the canonical absolute CLI, then the session named by an absolute
+		// .jsonl path (which keeps it out of the fork prompt a bare id would have
+		// hit), then the posture flags. What is asserted is what the kernel
+		// actually exec'd, and an argv array of exactly this shape is never a shell.
+		expect(argvOf(resumedPid).slice(1)).toEqual([
+			DRAHT_CLI,
+			"--session",
+			seeded.path,
+			"--attachable",
+			"--mode",
+			"rpc",
+			"--no-approve",
+		]);
 	});
 
 	test("the resumed session answers a prompt, and its environment carries only what was declared", async () => {
@@ -961,12 +964,12 @@ describe("the deadline, the process-GROUP teardown, and one resume at a time (R3
 			[
 				"#!/bin/sh",
 				"trap '' TERM",
-				`sh -c 'while :; do sleep 1; done' ${marker} &`,
+				`sh -c 'while :; do ${absoluteTool("sleep")} 1; done' ${marker} &`,
 				`echo "$$" > ${pidFile}.tmp`,
 				`echo "$!" >> ${pidFile}.tmp`,
 				// Renamed into place, so a reader never sees one line of two.
-				`mv ${pidFile}.tmp ${pidFile}`,
-				"while :; do sleep 1; done",
+				`${absoluteTool("mv")} ${pidFile}.tmp ${pidFile}`,
+				`while :; do ${absoluteTool("sleep")} 1; done`,
 				"",
 			].join("\n"),
 			{ mode: 0o755 },
@@ -1489,9 +1492,10 @@ describe("the trust lookup key, against the store it mirrors", () => {
 	 * canonicalise it anyway, so a non-canonical recorded cwd cannot be produced
 	 * by running the binary; and `HistoryIndex` memoises headers per file keyed on
 	 * INODE and never invalidates, so an in-place edit would be invisible to a
-	 * daemon that had already enumerated the file. Unlink-then-write gives a new
-	 * inode and moves the directory mtime, which is exactly what both cache levels
-	 * key on.
+	 * daemon that had already enumerated the file. Write-beside-then-rename gives a
+	 * new inode and moves the directory mtime, which is exactly what both cache
+	 * levels key on. (Unlink-then-write does not reliably: the filesystem may hand
+	 * the freed inode straight back.)
 	 */
 	test("an explicit `false` recorded canonically refuses a cwd recorded through a symlink", async () => {
 		const real = realpathSync(tempDir("srSy-"));
@@ -1504,8 +1508,12 @@ describe("the trust lookup key, against the store it mirrors", () => {
 		const header = JSON.parse(lines[0]) as Record<string, unknown>;
 		header.cwd = link;
 		lines[0] = JSON.stringify(header);
-		rmSync(seededThere.path);
-		writeFileSync(seededThere.path, lines.join("\n"));
+		// Write beside the file, then rename over it: the new file is allocated while the old one
+		// still exists, so its inode always differs. Unlink-then-write can get the freed inode back,
+		// and the daemon's per-inode header memo then keeps reporting the old cwd.
+		const rewritten = `${seededThere.path}.rewrite`;
+		writeFileSync(rewritten, lines.join("\n"));
+		renameSync(rewritten, seededThere.path);
 
 		const trustPath = join(agentDir, "trust.json");
 		writeFileSync(trustPath, JSON.stringify({ [real]: false }));

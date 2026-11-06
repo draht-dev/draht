@@ -185,11 +185,15 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 			reject(new Error("Request was aborted"));
 			return;
 		}
-		const timeout = setTimeout(resolve, ms);
-		signal?.addEventListener("abort", () => {
+		const onAbort = () => {
 			clearTimeout(timeout);
 			reject(new Error("Request was aborted"));
-		});
+		};
+		const timeout = setTimeout(() => {
+			signal?.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
+		signal?.addEventListener("abort", onAbort, { once: true });
 	});
 }
 
@@ -500,11 +504,6 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
-			for (const block of output.content) {
-				// Streaming scratch buffers are only used during parsing; never persist them.
-				delete (block as { partialJson?: string }).partialJson;
-				delete (block as { customInput?: unknown }).customInput;
-			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatProviderError(normalizeProviderError(error));
 			stream.push({ type: "error", reason: output.stopReason, error: output });

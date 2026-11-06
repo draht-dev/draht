@@ -242,11 +242,13 @@ describe.each(runtimes)("$name project checks runtime", ({ script }) => {
 		}
 	});
 
+	// The signal case keeps the default timeout: a loaded runner can take longer than a short
+	// timeout to start Node, and the timeout would then win the race and report ETIMEDOUT.
 	it.each([
-		["signal", "process.kill(process.pid, 'SIGTERM')", "SIGTERM"],
-		["timeout", "setTimeout(() => {}, 5000)", "ETIMEDOUT"],
-	])("rejects a %s", (_label, code, reason) => {
-		configure([check({ command: [process.execPath, "-e", code], timeoutMs: 100 })]);
+		["signal", "process.kill(process.pid, 'SIGTERM')", {}, "SIGTERM"],
+		["timeout", "setTimeout(() => {}, 5000)", { timeoutMs: 100 }, "ETIMEDOUT"],
+	])("rejects a %s", (_label, code, overrides, reason) => {
+		configure([check({ command: [process.execPath, "-e", code], ...overrides })]);
 		expect(run()).toMatchObject({ status: "failed", checks: [{ reason }] });
 	});
 

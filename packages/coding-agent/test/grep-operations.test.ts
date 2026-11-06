@@ -16,9 +16,9 @@ function startProcess(source: string) {
 	return child;
 }
 
-function matchEvent(text: string, lineNumber = 1) {
+function matchEvent(text: string, lineNumber = 1, type: "match" | "context" = "match") {
 	return JSON.stringify({
-		type: "match",
+		type,
 		data: { path: { text: "/virtual/project/example.ts" }, line_number: lineNumber, lines: { text: `${text}\n` } },
 	});
 }
@@ -31,10 +31,14 @@ afterEach(() => {
 
 describe("grep process operations", () => {
 	it("uses the custom process and filesystem backend without resolving or downloading local ripgrep", async () => {
-		const start = vi.fn(() => startProcess(`console.log(${JSON.stringify(matchEvent("needle", 2))})`));
-		const readFile = vi.fn(async () => "before\nneedle\nafter\n");
+		const output = [
+			matchEvent("before", 1, "context"),
+			matchEvent("needle", 2),
+			matchEvent("after", 3, "context"),
+		].join("\n");
+		const start = vi.fn(() => startProcess(`console.log(${JSON.stringify(output)})`));
 		const tool = createGrepTool("/virtual/project", {
-			operations: { isDirectory: () => true, readFile, spawn: start },
+			operations: { isDirectory: () => true, spawn: start },
 		});
 
 		const result = await tool.execute("test", {
@@ -55,11 +59,12 @@ describe("grep process operations", () => {
 			"--fixed-strings",
 			"--glob",
 			"*.ts",
+			"--context",
+			"1",
 			"--",
 			"needle",
 			"/virtual/project",
 		]);
-		expect(readFile).toHaveBeenCalledWith("/virtual/project/example.ts");
 		expect(result.content).toEqual([
 			{ type: "text", text: "example.ts-1- before\nexample.ts:2: needle\nexample.ts-3- after" },
 		]);
@@ -70,7 +75,7 @@ describe("grep process operations", () => {
 		vi.mocked(ensureTool).mockResolvedValue("/unavailable-draht-test-ripgrep");
 		const isDirectory = vi.fn(() => true);
 		const tool = createGrepTool("/virtual/project", {
-			operations: { isDirectory, readFile: () => "" },
+			operations: { isDirectory },
 		});
 
 		await expect(tool.execute("test", { pattern: "needle" })).rejects.toThrow("Failed to run ripgrep:");
@@ -91,7 +96,6 @@ describe("grep process operations", () => {
 		const tool = createGrepTool("/virtual/project", {
 			operations: {
 				isDirectory: () => true,
-				readFile: () => "",
 				spawn: () => startProcess("process.exitCode = 1"),
 			},
 		});
@@ -107,7 +111,7 @@ describe("grep process operations", () => {
 			startProcess(`process.stdout.write(${JSON.stringify(output)}); setInterval(() => {}, 1000)`),
 		);
 		const tool = createGrepTool("/virtual/project", {
-			operations: { isDirectory: () => true, readFile: () => "", spawn: start },
+			operations: { isDirectory: () => true, spawn: start },
 		});
 
 		const result = await tool.execute("test", { pattern: "needle", limit: 1 });
@@ -130,7 +134,7 @@ describe("grep process operations", () => {
 			return child;
 		});
 		const tool = createGrepTool("/virtual/project", {
-			operations: { isDirectory: () => true, readFile: () => "", spawn: start },
+			operations: { isDirectory: () => true, spawn: start },
 		});
 
 		await expect(tool.execute("test", { pattern: "needle" }, controller.signal)).rejects.toThrow("Operation aborted");
@@ -146,7 +150,6 @@ describe("grep process operations", () => {
 					controller.abort();
 					return true;
 				},
-				readFile: () => "",
 				spawn: start,
 			},
 		});
@@ -163,7 +166,7 @@ describe("grep process operations", () => {
 			return child;
 		});
 		const tool = createGrepTool("/virtual/project", {
-			operations: { isDirectory: () => true, readFile: () => "", spawn: start },
+			operations: { isDirectory: () => true, spawn: start },
 		});
 
 		await expect(tool.execute("test", { pattern: "needle" }, controller.signal)).rejects.toThrow("Operation aborted");
@@ -174,7 +177,6 @@ describe("grep process operations", () => {
 		const tool = createGrepTool("/virtual/project", {
 			operations: {
 				isDirectory: () => true,
-				readFile: () => "",
 				spawn: () => startProcess('process.stderr.write("invalid search pattern\\n"); process.exitCode = 2'),
 			},
 		});
@@ -186,7 +188,6 @@ describe("grep process operations", () => {
 		const tool = createGrepTool("/virtual/project", {
 			operations: {
 				isDirectory: () => true,
-				readFile: () => "",
 				spawn: () => spawn("/unavailable-draht-test-ripgrep", [], { stdio: ["ignore", "pipe", "pipe"] }),
 			},
 		});
@@ -198,7 +199,6 @@ describe("grep process operations", () => {
 		const tool = createGrepTool("/virtual/project", {
 			operations: {
 				isDirectory: () => true,
-				readFile: () => "",
 				spawn: () => {
 					throw new Error("Confinement unavailable");
 				},

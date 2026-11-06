@@ -31,7 +31,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { StringEnum } from "@draht/ai";
 import { type ExtensionAPI, getAgentDir, withFileMutationQueue } from "@draht/coding-agent";
-import { type Static, Type } from "@sinclair/typebox";
+import { type Static, Type } from "typebox";
 
 const PROVIDER = "google-antigravity";
 

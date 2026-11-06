@@ -118,12 +118,6 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
-			for (const block of output.content) {
-				delete (block as { index?: number }).index;
-				// Streaming scratch buffers are only used during parsing; never persist them.
-				delete (block as { partialJson?: string }).partialJson;
-				delete (block as { customInput?: unknown }).customInput;
-			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatAzureOpenAIError(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -211,7 +205,8 @@ function buildParams(
 		model: deploymentName,
 		input: messages,
 		stream: true,
-		prompt_cache_key: clampOpenAIPromptCacheKey(options?.sessionId),
+		prompt_cache_key:
+			model.compat?.promptCacheKeyMode === "disabled" ? undefined : clampOpenAIPromptCacheKey(options?.sessionId),
 		store: false,
 	};
 

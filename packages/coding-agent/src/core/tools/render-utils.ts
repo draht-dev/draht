@@ -1,20 +1,15 @@
-import * as os from "node:os";
 import { pathToFileURL } from "node:url";
 import type { ImageContent, TextContent } from "@draht/ai";
 import { getCapabilities, getImageDimensions, hyperlink, imageFallback } from "@draht/tui";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import { stripAnsi } from "../../utils/ansi.js";
-import { resolvePath } from "../../utils/paths.js";
+import { resolvePath, shortenHomePath } from "../../utils/paths.js";
 import { sanitizeBinaryOutput } from "../../utils/shell.js";
 import type { ToolRenderContext } from "../extensions/types.js";
 
 export function shortenPath(path: unknown): string {
 	if (typeof path !== "string") return "";
-	const home = os.homedir();
-	if (path.startsWith(home)) {
-		return `~${path.slice(home.length)}`;
-	}
-	return path;
+	return shortenHomePath(path);
 }
 
 export function linkPath(styledText: string, rawPath: string, cwd: string): string {

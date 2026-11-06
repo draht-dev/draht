@@ -1,123 +1,90 @@
 # CONTINUE HERE
 
-> Rewritten 2026-08-22 after a long autonomous `/loop` run. **Phase 36 waves 1 and 2 are complete and
-> committed**; wave 3 was in flight when this was written. A five-round project-trust repair also landed.
-> `npm run check` is green. `npm test` still fails on exactly one test, deliberately — the tailnet
-> identity tripwire from Phase 33.
+> Rewritten 2026-10-31. **Phase 36 is `partial` until CI runs the foreign-uid registry case, and merged into local `main`** from branch
+> `feat/phase-36-spawn-wire` (worktree `/home/nix/work/draht-p36`), not yet pushed. A phone can start a session: `session_spawn`
+> on `/attach` launches the registered `draht` in the registered project, and the served console has a
+> project/harness picker. Next is Phase 37 (run lanes).
 
-## Read this first: what waves 1 and 2 do NOT close
+## What is on the branch
 
-Nothing. **Every task in both waves is evidence class 2.** The commit log reads like a working spawn
-path and there isn't one:
+Ten commits, on `main`:
 
-- `AttachBridgeOptions.spawnSession` and `.registry` have **zero production callers**, so the shipped
-  daemon answers `session_spawn` with `{ok:false, code:"refused"}` and `registry_resync` with two empty
-  arrays. `createFleetRoutes` does not even accept the option.
-- `resolveHarnessLaunch` is referenced by exactly two files: itself and its test.
-- `buildSpawnArgv` likewise. Nothing anywhere starts a process from a spawn frame.
+1. Spawn suites runnable on hosts whose child PATH has no coreutils (NixOS).
+2. The dead `command` → `SessionProcess` chain deleted; gate rule D keeps `spawn-primitive.ts` the
+   only process-creating site in gateway source, enforced by `npm run check`.
+3. The launcher wired into the shipped daemon: `--registry`, per-connection offer, one launcher per
+   daemon, only `draht` spawnable, project-local executables refused.
+4. Docs: spec §9.1, §15.2, §15.3, `geist.yaml.example`, gateway README and SPEC.
+5. Class-3 suites: `spawn-acceptance`, `spawn-adversarial`, `spawn-posture` (gateway e2e).
+6. Gate rule D rewritten deny-by-default.
+7. The console picker and its browser e2e.
+8. The session-resume and git-probe fixtures resolve `sleep`/`mv` too.
+9. Decision 36.1: a session resumed from the phone starts untrusted (`--no-approve`), like a spawn.
+10. A container route to a foreign-owned registry file, so the foreign-uid case runs without sudo.
 
-Wave 4 wires `fleet.ts`. The class-3 acceptance is wave 5. **If the phase's acceptance is read off waves
-1-3 it will be read wrong.**
+The plan for waves 4-5 is appended to `.planning/phases/36-spawn/PLAN.md`.
 
-## The trust thread — five rounds, and why it took five
+## Verifying it on this NixOS box
 
-`hasTrustRequiringProjectResources` could be made to return false for a project it should gate, so a
-saved "Do not trust" was silently overridden. Reachable because `SessionManager.open` takes cwd verbatim
-from the session file header (`--resume`, `--session`), and — found only at the end — because
-`draht-acp-agent.ts:258` passes client-supplied `params.cwd` raw into `createAgentSession`.
+```bash
+cd /home/nix/work/draht-p36
+npm run check                                   # exit 0
+cd packages/gateway && nix-shell -p openssl --run "env -u DRAHT_PERMISSION_MODE bun test"
+#   822 pass / 4 skip / 0 fail (reach-transport needs openssl; the skips are the foreign-uid
+#   registry file case, two LAN-interface cases and one root-only guard).
+LD_LIBRARY_PATH=$(cat /home/nix/work/chromium-ldpath.txt) \
+  node --test --test-concurrency=1 --test-timeout=300000 scripts/geist-console-*.e2e.test.mjs   # 74/0
+```
 
-**Rounds 2, 3 and 4 each closed their target and left some shape worse than HEAD.** All four regressions
-were found by the adversarial verifier, never the implementer. The cause was one decision: round 1
-declined to touch `utils/paths.ts`, reasoning ~20 callers made a shared-helper change riskier than fixing
-the one security caller. The real number was **16 call sites in 8 files, all in one package, never
-exported from its index**. Every later regression landed in a different caller of that same function.
-
-Round 5 deleted `canonicalizePath` outright so the compiler enumerates callers, and promoted the segment
-walk into `src/utils/canonical-path.ts`: one core plus `realPathStrict` (the only one a trust,
-containment or load decision may use), `trustKeyPath`, `comparablePath`, `realHomeDir`.
-
-**If you touch this area, A/B against a reconstructed HEAD (`git archive HEAD | tar -x` into a clone —
-never `git stash`, other agents work this tree), not only against the shape you set out to fix.**
-
-## Runtime facts worth keeping
-
-- **Bun 1.4's `realpathSync` (and `.native`) rewrites `\` to `/` before the syscall.** `<dir>/a\b`
-  silently returns `<dir>/a/b` when that exists, aliasing two different directories. A character sweep
-  found backslash is the ONLY affected byte; `existsSync`/`statSync`/`lstatSync`/`readdirSync` are correct
-  and node 26 is correct. The shipped binary is `bun build --compile`, so this is production behaviour.
-- **windows-x64 IS a shipped target** (`scripts/build-binaries.sh --target=bun-windows-x64`, plus the CI
-  matrix). `canonical-path.ts` is POSIX-only: on win32 a native path is one segment handled by `lstat`, so
-  junctions never resolve and a junction under a trusted root inherits its trust.
-- `kill(pid, 0)` succeeds on a zombie. `ps` without `-A` lists only processes sharing the caller's
-  controlling terminal, so a detached child reads as absent and every negative assertion goes vacuously
-  green. macOS exposes a child's environment via `ps -Eww` for bun/node but **nothing** for SIP-protected
-  binaries, so an env canary asserted against a `/bin/sh` grandchild is vacuously green forever.
-- zsh has no `PIPESTATUS` (it is `pipestatus`, 1-indexed) — `cmd > /tmp/out 2>&1; echo $?` instead.
-- `rtk` mangles `grep`/`ls`/`git diff`/`git show` through a pipe. Use `rtk proxy git ...` redirected to a
-  file, or `sed -n`/`python3`.
-
-## Process lessons that cost real time today
-
-- **"No surviving mutations" from the agent that wrote the code is worth nothing.** All five wave-2
-  implementers reported none; all five were wrong — 47 undisclosed survivors and 18 vacuous assertions.
-  An author mutates where their own assumptions hold. Budget an adversarial pass per task.
-- **A gate that scans nothing passes its own tests.** `scanRepo() { return []; }` left the command-gate
-  suite 15/15 green with the gate printing `ok`, because every case fed it a fixture the test wrote.
-- **A prose assertion matching a WORD lets the document state the opposite.** `/deliberate/i` guarding
-  "there is no stop verb, and that is deliberate" passes "not deliberate — it is an oversight".
-- **A comment is not a fix.** One agent's entire deliverable was 39 added lines, all comment, zero code.
-  Repo baseline is 13.7% src / 5.9% tests; keep to it and put the reasoning in the commit message.
+The worktree lives under `/home/nix/work`, not `/srv/work`: the spawn primitive refuses any
+group-writable component of the executable path, and `/srv/work` is group-writable. geist-core has three
+status-probe failures on this box at `2c0482bad` too: `GIT_CANDIDATES` in `status-probe.ts` lists no
+NixOS path, so the fleet status is always `unknown` here (owner question 9 in `DECISIONS-PENDING.md`).
 
 ## Still open — needs Oskar
 
-**Four spawn questions, unanswered since before wave 2 and NOT planned around:**
-
-1. Does RESUME also get `--no-approve`, or only spawn? One-line change either way; the resume argv is in
-   `spawn-primitive.ts`.
-2. What is the local re-grant path for a phone-spawned session? Nothing turns a running untrusted session
-   into a trusted one without restarting it.
-3. `DRAHT_CODING_AGENT_DIR` crosses into the child by design and is the root for `auth.json`, which holds
-   every provider's credential. Per-harness `credentialEnv` fixes the ENVIRONMENT half only.
-4. Is a spawned session the daemon's child? Deciding it for resume decides it for spawn.
-
-**Also open:** the two Phase 35 product decisions, four in `DECISIONS-PENDING.md`, and the three hardware
-residuals (unchanged — see the commands in git history for the tailnet capture).
-
-`~/.draht/gateway.config.json` still holds `host: "0.0.0.0"` with `tokens.default: "test"`. Nothing
-listens on 7878 and the bind refusal prevents a wide bind, but the token is the literal string `test`.
-Not modified — it is your machine config.
+- **Push `main`.** Local `main` also holds the unpushed 2026-10-31 upstream sync from another session,
+  so the push waits for that session. The first CI run after it is the first class-3 evidence for the
+  registry-owned-by-another-uid FILE case, which needs `sudo -n` on the gateway shard (Blacksmith).
+- **Mark Phase 36 `complete`** once that CI run executes the foreign-uid FILE case green (Oskar's call). It
+  already ran here: `cd packages/gateway && DRAHT_TEST_SHORT_ROOT=<a 0700 dir under /home/nix/work>
+  DRAHT_FOREIGN_UID_IMAGE=docker.io/library/python:3.11-slim bun test src/__tests__/spawn-adversarial.e2e.test.ts`
+  (17/17; rootless podman chowns the file to a subuid; the image must already be local).
+- 36.1 and 36.3 are DECIDED (2026-10-31): resume starts untrusted (`6a9f2917d`); credentials are scoped by
+  environment only in v1, the `auth.json` file half waits for the Milestone 6 sandbox.
+- The six reversible orchestrator calls and eleven new questions under "Phase 36 waves 4–5" in
+  `DECISIONS-PENDING.md`. The ones that bite first: the installed `~/.local/bin/draht` cannot be
+  declared (symlink chain), and on NixOS spawned sessions get no coreutils unless `DRAHT_RESUME_PATH`
+  is set.
+- Unchanged from before: 36.2, 36.4, 36.5, the Phase 35 product decisions, the hardware residuals, and
+  the literal `test` token in the Mac's `~/.draht/gateway.config.json`.
 
 ## Carried forward, with owners
 
 - A `select`/`input` carrying a `tool_permission` detail still writes the wrong decision word.
   **Owner: Phase 37 opens the wire, Phase 38 freezes it at 1.0. It must not survive the freeze.**
-- `loadProjectContextFiles` walks cwd and every ancestor with no trust parameter, injecting
-  attacker-authored AGENTS.md/CLAUDE.md into the system prompt from a merely-opened checkout. Accepted
-  bounded risk: gating it would gate essentially every repository.
-- The foreign-uid busy-lock refusal and the sockets-directory uid refusal remain covered by reading only.
+- `registry` answers empty for a refused registry with no error field. Due before the 1.0 freeze.
+- `loadProjectContextFiles` walks cwd and every ancestor with no trust parameter (accepted bounded risk).
 - Replay starvation: `pendingFor` truncates at 16 and nothing re-drives the remainder.
+- Gate rule D is a text scanner: a reflective `Function` constructor and the regex/division ambiguity
+  still defeat it; closing them needs an AST-based scanner (question 16).
 
-## Branch note
+## Runtime facts worth keeping
 
-This checkout is shared with another session, which put HEAD on `upstream-sync`. `check:draht` asserts
-`.planning/ unchanged vs main` by diffing the WORKING TREE, so planning docs must be committed to `main`
-— do that with a temporary worktree (`git worktree add /tmp/mainwt main`), never by moving a ref. Code
-commits go on the current branch with **explicit pathspecs**: the tree carries ~55 files belonging to the
-other session, and `git add -A` would sweep them in.
+- **Bun 1.4's `realpathSync` rewrites `\` to `/` before the syscall**; anything deciding security from a
+  path must lstat a backslash-bearing path instead. The shipped binary is `bun build --compile`.
+- **windows-x64 is a shipped target** and `canonical-path.ts` is POSIX-only (junctions never resolve).
+- `kill(pid, 0)` succeeds on a zombie; `ps` without `-A` hides detached children; macOS exposes no
+  environment for SIP-protected binaries, so an env canary against `/bin/sh` is vacuous there.
+- On NixOS the constructed child PATH (`DEFAULT_RESUME_PATH`) holds only `/bin/sh` and `/usr/bin/env`;
+  a fixture calling a missing utility goes vacuous, not red (the stdout-flood test did).
+- No privilege-free foreign-owned inode exists on this box (no `sudo`: no_new_privs;
+  `protected_hardlinks=1`; `/tmp` is a separate mount), unlike macOS's `/private/var/db`.
 
 ## Next
 
-**Phase 36 wave 3**: `SessionSpawner.launch()` sharing the whole post-spawn block with `resume()`, the
-launcher composition, and the fleet-join proof. Then wave 4 wires `fleet.ts` — the first point at which
-anything can be class 3.
-
-```bash
-cd /Users/exe008/draht/draht-mono
-npm run check                 # expect exit 0
-```
-
-To restart the autonomous loop:
+Push `main` when the upstream sync is pushed, then **Phase 37** (run lanes). To restart the loop:
 
 ```
-/loop /draht:resume-work with /draht:orchestrate ultracode workflows. they can use fable 5 advisors for difficult problems
+/loop /draht:resume-work with /draht:orchestrate
 ```

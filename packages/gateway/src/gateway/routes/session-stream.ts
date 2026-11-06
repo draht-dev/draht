@@ -1,7 +1,7 @@
 /**
- * Session streaming routes (SSE) for individual session output.
+ * Session streaming routes (SSE).
  *
- * GET /sessions/:id/stream — text/event-stream of session stdout/stderr
+ * GET /sessions/:id/stream — text/event-stream for one session record
  */
 
 import { Hono } from "hono";
@@ -22,7 +22,7 @@ function sseFrame(event: string, data: unknown): Uint8Array {
  * Mount with: `app.route('/sessions', createSessionStreamRoutes(manager))`
  *
  * Routes:
- *   GET /:id/stream → text/event-stream of session output
+ *   GET /:id/stream → text/event-stream: a `ready` event, then nothing until the client disconnects
  */
 export function createSessionStreamRoutes(manager: SessionManager): Hono {
 	const app = new Hono();
@@ -40,73 +40,25 @@ export function createSessionStreamRoutes(manager: SessionManager): Hono {
 
 		const stream = new ReadableStream<Uint8Array>({
 			start(controller) {
-				// If session has a process, subscribe to its output
-				if (session.process) {
-					const unsubscribe = session.process.onOutput((data) => {
-						try {
-							controller.enqueue(
-								sseFrame("output", {
-									sessionId,
-									data,
-									stream: "stdout",
-								}),
-							);
-						} catch {
-							// Stream closed
-						}
-					});
+				// A session record has no process, so there is no output to stream:
+				// send a "ready" event and keep the connection open until the client leaves.
+				try {
+					controller.enqueue(sseFrame("ready", { sessionId, status: session.status }));
+				} catch {
+					// Stream closed
+				}
 
-					// Cleanup on disconnect or process exit
-					const cleanup = () => {
-						unsubscribe();
+				signal.addEventListener(
+					"abort",
+					() => {
 						try {
 							controller.close();
 						} catch {
 							// Already closed
 						}
-					};
-
-					signal.addEventListener("abort", cleanup, { once: true });
-
-					// Also close stream when process exits
-					session.process.exited
-						.then(() => {
-							try {
-								controller.enqueue(sseFrame("ended", { sessionId }));
-								controller.close();
-							} catch {
-								// Already closed
-							}
-						})
-						.catch(() => {
-							try {
-								controller.close();
-							} catch {
-								// Already closed
-							}
-						});
-				} else {
-					// No process - send a "ready" event and keep connection open
-					// This allows clients to connect even if session hasn't spawned yet
-					try {
-						controller.enqueue(sseFrame("ready", { sessionId, status: session.status }));
-					} catch {
-						// Stream closed
-					}
-
-					// Close on client disconnect
-					signal.addEventListener(
-						"abort",
-						() => {
-							try {
-								controller.close();
-							} catch {
-								// Already closed
-							}
-						},
-						{ once: true },
-					);
-				}
+					},
+					{ once: true },
+				);
 			},
 		});
 

@@ -15,6 +15,7 @@ import type {
 	MistralConversationsCompat,
 	OpenAICompletionsCompat,
 	OpenAIResponsesCompat,
+	SystemOneCompat,
 } from "./providers/compat-schema.ts";
 import type {
 	CacheRetention,
@@ -40,6 +41,7 @@ export type {
 	OpenAIResponsesCompat,
 	OpenRouterRouting,
 	SessionAffinityFormat,
+	SystemOneCompat,
 	ThinkingTokenBudgetField,
 	VercelGatewayRouting,
 } from "./providers/compat-schema.ts";
@@ -124,6 +126,7 @@ export type KnownProvider =
 	| "qwen-token-plan"
 	| "qwen-token-plan-cn"
 	| "qwen-token-plan-individual"
+	| "qwen-token-plan-individual-cn"
 	| "xiaomi"
 	| "xiaomi-token-plan-cn"
 	| "xiaomi-token-plan-ams"
@@ -253,6 +256,13 @@ export interface StreamOptions extends ProviderRequestOptions<Model<Api>> {
 	 * session-aware features. Ignored by providers that don't support it.
 	 */
 	sessionId?: string;
+	/**
+	 * Do not use or record server-side continuation state for this request (for example
+	 * Anthropic message threads). Set this for replays such as cache warming, which must not
+	 * replace the state of the real conversation. Providers that do not keep continuation
+	 * state ignore it.
+	 */
+	disableContinuation?: boolean;
 	/**
 	 * WebSocket connect timeout in milliseconds for providers that support
 	 * WebSocket transports. This covers the connection/open handshake only;
@@ -469,11 +479,18 @@ export interface Usage {
 	reasoning?: number;
 	totalTokens: number;
 	cost: {
+		/** Catalog-derived input cost. */
 		input: number;
+		/** Catalog-derived output cost. */
 		output: number;
+		/** Catalog-derived cache-read cost. */
 		cacheRead: number;
+		/** Catalog-derived cache-write cost. */
 		cacheWrite: number;
+		/** Best available total: provider-reported billed cost when supported, otherwise the catalog estimate. */
 		total: number;
+		/** True when `total` is the billed cost reported by the provider. False when it is a catalog estimate; absent also means false. */
+		totalFromProvider?: boolean;
 	};
 }
 
@@ -579,7 +596,7 @@ export interface AssistantMessage {
 	api: Api;
 	provider: ProviderId;
 	model: string;
-	responseModel?: string; // Concrete model reported by the provider when different from the requested `model`
+	responseModel?: string; // Concrete model reported by the provider, when reported. May equal the requested `model`
 	responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
 	/** Exact provider-native effort level used for this response. Absent for legacy or unmanaged responses. */
 	providerThinkingLevel?: string;
@@ -733,8 +750,6 @@ export interface ClassifierResult {
 	timestamp: number; // Unix timestamp in milliseconds
 }
 
-import type { TSchema } from "typebox";
-
 /** OpenAI grammar variants for constrained sampling. */
 export type GrammarFormat = "openai_lark" | "openai_regex";
 
@@ -757,7 +772,11 @@ export type ConstrainedSamplingConfig =
 			variants: GrammarVariants;
 	  };
 
-export interface Tool<TParameters extends TSchema = TSchema> {
+/**
+ * A tool the model may call. `parameters` is the JSON Schema of its arguments: @draht/schema's builders (which also type
+ * the arguments, see `Static` in `@draht/schema`), TypeBox schemas, or any JSON Schema object.
+ */
+export interface Tool<TParameters extends object = object> {
 	name: string;
 	description: string;
 	parameters: TParameters;
@@ -888,6 +907,8 @@ export interface ImageModel<TApi extends ImageApi> extends BaseModel<TApi> {
 export interface ClassifierModel<TApi extends ClassifierApi> extends BaseModel<TApi> {
 	type: "classifier";
 	contextWindow: number;
+	/** Compatibility overrides for System One APIs. If not set, auto-detected from provider, baseUrl, and id. */
+	compat?: TApi extends "typesafe-system-one" | "cloudflare-workers-ai-system-one" ? SystemOneCompat : never;
 }
 
 /** Model shape for each model type. */

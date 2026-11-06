@@ -4,18 +4,31 @@
 
 import { afterAll, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+	copyFileSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { buildSpawnArgv } from "../session/spawn-argv.js";
 import {
+	assertSafeExecutablePath,
 	buildChildEnvironment,
 	DECLARED_CREDENTIAL_ENV,
 	type ResolvedExecutable,
 	type SessionLaunchRequest,
 	SessionSpawner,
+	type SpawnOutcome,
 	SpawnRefusedError,
 } from "../session/spawn-primitive.js";
+import { absoluteTool } from "./helpers/absolute-tool.js";
 import {
+	argvOf,
 	isProcessAlive,
 	reapPgids,
 	rowFor,
@@ -43,21 +56,24 @@ function tempDir(prefix: string): string {
 
 const SESSION_ID = "spl-session";
 
+const MV = absoluteTool("mv");
+const SLEEP = absoluteTool("sleep");
+
 /** Reports what it was given, then claims the lock and the socket the poll is waiting for. */
 const BINDS_AND_REPORTS = `#!/bin/sh
-printf '%s\\n' "$0" "$@" > DIR/argv.tmp && mv DIR/argv.tmp DIR/argv
-env > DIR/env.tmp && mv DIR/env.tmp DIR/env
-pwd > DIR/cwd.tmp && mv DIR/cwd.tmp DIR/cwd
-sleep 3600 &
-{ echo "$$"; echo "$!"; } > DIR/pids.tmp && mv DIR/pids.tmp DIR/pids
-echo "$$" > DIR/SID.lock.tmp && mv DIR/SID.lock.tmp DIR/SID.lock
+printf '%s\\n' "$0" "$@" > DIR/argv.tmp && ${MV} DIR/argv.tmp DIR/argv
+env > DIR/env.tmp && ${MV} DIR/env.tmp DIR/env
+pwd > DIR/cwd.tmp && ${MV} DIR/cwd.tmp DIR/cwd
+${SLEEP} 3600 &
+{ echo "$$"; echo "$!"; } > DIR/pids.tmp && ${MV} DIR/pids.tmp DIR/pids
+echo "$$" > DIR/SID.lock.tmp && ${MV} DIR/SID.lock.tmp DIR/SID.lock
 : > DIR/SID.sock
 wait
 `;
 
 const SILENT_AND_BINDS_NOTHING = `#!/bin/sh
-echo "$$" > DIR/pids.tmp && mv DIR/pids.tmp DIR/pids
-exec sleep 3600
+echo "$$" > DIR/pids.tmp && ${MV} DIR/pids.tmp DIR/pids
+exec ${SLEEP} 3600
 `;
 
 const REFUSES_LOUDLY = `#!/bin/sh
@@ -153,6 +169,37 @@ test("the argv the child actually received is buildSpawnArgv's, element for elem
 	expect(lines(join(dir, "argv"))).toEqual(buildSpawnArgv({ sessionId: SESSION_ID, projectRoot, leadingArgs }));
 }, 120_000);
 
+/** Backgrounding `&` runs both markers at once under a shell; a `;` would queue them behind a child that never returns. */
+const METACHARACTER_ROOT_NAME = "p&:>MARK&$(:>MARK2)";
+
+test("a project root made of shell metacharacters is one argv element of the child, and nothing in it runs", async () => {
+	const { spawner, request } = harness(BINDS_AND_REPORTS);
+	const root = join(realpathSync(tempDir("splm-")), METACHARACTER_ROOT_NAME);
+	mkdirSync(root);
+	const script = join(root, "child.sh");
+	copyFileSync(request.leadingArgs[0] as string, script);
+	expect(() => assertSafeExecutablePath(script, process.getuid?.() ?? 0)).not.toThrow();
+	const launch = { ...request, projectRoot: root, leadingArgs: [script, request.leadingArgs[1] as string] };
+
+	const launched = await spawner.launch(launch).then(
+		(outcome) => outcome,
+		(refused: unknown) => refused,
+	);
+	// Judged first: under `shell: true` the markers exist and the launch fails too, and the markers say why.
+	expect(existsSync(join(root, "MARK"))).toBe(false);
+	expect(existsSync(join(root, "MARK2"))).toBe(false);
+	expect(launched).toHaveProperty("pid");
+	const { pid } = launched as SpawnOutcome;
+	pgids.add(pid);
+
+	const argv = argvOf(pid);
+	expect(argv).toEqual([
+		"/bin/sh",
+		...buildSpawnArgv({ sessionId: SESSION_ID, projectRoot: root, leadingArgs: launch.leadingArgs }),
+	]);
+	expect(argv.filter((element) => element === root)).toEqual([root]);
+}, 120_000);
+
 test("the child runs in the project root, not in the daemon's own directory", async () => {
 	const { spawner, dir, projectRoot, request } = harness(BINDS_AND_REPORTS);
 	const { pid } = await spawner.launch(request);
@@ -233,6 +280,18 @@ test("the daemon's permission mode crosses on its own, except yolo, which needs 
 	).toBeUndefined();
 });
 
+test("`DRAHT_RESUME_PATH` replaces the default PATH only when every component is absolute", () => {
+	const pathFor = (env: NodeJS.ProcessEnv) =>
+		buildChildEnvironment({ env, agentDir: "/tmp/spl-agent", cwd: "/tmp/spl-cwd" }).PATH;
+	const defaultPath = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+
+	expect(pathFor({ DRAHT_RESUME_PATH: "/opt/tools/bin:/usr/bin" })).toBe("/opt/tools/bin:/usr/bin");
+	expect(pathFor({})).toBe(defaultPath);
+	for (const declared of ["/usr/bin:bin", "/usr/bin::/bin", "/usr/bin:", ":/usr/bin", "/usr/bin:./bin", ""]) {
+		expect(pathFor({ DRAHT_RESUME_PATH: declared }), JSON.stringify(declared)).toBe(defaultPath);
+	}
+});
+
 test("a populated `credentialEnv` crosses exactly the names it declares and no others", async () => {
 	const { spawner, dir, request } = harness(
 		BINDS_AND_REPORTS,
@@ -281,6 +340,32 @@ test("a resume declares no credentialEnv and still receives every declared crede
 	for (const name of DECLARED_CREDENTIAL_ENV) expect(env.get(name)).toBe(`value-of-${name}`);
 }, 120_000);
 
+test("the argv a resumed child actually received is the frozen resume array, ending in `--no-approve`", async () => {
+	const { dir, projectRoot, leadingArgs } = harness(BINDS_AND_REPORTS);
+	const spawner = new SessionSpawner({
+		socketDir: dir,
+		agentDir: dir,
+		resolveExecutable: (): ResolvedExecutable => ({
+			executable: "/bin/sh",
+			leadingArgs,
+			target: leadingArgs[0] as string,
+		}),
+	});
+	const path = join(projectRoot, "s.jsonl");
+	const { pid } = await spawner.resume({ id: SESSION_ID, path, cwd: projectRoot });
+	pgids.add(pid);
+
+	expect(lines(join(dir, "argv"))).toEqual([
+		...leadingArgs,
+		"--session",
+		path,
+		"--attachable",
+		"--mode",
+		"rpc",
+		"--no-approve",
+	]);
+}, 120_000);
+
 test("stop() on a launched child reaches its whole group, grandchild included", async () => {
 	const { spawner, dir, request } = harness(BINDS_AND_REPORTS, { stopDeadlineMs: 500 });
 	const { pid } = await spawner.launch(request);
@@ -306,17 +391,26 @@ test("a launch whose executable cannot be spawned is refused with what the faile
 	expect(refused.message).toContain("ENOENT");
 }, 120_000);
 
-test("a socket this launch's own child did not bind is `already_live`, not success", async () => {
+test("a socket this launch's own child did not bind is `already_live`, not success, and that child is torn down", async () => {
 	const { spawner, dir, request } = harness(SILENT_AND_BINDS_NOTHING, { stopDeadlineMs: 300 });
 	const foreign = spawn("/bin/sh", ["-c", "exec sleep 60"], { stdio: "ignore" });
 	const foreignPid = foreign.pid as number;
+
+	const pending = refusalOf(spawner.launch(request));
+	// Taken only once the loser is running: refused at once, it dies before it can write its pid down.
+	const [loser] = (await reportedPidsWhenWritten(dir)) as [number];
+	pgids.add(loser);
+	expect(isProcessAlive(loser)).toBe(true);
 	writeFileSync(join(dir, `${SESSION_ID}.lock`), `${foreignPid}\n`);
 	writeFileSync(join(dir, `${SESSION_ID}.sock`), "");
 
-	const refused = await refusalOf(spawner.launch(request));
+	const refused = await pending;
 	expect(refused.code).toBe("already_live");
 	expect(refused.message).toContain(`PID ${foreignPid}`);
 	foreign.kill("SIGKILL");
+
+	await waitForProcessesGone([loser], 5_000);
+	expect(isProcessAlive(loser)).toBe(false);
 }, 120_000);
 
 test("a launch into a project root that no longer exists is refused before any process exists", async () => {

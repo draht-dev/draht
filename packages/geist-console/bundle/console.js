@@ -3,10 +3,11 @@
  * Decision record: .planning/specs/2026-08-19-geist-served-surface-decision.md
  *
  * Lists the live attachable draht sessions, opens one, streams its output and
- * sends prompts. Plain ES modules: the daemon serves this file byte for byte and
- * the browser runs it, so the file the acceptance drives is the file that ships.
+ * sends prompts, and starts a new one from the daemon's registry. Plain ES
+ * modules: the daemon serves this file byte for byte and the browser runs it, so
+ * the file the acceptance drives is the file that ships.
  *
- * Seven things here are load-bearing and deliberately not obvious:
+ * Eight things here are load-bearing and deliberately not obvious:
  *
  *  1. **Authentication is a frame, not a header and never a query string.**
  *     The page opens `/attach` with no credential at all — no `Authorization`
@@ -68,6 +69,16 @@
  *     deliberate: the wire says `attachable:false, resumable:true` for such a
  *     row, and R35-ALWAYS.7's last clause is about what the UI OFFERS.
  *
+ *  8. **Starting a session sends two ids and nothing else** (R36-SPAWN.1/.8).
+ *     {@link renderSpawn} offers it only on a connection whose `server_hello`
+ *     declared both `session-spawn` and `registry`, and the picker is built from
+ *     the `registry` frame: radios, never a text field, so what reaches
+ *     `session_spawn` is a `harnessId` and a `projectId` the daemon itself listed.
+ *     The new session is opened by {@link openSession} once the fleet model has
+ *     its row — never by a row this page made up from the answer, and never
+ *     after the operator has opened another session or gone back to the list.
+ *     Until then Start and New session stay off, so one tap starts one session.
+ *
  * There is no HTTP fleet read here either. The fleet is session data: the
  * daemon withholds it until this connection is somebody and then pushes it on
  * the wire, so a refresh is `fleet_resync` on the live socket — or, against a
@@ -105,6 +116,31 @@ const MAX_RETRIES = 8;
  * the pull half of the same mechanism, on the same socket — until it has.
  */
 const FLEET_DELTA_CAPABILITY = "fleet-delta";
+/**
+ * What a daemon declares in `server_hello.capabilities` when it will answer
+ * `session_spawn` and `registry_resync` (`geist/0.5`). Literals matching
+ * `SESSION_SPAWN_CAPABILITY` and `REGISTRY_CAPABILITY` in attach-bridge.ts, for
+ * the reason {@link FLEET_DELTA_CAPABILITY} is.
+ */
+const SESSION_SPAWN_CAPABILITY = "session-spawn";
+const REGISTRY_CAPABILITY = "registry";
+/**
+ * The shape of an id `session_spawn` can carry: `RegistryIdSchema` in
+ * geist-protocol, mirrored for the reason {@link FLEET_DELTA_CAPABILITY} is. A
+ * frame that schema refuses is answered by closing the connection with 1008.
+ */
+const REGISTRY_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const REGISTRY_ID_MAX = 64;
+/** What the picker says when the operator is left to open a session it started. */
+const STARTED_UNOPENED = "started — open it from the fleet list (Refresh if it is missing)";
+/** What New session says when its connection closed with a spawn still pending. */
+const SPAWN_LOST = "a session you started may still be starting — check the list";
+/**
+ * Pause before the one retry of the fleet ask for a spawned session's row: the
+ * daemon's `refreshNow()` reuses a scan younger than 25 ms, so asking at once can
+ * be answered from the very scan that lacked the row.
+ */
+const SPAWN_RETRY_MS = 100;
 /** How often the diagnostics readout re-renders its live measurements. */
 const DIAGNOSTICS_TICK_MS = 500;
 /**
@@ -196,6 +232,24 @@ let fleetSeq = -1;
 let resyncing = false;
 /** What the daemon said it will answer, from `server_hello.capabilities` (0.4). */
 let serverCapabilities = [];
+/** The "New session" section while this connection can start one, else null. */
+let spawnEl = null;
+/** The picker's form while it is open, else null. */
+let pickerEl = null;
+/** True between sending `session_spawn` and the one `session_spawned` that answers it. */
+let spawning = false;
+/** The id `session_spawned` named, until the fleet model shows its row and {@link openSession} has been asked for it. */
+let spawnedId = null;
+/** Whether the fleet has been asked once more for {@link spawnedId}'s row after a snapshot lacked it. */
+let spawnRetried = false;
+/** False once the operator has chosen where to be since tapping Start: the new session is then theirs to open. */
+let spawnOpens = false;
+/** True once a connection closed with a spawn unanswered, until the next answer or a fleet re-read: the daemon may still have started it. */
+let spawnLost = false;
+/** The pending retry of the fleet ask for {@link spawnedId}'s row, or null. */
+let spawnRetryTimer = null;
+/** The pending reconnect after a drop, or null. */
+let reconnectTimer = null;
 /**
  * True once the daemon has refused this bundle's protocol member.
  *
@@ -448,6 +502,10 @@ function applyFleetSnapshot(frame) {
 	// that answers it: a "connected" written here on an ordinary snapshot would
 	// overwrite whatever the connection is really saying.
 	if (answered && authenticated) setStatus("connected", "connected");
+	// Only a snapshot this page asked for: the one the daemon sends on arrival
+	// follows `device_credential` at once and would take the note down unread.
+	if (answered) clearSpawnLost();
+	settleSpawned();
 }
 
 /**
@@ -736,6 +794,367 @@ function renderPermissionResolved(frame) {
 	transcriptEl.scrollTop = transcriptEl.scrollHeight;
 }
 
+/* ----------------------------------------------------------------- spawn -- */
+
+/**
+ * Whether this connection can start a session, right now (R36-SPAWN.1).
+ *
+ * The daemon decides per connection (`server_hello.capabilities`), so this reads
+ * the connection and not the page: a reconnect to a daemon whose registry file has
+ * gone takes the affordance away, and one that has appeared brings it. Both
+ * capabilities, because the picker needs `registry_resync` to be built and
+ * `session_spawn` to be submitted, and a daemon offering one without the other
+ * has promised half a flow.
+ */
+function canSpawn() {
+	return (
+		authenticated &&
+		socket?.readyState === WebSocket.OPEN &&
+		serverCapabilities.includes(SESSION_SPAWN_CAPABILITY) &&
+		serverCapabilities.includes(REGISTRY_CAPABILITY)
+	);
+}
+
+/**
+ * Put the "New session" affordance in the DOM, or take it out.
+ *
+ * Built here rather than written into index.html so that "this daemon cannot
+ * spawn" is an ABSENT element and not a hidden one, which a stylesheet or a
+ * `hidden` attribute could undo. Everything owed to a socket that is gone goes
+ * with it: its `session_spawned` will never arrive, so a submit left disabled
+ * waiting for it would stay disabled for good. The daemon answers nothing on a
+ * connection it has closed, but the process it was starting is not stopped, so
+ * a spawn still pending here is remembered and the rebuilt affordance says so.
+ */
+function renderSpawn() {
+	if (!canSpawn()) {
+		if (spawnPending()) spawnLost = true;
+		clearTimeout(spawnRetryTimer);
+		spawnRetryTimer = null;
+		spawnEl?.remove();
+		spawnEl = null;
+		pickerEl = null;
+		spawning = false;
+		spawnedId = null;
+		spawnOpens = false;
+		return;
+	}
+	if (spawnEl) return;
+	const open = document.createElement("button");
+	open.id = "new-session";
+	open.type = "button";
+	open.textContent = "New session";
+	open.setAttribute("aria-expanded", "false");
+	open.addEventListener("click", toggleSpawnPicker);
+
+	spawnEl = document.createElement("section");
+	spawnEl.id = "spawn";
+	spawnEl.append(open);
+	if (spawnLost) {
+		const note = document.createElement("p");
+		note.id = "spawn-note";
+		note.className = "pane-note";
+		note.setAttribute("role", "status");
+		note.textContent = SPAWN_LOST;
+		spawnEl.append(note);
+	}
+	fleetEl.before(spawnEl);
+}
+
+/** The operator has the answer or has re-read the list: the note about a spawn lost with its connection is done. */
+function clearSpawnLost() {
+	spawnLost = false;
+	el("spawn-note")?.remove();
+}
+
+/** From tapping Start until the new session is open, or the attempt has ended in a sentence. */
+function spawnPending() {
+	return spawning || spawnedId !== null;
+}
+
+function toggleSpawnPicker() {
+	if (spawnPending()) return;
+	if (pickerEl) {
+		closeSpawnPicker();
+		return;
+	}
+	if (!send({ type: "registry_resync" })) return;
+	pickerEl = document.createElement("form");
+	pickerEl.id = "spawn-picker";
+	pickerEl.addEventListener("submit", submitSpawn);
+	const loading = document.createElement("p");
+	loading.className = "pane-note";
+	loading.textContent = "loading projects…";
+	pickerEl.append(loading);
+	spawnEl.append(pickerEl);
+	const open = el("new-session");
+	open.setAttribute("aria-expanded", "true");
+	open.setAttribute("aria-controls", "spawn-picker");
+}
+
+function closeSpawnPicker() {
+	pickerEl?.remove();
+	pickerEl = null;
+	const open = el("new-session");
+	open?.setAttribute("aria-expanded", "false");
+	open?.removeAttribute("aria-controls");
+}
+
+/**
+ * One group of radios. The ids are the registry frame's own and the labels are
+ * `textContent`: a project `name` and `root` are strings the operator's file
+ * chose, and arrive neutralized for control characters but not for markup.
+ */
+function choiceGroup(group, legend, choices) {
+	const fieldset = document.createElement("fieldset");
+	fieldset.className = "spawn-group";
+	const title = document.createElement("legend");
+	title.className = "pane-title";
+	title.textContent = legend;
+	fieldset.append(title);
+	for (const choice of choices) {
+		const label = document.createElement("label");
+		label.className = "spawn-choice";
+
+		const radio = document.createElement("input");
+		radio.type = "radio";
+		radio.name = group;
+		radio.value = choice.id;
+		radio.checked = choice.checked;
+		radio.addEventListener("change", syncSpawnSubmit);
+
+		const text = document.createElement("span");
+		const name = document.createElement("span");
+		name.className = "spawn-choice-name";
+		name.textContent = choice.name;
+		text.append(name);
+		if (choice.detail) {
+			const detail = document.createElement("span");
+			detail.className = "spawn-choice-detail";
+			detail.textContent = choice.detail;
+			text.append(detail);
+		}
+		label.append(radio, text);
+		fieldset.append(label);
+	}
+	return fieldset;
+}
+
+/**
+ * The rows of a registry list this page can offer: an id the daemon's schema
+ * accepts, once each, the first row winning. The daemon filters the same way, so
+ * this only acts on a frame that did not come from it — where the alternatives
+ * are a throw that leaves the panel blank and a `session_spawn` that costs the
+ * connection (and, on reconnect, a credential rotation).
+ */
+function registryRows(rows) {
+	const kept = new Map();
+	for (const row of Array.isArray(rows) ? rows : []) {
+		const id = row?.id;
+		if (typeof id !== "string" || id.length > REGISTRY_ID_MAX || !REGISTRY_ID.test(id) || kept.has(id)) continue;
+		kept.set(id, row);
+	}
+	return [...kept.values()];
+}
+
+/**
+ * Draw the picker from a `registry` frame.
+ *
+ * Both lists, or a sentence saying which is missing: a refused or unparsable
+ * registry answers with two empty arrays, and a blank panel there would read as a
+ * page that has not finished loading. Only the default harness is preselected —
+ * a project is a choice the operator makes, not one the page makes for them.
+ */
+function renderRegistry(frame) {
+	if (!pickerEl || spawning) return;
+	const projects = registryRows(frame.projects);
+	const harnesses = registryRows(frame.harnesses);
+	pickerEl.textContent = "";
+
+	const missing = projects.length === 0 ? "projects" : harnesses.length === 0 ? "harnesses" : null;
+	if (missing) {
+		const note = document.createElement("p");
+		note.className = "pane-note";
+		note.textContent = `no ${missing} available on this machine`;
+		pickerEl.append(note);
+		return;
+	}
+
+	const submit = document.createElement("button");
+	submit.id = "spawn-submit";
+	submit.type = "submit";
+	submit.textContent = "Start session";
+	const result = document.createElement("p");
+	result.id = "spawn-result";
+	result.className = "pane-note";
+	result.setAttribute("role", "status");
+
+	pickerEl.append(
+		choiceGroup(
+			"project",
+			"Project",
+			projects.map((project) => ({
+				id: project.id,
+				name: project.name || project.id,
+				detail: project.root,
+				checked: false,
+			})),
+		),
+		choiceGroup(
+			"harness",
+			"Harness",
+			harnesses.map((harness) => ({
+				id: harness.id,
+				name: harness.id,
+				detail: harness.isDefault === true ? "default" : "",
+				checked: harness.isDefault === true,
+			})),
+		),
+		submit,
+		result,
+	);
+	syncSpawnSubmit();
+}
+
+function chosen(group) {
+	return pickerEl?.querySelector(`input[name="${group}"]:checked`)?.value ?? null;
+}
+
+/**
+ * The submit is live only with both choices made and no spawn pending; New session
+ * follows the same state, and is updated even once the picker (and so the submit)
+ * is gone, because that is when a pending spawn ends by opening the session.
+ */
+function syncSpawnSubmit() {
+	const pending = spawnPending();
+	const open = el("new-session");
+	if (open) open.disabled = pending;
+	const submit = el("spawn-submit");
+	if (!submit) return;
+	submit.disabled = pending || chosen("project") === null || chosen("harness") === null;
+	for (const fieldset of pickerEl.querySelectorAll("fieldset")) fieldset.disabled = pending;
+}
+
+function spawnResult(text, state, code) {
+	const result = el("spawn-result");
+	if (!result) return;
+	result.textContent = text;
+	result.dataset.state = state;
+	if (code) result.dataset.code = code;
+	else delete result.dataset.code;
+}
+
+/** End the pending state with a sentence: the session is not going to be opened for the operator. */
+function spawnDone(text, state, code) {
+	spawnedId = null;
+	syncSpawnSubmit();
+	spawnResult(text, state, code);
+}
+
+function submitSpawn(event) {
+	event.preventDefault();
+	// The disabled submit already stops a tap; this stops a second `submit` event
+	// that does not come from the button (an Enter key, a script). Pending includes
+	// the wait for the fleet row, when the answer is in but the session is not open:
+	// both guards upstream of this one are already cleared by then.
+	if (spawnPending()) return;
+	const projectId = chosen("project");
+	const harnessId = chosen("harness");
+	if (projectId === null || harnessId === null) return;
+	if (!send({ type: "session_spawn", harnessId, projectId })) return;
+	spawning = true;
+	spawnOpens = true;
+	syncSpawnSubmit();
+	spawnResult("starting…", "pending");
+}
+
+/**
+ * The one answer to a `session_spawn`.
+ *
+ * `code` and `message` are the daemon's words and go in as text, never markup: a
+ * refusal quotes the registry's own paths. A refusal leaves the picker as it was,
+ * choices intact, so the operator can fix the file and tap again.
+ */
+function renderSpawned(frame) {
+	clearSpawnLost();
+	if (!spawning) return;
+	spawning = false;
+	if (frame.ok !== true) {
+		spawnDone(`${frame.code}: ${frame.message}`, "failed", frame.code);
+		return;
+	}
+	if (typeof frame.sessionId !== "string") {
+		spawnDone("started — refresh the fleet to find it", "ok");
+		return;
+	}
+	if (!spawnOpens) {
+		spawnDone(STARTED_UNOPENED, "ok");
+		return;
+	}
+	// The session joins the fleet through the observer, not through this answer.
+	// This connection is not attached, so it is sent no deltas: it asks. Still
+	// pending until it is open, so the submit stays off while it waits.
+	spawnedId = frame.sessionId;
+	spawnRetried = false;
+	spawnResult("started — waiting for it to join the fleet…", "pending");
+	if (!openSpawned() && !resyncFleet("opening the new session…")) {
+		spawnDone("started — refresh the fleet to open it", "ok");
+	}
+}
+
+/**
+ * Called with each fleet snapshot while a spawned session is awaited.
+ *
+ * The daemon answers `spawned` only after the process has published its socket,
+ * but `fleet_resync` is answered by `refreshNow()`, which skips the scan inside
+ * its 25 ms coalescing floor: the first snapshot after the answer can predate the
+ * row. So the fleet is asked for once more, {@link SPAWN_RETRY_MS} later, before
+ * the row is reported missing.
+ */
+function settleSpawned() {
+	if (spawnedId === null || openSpawned()) return;
+	if (spawnRetryTimer !== null) return;
+	if (!spawnRetried) {
+		spawnRetried = true;
+		spawnRetryTimer = setTimeout(() => {
+			spawnRetryTimer = null;
+			if (spawnedId !== null && !resyncFleet("opening the new session…")) settleSpawned();
+		}, SPAWN_RETRY_MS);
+		return;
+	}
+	spawnDone("started, but it is not in the fleet list yet — use Refresh", "ok");
+}
+
+/**
+ * The operator chose where to be, so what was going to be opened for them is no
+ * longer wanted. Covers both waits: for the answer (`spawning`, no id yet) and for
+ * the row (`spawnedId`). The session stays started; it is theirs to open.
+ */
+function declineSpawnedOpen() {
+	spawnOpens = false;
+	if (spawnedId !== null) spawnDone(STARTED_UNOPENED, "ok");
+}
+
+/**
+ * Open the session `session_spawned` named, if the fleet model has its row.
+ *
+ * The same {@link openSession} a tap on a discovered row calls, and only once
+ * {@link fleet} holds an attachable row for the id: an id the daemon minted is not
+ * yet a session this page may talk to, and a row built from the answer would be
+ * the page vouching for a process it has not seen.
+ */
+function openSpawned() {
+	const row = fleet.get(spawnedId);
+	if (!row || !isAttachable(row)) return false;
+	const id = spawnedId;
+	spawnedId = null;
+	spawnOpens = false;
+	closeSpawnPicker();
+	syncSpawnSubmit();
+	openSession(id);
+	return true;
+}
+
 /* --------------------------------------------------------------- viewport -- */
 
 /**
@@ -871,6 +1290,14 @@ function connect() {
 	// greet it and then refuse everything after, which costs a socket and
 	// teaches the operator nothing.
 	if (!protocol || (!bootstrap && !device)) return;
+	// One socket at a time. A backoff still pending would open a second beside the
+	// one a tap just opened, and a socket this replaces must not go on feeding the
+	// page: its close is ignored below, so nothing else would end it.
+	clearTimeout(reconnectTimer);
+	reconnectTimer = null;
+	const replaced = socket;
+	socket = null;
+	replaced?.close();
 	authenticated = false;
 	attachedId = null;
 	// A resync in flight belongs to the socket that is gone; the new connection
@@ -878,6 +1305,7 @@ function connect() {
 	// drop that snapshot's successors on the floor.
 	resyncing = false;
 	serverCapabilities = [];
+	renderSpawn();
 	setStatus("connecting…", "connecting");
 
 	const url = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/attach`;
@@ -903,6 +1331,7 @@ function connect() {
 	});
 
 	opened.addEventListener("message", (event) => {
+		if (socket !== opened) return;
 		let frame;
 		try {
 			frame = JSON.parse(event.data);
@@ -923,6 +1352,7 @@ function closed(event) {
 	authenticated = false;
 	attachedId = null;
 	markCurrent();
+	renderSpawn();
 	// Recorded before any of the branches below return: how the socket died is
 	// the fact the archived run is after, and every one of those paths is a way
 	// of dying (R33-REACH.2).
@@ -968,7 +1398,7 @@ function closed(event) {
 	// screen through the gap, so without this the page is indistinguishable from
 	// one whose session has simply gone quiet.
 	setStatus(`disconnected (${event.code}${event.reason ? ` ${event.reason}` : ""}) — reconnecting…`, "disconnected");
-	setTimeout(connect, delay);
+	reconnectTimer = setTimeout(connect, delay);
 }
 
 function receive(frame) {
@@ -995,6 +1425,7 @@ function receive(frame) {
 			authenticated = true;
 			tokenForm.hidden = true;
 			setStatus("connected", "connected");
+			renderSpawn();
 			// A connection that owes an attach is not finished arriving, so its
 			// budget is not yet earned — see `session_metadata`. One that owes
 			// nothing has arrived: it is authenticated, it is about to be handed
@@ -1018,6 +1449,17 @@ function receive(frame) {
 		// snapshot by `epoch` + `seq`.
 		case "fleet_delta":
 			applyFleetDelta(frame);
+			break;
+
+		// The answer to `registry_resync` (`geist/0.5`): the closed set the picker is
+		// drawn from. Carries no executable path, by schema.
+		case "registry":
+			renderRegistry(frame);
+			break;
+
+		// The one answer to `session_spawn`. The session itself arrives in the fleet.
+		case "session_spawned":
+			renderSpawned(frame);
 			break;
 
 		// The attach worked, which is the whole of what a connection that wanted a
@@ -1111,6 +1553,10 @@ function openSession(sessionId) {
 	// what does not exist.
 	const known = fleet.get(sessionId);
 	if (known !== undefined && !isAttachable(known)) return;
+	// Before the early return below: opening the session already on screen is a
+	// choice of where to be as well. `openSpawned` has cleared its own intent by
+	// the time it gets here.
+	declineSpawnedOpen();
 	if (attachedId === sessionId) {
 		document.body.dataset.view = "session";
 		return;
@@ -1136,6 +1582,7 @@ function openSession(sessionId) {
 }
 
 function backToFleet() {
+	declineSpawnedOpen();
 	document.body.dataset.view = "fleet";
 	if (attachedId) {
 		deliberateClose = true;

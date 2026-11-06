@@ -17,4 +17,5 @@ export {
 	type StartGatewayOptions,
 	startGateway,
 } from "./gateway/server";
+export { type UserRegistry, userRegistry } from "./session/harness-resolver";
 export { SessionManager } from "./session/session-manager";

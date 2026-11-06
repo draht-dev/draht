@@ -1,6 +1,6 @@
 import type { AgentTool } from "@draht/agent-core";
 import type { ImageContent, TextContent } from "@draht/ai";
-import { Type } from "@sinclair/typebox";
+import { num, obj, opt, str } from "@draht/schema";
 import { extname } from "path";
 import type { Executor } from "../sandbox.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
@@ -24,12 +24,15 @@ function isImageFile(filePath: string): string | null {
 	return IMAGE_MIME_TYPES[ext] || null;
 }
 
-const readSchema = Type.Object({
-	label: Type.String({ description: "Brief description of what you're reading and why (shown to user)" }),
-	path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
-	offset: Type.Optional(Type.Number({ description: "Line number to start reading from (1-indexed)" })),
-	limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
-});
+const readSchema = obj(
+	{
+		label: str({ description: "Brief description of what you're reading and why (shown to user)" }),
+		path: str({ description: "Path to the file to read (relative or absolute)" }),
+		offset: opt(num({ description: "Line number to start reading from (1-indexed)" })),
+		limit: opt(num({ description: "Maximum number of lines to read" })),
+	},
+	{ open: true },
+);
 
 interface ReadToolDetails {
 	truncation?: TruncationResult;

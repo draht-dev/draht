@@ -6,6 +6,9 @@ import { SpawnRefusedError } from "./spawn-primitive.js";
 /** Checked here, not imported: packages/gateway must not depend on @draht/coding-agent. */
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,127}$/;
 
+/** On the argv of every phone-initiated session, spawn and resume alike: untrusted despite any standing trust.json grant or defaultProjectTrust. */
+export const NO_APPROVE_FLAG = "--no-approve";
+
 export interface SpawnArgvInput {
 	sessionId: string;
 	/** Canonical absolute root: the session's cwd AND its context boundary. */
@@ -27,7 +30,7 @@ export function buildSpawnArgv(input: SpawnArgvInput): string[] {
 		"--attachable",
 		"--mode",
 		"rpc", // without a TTY the mode falls through to print, and the socket appears and vanishes
-		"--no-approve", // untrusted despite any standing trust.json grant or defaultProjectTrust
+		NO_APPROVE_FLAG,
 		"--context-root",
 		input.projectRoot,
 	];

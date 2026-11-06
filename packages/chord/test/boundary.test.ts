@@ -8,10 +8,11 @@ const sourceDirectory = resolve(packageDirectory, "src");
 const IMPORT_SPECIFIER = /(?:import|export)\s+(?:type\s+)?(?:[^;]*?\sfrom\s*)?["']([^"']+)["']/gu;
 
 describe("package boundary", () => {
-	// @draht/telemetry is the one allowed draht package: a leaf without dependencies, needed for Context.telemetry.
-	const ALLOWED = new Set(["@draht/telemetry"]);
+	// The allowed draht packages are leaves without dependencies: @draht/telemetry for Context.telemetry, @draht/schema
+	// for schemas.
+	const ALLOWED = new Set(["@draht/telemetry", "@draht/schema"]);
 
-	test("does not depend on draht packages other than telemetry, or on files outside Chord", async () => {
+	test("does not depend on draht packages other than telemetry and schema, or on files outside Chord", async () => {
 		const manifest = JSON.parse(await readFile(resolve(packageDirectory, "package.json"), "utf8")) as {
 			dependencies?: Record<string, string>;
 		};

@@ -1,5 +1,5 @@
 /**
- * Adapters that give a pi-agent-core `Agent` MCP tools and a codemode tool, using
+ * Adapters that give a @draht/agent-core `Agent` MCP tools and a codemode tool, using
  * `@draht/mcp` and `@draht/codemode`. See main.ts for how they fit together.
  */
 
@@ -13,7 +13,7 @@ import {
 import type { ImageContent, JsonObject, JsonValue, TextContent } from "@draht/ai";
 import { type CodemodeJsonSchema, CodemodeSandbox, type CodemodeTool, renderDeclarations } from "@draht/codemode";
 import { type McpClient, toLlmContent } from "@draht/mcp";
-import { Type } from "typebox";
+import { obj, str } from "@draht/schema";
 
 /** Provider tool names are limited to 64 characters of `[A-Za-z0-9_-]`. */
 function toToolName(prefix: string, name: string): string {
@@ -40,12 +40,12 @@ export async function createMcpTools(client: McpClient, prefix: string): Promise
 			label: tool.title ?? tool.name,
 			description: tool.description ?? tool.title ?? `MCP tool ${tool.name}`,
 			// Providers require an object schema, and some reject one without `properties`.
-			parameters: Type.Unsafe({
+			parameters: {
 				...tool.inputSchema,
 				type: "object",
 				properties: tool.inputSchema.properties ?? {},
-			}),
-			outputSchema: tool.outputSchema ? Type.Unsafe<Record<string, unknown>>(tool.outputSchema) : undefined,
+			},
+			outputSchema: tool.outputSchema,
 			execute: async (_toolCallId, params, signal, onUpdate) => {
 				const result = await client.callTool(tool.name, params as Record<string, unknown>, {
 					signal,
@@ -99,9 +99,11 @@ export function createNestedToolRunner(
 
 export const CODEMODE_TOOL_NAME = "codemode";
 
-const codemodeParameters = Type.Object({
-	code: Type.String({ description: "JavaScript source. Top-level await and return work." }),
-});
+const codemodeParameters = obj(
+	{ code: str({ description: "JavaScript source. Top-level await and return work." }) },
+	// Open, as the tool accepted extra arguments before it moved from TypeBox.
+	{ open: true },
+);
 
 /**
  * A tool that runs model-written JavaScript in the codemode sandbox, where `tools.<name>(args)`
@@ -116,7 +118,6 @@ export function createCodemodeTool(
 	const sandboxTools: CodemodeTool[] = callable.map((tool) => ({
 		name: tool.name,
 		description: tool.description,
-		// TypeBox schemas are JSON Schema.
 		inputSchema: tool.parameters as CodemodeJsonSchema,
 		// What the script receives: the structured result if the tool declares one, else its text.
 		outputSchema: (tool.outputSchema as CodemodeJsonSchema | undefined) ?? { type: "string" },
@@ -149,7 +150,7 @@ export function createCodemodeTool(
 			const sandbox = new CodemodeSandbox({ tools: sandboxTools, timeoutMs: 120_000 });
 			try {
 				const result = await sandbox.execute(params.code, { signal });
-				// Items from text(), console.*, and image(), in order. They have pi-ai's content shapes.
+				// Items from text(), console.*, and image(), in order. They have @draht/ai's content shapes.
 				const content: (TextContent | ImageContent)[] = [...result.output];
 				if (result.ok && result.value !== undefined) {
 					const value = typeof result.value === "string" ? result.value : JSON.stringify(result.value);

@@ -31,6 +31,7 @@ const deepseekCompat: Omit<
 	maxTokensField: "max_completion_tokens",
 	requiresToolResultName: false,
 	requiresAssistantAfterToolResult: false,
+	requiresNonNullAssistantContent: false,
 	requiresThinkingAsText: false,
 	thinkingFormat: "openai",
 	openRouterRouting: {},
@@ -47,6 +48,7 @@ const deepseekCompat: Omit<
 	chatTemplateKwargs: {},
 	chatTemplateArgs: {},
 	sessionAffinityFormat: "openai",
+	promptCacheKeyMode: "auto",
 };
 
 function makeDeepSeekModel(): Model<"openai-completions"> {

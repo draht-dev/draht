@@ -9,7 +9,7 @@ import {
 	spellRealPrefix,
 	trustKeyPath,
 } from "../utils/canonical-path.ts";
-import { resolvePath } from "../utils/paths.ts";
+import { pathsEqual, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
 
 export type ProjectTrustDecision = boolean | null;
@@ -62,15 +62,22 @@ function trustKeyEscapesProjectConfigDir(cwd: string): boolean {
 	return hasProjectConfigResources(lexicalCwd) && realPathStrict(lexicalCwd) !== realPathStrict(cwd);
 }
 
+/** Trust file keys naming `path`. Usually one; several on Windows when saved with different casing. */
+function findTrustFileKeys(data: TrustFile, path: string): string[] {
+	return Object.keys(data).filter((key) => pathsEqual(key, path));
+}
+
 function findNearestTrustEntry(data: TrustFile, cwd: string): ProjectTrustStoreEntry | null {
 	const prefix = resolveRealPrefix(cwd);
 	// A stored refusal always binds; a stored trust binds only when the key names the directory whose project config loads. An unresolved suffix is spelled lexically, and a `..` across a symlink resolves away from it: either way the key is not that directory.
 	const trustBinds = !prefix.failed && !trustKeyEscapesProjectConfigDir(cwd);
 	let currentDir = spellRealPrefix(prefix);
 	while (true) {
-		const value = data[currentDir];
-		if (value === false || (value === true && trustBinds)) {
-			return { path: currentDir, decision: value };
+		for (const key of findTrustFileKeys(data, currentDir)) {
+			const value = data[key];
+			if (value === false || (value === true && trustBinds)) {
+				return { path: key, decision: value };
+			}
 		}
 
 		const parentDir = dirname(currentDir);
@@ -239,7 +246,10 @@ function hasProjectResourcesAtOrAbove(startDir: string, userAgentsSkillsDir: str
 	while (true) {
 		for (const entry of TRUST_REQUIRING_ANCESTOR_PROJECT_RESOURCES) {
 			const resourceDir = join(currentDir, entry);
-			if (resourceDir !== userAgentsSkillsDir && existsSync(resourceDir)) {
+			if (
+				(userAgentsSkillsDir === undefined || !pathsEqual(resourceDir, userAgentsSkillsDir)) &&
+				existsSync(resourceDir)
+			) {
 				return true;
 			}
 		}
@@ -279,9 +289,10 @@ export class ProjectTrustStore {
 			const data = readTrustFile(this.trustPath);
 			for (const { path, decision } of decisions) {
 				const key = trustKeyPath(path);
-				if (decision === null) {
-					delete data[key];
-				} else {
+				for (const existingKey of findTrustFileKeys(data, key)) {
+					delete data[existingKey];
+				}
+				if (decision !== null) {
 					data[key] = decision;
 				}
 			}

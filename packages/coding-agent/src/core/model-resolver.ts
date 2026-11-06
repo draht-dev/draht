@@ -49,6 +49,7 @@ export const defaultModelPerProvider: Partial<Record<KnownProvider, string>> = {
 	"qwen-token-plan": "qwen3.7-max",
 	"qwen-token-plan-cn": "qwen3.7-max",
 	"qwen-token-plan-individual": "qwen3.8-max",
+	"qwen-token-plan-individual-cn": "qwen3.8-max",
 	xiaomi: "mimo-v2.6-pro",
 	"xiaomi-token-plan-cn": "mimo-v2.6-pro",
 	"xiaomi-token-plan-ams": "mimo-v2.6-pro",
@@ -122,13 +123,18 @@ function splitProviderPrefix(
 	text: string,
 	models: readonly Model<Api>[],
 ): { provider: string; modelText: string } | undefined {
-	const slashIndex = text.indexOf("/");
-	if (slashIndex === -1) return undefined;
-	const prefix = text.substring(0, slashIndex).trim().toLowerCase();
-	const modelText = text.substring(slashIndex + 1).trim();
-	if (!prefix || !modelText) return undefined;
-	const provider = models.find((model) => model.provider.toLowerCase() === prefix)?.provider;
-	return provider ? { provider, modelText } : undefined;
+	// Provider ids may contain "/" themselves (e.g. URL-derived ids), so match known ids, longest first
+	const lowerText = text.toLowerCase();
+	let best: { provider: string; modelText: string } | undefined;
+	for (const { provider } of models) {
+		const prefix = provider.trim().toLowerCase();
+		if (!prefix || (best && best.provider.length >= provider.length)) continue;
+		const slashIndex = lowerText.indexOf("/", prefix.length);
+		if (slashIndex === -1 || lowerText.substring(0, slashIndex).trim() !== prefix) continue;
+		const modelText = text.substring(slashIndex + 1).trim();
+		if (modelText) best = { provider, modelText };
+	}
+	return best;
 }
 
 /**

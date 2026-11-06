@@ -2,14 +2,31 @@
 // wrongly fails OPEN, so each case also shows the naive form answering wrongly about the very same process.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
 import {
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
+import { basename, dirname, join } from "node:path";
+import {
+	argvOf,
 	assertEnvAbsent,
+	cwdOf,
 	descendantsOf,
 	EnvironmentNotVisibleError,
 	envOf,
+	exeOf,
+	ForeignOwnedFileUnavailableError,
+	foreignOwnedFileIn,
 	groupMembers,
+	hardlinkForeignFile,
 	isProcessAlive,
 	isZombie,
 	liveGroupMembers,
@@ -38,8 +55,8 @@ function tempDir(prefix: string): string {
 
 /** `detached: true` gives the child its own session (no controlling terminal) and its own pgid (a reap that cannot
  * reach anything this run did not start). */
-function fixture(argv: string[], env: Record<string, string>): Bun.Subprocess {
-	const proc = Bun.spawn(argv, { env, detached: true, stdin: "ignore", stdout: "ignore", stderr: "pipe" });
+function fixture(argv: string[], env: Record<string, string>, cwd?: string): Bun.Subprocess {
+	const proc = Bun.spawn(argv, { env, cwd, detached: true, stdin: "ignore", stdout: "ignore", stderr: "pipe" });
 	pgids.add(proc.pid);
 	return proc;
 }
@@ -141,6 +158,13 @@ describe("a killed group leaves a zombie, and only the Z filter knows it is dead
 		expect(groupMembers(leaderPid).map((row) => row.pid)).toEqual([leaderPid]);
 
 		expect(liveGroupMembers(leaderPid)).toEqual([]);
+
+		// A defunct process has no argv; an empty answer would satisfy every "argv does not contain" check.
+		if (process.platform === "linux") {
+			expect(() => argvOf(leaderPid)).toThrow(/cmdline is empty/);
+			expect(() => exeOf(leaderPid)).toThrow(ProcessTableError);
+			expect(() => cwdOf(leaderPid)).toThrow(ProcessTableError);
+		}
 
 		expect(() => process.kill(leaderPid, 0)).not.toThrow();
 		expect(isProcessAlive(leaderPid)).toBe(false);
@@ -315,4 +339,136 @@ describe("descendantsOf, and a grandchild whose environment can actually be read
 
 		parent.kill("SIGKILL");
 	}, 90_000);
+});
+
+describe("argvOf, exeOf and cwdOf read the kernel's view, not the caller's", () => {
+	test("a bun started through a symlink: argv[0] is the link, the executable is the target, the cwd is where it started", async () => {
+		const dir = realpathSync(tempDir("hkv-"));
+		const link = join(dir, "bun-link");
+		symlinkSync(realpathSync(BUN), link);
+		const script = join(dir, "idle.js");
+		writeFileSync(script, "setTimeout(() => {}, 600000);");
+		const work = join(dir, "work");
+		mkdirSync(work);
+		const planted = uniqueMarker("planted");
+
+		const child = fixture(
+			[link, script, "alpha", "--flag=beta"],
+			{ PATH: "/usr/bin:/bin", W5_PLANTED: planted },
+			work,
+		);
+		await until(() => rowFor(child.pid)?.command.includes("idle.js"), `${child.pid} to have exec'd the idle script`);
+
+		expect(argvOf(child.pid)).toEqual([link, script, "alpha", "--flag=beta"]);
+		expect(exeOf(child.pid)).toBe(realpathSync(BUN));
+		expect(exeOf(child.pid)).not.toBe(link);
+		expect(cwdOf(child.pid)).toBe(work);
+		expect(cwdOf(child.pid)).not.toBe(process.cwd());
+
+		const seen = envOf(child.pid);
+		if (!seen.visible) throw new Error("a bun child's environment is visible");
+		expect(seen.env.get("W5_PLANTED")).toBe(planted);
+
+		child.kill("SIGKILL");
+	}, 60_000);
+
+	test.skipIf(process.platform !== "linux")(
+		"on Linux an empty element and a spaced one survive, which ps could not show",
+		async () => {
+			const dir = realpathSync(tempDir("hkv-"));
+			const script = join(dir, "idle.js");
+			writeFileSync(script, "setTimeout(() => {}, 600000);");
+
+			const child = fixture([BUN, script, "", "two words", "tail"], { PATH: "/usr/bin:/bin" });
+			await until(
+				() => rowFor(child.pid)?.command.includes("idle.js"),
+				`${child.pid} to have exec'd the idle script`,
+			);
+
+			expect(argvOf(child.pid)).toEqual([BUN, script, "", "two words", "tail"]);
+
+			child.kill("SIGKILL");
+		},
+		60_000,
+	);
+
+	test("a pid the kernel does not know throws instead of answering", async () => {
+		const gone = fixture([BUN, "-e", ""], { PATH: "/usr/bin:/bin" });
+		await gone.exited;
+		await until(() => rowFor(gone.pid) === undefined, `pid ${gone.pid} to leave the table`);
+
+		expect(() => argvOf(gone.pid)).toThrow(ProcessTableError);
+		expect(() => exeOf(gone.pid)).toThrow(ProcessTableError);
+		expect(() => cwdOf(gone.pid)).toThrow(ProcessTableError);
+	}, 60_000);
+});
+
+describe("foreignOwnedFileIn never fakes a foreign file", () => {
+	test("returns a file another uid owns inside our directory, or says why it cannot", () => {
+		const dir = realpathSync(tempDir("hff-"));
+		const result = foreignOwnedFileIn(dir, {});
+
+		if ("path" in result) {
+			expect(dirname(result.path)).toBe(dir);
+			expect(lstatSync(result.path).isSymbolicLink()).toBe(false);
+			expect(lstatSync(result.path).uid).not.toBe(process.getuid?.());
+			expect(readdirSync(dir)).toEqual([basename(result.path)]);
+			return;
+		}
+		console.log(`foreignOwnedFileIn is unavailable on this box: ${result.unavailable}`);
+		expect(result.unavailable.length).toBeGreaterThan(0);
+		if (process.platform === "linux") {
+			expect(result.unavailable).toContain("hard link of /etc/passwd");
+			expect(result.unavailable).toContain("sudo");
+		}
+		expect(readdirSync(dir)).toEqual([]);
+	});
+
+	test("a hard link to an inode this user owns is removed, never offered as foreign", () => {
+		const dir = realpathSync(tempDir("hff-"));
+		const own = join(dir, "own");
+		writeFileSync(own, "");
+
+		const result = hardlinkForeignFile([own], join(dir, "target"));
+
+		expect(result).toEqual({ failures: [`hard link of ${own}: the inode is owned by this user`] });
+		expect(readdirSync(dir)).toEqual(["own"]);
+	});
+
+	test("a link the kernel refuses is a recorded failure, and the next candidate is still tried", () => {
+		const dir = realpathSync(tempDir("hff-"));
+		const missing = join(dir, "missing");
+		const own = join(dir, "own");
+		writeFileSync(own, "");
+
+		const result = hardlinkForeignFile([missing, own], join(dir, "target"));
+
+		expect(result).toEqual({
+			failures: [`hard link of ${missing}: ENOENT`, `hard link of ${own}: the inode is owned by this user`],
+		});
+	});
+
+	test("with CI set, an unavailable result is an error; CI unset, empty, 0 or false is not CI", () => {
+		const missing = join(tempDir("hff-"), "does-not-exist");
+
+		expect(foreignOwnedFileIn(missing, {})).toHaveProperty("unavailable");
+		for (const notCi of ["", "0", "false", "FALSE"]) {
+			expect(foreignOwnedFileIn(missing, { CI: notCi })).toHaveProperty("unavailable");
+		}
+		for (const ci of ["true", "1"]) {
+			expect(() => foreignOwnedFileIn(missing, { CI: ci })).toThrow(ForeignOwnedFileUnavailableError);
+		}
+		expect(() => foreignOwnedFileIn(missing, { CI: "true" })).toThrow(
+			`a foreign-owned file in ${missing} is required and not skippable`,
+		);
+
+		const before = process.env.CI;
+		process.env.CI = "true";
+		try {
+			expect(() => foreignOwnedFileIn(missing)).toThrow(ForeignOwnedFileUnavailableError);
+		} finally {
+			if (before === undefined) delete process.env.CI;
+			else process.env.CI = before;
+		}
+	});
 });

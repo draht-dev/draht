@@ -2,6 +2,58 @@
 
 ## [Unreleased]
 
+## [2026.11.5-1] - 2026-11-05
+
+### Changed
+
+- feat(ai,agent,coding-agent): validate tool arguments with pi-schema, drop TypeBox
+- fix(ai): allow prompt cache keys for compatible proxies (badlogic/pi-mono#9442)
+- feat(ai): add Qwen Token Plan Individual CN provider (badlogic/pi-mono#7989)
+- feat(ai): add requiresNonNullAssistantContent compat flag (badlogic/pi-mono#8118)
+- fix(ai): mark Claude Sonnet 5 as not supporting temperature (badlogic/pi-mono#7961)
+- fix(ai): send session-id instead of session_id on OpenAI Responses (badlogic/pi-mono#11793)
+- fix(ai): preserve aborted stop reason during lazy setup (badlogic/pi-mono#8635)
+- fix(ai): add glm-5.3 to qwen-token-plan-individual models (badlogic/pi-mono#11785)
+- fix(ai): keep the underlying cause in connection error messages (badlogic/pi-mono#11783)
+- fix(ai): use Azure Foundry 1.05M context window for GPT-6 models (badlogic/pi-mono#11781)
+- Anthropic message threads (badlogic/pi-mono#11545)
+- fix(ai): remove Codex SSE retry abort listener after backoff (badlogic/pi-mono#11725)
+- fix(ai): leave room for OpenRouter's input overcount when clamping max tokens (badlogic/pi-mono#11712)
+- regenerate OpenCode catalog data for drop_block
+- feat(ai): add Microsoft-Decision-1 classifier to GitHub Copilot (badlogic/pi-mono#11679)
+- fix(ai): keep root $defs in Anthropic non-strict tool schemas
+- fix(ai): send drop_block for OpenCode Zen and Go Claude models
+- fix: remove vulnerable dependency chains
+- fix(ai): do not retry Zhipu usage limit errors (code 1308) (badlogic/pi-mono#11572)
+- feat(ai): refactor provider definitions (badlogic/pi-mono#11368)
+- fix(ai): remove adaptive thinking metadata test that duplicated generator logic
+- fix(ai): use Anthropic Messages for OpenRouter ~anthropic latest aliases
+- fix(ai): detect LiteLLM ContextWindowExceededError as context overflow (badlogic/pi-mono#11494)
+- fix(ai): fall back on Bedrock strict tool limits
+- fix(ai): declare GPT-5.4 and GPT-5.5 tools at the top level
+- fix(ai): use OpenCode protocol-specific endpoints (badlogic/pi-mono#11434)
+- fix(ai): remove unused root bedrock-provider shims
+- feat(ai): add GPT-6.1 Terra
+- fix: harden handling of untrusted URLs, terminal text, and streamed data
+- fix(ai): treat Kimi K3.1 Pro models as Kimi K3 family
+- fix(ai,chord,durable,coding-agent): parse streamed tool-call arguments incrementally (fixes badlogic/pi-mono#9265)
+- fix(ai): preserve literal data in Gemini tool schemas
+- fix(ai): send const as enum in Gemini tool schemas
+- fix(ai): do not count faux cache writes as input tokens
+- fix(ai): send fixed low top-level effort with Anthropic per-message effort
+- feat(ai): carry responseModel on pi-messages terminal events (badlogic/pi-mono#11265)
+- feat(coding-agent): confirm device-code browser and clipboard actions
+- fix(ai): hold Anthropic system updates past dropped assistant messages
+- fix(ai): use OpenRouter-reported total cost (badlogic/pi-mono#10286)
+- feat(ai): add totalFromProvider flag to usage cost (badlogic/pi-mono#11178)
+- fix(ai): expect compat on OpenRouter decision models in catalog test
+- feat(ai,coding-agent): image input for System One classifiers
+
+### Fixed
+
+- rebrand pi references left by the 2026-11-01 upstream sync
+- rebrand pi references left by the 2026-10-31 upstream sync
+
 ## [2026.10.23-1] - 2026-10-23
 
 ### Added

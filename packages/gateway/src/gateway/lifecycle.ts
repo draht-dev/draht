@@ -25,7 +25,7 @@ export interface DestroyableManager {
  *
  * Shutdown sequence:
  *   1. server.stop()     — stop accepting new connections
- *   2. manager.destroyAll() — kill every active session and emit domain events
+ *   2. manager.destroyAll() — destroy every active session and emit domain events
  *
  * The shutdown promise is memoised: concurrent or repeated calls all receive
  * the same Promise<number>, guaranteeing stop() and destroyAll() are each

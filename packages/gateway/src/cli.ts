@@ -1,10 +1,12 @@
 import { existsSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import {
 	DEVICE_REGISTRY_PATH_ENV,
 	DeviceRegistry,
 	type DeviceRegistryEvent,
 	resolveDeviceRegistryPath,
 } from "@draht/geist-core";
+import { RegistryFileRefusedError } from "@draht/geist-protocol";
 import { CONFIG_PATH, createDefaultConfigFile, type GatewaySettings, loadConfigSync } from "./config/config";
 import { assertBindHostAllowed } from "./gateway/bind-host";
 import { GatewayLifecycle } from "./gateway/lifecycle";
@@ -12,6 +14,7 @@ import { type Logger, logger } from "./gateway/logger";
 import type { AttachDeviceAuthenticator, AttachDeviceProvider } from "./gateway/routes/fleet";
 import { type BoundServer, type StartGatewayOptions, startGateway } from "./gateway/server";
 import { EventBus } from "./session/event-bus";
+import { type UserRegistry, userRegistry } from "./session/harness-resolver";
 import { SessionManager } from "./session/session-manager";
 
 export { isLoopbackHost, nonLoopbackBindError, nonLoopbackBindWarning } from "./gateway/bind-host";
@@ -23,6 +26,8 @@ export interface ParsedArgs {
 	config: GatewaySettings;
 	/** True when the operator explicitly opted into a non-loopback bind. */
 	allowNonLoopback: boolean;
+	/** The absolute path `--registry` named. Absent means the default under the user's home, never cwd. */
+	registryPath?: string;
 }
 
 /** Injection seam so the loopback warning can be asserted in tests. */
@@ -58,6 +63,7 @@ export function parseArgs(argv: string[], config: GatewaySettings, options: Pars
 	let host = config.host;
 	let authToken: string | undefined;
 	let allowNonLoopback = false;
+	let registryPath: string | undefined;
 
 	for (let i = 0; i < argv.length; i++) {
 		const flag = argv[i];
@@ -91,6 +97,14 @@ export function parseArgs(argv: string[], config: GatewaySettings, options: Pars
 			}
 			authToken = token;
 			i++;
+		} else if (flag === "--registry") {
+			const value = requireValue(flag, next, "an absolute path");
+			// Refused here rather than resolved: a relative path would mean whatever directory the daemon was started in.
+			if (!isAbsolute(value)) {
+				throw new Error(`--registry must be an absolute path, got: ${value}`);
+			}
+			registryPath = value;
+			i++;
 		}
 	}
 
@@ -108,7 +122,7 @@ export function parseArgs(argv: string[], config: GatewaySettings, options: Pars
 		}
 	}
 
-	return { port, host, authToken, config, allowNonLoopback };
+	return { port, host, authToken, config, allowNonLoopback, registryPath };
 }
 
 /**
@@ -366,6 +380,48 @@ function buildDeviceStore(path: string, log: Logger): AttachDeviceAuthenticator 
 	};
 }
 
+/** The registry seams are the device seams, plus the one path an operator can name. */
+export interface RegistryWiringOptions extends DeviceWiringOptions {
+	/** The absolute path `--registry` named. Absent means `~/.geist/config.yaml` under the environment's HOME. */
+	explicit?: string;
+}
+
+/**
+ * Build the registry `/attach` offers `session_spawn` from; see `onOpen` in
+ * fleet.ts for when it is offered.
+ *
+ * The default path comes from the injected HOME and never from cwd. An unusable
+ * HOME costs this optional feature, not the daemon, so the result is `undefined`
+ * with a warning. An invalid `--registry` is the operator's own input and stays
+ * an error.
+ */
+export function createRegistryWiring(options: RegistryWiringOptions = {}): UserRegistry | undefined {
+	const env = options.env ?? process.env;
+	const log = options.log ?? logger;
+	let registry: UserRegistry;
+	try {
+		registry = userRegistry({ explicit: options.explicit, home: env.HOME });
+	} catch (error) {
+		const named = options.explicit !== undefined && options.explicit !== "";
+		if (named || !(error instanceof RegistryFileRefusedError)) throw error;
+		log.warn({
+			message:
+				"no spawn registry: HOME is empty or not an absolute path, so the default registry path cannot be resolved; pass --registry <absolute path> to offer session_spawn",
+			home: env.HOME,
+		});
+		return undefined;
+	}
+
+	if (!registry.present()) {
+		log.warn({
+			message: "no spawn registry: this daemon does not offer session_spawn until a registry file exists",
+			path: registry.path,
+			hint: "create it as a file only you can read (mode 0600) inside a directory only you can write (mode 0700)",
+		});
+	}
+	return registry;
+}
+
 /**
  * The single options object the daemon starts from.
  *
@@ -387,6 +443,7 @@ export function gatewayOptions(
 		config: parsed.config,
 		allowNonLoopback: parsed.allowNonLoopback,
 		devices: createDeviceAuthenticator(options),
+		userRegistry: createRegistryWiring({ explicit: parsed.registryPath, env: options.env, log: options.log }),
 	};
 }
 

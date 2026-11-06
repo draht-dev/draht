@@ -114,15 +114,16 @@ See [Describe model input and caching](models.md#describe-model-input-and-cachin
 | `supportsDeveloperRole` | boolean |  | Whether the provider supports the developer role instead of system. Default: auto-detected from URL. |
 | `supportsReasoningEffort` | boolean |  | Whether the provider supports reasoning_effort. Default: auto-detected from URL. |
 | `supportsUsageInStreaming` | boolean | `true` | Whether the provider supports stream_options.include_usage for token usage in streaming responses. |
-| `supportsFinishReason` | boolean | `true` | Whether streamed responses include finish_reason. When false, pi infers stop or toolUse when the stream ends. |
+| `supportsFinishReason` | boolean | `true` | Whether streamed responses include finish_reason. When false, draht infers stop or toolUse when the stream ends. |
 | `maxTokensField` | `"max_completion_tokens" \| "max_tokens"` |  | Which field to use for max tokens. Default: auto-detected from URL. |
 | `requiresToolResultName` | boolean |  | Whether tool results require the name field. Default: auto-detected from URL. |
 | `requiresAssistantAfterToolResult` | boolean |  | Whether a user message after tool results requires an assistant message in between. Default: auto-detected from URL. |
+| `requiresNonNullAssistantContent` | boolean |  | Whether replayed assistant messages with no text (e.g. tool-call-only messages) must send "" instead of null content. Default: false. |
 | `requiresThinkingAsText` | boolean |  | Whether thinking blocks must be converted to text blocks with &lt;thinking> delimiters. Default: auto-detected from URL. |
 | `requiresReasoningContentOnAssistantMessages` | boolean |  | Whether all replayed assistant messages must include an empty reasoning_content field when reasoning is enabled. Default: auto-detected from URL. |
 | `thinkingFormat` | `"openai" \| "openrouter" \| "deepseek" \| "together" \| "baseten" \| "zai" \| "qwen" \| "chat-template" \| "qwen-chat-template" \| "string-thinking" \| "ant-ling"` |  | Format for reasoning or thinking parameters. When omitted, draht auto-detects the format from the provider URL. "openai" uses reasoning_effort, "openrouter" uses reasoning.effort, "deepseek" uses thinking.type plus reasoning_effort when supported, "together" uses reasoning.enabled plus reasoning_effort when supported, "baseten" uses configurable chat_template_args plus reasoning_effort when supported, "zai" uses thinking.type, "qwen" uses top-level enable_thinking, "qwen-chat-template" uses chat_template_kwargs.enable_thinking and preserve_thinking, "chat-template" uses configurable chat_template_kwargs, "string-thinking" uses top-level thinking, and "ant-ling" uses reasoning.effort only when the mapped effort is non-null. |
-| `chatTemplateKwargs` | object |  | Kwargs sent as chat_template_kwargs when thinkingFormat is "chat-template". Use $var with "thinking.enabled", "thinking.effort", or "thinking.budget" for pi-controlled values. |
-| `chatTemplateArgs` | object |  | Arguments sent as chat_template_args when thinkingFormat is "baseten". Use $var with "thinking.enabled", "thinking.effort", or "thinking.budget" for pi-controlled values. |
+| `chatTemplateKwargs` | object |  | Kwargs sent as chat_template_kwargs when thinkingFormat is "chat-template". Use $var with "thinking.enabled", "thinking.effort", or "thinking.budget" for draht-controlled values. |
+| `chatTemplateArgs` | object |  | Arguments sent as chat_template_args when thinkingFormat is "baseten". Use $var with "thinking.enabled", "thinking.effort", or "thinking.budget" for draht-controlled values. |
 | `openRouterRouting` | object |  | OpenRouter provider routing preferences. Controls which upstream providers OpenRouter routes requests to. Sent as the provider field in the OpenRouter API request body. See https://openrouter.ai/docs/guides/routing/provider-selection. |
 | `vercelGatewayRouting` | object |  | Vercel AI Gateway routing preferences. Controls which upstream providers the gateway routes requests to. See https://vercel.com/docs/ai-gateway/models-and-providers/provider-options. |
 | `zaiToolStream` | boolean | `false` | Whether z.ai supports top-level tool_stream for streaming tool call deltas. |
@@ -135,6 +136,7 @@ See [Describe model input and caching](models.md#describe-model-input-and-cachin
 | `cacheControlFormat` | `"anthropic"` |  | Cache control convention for prompt caching. Anthropic applies cache_control markers to the system prompt, last tool definition, and last user, assistant, or tool-result text content. |
 | `sendSessionAffinityHeaders` | boolean |  | Whether to send session-affinity data from options.sessionId. Default: true for OpenRouter endpoints, false otherwise. |
 | `sessionAffinityFormat` | `"openai" \| "openai-nosession" \| "openrouter"` |  | Session-affinity header format. openai sends session_id, x-client-request-id, and x-session-affinity; openai-nosession sends x-client-request-id and x-session-affinity; openrouter sends x-session-id. Does not affect prompt_cache_key. Default: auto-detected. |
+| `promptCacheKeyMode` | `"auto" \| "enabled" \| "disabled"` |  | Controls the prompt_cache_key request field. auto sends it to api.openai.com, or with long cache retention when supportsLongCacheRetention is true; enabled sends it whenever caching is active, for compatible proxies; disabled never sends it. Default: auto. |
 | `supportsLongCacheRetention` | boolean |  | Whether the provider supports long prompt cache retention (prompt_cache_retention: "24h" or Anthropic-style cache_control.ttl: "1h", depending on format). Default: auto-detected from provider and URL. |
 | `vllmPriority` | number |  | vLLM scheduler priority sent as the top-level priority request field. Lower values are handled earlier and the server default is 0. Only meaningful with --scheduling-policy priority. Off by default and not set on the generated catalog. |
 
@@ -146,7 +148,8 @@ Also applies to `azure-openai-responses` and `openai-codex-responses`.
 |---|---|---|---|
 | `supportsDeveloperRole` | boolean | `true` | Whether the provider supports the developer role instead of system. |
 | `supportsMidConvoSystemMessages` | boolean | `false` | Whether the exact model accepts developer or system messages after the conversation has started. When false, later system messages are folded into the leading system message. The generated catalog enables this for verified models. |
-| `sessionAffinityFormat` | `"openai" \| "openai-nosession" \| "openrouter"` |  | Session-affinity header format. openai sends session_id and x-client-request-id; openai-nosession sends x-client-request-id; openrouter sends x-session-id. Does not affect prompt_cache_key. Default: auto-detected. |
+| `sessionAffinityFormat` | `"openai" \| "openai-nosession" \| "openrouter"` |  | Session-affinity header format. openai sends session-id and x-client-request-id; openai-nosession sends x-client-request-id; openrouter sends x-session-id. Does not affect prompt_cache_key. Default: auto-detected. |
+| `promptCacheKeyMode` | `"auto" \| "enabled" \| "disabled"` |  | Controls the prompt_cache_key request field. auto and enabled send it whenever caching is active; disabled never sends it, for compatible proxies that reject it. Default: auto. |
 | `supportsLongCacheRetention` | boolean | `true` | Whether the provider supports long prompt cache retention. This uses prompt_cache_options.ttl: "30m" on GPT-5.6+ and prompt_cache_retention: "24h" on earlier models. |
 | `supportsStrictMode` | boolean |  | Whether the provider supports strict JSON-schema function tools. Defaults are API-specific; generated OpenAI models enable it explicitly. |
 | `supportsOpenAIGrammarTools` | boolean | `false` | Whether to emit OpenAI custom tools with Lark or regex grammar formats. When false, grammar-constrained tools fall back to normal function tools. The generated catalog enables this for capable models. |
@@ -172,6 +175,7 @@ Also applies to `azure-openai-responses` and `openai-codex-responses`.
 | `supportsMidConvoEffort` | boolean | `false` | Whether the exact model transport supports effort-only system messages and thinking binding controls. |
 | `supportsMidConvoSystemMessages` | boolean | `false` | Whether the exact model accepts system-role messages inside the conversation. When false, later system messages are folded into the top-level system prompt. |
 | `supportsMidConvoToolChanges` | boolean | `false` | Whether the exact model accepts mid-conversation tool_addition and tool_removal blocks. Requires supportsMidConvoSystemMessages. |
+| `supportsMessageThreads` | boolean |  | Whether the endpoint supports Anthropic message threads, which let a request with a session id send only the new messages and continue from the previous reply. Default: true for provider anthropic with a baseUrl on api.anthropic.com, false otherwise. Set true for gateways that forward the thread request field. |
 | `allowedFallbackModels` | `object[]` |  | Models Anthropic accepts for server-side refusal fallback, with local pricing metadata for returned fallback responses. When absent or empty, callers must omit fallbacks; Anthropic rejects the field for models with no permitted fallback targets. |
 
 ### `bedrock-converse-stream`
@@ -185,3 +189,12 @@ Also applies to `azure-openai-responses` and `openai-codex-responses`.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `supportsMidConvoSystemMessages` | boolean | `false` | Whether the exact model accepts system messages after the conversation has started. When false, later system messages are folded into the leading system message. |
+
+### `typesafe-system-one`
+
+Also applies to `cloudflare-workers-ai-system-one`.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `imageInput` | `"assets" \| "images" \| "state-image-urls"` |  | How the service takes classifier images. "assets" sends TypeSafe's assets map (PNG and JPEG) and references the images from the state, as TypeSafe and Jev on Workers AI expect. "images" sends Clef's images list of data URLs (PNG, JPEG, and WebP, at most four), as Clef on Workers AI expects. "state-image-urls" places image_url parts before the state, as OpenRouter expects; OpenRouter drops assets without an error. Auto-detected from the provider, baseUrl, and model ID. Classifier models read it from the provider-level compat; models and modelOverrides entries apply to chat models only. |
+| `sendImageOptInHeader` | boolean |  | Whether requests with images send the TypeSafe-Danger-Zone-Images: true header, which TypeSafe's own API requires for its experimental image input. Defaults to true for the typesafe-system-one API unless the model is detected as OpenRouter. |

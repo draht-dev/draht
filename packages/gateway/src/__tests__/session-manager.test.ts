@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { EventBus } from "../session/event-bus";
 import { SessionManager } from "../session/session-manager";
-import { SessionProcess } from "../session/session-process";
 
 describe("SessionManager", () => {
 	let manager: SessionManager;
@@ -65,34 +64,8 @@ describe("SessionManager", () => {
 
 	// Phase 2 additions
 
-	test('create() with no args → status === "starting", process === undefined', () => {
+	test('create() → status === "starting"', () => {
 		const session = manager.create();
 		expect(session.status).toBe("starting");
-		expect(session.process).toBeUndefined();
-	});
-
-	test('create(["echo", "hello"]) → session.process is defined (instanceof SessionProcess)', async () => {
-		const session = manager.create(["echo", "hello"]);
-		expect(session.process).toBeInstanceOf(SessionProcess);
-		await session.process?.exited;
-	});
-
-	test('destroy(id) on live process → process is killed → after await proc.exited → status === "stopped"', async () => {
-		const session = manager.create(["cat"]);
-		const proc = session.process!;
-		expect(proc).toBeInstanceOf(SessionProcess);
-		await proc.ready;
-
-		manager.destroy(session.id);
-		await proc.exited;
-
-		expect(proc.status).toBe("stopped");
-	});
-
-	test('after process exits naturally → session.status === "stopped"', async () => {
-		const session = manager.create(["echo", "done"]);
-		expect(session.process).toBeInstanceOf(SessionProcess);
-		await session.process!.exited;
-		expect(session.status).toBe("stopped");
 	});
 });

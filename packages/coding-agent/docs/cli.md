@@ -13,7 +13,7 @@ draht update [target] [options]
 draht list
 draht config [options]
 draht auth <check|print-api-key|print-bearer-token> [options]
-draht mcp <list|login|logout> [options]
+draht mcp <add|remove|list|login|logout> [options]
 draht checkpoint prune [--days <n>] [--max-per-session <n>] [--dry-run]
 draht rlm --input <path|glob|url> --query "..." [--max-cost <n>]
 draht rlm replay <trajectory-id> [--verbose]
@@ -89,15 +89,15 @@ draht --continue
 See [Sessions and Context](sessions.md) for resuming, forking, naming, and storing sessions.
 
 - `-c`, `--continue`<br>
-  Continues the most recent session for the current project.
+  Continues the most recent session for the current directory.
 - `-r`, `--resume`<br>
-  Opens the session selector.
+  Opens the session selector and resumes the chosen session in its working directory. Press Tab to include sessions from other directories.
 - `--session <path|id>`<br>
-  Opens by file path, exact ID, or partial ID. draht searches the current project first and offers to fork a cross-project match.
+  Opens a session by file path or full/partial ID, and resumes it in its working directory. If the ID only matches sessions stored for another directory, draht offers to fork it into the current directory instead.
 - `--session-id <id>`<br>
-  Opens the exact project session ID or creates it if absent. IDs accept letters, numbers, `.`, `_`, and `-`.
+  Opens the current directory's existing session with the ID, or creates it otherwise. IDs accept letters, numbers, `.`, `_`, and `-`.
 - `--fork <path|id>`<br>
-  Forks an existing session into a new session for the current project.
+  Forks a session, chosen by file path or full/partial ID, into a new session in the current directory.
 - `--session-dir <dir>`<br>
   Overrides storage and lookup. It takes precedence over `DRAHT_CODING_AGENT_SESSION_DIR` and the `sessionDir` setting.
 - `--no-session`<br>
@@ -163,7 +163,7 @@ Tool selection does not grant permission to execute. Every selected tool still p
 | `find` | Find paths using glob patterns |
 | `ls` | List directory contents |
 
-Built-in extensions add two more tools. They are off by default; the MCP extension turns them on when an MCP server needs them (see [MCP](mcp.md#exposure)). To enable them yourself, name them in `--tools` or `defaultTools`.
+Built-in extensions add two more tools. They are off by default; the MCP extension turns them on when an MCP server needs them (see [MCP](mcp.md#control-tool-exposure)). To enable them yourself, name them in `--tools` or `defaultTools`.
 
 | Built-in extension | Purpose |
 |---|---|
@@ -297,6 +297,18 @@ Running `draht update` without a target updates draht itself.
 
 Add `--force` to reinstall draht when the selected update includes draht.
 
+`draht update` cannot update draht when another package manager provides it, such as Nix. Update draht with that package manager, for example `nix profile upgrade draht`. Package and model catalog updates still work.
+
+#### Custom update command
+
+If a wrapper or another package manager provides draht, set `DRAHT_SELF_UPDATE_COMMAND` so `draht update` runs its update command:
+
+```sh
+export DRAHT_SELF_UPDATE_COMMAND="mise use -g npm:{packageName}@{version}"
+```
+
+`draht update` runs it only when the npm registry has a newer `@draht/coding-agent` release, replacing `{packageName}`, `{version}`, and `{installSpec}` (`{packageName}@{version}`) with that release. The value is split on spaces. For arguments with spaces, use the `selfUpdateCommand` setting in `~/.draht/agent/settings.json` instead, an argv array such as `["nix", "profile", "upgrade", "draht"]`.
+
 ### Aliases and command options
 
 - `draht uninstall <source>` is an alias for `draht remove <source>`.
@@ -370,9 +382,9 @@ These commands work outside a session, so agents can run them through `bash`. Se
 | `draht mcp add <server> [options] --url <url>` | Add or replace a streamable HTTP server; `--header KEY=VALUE` (repeatable), `--bearer-token-env-var <NAME>` (sends `Authorization: Bearer ${NAME}`), `--oauth-client-id`, `--oauth-client-secret`, `--oauth-callback-port`, and `--oauth-client-name` configure authentication |
 | `draht mcp remove <server>` | Remove a server from `mcp.json`; stored OAuth credentials are kept |
 | `draht mcp list [--json]` | Connect to every enabled server and print its state, tools, and errors; exit with `1` when a config entry is invalid or an enabled server is not connected |
-| `draht mcp login <server> [--timeout <seconds>]` | Sign in to an OAuth server: open the authorization page and wait for the browser; a terminal also accepts the pasted redirect URL. `--timeout` limits the whole sign-in, including requests to the authorization server (default 300 seconds) |
-| `draht mcp logout <server>` | Delete the stored OAuth credentials of a server |
+| `draht mcp login <server> [-l] [--timeout <seconds>]` | Sign in to an OAuth server: open the authorization page and wait for the browser; a terminal also accepts the pasted redirect URL. `--timeout` limits the whole sign-in, including requests to the authorization server (default 300 seconds). `-l` requires the server to be defined in the project's `.draht/mcp.json` |
+| `draht mcp logout <server> [-l]` | Delete the stored OAuth credentials of a server |
 
-`add` and `remove` change `~/.draht/agent/mcp.json`, or `.draht/mcp.json` in the current directory with `--local` (`-l`). `add` also takes `--exposure <mode>` (see [Exposure](mcp.md#exposure)) and `--description <text>` and does not connect; run `draht mcp list` to check the server.
+`add` and `remove` change `~/.draht/agent/mcp.json`, or `.draht/mcp.json` in the current directory with `--local` (`-l`). `add` also takes `--exposure <mode>` (see [Exposure](mcp.md#control-tool-exposure)) and `--description <text>` and does not connect; run `draht mcp list` to check the server.
 
 Project `.draht/mcp.json` files are only read for projects that are already trusted.

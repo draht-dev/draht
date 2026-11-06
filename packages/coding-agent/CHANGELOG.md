@@ -14,6 +14,137 @@
 - graph-clusters labels are unique and descriptive (dominant layer / ordinal suffixes instead of six identical `packages/ai` rows) ([#2](https://github.com/draht-dev/draht/pull/2))
 - MAP.html search covers `modules[*].symbols` (non-exported declarations and barrel APIs), not just the exported-only symbolIndex ([#2](https://github.com/draht-dev/draht/pull/2))
 
+## [2026.11.5-1] - 2026-11-05
+
+### Changed
+
+- remove three timing races that failed the scheduled releases
+- fix(mcp): refresh with the app's redirect URI, cancel sign-in during the lock wait
+- feat(mcp): shared tool naming, schema, output limit and config helpers
+- feat(mcp): MCP OAuth sign-in in two halves, moved from coding-agent
+- regenerate models-configuration reference with draht wording
+- feat(agent): pi-schema's Static types TypeBox-built schemas too, without depending on TypeBox
+- feat(ai,agent,coding-agent): validate tool arguments with pi-schema, drop TypeBox
+- llama.cpp default URL matches DEFAULT_LLAMA_SERVER_URL (8080)
+- fix(coding-agent): send provider tokens in pi mcp list
+- fix(ai): allow prompt cache keys for compatible proxies (badlogic/pi-mono#9442)
+- fix(coding-agent): fix CI type check and image-only steering test
+- feat(ai): add Qwen Token Plan Individual CN provider (badlogic/pi-mono#7989)
+- feat(ai): add requiresNonNullAssistantContent compat flag (badlogic/pi-mono#8118)
+- fix(coding-agent): make subagent progress and failures reliable (badlogic/pi-mono#8250)
+- fix(coding-agent): preserve pasted text during editor restoration (badlogic/pi-mono#10146)
+- fix(coding-agent): prevent prompt and tree navigation overlap (badlogic/pi-mono#9155)
+- docs(coding-agent): llama.cpp tweaks (badlogic/pi-mono#11624)
+- feat(coding-agent): upgrade Mermaid terminal rendering (badlogic/pi-mono#8158)
+- fix(coding-agent): realpath extension entries before jiti import (badlogic/pi-mono#8112)
+- fix(plan-mode): make progress tracking robust and tolerant (badlogic/pi-mono#7950)
+- Highlight .dart, .nix, and .groovy files in read/write views (badlogic/pi-mono#11790)
+- fix(ai): send session-id instead of session_id on OpenAI Responses (badlogic/pi-mono#11793)
+- fix(coding-agent): clear delivered image-only queue entries (badlogic/pi-mono#8612)
+- fix(ai): preserve aborted stop reason during lazy setup (badlogic/pi-mono#8635)
+- fix(coding-agent): settle tool results before disposal (badlogic/pi-mono#9126)
+- fix(coding-agent): render session tree search cursor (badlogic/pi-mono#9157)
+- fix(coding-agent): reject reload while running or compacting (badlogic/pi-mono#9222)
+- fix(coding-agent): preserve indentation in rendered diffs (badlogic/pi-mono#9274)
+- fix(coding-agent): track discarded user bash output (badlogic/pi-mono#10165)
+- fix: limit selector window height (badlogic/pi-mono#11072)
+- fix(coding-agent): load user keybindings in pi config (badlogic/pi-mono#11788)
+- fix(coding-agent): share the auth.json lock across symlinked paths (badlogic/pi-mono#11787)
+- fix(coding-agent): resize images in queued steering and follow-up messages (badlogic/pi-mono#11782)
+- fix(coding-agent): keep ctrl+v as a paste key on Windows and WSL (badlogic/pi-mono#11780)
+- fix(coding-agent): name the llama.cpp server and cause when it cannot be reached (badlogic/pi-mono#11779)
+- fix(coding-agent): find and ls limit edge cases (badlogic/pi-mono#11747)
+- fix(coding-agent): take grep context lines from ripgrep instead of reading matched files (badlogic/pi-mono#11705)
+- feat(coding-agent): let Markdown transformers opt into more surfaces (badlogic/pi-mono#11756)
+- fix(coding-agent): let a started RPC or print shutdown finish; only a repeated signal forces exit (badlogic/pi-mono#11752)
+- fix(coding-agent): dispose session runtime after startup benchmark (badlogic/pi-mono#11736)
+- fix(coding-agent): ignore prerelease suffix of last seen changelog version (badlogic/pi-mono#11753)
+- fix(coding-agent): process idle ctx.shutdown() requests in RPC mode (badlogic/pi-mono#11746)
+- feat(mcp): shared tool naming, schema, output limit and config helpers
+- Anthropic message threads (badlogic/pi-mono#11545)
+- fix(coding-agent): only report packages as up to date when pi update checked them (badlogic/pi-mono#11711)
+- feat(coding-agent): list updated packages with version changes in pi update (badlogic/pi-mono#11707)
+- feat(ai): add Microsoft-Decision-1 classifier to GitHub Copilot (badlogic/pi-mono#11679)
+- fix(coding-agent): apply context edits to branch summary input (badlogic/pi-mono#11680)
+- fix(coding-agent,tui): reuse syntax highlighting and rendered Markdown blocks
+- fix(coding-agent): keep updating git packages when git clean fails (badlogic/pi-mono#11648)
+- docs(coding-agent): list external limitations as known issues with remedies (badlogic/pi-mono#11647)
+- fix: remove vulnerable dependency chains
+- docs(coding-agent): note tmux 3.6 color reply leak in tmux guide (badlogic/pi-mono#11645)
+- docs(coding-agent): document Windows terminal and conhost limitations (badlogic/pi-mono#11644)
+- fix(coding-agent): tighten system prompt
+- fix(durable,coding-agent): support Unicode word segmentation in tool search (badlogic/pi-mono#11037)
+- fix(coding-agent): rank tools matching more query terms first in tool search (badlogic/pi-mono#11632)
+- fix(coding-agent): pass host keybinding hints to extension renderers (badlogic/pi-mono#11630)
+- feat(coding-agent): add PI_SELF_UPDATE_COMMAND and selfUpdateCommand for pi update (badlogic/pi-mono#11629)
+- fix(coding-agent): weigh tool names above descriptions in tool search (badlogic/pi-mono#11625)
+- fix(coding-agent): start WSL interop helpers from / and report external editor failures (badlogic/pi-mono#11627)
+- fix(coding-agent): name the package manager in pi update only when it owns the install (badlogic/pi-mono#11628)
+- docs(coding-agent): document which working directory resumed sessions use (badlogic/pi-mono#11617)
+- fix(coding-agent): accept -l in pi mcp login and logout
+- fix(coding-agent): compare paths case-insensitively on Windows (badlogic/pi-mono#11588)
+- docs(coding-agent): document how -e packages are cached and refreshed
+- fix(coding-agent): refresh temporary git sources pinned to a branch ref
+- fix(coding-agent): refresh unpinned temporary npm extensions when a newer version exists
+- fix(coding-agent): honor saved project trust for projects without trust-requiring resources
+- fix(tui): treat ESC+Return with native Shift held as Shift+Enter
+- fix(coding-agent): pick the smaller of PNG and JPEG when resizing images (badlogic/pi-mono#11577)
+- fix(coding-agent): warn when an npm package update leaves the installed version unchanged (badlogic/pi-mono#11571)
+- fix(coding-agent): label skill diagnostics as [Skill warnings] (badlogic/pi-mono#11566)
+- fix(coding-agent): let the SDK stream resolve auth for summaries (badlogic/pi-mono#11556)
+- fix(coding-agent): cap pi.exec output at 256 MiB (badlogic/pi-mono#11546)
+- fix(coding-agent): strip private-parameter CSI sequences in stripAnsi
+- fix(tui,coding-agent): handle selection page keys in all scrolling lists
+- feat(coding-agent): extensions changelog (badlogic/pi-mono#8790)
+- fix(coding-agent): keep active tool order when the same tools are set again (badlogic/pi-mono#11514)
+- fix(coding-agent): summarize union and multi-line codemode output types in tool descriptions (badlogic/pi-mono#11513)
+- fix(coding-agent): show model scope in the fullscreen header instead of the shell (badlogic/pi-mono#11512)
+- fix(coding-agent): report a deleted working directory instead of crashing on startup (badlogic/pi-mono#11511)
+- docs(coding-agent): restore the full extensions guide, corrected against current source (badlogic/pi-mono#11498)
+- docs(coding-agent): update llama.cpp setup for llama.app (badlogic/pi-mono#10179)
+- fix(coding-agent): keep session memory in line with the file when a write fails (badlogic/pi-mono#11486)
+- fix(coding-agent): pass thinking level to branch summarization (badlogic/pi-mono#11482)
+- feat(coding-agent): let inline ctx.ui.custom() components report blocked program status (badlogic/pi-mono#11471)
+- fix(coding-agent): hidden thinking with an empty label renders no rows (badlogic/pi-mono#11470)
+- fix(coding-agent): skip npm audit and fund output when installing pi packages (badlogic/pi-mono#11469)
+- fix(coding-agent): keep open extension dialog visible when the editor component is replaced (badlogic/pi-mono#11466)
+- fix(coding-agent): keep grep context lines aligned with ripgrep when a file has a lone CR (badlogic/pi-mono#11465)
+- fix: harden handling of untrusted URLs, terminal text, and streamed data
+- fix(coding-agent): rank tools first when the search query is their name
+- fix(coding-agent): resolve provider/id references when the provider id contains a slash (badlogic/pi-mono#11397)
+- fix(coding-agent): pass real path as npm prefix when agent dir is a symlink (badlogic/pi-mono#11396)
+- fix(ai,chord,durable,coding-agent): parse streamed tool-call arguments incrementally (fixes badlogic/pi-mono#9265)
+- fix(coding-agent): test forkFrom copied content instead of fs calls
+- fix(coding-agent): write forked session through one fd
+- feat(coding-agent): show model names in model selectors when they add information
+- fix(examples): todo renderResult returns undefined on validation errors
+- fix(coding-agent): skip fd/rg downloads on unsupported architectures
+- docs: fix provider checklist, MCP anchors, and missing commands/settings (badlogic/pi-mono#11338)
+- fix(coding-agent): decode pi.exec output across UTF-8 chunk boundaries (badlogic/pi-mono#11326)
+- fix(coding-agent): start when a configured package fails to install (badlogic/pi-mono#11304)
+- feat(ai): carry responseModel on pi-messages terminal events (badlogic/pi-mono#11265)
+- fix(tui,coding-agent): rank contiguous fuzzy matches and search session fields separately
+- docs(coding-agent): shorten device-code login guidance
+- expect the provider-reported flag on combined child usage
+- feat(coding-agent): confirm device-code browser and clipboard actions
+- fix(coding-agent): preserve pi.exec spawn errors
+- fix(coding-agent): render HTML export for sessions deeper than the call stack
+- feat(coding-agent): add messageId and timestamp to markdown transformer context
+- fix(coding-agent): render system messages in HTML export
+- fix(coding-agent): stop macOS shell groups before killing them
+- fix(coding-agent): drop min-release-age override from managed npm ci (badlogic/pi-mono#11270)
+- fix: update deps for security advisories
+- fix(ai): use OpenRouter-reported total cost (badlogic/pi-mono#10286)
+- feat(ai): add totalFromProvider flag to usage cost (badlogic/pi-mono#11178)
+- feat(ai,coding-agent): image input for System One classifiers
+
+### Fixed
+
+- rebrand pi references left by the pi-schema and MCP OAuth ports
+- bump @anthropic-ai/sandbox-runtime to 0.0.81
+- rebrand pi references left by the 2026-11-01 upstream sync
+- rebrand pi references left by the 2026-10-31 upstream sync
+
 ## [2026.10.31-1] - 2026-10-31
 
 ### Added

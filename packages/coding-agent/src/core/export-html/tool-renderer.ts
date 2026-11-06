@@ -7,6 +7,7 @@
 
 import type { ImageContent, TextContent } from "@draht/ai";
 import type { Component } from "@draht/tui";
+import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.js";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import type { ToolRenderContext, ToolRenderers } from "../extensions/types.js";
 import { ansiLinesToHtml } from "./ansi-to-html.js";
@@ -94,6 +95,8 @@ export function createToolHtmlRenderer(deps: ToolHtmlRendererDeps): ToolHtmlRend
 			isError,
 			durationMs: undefined,
 			outputPad: 1,
+			keyText,
+			keyHint,
 		};
 	};
 

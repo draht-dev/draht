@@ -92,9 +92,14 @@ function detectCapabilitiesFromEnvironment(tmuxForwardsHyperlink: () => boolean)
 		return { images: "kitty", trueColor: hasTrueColorHint, hyperlinks: true };
 	}
 
-	// Rex supports OSC 8 hyperlinks and only partially implements the Kitty graphics protocol
-	// (no Unicode placeholders), but enough to support draht.
 	if (termProgram === "rex") {
+		return { images: "kitty", trueColor: true, hyperlinks: true };
+	}
+
+	// Orca supports Kitty graphics but only advertises it through ORCA_IMAGE_PROTOCOL. Require
+	// both signals so Orca releases predating that advertisement keep the text fallback instead
+	// of reserving image rows that nothing renders.
+	if (termProgram === "orca" && process.env.ORCA_IMAGE_PROTOCOL === "kitty") {
 		return { images: "kitty", trueColor: true, hyperlinks: true };
 	}
 
@@ -123,7 +128,10 @@ function detectCapabilitiesFromEnvironment(tmuxForwardsHyperlink: () => boolean)
 		return { images: null, trueColor: true, hyperlinks: true };
 	}
 
-	if (termProgram === "alacritty" || termProgram === "vscode" || termProgram === "zed") {
+	// Alacritty does not set TERM_PROGRAM. It sets TERM=alacritty when its terminfo entry is
+	// installed (otherwise xterm-256color) and ALACRITTY_WINDOW_ID on Unix and macOS.
+	const isAlacritty = termProgram === "alacritty" || term.startsWith("alacritty") || process.env.ALACRITTY_WINDOW_ID;
+	if (isAlacritty || termProgram === "vscode" || termProgram === "zed") {
 		return { images: null, trueColor: true, hyperlinks: true };
 	}
 
@@ -351,15 +359,24 @@ export interface KittyImagePlacement {
 
 const kittyImageMetadata = new Map<number, RegisteredKittyImageMetadata>();
 let kittyTransmissionGeneration = 0;
+// Tallest registered image. Bounds backward searches for image lines above a
+// viewport: no image line further up than this can reach into it.
+let maxKittyImageRows = 0;
 
 export function registerKittyImageMetadata(metadata: KittyImageMetadata): void {
 	kittyTransmissionGeneration += 1;
+	maxKittyImageRows = Math.max(maxKittyImageRows, metadata.rows);
 	kittyImageMetadata.delete(metadata.imageId);
 	kittyImageMetadata.set(metadata.imageId, { ...metadata, transmissionGeneration: kittyTransmissionGeneration });
 	if (kittyImageMetadata.size > 1000) {
 		const oldestImageId = kittyImageMetadata.keys().next().value;
 		if (oldestImageId !== undefined) kittyImageMetadata.delete(oldestImageId);
 	}
+}
+
+/** Return the row height of the tallest Kitty image registered so far. */
+export function getMaxKittyImageRows(): number {
+	return maxKittyImageRows;
 }
 
 function getRegisteredKittyImageMetadataFromControls(controls: string): RegisteredKittyImageMetadata | undefined {

@@ -1,5 +1,24 @@
-import type { AgentTool } from "@draht/agent-core";
+import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@draht/agent-core";
+import type { Static, TSchema } from "typebox";
 import type { ExtensionToolContext, ToolDefinition } from "../extensions/types.ts";
+
+/**
+ * An `AgentTool` with a TypeBox parameter schema whose `execute` and `prepareArguments` are typed by TypeBox's
+ * `Static`, as the built-in tools are (@draht/agent-core types `params` through @draht/schema, which maps only the common
+ * TypeBox kinds). Spreads into a `ToolDefinition` of the same schema.
+ */
+export type TypeBoxAgentTool<TParams extends TSchema = TSchema, TDetails = any> = Omit<
+	AgentTool<TParams, TDetails>,
+	"prepareArguments" | "execute"
+> & {
+	prepareArguments?: (args: unknown) => Static<TParams>;
+	execute: (
+		toolCallId: string,
+		params: Static<TParams>,
+		signal?: AbortSignal,
+		onUpdate?: AgentToolUpdateCallback<TDetails>,
+	) => Promise<AgentToolResult<TDetails>>;
+};
 
 /** Creates the context for one tool call. */
 export type ToolContextFactory = (toolCallId: string, signal: AbortSignal | undefined) => ExtensionToolContext;

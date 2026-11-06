@@ -48,22 +48,4 @@ describe("SessionManager.destroyAll()", () => {
 		manager.destroyAll();
 		expect(manager.destroyAll()).toBe(0);
 	});
-
-	test("destroyAll() with live processes — kills each process", async () => {
-		const s1 = manager.create(["cat"]);
-		const s2 = manager.create(["cat"]);
-		const proc1 = s1.process!;
-		const proc2 = s2.process!;
-
-		await proc1.ready;
-		await proc2.ready;
-
-		manager.destroyAll();
-
-		await proc1.exited;
-		await proc2.exited;
-
-		expect(proc1.status).toBe("stopped");
-		expect(proc2.status).toBe("stopped");
-	});
 });

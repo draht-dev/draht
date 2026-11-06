@@ -16,6 +16,8 @@ draht install ./local-package
 
 `draht list` shows configured packages. Use `draht remove <source>` to remove one and `draht update --extensions` to reconcile package installations. See [Command Line](cli.md#package-commands) for every package command and option.
 
+If a configured package fails to install at startup, for example because npm cannot reach the registry, draht warns about it, skips that package's resources, and keeps running. draht tries to install it again on the next start or `/reload`. `draht install` and `draht update --extensions` still report the failure and exit non-zero.
+
 Personal installs are written to `~/.draht/agent/settings.json`. Add `--local` or `-l` to write the package declaration to `.draht/settings.json`. draht reads declarations from that file only after project trust is granted.
 
 Project packages are installed and loaded only after project trust is resolved. Packages can execute extension code and can include skills that instruct the model to run programs. Review third-party package source before installing it. Review project package declarations before granting project trust.
@@ -25,6 +27,8 @@ Use `--extension` or `-e` to try a package for one invocation without adding it 
 ```bash
 draht -e npm:@example/my-tools
 ```
+
+draht caches `-e` packages under `~/.draht/agent/tmp/extensions/` and checks them on every start and `/reload`. An npm package is reinstalled when the registry has a newer version that matches the specification. A version pinned to an exact number, such as `@1.2.3`, is not checked. A git package is fetched and reset to the remote branch or ref. A ref that is a commit hash already checked out is not fetched. If the check fails or offline mode is on, draht loads the cached copy.
 
 ## Choose a source
 
@@ -74,6 +78,26 @@ draht reads the `draht` key first. Packages written for pi that declare the same
 Paths are relative to the package root. Arrays accept glob patterns and exclusions. List dot-prefixed or symlinked resource roots directly when traversal through a glob would not discover them.
 
 The `pi-package` keyword makes the package findable through npm search. draht has no package gallery of its own; optional `image` and `video` manifest fields are accepted but currently unused.
+
+## Show a changelog
+
+After a package update, draht can show what changed. On the next fresh launch, draht reads the package changelog and shows entries newer than the last seen version under "Extension Updates", the same way it shows its own changelog. The first time draht sees a package, it records the version without showing anything.
+
+This applies to packages that load at least one extension. Packages that only provide skills, prompt templates, or themes do not show a changelog.
+
+By default draht reads `CHANGELOG.md` from the package root. Point `draht.changelogPath` at another file inside the package, or set it to `""` to disable the changelog:
+
+```json
+{
+  "name": "my-draht-package",
+  "version": "1.2.0",
+  "draht": {
+    "changelogPath": "./docs/CHANGELOG.md"
+  }
+}
+```
+
+Use version headings in the same format as draht's changelog, such as `## [1.2.0]` or `## 1.2.0 - 2026-01-01`. Entries are matched against the `version` field in `package.json`, so a git package only shows a changelog when that field increases. The `collapseChangelog` setting condenses the section to one line per package, such as `Updated my-draht-package to v1.2.0.` Unlike draht's own changelog, `/changelog` does not show package changelogs, so read the package's changelog file or repository for details.
 
 ## Declare dependencies
 

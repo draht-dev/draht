@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { type ChangelogEntry, normalizeChangelogLinks } from "../src/utils/changelog.ts";
+import { type ChangelogEntry, getNewEntries, normalizeChangelogLinks } from "../src/utils/changelog.ts";
 
 const entry: ChangelogEntry = {
 	major: 0,
@@ -46,5 +46,46 @@ describe("normalizeChangelogLinks", () => {
 				"[Local anchor](#settings)",
 			].join("\n"),
 		);
+	});
+});
+
+describe("getNewEntries", () => {
+	const entries: ChangelogEntry[] = [
+		{ major: 0, minor: 1, patch: 5, suffix: 0, content: "0.1.5" },
+		{ major: 0, minor: 1, patch: 4, suffix: 0, content: "0.1.4" },
+	];
+	const newContent = (lastVersion: string) => getNewEntries(entries, lastVersion)?.map((e) => e.content);
+
+	// #11703
+	test("ignores prerelease and build suffixes of the last seen version", () => {
+		expect(newContent("0.1.5-20261020.7")).toEqual([]);
+		expect(newContent("0.1.5+build.3")).toEqual([]);
+		expect(newContent("0.1.4-beta.1")).toEqual(["0.1.5"]);
+	});
+
+	test("compares release versions numerically", () => {
+		expect(newContent("0.1.5")).toEqual([]);
+		expect(newContent("0.1.3")).toEqual(["0.1.5", "0.1.4"]);
+		expect(getNewEntries([{ major: 0, minor: 10, patch: 0, suffix: 0, content: "0.10.0" }], "0.9.0")?.length).toBe(1);
+	});
+
+	test("treats a draht intraday -N suffix as a release, not a prerelease", () => {
+		const dated: ChangelogEntry[] = [
+			{ major: 2026, minor: 10, patch: 31, suffix: 2, content: "2026.10.31-2" },
+			{ major: 2026, minor: 10, patch: 31, suffix: 1, content: "2026.10.31-1" },
+			{ major: 2026, minor: 10, patch: 31, suffix: 0, content: "2026.10.31" },
+		];
+		const datedContent = (lastVersion: string) => getNewEntries(dated, lastVersion)?.map((e) => e.content);
+		expect(datedContent("2026.10.31-1")).toEqual(["2026.10.31-2"]);
+		expect(datedContent("2026.10.31-2")).toEqual([]);
+		expect(datedContent("2026.10.31")).toEqual(["2026.10.31-2", "2026.10.31-1"]);
+		expect(datedContent("2026.10.31-1+build.3")).toEqual(["2026.10.31-2"]);
+		expect(datedContent("2026.10.31-20261020.7")).toEqual(["2026.10.31-2", "2026.10.31-1"]);
+	});
+
+	test("returns undefined for a last seen version without major.minor.patch", () => {
+		expect(newContent("latest")).toBeUndefined();
+		expect(newContent("0.1")).toBeUndefined();
+		expect(newContent("")).toBeUndefined();
 	});
 });

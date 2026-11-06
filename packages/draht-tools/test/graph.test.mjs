@@ -268,6 +268,47 @@ test("downstream barrels retract names that later become ambiguous upstream", ()
 	}
 });
 
+test("a binding reached directly and through a named re-export is not ambiguous (greptile P2)", () => {
+	const root3 = fs.mkdtempSync(path.join(os.tmpdir(), "draht-named-test-"));
+	try {
+		fs.mkdirSync(path.join(root3, ".git"));
+		fs.writeFileSync(path.join(root3, "package.json"), JSON.stringify({ name: "named", version: "1.0.0" }));
+		fs.mkdirSync(path.join(root3, "src"), { recursive: true });
+		const w = (rel, text) => fs.writeFileSync(path.join(root3, rel), text);
+		w("src/xdef.ts", "export function sharedFoo() { return 1; }\n");
+		// Direct route and a named re-export of the same definition.
+		w("src/xnamed.ts", 'export { sharedFoo } from "./xdef.js";\n');
+		w("src/xbarrel.ts", 'export * from "./xdef.js";\nexport * from "./xnamed.js";\n');
+		// The named re-export's target only gets the name from its OWN star
+		// expansion, which runs after ybarrel in sorted order.
+		w("src/ystar.ts", 'export * from "./xdef.js";\n');
+		w("src/ynamed.ts", 'export { sharedFoo } from "./ystar.js";\n');
+		w("src/ybarrel.ts", 'export * from "./xdef.js";\nexport * from "./ynamed.js";\n');
+		// A named re-export of a CommonJS module (no extracted exports) still
+		// reaches a star barrel, with the CommonJS module as its origin.
+		w("src/zcjs.js", "module.exports = { legacy() { return 1; } };\n");
+		w("src/znamed.ts", 'export { legacy } from "./zcjs.js";\n');
+		w("src/zbarrel.ts", 'export * from "./znamed.js";\n');
+		execFileSync(process.execPath, [CLI, "map-graph", "--quiet"], { cwd: root3, encoding: "utf-8", env: ENV });
+		const m = JSON.parse(fs.readFileSync(path.join(root3, ".planning/codebase/MAP.json"), "utf-8"));
+		const exp = (id, name) => m.modules.find((x) => x.id === id).exports.find((e) => e.name === name);
+		for (const barrel of ["src/xbarrel.ts", "src/ybarrel.ts"]) {
+			const e = exp(barrel, "sharedFoo");
+			assert.ok(e, `${barrel} dropped sharedFoo as ambiguous: ${JSON.stringify(m.modules.find((x) => x.id === barrel).exports)}`);
+			assert.equal(e.via, "src/xdef.ts");
+		}
+		// The named entry itself names the defining module, not the
+		// intermediate star barrel it was re-exported from.
+		assert.equal(exp("src/ynamed.ts", "sharedFoo").via, "src/xdef.ts");
+		const legacy = exp("src/zbarrel.ts", "legacy");
+		assert.ok(legacy, "named re-export of an unextracted module lost from the star barrel");
+		assert.equal(legacy.via, "src/zcjs.js");
+		assert.equal(exp("src/znamed.ts", "legacy").via, "src/zcjs.js");
+	} finally {
+		fs.rmSync(root3, { recursive: true, force: true });
+	}
+});
+
 test("export default <identifier> does not fabricate a declaration symbol", () => {
 	const map = loadMap();
 	const mod = map.modules.find((m) => m.id === "src/defid.ts");

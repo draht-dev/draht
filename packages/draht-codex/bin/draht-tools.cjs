@@ -2340,6 +2340,7 @@ function visBuildMap(root) {
 	}
 
 	const starReExports = new Map(); // barrel module id -> [{ target, line }] for `export * from`
+	const namedReExports = new Map(); // module id -> Map(exported name -> { target, imported }) for `export { x } from`
 
 	const resolveSpec = (fromDir, spec) => {
 		// Relative path
@@ -2391,6 +2392,12 @@ function visBuildMap(root) {
 				if (imp.namespace === "*") {
 					if (!starReExports.has(m.id)) starReExports.set(m.id, []);
 					starReExports.get(m.id).push({ target: resolved, line: imp.line || 1 });
+				} else if (!imp.namespace) {
+					if (!namedReExports.has(m.id)) namedReExports.set(m.id, new Map());
+					const links = namedReExports.get(m.id);
+					for (const n of imp.names || []) {
+						if (!links.has(n.local)) links.set(n.local, { target: resolved, imported: n.imported });
+					}
 				}
 				continue;
 			}
@@ -2419,47 +2426,28 @@ function visBuildMap(root) {
 		}
 	}
 
-	// Named re-export provenance: resolve each `export { x } from './y'` entry to
-	// the module that ultimately DEFINES the binding and record it as `via`.
-	// Without this, a barrel starring both the definer and a named re-exporter of
-	// the same binding would see two "origins" and wrongly drop the name as
-	// ambiguous — the ES spec treats same-binding routes as one export.
-	{
-		const resolveOrigin = (modId, name, seen) => {
-			const key = modId + "\u0000" + name;
-			if (seen.has(key)) return [modId, name];
-			seen.add(key);
-			const mod = moduleByRel.get(modId);
-			const file = perFile.get(modId);
-			if (!mod || !file) return [modId, name];
-			const local = mod.exports.find((e) => e.name === name && e.kind !== "re-export");
-			// A local alias export (`export { a as b }`) terminates resolution, but
-			// the BINDING it stands for is the local name.
-			if (local) return [modId, local.viaName || name];
-			const fromDir = path.posix.dirname(modId);
-			for (const imp of file.parsedImports || []) {
-				if (!imp.reExport || imp.namespace === "*") continue;
-				const resolved = resolveSpec(fromDir, imp.specifier);
-				if (!resolved || !moduleByRel.has(resolved)) continue;
-				for (const n of imp.names || []) {
-					if ((n.local || n.imported) === name) return resolveOrigin(resolved, n.imported, seen);
-				}
-			}
-			return [modId, name];
-		};
-		for (const m of modules) {
-			for (const e of m.exports) {
-				if (e.kind !== "re-export" || e.via) continue;
-				const [origin, originName] = resolveOrigin(m.id, e.name, new Set());
-				if (origin === m.id) continue;
-				e.via = origin;
-				// The origin BINDING matters too: `export { b as a } from './x'`
-				// exposes x's `b` under the name `a` — a star sibling exposing
-				// x's own `a` is a different binding, hence ambiguous.
-				if (originName !== e.name) e.viaName = originName;
-			}
-		}
-	}
+	// Named re-export provenance: the ORIGIN of a module's export `name` is the
+	// module that ultimately DEFINES the binding plus the binding's name there,
+	// [module id, name]. Without it, a barrel starring both the definer and a
+	// named re-exporter of the same binding would see two origins and wrongly
+	// drop the name as ambiguous — the ES spec treats same-binding routes as one
+	// export. A local definition is its own origin (a local alias
+	// `export { a as b }` stands for the binding `a`); a star copy, or an entry
+	// resolved after expansion, carries `via`/`viaName`; a named re-export
+	// (`export { x } from './y'`) is followed to its target. null = pending:
+	// the target does not export the name, perhaps not YET (its own star
+	// expansion may add it). Once `settled`, a target that never exports it
+	// (CommonJS: no extracted exports) is taken as the origin.
+	const reExportOrigin = (mod, name, settled, hops = 0) => {
+		const e = mod.exports.find((x) => x.name === name);
+		if (!e) return null;
+		if (e.via) return [e.via, e.viaName || name];
+		const link = e.kind === "re-export" && namedReExports.has(mod.id) ? namedReExports.get(mod.id).get(name) : null;
+		const target = link && hops < 16 ? moduleByRel.get(link.target) : null;
+		if (!target) return [mod.id, e.viaName || name];
+		return reExportOrigin(target, link.imported, settled, hops + 1) || (settled ? [target.id, link.imported] : null);
+	};
+	const originKeyOf = (origin) => origin[0] + "\u0000" + origin[1];
 
 	// Star re-export expansion: `export * from './x'` declares no names, so without this pass
 	// a star barrel's public API is invisible to graph-context/graph-query/MAP.html search.
@@ -2471,16 +2459,21 @@ function visBuildMap(root) {
 		const EXPANSION_CAP = 60;
 		const sortedBarrels = [...starReExports.keys()].sort();
 		// Per-barrel bookkeeping: names added by THIS pass's star expansion
-		// (name → via) and names dropped as ambiguous. Two star targets
+		// (name → origin key) and names dropped as ambiguous. Two star targets
 		// providing the same name from DIFFERENT origins make it ambiguous
 		// (ES spec): removed and never re-added. The same origin reached
 		// through different chains is one binding and stays. Explicit exports
-		// are never in starAdded, so they are never removed.
-		const starAdded = new Map(); // barrelId -> Map(name -> via)
+		// are never in starAdded, so they are never removed. A name whose
+		// origin is pending (see reExportOrigin) waits for a later pass; if
+		// names are still pending once the fixpoint settles, one more round
+		// resolves them as settled.
+		const starAdded = new Map(); // barrelId -> Map(name -> origin key)
 		const starAmbiguous = new Map(); // barrelId -> Set(name)
 		for (const b of sortedBarrels) { starAdded.set(b, new Map()); starAmbiguous.set(b, new Set()); }
+		let settled = false;
 		for (;;) {
 			let changed = false;
+			let pending = false;
 			for (const barrelId of sortedBarrels) {
 				const barrel = moduleByRel.get(barrelId);
 				if (!barrel) continue;
@@ -2495,7 +2488,8 @@ function visBuildMap(root) {
 				for (const [name, originKey] of [...added]) {
 					const stillProvided = starReExports.get(barrelId).some((star) => {
 						const target = moduleByRel.get(star.target);
-						return target && target.exports.some((e) => e.name === name && (e.via || target.id) + "\u0000" + (e.viaName || e.name) === originKey);
+						const origin = target ? reExportOrigin(target, name, settled) : null;
+						return origin !== null && originKeyOf(origin) === originKey;
 					});
 					if (stillProvided) continue;
 					const sameNameElsewhere = starReExports.get(barrelId).some((star) => {
@@ -2515,8 +2509,9 @@ function visBuildMap(root) {
 					for (const e of target.exports) {
 						if (e.name === "default") continue; // a bare `export *` never forwards default (ES spec)
 						if (amb.has(e.name)) continue;
-						const via = e.via || target.id;
-						const originKey = via + "\u0000" + (e.viaName || e.name);
+						const origin = reExportOrigin(target, e.name, settled);
+						if (!origin) { pending = true; continue; }
+						const originKey = originKeyOf(origin);
 						if (have.has(e.name)) {
 							if (added.has(e.name) && added.get(e.name) !== originKey) {
 								const idx = barrel.exports.findIndex((x) => x.name === e.name && x.via && x.via + "\u0000" + (x.viaName || x.name) === added.get(e.name));
@@ -2531,14 +2526,16 @@ function visBuildMap(root) {
 						if (barrel.exports.length >= EXPANSION_CAP) break;
 						have.add(e.name);
 						added.set(e.name, originKey);
-						const copy = { name: e.name, kind: "re-export", line: star.line, doc: e.doc, via };
-						if (e.viaName) copy.viaName = e.viaName;
+						const copy = { name: e.name, kind: "re-export", line: star.line, doc: e.doc, via: origin[0] };
+						if (origin[1] !== e.name) copy.viaName = origin[1];
 						barrel.exports.push(copy);
 						changed = true;
 					}
 				}
 			}
-			if (!changed) break;
+			if (changed) continue;
+			if (pending && !settled) { settled = true; continue; }
+			break;
 		}
 		// Mirror expanded names into symbols so graph-query and the HTML viewer see them.
 		for (const barrelId of sortedBarrels) {
@@ -2551,6 +2548,22 @@ function visBuildMap(root) {
 				seen.add(e.name);
 				barrel.symbols.push({ name: e.name, kind: "re-export", line: e.line, exported: true });
 			}
+		}
+	}
+
+	// Record each named re-export entry's origin as `via`. The origin BINDING
+	// matters too: `export { b as a } from './x'` exposes x's `b` under the
+	// name `a` (viaName "b") — a star sibling exposing x's own `a` is a
+	// different binding, hence ambiguous. Runs after star expansion so an entry
+	// whose target gains the name through its own `export *` names the
+	// defining module, not that intermediate barrel.
+	for (const m of modules) {
+		for (const e of m.exports) {
+			if (e.kind !== "re-export" || e.via) continue;
+			const origin = reExportOrigin(m, e.name, true);
+			if (!origin || origin[0] === m.id) continue;
+			e.via = origin[0];
+			if (origin[1] !== e.name) e.viaName = origin[1];
 		}
 	}
 

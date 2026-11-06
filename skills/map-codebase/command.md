@@ -27,6 +27,7 @@ Decompose the work into independently verifiable units before acting; the `atomi
      - **Flow Trace** — entry points on top, sinks on bottom, intermediate modules ranked by depth from entry. Click an entry point to trace which sinks it reaches.
      - **Insights** — graphify-style knowledge graph: clusters (label-propagation communities), god-nodes (high-degree hotspots), and surprising cross-cluster edges.
      Open directly, or run `draht-tools map-serve` for a live-reloading dev view (regenerates on every file save).
+2b. Run `draht-tools kg build` for the **symbol-level** knowledge graph (graphify-parity engine, fully deterministic — no LLM). Produces `.planning/codebase/graph.json` (nodes = functions/classes/types with calls/inherits/imports edges + EXTRACTED/INFERRED/AMBIGUOUS confidence) and `KG_REPORT.md` (god nodes, communities, surprising connections, suggested questions). Query it with `draht-tools kg query "<question>"` (subgraph traversal), `kg explain "<symbol>"`, `kg path "<a>" "<b>"`, `kg affected "<symbol>"`.
 
 3. **Run parallel deep analysis via subagents**:
    Dispatch these two subagents in parallel (single assistant turn, two subagent calls):

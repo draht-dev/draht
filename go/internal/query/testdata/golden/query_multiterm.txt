@@ -1,9 +1,17 @@
-query "session token" — 8/8 hits
-packages/coding-agent/src/core/agent-session.ts:286  function estimateMessagesTokens
-packages/gateway/src/__tests__/session-stream.test.ts:10  const AUTH_TOKEN
-packages/gateway/src/__tests__/sessions-input.test.ts:10  const AUTH_TOKEN
-scripts/session-context-stats.mjs:156  function contextTokens
-packages/coding-agent/src/core/compaction/compaction.ts:403  function findCutPoint  — Find the cut point in session entries that keeps approximate  [exported]
-packages/coding-agent/src/modes/interactive/components/footer.ts:50  class FooterComponent  — Footer component that shows pwd, token stats, and context us  [exported]
-packages/coding-agent/src/core/footer-data-provider.ts:99  class FooterDataProvider  — Provides git branch and extension statuses - data not otherw  [exported]
+query "session token" — 15/269 hits
+packages/coding-agent/src/core/agent-session.ts:262  interface SessionStats  — Session statistics for /session command  [exported]
+packages/ai/src/types.ts:109  type SessionAffinityFormat  [exported]
+packages/router/src/cost.ts:87  function getSessionCosts  — Get costs filtered by session ID.  [exported]
+packages/agent/src/harness/compaction/compaction.ts:181  function calculateContextTokens  — Calculate total context tokens from provider usage.  [exported]
+packages/coding-agent/src/core/compaction/compaction.ts:146  function calculateContextTokens  — Calculate total context tokens from usage. Uses the native t  [exported]
+packages/coding-agent/src/modes/interactive/components/footer.ts:24  function formatTokens  — Format token counts for compact footer display.  [exported]
 packages/coding-agent/src/core/cache-stats.ts:138  function computeCacheWaste  — Cumulative cache waste across a session: prompt tokens that   [exported]
+packages/ai/src/api/openai-responses.ts:32  const OPENAI_RESPONSES_MIN_OUTPUT_TOKENS
+scripts/session-context-stats.mjs:9  const DEFAULT_SESSIONS_DIR
+packages/agent/src/harness/session/session.ts:150  class Session  [exported]  (1/2 terms)
+packages/gateway/src/session/session.ts:27  interface Session  — Session — entity representing a managed draht coding agent i  [exported]  (1/2 terms)
+packages/coding-agent/test/utilities.ts:158  interface TestSessionOptions  — Options for creating a test session.  [exported]
+packages/coding-agent/src/core/multi-agent/permission-gate.ts:344  function resolveBasenameOfFirstToken
+packages/agent/src/harness/compaction/branch-summarization.ts:71  function collectEntriesForBranchSummary  — Collect entries that should be summarized before navigating   [exported]
+packages/coding-agent/src/core/footer-data-provider.ts:99  class FooterDataProvider  — Provides git branch and extension statuses - data not otherw  [exported]
+(254 more: --json for all)

@@ -18,6 +18,18 @@ var (
 	goFuncRe   = regexp.MustCompile(`^func\b`)
 
 	rustSymbolRe = regexp.MustCompile(`^\s*(?:fn|struct|enum|trait)\s+([A-Za-z_][\w]*)`)
+
+	// tsDefaultDeclRe: `export default class Widget {}` / `export default
+	// function hidden()` export only `default`; the name binds locally.
+	// buildSymbols records it as a non-exported symbol so search still finds
+	// the defining file by its real name.
+	tsDefaultDeclRe = regexp.MustCompile(`^export\s+default\s+(?:async\s+)?(?:function(?:\s*\*\s*|\s+)|(?:abstract\s+)?class\s+)([A-Za-z_$][\w$]*)`)
+	tsDefaultClsRe  = regexp.MustCompile(`\bclass\b`)
+
+	// tsNamedExportStmtRe matches one assembled `export { ... }` statement in
+	// namedExportLocalAt (signature resolution only — exports extraction
+	// itself uses the content-level tsNamedBlockRe in exports.go).
+	tsNamedExportStmtRe = regexp.MustCompile(`^\s*export\s*\{([^}]+)\}`)
 )
 
 // buildSymbols ports visBuildSymbols (draht-tools.cjs:1815-1845): exported
@@ -115,6 +127,14 @@ func buildSymbols(lang string, content []byte, exports []Export, withSignatures 
 			}
 			return "const"
 		})
+		if len(syms) < 60 {
+			addDecl(tsDefaultDeclRe, func(l string) string {
+				if tsDefaultClsRe.MatchString(l) {
+					return "class"
+				}
+				return "function"
+			})
+		}
 	case "python":
 		addDecl(pySymbolRe, func(l string) string {
 			if pyClassRe.MatchString(l) {
@@ -152,7 +172,7 @@ func namedExportLocalAt(lines []string, idx int, exported string) string {
 			break
 		}
 	}
-	m := tsNamedExportRe.FindStringSubmatch(statement.String())
+	m := tsNamedExportStmtRe.FindStringSubmatch(statement.String())
 	if m == nil {
 		return ""
 	}

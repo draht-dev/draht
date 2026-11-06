@@ -66,11 +66,12 @@ func (p *regexParser) Extract(ctx context.Context, lang Lang, path string, src [
 		return Result{}, err
 	}
 
-	// visParseImports/visExtractRawImports both operate on the STRIPPED copy
-	// (draht-tools.cjs:2146-2149 strips once, then passes the stripped text
-	// to visParseImports, which for non-ts/js languages forwards that SAME
-	// stripped text into visExtractRawImports) — never the raw content.
-	stripped := StripComments(src, lang)
+	// visParseImports/visExtractRawImports both operate on a STRIPPED copy —
+	// never the raw content. The newline-preserving variant keeps Import.Line
+	// aligned with the raw source (a fully-deleted multiline block comment
+	// used to shift every line computed after it), matching the CJS engine's
+	// import-parse input; sinks/routes still use the fully-deleting strip.
+	stripped := StripCommentsPreserveLines(src, lang)
 
 	var imports []Import
 	switch lang {

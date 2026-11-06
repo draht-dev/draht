@@ -29,6 +29,7 @@
  * and runnable standalone: `node draht-kg.cjs build`.
  */
 
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -201,9 +202,9 @@ function walk(root, maxFiles = 20000) {
 // Comment/string stripping (for call-site scans; decls scan raw lines)
 // ============================================================================
 
-// Comments-only mask (strings and positions preserved): the import scans need
-// string literals intact (specifiers live in them) but must not match
-// commented-out examples.
+// Comments (and Python docstrings) blanked to spaces, same length and line
+// structure, strings intact: import scans run on this so a documented
+// `import { logger } from './logger'` example is not a real dependency.
 function maskComments(content, lang) {
 	let s = content;
 	if (TS_LIKE.has(lang) || lang === "go" || lang === "rust") {
@@ -217,14 +218,14 @@ function maskComments(content, lang) {
 }
 
 function stripCode(content, lang) {
-	let s = content;
+	return maskStrings(maskComments(content, lang), lang);
+}
+
+// Strings and template literals blanked on an already comment-masked copy.
+function maskStrings(commentMasked, lang) {
+	let s = commentMasked;
 	if (TS_LIKE.has(lang) || lang === "go" || lang === "rust") {
-		s = s.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "));
-		s = s.replace(/(^|[^:])\/\/[^\n]*/g, (m, p1) => p1 + " ".repeat(m.length - p1.length));
 		s = s.replace(/`(?:[^`\\]|\\.)*`/g, (m) => m.replace(/[^\n]/g, " "));
-	} else if (lang === "python") {
-		s = s.replace(/("""|''')[\s\S]*?\1/g, (m) => m.replace(/[^\n]/g, " "));
-		s = s.replace(/#[^\n]*/g, (m) => " ".repeat(m.length));
 	}
 	s = s.replace(/"(?:[^"\\\n]|\\.)*"/g, (m) => " ".repeat(m.length));
 	s = s.replace(/'(?:[^'\\\n]|\\.)*'/g, (m) => " ".repeat(m.length));
@@ -237,13 +238,64 @@ function stripCode(content, lang) {
 
 const MAX_SYMBOLS_PER_FILE = 300;
 
+// Header vs body braces. While a declaration waits for its body, braces in
+// its HEADER — an object type in the parameter list
+// (`createOps(options?: { shellPath?: string }) {`), a generic argument or
+// constraint, a return type annotation (`): { ok: boolean } {`), Go's
+// `interface{}` / `struct{}` — neither open nor close it. `entry` carries the
+// header counters (paren, angle, type); `prev` is the previous non-space
+// masked char and `prevWord` the identifier ending there.
+const TYPE_BRACE_PREV = new Set([":", "|", "&", ",", "(", "<", "?"]);
+function isHeaderBrace(entry, lang, prev, prevWord) {
+	if (entry.paren > 0 || entry.angle > 0 || entry.type > 0) return true;
+	if (TYPE_BRACE_PREV.has(prev)) return true;
+	return lang === "go" && (prevWord === "interface" || prevWord === "struct");
+}
+function trackHeaderChar(entry, lang, ch, prev) {
+	if (ch === "(") entry.paren++;
+	else if (ch === ")") entry.paren = Math.max(0, entry.paren - 1);
+	// Angle brackets are TS generics only (Go's `<-chan` is not one); the `>`
+	// of `=>` closes nothing.
+	else if (ch === "<" && lang !== "go") entry.angle++;
+	else if (ch === ">" && lang !== "go" && prev !== "=") entry.angle = Math.max(0, entry.angle - 1);
+}
+// After each masked char of a pending header: remember the previous
+// non-space char and the identifier ending there (`last` is the raw char
+// before `ch`).
+function noteScanChar(scan, ch, last) {
+	if (isIdentChar(ch)) scan.word = isIdentChar(last) ? scan.word + ch : ch;
+	else if (ch !== " " && ch !== "\t" && ch !== "\r") scan.word = "";
+	if (ch !== " " && ch !== "\t" && ch !== "\r") scan.prev = ch;
+}
+function isIdentChar(c) {
+	return (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c === "_" || c === "$";
+}
+// `implements A, B<T>, ns.C` (text up to the body brace) → ["A", "B", "ns"]:
+// generic arguments removed, then each item's leading identifier.
+function implementsList(text) {
+	let s = text || "";
+	while (/<[^<>]*>/.test(s)) s = s.replace(/<[^<>]*>/g, "");
+	return s.split(",").map((x) => (x.trim().match(/^[A-Za-z_$][\w$]*/) || [""])[0]).filter(Boolean);
+}
+// The top declaration of `open` while it still waits for its body brace.
+function pendingHeader(open) {
+	const top = open[open.length - 1];
+	return top && !top.opened ? top : null;
+}
+// A declaration awaiting its body end (`opened` once its body brace is seen).
+function openDecl(ref, depth, line) {
+	return { ref, depth, line, opened: false, paren: 0, angle: 0, type: 0 };
+}
+
 function parseDecls(rel, content, lang) {
 	const lines = content.split("\n");
 	const d = { classes: [], functions: [], types: [], imports: [], docstring: null };
 	// Brace depth is counted on a comment/string-masked copy (same line
 	// structure): a `{` inside `const marker = "{";` or a comment must not
 	// desynchronize `depth` and hide every later top-level declaration.
-	const maskedLines = stripCode(content, lang).split("\n");
+	// Import scans read `importText`: comments masked, strings intact.
+	const importText = maskComments(content, lang);
+	const maskedLines = maskStrings(importText, lang).split("\n");
 
 	if (TS_LIKE.has(lang)) {
 		// Leading /** */ or run of // as module rationale
@@ -257,29 +309,33 @@ function parseDecls(rel, content, lang) {
 		// x,\n) {`) must stay open until its body starts and ends. Entries that
 		// never open a brace (brace-less arrows) close when the next same-level
 		// declaration appears.
+		// Header braces (see isHeaderBrace) are skipped, and a header-level `;`
+		// ends a declaration that never gets a body (overload or abstract
+		// signature, brace-less arrow).
 		const open = [];
 		const closeUnopened = (endLine) => {
 			while (open.length && !open[open.length - 1].opened && depth <= open[open.length - 1].depth) open.pop().ref.end = endLine;
 		};
+		const scan = { prev: "", word: "" };
 		for (let i = 0; i < lines.length && d.classes.length + d.functions.length + d.types.length < MAX_SYMBOLS_PER_FILE; i++) {
 			const ln = lines[i];
 			let m;
-			if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)(?:<[^>]*>)?(?:\s+extends\s+([A-Za-z_$][\w$.]*)(?:<[^>]*>)?)?(?:\s+implements\s+([\w$,\s.<>]+?))?\s*(?:\{|$)/)) && /\bclass\b/.test(ln)) {
+			if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)(?:\s*<[^{]*?>)?(?:\s+extends\s+([A-Za-z_$][\w$.]*)(?:\s*<[^{]*?>)?)?(?:\s+implements\s+([^{]+))?/)) && /\bclass\b/.test(ln)) {
 				closeUnopened(i);
-				currentClass = { name: m[1], line: i + 1, end: null, isDefault: /^\s*export\s+default\b/.test(ln), extends: m[2] ? m[2].split(".")[0] : null, implements: (m[3] || "").split(",").map((x) => x.trim().split("<")[0].split(".")[0]).filter(Boolean), methods: [] };
+				currentClass = { name: m[1], line: i + 1, end: null, isDefault: /^\s*export\s+default\b/.test(ln), extends: m[2] ? m[2].split(".")[0] : null, implements: implementsList(m[3]), methods: [] };
 				d.classes.push(currentClass);
 				classDepth = depth;
-				open.push({ ref: currentClass, depth, line: i + 1, opened: false });
+				open.push(openDecl(currentClass, depth, i + 1));
 			} else if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/))) {
 				closeUnopened(i);
 				const fn = { name: m[1], line: i + 1, end: null, isDefault: /^\s*export\s+default\b/.test(ln) };
 				d.functions.push(fn);
-				open.push({ ref: fn, depth, line: i + 1, opened: false });
+				open.push(openDecl(fn, depth, i + 1));
 			} else if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)(?::[^=]+)?\s*=\s*(?:async\s*)?(?:\(|function\b|[A-Za-z_$][\w$]*\s*=>)/))) {
 				closeUnopened(i);
 				const fn = { name: m[1], line: i + 1, end: null };
 				d.functions.push(fn);
-				open.push({ ref: fn, depth, line: i + 1, opened: false });
+				open.push(openDecl(fn, depth, i + 1));
 			} else if (depth === 0 && (m = ln.match(/^\s*export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)/))) {
 				d.types.push({ name: m[1], line: i + 1, kind: "const" });
 			} else if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:interface|enum)\s+([A-Za-z_$][\w$]*)(?:\s+extends\s+([A-Za-z_$][\w$.]*))?/)) && /\b(?:interface|enum)\b/.test(ln)) {
@@ -290,58 +346,72 @@ function parseDecls(rel, content, lang) {
 				if (!CALL_KEYWORDS.has(m[1]) && currentClass.methods.length < 80) {
 					const meth = { name: m[1], line: i + 1, end: null };
 					currentClass.methods.push(meth);
-					open.push({ ref: meth, depth, line: i + 1, opened: false });
+					open.push(openDecl(meth, depth, i + 1));
 				}
 			}
-			// brace depth AFTER matching decls on this line (masked copy). Parens
-			// are tracked per open declaration so a `{` inside a parameter list
-			// (an inline object type or default) does not count as the BODY
-			// opening — `f(options?: { shellPath?: string })` must stay open
-			// until the real body brace.
+			// brace depth AFTER matching decls on this line (masked copy)
+			// `header` changes only at `{`, `}` and a header-level `;`.
+			let last = "\n";
+			let header = pendingHeader(open);
 			for (const ch of maskedLines[i] || "") {
-				const top = open[open.length - 1];
-				if (ch === "(") {
-					if (top && !top.opened) top.pd = (top.pd || 0) + 1;
-				} else if (ch === ")") {
-					if (top && !top.opened && top.pd > 0) top.pd--;
-				} else if (ch === "{") {
+				if (ch === "{") {
 					depth++;
-					if (top && !top.opened && !top.pd && depth === top.depth + 1) top.opened = true;
+					if (header) {
+						if (isHeaderBrace(header, lang, scan.prev, scan.word)) header.type++;
+						else if (depth === header.depth + 1) header.opened = true;
+						noteScanChar(scan, ch, last);
+						header = pendingHeader(open);
+					}
 				} else if (ch === "}") {
 					depth--;
-					if (currentClass && depth <= classDepth) { currentClass.end = i + 1; currentClass = null; }
-					while (open.length && open[open.length - 1].opened && depth <= open[open.length - 1].depth) open.pop().ref.end = i + 1;
+					if (header && header.type > 0) {
+						header.type--;
+						noteScanChar(scan, ch, last);
+					} else {
+						if (currentClass && depth <= classDepth) { currentClass.end = i + 1; currentClass = null; }
+						while (open.length && open[open.length - 1].opened && depth <= open[open.length - 1].depth) open.pop().ref.end = i + 1;
+						if (header) noteScanChar(scan, ch, last);
+						header = pendingHeader(open);
+					}
+				} else if (header) {
+					if (ch === ";" && !header.paren && !header.angle && !header.type) {
+						open.pop().ref.end = i + 1;
+						header = pendingHeader(open);
+					} else {
+						trackHeaderChar(header, lang, ch, scan.prev);
+						noteScanChar(scan, ch, last);
+					}
 				}
+				last = ch;
 			}
 		}
-		// imports (content-level, multi-line safe) — matched against a
-		// comment-MASKED copy (strings and positions preserved): a documented
-		// `// import { logger } from './logger'` example must not become a
-		// real dependency.
-		const importSrc = maskComments(content, lang);
-		const impRe = /import\s+(?:type\s+)?(?:(?:([A-Za-z_$][\w$]*)\s*,?\s*)?(?:\*\s*as\s+([A-Za-z_$][\w$]*)|\{([^}]*)\})?\s*from\s*)?["']([^"']+)["']/g;
+		// imports (content-level, multi-line safe), on the comment-masked copy
+		// so commented-out examples are not dependencies. A statement-level
+		// `type` (`import type OpenAI from "openai"`) is skipped unless it is
+		// itself the default binding (`import type from "./type"`).
+		const impRe = /import\s+(?:type\s+(?!from\s*["']))?(?:(?:([A-Za-z_$][\w$]*)\s*,?\s*)?(?:\*\s*as\s+([A-Za-z_$][\w$]*)|\{([^}]*)\})?\s*from\s*)?["']([^"']+)["']/g;
 		let m2;
-		while ((m2 = impRe.exec(importSrc)) !== null) {
+		while ((m2 = impRe.exec(importText)) !== null) {
 			if (!/^import/.test(m2[0])) continue;
 			const names = (m2[3] || "").split(",").map((s) => s.trim().replace(/^type\s+/, "")).filter(Boolean)
 				.map((t) => { const am = t.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/); return am ? { imported: am[1], local: am[2] || am[1] } : null; })
 				.filter(Boolean);
-			d.imports.push({ spec: m2[4], default: m2[1] || null, namespace: m2[2] || null, names, reExport: false, dynamic: false, line: lineAt(importSrc, m2.index) });
+			d.imports.push({ spec: m2[4], default: m2[1] || null, namespace: m2[2] || null, names, reExport: false, dynamic: false, line: lineAt(content, m2.index) });
 		}
 		const reExpRe = /export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']([^"']+)["']/g;
-		while ((m2 = reExpRe.exec(importSrc)) !== null) {
+		while ((m2 = reExpRe.exec(importText)) !== null) {
 			const names = m2[1].split(",").map((s) => s.trim().replace(/^type\s+/, "")).filter(Boolean)
 				.map((t) => { const am = t.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/); return am ? { imported: am[1], local: am[2] || am[1] } : null; })
 				.filter(Boolean);
-			d.imports.push({ spec: m2[2], default: null, namespace: null, names, reExport: true, dynamic: false, line: lineAt(importSrc, m2.index) });
+			d.imports.push({ spec: m2[2], default: null, namespace: null, names, reExport: true, dynamic: false, line: lineAt(content, m2.index) });
 		}
 		const starRe = /export\s+\*(?:\s+as\s+[A-Za-z_$][\w$]*)?\s+from\s*["']([^"']+)["']/g;
-		while ((m2 = starRe.exec(importSrc)) !== null) {
-			d.imports.push({ spec: m2[1], default: null, namespace: "*", names: [], reExport: true, dynamic: false, line: lineAt(importSrc, m2.index) });
+		while ((m2 = starRe.exec(importText)) !== null) {
+			d.imports.push({ spec: m2[1], default: null, namespace: "*", names: [], reExport: true, dynamic: false, line: lineAt(content, m2.index) });
 		}
 		const dynRe = /(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/g;
-		while ((m2 = dynRe.exec(importSrc)) !== null) {
-			d.imports.push({ spec: m2[1], default: null, namespace: null, names: [], reExport: false, dynamic: true, line: lineAt(importSrc, m2.index) });
+		while ((m2 = dynRe.exec(importText)) !== null) {
+			d.imports.push({ spec: m2[1], default: null, namespace: null, names: [], reExport: false, dynamic: true, line: lineAt(content, m2.index) });
 		}
 	} else if (lang === "python") {
 		const dm = content.match(/^(?:#[^\n]*\n|\s*\n)*\s*("""|''')([\s\S]*?)\1/);
@@ -362,21 +432,22 @@ function parseDecls(rel, content, lang) {
 				currentClass = null;
 			}
 		}
-		const importSrc = maskComments(content, lang);
 		const impRe = /^\s*from\s+(\S+)\s+import\s+([^\n(]+|\([^)]*\))|^\s*import\s+([\w.]+)/gm;
 		let m2;
-		while ((m2 = impRe.exec(importSrc)) !== null) {
-			if (m2[3]) d.imports.push({ spec: m2[3], default: null, namespace: m2[3], names: [], reExport: false, dynamic: false, line: lineAt(importSrc, m2.index) });
+		while ((m2 = impRe.exec(importText)) !== null) {
+			if (m2[3]) d.imports.push({ spec: m2[3], default: null, namespace: m2[3], names: [], reExport: false, dynamic: false, line: lineAt(content, m2.index) });
 			else {
 				const names = m2[2].replace(/[()]/g, "").split(",").map((s) => s.trim().split(/\s+as\s+/)).filter((p) => p[0])
 					.map((p) => ({ imported: p[0], local: p[1] || p[0] }));
-				d.imports.push({ spec: m2[1], default: null, namespace: null, names, reExport: false, dynamic: false, line: lineAt(importSrc, m2.index) });
+				d.imports.push({ spec: m2[1], default: null, namespace: null, names, reExport: false, dynamic: false, line: lineAt(content, m2.index) });
 			}
 		}
 	} else if (lang === "go") {
 		let currentType = null;
 		let depth = 0;
+		// Header braces (`func f(x interface{}) {`) are skipped; see isHeaderBrace.
 		const open = [];
+		const scan = { prev: "", word: "" };
 		for (let i = 0; i < lines.length; i++) {
 			const ln = lines[i];
 			let m;
@@ -388,32 +459,48 @@ function parseDecls(rel, content, lang) {
 				const owner = d.classes.find((c) => c.name === m[1]);
 				if (owner) { if (owner.methods.length < 80) owner.methods.push(meth); }
 				else d.functions.push(meth);
-				open.push({ ref: meth, depth, line: i + 1, opened: false });
+				open.push(openDecl(meth, depth, i + 1));
 			} else if ((m = ln.match(/^func\s+([A-Za-z_][\w]*)/))) {
 				const fn = { name: m[1], line: i + 1, end: null };
 				d.functions.push(fn);
-				open.push({ ref: fn, depth, line: i + 1, opened: false });
+				open.push(openDecl(fn, depth, i + 1));
 			} else if ((m = ln.match(/^type\s+([A-Za-z_][\w]*)\s/))) {
 				d.types.push({ name: m[1], line: i + 1, kind: "type" });
 			}
+			let last = "\n";
+			let header = pendingHeader(open);
 			for (const ch of maskedLines[i] || "") {
 				if (ch === "{") {
 					depth++;
-					const top = open[open.length - 1];
-					if (top && !top.opened && depth === top.depth + 1) top.opened = true;
+					if (header) {
+						if (isHeaderBrace(header, lang, scan.prev, scan.word)) header.type++;
+						else if (depth === header.depth + 1) header.opened = true;
+						noteScanChar(scan, ch, last);
+						header = pendingHeader(open);
+					}
 				} else if (ch === "}") {
 					depth--;
-					while (open.length && open[open.length - 1].opened && depth <= open[open.length - 1].depth) open.pop().ref.end = i + 1;
+					if (header && header.type > 0) {
+						header.type--;
+						noteScanChar(scan, ch, last);
+					} else {
+						while (open.length && open[open.length - 1].opened && depth <= open[open.length - 1].depth) open.pop().ref.end = i + 1;
+						if (header) noteScanChar(scan, ch, last);
+						header = pendingHeader(open);
+					}
+				} else if (header) {
+					trackHeaderChar(header, lang, ch, scan.prev);
+					noteScanChar(scan, ch, last);
 				}
+				last = ch;
 			}
 		}
 		// Named (`import foo "path"`), blank (`_`) and dot (`.`) imports all count;
 		// a named alias becomes the local namespace so call binding can resolve
 		// through it. Applies to both single-line and block forms.
-		const importSrc = maskComments(content, lang);
 		const impRe = /^import\s+(?:([\w.]+)\s+)?"([^"]+)"|^import\s+\(([^)]*)\)/gm;
 		let m2;
-		while ((m2 = impRe.exec(importSrc)) !== null) {
+		while ((m2 = impRe.exec(importText)) !== null) {
 			const entries = [];
 			if (m2[2]) entries.push({ alias: m2[1] || null, spec: m2[2] });
 			else if (m2[3]) {
@@ -421,7 +508,7 @@ function parseDecls(rel, content, lang) {
 			}
 			for (const e of entries) {
 				const ns = e.alias && e.alias !== "_" && e.alias !== "." ? e.alias : e.spec.split("/").pop();
-				d.imports.push({ spec: e.spec, default: null, namespace: ns, names: [], reExport: false, dynamic: false, line: lineAt(importSrc, m2.index) });
+				d.imports.push({ spec: e.spec, default: null, namespace: ns, names: [], reExport: false, dynamic: false, line: lineAt(content, m2.index) });
 			}
 		}
 	} else if (lang === "rust") {
@@ -431,6 +518,7 @@ function parseDecls(rel, content, lang) {
 		let currentImpl = null; // { name, depth at impl line }
 		let depth = 0;
 		const openFns = [];
+		const importLines = importText.split("\n");
 		for (let i = 0; i < lines.length; i++) {
 			const ln = lines[i];
 			let m;
@@ -450,9 +538,9 @@ function parseDecls(rel, content, lang) {
 				} else {
 					d.functions.push(fn);
 				}
-				openFns.push({ ref: fn, depth, line: i + 1, opened: false });
+				openFns.push(openDecl(fn, depth, i + 1));
 			}
-			if ((m = ln.match(/^\s*use\s+([\w:]+)/))) {
+			if ((m = (importLines[i] || "").match(/^\s*use\s+([\w:]+)/))) {
 				d.imports.push({ spec: m[1], default: null, namespace: m[1].split("::").pop(), names: [], reExport: false, dynamic: false, line: i + 1 });
 			}
 			for (const ch of maskedLines[i] || "") {
@@ -1816,15 +1904,14 @@ document.getElementById('collapse').onclick=function(){document.querySelectorAll
 	return p;
 }
 
-function shortHash(s) {
-	let h = 5381;
-	for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
-	return h.toString(16);
-}
-
-function wikiFileName(id) {
-	if (id.length <= 100) return id + ".md";
-	return id.slice(0, 80) + "-" + shortHash(id) + ".md";
+// Wiki page file for a node, from its unique id: labels repeat (two `save()`
+// methods would write, and link to, the same page). The `node-` prefix keeps
+// pages clear of index.md and community-N.md; very long ids keep a readable
+// prefix plus a hash.
+function wikiPageName(id) {
+	const slug = String(id).replace(/_/g, "-");
+	if (slug.length <= 120) return `node-${slug}.md`;
+	return `node-${slug.slice(0, 100)}-${crypto.createHash("sha1").update(String(id)).digest("hex").slice(0, 10)}.md`;
 }
 
 function exportWiki(root, graph) {
@@ -1840,10 +1927,7 @@ function exportWiki(root, graph) {
 		idx.push(`- [${c.name}](community-${c.id}.md) — ${c.size} nodes, cohesion ${c.cohesion}`);
 	}
 	idx.push("", "## God Nodes", "");
-	// Filenames carry the unique node id — two god nodes labeled `save()`
-	// must not overwrite each other's page — bounded with a stable hash
-	// suffix so a deep-path id cannot exceed the filesystem's name limit.
-	for (const g of gods) idx.push(`- [${g.label}](${wikiFileName(g.id)}) — degree ${g.degree}`);
+	for (const g of gods) idx.push(`- [${g.label}](${wikiPageName(g.id)}) — degree ${g.degree}`);
 	fs.writeFileSync(path.join(dir, "index.md"), idx.join("\n") + "\n", "utf-8");
 
 	for (const c of communities) {
@@ -1875,7 +1959,7 @@ function exportWiki(root, graph) {
 		conns.sort((a, b) => (adj.deg.get(b[1]) || 0) - (adj.deg.get(a[1]) || 0));
 		for (const [arrow, nb, e] of conns.slice(0, 30)) L.push(`- ${arrow} \`${(byId.get(nb) || {}).label || nb}\` [${e.relation}] [${e.confidence}]`);
 		L.push("", "## Audit Trail", "", `Extraction: deterministic (draht-tools kg). Source: ${g.source_file || "-"}.`);
-		fs.writeFileSync(path.join(dir, wikiFileName(g.id)), L.join("\n") + "\n", "utf-8");
+		fs.writeFileSync(path.join(dir, wikiPageName(g.id)), L.join("\n") + "\n", "utf-8");
 	}
 	return dir;
 }
@@ -1934,7 +2018,7 @@ function kgMain(argv) {
 	return 0;
 }
 
-module.exports = { kgMain, buildGraph, writeGraph, loadGraph, queryTerms, scoreNodes, normalizeId, makeId, KG_HELP };
+module.exports = { kgMain, buildGraph, writeGraph, loadGraph, queryTerms, scoreNodes, normalizeId, makeId, parseDecls, KG_HELP };
 
 if (require.main === module) {
 	process.exit(kgMain(process.argv.slice(2)));

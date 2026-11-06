@@ -4,11 +4,13 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../bin/draht-tools.cjs");
+const { parseDecls } = createRequire(import.meta.url)("../bin/draht-kg.cjs");
 let root;
 
 function run(args) {
@@ -321,11 +323,13 @@ test("generic classes keep their declarations and methods", () => {
 		"export class UndoStack<S> {",
 		"\tpush(state: S): void {}",
 		"}",
+		"export class TrimmedStack<S> extends UndoStack<S> {}",
 	].join("\n"));
 	run(["build", "--quiet"]);
 	const g = loadGraph();
 	assert.ok(g.nodes.some((n) => n.id === "src_genstack_undostack"), "generic class node missing");
 	assert.ok(g.nodes.some((n) => n.id === "src_genstack_undostack_push"), "generic class method missing");
+	assert.ok(g.edges.some((e) => e.relation === "inherits" && e.source === "src_genstack_trimmedstack" && e.target === "src_genstack_undostack"), "extends after class type parameters lost");
 });
 
 test("implements captures the full interface name", () => {
@@ -422,4 +426,152 @@ test("Rust impl methods belong to their type, not the file (greptile P1)", () =>
 	const methodEdge = g.edges.find((e) => e.relation === "method" && e.target === "rsrc_widget_widget_grow");
 	assert.ok(methodEdge && methodEdge.source === "rsrc_widget_widget", "method edge from owning type missing");
 	assert.ok(g.nodes.some((n) => n.id === "rsrc_widget_free_standing"), "top-level fn should stay file-level");
+});
+
+test("object types in a declaration header do not end it early (greptile P1)", () => {
+	write("src/hdrhelper.ts", "export function hdrhelp() { return true; }\n");
+	write("src/hdrsig.ts", [
+		'import { hdrhelp } from "./hdrhelper.js";',
+		"export function createOps(options?: { shellPath?: string }): { ok: boolean } {",
+		"\treturn { ok: hdrhelp() };",
+		"}",
+		"export function pickTyped<T extends { id: string }>(item: T): Promise<{ id: string }> {",
+		"\treturn Promise.resolve({ id: String(hdrhelp()) });",
+		"}",
+	].join("\n"));
+	write("gosrc/hdr.go", [
+		"package main",
+		"",
+		"func goHelp() int { return 1 }",
+		"",
+		"func Run(x interface{}) map[string]struct{} {",
+		"\tgoHelp()",
+		"\treturn nil",
+		"}",
+	].join("\n"));
+	run(["build", "--quiet"]);
+	const g = loadGraph();
+	const sources = (target) => g.edges.filter((e) => e.relation === "calls" && e.target === target).map((e) => e.source);
+	assert.ok(sources("src_hdrhelper_hdrhelp").includes("src_hdrsig_createops"), `parameter object type ended createOps early: ${JSON.stringify(sources("src_hdrhelper_hdrhelp"))}`);
+	assert.ok(sources("src_hdrhelper_hdrhelp").includes("src_hdrsig_picktyped"), `generic constraint or return type ended pickTyped early: ${JSON.stringify(sources("src_hdrhelper_hdrhelp"))}`);
+	assert.ok(sources("gosrc_hdr_gohelp").includes("gosrc_hdr_run"), `interface{} parameter ended Run early: ${JSON.stringify(sources("gosrc_hdr_gohelp"))}`);
+});
+
+test("body-less signatures end at their semicolon", () => {
+	write("src/shapehelper.ts", "export function shapeHelp() { return 1; }\n");
+	write("src/shape.ts", [
+		'import { shapeHelp } from "./shapehelper.js";',
+		"export abstract class Shape {",
+		"\tabstract area(): number;",
+		"}",
+		"shapeHelp();",
+		"export function laterFn() {",
+		"\treturn 1;",
+		"}",
+	].join("\n"));
+	run(["build", "--quiet"]);
+	const g = loadGraph();
+	const call = g.edges.find((e) => e.relation === "calls" && e.target === "src_shapehelper_shapehelp");
+	assert.ok(call, "top-level call missing");
+	assert.equal(call.source, "src_shape", `top-level call attributed to ${call.source}: an abstract method stayed open past its semicolon`);
+});
+
+test("commented-out import examples are not dependencies (greptile P1)", () => {
+	write("src/cmhelper.ts", "export function cmhelp() { return 1; }\n");
+	write("src/cmlogger.ts", [
+		"/**",
+		" * Usage:",
+		" *   import { cmlog } from './cmlogger'",
+		" */",
+		'// import { cmhelp } from "./cmhelper.js";',
+		'// const lazy = require("./cmhelper.js");',
+		"export function cmlog() { return 1; }",
+	].join("\n"));
+	write("src/cmreal.ts", [
+		'import { cmhelp } from "./cmhelper.js"; // a real import with a trailing comment',
+		"export const cmurl = \"https://example.com/a//b\";",
+		"export function cmuse() { return cmhelp(); }",
+	].join("\n"));
+	run(["build", "--quiet"]);
+	const g = loadGraph();
+	const deps = (src) => g.edges.filter((e) => e.source === src && e.relation === "imports_from").map((e) => e.target);
+	assert.deepEqual(deps("src_cmlogger"), [], `commented-out imports became dependencies: ${JSON.stringify(deps("src_cmlogger"))}`);
+	assert.ok(deps("src_cmreal").includes("src_cmhelper"), `real import lost: ${JSON.stringify(deps("src_cmreal"))}`);
+});
+
+test("implements lists keep full interface names (greptile P1)", () => {
+	write("src/ifaces.ts", [
+		"export interface StorageBackend { get(k: string): string; }",
+		"export interface Closeable { close(): void; }",
+		"export class BaseCache<T> { items: T[] = []; }",
+	].join("\n"));
+	write("src/impls.ts", [
+		'import { StorageBackend, Closeable, BaseCache } from "./ifaces.js";',
+		"export class DiskStore implements StorageBackend, Closeable {",
+		"\tget(k: string): string { return k; }",
+		"\tclose(): void {}",
+		"}",
+		"export class TypedCache extends BaseCache<string> implements StorageBackend {",
+		"\tget(k: string): string { return k; }",
+		"}",
+	].join("\n"));
+	run(["build", "--quiet"]);
+	const g = loadGraph();
+	const impl = (src) => g.edges.filter((e) => e.relation === "implements" && e.source === src).map((e) => e.target).sort();
+	assert.deepEqual(impl("src_impls_diskstore"), ["src_ifaces_closeable", "src_ifaces_storagebackend"]);
+	assert.deepEqual(impl("src_impls_typedcache"), ["src_ifaces_storagebackend"], "implements after a generic extends clause lost");
+	assert.ok(g.edges.some((e) => e.relation === "inherits" && e.source === "src_impls_typedcache" && e.target === "src_ifaces_basecache"), "generic extends clause lost");
+});
+
+test("statement-level type imports are dependencies (greptile P2)", () => {
+	write("src/typemod.ts", "export interface TypedThing { id: string }\nexport default interface DefaultThing { id: string }\n");
+	write("src/typeuse.ts", [
+		'import type OpenAI from "openai";',
+		'import type { TypedThing } from "./typemod.js";',
+		"export function typeUse(a: OpenAI, b: TypedThing) { return [a, b]; }",
+	].join("\n"));
+	run(["build", "--quiet"]);
+	const g = loadGraph();
+	const deps = (src) => g.edges.filter((e) => e.source === src && e.relation === "imports_from").map((e) => e.target).sort();
+	assert.deepEqual(deps("src_typeuse"), ["openai", "src_typemod"]);
+	const imps = parseDecls("src/t.ts", [
+		'import type OpenAI from "openai";',
+		'import type { TypedThing } from "./typemod.js";',
+		'import type from "./type.js";',
+	].join("\n"), "typescript").imports.map((i) => ({ spec: i.spec, default: i.default, names: i.names.map((n) => n.local) }));
+	assert.deepEqual(imps, [
+		{ spec: "openai", default: "OpenAI", names: [] },
+		{ spec: "./typemod.js", default: null, names: ["TypedThing"] },
+		// `import type from "./x"` is a default import NAMED `type`, not a type import.
+		{ spec: "./type.js", default: "type", names: [] },
+	]);
+});
+
+test("wiki god-node pages are keyed by node id, not label (greptile P2)", () => {
+	const wikiRoot = fs.mkdtempSync(path.join(os.tmpdir(), "draht-kg-wiki-test-"));
+	try {
+		fs.mkdirSync(path.join(wikiRoot, ".git"));
+		fs.writeFileSync(path.join(wikiRoot, "package.json"), JSON.stringify({ name: "wiki", version: "1.0.0" }));
+		for (const dir of ["alpha", "beta"]) {
+			fs.mkdirSync(path.join(wikiRoot, dir), { recursive: true });
+			fs.writeFileSync(path.join(wikiRoot, dir, "store.ts"), [
+				"export class Store {",
+				"\tsave(): void {}",
+				"\tload(): void {}",
+				"\tclear(): void {}",
+				"}",
+			].join("\n"));
+		}
+		const kg = (args) => execFileSync(process.execPath, [CLI, "kg", ...args], { cwd: wikiRoot, encoding: "utf-8" });
+		kg(["build", "--quiet"]);
+		kg(["export", "wiki"]);
+		const dir = path.join(wikiRoot, ".planning/codebase/kg-wiki");
+		const links = [...fs.readFileSync(path.join(dir, "index.md"), "utf-8").matchAll(/^- \[Store\]\(([^)]+)\) — degree/gm)].map((m) => m[1]);
+		assert.equal(links.length, 2, `expected both Store god nodes in the index: ${JSON.stringify(links)}`);
+		assert.notEqual(links[0], links[1], "two Store nodes link to the same page");
+		const pages = links.map((l) => fs.readFileSync(path.join(dir, l), "utf-8"));
+		assert.ok(pages.some((p) => p.includes("alpha/store.ts")) && pages.some((p) => p.includes("beta/store.ts")), "one Store page overwrote the other");
+	} finally {
+		fs.rmSync(wikiRoot, { recursive: true, force: true });
+	}
 });

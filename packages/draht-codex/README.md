@@ -140,6 +140,7 @@ Disciplines:
 - `model-tiering` — advisor and orchestrator patterns for cost-efficient model selection
 - `saga-spawner` — saga-graph reconciliation loop for unattended repo advancement as a cloud routine
 - `tdd-workflow` — red→green→refactor discipline, commit conventions, cycle violations
+- `test-audit` — authoring gates, evidence-led test audits, and subsystem campaigns that preserve owner-boundary contracts
 - `verification-gate` — evidence before claims: run the command that proves it before saying "done"
 
 Creative:

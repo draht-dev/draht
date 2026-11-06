@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Add a self-contained `/test-audit` prompt for behavior-focused test authoring and coverage audits ([#34](https://github.com/draht-dev/draht/pull/34))
+
 ## [2026.11.5-1] - 2026-11-05
 
 ### Changed

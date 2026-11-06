@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Add the `test-audit` skill and campaign guide for behavior-focused test authoring and coverage audits ([#34](https://github.com/draht-dev/draht/pull/34))
+
 ## [2026.10.31-1] - 2026-10-31
 
 ### Added

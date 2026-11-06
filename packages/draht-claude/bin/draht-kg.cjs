@@ -569,6 +569,30 @@ function lineAt(content, idx) {
 // Build (phases 2-8)
 // ============================================================================
 
+// Every target string of a package.json `exports` value (string, conditions
+// object or fallback array), in declaration order.
+function exportTargets(v, out = []) {
+	if (typeof v === "string") out.push(v);
+	else if (v && typeof v === "object") for (const k of Object.values(v)) exportTargets(k, out);
+	return out;
+}
+
+// A package's `exports` as a subpath map ("." and "./sub" keys); null when
+// the field is absent. A string or a bare conditions object exports the
+// root alone.
+function subpathExports(exports) {
+	if (exports === undefined || exports === null) return null;
+	if (typeof exports === "object" && !Array.isArray(exports) && Object.keys(exports).some((k) => k.startsWith("."))) return exports;
+	return { ".": exports };
+}
+
+// The source path a build output was compiled from (`./dist/x.js` or
+// `./dist/x.d.ts` → `./src/x`): `dist/` is never walked, so an export that
+// points only at build output is found through its source.
+function distToSrc(target) {
+	return target.replace(/^(\.\/)?dist\//, "$1src/").replace(/\.d\.[mc]?ts$/, "");
+}
+
 function buildGraph(root) {
 	const files = walk(root);
 	const nodes = [];
@@ -655,10 +679,12 @@ function buildGraph(root) {
 		perFile.set(rel, { lang, decls, stripped, localDefs, defaultNid, importedNames: new Map(), fileNid });
 	}
 
-	// -- workspace package resolution (js/ts monorepos)
+	// -- workspace package resolution (js/ts monorepos): each package's root
+	// entry, plus its directory and `exports` map for subpath imports
 	const rels = [...perFile.keys()];
 	const relSet = new Set(rels);
 	const workspaceEntry = new Map();
+	const workspacePkg = new Map(); // package name -> { dir, exports: subpath map | null }
 	{
 		const pkgDirs = new Set([""]);
 		for (const rel of rels) {
@@ -670,11 +696,11 @@ function buildGraph(root) {
 			try {
 				const pj = JSON.parse(fs.readFileSync(pjPath, "utf-8"));
 				if (!pj.name) continue;
+				if (!workspacePkg.has(pj.name)) workspacePkg.set(pj.name, { dir, exports: subpathExports(pj.exports) });
 				const candidates = [];
 				if (typeof pj.main === "string") candidates.push(pj.main);
 				if (typeof pj.module === "string") candidates.push(pj.module);
-				const collect = (v) => { if (typeof v === "string") candidates.push(v); else if (v && typeof v === "object") for (const k of Object.values(v)) collect(k); };
-				if (pj.exports) collect(pj.exports);
+				if (pj.exports) exportTargets(pj.exports, candidates);
 				candidates.push("src/index.ts", "src/index.js", "index.ts", "index.js");
 				for (const c of candidates) {
 					if (typeof c !== "string") continue;
@@ -693,25 +719,66 @@ function buildGraph(root) {
 		}
 	}
 
+	// The file a module path names: as written, with a `.js`-family extension
+	// swapped for a source one, or a directory's index.
+	const probeModule = (base) => {
+		const stems = [base];
+		if (/\.(js|mjs|cjs|jsx)$/.test(base)) stems.push(base.replace(/\.(js|mjs|cjs|jsx)$/, ""));
+		for (const stem of stems) {
+			for (const e of ["", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".py", ".go", ".rs"]) {
+				if (relSet.has(stem + e)) return stem + e;
+			}
+			for (const e of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]) {
+				if (relSet.has(path.posix.join(stem, "index" + e))) return path.posix.join(stem, "index" + e);
+			}
+		}
+		return null;
+	};
+	const probeTarget = (dir, target) => {
+		const hit = probeModule(path.posix.normalize(path.posix.join(dir, target)));
+		if (hit) return hit;
+		const source = distToSrc(target);
+		return source !== target ? probeModule(path.posix.normalize(path.posix.join(dir, source))) : null;
+	};
+
+	// A workspace subpath import (`@scope/pkg/testing`) resolves through the
+	// package's `exports`: the exact key, else the `*` pattern with the
+	// longest prefix (Node's rule), its targets tried in condition order. Never
+	// the package root — the root does not export the subpath's names, so its
+	// symbol imports and calls would be lost. A subpath the map does not
+	// export is unresolved (Node refuses it); without an `exports` field the
+	// subpath is a path inside the package.
+	const resolveWorkspaceSubpath = (pkg, sub) => {
+		if (!pkg.exports) return probeTarget(pkg.dir, sub);
+		let key = Object.hasOwn(pkg.exports, sub) ? sub : null;
+		let star = null;
+		if (key === null) {
+			let prefixLen = -1;
+			for (const k of Object.keys(pkg.exports)) {
+				const at = k.indexOf("*");
+				if (at < 0 || at < prefixLen || (at === prefixLen && k.length <= key.length)) continue;
+				const prefix = k.slice(0, at);
+				const suffix = k.slice(at + 1);
+				if (sub.length < k.length || !sub.startsWith(prefix) || !sub.endsWith(suffix)) continue;
+				key = k;
+				prefixLen = at;
+				star = sub.slice(prefix.length, sub.length - suffix.length);
+			}
+			if (key === null) return null;
+		}
+		for (const target of exportTargets(pkg.exports[key])) {
+			const hit = probeTarget(pkg.dir, star === null ? target : target.split("*").join(star));
+			if (hit) return hit;
+		}
+		return null;
+	};
+
 	const resolveSpec = (fromRel, spec) => {
 		const fromDir = path.posix.dirname(fromRel);
-		if (spec.startsWith(".")) {
-			const base = path.posix.normalize(path.posix.join(fromDir, spec));
-			const stems = [base];
-			if (/\.(js|mjs|cjs|jsx)$/.test(base)) stems.push(base.replace(/\.(js|mjs|cjs|jsx)$/, ""));
-			for (const stem of stems) {
-				for (const e of ["", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".py", ".go", ".rs"]) {
-					if (relSet.has(stem + e)) return stem + e;
-				}
-				for (const e of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]) {
-					if (relSet.has(path.posix.join(stem, "index" + e))) return path.posix.join(stem, "index" + e);
-				}
-			}
-			return null;
-		}
+		if (spec.startsWith(".")) return probeModule(path.posix.normalize(path.posix.join(fromDir, spec)));
 		if (workspaceEntry.has(spec)) return workspaceEntry.get(spec);
 		const slash = spec.indexOf("/", spec.startsWith("@") ? spec.indexOf("/") + 1 : 0);
-		if (slash > 0 && workspaceEntry.has(spec.slice(0, slash))) return workspaceEntry.get(spec.slice(0, slash));
+		if (slash > 0 && workspacePkg.has(spec.slice(0, slash))) return resolveWorkspaceSubpath(workspacePkg.get(spec.slice(0, slash)), "." + spec.slice(slash));
 		// python dotted module → path
 		if (/^[\w.]+$/.test(spec) && spec.includes(".")) {
 			const p = spec.replace(/\./g, "/");

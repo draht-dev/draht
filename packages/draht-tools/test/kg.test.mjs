@@ -575,3 +575,61 @@ test("wiki god-node pages are keyed by node id, not label (greptile P2)", () => 
 		fs.rmSync(wikiRoot, { recursive: true, force: true });
 	}
 });
+
+test("workspace subpath imports resolve through the package's exports, not its root (greptile P1)", () => {
+	const wsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "draht-kg-ws-test-"));
+	try {
+		const w = (rel, content) => {
+			fs.mkdirSync(path.dirname(path.join(wsRoot, rel)), { recursive: true });
+			fs.writeFileSync(path.join(wsRoot, rel), content);
+		};
+		fs.mkdirSync(path.join(wsRoot, ".git"));
+		w("package.json", JSON.stringify({ name: "ws", version: "1.0.0" }));
+		// A `source` condition, a dist-only exact key (built from src/) and a dist-only `*` pattern.
+		w("packages/mod/package.json", JSON.stringify({
+			name: "@ws/mod",
+			exports: {
+				".": { source: "./src/index.ts", import: "./dist/index.js" },
+				"./testing": { source: "./src/testing/index.ts", import: "./dist/testing/index.js" },
+				"./compat": { types: "./dist/compat.d.ts", import: "./dist/compat.js" },
+				"./providers/*": { types: "./dist/providers/*.d.ts", import: "./dist/providers/*.js" },
+			},
+		}));
+		w("packages/mod/src/index.ts", "export function rootOnly() { return 1; }\n");
+		w("packages/mod/src/testing/index.ts", "export function makePair() { return 2; }\n");
+		w("packages/mod/src/compat.ts", "export function compatShim() { return 3; }\n");
+		w("packages/mod/src/providers/faux.ts", "export function fauxProvider() { return 4; }\n");
+		// No `exports` field: a subpath is a path inside the package.
+		w("packages/plain/package.json", JSON.stringify({ name: "@ws/plain", main: "./src/index.ts" }));
+		w("packages/plain/src/index.ts", "export function plainRoot() { return 5; }\n");
+		w("packages/plain/lib/extra.ts", "export function plainExtra() { return 6; }\n");
+		w("packages/app/src/use.ts", [
+			'import { makePair } from "@ws/mod/testing";',
+			'import { compatShim } from "@ws/mod/compat";',
+			'import { fauxProvider } from "@ws/mod/providers/faux";',
+			'import { plainExtra } from "@ws/plain/lib/extra.js";',
+			'import { hidden } from "@ws/mod/internal";',
+			"export function useAll() { return [makePair(), compatShim(), fauxProvider(), plainExtra(), hidden()]; }",
+		].join("\n"));
+		execFileSync(process.execPath, [CLI, "kg", "build", "--quiet"], { cwd: wsRoot, encoding: "utf-8" });
+		const g = JSON.parse(fs.readFileSync(path.join(wsRoot, ".planning/codebase/graph.json"), "utf-8"));
+		const deps = g.edges.filter((e) => e.source === "packages_app_src_use" && e.relation === "imports_from").map((e) => e.target).sort();
+		assert.deepEqual(deps, [
+			"packages_mod_src_compat",
+			"packages_mod_src_providers_faux",
+			"packages_mod_src_testing_index",
+			"packages_plain_lib_extra",
+			// Not in the exports map: Node refuses it, so it is no in-repo file, least of all the root.
+			"ws_mod_internal",
+		]);
+		const calls = g.edges.filter((e) => e.source === "packages_app_src_use_useall" && e.relation === "calls").map((e) => e.target).sort();
+		assert.deepEqual(calls, [
+			"packages_mod_src_compat_compatshim",
+			"packages_mod_src_providers_faux_fauxprovider",
+			"packages_mod_src_testing_index_makepair",
+			"packages_plain_lib_extra_plainextra",
+		]);
+	} finally {
+		fs.rmSync(wsRoot, { recursive: true, force: true });
+	}
+});

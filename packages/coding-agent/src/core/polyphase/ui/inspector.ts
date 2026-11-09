@@ -18,6 +18,7 @@ import {
 	formatTokens,
 	oneLine,
 	padToWidth,
+	progressBar,
 	statusGlyph,
 } from "../render/format.ts";
 import { sanitizeChildText, sanitizeSnapshot } from "../render/run-block.ts";
@@ -207,6 +208,8 @@ function runSubtitleText(snapshot: RunSnapshot): string {
  * status glyph must stay visible even when nothing else does. `columns()`'s own 1-column gap
  * supplies the separator space before the title, matching `› ● label` elsewhere in this file. */
 const RUNS_ROW_CURSOR_WIDTH = 3;
+/** Cap for the runs view's widened counts cell, so it never squeezes the title to nothing. */
+const RUNS_COUNTS_MAX_WIDTH = 20;
 
 function savedWorkflowSourceLabel(source: SavedWorkflowSummary["source"]): string {
 	return source === "project" ? "proj" : "user";
@@ -289,6 +292,45 @@ function formatCounts(theme: Theme, now: number, counts: Record<AgentStatus, num
 
 function isFinishedAgentStatus(status: AgentStatus): boolean {
 	return status === "done" || status === "failed" || status === "cancelled" || status === "skipped";
+}
+
+/** `label · agentType · phase`, minus any part that repeats an earlier one (a workflow agent is
+ * often labelled after its type or its phase, which would otherwise read `cleanup · cleanup`). */
+function agentTitleText(row: AgentSnapshotRow, phaseTitle: string | undefined): string {
+	const parts: string[] = [];
+	for (const part of [row.label, row.agentType, phaseTitle]) {
+		if (part && !parts.includes(part)) parts.push(part);
+	}
+	return parts.join(" · ");
+}
+
+/** `budget ███░░ 12.3k/50.0k tok · time ██░░░ 4:10/30:00` for a run with a token budget or a time
+ * limit, so how close the run is to being stopped is visible before it happens. */
+function limitsGaugeText(snapshot: RunSnapshot, theme: Theme): string | undefined {
+	const parts: string[] = [];
+	const gauge = (ratio: number, hit: boolean) =>
+		theme.fg(hit ? "error" : ratio >= 0.8 ? "warning" : "accent", progressBar(ratio, 10));
+	if (snapshot.budget) {
+		const { spentTokens, totalTokens, exhausted } = snapshot.budget;
+		parts.push(
+			`budget ${gauge(spentTokens / totalTokens, exhausted)} ${formatTokens(spentTokens)}/${formatTokens(totalTokens)} tok`,
+		);
+	}
+	if (snapshot.timeLimit) {
+		const { totalMs, reached } = snapshot.timeLimit;
+		parts.push(
+			`time ${gauge(snapshot.elapsedMs / totalMs, reached)} ${formatDuration(Math.min(snapshot.elapsedMs, totalMs))}/${formatDuration(totalMs)}`,
+		);
+	}
+	return parts.length > 0 ? parts.join(" · ") : undefined;
+}
+
+/** Joins hints with two spaces, dropping hints from just before the last one until the line fits,
+ * so the closing `back`/`close` hint stays visible on a narrow terminal instead of being cut. */
+function fitHints(hints: readonly string[], width: number): string {
+	const kept = [...hints];
+	while (kept.length > 2 && visibleWidth(kept.join("  ")) > width) kept.splice(kept.length - 2, 1);
+	return kept.join("  ");
 }
 
 /**
@@ -429,19 +471,14 @@ export class PolyphaseInspector implements Component, Focusable {
 			topRight = snapshot ? this.runHeaderRight(snapshot) : "";
 			bodyLines =
 				width >= SPLIT_MIN_WIDTH
-					? this.renderSplitBody(innerWidth, bodyHeight, rows)
+					? this.renderSplitBody(innerWidth, bodyHeight, snapshot, rows)
 					: this.renderRunBody(innerWidth, bodyHeight, snapshot, rows);
 		} else {
 			const snapshot = this.currentRunSnapshot();
 			const rows = this.sortedAgentsOf(snapshot);
 			const row = rows.find((r) => r.i === this.currentAgentIndex);
-			const phaseTitle = row?.phase !== undefined ? snapshot?.phases[row.phase]?.title : undefined;
-			topTitle = row ? `${row.label} · ${row.agentType}${phaseTitle ? ` · ${phaseTitle}` : ""}` : "agent";
-			topRight = row
-				? `${statusGlyph(row.status, this.deps.theme, { now: this.now(), animate: false })} ${headerActivityText(row)}${
-						row.elapsedMs === undefined ? "" : `  ${formatDuration(row.elapsedMs)}`
-					}`
-				: "";
+			topTitle = row ? agentTitleText(row, this.phaseTitleOf(snapshot, row)) : "agent";
+			topRight = row ? this.agentStatusText(row) : "";
 			bodyLines = this.renderAgentDetailBody(this.currentAgentIndex, innerWidth, bodyHeight, rows);
 		}
 
@@ -461,6 +498,17 @@ export class PolyphaseInspector implements Component, Focusable {
 
 	private now(): number {
 		return Date.now();
+	}
+
+	private phaseTitleOf(snapshot: RunSnapshot | undefined, row: AgentSnapshotRow): string | undefined {
+		return row.phase !== undefined ? snapshot?.phases[row.phase]?.title : undefined;
+	}
+
+	/** `● thinking  0:41`: the agent detail header's right side (§12.2). */
+	private agentStatusText(row: AgentSnapshotRow): string {
+		const glyph = statusGlyph(row.status, this.deps.theme, { now: this.now(), animate: false });
+		const elapsed = row.elapsedMs === undefined ? "" : `  ${formatDuration(row.elapsedMs)}`;
+		return `${glyph} ${headerActivityText(row)}${elapsed}`;
 	}
 
 	// ── Navigation ──────────────────────────────────────────────────────────
@@ -811,7 +859,9 @@ export class PolyphaseInspector implements Component, Focusable {
 
 	// ── Rendering ───────────────────────────────────────────────────────────
 
-	private formatRunsRow(row: RunsRow, width: number, selected: boolean): string {
+	/** `countsWidth` is the widest counts cell across every listed run (at least the default), so
+	 * multi-digit counts like `●10 ✓12` are never cut to `●1`. */
+	private formatRunsRow(row: RunsRow, width: number, selected: boolean, countsWidth: number): string {
 		const cursor = selected ? "› " : "  ";
 		if (row.kind === "saved" && row.saved) {
 			const saved = row.saved;
@@ -839,7 +889,10 @@ export class PolyphaseInspector implements Component, Focusable {
 		];
 		if (optional.subtitle > 0) cells.push({ text: runSubtitleText(snapshot), width: optional.subtitle });
 		if (optional.counts > 0) {
-			cells.push({ text: formatCounts(this.deps.theme, this.now(), snapshot.counts), width: optional.counts });
+			cells.push({
+				text: formatCounts(this.deps.theme, this.now(), snapshot.counts),
+				width: Math.max(optional.counts, countsWidth),
+			});
 		}
 		if (optional.duration > 0) {
 			cells.push({ text: formatDuration(snapshot.elapsedMs), width: optional.duration, align: "right" });
@@ -859,6 +912,16 @@ export class PolyphaseInspector implements Component, Focusable {
 		const rows = this.runsRows;
 		const lines: string[] = [];
 		const lineForRow: number[] = [];
+		let countsWidth = 0;
+		for (const row of rows) {
+			if (row.snapshot) {
+				countsWidth = Math.max(
+					countsWidth,
+					visibleWidth(formatCounts(this.deps.theme, this.now(), row.snapshot.counts)),
+				);
+			}
+		}
+		countsWidth = Math.min(RUNS_COUNTS_MAX_WIDTH, countsWidth);
 		let lastKind: RunsRow["kind"] | undefined;
 		rows.forEach((row, idx) => {
 			if (row.kind !== lastKind) {
@@ -866,7 +929,7 @@ export class PolyphaseInspector implements Component, Focusable {
 				lastKind = row.kind;
 			}
 			lineForRow[idx] = lines.length;
-			lines.push(this.formatRunsRow(row, width, idx === this.runsSelection));
+			lines.push(this.formatRunsRow(row, width, idx === this.runsSelection, countsWidth));
 		});
 		if (rows.length === 0) {
 			lines.push('No agents yet. Put "polyphase" in a prompt or run /workflow <name>.');
@@ -874,17 +937,16 @@ export class PolyphaseInspector implements Component, Focusable {
 		const pivot = lineForRow[this.runsSelection] ?? 0;
 		const contentHeight = Math.max(1, height - 1);
 		const windowed = padLines(windowAround(lines, contentHeight, pivot, this.deps.theme), contentHeight);
-		return [...windowed, this.footerLine(this.runsHintLine(), width)];
+		return [...windowed, this.footerLine(this.runsHints(), width)];
 	}
 
 	private formatAgentRow(row: AgentSnapshotRow, width: number, selected: boolean): string {
 		const cursor = selected ? "› " : "  ";
 		const glyph = statusGlyph(row.status, this.deps.theme, { now: this.now(), animate: false });
-		const model = formatModelLabel(row, { withProvider: false });
-		const cells: ColumnCell[] = [
-			{ text: `${cursor}${glyph} ${row.label}`, width: 18 },
-			{ text: model, width: 20 },
-		];
+		const cells: ColumnCell[] = [{ text: `${cursor}${glyph} ${row.label}`, width: 18 }];
+		// Below 50 columns (the split view's left pane, a phase-indented row in it) the model column
+		// would leave no room for the activity; the split view's right pane names the model anyway.
+		if (width >= 50) cells.push({ text: formatModelLabel(row, { withProvider: false }), width: 20 });
 		// Dropped below 60 columns, the same threshold `layoutRun` uses for its elapsed column: at
 		// the 40-column split-pane width there is no room for a 5th fixed cell ahead of the flex one.
 		if (width >= 60) {
@@ -909,7 +971,7 @@ export class PolyphaseInspector implements Component, Focusable {
 
 	private runHeaderRight(snapshot: RunSnapshot): string {
 		const parts = [formatCounts(this.deps.theme, this.now(), snapshot.counts), formatDuration(snapshot.elapsedMs)];
-		if (snapshot.tokens > 0) parts.push(formatTokens(snapshot.tokens));
+		if (snapshot.tokens > 0) parts.push(`${formatTokens(snapshot.tokens)} tok`);
 		const cost = formatCost(snapshot.cost);
 		if (cost) parts.push(cost);
 		return parts.filter((part) => part.length > 0).join("  ");
@@ -923,9 +985,26 @@ export class PolyphaseInspector implements Component, Focusable {
 	): string[] {
 		if (!snapshot) return [this.deps.theme.fg("muted", "run not found")];
 		this.runSelection = clamp(this.runSelection, 0, Math.max(0, rows.length - 1));
+		const { lines, lineForAgent } = this.runListLines(snapshot, rows, width);
+		const pivot = lineForAgent[this.runSelection] ?? 0;
+		const contentHeight = Math.max(1, height - 1);
+		const windowed = padLines(windowAround(lines, contentHeight, pivot, this.deps.theme), contentHeight);
+		return [...windowed, this.footerLine(this.runHints(), width)];
+	}
 
+	/** The run view's list (§12.2): a limits gauge when the run has a budget or time limit, then
+	 * agents grouped by phase for workflows, numbered for chains, flat otherwise, then the newest log
+	 * line or the result. Shared by the full-width run view and the split view's left pane, so the
+	 * phase tree survives the split. */
+	private runListLines(
+		snapshot: RunSnapshot,
+		rows: AgentSnapshotRow[],
+		width: number,
+	): { lines: string[]; lineForAgent: number[] } {
 		const lines: string[] = [];
 		const lineForAgent: number[] = [];
+		const gauge = limitsGaugeText(snapshot, this.deps.theme);
+		if (gauge) lines.push(fitLine(gauge, width));
 		if (snapshot.phases.length > 0) {
 			// Agents spawned before any phase()/agent({phase}) call (§13.3) carry no phase index; they
 			// are still selectable, so they get an ungrouped block ahead of the phase list instead of
@@ -973,35 +1052,41 @@ export class PolyphaseInspector implements Component, Focusable {
 		} else if (snapshot.resultPreview && snapshot.status !== "running") {
 			lines.push(`→ ${oneLine(sanitizeForDisplay(snapshot.resultPreview))}`);
 		}
-
-		const pivot = lineForAgent[this.runSelection] ?? 0;
-		const contentHeight = Math.max(1, height - 1);
-		const windowed = padLines(windowAround(lines, contentHeight, pivot, this.deps.theme), contentHeight);
-		return [...windowed, this.footerLine(this.runHintLine(), width)];
+		return { lines: lines.map((line) => fitLine(line, width)), lineForAgent };
 	}
 
-	private renderSplitBody(width: number, height: number, rows: AgentSnapshotRow[]): string[] {
-		const rightWidth = Math.max(1, width - SPLIT_LEFT_WIDTH - 1);
+	private renderSplitBody(
+		width: number,
+		height: number,
+		snapshot: RunSnapshot | undefined,
+		rows: AgentSnapshotRow[],
+	): string[] {
+		if (!snapshot) return [this.deps.theme.fg("muted", "run not found")];
+		// The left list stops one column short of the divider, and one more column of air follows it.
+		const rightWidth = Math.max(1, width - SPLIT_LEFT_WIDTH - 2);
 		this.runSelection = clamp(this.runSelection, 0, Math.max(0, rows.length - 1));
-		const leftLines = rows.map((row, idx) =>
-			fitLine(this.formatAgentRow(row, SPLIT_LEFT_WIDTH, idx === this.runSelection), SPLIT_LEFT_WIDTH),
-		);
-		const selectedAgentIndex = rows[this.runSelection]?.i;
-		const rightLines = this.renderAgentDetailBody(selectedAgentIndex, rightWidth, height, rows);
-		// Windowed the same way `renderRunBody` windows the flat agent list, so a run with more agents
-		// than the pane has rows keeps the `›` cursor on screen instead of scrolling it off the top.
-		const paddedLeft = padLines(windowAround(leftLines, height, this.runSelection, this.deps.theme), height);
+		const { lines: leftLines, lineForAgent } = this.runListLines(snapshot, rows, SPLIT_LEFT_WIDTH - 1);
+		const selected = rows[this.runSelection];
+		const rightLines = this.renderAgentDetailBody(selected?.i, rightWidth, height, rows, snapshot);
+		// Windowed the same way `renderRunBody` windows its list, so a run with more agents than the
+		// pane has rows keeps the `›` cursor on screen instead of scrolling it off the top.
+		const pivot = lineForAgent[this.runSelection] ?? 0;
+		const paddedLeft = padLines(windowAround(leftLines, height, pivot, this.deps.theme), height);
 		const paddedRight = padLines(rightLines, height);
-		return paddedLeft.map((line, idx) => `${padToWidth(line, SPLIT_LEFT_WIDTH)}│${paddedRight[idx] ?? ""}`);
+		const divider = this.deps.theme.fg("dim", "│");
+		return paddedLeft.map((line, idx) => `${padToWidth(line, SPLIT_LEFT_WIDTH)}${divider} ${paddedRight[idx] ?? ""}`);
 	}
 
+	/** `identityFrom` is set by the split view, whose border title names the run rather than the
+	 * agent: the pane then opens with the agent's own title and status line. */
 	private renderAgentDetailBody(
 		agentIndex: number | undefined,
 		width: number,
 		height: number,
 		rows: AgentSnapshotRow[],
+		identityFrom?: RunSnapshot,
 	): string[] {
-		const footerFallback = this.agentHintLine();
+		const footerFallback = this.agentHints();
 		const contentHeight = Math.max(1, height - 1);
 		if (agentIndex === undefined) {
 			return [
@@ -1018,6 +1103,21 @@ export class PolyphaseInspector implements Component, Focusable {
 		}
 
 		const header: string[] = [];
+		if (identityFrom) {
+			const status = this.agentStatusText(row);
+			header.push(
+				columns(
+					[
+						{
+							text: this.deps.theme.bold(agentTitleText(row, this.phaseTitleOf(identityFrom, row))),
+							width: "flex",
+						},
+						{ text: status, width: visibleWidth(status), align: "right" },
+					],
+					width,
+				),
+			);
+		}
 		const modelLabel = formatModelLabel(row, { withProvider: true, withSource: true });
 		const confirmText = row.modelConfirmed ? "confirmed" : "unconfirmed";
 		const tokensText = row.tokens > 0 ? ` · ${formatTokens(row.tokens)} tok` : "";
@@ -1028,7 +1128,7 @@ export class PolyphaseInspector implements Component, Focusable {
 		header.push(`task  ${oneLine(row.task)}`);
 		header.push("─".repeat(Math.max(0, width)));
 
-		const footer = this.footerLine(this.agentHintLine(row.status), width);
+		const footer = this.footerLine(this.agentHints(row.status), width);
 		const transcript = this.currentAgentTranscriptFor(agentIndex);
 		if (!transcript) {
 			const OUTPUT_PREVIEW_MAX_LINES = 8;
@@ -1095,33 +1195,36 @@ export class PolyphaseInspector implements Component, Focusable {
 		return [...padLines(body, contentHeight), footer];
 	}
 
-	/** `width` is the same inner width the caller laid its body out to, so a hint line that does not
-	 * fit is ellipsised like every other row instead of being hard-cut by `sideLine`'s padding,
-	 * which carries no ellipsis of its own. */
-	private footerLine(hint: string, width: number): string {
-		return fitLine(this.footerNotice ? this.deps.theme.fg("warning", this.footerNotice) : hint, width);
+	/** `width` is the same inner width the caller laid its body out to: hints that do not fit are
+	 * dropped by `fitHints`, and anything still too wide is ellipsised like every other row instead
+	 * of being hard-cut by `sideLine`'s padding, which carries no ellipsis of its own. */
+	private footerLine(hints: readonly string[], width: number): string {
+		return fitLine(
+			this.footerNotice ? this.deps.theme.fg("warning", this.footerNotice) : fitHints(hints, width),
+			width,
+		);
 	}
 
-	private runsHintLine(): string {
+	private runsHints(): string[] {
 		return [
 			combinedKeyHint(["tui.select.up", "tui.select.down"], "select"),
 			keyHint("tui.select.confirm", "open"),
 			keyHint("app.polyphase.cancelRun", "cancel run"),
 			keyHint("tui.select.cancel", "close"),
-		].join("  ");
+		];
 	}
 
-	private runHintLine(): string {
+	private runHints(): string[] {
 		return [
 			combinedKeyHint(["tui.select.up", "tui.select.down"], "select"),
 			keyHint("tui.select.confirm", "follow"),
 			keyHint("app.polyphase.cancelAgent", "cancel agent"),
 			keyHint("app.polyphase.cancelRun", "cancel run"),
 			keyHint("tui.select.cancel", "back"),
-		].join("  ");
+		];
 	}
 
-	private agentHintLine(status?: AgentStatus): string {
+	private agentHints(status?: AgentStatus): string[] {
 		const finished = status !== undefined && isFinishedAgentStatus(status);
 		return [
 			keyHint("app.polyphase.nextAgent", "next agent"),
@@ -1129,6 +1232,6 @@ export class PolyphaseInspector implements Component, Focusable {
 			keyHint("app.thinking.toggle", "thinking"),
 			...(finished ? [] : [keyHint("app.polyphase.cancelAgent", "cancel")]),
 			keyHint("tui.select.cancel", "back"),
-		].join("  ");
+		];
 	}
 }

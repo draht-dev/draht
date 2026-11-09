@@ -322,7 +322,7 @@ function agentCollapsedLine(
 	const glyph = statusGlyph(row.status, theme, { now: options.now, animate });
 	const labelWidth = extra?.labelWidth ?? computeLabelWidth([row]);
 	const cells: ColumnCell[] = [
-		extra?.stepLabel ? { text: `${glyph} ${extra.stepLabel}`, width: 4 } : { text: glyph, width: 2 },
+		extra?.stepLabel ? { text: `${glyph} ${extra.stepLabel}`, width: 4 } : { text: glyph, width: 1 },
 		{ text: row.label, width: labelWidth },
 	];
 	if (width >= 60) cells.push({ text: modelLabelFor(row, options, { withProvider: false }), width: 22 });
@@ -361,9 +361,25 @@ function outputBlockLines(text: string): string[] {
 	return [...first, `    … ${lines.length - 9} lines omitted …`, ...last];
 }
 
+/** The warning notice `child-events.ts` records right after a blocked tool call repeats what that
+ * call's own `⚠` line already says, so the live views skip it while the call is still shown. */
+export function isBlockedEchoNotice(item: TranscriptItem, previous: TranscriptItem | undefined): boolean {
+	return (
+		item.kind === "notice" &&
+		item.level === "warning" &&
+		previous?.kind === "tool" &&
+		previous.status === "blocked" &&
+		item.text === `${previous.name} ${BLOCKED_TOOL_TEXT}`
+	);
+}
+
 function tailItemLines(items: readonly TranscriptItem[], width: number): string[] {
 	const lines: string[] = [];
+	let previous: TranscriptItem | undefined;
 	for (const item of items) {
+		const echo = isBlockedEchoNotice(item, previous);
+		previous = item;
+		if (echo) continue;
 		if (item.kind === "thinking" || item.kind === "text") {
 			const label = item.kind === "thinking" ? "thinking" : "writing";
 			const cursor = item.done ? "" : "▌";
@@ -437,24 +453,59 @@ function agentExpandedBlock(
 	return lines;
 }
 
-function overflowLine(remaining: number, done: number, queued: number): string {
-	const parts = [`${done} done`];
-	if (queued > 0) parts.push(`${queued} queued`);
-	return `… +${remaining} more (${parts.join(", ")}) · ${keyText("app.polyphase.inspector")} inspect`;
-}
-
 /** Folds `agentsOmitted` (agents dropped before the row even reached this layout, e.g. a degraded
  * archived snapshot) into the agents omitted by the line budget, so the overflow count and its
- * done/queued breakdown always reflect every agent the run actually has. */
+ * per-status breakdown always reflect every agent the run actually has. */
 function overflowLineFor(
 	omitted: readonly AgentSnapshotRow[],
 	agentsOmitted: RunSnapshot["agentsOmitted"],
 ): string | undefined {
 	const remaining = omitted.length + (agentsOmitted?.count ?? 0);
 	if (remaining <= 0) return undefined;
-	const done = omitted.filter((a) => a.status === "done").length + (agentsOmitted?.byStatus.done ?? 0);
-	const queued = omitted.filter((a) => a.status === "queued").length + (agentsOmitted?.byStatus.queued ?? 0);
-	return overflowLine(remaining, done, queued);
+	const counts: Record<AgentStatus, number> = {
+		pending: 0,
+		queued: 0,
+		starting: 0,
+		running: 0,
+		done: 0,
+		failed: 0,
+		cancelled: 0,
+		skipped: 0,
+	};
+	for (const agent of omitted) counts[agent.status]++;
+	for (const [status, n] of Object.entries(agentsOmitted?.byStatus ?? {}) as [AgentStatus, number][]) {
+		counts[status] += n;
+	}
+	counts.running += counts.starting;
+	const parts: string[] = [];
+	for (const status of COUNT_ORDER) {
+		if (counts[status] > 0) parts.push(`${counts[status]} ${STATUS_WORDS[status]}`);
+	}
+	return `… +${remaining} more (${parts.join(", ")}) · ${keyText("app.polyphase.inspector")} inspect`;
+}
+
+/** Collapsed-row priority when a list has more agents than lines: problems first, then work in
+ * flight, then finished and waiting agents. Lower is shown first. */
+function overflowPriority(row: AgentSnapshotRow): number {
+	if (row.status === "failed") return 0;
+	if (row.blocked > 0 && !isFinished(row.status)) return 1;
+	if (row.status === "running" || row.status === "starting") return 2;
+	if (row.status === "cancelled") return 3;
+	if (row.status === "done") return 4;
+	return 5;
+}
+
+/** The agents a one-line-per-agent list shows within `maxLines` (one line kept for the overflow
+ * marker): every agent when they all fit, otherwise the highest-priority ones, back in run order. */
+function pickCollapsedRows(agents: readonly AgentSnapshotRow[], maxLines: number): readonly AgentSnapshotRow[] {
+	const budget = Math.max(1, maxLines);
+	if (agents.length <= budget) return agents;
+	const keep = new Set(
+		[...agents]
+			.sort((a, b) => overflowPriority(a) - overflowPriority(b) || a.i - b.i)
+			.slice(0, Math.max(1, budget - 1)),
+	);
+	return [...agents.filter((agent) => keep.has(agent)), ...agents.filter((agent) => !keep.has(agent))];
 }
 
 function hintLine(options: RunLayoutOptions): string {
@@ -509,7 +560,14 @@ function layoutAgentsBounded(
 function layoutParallel(snapshot: RunSnapshot, theme: Theme, options: RunLayoutOptions, width: number): string[] {
 	const lines = [buildMultiSummaryLine(snapshot, theme, options, width)];
 	const labelWidth = computeLabelWidth(snapshot.agents);
-	const { lines: agentLines, omitted } = layoutAgentsBounded(snapshot.agents, options.maxLines, (row) =>
+	// Only a live view reorders: a static row must not change shape without a status transition of
+	// its own, and a final row lists agents in run order. Priority order would also follow every
+	// status change, so it is limited to the focused, still-running row.
+	const agents =
+		options.expanded || !options.partial || !options.focus
+			? snapshot.agents
+			: pickCollapsedRows(snapshot.agents, options.maxLines);
+	const { lines: agentLines, omitted } = layoutAgentsBounded(agents, options.maxLines, (row) =>
 		options.expanded
 			? agentExpandedBlock(row, theme, options, width, { labelWidth })
 			: [agentCollapsedLine(row, theme, options, width, { labelWidth })],

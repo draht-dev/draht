@@ -543,7 +543,16 @@ try {
 		pass(`.planning/ check skipped (authoring branch)`);
 	} else {
 		// Main may have advanced independently; only this branch's planning edits count.
-		const base = run("git merge-base main HEAD");
+		// During a merge the working tree also holds MERGE_HEAD's side, so the newest
+		// main commit reachable from either parent is the base.
+		let base = run("git merge-base main HEAD");
+		try {
+			const mergeHead = run("git rev-parse --verify --quiet MERGE_HEAD");
+			const mergeBase = run(`git merge-base main ${mergeHead}`);
+			if (run(`git rev-list --count ${base}..${mergeBase}`) !== "0") base = mergeBase;
+		} catch {
+			// No merge in progress.
+		}
 		check(run(`git diff ${base} -- .planning/`) === "", `.planning/ unchanged vs merge-base with main`);
 	}
 } catch {

@@ -378,7 +378,8 @@ describe("agent detail header", () => {
 		});
 		const inspector = new PolyphaseInspector(deps);
 
-		expect(out(inspector)).toContain("planner · planner · plan");
+		expect(out(inspector)).toContain("planner · plan");
+		expect(out(inspector)).not.toContain("planner · planner");
 	});
 
 	it("singularizes 'turn' and 'tool' for a count of exactly one", () => {
@@ -1169,9 +1170,17 @@ describe("split view", () => {
 
 		inspector.handleInput(KEYS.pageUp);
 		const rendered = out(inspector, 120);
+		// The left pane and the right pane's identity line (border row 0, identity row 1) both show the
+		// agent's latest activity (`bash step 39`); only the transcript below them scrolls.
+		const rightPane = rendered
+			.split("\n")
+			.slice(2)
+			.map((line) => line.split("│")[2] ?? "")
+			.join("\n");
 
 		expect(rendered).toContain("paused");
-		expect(rendered).not.toContain("step 39");
+		expect(rightPane).toMatch(/● bash step \d+/);
+		expect(rightPane).not.toContain("step 39");
 	});
 });
 
@@ -1305,7 +1314,7 @@ describe("footer hints", () => {
 		}
 	});
 
-	it("ellipsises an overflowing footer instead of hard-cutting it mid-word", () => {
+	it("drops hints that do not fit instead of hard-cutting the footer mid-word", () => {
 		// Measured on a real run view at 60 columns: the footer used to read
 		// "...shift+x cance" (the border's own padding truncates with no ellipsis of its own).
 		const sample = parallelRun();
@@ -1322,7 +1331,8 @@ describe("footer hints", () => {
 		const footer = lines.find((line) => line.includes("select"));
 		if (!footer) throw new Error("expected a footer line containing the select hint");
 		expect(footer).not.toContain("cance ");
-		expect(footer).toContain("…");
+		expect(footer).not.toContain("…");
+		expect(footer).toContain("back");
 	});
 });
 
@@ -1446,5 +1456,55 @@ describe("dispose", () => {
 		vi.advanceTimersByTime(1000);
 
 		expect(requestRender.mock.calls.length).toBe(callsBeforeDispose);
+	});
+});
+
+describe("run view layout", () => {
+	it("keeps the workflow phase tree and names the selected agent in split view", () => {
+		const sample = workflowRun();
+		disposables.push(sample.dispose);
+		const { tui } = fakeTui(30, 140);
+		const inspector = new PolyphaseInspector(
+			buildDeps({ session: testSession(sample), tui, initial: { view: "run", runId: sample.run.id } }),
+		);
+
+		const lines = inspector.render(140).map((line) => stripAnsi(line));
+		const left = lines.map((line) => line.split("│")[1] ?? "");
+		const right = lines.map((line) => line.split("│")[2] ?? "");
+		expect(left.some((line) => line.includes("1 plan"))).toBe(true);
+		expect(left.some((line) => line.includes("4 cleanup"))).toBe(true);
+		expect(right[1]).toContain("cleanup");
+		expect(right[1]).toContain("bash git push");
+	});
+
+	it("shows a budget gauge for a run with a token budget", () => {
+		const sample = workflowRun();
+		disposables.push(sample.dispose);
+		const inspector = new PolyphaseInspector(
+			buildDeps({ session: testSession(sample), initial: { view: "run", runId: sample.run.id } }),
+		);
+
+		expect(out(inspector)).toMatch(/budget [█░]{10} 15\/10\.0k tok/);
+	});
+
+	it("labels the token count in the run header", () => {
+		const sample = parallelRun();
+		disposables.push(sample.dispose);
+		const inspector = new PolyphaseInspector(
+			buildDeps({ session: testSession(sample), initial: { view: "run", runId: sample.run.id } }),
+		);
+
+		expect(out(inspector).split("\n")[0]).toContain("15 tok");
+	});
+
+	it("widens the runs view's counts column instead of cutting multi-digit counts", () => {
+		const sample = largeRun(30);
+		disposables.push(sample.dispose);
+		const { tui } = fakeTui(24, 100);
+		const inspector = new PolyphaseInspector(
+			buildDeps({ session: testSession(sample), tui, initial: { view: "runs" } }),
+		);
+
+		expect(out(inspector, 100)).toContain("◌10");
 	});
 });

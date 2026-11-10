@@ -132,6 +132,13 @@ export function formatModelLabel(
 	return [label, sourceSuffix].filter((part) => part.length > 0).join(" ");
 }
 
+/** `████░░░░░░` for `ratio` (clamped to 0..1) across `cells` columns. */
+export function progressBar(ratio: number, cells: number): string {
+	const safe = Number.isFinite(ratio) ? Math.min(1, Math.max(0, ratio)) : 0;
+	const filled = Math.round(safe * cells);
+	return "█".repeat(filled) + "░".repeat(Math.max(0, cells - filled));
+}
+
 /** Collapses whitespace runs (including newlines) to single spaces and trims. */
 export function oneLine(text: string): string {
 	return text.replace(/\s+/g, " ").trim();

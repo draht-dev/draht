@@ -597,6 +597,10 @@ export class InteractiveMode {
 	private extensionDialogs: ExtensionDialog[] = [];
 	/** Label of the surface that decided the open ask elsewhere, pending a one-line notice. */
 	private extensionDialogDecidedBy: string | undefined = undefined;
+	/** Numbers the program status sources of blocking overlays, so closing one keeps the others. */
+	private nextBlockingOverlayId = 0;
+	/** Program status sources of blocking overlays that have not called `done()` yet. */
+	private readonly blockingOverlaySources = new Set<string>();
 	private extensionTerminalInputSubscriptions = new Set<{
 		handler: (data: string) => { consume?: boolean; data?: string } | undefined;
 		unsubscribe: () => void;
@@ -2593,6 +2597,9 @@ export class InteractiveMode {
 	private resetExtensionUI(): void {
 		this.closeAllExtensionDialogs();
 		this.ui.hideOverlay();
+		// Reload and session switches drop overlays without calling done(), so clear their blocked status here.
+		for (const source of this.blockingOverlaySources) this.programStatus.setBlocked(source, undefined);
+		this.blockingOverlaySources.clear();
 		this.clearExtensionTerminalInputListeners();
 		this.setExtensionFooter(undefined);
 		this.setExtensionHeader(undefined);
@@ -3240,6 +3247,9 @@ export class InteractiveMode {
 		return new Promise((resolve, reject) => {
 			let component: ExtensionDialogComponent | undefined;
 			let overlayHandle: OverlayHandle | undefined;
+			// An overlay stays blocked until its interaction ends, also while setHidden() hides it.
+			const overlayStatusSource =
+				isOverlay && options?.blocked ? `extension-overlay:${this.nextBlockingOverlayId++}` : undefined;
 			let closed = false;
 
 			const restoreEditor = () => {
@@ -3254,6 +3264,10 @@ export class InteractiveMode {
 				// Remove this overlay, not the topmost one: another overlay may have opened above it.
 				if (isOverlay) overlayHandle?.hide();
 				else restoreEditor();
+				if (overlayStatusSource) {
+					this.blockingOverlaySources.delete(overlayStatusSource);
+					this.programStatus.setBlocked(overlayStatusSource, undefined);
+				}
 				// Note: both branches above already call requestRender
 				resolve(result);
 				try {
@@ -3282,6 +3296,10 @@ export class InteractiveMode {
 							return w ? { width: w } : undefined;
 						};
 						overlayHandle = this.ui.showOverlay(c, resolveOptions());
+						if (overlayStatusSource) {
+							this.blockingOverlaySources.add(overlayStatusSource);
+							this.programStatus.setBlocked(overlayStatusSource, options?.blocked);
+						}
 						// Expose handle to caller for visibility control
 						options?.onHandle?.(overlayHandle);
 					} else {

@@ -75,7 +75,7 @@ The supported Draht product is a local agent stack for building and running AI a
 - **Attachable sessions.** See [attachable-sessions.md](packages/coding-agent/docs/attachable-sessions.md).
 - **Drahtbank:** compares Draht prompt snapshots on small, repeatable tasks (ten cases in the first suite), grading baseline and candidate prompts independently. See [drahtbank.md](packages/coding-agent/docs/drahtbank.md).
 - **Claude Code and Codex plugins:** the same workflows, commands and subagents for other agents via `npx draht-claude install` ([draht-claude](packages/draht-claude)) and `npx draht-codex install` ([draht-codex](packages/draht-codex)).
-- **Workflow skills** in [skills/](skills), for example `tdd-workflow`, `ddd-workflow` and `debugging-workflow`. See [Opinionated prompts for agentic engineering](#opinionated-prompts-for-agentic-engineering).
+- **Workflow skills** in [skills/](skills), for example `tdd-workflow`, `ddd-workflow` and `debugging-workflow`. They ship with the Claude Code and Codex plugins and as an Agent Skills catalog, not inside the `@draht/coding-agent` npm package. See [Opinionated prompts for agentic engineering](#opinionated-prompts-for-agentic-engineering).
 
 ## Installation
 
@@ -113,12 +113,17 @@ draht ships prompt templates (slash commands), skills and subagent prompts that 
 - Everyday work: `/quick`, `/fix` (4-phase debugging protocol with TDD discipline), `/review` (parallel reviewer and security-auditor), `/atomic-commit`, `/resolve-conflicts`, `/why` (cited investigation of why code is the way it is)
 - Thinking and coordination: `/brainstorm`, `/grill`, `/orchestrate` (dispatch specialist subagents), `/orchestrate-loop` (fresh subagent iterations until a deterministic check passes), `/triage` (classify an external issue report), `/create-verification-skill`
 
-**Skills** ([skills/](skills) and [packages/coding-agent/skills](packages/coding-agent/skills)), loaded by the model when a task matches, or forced with `/skill:name`:
+**Skills**, loaded by the model when a task matches, or forced with `/skill:name`. They come through two channels:
+
+- [packages/coding-agent/skills](packages/coding-agent/skills) ships inside the `@draht/coding-agent` npm package: `atomic-reasoning`, `blast-radius`, `epistemics`, `explainers`, `typescript-discipline`, `unslop` and `hexagon-animation`. These are the skills the bundled commands and subagents refer to by name.
+- [skills/](skills) is the full catalog, including the workflow skills below. It ships with the `draht-claude` and `draht-codex` plugins. For the draht CLI, install it with `npx skills add draht-dev/draht`, or copy the skill directories you want into `~/.draht/agent/skills/` or `.draht/skills/`. If `/skill:` does not list `tdd-workflow`, the catalog is not installed.
+
+Catalog skills:
 
 - `tdd-workflow`: write a behavior-focused test, confirm it fails for the right reason, make the smallest complete change, then refactor. Optional. Use TDD where a regression contract helps; do not manufacture tests for docs, config or mechanical changes.
 - `ddd-workflow`: optional. Model concepts, invariants and context boundaries with the project's own language. Do not add aggregates, events, repositories or adapters without a concrete need.
 - `gsd-workflow`: optional. The milestone, phase, plan, task hierarchy stored in `.planning/`. Only used when you explicitly choose it.
-- Others include `debugging-workflow`, `verification-gate`, `atomic-commit`, `blast-radius`, `epistemics`, `typescript-discipline` and `unslop`.
+- Others include `debugging-workflow`, `verification-gate` and `atomic-commit`.
 
 **Subagent prompts** ([packages/coding-agent/agents](packages/coding-agent/agents)): for example, the implementer prompt asks for the smallest complete change, reading code before editing, matching existing patterns, and never silencing failing checks.
 
@@ -195,7 +200,7 @@ The name `draht` was already taken on npm, so the package is `@draht/coding-agen
 RLM (Recursive Language Models) is a `draht rlm` command for questions about inputs too large for a model's context window. The model writes Python that inspects the input in a sandboxed REPL instead of reading it all into the prompt. For inputs that fit in context, a normal read is faster and cheaper.
 
 ### Does draht require TDD, DDD or GSD?
-No. All three are optional workflows shipped with draht. GSD is a planning workflow (`/new-project`, `/plan-phase`, `/execute-phase`, `/verify-work`) with files in `.planning/`. `tdd-workflow` and `ddd-workflow` are skills the model loads when a task calls for them, or you force them with `/skill:tdd-workflow` and `/skill:ddd-workflow`.
+No. All three are optional workflows. GSD is a planning workflow (`/new-project`, `/plan-phase`, `/execute-phase`, `/verify-work`) with files in `.planning/`. `tdd-workflow` and `ddd-workflow` are skills the model loads when a task calls for them, or you force them with `/skill:tdd-workflow` and `/skill:ddd-workflow`.
 
 ### Can I use draht's prompts in Claude Code or Codex?
 Yes. `npx draht-claude install` and `npx draht-codex install` install the commands, subagents and workflows as plugins.

@@ -6,7 +6,7 @@ For native Windows setup, read [Windows Setup](windows.md). For Android, read [T
 
 ## 1. Install draht
 
-Install draht from npm. This requires Node.js 22.19 or newer:
+Install draht from npm. This requires Node.js `^22.23.4`, `^24.22.1` or `^26.12.1`:
 
 ```bash
 npm install -g --ignore-scripts @draht/coding-agent

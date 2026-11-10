@@ -161,7 +161,7 @@ The easiest way is the one-shot installer:
 npx draht-claude install
 ```
 
-That copies the plugin into `~/.claude/plugins/draht/`. Restart Claude Code and the commands appear in the slash command picker.
+That copies the plugin into a local marketplace at `~/.draht/claude-marketplace/` (plugin files under `plugins/draht/`), then registers and enables it with `claude plugin marketplace add` and `claude plugin install`. Restart Claude Code and the commands appear in the slash command picker.
 
 Other install options:
 
@@ -169,8 +169,8 @@ Other install options:
 # Reinstall or refresh to latest
 npx draht-claude update
 
-# Install to a custom location
-npx draht-claude install --path /path/to/plugins/draht
+# Use a custom local marketplace directory
+npx draht-claude install --path /path/to/claude-marketplace
 
 # Check install status
 npx draht-claude status
@@ -189,14 +189,13 @@ npx draht-claude configure --list
 npx draht-claude uninstall
 ```
 
-Or install manually:
+Or load it for a single session without installing:
 
 ```bash
-mkdir -p ~/.claude/plugins/draht
-cd ~/.claude/plugins/draht
+mkdir -p /tmp/draht-claude && cd /tmp/draht-claude
 npm pack draht-claude
 tar -xzf draht-claude-*.tgz --strip-components=1
-rm draht-claude-*.tgz package.json cli.mjs
+claude --plugin-dir /tmp/draht-claude
 ```
 
 ## Quick Start

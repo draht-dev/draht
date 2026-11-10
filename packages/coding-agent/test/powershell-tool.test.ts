@@ -71,12 +71,12 @@ describe("powershell exit codes", () => {
 		[`${stderrExit0} 2>$null`, 0],
 		[`$output = ${stderrExit0} 2>&1`, 0],
 		[stderrExit0, 0],
-		[`Get-Item C:\\pi-missing-8842; ${stderrExit0} 2>&1`, 0],
+		[`Get-Item C:\\draht-missing-8842; ${stderrExit0} 2>&1`, 0],
 		[`${stderrExit7} 2>&1 | Select-Object -Last 3`, 1],
 		[stderrExit7, 1],
 		['cmd /c "exit 3"', 1],
-		["Get-Item C:\\pi-missing-8842", 1],
-		[`${stderrExit0} 2>&1; Get-Item C:\\pi-missing-8842`, 1],
+		["Get-Item C:\\draht-missing-8842", 1],
+		[`${stderrExit0} 2>&1; Get-Item C:\\draht-missing-8842`, 1],
 		['Write-Error "failed"', 1],
 		['throw "failed"', 1],
 		[`${stderrExit7}; Write-Output done`, 0],
@@ -94,7 +94,7 @@ describe("powershell exit codes", () => {
 		"Write-Output (1 +",
 		'Write-Output "unclosed',
 		"if ($true) {",
-	].map((statement) => `Write-Output ("pi-" + "ran"); ${statement}`);
+	].map((statement) => `Write-Output ("draht-" + "ran"); ${statement}`);
 
 	for (const fileName of ["powershell.exe", "pwsh.exe"] as const) {
 		const shellPath = findPowerShell(fileName);
@@ -118,7 +118,7 @@ describe("powershell exit codes", () => {
 							output += data.toString();
 						},
 					});
-					unfinishedResults.push([command, exitCode, output.includes("pi-ran")]);
+					unfinishedResults.push([command, exitCode, output.includes("draht-ran")]);
 				}
 				expect(unfinishedResults).toEqual(unfinished.map((command) => [command, 1, false]));
 			},

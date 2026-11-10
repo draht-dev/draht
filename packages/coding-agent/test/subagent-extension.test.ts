@@ -453,19 +453,19 @@ describe("subagent example extension", () => {
 		});
 	});
 
-	describe("pi invocation", () => {
+	describe("draht invocation", () => {
 		it("does not pass a Windows Bun virtual entry path to the child", async () => {
-			// Inside a Windows Bun-compiled binary, argv[1] is "B:/~BUN/root/pi.exe" and
+			// Inside a Windows Bun-compiled binary, argv[1] is "B:/~BUN/root/draht.exe" and
 			// fs.existsSync() reports it as present. Recreate that relative path under the
 			// cwd so existsSync() also succeeds here.
-			const virtualScript = "B:/~BUN/root/pi.exe";
+			const virtualScript = "B:/~BUN/root/draht.exe";
 			mkdirSync(join(tempDir, "B:", "~BUN", "root"), { recursive: true });
 			writeFileSync(join(tempDir, virtualScript), readFileSync(SUBAGENT_FIXTURE_PATH));
-			// The test runs under node, so the fallback spawns "pi" from PATH.
+			// The test runs under node, so the fallback spawns "draht" from PATH.
 			const binDir = join(tempDir, "bin");
 			mkdirSync(binDir);
 			writeFileSync(
-				join(binDir, "pi"),
+				join(binDir, "draht"),
 				`#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(SUBAGENT_FIXTURE_PATH)} "$@"\n`,
 				{ mode: 0o755 },
 			);

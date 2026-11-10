@@ -7,14 +7,17 @@
 import type { Component, TUI } from "@draht/tui";
 import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
-import { fitLine, formatCost, spinnerFrame } from "../render/format.ts";
-import { layoutRun } from "../render/run-block.ts";
+import { columns, fitLine, formatCost, formatDuration, spinnerFrame, statusGlyph } from "../render/format.ts";
+import { layoutRun, sanitizeChildText } from "../render/run-block.ts";
 import { snapshotFromRun } from "../render/snapshot.ts";
 import type { PolyphaseSession } from "../session.ts";
 import type { RunView } from "../types.ts";
 
 const DOCK_MAX_LINES = 10;
 const COMMAND_RUN_MAX_LINES = 8;
+/** Per-run lines are listed only when at least this many runs are live: with a single run, the
+ * summary line (and that run's own tool row or phase tree) already says everything. */
+const RUN_LINES_MIN_RUNS = 2;
 
 export interface PolyphaseDockDeps {
 	session: PolyphaseSession;
@@ -68,6 +71,28 @@ function summaryLine(summary: DockSummary, theme: Theme, now: number): string {
 	return `${theme.fg("accent", spinnerFrame(now))} ${parts.join(" · ")}`;
 }
 
+/** `  ● <title>  3/5 done  1:20  $0.12`: one live run that has no phase tree of its own in the dock. */
+function runLine(run: RunView, theme: Theme, width: number, now: number): string {
+	let done = 0;
+	let cost = 0;
+	for (const agent of run.agents) {
+		if (agent.status === "done") done++;
+		cost += (agent.state.usage?.cost.total ?? 0) + (agent.state.liveUsage?.cost.total ?? 0);
+	}
+	return columns(
+		[
+			{
+				text: `  ${statusGlyph("running", theme, { now, animate: false })} ${sanitizeChildText(run.title)}`,
+				width: "flex",
+			},
+			{ text: `${done}/${run.agents.length} done`, width: 11, align: "right" },
+			{ text: formatDuration(now - run.startedAt), width: 7, align: "right" },
+			{ text: formatCost(cost), width: 7, align: "right" },
+		],
+		width,
+	);
+}
+
 /** `Component` for `ctx.ui.setWidget`'s `(tui, theme) => Component & { dispose?(): void }` factory. */
 export class PolyphaseDock implements Component {
 	private readonly deps: PolyphaseDockDeps;
@@ -101,6 +126,14 @@ export class PolyphaseDock implements Component {
 		this.cacheKey = key;
 
 		const lines: string[] = [fitLine(summaryLine(liveSummary(runs), this.deps.theme, now), width)];
+		const liveRuns = runs.filter((run) => run.status === "running");
+		if (liveRuns.length >= RUN_LINES_MIN_RUNS) {
+			for (const run of liveRuns) {
+				if (lines.length >= DOCK_MAX_LINES) break;
+				if (run.kind === "workflow" && run.origin === "command") continue;
+				lines.push(runLine(run, this.deps.theme, width, now));
+			}
+		}
 		for (const run of runs) {
 			if (lines.length >= DOCK_MAX_LINES) break;
 			if (run.status !== "running" || run.kind !== "workflow" || run.origin !== "command") continue;

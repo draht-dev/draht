@@ -317,6 +317,67 @@ describe("finished run phase status", () => {
 		const snapshot = snapshotFromRun(run, { now: 2000, tailItems: 4 });
 		expect(snapshot.phases.map((p) => p.status)).toEqual(["done", "failed"]);
 	});
+
+	it("reports 'cancelled' for a finished phase whose agents were all cancelled, not 'done'", () => {
+		const run = finishedRun("cancelled", [agentAt(0, 0, "cancelled"), agentAt(1, 1, "cancelled")]);
+		const snapshot = snapshotFromRun(run, { now: 2000, tailItems: 4 });
+		expect(snapshot.phases.map((p) => p.status)).toEqual(["cancelled", "cancelled"]);
+	});
+
+	it("keeps 'done' for a phase where some agents finished and others were cancelled", () => {
+		const run = finishedRun("done", [agentAt(0, 0, "done"), agentAt(1, 0, "cancelled"), agentAt(2, 1, "done")]);
+		const snapshot = snapshotFromRun(run, { now: 2000, tailItems: 4 });
+		expect(snapshot.phases.map((p) => p.status)).toEqual(["done", "done"]);
+	});
+
+	it("reports 'skipped' for a phase without agents once the run has finished", () => {
+		const run = finishedRun("done", [agentAt(0, 0, "done")]);
+		const snapshot = snapshotFromRun(run, { now: 2000, tailItems: 4 });
+		expect(snapshot.phases.map((p) => p.status)).toEqual(["done", "skipped"]);
+	});
+});
+
+describe("phase status: agent-less phases of a running workflow", () => {
+	function agentAt(index: number, phase: number, status: AgentView["status"]): AgentView {
+		return {
+			key: `run-2s#${index}`,
+			index,
+			label: `agent#${index}`,
+			agentType: "worker",
+			task: "do work",
+			phase,
+			status,
+			state: stateFor({ source: "inherited", confirmed: false }),
+			createdAt: 0,
+		};
+	}
+
+	it("marks a phase the script moved past 'skipped', the current one 'running', later ones 'pending'", () => {
+		const run: RunView = {
+			id: "run-2s",
+			kind: "workflow",
+			origin: "command",
+			title: "workflow phases",
+			phases: [
+				{ title: "P0", dynamic: false },
+				{ title: "P1", dynamic: false },
+				{ title: "P2", dynamic: false },
+				{ title: "P3", dynamic: false },
+			],
+			currentPhase: 2,
+			status: "running",
+			startedAt: 0,
+			agents: [agentAt(0, 0, "done")],
+			log: [],
+			logDropped: 0,
+			budget: { totalTokens: null, spentTokens: 0, exhausted: false },
+			version: 1,
+			coarseVersion: 1,
+		};
+
+		const snapshot = snapshotFromRun(run, { now: 1000, tailItems: 4 });
+		expect(snapshot.phases.map((p) => p.status)).toEqual(["done", "skipped", "running", "pending"]);
+	});
 });
 
 describe("tail length bound", () => {

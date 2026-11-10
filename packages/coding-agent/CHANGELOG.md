@@ -6,6 +6,16 @@
 
 - Add a self-contained `/test-audit` prompt for behavior-focused test authoring and coverage audits ([#34](https://github.com/draht-dev/draht/pull/34))
 
+### Changed
+
+- Polyphase inspector split view keeps the workflow phase tree and names the selected agent above its transcript; runs with a token budget or time limit show a gauge; the dock lists each live run when several run at once; an overflowing agent list shows failed and running agents first
+
+### Fixed
+
+- Polyphase phases whose agents were all cancelled no longer show the done glyph, and phases a workflow skipped no longer read as pending
+- Polyphase no longer shows a blocked tool call twice, and the "+N more" line counts running agents
+- Polyphase inspector no longer cuts multi-digit counts, repeats an agent's name in its title, or truncates the back hint in narrow footers
+
 ## [2026.11.5-1] - 2026-11-05
 
 ### Changed

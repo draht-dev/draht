@@ -21,7 +21,12 @@ import {
 const grepSchema = Type.Object({
 	pattern: Type.String({ description: "Search pattern (regex or literal string)" }),
 	path: Type.Optional(Type.String({ description: "Directory or file to search (default: current directory)" })),
-	glob: Type.Optional(Type.String({ description: "Filter files by glob pattern, e.g. '*.ts' or '**/*.spec.ts'" })),
+	glob: Type.Optional(
+		Type.String({
+			description:
+				"Filter files by glob pattern, relative to path, e.g. '*.ts', 'src/**/*.ts' or '**/*.spec.ts'. A pattern without '/' matches file names at any depth",
+		}),
+	),
 	ignoreCase: Type.Optional(Type.Boolean({ description: "Case-insensitive search (default: false)" })),
 	literal: Type.Optional(
 		Type.Boolean({ description: "Treat pattern as literal string instead of regex (default: false)" }),
@@ -129,14 +134,17 @@ export function createGrepToolDefinition(
 				(async () => {
 					try {
 						const ops = customOps ?? defaultGrepOperations;
-						let start = ops.spawn;
-						if (!start) {
+						const customSpawn = ops.spawn;
+						let start: (args: string[], cwd?: string) => GrepProcess;
+						if (customSpawn) {
+							start = (args) => customSpawn(args);
+						} else {
 							const rgPath = await ensureTool("rg");
 							if (!rgPath) {
 								settle(() => reject(new Error("ripgrep (rg) is not available and could not be downloaded")));
 								return;
 							}
-							start = (args) => spawn(rgPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+							start = (args, cwd) => spawn(rgPath, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
 						}
 
 						const searchPath = resolveToCwd(searchDir || ".", ctx?.cwd || cwd);
@@ -154,7 +162,7 @@ export function createGrepToolDefinition(
 						const effectiveLimit = Math.max(1, Math.floor(limit ?? DEFAULT_LIMIT));
 						const formatPath = (filePath: string): string => {
 							if (isDirectory) {
-								const relative = path.relative(searchPath, filePath);
+								const relative = path.relative(searchPath, path.resolve(searchPath, filePath));
 								if (relative && !relative.startsWith("..")) {
 									return relative.replace(/\\/g, "/");
 								}
@@ -167,16 +175,22 @@ export function createGrepToolDefinition(
 						const args: string[] = ["--no-config", "--json", "--line-number", "--color=never", "--hidden"];
 						if (ignoreCase) args.push("--ignore-case");
 						if (literal) args.push("--fixed-strings");
-						if (glob) args.push("--glob", glob);
+						// rg never matches a leading "./" ("./src/*.ts" finds nothing), so drop it; "!" negates.
+						if (glob) args.push("--glob", glob.replace(/^(!?)(?:\.\/)+/, "$1"));
 						// rg emits the surrounding lines as `context` events, so no matched file is ever read here (#9276).
 						if (contextValue > 0) args.push("--context", String(contextValue));
-						args.push("--", pattern, searchPath);
+						// rg roots --glob at its own cwd, so a local directory search runs inside searchPath (#11807).
+						// It searches "." because rg canonicalizes its cwd: with an absolute path, a symlinked
+						// searchPath (macOS /tmp) would no longer lie under the glob root.
+						// A custom spawn cannot set the cwd, so it keeps searching the absolute path.
+						const rootAtSearchPath = isDirectory && !customSpawn;
+						args.push("--", pattern, rootAtSearchPath ? "." : searchPath);
 
 						if (signal?.aborted) {
 							settle(() => reject(new Error("Operation aborted")));
 							return;
 						}
-						const child = start(args);
+						const child = start(args, rootAtSearchPath ? searchPath : undefined);
 						const rl = createInterface({ input: child.stdout });
 						let stderr = "";
 						let matchCount = 0;

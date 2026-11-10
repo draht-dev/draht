@@ -1,1 +1,1 @@
-impact doc.go — 0 modules · 0 packages · 0 entry points · sinks: none
+impact go/cmd/draht-tools/doc.go — 0 modules · 0 packages · 0 entry points · sinks: none

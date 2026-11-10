@@ -142,7 +142,7 @@
         {
           "path": "packages/core/src/index.ts",
           "reason": "library entry",
-          "score": 13.91,
+          "score": 15.91,
           "loc": 4
         },
         {
@@ -196,7 +196,7 @@
         {
           "path": "packages/core/src/index.ts",
           "reason": "library entry",
-          "score": 13.91,
+          "score": 15.91,
           "loc": 4
         },
         {
@@ -395,8 +395,23 @@
       "loc": 4,
       "isTest": false,
       "package": "@fixture/core",
-      "exports": [],
-      "symbols": [],
+      "exports": [
+        {
+          "name": "helper",
+          "kind": "re-export",
+          "line": 3,
+          "doc": "helper is the one thing @fixture/core exports for real use.",
+          "via": "packages/core/src/utils.ts"
+        }
+      ],
+      "symbols": [
+        {
+          "name": "helper",
+          "kind": "re-export",
+          "line": 3,
+          "exported": true
+        }
+      ],
       "sinks": [],
       "sinkSites": [],
       "routes": [],
@@ -641,7 +656,7 @@
           "boxFrom": "pkg:@fixture/app",
           "boxTo": "pkg:@fixture/core",
           "title": "helper() in index.ts",
-          "description": "src/main.ts calls `helper()` in src/index.ts.",
+          "description": "src/main.ts calls `helper()` in src/index.ts — helper is the one thing @fixture/core exports for real use..",
           "symbol": "helper",
           "fromFile": "packages/app/src/main.ts",
           "toFile": "packages/core/src/index.ts"
@@ -661,7 +676,7 @@
           "from": "actor:user",
           "to": "pkg:@fixture/core",
           "title": "call @fixture/core",
-          "description": "Library consumer imports from packages/core/src/index.ts.",
+          "description": "Library consumer imports from packages/core/src/index.ts. Exposes re-export `helper`.",
           "fromFile": null,
           "toFile": "packages/core/src/index.ts",
           "boxFrom": "actor:user",
@@ -740,6 +755,14 @@
       "line": 2,
       "file": "packages/app/src/lazy.ts",
       "package": "@fixture/app",
+      "exported": true
+    },
+    {
+      "name": "helper",
+      "kind": "re-export",
+      "line": 3,
+      "file": "packages/core/src/index.ts",
+      "package": "@fixture/core",
       "exported": true
     },
     {
@@ -1210,7 +1233,7 @@
     },
     {
       "id": "cluster:packages/app/src",
-      "label": "app/src",
+      "label": "app/src · application",
       "size": 1,
       "members": [
         "packages/app/src/Widget.tsx"
@@ -1223,7 +1246,7 @@
     },
     {
       "id": "cluster:packages/app/src:2",
-      "label": "app/src",
+      "label": "app/src · support",
       "size": 1,
       "members": [
         "packages/app/src/huge.ts"
@@ -1236,7 +1259,7 @@
     },
     {
       "id": "cluster:packages/app/src:3",
-      "label": "app/src",
+      "label": "app/src · application · 2",
       "size": 1,
       "members": [
         "packages/app/src/lazy.ts"
@@ -1249,7 +1272,7 @@
     },
     {
       "id": "cluster:packages/app/src:4",
-      "label": "app/src",
+      "label": "app/src · support · 2",
       "size": 1,
       "members": [
         "packages/app/src/legacy.js"
@@ -1262,7 +1285,7 @@
     },
     {
       "id": "cluster:packages/app/src:5",
-      "label": "app/src",
+      "label": "app/src · support · 3",
       "size": 1,
       "members": [
         "packages/app/src/main.test.ts"
@@ -1275,7 +1298,7 @@
     },
     {
       "id": "cluster:packages/app/src:6",
-      "label": "app/src",
+      "label": "app/src · presentation",
       "size": 1,
       "members": [
         "packages/app/src/main.ts"
@@ -1288,7 +1311,7 @@
     },
     {
       "id": "cluster:packages/core/src",
-      "label": "core/src",
+      "label": "core/src · support",
       "size": 1,
       "members": [
         "packages/core/src/index.ts"
@@ -1301,7 +1324,7 @@
     },
     {
       "id": "cluster:packages/core/src:2",
-      "label": "core/src",
+      "label": "core/src · application",
       "size": 1,
       "members": [
         "packages/core/src/utils.ts"
@@ -1314,7 +1337,7 @@
     },
     {
       "id": "cluster:scripts",
-      "label": "scripts",
+      "label": "fixture-monorepo · application",
       "size": 1,
       "members": [
         "scripts/build.py"
@@ -1327,7 +1350,7 @@
     },
     {
       "id": "cluster:src",
-      "label": "src",
+      "label": "fixture-monorepo · application · 2",
       "size": 1,
       "members": [
         "src/lib.rs"

@@ -82,6 +82,18 @@ type Export struct {
 	Kind string  `json:"kind"`
 	Line int     `json:"line"`
 	Doc  *string `json:"doc"`
+	// Via is set only on re-export entries whose defining module is known
+	// (named re-exports resolved by AssignNamedReExportVias and
+	// star-expansion copies); omitted otherwise, matching the CJS engine's
+	// `via` field. MUST stay after Doc: encoding/json emits struct fields in
+	// declaration order and the CJS engine appends via before viaName.
+	Via string `json:"via,omitempty"`
+	// ViaName is the ORIGINAL binding name at Via when an aliased re-export
+	// renamed it (`export { b as a } from './x'` → Name "a", ViaName "b").
+	// Star expansion compares (Via, ViaName|Name) pairs, so the same name
+	// from two different bindings is ambiguous even when both live in the
+	// same module. MUST stay after Via (field-order contract as above).
+	ViaName string `json:"viaName,omitempty"`
 }
 
 // Symbol is one symbol-level node.

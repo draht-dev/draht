@@ -66,6 +66,10 @@ export interface GrepOperations {
 	isDirectory: (absolutePath: string) => Promise<boolean> | boolean;
 	/** Start ripgrep with these arguments and piped stdout/stderr. Bypasses local tool resolution. */
 	spawn?: (args: string[]) => GrepProcess;
+	/**
+	 * @deprecated Ignored. Context lines come directly from ripgrep. Override the tool's execute() for remote search.
+	 */
+	readFile?: (absolutePath: string) => Promise<string> | string;
 }
 
 const defaultGrepOperations: GrepOperations = {

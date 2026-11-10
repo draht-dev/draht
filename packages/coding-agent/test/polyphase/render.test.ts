@@ -190,6 +190,45 @@ describe("layoutRun fragments (§11.4)", () => {
 		expect(text).not.toContain("no rule matched");
 	});
 
+	it("does not repeat a blocked tool call as a separate warning notice", () => {
+		const blockedItem: TranscriptItem = {
+			kind: "tool",
+			seq: 1,
+			rev: 1,
+			toolCallId: "call-2",
+			name: "bash",
+			summary: "git push",
+			status: "blocked",
+			blockedReason: `needs approval ${NO_UI_APPROVAL_SUFFIX}`,
+		};
+		const echo: TranscriptItem = {
+			kind: "notice",
+			seq: 2,
+			rev: 1,
+			level: "warning",
+			text: "bash blocked: needs approval, nobody could be asked",
+			at: 0,
+		};
+		const agents = [makeRow({ i: 0, label: "reviewer#1", status: "running", tail: [blockedItem, echo] })];
+		const text = stripAnsi(layoutRun(makeSnapshot({ agents }), 78, theme, opts({ expanded: true })).join("\n"));
+		expect(text).toContain("⚠ bash git push");
+		expect(text).not.toContain("! bash blocked");
+	});
+
+	it("keeps a warning notice that does not follow its blocked tool call", () => {
+		const notice: TranscriptItem = {
+			kind: "notice",
+			seq: 1,
+			rev: 1,
+			level: "warning",
+			text: "bash blocked: needs approval, nobody could be asked",
+			at: 0,
+		};
+		const agents = [makeRow({ i: 0, label: "reviewer#1", status: "running", tail: [notice] })];
+		const text = stripAnsi(layoutRun(makeSnapshot({ agents }), 78, theme, opts({ expanded: true })).join("\n"));
+		expect(text).toContain("! bash blocked");
+	});
+
 	it("a queued agent row reads 'queued'", () => {
 		const agents = [makeRow({ i: 0, label: "reviewer#2", status: "queued" })];
 		const snapshot = makeSnapshot({ agents });
@@ -717,6 +756,34 @@ describe("hint line order (§11.4)", () => {
 	});
 });
 
+describe("collapsed overflow shows problems and work in flight first", () => {
+	function agents(): AgentSnapshotRow[] {
+		return Array.from({ length: 10 }, (_, i) =>
+			makeRow({
+				i,
+				label: `agent#${i}`,
+				status: i < 7 ? "done" : i === 7 ? "running" : i === 8 ? "failed" : "queued",
+				error: i === 8 ? "patch failed" : undefined,
+			}),
+		);
+	}
+
+	it("keeps the failed and running agents, in run order, when the list overflows", () => {
+		const lines = layoutRun(makeSnapshot({ agents: agents() }), 78, theme, opts({ maxLines: 4 })).map(stripAnsi);
+		const shown = lines.filter((line) => line.includes("agent#")).map((line) => line.match(/agent#\d/)?.[0]);
+		expect(shown).toEqual(["agent#0", "agent#7", "agent#8"]);
+		expect(lines.join("\n")).toContain("… +7 more (6 done, 1 queued)");
+	});
+
+	it("keeps run order on a static (non-focused) row", () => {
+		const lines = layoutRun(makeSnapshot({ agents: agents() }), 78, theme, opts({ maxLines: 4, focus: false })).map(
+			stripAnsi,
+		);
+		const shown = lines.filter((line) => line.includes("agent#")).map((line) => line.match(/agent#\d/)?.[0]);
+		expect(shown).toEqual(["agent#0", "agent#1", "agent#2"]);
+	});
+});
+
 describe("chain overflow reports done/queued among the omitted steps", () => {
 	it("counts only the steps that did not fit", () => {
 		const agents = Array.from({ length: 10 }, (_, i) =>
@@ -729,7 +796,7 @@ describe("chain overflow reports done/queued among the omitted steps", () => {
 		);
 		const snapshot = makeSnapshot({ agents, mode: "chain" });
 		const text = stripAnsi(layoutRun(snapshot, 78, theme, opts({ maxLines: 3 })).join("\n"));
-		expect(text).toMatch(/… \+\d+ more \(\d+ done, \d+ queued\)/);
+		expect(text).toContain("… +8 more (1 running, 3 queued, 4 pending)");
 		expect(text).not.toContain("(0 done)");
 	});
 });

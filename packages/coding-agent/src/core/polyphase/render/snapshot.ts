@@ -33,7 +33,7 @@ export interface PhaseSnapshot {
 	detail?: string;
 	model?: string;
 	dynamic: boolean;
-	status: "pending" | "running" | "done" | "failed";
+	status: "pending" | "running" | "done" | "failed" | "cancelled" | "skipped";
 	agentIdx: number[];
 	done: number;
 	total: number;
@@ -141,15 +141,26 @@ function splitModel(model: string | undefined): { provider?: string; id?: string
  *     but none active, reads "running" rather than falling through to "pending".** "Pending" is
  *     reserved for phases where no agent has made any progress yet; partial progress should not
  *     look identical to "not started".
+ *  3. **A finished phase with no `done` agent but at least one cancelled one reads "cancelled"**, and
+ *     **a phase without agents that the run has already moved past reads "skipped"**, so neither
+ *     shows the `done` or `pending` glyph for work that never happened.
  */
-function phaseStatusFor(agentRows: readonly AgentSnapshotRow[], isCurrent: boolean): PhaseSnapshot["status"] {
+function phaseStatusFor(
+	agentRows: readonly AgentSnapshotRow[],
+	isCurrent: boolean,
+	passed: boolean,
+): PhaseSnapshot["status"] {
 	const total = agentRows.length;
 	const anyActive = agentRows.some((row) => isActive(row.status));
 	const anyFinished = agentRows.some((row) => isFinished(row.status));
 	const allFinished = total > 0 && agentRows.every((row) => isFinished(row.status));
 	const anyFailed = agentRows.some((row) => row.status === "failed");
 	if (anyFailed && !anyActive) return "failed";
-	if (allFinished && !isCurrent) return "done";
+	if (allFinished && !isCurrent) {
+		const anyDone = agentRows.some((row) => row.status === "done");
+		return !anyDone && agentRows.some((row) => row.status === "cancelled") ? "cancelled" : "done";
+	}
+	if (total === 0 && !isCurrent && passed) return "skipped";
 	if (isCurrent || anyActive) return "running";
 	if (anyFinished) return "running";
 	return "pending";
@@ -169,8 +180,16 @@ function buildPhaseSnapshots(
 	phases: readonly { title: string; detail?: string; model?: string; dynamic: boolean }[],
 	agents: readonly AgentSnapshotRow[],
 	currentPhase: number | undefined,
+	finished: boolean,
 	incomplete = false,
 ): PhaseSnapshot[] {
+	// The furthest phase the run has reached: the current one, or the latest phase any agent was
+	// started in. An agent-less phase before it was passed over, not still ahead; once the run has
+	// finished, every agent-less phase was (unless a degraded snapshot dropped its agents).
+	let reachedPhase = currentPhase ?? -1;
+	for (const row of agents) {
+		if (row.phase !== undefined && row.status !== "pending") reachedPhase = Math.max(reachedPhase, row.phase);
+	}
 	return phases.map((phase, index) => {
 		const agentRows = agents.filter((row) => row.phase === index);
 		const agentIdx = agentRows.map((row) => row.i);
@@ -181,7 +200,7 @@ function buildPhaseSnapshots(
 			detail: phase.detail,
 			model: phase.model,
 			dynamic: phase.dynamic,
-			status: phaseStatusFor(agentRows, currentPhase === index),
+			status: phaseStatusFor(agentRows, currentPhase === index, index < reachedPhase || (finished && !incomplete)),
 			agentIdx,
 			done,
 			total: agentRows.length,
@@ -286,7 +305,12 @@ export function snapshotFromRun(
 					args: run.workflow.args,
 				}
 			: undefined,
-		phases: buildPhaseSnapshots(phases, agents, run.status === "running" ? run.currentPhase : undefined),
+		phases: buildPhaseSnapshots(
+			phases,
+			agents,
+			run.status === "running" ? run.currentPhase : undefined,
+			run.status !== "running",
+		),
 		currentPhase: run.currentPhase,
 		agents,
 		log: run.log.map((line) => line.text),
@@ -409,6 +433,7 @@ export function snapshotFromDetails(details: PolyphaseDetails, options?: { now?:
 			phases,
 			agents,
 			details.status === "running" ? details.currentPhase : undefined,
+			details.status !== "running",
 			details.agentsOmitted !== undefined,
 		),
 		currentPhase: details.currentPhase,

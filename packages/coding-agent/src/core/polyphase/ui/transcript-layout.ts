@@ -10,6 +10,7 @@ import { stripAnsi } from "../../../utils/ansi.ts";
 import { sanitizeBinaryOutput } from "../../../utils/shell.ts";
 import { replaceTabs } from "../../tools/render-utils.ts";
 import { columns, fitLine, formatDuration, oneLine } from "../render/format.ts";
+import { isBlockedEchoNotice } from "../render/run-block.ts";
 import type { TranscriptItem } from "../types.ts";
 
 /** Only the last 16 KiB of an open (not-yet-done) item's text is re-wrapped on every delta, so
@@ -236,7 +237,9 @@ export class TranscriptLineCache {
 			liveSeqs.add(item.seq);
 			const open = i === lastIndex && isOpenItem(item);
 			const start = lines.length;
-			if (isLiveTimed(item)) {
+			if (isBlockedEchoNotice(item, items[i - 1])) {
+				// Kept as an empty range so pause anchors and evictions still see the item.
+			} else if (isLiveTimed(item)) {
 				lines.push(...this.renderItem(item, options, open));
 			} else {
 				const key = `${item.rev}|${options.width}|${options.showThinking}|${options.showToolPreviews}|${open}`;

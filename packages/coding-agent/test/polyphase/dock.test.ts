@@ -118,6 +118,41 @@ describe("PolyphaseDock", () => {
 		store.dispose();
 	});
 
+	it("lists one line per live run once several runs are live", () => {
+		const { store } = storeWithPump();
+		for (const [id, title] of [
+			["run-a", "review the diff"],
+			["run-b", "investigate the flaky test"],
+		]) {
+			const run = store.createRun({
+				id,
+				kind: "subagent",
+				origin: "tool",
+				mode: "parallel",
+				title,
+				budgetTokens: null,
+			});
+			run.addAgent({ label: `${id}-agent`, agentType: "worker", task: "work", model: pendingModel() });
+		}
+
+		const { tui } = fakeTui();
+		const dock = new PolyphaseDock({ session: testSession(store), tui, theme, now: () => NOW });
+		const lines = out(dock);
+		expect(lines[0]).toContain("2 runs");
+		expect(lines.some((line) => line.includes("review the diff") && line.includes("0/1 done"))).toBe(true);
+		expect(lines.some((line) => line.includes("investigate the flaky test"))).toBe(true);
+
+		store.dispose();
+	});
+
+	it("shows no per-run lines for a single live run", () => {
+		const sample = parallelRun();
+		const { tui } = fakeTui();
+		const dock = new PolyphaseDock({ session: testSession(sample.store), tui, theme, now: () => NOW });
+		expect(out(dock)).toHaveLength(1);
+		sample.dispose();
+	});
+
 	it("caps the total line count at 10", () => {
 		const { store } = storeWithPump();
 		for (let i = 0; i < 5; i++) {

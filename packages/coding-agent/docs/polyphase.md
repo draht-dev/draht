@@ -39,10 +39,15 @@ alt+a inspect agents · ctrl+o expand
 
 - **Glyphs:** `◐`/`◓`/`◑`/`◒` spinner or `●` (running), `◌` (queued), `·` (pending), `✓` (done),
   `✗` (failed), `⊘` (cancelled), `–` (skipped), `⚠` (blocked tool call).
+  A workflow phase uses the same glyphs: `⊘` when every agent in it was cancelled, `–` when the
+  script moved past it without starting any agent.
 - **Only the focus row animates.** The focus row is the newest running tool-origin `subagent` or
   `workflow` run. Every other row shows a static `●` glyph with no elapsed time, no live tokens,
   and no "what it's doing now" text, so scrolling past a background run never forces a full
   terminal redraw.
+- **Overflow.** When a run has more agents than the row has lines, the focus row shows failed,
+  blocked and running agents first (still in run order), and the `… +N more (…)` line counts the
+  rest by status.
 - **Expand/collapse** with `app.tools.expand` (`ctrl+o`, the existing key). The expanded view adds
   per-agent task text, tool-call counts, and either the live transcript tail (thinking/text/tool
   items) or, once finished, a head+tail preview of the output (up to 10 lines; longer output shows
@@ -63,8 +68,11 @@ on):
 
 ```
 ◐ polyphase · 2 runs · 3 running · 1 queued · 6 done · 1 failed · $0.69 · alt+a inspect
+  ● review the diff                          2/3 done    0:42   $0.21
+  ● investigate the flaky test              0/1 done    0:12   $0.03
 ```
 
+With two or more live runs, each one gets its own line (title, finished agents, elapsed, cost).
 A running workflow started from a slash command (`/<name>` or `/workflow <name>`) additionally
 shows its compact phase tree under the summary line, capped at 10 lines total for the whole dock.
 The dock disappears again once nothing is running, and is skipped entirely when
@@ -83,12 +91,16 @@ agents, and to follow any agent's live thinking, text, and tool calls. A second 
   `/workflow <name> `) into the editor and closes the inspector. Opens automatically when there
   is no exactly-one live run, or on `/workflows`.
 - **Run** — phase-grouped for workflows, a flat numbered list of steps for chains, a flat list of
-  agents otherwise. Opens automatically when exactly one run is live, with its first running
+  agents otherwise. A run with a token budget or time limit shows a gauge line on top
+  (`budget ███░░░░░░░ 12.3k/50.0k tok · time ██░░░░░░░░ 4:10/30:00`), turning yellow at 80% and red
+  once reached. Opens automatically when exactly one run is live, with its first running
   agent selected.
 - **Agent detail** — the live transcript tail for one agent: tool calls with status and duration,
   thinking and text, and a footer showing `◆ following` or `‖ paused · f to follow`.
 - **Split view** — at 120 columns or more, the run view's agent list (left, 40 columns) and the
   selected agent's detail (right) render side by side; `enter` switches to the full-width detail.
+  The left pane keeps the workflow phase tree; the right pane opens with the agent's name and
+  current activity.
 
 Archived (no-longer-live) runs render from their persisted summary only, with the note
 "Live transcript is only kept while the run is in memory."

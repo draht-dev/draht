@@ -32,6 +32,7 @@ const deepseekCompat: Omit<
 	requiresToolResultName: false,
 	requiresAssistantAfterToolResult: false,
 	requiresNonNullAssistantContent: false,
+	requiresToolsWithToolHistory: false,
 	requiresThinkingAsText: false,
 	thinkingFormat: "openai",
 	openRouterRouting: {},

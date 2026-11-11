@@ -266,7 +266,7 @@
         "@draht/geist-console": "workspace:*",
         "@draht/geist-core": "workspace:*",
         "@draht/geist-protocol": "workspace:*",
-        "hono": "^4.12.5",
+        "hono": "^4.13.17",
       },
       "devDependencies": {
         "@types/bun": "latest",
@@ -283,7 +283,7 @@
         "@draht/geist-acp": "workspace:*",
         "@draht/geist-core": "workspace:*",
         "@draht/geist-protocol": "workspace:*",
-        "hono": "^4.12.5",
+        "hono": "^4.13.17",
         "qrcode": "^1.5.4",
       },
       "devDependencies": {
@@ -2266,7 +2266,7 @@
 
     "highlight.js": ["highlight.js@10.7.3", "", {}, "sha512-tzcUFauisWKNHaRkN4Wjl/ZA07gENAjFl3J/c480dprkGTg5EQstgaNFqBfUqCq54kZRIEcreTsAgF/m2quD7A=="],
 
-    "hono": ["hono@4.12.5", "", {}, "sha512-3qq+FUBtlTHhtYxbxheZgY8NIFnkkC/MR8u5TTsr7YZ3wixryQ3cCwn3iZbg8p8B88iDBBAYSfZDS75t8MN7Vg=="],
+    "hono": ["hono@4.13.17", "", {}, "sha512-vZIcbkvjOR5hHRWERbGkr8fGfF0GGM1ooYkuH448iO3b2AdVEr3AXZSw4Z3Kn+1L5z0CVoVeyV29VGYmFh05kQ=="],
 
     "hosted-git-info": ["hosted-git-info@9.0.2", "", { "dependencies": { "lru-cache": "^11.1.0" } }, "sha512-M422h7o/BR3rmCQ8UHi7cyyMqKltdP9Uo+J2fXK+RSAY+wTcKOIRyhTuKv4qn+DJf3g+PL890AzId5KZpX+CBg=="],
 

@@ -20,7 +20,7 @@
 		"@draht/geist-console": "workspace:*",
 		"@draht/geist-core": "workspace:*",
 		"@draht/geist-protocol": "workspace:*",
-		"hono": "^4.12.5"
+		"hono": "^4.13.17"
 	},
 	"devDependencies": {
 		"@types/bun": "latest",

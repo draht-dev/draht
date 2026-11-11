@@ -34,7 +34,7 @@
 		"@draht/geist-acp": "workspace:*",
 		"@draht/geist-core": "workspace:*",
 		"@draht/geist-protocol": "workspace:*",
-		"hono": "^4.12.5",
+		"hono": "^4.13.17",
 		"qrcode": "^1.5.4"
 	},
 	"devDependencies": {

@@ -163,10 +163,6 @@
         "@anthropic-ai/sdk": "0.52.0",
       },
     },
-    "packages/coding-agent/examples/extensions/custom-provider-gitlab-duo": {
-      "name": "draht-extension-custom-provider-gitlab-duo",
-      "version": "0.80.6",
-    },
     "packages/coding-agent/examples/extensions/custom-provider-qwen-cli": {
       "name": "draht-extension-custom-provider-qwen-cli",
       "version": "1.6.0",
@@ -2033,8 +2029,6 @@
     "draht-codex": ["draht-codex@workspace:packages/draht-codex"],
 
     "draht-extension-custom-provider-anthropic": ["draht-extension-custom-provider-anthropic@workspace:packages/coding-agent/examples/extensions/custom-provider-anthropic"],
-
-    "draht-extension-custom-provider-gitlab-duo": ["draht-extension-custom-provider-gitlab-duo@workspace:packages/coding-agent/examples/extensions/custom-provider-gitlab-duo"],
 
     "draht-extension-custom-provider-qwen-cli": ["draht-extension-custom-provider-qwen-cli@workspace:packages/coding-agent/examples/extensions/custom-provider-qwen-cli"],
 

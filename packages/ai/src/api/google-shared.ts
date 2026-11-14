@@ -502,7 +502,7 @@ export function mapStopReason(reason: FinishReason): StopReason {
 		case FinishReason.STOP:
 			return "stop";
 		case FinishReason.MAX_TOKENS:
-		// Per-request token limit reached before generation completed; pi does not resume with the continuation token.
+		// Per-request token limit reached before generation completed; draht does not resume with the continuation token.
 		case FinishReason.CONTINUATION:
 			return "length";
 		case FinishReason.BLOCKLIST:

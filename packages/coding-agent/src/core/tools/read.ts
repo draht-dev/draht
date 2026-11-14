@@ -41,7 +41,7 @@ export interface ReadToolDetails {
 	truncation?: TruncationResult;
 	/**
 	 * Id of the model that was selected when the image was read, if it has no image input. Shown to the user only:
-	 * the model gets pi-ai's placeholder per request, so the stored result stays right after a model switch.
+	 * the model gets @draht/ai's placeholder per request, so the stored result stays right after a model switch.
 	 */
 	imageUnsupportedByModel?: string;
 }

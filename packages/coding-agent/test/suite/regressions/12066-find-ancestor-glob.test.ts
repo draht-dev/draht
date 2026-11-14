@@ -16,7 +16,7 @@ describe("issue #12066 find path globs do not match above the search path", () =
 	let tempRoot: string;
 
 	beforeEach(() => {
-		tempRoot = realpathSync(mkdtempSync(join(tmpdir(), "pi-12066-")));
+		tempRoot = realpathSync(mkdtempSync(join(tmpdir(), "draht-12066-")));
 	});
 
 	afterEach(() => {

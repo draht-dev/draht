@@ -253,7 +253,7 @@ describe("Coding Agent Tools", () => {
 			);
 
 			// The result is replayed after a switch to a vision model, so it keeps the image and no
-			// note saying the model cannot see it; pi-ai replaces the image per request instead.
+			// note saying the model cannot see it; @draht/ai replaces the image per request instead.
 			expect(getTextOutput(result)).toBe("Read image file [image/png]");
 			expect(result.content.some((c) => c.type === "image")).toBe(true);
 

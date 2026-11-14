@@ -21,7 +21,7 @@ afterEach(() => {
 async function runNewSessionOverRpc(agentDir: string, projectDir: string): Promise<string> {
 	const child = spawn(process.execPath, ["--import", sourceResolverUrl, cliPath, "--mode", "rpc", "--no-session"], {
 		cwd: projectDir,
-		env: { ...process.env, [ENV_AGENT_DIR]: agentDir, PI_OFFLINE: "1" },
+		env: { ...process.env, [ENV_AGENT_DIR]: agentDir, DRAHT_OFFLINE: "1" },
 		stdio: ["pipe", "pipe", "pipe"],
 	});
 	let stdout = "";
@@ -50,7 +50,7 @@ describe("model scope warnings on session replacement", () => {
 	// #11264: the runtime factory runs again on /new, /resume and /fork. It printed the model scope warnings
 	// with console.warn, which drew over the interactive TUI. They are now startup diagnostics, reported once.
 	it("reports unmatched enabledModels patterns once at startup, not again on new_session", async () => {
-		const tempRoot = mkdtempSync(join(tmpdir(), "pi-model-scope-replacement-"));
+		const tempRoot = mkdtempSync(join(tmpdir(), "draht-model-scope-replacement-"));
 		tempDirs.push(tempRoot);
 		const agentDir = join(tempRoot, "agent");
 		const projectDir = join(tempRoot, "project");

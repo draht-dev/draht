@@ -111,7 +111,7 @@ async function runManagedNpmCi(stageDir: string): Promise<void> {
 
 /**
  * Environment for the managed release smoke test, with the Node.js running this update
- * first on PATH. On Windows the managed launcher runs Pi on the installer's standalone
+ * first on PATH. On Windows the managed launcher runs draht on the installer's standalone
  * Node without changing PATH, so the release's `node_modules/.bin` shim may otherwise
  * run an older system Node that cannot load the new release.
  */

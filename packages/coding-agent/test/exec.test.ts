@@ -131,7 +131,7 @@ describe("execCommand", () => {
 		});
 
 		it("reports 128 + the signal number for a command killed by someone else", async () => {
-			// Not killed by pi, so `killed` is false and only the code tells this apart from success.
+			// Not killed by draht, so `killed` is false and only the code tells this apart from success.
 			const script = 'process.kill(process.pid, "SIGKILL")';
 			const result = await execCommand(process.execPath, ["-e", script], process.cwd());
 

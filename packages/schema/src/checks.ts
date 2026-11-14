@@ -7,12 +7,14 @@ import type { Check } from "./types.ts";
 export const ALWAYS: Check = () => true;
 export const NEVER: Check = () => false;
 const IS_STRING: Check = (v) => typeof v === "string";
-const IS_NUMBER: Check = (v) => typeof v === "number";
+const IS_NUMBER: Check = (v) => Number.isFinite(v);
 const IS_INTEGER: Check = (v) => Number.isInteger(v);
 const IS_BOOLEAN: Check = (v) => typeof v === "boolean";
 const IS_NULL: Check = (v) => v === null;
 export const IS_ARRAY: Check = (v) => Array.isArray(v);
 const IS_BYTES: Check = (v) => v instanceof Uint8Array;
+const IS_BIGINT: Check = (v) => typeof v === "bigint";
+const IS_UNDEFINED: Check = (v) => v === undefined;
 export const IS_OBJECT: Check = (v) => isObject(v);
 
 /** Whether `v` is a JSON object: not null, an array or bytes. */
@@ -20,7 +22,11 @@ export function isObject(v: unknown): v is Record<string, unknown> {
 	return typeof v === "object" && v !== null && !Array.isArray(v) && !(v instanceof Uint8Array);
 }
 
-/** The check of a `type` name; `bytes` (a Uint8Array) extends JSON Schema for values that never pass through JSON. */
+/**
+ * The check of a `type` name. `bytes` (a Uint8Array), `bigint` (TypeBox's `Type.BigInt`) and `undefined` (TypeBox's
+ * `Type.Undefined`) extend JSON Schema for values that never pass through JSON. A `number` is finite, as in TypeBox:
+ * JSON has no NaN or Infinity, so only a value built in code can be one.
+ */
 export const TYPE_CHECKS: ReadonlyMap<string, Check> = new Map([
 	["string", IS_STRING],
 	["number", IS_NUMBER],
@@ -30,6 +36,8 @@ export const TYPE_CHECKS: ReadonlyMap<string, Check> = new Map([
 	["array", IS_ARRAY],
 	["object", IS_OBJECT],
 	["bytes", IS_BYTES],
+	["bigint", IS_BIGINT],
+	["undefined", IS_UNDEFINED],
 ]);
 
 /**
@@ -78,7 +86,7 @@ function leafOk(code: number, x: unknown, arg: unknown): boolean {
 		case 1:
 			return typeof x === "string";
 		case 2:
-			return typeof x === "number";
+			return Number.isFinite(x);
 		case 3:
 			return Number.isInteger(x);
 		case 4:
@@ -97,7 +105,7 @@ function leafOk(code: number, x: unknown, arg: unknown): boolean {
 		case 10:
 			return Number.isInteger(x) && inBounds(x as number, arg as Bounds);
 		case 11:
-			return typeof x === "number" && inBounds(x, arg as Bounds);
+			return Number.isFinite(x) && inBounds(x as number, arg as Bounds);
 		case 12:
 			return typeof x === "string" && lengthOk(x, (arg as Bounds).min, (arg as Bounds).max);
 		case 13:
@@ -175,6 +183,8 @@ const TYPE_BITS: ReadonlyMap<string, number> = new Map([
 	["array", 32],
 	["object", 64],
 	["bytes", 128],
+	["bigint", 256],
+	["undefined", 512],
 ]);
 
 /** The bits of the named types; unknown names add none. */
@@ -184,17 +194,21 @@ export function typeMask(types: readonly unknown[]): number {
 	return mask;
 }
 
-/** The type bits of `v`: an integer has the bits of `number` and `integer`. */
+/** The type bits of `v`: an integer has the bits of `number` and `integer`; NaN and Infinity have neither. */
 function typeBits(v: unknown): number {
 	switch (typeof v) {
 		case "string":
 			return 1;
 		case "number":
-			return Number.isInteger(v) ? 6 : 2;
+			return Number.isInteger(v) ? 6 : Number.isFinite(v) ? 2 : 0;
 		case "boolean":
 			return 8;
 		case "object":
 			return v === null ? 16 : Array.isArray(v) ? 32 : v instanceof Uint8Array ? 128 : 64;
+		case "bigint":
+			return 256;
+		case "undefined":
+			return 512;
 		default:
 			return 0;
 	}
@@ -262,26 +276,47 @@ export function stringCheck(
 	};
 }
 
-/** The number keywords. `mode`: 0 passes other types, 1 requires a number, 2 an integer. */
+/** A number bound: a number, or a bigint (TypeBox's `Type.BigInt` writes its bounds as bigints). */
+export type Bound = number | bigint;
+
+/**
+ * The number keywords, for numbers and bigints alike (as TypeBox applies them): bounds of either kind compare with
+ * values of either kind. `mode`: 0 passes other types, 1 requires a number, 2 an integer, 3 a bigint.
+ */
 export function numberCheck(
-	mode: 0 | 1 | 2,
-	min: number,
-	max: number,
-	xmin: number,
-	xmax: number,
-	multipleOf: number | undefined,
+	mode: 0 | 1 | 2 | 3,
+	min: Bound,
+	max: Bound,
+	xmin: Bound,
+	xmax: Bound,
+	multipleOf: Bound | undefined,
 ): Check {
 	const check: Check = (v) => {
-		if (typeof v !== "number") return mode === 0;
+		if (typeof v !== "number" && typeof v !== "bigint") return mode === 0;
+		if (mode === 3 ? typeof v !== "bigint" : mode !== 0 && !Number.isFinite(v)) return false;
 		if (mode === 2 && !Number.isInteger(v)) return false;
 		return v >= min && v <= max && v > xmin && v < xmax && (multipleOf === undefined || isMultiple(v, multipleOf));
 	};
-	if (mode === 0 || multipleOf !== undefined) return check;
+	const plain =
+		typeof min === "number" && typeof max === "number" && typeof xmin === "number" && typeof xmax === "number";
+	if (mode === 0 || mode === 3 || multipleOf !== undefined || !plain) return check;
 	return leaf(mode === 2 ? 10 : 11, new Bounds(min, max, xmin, xmax), check);
 }
 
-/** Whether `v` is a multiple of `d`, exactly for decimals: 0.0075 / 0.0001 is 74.99999999999999 in floating point. */
-export function isMultiple(v: number, d: number): boolean {
+/**
+ * Whether `v` is a multiple of `d`, exactly for decimals: 0.0075 / 0.0001 is 74.99999999999999 in floating point. With
+ * a bigint on either side, exact integer arithmetic; a bigint is no multiple of 0 or of a fraction.
+ *
+ * Deliberately unlike TypeBox, which throws there (`BigInt(0.5)`, division by zero): a check answers for every value
+ * and never throws, and no real schema pairs a bigint with a fractional or zero `multipleOf`.
+ */
+export function isMultiple(v: Bound, d: Bound): boolean {
+	if (typeof v === "bigint" || typeof d === "bigint") {
+		if ((typeof v === "number" && !Number.isInteger(v)) || (typeof d === "number" && !Number.isInteger(d)))
+			return false;
+		const divisor = BigInt(d);
+		return divisor !== 0n && BigInt(v) % divisor === 0n;
+	}
 	const q = v / d;
 	if (Number.isInteger(q)) return true;
 	if (!Number.isFinite(q)) return v % d === 0;
@@ -338,8 +373,10 @@ export function declaredObject(
 			}
 			next = i + 3;
 			const x = o[k];
-			if (x === undefined) continue;
 			const f = entries[i + 2] as number;
+			// An optional property set to undefined counts as absent; a required one is present, and its schema decides
+			// whether undefined is a value of it (TypeBox's Type.Undefined, Unknown, Any).
+			if (x === undefined && !(f & REQUIRED)) continue;
 			const c = f & CODE;
 			if (c !== 0 ? !leafOk(c, x, entries[i + 1]) : !(entries[i + 1] as Check)(x)) return false;
 			if (f & REQUIRED) required++;
@@ -365,7 +402,8 @@ export function openObject(
 			const k = entries[i] as string;
 			const x = o[k];
 			const f = entries[i + 2] as number;
-			if (x === undefined || (f & INHERITED && !Object.hasOwn(o, k))) {
+			// Absent, or an optional property set to undefined (which counts as absent); see declaredObject.
+			if ((x === undefined && !(f & REQUIRED && Object.hasOwn(o, k))) || (f & INHERITED && !Object.hasOwn(o, k))) {
 				if (f & REQUIRED) return false;
 				continue;
 			}
@@ -535,7 +573,10 @@ export function taggedCheck(key: string, tags: readonly unknown[], checks: reado
 	};
 }
 
-/** JSON equality: same primitives, arrays with equal items in order, objects with the same keys and equal values. */
+/**
+ * JSON equality, as `const`, `enum` and `uniqueItems` compare: the same primitives, arrays with equal items in order,
+ * objects with the same keys and equal values (key order does not matter).
+ */
 export function deepEqual(a: unknown, b: unknown): boolean {
 	if (a === b) return true;
 	if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;

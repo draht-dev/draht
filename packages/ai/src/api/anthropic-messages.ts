@@ -62,13 +62,17 @@ import {
 
 import {
 	getJsonSchemaToolParameters,
-	isStrictToolLimitErrorMessage,
 	prefersJsonSchemaStrictSampling,
 	resolveJsonSchemaStrictSampling,
 	type UnsupportedStrictSchemaKeywordCheck,
 } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
 import { adjustMaxTokensForThinking, buildBaseOptions, clampMaxTokensToContext } from "./simple-options.ts";
+import {
+	hasExceededStrictToolLimits,
+	isStrictToolLimitErrorMessage,
+	markStrictToolLimitsExceeded,
+} from "./strict-tool-limits.ts";
 import { splitErrorToolResultImages, transformMessages } from "./transform-messages.ts";
 
 /**
@@ -102,7 +106,7 @@ function getCacheControl(
 }
 
 // Stealth mode: Mimic Claude Code's tool naming exactly
-const claudeCodeVersion = "2.1.280";
+const claudeCodeVersion = "2.1.322";
 
 // Claude Code 2.x tool names (canonical casing)
 // Source: https://cchistory.mariozechner.at/data/prompts-2.1.11.md
@@ -242,9 +246,7 @@ function getAnthropicCompat(model: Model<"anthropic-messages">) {
 		// Gateways that drop unknown request fields would silently turn a `continue` into a request
 		// without the earlier conversation, so the default is limited to Anthropic's own endpoint.
 		// Widen or remove this restriction once proxies generally forward the `thread` field.
-		supportsMessageThreads:
-			model.compat?.supportsMessageThreads ??
-			(model.provider === "anthropic" && model.baseUrl.includes("api.anthropic.com")),
+		supportsMessageThreads: model.compat?.supportsMessageThreads ?? model.baseUrl.includes("api.anthropic.com"),
 	};
 }
 
@@ -885,7 +887,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					maxRetryDelayMs: options?.maxRetryDelayMs,
 					signal: options?.signal,
 				});
-			let disablePreferredStrictTools = false;
+			let disablePreferredStrictTools = hasExceededStrictToolLimits(options?.sessionId);
 			let response: Response;
 			let params: MessageCreateParamsStreaming;
 			// The thread request that produced the response; undefined when no `thread` was sent.
@@ -927,6 +929,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 						throw error;
 					}
 					disablePreferredStrictTools = true;
+					markStrictToolLimitsExceeded(options?.sessionId);
 					appendAssistantMessageDiagnostic(output, {
 						type: "anthropic_strict_tools_fallback",
 						timestamp: Date.now(),
@@ -1406,7 +1409,7 @@ function getBetaFeatures(
 }
 
 interface BuildParamsFlags {
-	/** Send `strict: "prefer"` tools without strict schemas, after Anthropic rejected them. */
+	/** Send `strict: "prefer"` tools without strict schemas, after Anthropic rejected them in this request or session. */
 	disablePreferredStrictTools: boolean;
 	/** The session uses message threads, so the threads beta is sent. */
 	messageThreads: boolean;
@@ -1901,15 +1904,18 @@ function convertTools(
 		const schema = parameters as {
 			properties?: unknown;
 			required?: string[];
+			additionalProperties?: unknown;
 			$defs?: unknown;
 			definitions?: unknown;
 		};
-		// Keep shared definitions so property $refs still resolve. Other root keywords stay out:
+		// Keep shared definitions so property $refs still resolve, and additionalProperties so the
+		// model knows whether extra arguments are allowed. Other root keywords stay out:
 		// Anthropic rejects root anyOf/oneOf/allOf with a 400.
 		const legacyInputSchema = {
 			type: "object" as const,
 			properties: schema.properties ?? {},
 			required: schema.required ?? [],
+			...(schema.additionalProperties === undefined ? {} : { additionalProperties: schema.additionalProperties }),
 			...(schema.$defs === undefined ? {} : { $defs: schema.$defs }),
 			...(schema.definitions === undefined ? {} : { definitions: schema.definitions }),
 		};

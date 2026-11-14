@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { ModelsError } from "@draht/ai";
 import lockfile from "proper-lockfile";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { APP_NAME, ENV_AGENT_DIR, PACKAGE_NAME, VERSION } from "../src/config.ts";
@@ -44,6 +45,7 @@ describe("package commands", () => {
 	function prepareManagedInstall(
 		targetVersion: string,
 		npmExitCode = 0,
+		stagedPiUsesNode = false,
 	): { managedRoot: string; npmRecordPath: string } {
 		const managedRoot = join(agentDir, "install");
 		const activeRelease = join(managedRoot, "releases", VERSION);
@@ -74,7 +76,9 @@ fs.writeFileSync(
 	drahtPath,
 	process.platform === "win32"
 		? "@echo off\\r\\necho ${targetVersion}\\r\\n"
-		: "#!/bin/sh\\nprintf '%s\\n' ${targetVersion}\\n",
+		: ${stagedPiUsesNode}
+			? "#!/usr/bin/env node\\nconsole.log('${targetVersion}')\\n"
+			: "#!/bin/sh\\nprintf '%s\\n' ${targetVersion}\\n",
 );
 if (process.platform !== "win32") fs.chmodSync(drahtPath, 0o755);
 `,
@@ -530,6 +534,46 @@ if (process.platform !== "win32") fs.chmodSync(drahtPath, 0o755);
 		expect(process.exitCode).toBeUndefined();
 	});
 
+	it("warns about a stale provider login during update --models and keeps the refresh successful", async () => {
+		const errors = new Map<string, Error>([
+			["radius", new ModelsError("oauth", "OAuth refresh failed for radius", { cause: new Error("invalid_grant") })],
+		]);
+		const refresh = vi.fn(async () => ({ aborted: false, errors }));
+		vi.spyOn(ModelRuntime, "create").mockResolvedValue({ refresh } as unknown as ModelRuntime);
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		await expect(runPackageCommandDirectly(["update", "--models"])).resolves.toBeUndefined();
+
+		const warnings = warnSpy.mock.calls.map(([message]) => String(message)).join("\n");
+		expect(warnings).toContain("skipped model catalog for radius: OAuth refresh failed for radius: invalid_grant");
+		expect(warnings).toContain(`${APP_NAME} auth login radius`);
+		expect(logSpy.mock.calls.map(([message]) => String(message)).join("\n")).toContain("Model catalogs refreshed");
+		expect(errorSpy).not.toHaveBeenCalled();
+		expect(process.exitCode).toBeUndefined();
+	});
+
+	it("fails update --models when a catalog refresh fails for a reason other than a stale login", async () => {
+		const errors = new Map<string, Error>([
+			["radius", new ModelsError("oauth", "OAuth refresh failed for radius")],
+			["openrouter", new Error("OpenRouter model list request failed: 500")],
+		]);
+		const refresh = vi.fn(async () => ({ aborted: false, errors }));
+		vi.spyOn(ModelRuntime, "create").mockResolvedValue({ refresh } as unknown as ModelRuntime);
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		await expect(runPackageCommandDirectly(["update", "--models"])).resolves.toBeUndefined();
+
+		const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
+		expect(stderr).toContain(
+			"Could not refresh model catalogs: openrouter: OpenRouter model list request failed: 500",
+		);
+		expect(stderr).not.toContain("radius");
+		expect(process.exitCode).toBe(1);
+	});
+
 	it("rejects update --models combined with another update target", async () => {
 		const create = vi.spyOn(ModelRuntime, "create");
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -781,6 +825,29 @@ if (process.platform !== "win32") fs.chmodSync(drahtPath, 0o755);
 		expect(errorSpy).not.toHaveBeenCalled();
 		expect(process.exitCode).toBeUndefined();
 	});
+
+	it.skipIf(process.platform === "win32")(
+		"verifies a managed update with the running Node when an older node is first on PATH",
+		async () => {
+			// https://github.com/earendil-works/pi/issues/12048
+			const targetVersion = getNewerPatchVersion();
+			const { managedRoot } = prepareManagedInstall(targetVersion, 0, true);
+			const oldNodeDir = join(tempDir, "old-node");
+			mkdirSync(oldNodeDir, { recursive: true });
+			const oldNodePath = join(oldNodeDir, "node");
+			writeFileSync(oldNodePath, "#!/bin/sh\necho 'unsupported old node' >&2\nexit 1\n");
+			chmodSync(oldNodePath, 0o755);
+			process.env.PATH = `${oldNodeDir}${delimiter}${process.env.PATH ?? ""}`;
+			mockManagedUpdate(targetVersion);
+			vi.spyOn(console, "log").mockImplementation(() => {});
+			const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+			await expect(runPackageCommandDirectly(["update", "--self"])).resolves.toBeUndefined();
+
+			expect(errorSpy).not.toHaveBeenCalled();
+			expect(readFileSync(join(managedRoot, "current-version"), "utf8")).toBe(`${targetVersion}\n`);
+		},
+	);
 
 	it("rejects a concurrent managed update", async () => {
 		const targetVersion = getNewerPatchVersion();

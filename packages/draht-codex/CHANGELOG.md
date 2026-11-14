@@ -14,6 +14,12 @@
 - graph-clusters labels are unique and descriptive (dominant layer / ordinal suffixes instead of six identical `packages/ai` rows) ([#2](https://github.com/draht-dev/draht/pull/2))
 - MAP.html search covers `modules[*].symbols` (non-exported declarations and barrel APIs), not just the exported-only symbolIndex ([#2](https://github.com/draht-dev/draht/pull/2))
 
+## [2026.11.14-1] - 2026-11-14
+
+### Added
+
+- ship test audit prompt and plugin skills
+
 ## [2026.10.31-1] - 2026-10-31
 
 ### Added

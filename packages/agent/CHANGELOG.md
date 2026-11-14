@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [2026.11.14-1] - 2026-11-14
+
+### Changed
+
+- fix(agent): answer every tool call when a batch is aborted
+
 ## [2026.11.5-1] - 2026-11-05
 
 ### Changed

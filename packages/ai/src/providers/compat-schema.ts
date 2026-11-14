@@ -231,6 +231,12 @@ const OpenAICompletionsCompatProperties = {
 				'Whether replayed assistant messages with no text (e.g. tool-call-only messages) must send "" instead of null content. Default: false.',
 		}),
 	),
+	requiresToolsWithToolHistory: opt(
+		bool({
+			description:
+				'Whether requests without tools must send "tools": [] when the conversation contains tool calls or tool results. Needed by some proxies in front of Anthropic, such as older LiteLLM versions. Default: false, the field is omitted.',
+		}),
+	),
 	requiresThinkingAsText: opt(
 		bool({
 			description:
@@ -501,7 +507,7 @@ const AnthropicMessagesCompatProperties = {
 	),
 	supportsMessageThreads: optionalCompatBoolean({
 		description:
-			"Whether the endpoint supports Anthropic message threads, which let a request with a session id send only the new messages and continue from the previous reply. Default: true for provider anthropic with a baseUrl on api.anthropic.com, false otherwise. Set true for gateways that forward the thread request field.",
+			"Whether the endpoint supports Anthropic message threads, which let a request with a session id send only the new messages and continue from the previous reply. Default: true for a baseUrl on api.anthropic.com, false otherwise. Set true for gateways that forward the thread request field.",
 	}),
 	allowedFallbackModels: opt(
 		arr(AnthropicAllowedFallbackModelSchema, {

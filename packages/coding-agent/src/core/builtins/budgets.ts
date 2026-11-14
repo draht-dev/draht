@@ -12,12 +12,7 @@ import {
 	type ToolCallEvent,
 } from "../extensions/types.ts";
 import type { SessionEntry } from "../session-manager.ts";
-import {
-	applyEditsToNormalizedContent,
-	detectLineEnding,
-	normalizeToLF,
-	restoreLineEndings,
-} from "../tools/edit-diff.ts";
+import { applyEditsToNormalizedContent, applyReplacementsToOriginal, normalizeToLF } from "../tools/edit-diff.ts";
 import { resolveToCwd } from "../tools/path-utils.ts";
 import { BUDGET_GUIDANCE } from "./budget-guidance.ts";
 
@@ -158,8 +153,15 @@ function previewEdit(event: ToolCallEvent, cwd: string): ProposedFiles | undefin
 		const original = readRegularFile(path);
 		if (original === undefined) return undefined;
 		const { bom, text } = splitBom(original);
-		const { newContent } = applyEditsToNormalizedContent(normalizeToLF(text), event.input.edits, event.input.path);
-		return [{ path, content: bom + restoreLineEndings(newContent, detectLineEnding(text)) }];
+		const normalized = normalizeToLF(text);
+		const { newContent, replacements } = applyEditsToNormalizedContent(
+			normalized,
+			event.input.edits,
+			event.input.path,
+		);
+		// Same splice as the edit tool, so untouched lines keep their line endings in the preview.
+		const content = text === normalized ? newContent : applyReplacementsToOriginal(text, replacements);
+		return [{ path, content: bom + content }];
 	} catch {
 		return undefined;
 	}

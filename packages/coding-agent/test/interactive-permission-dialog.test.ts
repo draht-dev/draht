@@ -17,7 +17,6 @@ import { type ProgramStatus, setKeybindings, type Terminal, visibleWidth } from 
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PermissionAskDetail } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
-import { formatMissingSessionCwdPrompt } from "../src/core/session-cwd.ts";
 import { ExtensionSelectorComponent, MAX_DETAIL_ROWS } from "../src/modes/interactive/components/extension-selector.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { type BlockedStatus, ProgramStatusReporter } from "../src/modes/interactive/program-status-reporter.ts";
@@ -294,6 +293,7 @@ function createHost(columns = RENDER_WIDTH): DialogHost {
 			() => undefined,
 		),
 		extensionDialogs: [],
+		extensionOverlays: new Map(),
 		get extensionSelector() {
 			return visibleDialog<ExtensionSelectorComponent>(host, "selector");
 		},
@@ -681,9 +681,9 @@ describe("InteractiveMode permission dialog", () => {
 	});
 
 	it("treats a newline in the MESSAGE as a row break, under the row cap", async () => {
-		// CONTRACT (H4). A newline the caller wrote in the MESSAGE is a legitimate row break: the
-		// in-tree `formatMissingSessionCwdPrompt` prompt is written as five lines, and collapsing
-		// them into one middle-elided row hid WHICH session cwd was missing. So a message that
+		// CONTRACT (H4). A newline the caller wrote in the MESSAGE is a legitimate row break: a
+		// five-line missing-session-cwd prompt collapsed into one middle-elided row hid WHICH
+		// session cwd was missing. So a message that
 		// writes "Yes" on a line of its own does get a row reading "Yes" — four option-looking rows
 		// here, two of them the caller's own text.
 		//
@@ -769,16 +769,18 @@ describe("InteractiveMode permission dialog", () => {
 		}
 	});
 
-	it("renders the missing-session-cwd prompt as the five rows it was written as", async () => {
-		// `promptForMissingSessionCwd` passes `formatMissingSessionCwdPrompt(issue)`, a deliberately
-		// 5-line message. Neutralizing those newlines into U+240A collapsed all five into one row and
-		// then middle-elided it, so the operator could not see WHICH session cwd was missing.
-		const message = formatMissingSessionCwdPrompt({
-			sessionFile: "/Users/someone/.pi/sessions/abc.jsonl",
-			sessionCwd: "/Users/someone/projects/gone-project",
-			fallbackCwd: "/Users/someone/projects/other-project",
-		});
-		expect(message.split("\n")).toHaveLength(5);
+	it("renders a five-line caller message as the five rows it was written as", async () => {
+		// The shape the missing-session-cwd prompt had when this broke: a deliberately 5-line
+		// message. Neutralizing those newlines into U+240A collapsed all five into one row and then
+		// middle-elided it, so the operator could not see WHICH session cwd was missing. The in-tree
+		// prompt is one line today; the contract holds for any caller that writes its own breaks.
+		const message = [
+			"cwd from session file does not exist",
+			"/Users/someone/projects/gone-project",
+			"",
+			"continue in current cwd",
+			"/Users/someone/projects/other-project",
+		].join("\n");
 
 		for (const columns of [80, 120]) {
 			const lines = await confirmLines(columns, "Session cwd not found", message);

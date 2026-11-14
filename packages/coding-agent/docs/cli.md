@@ -12,6 +12,8 @@ draht uninstall <source> [options]
 draht update [target] [options]
 draht list
 draht config [options]
+draht auth login <provider> [--api-key] [--no-browser]
+draht auth logout <provider>
 draht auth <check|print-api-key|print-bearer-token> [options]
 draht mcp <add|remove|list|login|logout> [options]
 draht checkpoint prune [--days <n>] [--max-per-session <n>] [--dry-run]
@@ -319,11 +321,22 @@ export DRAHT_SELF_UPDATE_COMMAND="mise use -g npm:{packageName}@{version}"
 
 ## Credential commands
 
+`draht auth login <provider>` logs in to a provider in the terminal and exits, without starting a session. It signs in with an account and opens the browser, like `/login <provider>`. Providers without account sign-in ask for an API key. Logging in to Radius also adds the Radius MCP server to `~/.draht/agent/mcp.json` when no global server uses that login yet. It requires an interactive terminal.
+
+| Option | Description |
+|---|---|
+| `--api-key` | Save an API key instead of signing in with an account; the key is read without echoing it |
+| `--no-browser` | Do not open a browser; use the provider's other sign-in method, such as a device code, for example over SSH. Asks when there are several. Not allowed with `--api-key` |
+
+`draht auth logout <provider>` removes the credentials that `draht auth login` or `/login` stored, like `/logout`. Environment variables and `models.json` config are unchanged. It exits with status `0` when nothing is stored, so it is safe to repeat.
+
 ```sh
+draht auth login radius
+draht auth logout radius
 draht auth check --provider openai --json
 ```
 
-Authentication commands require `--provider <provider>` or `--model <model>`. See [Providers](providers.md) for supported methods.
+The other authentication commands require `--provider <provider>` or `--model <model>`. See [Providers](providers.md) for supported methods.
 
 | Command | Description |
 |---|---|

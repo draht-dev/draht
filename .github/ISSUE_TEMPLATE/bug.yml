@@ -7,7 +7,7 @@ body:
       value: |
         **Before you start:** Read [CONTRIBUTING.md](https://github.com/draht-dev/draht/blob/main/CONTRIBUTING.md).
 
-        New issues from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. Issues that do not meet the quality bar in [CONTRIBUTING.md](https://github.com/draht-dev/draht/blob/main/CONTRIBUTING.md) will not be reopened or receive a reply.
+        Issues without a template, and issues opened Friday through Sunday (UTC), are auto-closed. A templated weekday issue stays open for review. See [CONTRIBUTING.md](https://github.com/draht-dev/draht/blob/main/CONTRIBUTING.md).
 
         Keep this short. If it doesn't fit on one screen, it's too long. Write in your own voice.
 

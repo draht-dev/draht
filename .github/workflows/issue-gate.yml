@@ -19,7 +19,7 @@ jobs:
           script: |
             const APPROVED_FILE = '.github/APPROVED_CONTRIBUTORS';
             const VALID_CAPABILITIES = new Set(['issue', 'pr']);
-            const ISSUE_GATE_MESSAGE_MODE = 'refactor'; // Switch to 'normal' to restore the standard auto-close message.
+            const ISSUE_GATE_MESSAGE_MODE = 'normal'; // Was 'refactor' with a stale close-until-2026-05-17 message from upstream.
             const issueAuthor = context.payload.issue.user.login;
             const defaultBranch = context.payload.repository.default_branch;
             const issueCreatedDay = new Date(context.payload.issue.created_at).getUTCDay();
@@ -101,12 +101,22 @@ jobs:
               return;
             }
 
+            const issueBody = context.payload.issue.body || '';
+            const usedBugTemplate = /### What happened\?/i.test(issueBody) && /### Steps to reproduce/i.test(issueBody);
+            const usedContributionTemplate = /### What do you want to change\?/i.test(issueBody) && /### Why\?/i.test(issueBody);
+            const usedOfficialTemplate = usedBugTemplate || usedContributionTemplate;
+
+            if (!isFridayThroughSunday && usedOfficialTemplate) {
+              console.log('Weekday issue used an official template; leaving open');
+              return;
+            }
+
             function buildNormalGateMessage() {
               return [
-                'This issue was auto-closed. All issues from new contributors are auto-closed by default.',
+                'This issue was auto-closed. Issues without an official template, and issues opened Friday through Sunday (UTC), are auto-closed. Templated weekday issues stay open.',
                 ...(isFridayThroughSunday
                   ? [
-                      'Issues submitted Friday through Sunday are not reviewed. If this is urgent, ask on Discord: https://discord.com/invite/3cU7Bz4UPx',
+                      'Issues submitted Friday through Sunday are not reviewed. A draht Discord invite is not published yet.',
                     ]
                   : []),
                 '',
@@ -126,7 +136,7 @@ jobs:
                 '',
                 'Issues closed during this period will not be reviewed. The reason is that the refactor will not get done otherwise, because issue triage has been taking about 8 hours per day.',
                 '',
-                'In case of emergency, ask on Discord: https://discord.com/invite/3cU7Bz4UPx',
+                'In case of emergency, see CONTRIBUTING.md. A draht Discord invite is not published yet.',
               ].join('\n');
             }
 

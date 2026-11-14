@@ -26,7 +26,7 @@
     },
     "packages/agent": {
       "name": "@draht/agent-core",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "dependencies": {
         "@draht/ai": "workspace:*",
         "@draht/schema": "workspace:*",
@@ -39,7 +39,7 @@
     },
     "packages/ai": {
       "name": "@draht/ai",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "bin": {
         "draht-ai": "dist/cli.js",
       },
@@ -70,7 +70,7 @@
     },
     "packages/chord": {
       "name": "@draht/chord",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "dependencies": {
         "@draht/schema": "workspace:*",
         "@draht/telemetry": "workspace:*",
@@ -83,7 +83,7 @@
     },
     "packages/ci": {
       "name": "@draht/ci",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.39.0",
         "@octokit/rest": "^21.1.0",
@@ -96,7 +96,7 @@
     },
     "packages/codemode": {
       "name": "@draht/codemode",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "dependencies": {
         "quickjs-wasi": "3.6.2",
       },
@@ -106,7 +106,7 @@
     },
     "packages/coding-agent": {
       "name": "@draht/coding-agent",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "bin": {
         "coding-agent": "dist/bundle/cli.js",
         "draht": "dist/bundle/cli.js",
@@ -193,14 +193,14 @@
     },
     "packages/compliance": {
       "name": "@draht/compliance",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "devDependencies": {
         "@draht/coding-agent": "workspace:*",
       },
     },
     "packages/deploy-guardian": {
       "name": "@draht/deploy-guardian",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "devDependencies": {
         "@draht/coding-agent": "workspace:*",
         "@types/node": "^22.10.5",
@@ -210,7 +210,7 @@
     },
     "packages/draht-acp": {
       "name": "@draht/draht-acp",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "bin": {
         "draht-acp": "./src/main.ts",
       },
@@ -227,7 +227,7 @@
     },
     "packages/draht-claude": {
       "name": "draht-claude",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "bin": {
         "draht-claude": "./cli.mjs",
       },
@@ -237,7 +237,7 @@
     },
     "packages/draht-codex": {
       "name": "draht-codex",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "bin": {
         "draht-codex": "./cli.mjs",
       },
@@ -247,14 +247,14 @@
     },
     "packages/draht-tools": {
       "name": "@draht/tools",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "bin": {
         "draht-tools": "./bin/draht-tools.cjs",
       },
     },
     "packages/gateway": {
       "name": "@draht/gateway",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "bin": {
         "draht-gateway": "src/cli.ts",
       },
@@ -271,7 +271,7 @@
     },
     "packages/geist": {
       "name": "@draht/geist",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "bin": {
         "geist": "dist/cli.js",
       },
@@ -289,7 +289,7 @@
     },
     "packages/geist-acp": {
       "name": "@draht/geist-acp",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "dependencies": {
         "@agentclientprotocol/sdk": "1.2.1",
         "@draht/geist-core": "workspace:*",
@@ -301,7 +301,7 @@
     },
     "packages/geist-console": {
       "name": "@draht/geist-console",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "dependencies": {
         "@draht/geist-protocol": "workspace:*",
       },
@@ -316,18 +316,18 @@
     },
     "packages/geist-core": {
       "name": "@draht/geist-core",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "dependencies": {
         "@draht/geist-protocol": "workspace:*",
       },
     },
     "packages/geist-picker": {
       "name": "@draht/geist-picker",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
     },
     "packages/geist-protocol": {
       "name": "@draht/geist-protocol",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "dependencies": {
         "yaml": "^2.9.0",
         "zod": "^3.25.0",
@@ -335,7 +335,7 @@
     },
     "packages/infra": {
       "name": "@draht/infra",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "dependencies": {
         "@aws-sdk/client-s3": "^3.972.0",
         "sst": "^4.2.1",
@@ -349,7 +349,7 @@
     },
     "packages/install": {
       "name": "@draht/install",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "bin": {
         "draht-install": "./dist/cli.js",
         "draht-init": "./dist/cli.js",
@@ -368,14 +368,14 @@
     },
     "packages/invoice": {
       "name": "@draht/invoice",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "devDependencies": {
         "@draht/coding-agent": "workspace:*",
       },
     },
     "packages/knowledge": {
       "name": "@draht/knowledge",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "dependencies": {
         "better-sqlite3": "^12.11.1",
       },
@@ -389,7 +389,7 @@
     },
     "packages/landing": {
       "name": "@draht/landing",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "dependencies": {
         "@astrojs/sitemap": "^3.7.0",
         "@resvg/resvg-js": "^2.6.2",
@@ -400,7 +400,7 @@
     },
     "packages/mcp": {
       "name": "@draht/mcp",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "dependencies": {
         "cross-spawn": "7.0.6",
       },
@@ -411,7 +411,7 @@
     },
     "packages/mom": {
       "name": "@draht/mom",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "bin": {
         "mom": "dist/main.js",
       },
@@ -435,7 +435,7 @@
     },
     "packages/orchestrator": {
       "name": "@draht/orchestrator",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.39.0",
       },
@@ -448,7 +448,7 @@
     },
     "packages/pods": {
       "name": "@draht/pods",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "bin": {
         "draht-pods": "dist/cli.js",
       },
@@ -459,7 +459,7 @@
     },
     "packages/reels": {
       "name": "@draht/reels",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "bin": {
         "draht-reels": "./src/cli.ts",
       },
@@ -483,7 +483,7 @@
     },
     "packages/rlm": {
       "name": "@draht/rlm",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "dependencies": {
         "@draht/ai": "workspace:*",
         "@draht/knowledge": "workspace:*",
@@ -497,7 +497,7 @@
     },
     "packages/rlm-agent": {
       "name": "@draht/rlm-agent",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "dependencies": {
         "@draht/rlm": "workspace:*",
         "@draht/router": "workspace:*",
@@ -513,7 +513,7 @@
     },
     "packages/router": {
       "name": "@draht/router",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "dependencies": {
         "@draht/ai": "workspace:*",
       },
@@ -523,7 +523,7 @@
     },
     "packages/schema": {
       "name": "@draht/schema",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "devDependencies": {
         "@cfworker/json-schema": "4.1.1",
         "@oh-my-pi/omptype": "18.13.3",
@@ -537,7 +537,7 @@
     },
     "packages/telemetry": {
       "name": "@draht/telemetry",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "devDependencies": {
         "@types/node": "^24.3.0",
         "vitest": "^3.2.4",
@@ -545,11 +545,11 @@
     },
     "packages/templates": {
       "name": "@draht/templates",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
     },
     "packages/tui": {
       "name": "@draht/tui",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "dependencies": {
         "@types/mime-types": "^2.1.4",
         "chalk": "^5.5.0",
@@ -568,7 +568,7 @@
     },
     "packages/web-ui": {
       "name": "@draht/web-ui",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "dependencies": {
         "@draht/agent-core": "workspace:*",
         "@draht/ai": "workspace:*",
@@ -615,11 +615,11 @@
     },
     "packages/workflows": {
       "name": "@draht/workflows",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
     },
     "packages/x-markdown": {
       "name": "@draht/x-markdown",
-      "version": "2026.11.5-1",
+      "version": "2026.11.14-1",
       "bin": {
         "x-markdown": "./src/cli.ts",
       },
@@ -956,7 +956,7 @@
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.28.2", "", { "os": "win32", "cpu": "x64" }, "sha512-5ebpxr3nWMzrL/rnUI755Jkuee0bHL/Gq0WTF9lvcpv73wAp5eu8MfBUgWK9bhWvZjj7yX8etf/8tI8Ney695g=="],
 
-    "@google/genai": ["@google/genai@2.32.0", "", { "dependencies": { "google-auth-library": "^10.3.0", "p-retry": "^4.6.2", "protobufjs": "^7.5.4", "ws": "^8.18.0" }, "peerDependencies": { "@modelcontextprotocol/sdk": "^1.25.2" }, "optionalPeers": ["@modelcontextprotocol/sdk"], "hasInstallScript": true }, "sha512-60c79uXpR0a47bmGqDxbXEBuQUalNmwo5mx5kqb91jIW4FoqpsLSt86DeVhRhtH5+s/16Wqxt3sXzFQn2U1OHQ=="],
+    "@google/genai": ["@google/genai@2.32.0", "", { "dependencies": { "google-auth-library": "^10.3.0", "p-retry": "^4.6.2", "protobufjs": "^7.5.4", "ws": "^8.18.0" }, "peerDependencies": { "@modelcontextprotocol/sdk": "^1.25.2" }, "optionalPeers": ["@modelcontextprotocol/sdk"] }, "sha512-60c79uXpR0a47bmGqDxbXEBuQUalNmwo5mx5kqb91jIW4FoqpsLSt86DeVhRhtH5+s/16Wqxt3sXzFQn2U1OHQ=="],
 
     "@hono/node-server": ["@hono/node-server@1.19.14", "", { "peerDependencies": { "hono": "^4" } }, "sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw=="],
 

@@ -1,10 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2026.11.14-1] - 2026-11-14
 
 ### Added
 
-- Add the `test-audit` skill and campaign guide for behavior-focused test authoring and coverage audits ([#34](https://github.com/draht-dev/draht/pull/34))
+- ship test audit prompt and plugin skills
 
 ## [2026.10.31-1] - 2026-10-31
 

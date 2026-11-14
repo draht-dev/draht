@@ -1,6 +1,39 @@
 # Changelog
 
-## [Unreleased]
+## [2026.11.14-1] - 2026-11-14
+
+### Changed
+
+- fix(ai): send reasoning_effort and read reasoning tokens for GitHub Copilot (badlogic/pi-mono#12110)
+- fix(ai): retry provider errors that report only a Node socket error code (badlogic/pi-mono#12136)
+- fix(ai): move Qwen Token Plan to current gateways and model lists (badlogic/pi-mono#12112)
+- fix(ai): Google custom fetch follow-ups (badlogic/pi-mono#12108)
+- fix(ai): pass custom fetch to the Google GenAI SDK adapters (badlogic/pi-mono#12103)
+- fix(ai): keep root additionalProperties in non-strict Anthropic tool schemas (badlogic/pi-mono#12100)
+- fix(ai): retry provider errors reading "Connection closed." (badlogic/pi-mono#12093)
+- fix(ai): fall back from strict tool schemas with untyped nodes
+- fix llama.cpp default port (badlogic/pi-mono#12001)
+- fix(ai): default Anthropic message threads by endpoint, not provider id
+- fix(durable): clean up provider resources when a harness closes (badlogic/pi-mono#11961)
+- fix(ai): update reported Claude Code version
+- fix(ai,coding-agent): warn instead of failing when a provider is signed out during model refresh
+- feat(ai): add Claude Fable 5.2
+- fix(ai): keep long-context price tier for Azure OpenAI models (badlogic/pi-mono#11949)
+- fix(ai): remember strict tool limit rejections per session
+- feat: prompt cache warming in p2 (badlogic/pi-mono#11857)
+- fix(ai): replace removed Fireworks Nemotron model in providers test
+- fix(ai): update Fireworks tests for removed Nemotron model
+- fix(ai): omit empty tools array for tool history on openai-completions (badlogic/pi-mono#11891)
+- fix(ai): retry streams cut short after the reply had begun (badlogic/pi-mono#11885)
+- fix(ai,coding-agent): remove "(legacy)" marker from OpenAI Codex provider name
+- feat(schema): TypeBox parity for extra types (badlogic/pi-mono#11833)
+- feat(ai): lazy OAuth flow and Bedrock loaders for code-split Node bundles
+- fix(ai): resolve variable lazy imports against the module URL
+
+### Fixed
+
+- refresh the model catalog for current Qwen Token Plan and GitHub Copilot models
+- remove pi references leaked by upstream sync
 
 ## [2026.11.5-1] - 2026-11-05
 

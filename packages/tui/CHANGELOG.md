@@ -1,6 +1,14 @@
 # Changelog
 
-## [Unreleased]
+## [2026.11.14-1] - 2026-11-14
+
+### Changed
+
+- fix(tui): hide terminal images covered by overlays (badlogic/pi-mono#12109)
+- fix(tui): keep Kitty images across fullscreen full redraws (badlogic/pi-mono#12047)
+- fix(tui): keep hard breaks after inline Markdown images as separate rows (badlogic/pi-mono#12045)
+- fix(tui): keep short paste markers intact when renumbering after backspace (badlogic/pi-mono#11947)
+- fix(tui): draw fullscreen Kitty images after the rows they cover on every terminal (badlogic/pi-mono#11890)
 
 ## [2026.11.5-1] - 2026-11-05
 

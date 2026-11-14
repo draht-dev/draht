@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2026.11.14-1] - 2026-11-14
+
+### Changed
+
+- count the test-audit skill in the canonical skill inventory
 
 ## [2026.10.31-1] - 2026-10-31
 

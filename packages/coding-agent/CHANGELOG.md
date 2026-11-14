@@ -1,20 +1,70 @@
 # Changelog
 
-## [Unreleased]
+## [2026.11.14-1] - 2026-11-14
 
 ### Added
 
-- Add a self-contained `/test-audit` prompt for behavior-focused test authoring and coverage audits ([#34](https://github.com/draht-dev/draht/pull/34))
+- clearer phase states, dock run lines and inspector layout
+- ship test audit prompt and plugin skills
 
 ### Changed
 
-- Polyphase inspector split view keeps the workflow phase tree and names the selected agent above its transcript; runs with a token budget or time limit show a gauge; the dock lists each live run when several run at once; an overflowing agent list shows failed and running agents first
+- repair release-blocking tests after upstream sync
+- fix(coding-agent): don't crash when rendering very large self-rendered tool results (badlogic/pi-mono#12145)
+- fix(coding-agent,durable): keep read's non-vision image warning out of what the model gets (badlogic/pi-mono#12139)
+- fix(coding-agent): /copy skips turns that ended without an answer (badlogic/pi-mono#12121)
+- fix(coding-agent): anchor find path patterns at the search path (badlogic/pi-mono#12116)
+- fix(coding-agent): report model scope warnings as startup diagnostics (badlogic/pi-mono#11973)
+- fix(ai): move Qwen Token Plan to current gateways and model lists (badlogic/pi-mono#12112)
+- fix(coding-agent): keep /resume selection while the session list reloads progressively (badlogic/pi-mono#12111)
+- fix(coding-agent): report signal-terminated pi.exec commands as failed (badlogic/pi-mono#12089)
+- fix(coding-agent): keep bash output when the tail is one over-long line (badlogic/pi-mono#12092)
+- fix(coding-agent): keep restored MCP tools when an extension hides only its own tool (badlogic/pi-mono#12054)
+- fix(coding-agent): convert OSC 8 hyperlinks in HTML export tool output (badlogic/pi-mono#12052)
+- fix(coding-agent): verify managed updates with the Node.js running pi (badlogic/pi-mono#12051)
+- Fix standalone binary not resolving extension dependencies via package.json main/exports (badlogic/pi-mono#12046)
+- fix(coding-agent): ignore a leading ./ in find patterns (badlogic/pi-mono#12044)
+- use llama serve in the NVIDIA RTX guide (badlogic/pi-mono#12004)
+- fix llama.cpp default port (badlogic/pi-mono#12001)
+- fix(ai): default Anthropic message threads by endpoint, not provider id
+- fix(coding-agent): do not crash when an aborted signal destroys an unwatched file stream (badlogic/pi-mono#12025)
+- clarify skill distribution and update install instructions
+- docs(coding-agent): use the unified llama entry point (badlogic/pi-mono#11958)
+- fix(coding-agent): offer fork when a session cwd no longer exists (badlogic/pi-mono#11975)
+- fix(coding-agent): do not start fd after find was aborted (badlogic/pi-mono#11974)
+- fix(coding-agent): match Windows find path patterns with every fd version (badlogic/pi-mono#11972)
+- fix(coding-agent): restore deprecated grep readFile hook
+- fix(coding-agent): report native exit codes in the powershell tool on Windows PowerShell 5.1 (badlogic/pi-mono#11964)
+- fix(ai,coding-agent): warn instead of failing when a provider is signed out during model refresh
+- feat(coding-agent): default cacheWarming to idle
+- feat(coding-agent): list preferred partner providers first in /login and /logout
+- feat: prompt cache warming in p2 (badlogic/pi-mono#11857)
+- fix(coding-agent): match grep globs relative to path (badlogic/pi-mono#11895)
+- fix(coding-agent): await image resize worker termination
+- fix(coding-agent): edit keeps line endings of untouched lines, diffs only around changes (badlogic/pi-mono#11751)
+- fix(ai): omit empty tools array for tool history on openai-completions (badlogic/pi-mono#11891)
+- fix(coding-agent): record the live thinking level on the branch before each prompt (badlogic/pi-mono#11888)
+- fix(coding-agent): apply ctrl+o to user bash output shown while the agent is working (badlogic/pi-mono#11886)
+- subagent example: ignore the Windows Bun virtual entry path when spawning pi (badlogic/pi-mono#11874)
+- fix(coding-agent): keep apostrophes in prompt template arguments (badlogic/pi-mono#11873)
+- fix(coding-agent): follow local schema refs in tool search and codemode summaries (badlogic/pi-mono#11850)
+- fix(coding-agent): remove all extension overlays on /reload and session switch (badlogic/pi-mono#11853)
+- feat(coding-agent): let ctx.ui.custom() overlays report blocked program status (badlogic/pi-mono#11851)
+- feat(coding-agent): add pi auth login and logout
+- fix(coding-agent): cycle to the only model in scope when the active model is outside it (badlogic/pi-mono#11832)
+- feat(coding-agent): merge consecutive cache warming notices into one line
+- fix(coding-agent): wait for a started OAuth refresh to be saved before exit (badlogic/pi-mono#11812)
+- fix(coding-agent): report the shell exit code when bash times out after the shell exited (badlogic/pi-mono#11813)
+- fix(coding-agent): stream the read tool instead of loading whole files (badlogic/pi-mono#11750)
+- fix(coding-agent): keep model selector selection when the catalog refresh lands (badlogic/pi-mono#11810)
+- fix(coding-agent): do not split surrogate pairs when truncating text (badlogic/pi-mono#11757)
+- feat(coding-agent): move provider defaults to newer models at the same or a lower price
+- feat(coding-agent): default Anthropic model is Claude Opus 5.5
 
 ### Fixed
 
-- Polyphase phases whose agents were all cancelled no longer show the done glyph, and phases a workflow skipped no longer read as pending
-- Polyphase no longer shows a blocked tool call twice, and the "+N more" line counts running agents
-- Polyphase inspector no longer cuts multi-digit counts, repeats an agent's name in its title, or truncates the back hint in narrow footers
+- remove pi references leaked by upstream sync
+- remove pi references leaked by upstream sync
 
 ## [2026.11.5-1] - 2026-11-05
 

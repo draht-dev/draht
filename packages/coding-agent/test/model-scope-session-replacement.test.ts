@@ -1,14 +1,13 @@
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.ts";
 
 const cliPath = resolve(__dirname, "../src/cli.ts");
-// --import takes a module specifier, not a filesystem path.
-const sourceResolverUrl = pathToFileURL(resolve(__dirname, "../src/experimental/source-resolver.ts")).href;
+const tsxPath = createRequire(__filename).resolve("tsx");
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -19,7 +18,7 @@ afterEach(() => {
 
 /** Start RPC mode, replace the session once, and return everything the process wrote to stderr. */
 async function runNewSessionOverRpc(agentDir: string, projectDir: string): Promise<string> {
-	const child = spawn(process.execPath, ["--import", sourceResolverUrl, cliPath, "--mode", "rpc", "--no-session"], {
+	const child = spawn(process.execPath, ["--import", tsxPath, cliPath, "--mode", "rpc", "--no-session"], {
 		cwd: projectDir,
 		env: { ...process.env, [ENV_AGENT_DIR]: agentDir, DRAHT_OFFLINE: "1" },
 		stdio: ["pipe", "pipe", "pipe"],

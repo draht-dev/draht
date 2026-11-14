@@ -1,6 +1,7 @@
 import { execFileSync } from "child_process";
 import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import type * as fsPromises from "fs/promises";
+import { createRequire } from "module";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import { pathToFileURL } from "url";
@@ -299,7 +300,7 @@ describe("read tool streaming", () => {
 
 	it("reads a 200 MB line with a 64 MB heap", () => {
 		// A child process, so a regression that stores the whole line runs out of memory instead of passing.
-		const sourceResolverUrl = pathToFileURL(resolve(__dirname, "../src/experimental/source-resolver.ts")).href;
+		const tsxUrl = pathToFileURL(createRequire(__filename).resolve("tsx")).href;
 		const readToolUrl = pathToFileURL(resolve(__dirname, "../src/core/tools/read.ts")).href;
 		const script = `
 			import { createReadToolDefinition } from ${JSON.stringify(readToolUrl)};
@@ -313,7 +314,7 @@ describe("read tool streaming", () => {
 		`;
 		const output = execFileSync(
 			process.execPath,
-			["--max-old-space-size=64", "--import", sourceResolverUrl, "--input-type=module", "--eval", script],
+			["--max-old-space-size=64", "--import", tsxUrl, "--input-type=module", "--eval", script],
 			{ encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
 		);
 		expect(output).toBe(

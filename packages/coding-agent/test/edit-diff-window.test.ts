@@ -1,5 +1,6 @@
 import { execFileSync } from "child_process";
 import { applyPatch } from "diff";
+import { createRequire } from "module";
 import { resolve } from "path";
 import { pathToFileURL } from "url";
 import { describe, expect, it } from "vitest";
@@ -86,7 +87,7 @@ describe("generateEditDiff", () => {
 
 	it("diffs a small change in a 20 MB file with a 96 MB heap", () => {
 		// A child process, so a regression to diffing the whole file runs out of memory instead of passing.
-		const sourceResolverUrl = pathToFileURL(resolve(__dirname, "../src/experimental/source-resolver.ts")).href;
+		const tsxUrl = pathToFileURL(createRequire(__filename).resolve("tsx")).href;
 		const editDiffUrl = pathToFileURL(resolve(__dirname, "../src/core/tools/edit-diff.ts")).href;
 		const script = `
 			import { generateEditDiff } from ${JSON.stringify(editDiffUrl)};
@@ -100,7 +101,7 @@ describe("generateEditDiff", () => {
 		`;
 		const output = execFileSync(
 			process.execPath,
-			["--max-old-space-size=96", "--import", sourceResolverUrl, "--input-type=module", "--eval", script],
+			["--max-old-space-size=96", "--import", tsxUrl, "--input-type=module", "--eval", script],
 			{ encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
 		);
 		expect(output).toBe("-100001 TARGET = 1\n+100001 TARGET = 2");

@@ -114,10 +114,12 @@ for platform in "${PLATFORMS[@]}"; do
     # Disable cwd bunfig.toml autoload so project preload scripts cannot crash the
     # standalone binary before draht starts (see badlogic/pi-mono#7684). Disable cwd
     # .env autoload so project files cannot populate its environment (badlogic/pi-mono#10473).
+    # Enable package.json autoload so extension dependencies resolve through their
+    # package.json main/exports entries instead of only a root index.* (badlogic/pi-mono#12012).
     if [[ "$platform" == "windows-x64" ]]; then
-        bun build --compile --external koffi --no-compile-autoload-bunfig --no-compile-autoload-dotenv --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile binaries/$platform/draht.exe
+        bun build --compile --external koffi --no-compile-autoload-bunfig --no-compile-autoload-dotenv --compile-autoload-package-json --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile binaries/$platform/draht.exe
     else
-        bun build --compile --external koffi --no-compile-autoload-bunfig --no-compile-autoload-dotenv --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile binaries/$platform/draht
+        bun build --compile --external koffi --no-compile-autoload-bunfig --no-compile-autoload-dotenv --compile-autoload-package-json --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile binaries/$platform/draht
     fi
 done
 

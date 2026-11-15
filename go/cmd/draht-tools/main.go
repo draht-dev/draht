@@ -28,7 +28,7 @@ const defaultMemLimitBytes = 768 << 20
 // build` leave them at "dev"/"" — that is the intended dev signal.
 var version, commit = "dev", ""
 
-const graphSchemaVersion = 5
+const graphSchemaVersion = 6
 
 type managedStamp struct {
 	Name          string `json:"name"`

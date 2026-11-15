@@ -7,12 +7,19 @@
 - `kg` engine (`bin/draht-kg.cjs`): graphify-parity **symbol-level** knowledge graph — deterministic indexer (`kg build` → `graph.json` in graphify's node-link schema + `KG_REPORT.md`), graphify query semantics (`kg query` seed-scored BFS/DFS traversal with NODE/EDGE output, `kg explain`, `kg path`, `kg affected`), and exports (`kg export tree|wiki|graphml`) ([#2](https://github.com/draht-dev/draht/pull/2))
 - graphify parity for the living map: barrel re-exports (`export { X } from`, multi-line blocks, `export * from` with `via` provenance) now populate each barrel's exports/symbols; MAP.html gains the Insights view (clusters, hotspots, surprising connections, rationale highlights; keyboard `i`) ([#2](https://github.com/draht-dev/draht/pull/2))
 
+### Changed
+
+- MAP.json `schemaVersion` is 6 (barrel re-exports in `exports`, `via`/`viaName` provenance, 60-name cap); a `draht-graph` binary stamped for schema 5 is rejected and the JS engine runs until the binary is reinstalled ([#2](https://github.com/draht-dev/draht/pull/2))
+
 ### Fixed
 
 - graph-query recall: term coverage is scored at the module level with coverage² scaling (was a per-symbol AND that missed multi-word concepts); tests are demoted below the code they test ([#2](https://github.com/draht-dev/draht/pull/2))
 - graph-impact echoes full resolved paths and explains zero-impact barrels instead of printing a bare `index.ts — 0 modules` ([#2](https://github.com/draht-dev/draht/pull/2))
 - graph-clusters labels are unique and descriptive (dominant layer / ordinal suffixes instead of six identical `packages/ai` rows) ([#2](https://github.com/draht-dev/draht/pull/2))
 - MAP.html search covers `modules[*].symbols` (non-exported declarations and barrel APIs), not just the exported-only symbolIndex ([#2](https://github.com/draht-dev/draht/pull/2))
+- graph-query ranks the defining file above barrels: re-exported names score at their defining module, and a module whose single symbol carries every query term ranks first ([#2](https://github.com/draht-dev/draht/pull/2))
+- living map and `kg` engine correctness: type-only re-exports, order-independent star expansion, string-aware source masking, workspace root resolution, Python import resolution, and linear-time `kg build` on large repos ([#2](https://github.com/draht-dev/draht/pull/2))
+- `kg` engine: a class keeps every method (was capped at 80), constructors and `#private` methods are nodes that own their calls, and methods named like reserved words (`delete()`) are indexed ([#2](https://github.com/draht-dev/draht/pull/2))
 
 ## [2026.11.14-1] - 2026-11-14
 

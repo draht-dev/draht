@@ -71,6 +71,13 @@ func Query(m *model.Map, argv []string, w io.Writer) int {
 		for _, t := range terms {
 			best := 0
 			for _, s := range mod.Symbols {
+				// Re-export symbols are the barrel's copies of names defined
+				// elsewhere: the defining module matches them, so scoring them
+				// here ranked barrels above the real definition. Barrels still
+				// match through path, doc and cluster below.
+				if s.Kind == "re-export" {
+					continue
+				}
 				nameLow := LowerJS(s.Name)
 				sc := 0
 				switch {
@@ -128,6 +135,9 @@ func Query(m *model.Map, argv []string, w io.Writer) int {
 		bestVal := 0.0
 		for i := range mod.Symbols {
 			s := &mod.Symbols[i]
+			if s.Kind == "re-export" {
+				continue
+			}
 			v := float64(symScores[s.Name])
 			if s.Exported {
 				v *= 1.5
@@ -139,6 +149,12 @@ func Query(m *model.Map, argv []string, w io.Writer) int {
 		}
 		if bestSym != nil && bestSym.Exported {
 			mult *= 1.5
+		}
+		// A multi-term query that one declared symbol's name satisfies in full
+		// ("session token" -> SessionToken) is a definition lookup: prefer it
+		// over modules that merely cover the terms.
+		if len(terms) > 1 && declaresAllTerms(mod.Symbols, terms) {
+			mult *= 2
 		}
 		hit := QueryHit{
 			Score:   ToFixed1(float64(sum) * mult),
@@ -210,6 +226,28 @@ func Query(m *model.Map, argv []string, w io.Writer) int {
 		fmt.Fprintf(w, "(%d more: --json for all)\n", len(cands)-15)
 	}
 	return 0
+}
+
+// declaresAllTerms reports whether one non-re-export symbol's lowercased name
+// contains every term.
+func declaresAllTerms(symbols []model.Symbol, terms []string) bool {
+	for _, s := range symbols {
+		if s.Kind == "re-export" {
+			continue
+		}
+		low := LowerJS(s.Name)
+		all := true
+		for _, t := range terms {
+			if !strings.Contains(low, t) {
+				all = false
+				break
+			}
+		}
+		if all {
+			return true
+		}
+	}
+	return false
 }
 
 // stem ports `s.replace(/(ing|tion|ed|s)$/, "")`. Because "tion", "ing",

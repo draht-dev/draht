@@ -139,10 +139,14 @@ test("graph-query matches multi-term concepts across symbols (module-level cover
 	assert.doesNotMatch(out, /— 0\/0 hits/);
 });
 
-test("graph-query surfaces barrel re-exported API names", () => {
+test("graph-query ranks the defining module of a re-exported name first", () => {
+	// The barrel re-exports resolveAuthToken; scoring its re-export symbol as well used to put the
+	// (better connected) barrel level with, or above, the file that actually defines the name.
 	const out = run(["graph-query", "resolveauthtoken"]);
-	assert.match(out, /index\.ts/, `expected the barrel itself as a hit for its re-exported symbol:\n${out}`);
-	assert.match(out, /auth\.ts/, `expected the defining module as a hit:\n${out}`);
+	const hits = out.split("\n").slice(1).filter(Boolean);
+	assert.match(hits[0], /^src\/auth\.ts:/, `expected the defining module as the first hit:\n${out}`);
+	const barrelAt = hits.findIndex((h) => h.startsWith("src/index.ts:"));
+	assert.ok(barrelAt === -1 || barrelAt > 0, `barrel outranks the definition:\n${out}`);
 });
 
 test("commented-out export examples are not reported as exports", () => {
@@ -351,4 +355,166 @@ test("star expansion reaches fixpoint on deep barrel chains (>5 hops)", () => {
 	} finally {
 		fs.rmSync(chainRoot, { recursive: true, force: true });
 	}
+});
+
+// --- re-export resolution, query ranking, masking: regressions for the PR #2 review round ---
+
+// Build a throwaway repo from `files`, run map-graph on it, and hand back the parsed MAP.json plus a
+// runner for graph-* commands.
+function withRepo(files, fn) {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "draht-graph-fx-"));
+	try {
+		fs.mkdirSync(path.join(dir, ".git"));
+		fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "fx", version: "1.0.0" }));
+		for (const [rel, text] of Object.entries(files)) {
+			fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+			fs.writeFileSync(path.join(dir, rel), text);
+		}
+		execFileSync(process.execPath, [CLI, "map-graph", "--quiet"], { cwd: dir, encoding: "utf-8", env: ENV });
+		const map = JSON.parse(fs.readFileSync(path.join(dir, ".planning/codebase/MAP.json"), "utf-8"));
+		const cli = (args) => execFileSync(process.execPath, [CLI, ...args], { cwd: dir, encoding: "utf-8", env: ENV });
+		return fn({ map, cli });
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+const moduleOf = (map, id) => map.modules.find((m) => m.id === id);
+const exportOf = (map, id, name) => moduleOf(map, id).exports.find((e) => e.name === name);
+const exportNames = (map, id) => moduleOf(map, id).exports.map((e) => e.name);
+
+test("export type { X } from is a named re-export: the origin is the definer, not the barrel", () => {
+	withRepo({
+		"src/a.ts": 'export type { Foo } from "./types";\nexport { type Bar } from "./types";\nexport const aa = 1;\n',
+		"src/index.ts": 'export * from "./a";\nexport * from "./types";\n',
+		"src/types.ts": "export interface Foo { a: number }\nexport interface Bar { b: number }\n",
+	}, ({ map }) => {
+		for (const name of ["Foo", "Bar"]) {
+			assert.equal(exportOf(map, "src/a.ts", name)?.via, "src/types.ts", `a.ts ${name} lost its origin`);
+			// Without the link the sibling `export *` of the real definer looked like a clash and dropped the name.
+			assert.equal(exportOf(map, "src/index.ts", name)?.via, "src/types.ts", `index.ts dropped ${name}: ${exportNames(map, "src/index.ts")}`);
+		}
+	});
+});
+
+test("star expansion is independent of file names (diamond with an ambiguous branch)", () => {
+	// b stars two bindings of s (l via c, and m): ambiguous. Ambiguity propagates (ES ResolveExport),
+	// so a, which also stars the definer l, does not export s either; c still does.
+	withRepo({
+		"src/a.ts": 'export * from "./b";\nexport * from "./l";\n',
+		"src/b.ts": 'export * from "./c";\nexport * from "./m";\n',
+		"src/c.ts": 'export * from "./l";\n',
+		"src/l.ts": "export const s = 1;\n",
+		"src/m.ts": "export const s = 2;\n",
+	}, ({ map }) => {
+		assert.equal(exportOf(map, "src/c.ts", "s")?.via, "src/l.ts");
+		for (const id of ["src/a.ts", "src/b.ts"]) assert.ok(!exportNames(map, id).includes("s"), `ambiguous s kept by ${id}`);
+	});
+	// The same graph with the barrels renamed so they sort the other way (the old fixpoint kept or
+	// dropped the name depending on iteration order).
+	withRepo({
+		"src/a.ts": 'export * from "./l";\n',
+		"src/b.ts": 'export * from "./a";\nexport * from "./m";\n',
+		"src/l.ts": "export const s = 1;\n",
+		"src/m.ts": "export const s = 2;\n",
+		"src/z.ts": 'export * from "./b";\nexport * from "./l";\n',
+	}, ({ map }) => {
+		assert.equal(exportOf(map, "src/a.ts", "s")?.via, "src/l.ts");
+		for (const id of ["src/b.ts", "src/z.ts"]) assert.ok(!exportNames(map, id).includes("s"), `ambiguous s kept by ${id}`);
+	});
+});
+
+test("star expansion keeps no stale names in a barrel cycle", () => {
+	withRepo({
+		"src/a.ts": 'export * from "./b";\n',
+		"src/b.ts": 'export * from "./a";\nexport * from "./z";\n',
+		"src/c.ts": "export const x = 1;\n",
+		"src/d.ts": "export const x = 2;\n",
+		"src/e.ts": 'export * from "./f";\n',
+		"src/f.ts": 'export * from "./d";\n',
+		"src/z.ts": 'export * from "./c";\nexport * from "./e";\n',
+	}, ({ map }) => {
+		for (const id of ["src/a.ts", "src/b.ts", "src/z.ts"]) {
+			assert.ok(!exportNames(map, id).includes("x"), `${id} keeps ambiguous x`);
+			assert.ok(!moduleOf(map, id).symbols.some((s) => s.name === "x"), `${id} mirrors ambiguous x into symbols`);
+		}
+		assert.equal(exportOf(map, "src/e.ts", "x")?.via, "src/d.ts");
+	});
+	// A cycle with an unambiguous way in: both members export the entering name.
+	withRepo({
+		"src/a.ts": 'export * from "./b";\n',
+		"src/b.ts": 'export * from "./a";\nexport * from "./c";\n',
+		"src/c.ts": "export const x = 1;\n",
+	}, ({ map }) => {
+		assert.equal(exportOf(map, "src/a.ts", "x")?.via, "src/c.ts");
+		assert.equal(exportOf(map, "src/b.ts", "x")?.via, "src/c.ts");
+	});
+});
+
+test("graph-query ranks the defining file above barrels; a symbol naming every term wins", () => {
+	withRepo({
+		"src/widget.ts": "export function resolveWidget() { return 1; }\n",
+		"src/index.ts": 'export * from "./widget";\n',
+		"src/main.ts": 'import { resolveWidget } from "./index";\nresolveWidget();\n',
+		"src/cli.ts": 'import { resolveWidget } from "./index";\nresolveWidget();\n',
+		"src/alpha.ts": "export class SessionStore {}\nexport class TokenBudget {}\n",
+		"src/beta.ts": "export interface SessionToken {}\n",
+	}, ({ cli }) => {
+		const hits = (...terms) => cli(["graph-query", ...terms]).split("\n").slice(1).filter(Boolean);
+		assert.match(hits("resolvewidget")[0], /^src\/widget\.ts:/);
+		assert.ok(!hits("resolvewidget").some((h) => h.startsWith("src/index.ts:")), "barrel matched through its re-export symbol");
+		assert.match(hits("session", "token")[0], /^src\/beta\.ts:/, "SessionToken (one symbol naming both terms) must lead");
+	});
+});
+
+test("symbolIndex indexes a name at its definition, not at the barrels re-exporting it", () => {
+	withRepo({
+		"src/def.ts": "export const realThing = 1;\n",
+		"src/barrel.ts": 'export * from "./def";\nexport { realThing as alias } from "./def";\n',
+	}, ({ map }) => {
+		const hits = map.symbolIndex.filter((e) => e.name === "realThing" || e.name === "alias").map((e) => `${e.name}@${e.file}`);
+		assert.deepEqual(hits, ["realThing@src/def.ts"]);
+	});
+});
+
+test("export lists inside strings and templates are not exports; a /* in a string hides no code", () => {
+	withRepo({
+		"src/g.ts": [
+			'const pattern = "src/*.ts";',
+			"function helper() { return pattern; }",
+			"function other() { return 1; }",
+			"export { helper, other };",
+			'const glob = "**/*.ts";',
+			"/** The zed constant, documented. */",
+			"export const zed = 1;",
+		].join("\n"),
+		"src/gen.ts": [
+			"export function gen() {",
+			"\treturn `",
+			'export { fake } from "./nope";',
+			'export * as Ghost from "./nope";',
+			"${ [1].map((n) => n) }`;",
+			"}",
+			"const quoted = 'export { quotedFake } from \"./nope\"';",
+		].join("\n"),
+	}, ({ map }) => {
+		const g = exportNames(map, "src/g.ts");
+		for (const name of ["helper", "other", "zed"]) assert.ok(g.includes(name), `real export ${name} hidden by a /* inside a string: ${g}`);
+		assert.deepEqual(exportNames(map, "src/gen.ts"), ["gen"], "export list inside a template/string literal became a fake export");
+	});
+});
+
+test("plain root directories keep their own name as cluster label", () => {
+	const files = {};
+	// Padding keeps the two 2-module clusters under the oversize-split threshold.
+	for (let i = 0; i < 14; i++) files[`pad${i}/f.ts`] = "export const p = 1;\n";
+	files["src/a.ts"] = 'import { b } from "./b";\nexport const a = b;\n';
+	files["src/b.ts"] = "export const b = 1;\n";
+	files["scripts/c.ts"] = 'import { d } from "./d";\nexport const c = d;\n';
+	files["scripts/d.ts"] = "export const d = 1;\n";
+	withRepo(files, ({ map }) => {
+		const label = (id) => map.clusters.find((c) => c.id === id)?.label;
+		assert.equal(label("cluster:src"), "src");
+		assert.equal(label("cluster:scripts"), "scripts");
+	});
 });

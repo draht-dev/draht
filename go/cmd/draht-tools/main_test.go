@@ -62,7 +62,7 @@ func managedBinary(t *testing.T) (string, string, []byte) {
 func writeManagedStamp(t *testing.T, target string, data []byte) {
 	t.Helper()
 	sum := sha256.Sum256(data)
-	stamp := map[string]any{"name": "draht-graph", "version": "test", "schemaVersion": 5, "sha256": hex.EncodeToString(sum[:]), "size": len(data)}
+	stamp := map[string]any{"name": "draht-graph", "version": "test", "schemaVersion": 6, "sha256": hex.EncodeToString(sum[:]), "size": len(data)}
 	b, _ := json.Marshal(stamp)
 	if err := os.WriteFile(filepath.Join(filepath.Dir(target), ".draht-graph.json"), b, 0o600); err != nil {
 		t.Fatal(err)
@@ -273,7 +273,7 @@ func TestNoArgs_ExitCodeAndStderr(t *testing.T) {
 // quietOutputRe matches map-graph --quiet's single-line stdout contract
 // (this is the exact string the gsd-post-phase hook parses/depends on — see
 // design §7/D7): "map-graph: <N> modules · schemaVersion <V> · <ms>ms → <path>".
-var quietOutputRe = regexp.MustCompile(`^map-graph: \d+ modules · schemaVersion 5 · \d+ms → .+MAP\.json\n$`)
+var quietOutputRe = regexp.MustCompile(`^map-graph: \d+ modules · schemaVersion 6 · \d+ms → .+MAP\.json\n$`)
 
 // TestMapGraphQuiet_StdoutMatchesHookContract covers the finding's
 // "--quiet stdout regex (byte-parity hook path per D7)" gap: runs the real

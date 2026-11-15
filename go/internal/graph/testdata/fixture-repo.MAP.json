@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "generatedAt": "",
   "buildMs": 0,
   "root": "001",
@@ -758,14 +758,6 @@
       "exported": true
     },
     {
-      "name": "helper",
-      "kind": "re-export",
-      "line": 3,
-      "file": "packages/core/src/index.ts",
-      "package": "@fixture/core",
-      "exported": true
-    },
-    {
       "name": "Widget",
       "kind": "function",
       "line": 5,
@@ -1337,7 +1329,7 @@
     },
     {
       "id": "cluster:scripts",
-      "label": "fixture-monorepo · application",
+      "label": "scripts",
       "size": 1,
       "members": [
         "scripts/build.py"
@@ -1350,7 +1342,7 @@
     },
     {
       "id": "cluster:src",
-      "label": "fixture-monorepo · application · 2",
+      "label": "src",
       "size": 1,
       "members": [
         "src/lib.rs"

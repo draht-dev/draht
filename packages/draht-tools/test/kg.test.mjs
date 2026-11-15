@@ -10,7 +10,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../bin/draht-tools.cjs");
-const { parseDecls } = createRequire(import.meta.url)("../bin/draht-kg.cjs");
+const { parseDecls, buildGraph, maskSource, sortByPosixPath, importCycles } = createRequire(import.meta.url)("../bin/draht-kg.cjs");
 let root;
 
 function run(args) {
@@ -631,5 +631,608 @@ test("workspace subpath imports resolve through the package's exports, not its r
 		]);
 	} finally {
 		fs.rmSync(wsRoot, { recursive: true, force: true });
+	}
+});
+
+// ---------------------------------------------------------------------------
+// Review-fix regressions. Each case builds a throwaway repo in-process.
+// ---------------------------------------------------------------------------
+
+function graphOf(files) {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "draht-kg-case-"));
+	try {
+		fs.mkdirSync(path.join(dir, ".git"));
+		for (const [rel, content] of Object.entries(files)) {
+			fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+			fs.writeFileSync(path.join(dir, rel), content);
+		}
+		return buildGraph(dir);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+const edgesFrom = (g, source, relation) => g.edges.filter((e) => e.source === source && (!relation || e.relation === relation));
+const targetsOf = (g, source, relation) => edgesFrom(g, source, relation).map((e) => e.target).sort();
+const hasNode = (g, id) => g.nodes.some((n) => n.id === id);
+
+test("one lexer pass: a string, regex or template cannot swallow code across lines (item 1)", () => {
+	const g = graphOf({
+		"src/helper.ts": "export function helperA() { return 1; }\n",
+		"src/main.ts": [
+			'import { helperA } from "./helper.js";',
+			"export function globs(files: string[]) {",
+			// "/*" inside a string used to open a comment that ran to the next "*/".
+			'\treturn files.filter((f) => f.startsWith("src/*"));',
+			"}",
+			"export function afterGlob() { return helperA(); }",
+			"/* a real comment */",
+			// A lone backtick inside a string used to open a template literal.
+			"export function quote(s: string) {",
+			'\treturn "\x60" + s;',
+			"}",
+			"export function afterTick() { return helperA(); }",
+			// Backtick and star inside a regex literal.
+			"export function escapes(s: string) {",
+			"\treturn s.replace(/[\x60*_]/g, \"\");",
+			"}",
+			"export function afterRegex() { return helperA(); }",
+			// Calls inside ${ } survive, nested templates included.
+			"export function nested(x: string) {",
+			"\treturn \x60[${x}] ${wrap(\x60<${helperA()}>\x60)}\x60;",
+			"}",
+			"export function wrap(s: string) { return s; }",
+		].join("\n"),
+	});
+	for (const fn of ["globs", "afterGlob", "quote", "afterTick", "escapes", "afterRegex", "nested", "wrap"]) {
+		assert.ok(hasNode(g, "src_main_" + fn.toLowerCase()), `${fn}() missing from the graph`);
+	}
+	for (const fn of ["afterglob", "aftertick", "afterregex", "nested"]) {
+		assert.deepEqual(targetsOf(g, "src_main_" + fn, "calls").filter((t) => t === "src_helper_helpera"), ["src_helper_helpera"], `${fn} lost its call`);
+	}
+	assert.ok(targetsOf(g, "src_main_nested", "calls").includes("src_main_wrap"), "call inside a template expression lost");
+	// Same length, same line breaks: offsets and line numbers survive masking.
+	const src = 'a = "x\\"/*"; /* y */ b = \x60q${c}\x60;\nd();';
+	const masked = maskSource(src, "typescript");
+	assert.equal(masked.length, src.length);
+	assert.equal(masked.replace(/[^\n]/g, ""), src.replace(/[^\n]/g, ""));
+});
+
+test("Python masking: # comments and triple-quoted strings (item 1)", () => {
+	const masked = maskSource('x = """a\n"""  # note\ndef f():\n    return 1', "python");
+	assert.equal(masked, 'x = """ \n"""        \ndef f():\n    return 1');
+});
+
+test("workspace root import comes from exports['.'] only and maps dist back to src (item 2)", () => {
+	const g = graphOf({
+		"package.json": JSON.stringify({ name: "ws", private: true }),
+		// The root is dist-only; `./extension` points into src. The root must not borrow it.
+		"packages/knowledge/package.json": JSON.stringify({
+			name: "@ws/knowledge",
+			exports: { ".": { types: "./dist/index.d.ts", import: "./dist/index.js" }, "./extension": { import: "./src/extension.ts" } },
+		}),
+		"packages/knowledge/src/index.ts": "export function knowRoot() { return 1; }\n",
+		"packages/knowledge/src/extension.ts": "export function knowExt() { return 2; }\n",
+		// `main` names build output only.
+		"packages/cli/package.json": JSON.stringify({ name: "@ws/cli", main: "./dist/main.js", types: "./dist/main.d.ts" }),
+		"packages/cli/src/main.ts": "export function cliRun() { return 3; }\n",
+		"packages/app/src/use.ts": [
+			'import { knowRoot } from "@ws/knowledge";',
+			'import { knowExt } from "@ws/knowledge/extension";',
+			'import { cliRun } from "@ws/cli";',
+			"export function useAll() { return [knowRoot(), knowExt(), cliRun()]; }",
+		].join("\n"),
+	});
+	assert.deepEqual(targetsOf(g, "packages_app_src_use", "imports_from"), [
+		"packages_cli_src_main",
+		"packages_knowledge_src_extension",
+		"packages_knowledge_src_index",
+	]);
+	assert.deepEqual(targetsOf(g, "packages_app_src_use_useall", "calls"), [
+		"packages_cli_src_main_clirun",
+		"packages_knowledge_src_extension_knowext",
+		"packages_knowledge_src_index_knowroot",
+	]);
+});
+
+test("declarations inside a template literal are not symbols (item 3)", () => {
+	const g = graphOf({
+		"src/real.ts": "export function render() { return 1; }\n",
+		"src/gen.ts": [
+			'import { render } from "./real.js";',
+			"const TEMPLATE = \x60",
+			"export function render() {",
+			"\treturn 0;",
+			"}",
+			"\x60;",
+			"export function build() {",
+			"\treturn render() + TEMPLATE;",
+			"}",
+		].join("\n"),
+	});
+	assert.ok(!hasNode(g, "src_gen_render"), "phantom node from template text");
+	assert.deepEqual(targetsOf(g, "src_gen_build", "calls"), ["src_real_render"]);
+});
+
+test("a declaration's own name and type-only signatures are not calls (item 4)", () => {
+	const g = graphOf({
+		"src/config.ts": "export function load() { return {}; }\nexport function save() { return 1; }\n",
+		"src/store.ts": [
+			'import { load, save } from "./config.js";',
+			"export interface Persist {",
+			"\tsave(): number;",
+			"}",
+			"export type Loader = {",
+			"\tload(): object;",
+			"};",
+			"export class Store {",
+			"\tload(): object {",
+			"\t\treturn {};",
+			"\t}",
+			"\tflush() { return save(); }",
+			"}",
+		].join("\n"),
+	});
+	const toConfig = g.edges.filter((e) => e.relation === "calls" && e.target.startsWith("src_config_"));
+	assert.deepEqual(toConfig.map((e) => e.source + " -> " + e.target), ["src_store_store_flush -> src_config_save"], "header or signature lines became calls");
+});
+
+test("Python relative and package imports resolve; external ids do not merge with repo files (item 5)", () => {
+	const g = graphOf({
+		"models.py": "class Model:\n    pass\n",
+		"shop/models.py": "class Order:\n    pass\n",
+		"shop/views.py": "from .models import Order\n\nclass View:\n    def get(self):\n        return Order()\n",
+		"shop/sub/deep.py": "from ..models import Order\n\ndef make():\n    return Order()\n",
+		"main.py": "from mypkg import helper\n\ndef run():\n    return helper()\n",
+		"mypkg/__init__.py": "def helper():\n    return 1\n",
+		"other.py": "def helper():\n    return 2\n",
+		"lonely/x.py": "from .models import Z\n",
+	});
+	assert.deepEqual(targetsOf(g, "shop_views", "imports_from"), ["shop_models"], "`.models` must be the sibling module");
+	assert.deepEqual(targetsOf(g, "shop_sub_deep", "imports_from"), ["shop_models"], "`..models` must be the parent package's module");
+	assert.deepEqual(targetsOf(g, "main", "imports_from"), ["mypkg_init"], "`from mypkg import` must find mypkg/__init__.py");
+	assert.deepEqual(targetsOf(g, "main_run", "calls"), ["mypkg_init_helper"]);
+	assert.deepEqual(targetsOf(g, "shop_views_view_get", "instantiates"), ["shop_models_order"]);
+	const unresolved = targetsOf(g, "lonely_x", "imports_from");
+	assert.equal(unresolved.length, 1);
+	assert.notEqual(unresolved[0], "models", "external module merged with the repo's models.py");
+	assert.equal(g.nodes.find((n) => n.id === "models").source_file, "models.py");
+});
+
+test("Python scopes follow indentation: self.x(), triple-quoted strings, __main__ (item 6)", () => {
+	const g = graphOf({
+		"app/util.py": "def normalize(x):\n    return x\n",
+		"app/views.py": [
+			"from .util import normalize",
+			"",
+			"class Alpha:",
+			"    def save(self):",
+			"        pass",
+			"",
+			"class Beta:",
+			"    def run(self):",
+			'        q = """',
+			"SELECT * FROM t",
+			'"""',
+			"        self.save()",
+			"        return normalize(q)",
+			"",
+			"    def after_sql(self):",
+			"        return 1",
+			"",
+			"def main():",
+			"    return Beta().run()",
+			"",
+			'if __name__ == "__main__":',
+			"    main()",
+		].join("\n"),
+	});
+	assert.deepEqual(targetsOf(g, "app_views_beta_run", "calls"), ["app_util_normalize"], "self.save() bound to an unrelated earlier class");
+	assert.ok(hasNode(g, "app_views_beta_after_sql"), "method after a column-0 line in a triple-quoted string was dropped");
+	assert.deepEqual(targetsOf(g, "app_views", "calls"), ["app_views_main"], "module-level main() must belong to the file");
+});
+
+test("names imported from an external module never bind to a same-named repo symbol (item 7)", () => {
+	const g = graphOf({
+		"lib/session.py": "class Session:\n    pass\n",
+		"ext.py": "from requests import Session\n\ndef go():\n    return Session()\n",
+		"own.py": "from lib.session import Session\n\ndef go():\n    return Session()\n",
+		// A package the repo defines but the root-relative resolver misses (src
+		// layout) is not external: the heuristic binding stays.
+		"src/mypkg/engine.py": "class Engine:\n    pass\n",
+		"src/mypkg/run.py": "from mypkg.engine import Engine\n\ndef go():\n    return Engine()\n",
+	});
+	assert.deepEqual(targetsOf(g, "ext_go", "instantiates"), [], "bound to lib.session.Session");
+	assert.deepEqual(targetsOf(g, "own_go", "instantiates"), ["lib_session_session"], "in-repo import must still bind");
+	assert.deepEqual(targetsOf(g, "src_mypkg_run_go", "instantiates"), ["src_mypkg_engine_engine"], "src-layout import lost its heuristic binding");
+});
+
+test("barrels with cyclic star exports resolve every name once (item 8a)", () => {
+	const g = graphOf({
+		"src/a.ts": 'export * from "./b.js";\nexport function fa() { return 1; }\n',
+		"src/b.ts": 'export * from "./a.js";\nexport function fb() { return 2; }\n',
+		"src/c.ts": 'export * from "./b.js";\nexport * from "./d.js";\n',
+		"src/d.ts": 'export * from "./c.js";\nexport function fd() { return 3; }\n',
+		"src/use.ts": [
+			'import { fa, fb } from "./a.js";',
+			'import { fd, fb as other } from "./c.js";',
+			"export function useAll() { return [fa(), fb(), fd(), other()]; }",
+		].join("\n"),
+	});
+	assert.deepEqual(targetsOf(g, "src_use_useall", "calls"), ["src_a_fa", "src_b_fb", "src_d_fd"]);
+});
+
+test("a 1500-module star barrel builds in bounded time (item 8a)", () => {
+	const N = 1500;
+	const files = {};
+	const barrel = [];
+	for (let i = 0; i < N; i++) {
+		files[`src/lib/l${i}.ts`] = `export function a${i}() {}\nexport function b${i}() {}\n`;
+		barrel.push(`export * from "./l${i}.js";`);
+	}
+	files["src/lib/index.ts"] = barrel.join("\n");
+	for (let i = 0; i < N; i++) {
+		const [x, y, z] = [i, (i + 131) % N, (i + 262) % N];
+		files[`src/app/c${i}.ts`] = `import { a${x}, a${y}, a${z} } from "../lib/index.js";\nexport function run${i}() { return [a${x}(), a${y}(), a${z}()]; }\n`;
+	}
+	const t0 = Date.now();
+	const g = graphOf(files);
+	const ms = Date.now() - t0;
+	assert.deepEqual(targetsOf(g, "src_app_c5_run5", "calls"), ["src_lib_l136_a136", "src_lib_l267_a267", "src_lib_l5_a5"]);
+	// ~0.2s with per-module export maps; ~8s when every importer rescanned the barrel.
+	assert.ok(ms < 3000, `barrel resolution took ${ms}ms (was per-importer O(barrel size))`);
+});
+
+// Reference: importCycles as it was before the SCC pre-pass.
+function referenceCycles(graph, maxLen = 5) {
+	const adj = new Map();
+	for (const e of graph.edges) {
+		if (e.relation !== "imports_from" && e.relation !== "re_exports") continue;
+		if (e._deferred) continue;
+		if (!adj.has(e.source)) adj.set(e.source, []);
+		adj.get(e.source).push(e.target);
+	}
+	const cycles = [];
+	const seen = new Set();
+	for (const start of [...adj.keys()].sort()) {
+		const stack = [[start, [start]]];
+		while (stack.length && cycles.length < 20) {
+			const [cur, pathArr] = stack.pop();
+			for (const nb of adj.get(cur) || []) {
+				if (nb === start && pathArr.length > 1) {
+					const minIdx = pathArr.indexOf([...pathArr].sort()[0]);
+					const canon = pathArr.slice(minIdx).concat(pathArr.slice(0, minIdx)).join("→");
+					if (!seen.has(canon)) { seen.add(canon); cycles.push([...pathArr, start]); }
+				} else if (!pathArr.includes(nb) && pathArr.length < maxLen) {
+					stack.push([nb, [...pathArr, nb]]);
+				}
+			}
+		}
+	}
+	return cycles.slice(0, 10);
+}
+
+test("import cycles: same cycles in the same order as the exhaustive search (item 8b)", () => {
+	let seed = 12345;
+	const rand = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+	let withCycles = 0;
+	for (let round = 0; round < 60; round++) {
+		const n = 8 + Math.floor(rand() * 40);
+		const p = 0.03 + rand() * 0.12;
+		const edges = [];
+		for (let a = 0; a < n; a++) {
+			for (let b = 0; b < n; b++) {
+				if (rand() >= p) continue;
+				const roll = rand();
+				edges.push({ source: "f" + a, target: "f" + b, relation: roll < 0.1 ? "re_exports" : "imports_from", _deferred: roll > 0.92 ? true : undefined });
+			}
+		}
+		const expected = referenceCycles({ edges });
+		if (expected.length) withCycles++;
+		assert.deepEqual(importCycles({ edges }), expected, `round ${round}`);
+	}
+	assert.ok(withCycles > 10, "random graphs should exercise real cycles");
+});
+
+test("import cycles: an acyclic 6000-module graph is not path-searched (item 8b)", () => {
+	const edges = [];
+	for (let i = 0; i < 6000; i++) for (let k = 1; k <= 6; k++) if (i + k < 6000) edges.push({ source: "n" + i, target: "n" + (i + k), relation: "imports_from" });
+	const t0 = Date.now();
+	assert.deepEqual(importCycles({ edges }), []);
+	const ms = Date.now() - t0;
+	assert.ok(ms < 500, `acyclic graph took ${ms}ms`);
+});
+
+test("import line numbers come from precomputed line starts (item 8c)", () => {
+	const lines = [];
+	for (let i = 0; i < 20000; i++) lines.push(`import { v${i} } from "./m${i}.js";`);
+	const t0 = Date.now();
+	const d = parseDecls("src/a.ts", lines.join("\n"), "typescript");
+	const ms = Date.now() - t0;
+	assert.equal(d.imports.length, 20000);
+	assert.deepEqual([d.imports[0].line, d.imports[1234].line, d.imports[19999].line], [1, 1235, 20000]);
+	assert.ok(ms < 2000, `20000 imports took ${ms}ms (line lookup rescanned the file per import)`);
+	const py = parseDecls("a.py", "import os\n\nfrom x import y\n", "python");
+	assert.deepEqual(py.imports.map((i) => i.line), [1, 3]);
+});
+
+test("re-export forms: default-as and namespace re-exports (item 9)", () => {
+	const g = graphOf({
+		"src/Button.ts": "export default function Button() { return 1; }\n",
+		"src/utils.ts": "export function inner() { return 2; }\n",
+		"src/index.ts": 'export { default as Button } from "./Button.js";\nexport * as utils from "./utils.js";\n',
+		"src/app.ts": [
+			'import { Button, inner } from "./index.js";',
+			"export function app() { return [Button(), inner()]; }",
+		].join("\n"),
+	});
+	assert.deepEqual(targetsOf(g, "src_app", "imports"), ["src_button_button"], "Button lost, or inner leaked out of `export * as utils`");
+	assert.deepEqual(targetsOf(g, "src_app_app", "calls"), ["src_button_button"]);
+	assert.deepEqual(targetsOf(g, "src_index", "re_exports"), ["src_button", "src_utils"], "both re-exports remain file dependencies");
+});
+
+test("import text inside strings and templates is not a dependency (item 10)", () => {
+	const g = graphOf({
+		"src/heavy.ts": "export function heavy() { return 1; }\n",
+		"src/real.ts": "export function real() { return 2; }\n",
+		"src/gen.test.ts": [
+			'import { real } from "./real.js";',
+			"const FIXTURE = \x60",
+			'import { heavy } from "./heavy.js";',
+			"heavy();",
+			'export * from "./heavy.js";',
+			"\x60;",
+			"const SNIPPET = \"const m = require('./heavy.js');\";",
+			'const LAZY = "import(\\"./heavy.js\\")";',
+			"export function check() { return real() + FIXTURE + SNIPPET + LAZY; }",
+		].join("\n"),
+	});
+	// Only the real import (its specifier is read from the original text) survives.
+	const deps = edgesFrom(g, "src_gen_test").filter((e) => /import|re_exports/.test(e.relation)).map((e) => e.relation + " " + e.target).sort();
+	assert.deepEqual(deps, ["imports src_real_real", "imports_from src_real"]);
+});
+
+test("indirect calls keep every argument, not every other one (item 11)", () => {
+	const g = graphOf({
+		"src/wire.ts": [
+			"export function register(alpha: () => void, beta: () => void, gamma: () => void) {}",
+			"export function a1() {}",
+			"export function a2() {}",
+			"export function a3() {}",
+			"export function wire() {",
+			"\tregister(a1, a2, a3);",
+			"}",
+		].join("\n"),
+		"src/names.ts": 'import { a1, a2, a3 } from "./wire.js";\nexport const all = 1;\n',
+	});
+	assert.deepEqual(targetsOf(g, "src_wire_wire", "indirect_call"), ["src_wire_a1", "src_wire_a2", "src_wire_a3"]);
+	assert.deepEqual(targetsOf(g, "src_names", "indirect_call"), [], "an import list is not a call site");
+});
+
+test("kg flags that need a value reject a missing one with usage and a non-zero exit (item 12)", () => {
+	for (const args of [["export", "tree", "--output"], ["export", "graphml", "--output", "--quiet"], ["query", "x", "--depth"]]) {
+		let failure = null;
+		try {
+			execFileSync(process.execPath, [CLI, "kg", ...args], { cwd: root, encoding: "utf-8", stdio: "pipe" });
+		} catch (err) {
+			failure = err;
+		}
+		assert.ok(failure, `${args.join(" ")} should fail`);
+		assert.equal(failure.status, 1);
+		assert.match(failure.stderr, /requires a value/);
+		assert.doesNotMatch(failure.stderr, /TypeError/);
+		assert.match(failure.stdout, /Usage: draht-tools kg/);
+	}
+	// A real value still works.
+	const out = path.join(root, "tree-out.html");
+	run(["export", "tree", "--output", out]);
+	assert.ok(fs.existsSync(out));
+});
+
+test("Go: a method above its type belongs to it; the type's region closes (item 13)", () => {
+	const g = graphOf({
+		"srv/server.go": [
+			"package srv",
+			"",
+			"func (s *Server) Start() error {",
+			"\treturn nil",
+			"}",
+			"",
+			"type Server struct {",
+			"\taddr string",
+			"}",
+			"",
+			"var defaultServer = newServer()",
+			"",
+			"func newServer() *Server { return &Server{} }",
+		].join("\n"),
+	});
+	assert.ok(hasNode(g, "srv_server_server_start"), "Start() must be a method of Server");
+	assert.ok(!hasNode(g, "srv_server_start"), "Start() became a file-level function");
+	assert.deepEqual(targetsOf(g, "srv_server", "calls"), ["srv_server_newserver"], "package-level call attributed to the Server type");
+});
+
+test("files are ordered by their '/'-normalized path on every OS (item 14)", () => {
+	// On Windows the separator is a backslash, which sorts after digits and
+	// capitals; the normalized order must match POSIX.
+	const win = ["src\\a0.ts", "src\\a\\b.ts", "src\\a-z.ts"];
+	assert.deepEqual(sortByPosixPath(win, "\\"), ["src\\a-z.ts", "src\\a\\b.ts", "src\\a0.ts"]);
+	assert.deepEqual(sortByPosixPath(["src/a0.ts", "src/a/b.ts"], "/"), ["src/a/b.ts", "src/a0.ts"]);
+});
+
+// ---------------------------------------------------------------------------
+// Method coverage: measured against the TypeScript compiler, the engine found
+// 83% of class methods and no constructors.
+// ---------------------------------------------------------------------------
+
+test("a class keeps every method, however many it declares", () => {
+	const N = 150;
+	const body = [];
+	for (let i = 0; i < N; i++) body.push(`\tm${i}(): number { return ${i + 1 < N ? `this.m${i + 1}()` : "0"}; }`);
+	const g = graphOf({ "src/big.ts": ["export class Big {", ...body, "}"].join("\n") });
+	const methods = targetsOf(g, "src_big_big", "method");
+	assert.equal(methods.length, N, `only ${methods.length} of ${N} methods were indexed`);
+	assert.deepEqual(targetsOf(g, "src_big_big_m148", "calls"), ["src_big_big_m149"], "a call between late methods was lost");
+	assert.deepEqual(targetsOf(g, "src_big_big", "calls"), [], "calls of unindexed methods fell back to the class");
+});
+
+test("a class past the method limit is named in the build output", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "draht-kg-limit-"));
+	try {
+		fs.mkdirSync(path.join(dir, ".git"));
+		fs.mkdirSync(path.join(dir, "src"));
+		const body = [];
+		for (let i = 0; i < 1003; i++) body.push(`\tm${i}(): void {}`);
+		fs.writeFileSync(path.join(dir, "src/huge.ts"), ["export class Huge {", ...body, "}"].join("\n"));
+		const out = execFileSync(process.execPath, [CLI, "kg", "build"], { cwd: dir, encoding: "utf-8" });
+		assert.match(out, /warning: 1 class\(es\) declare more than 1000 methods/, out);
+		assert.match(out, /src\/huge\.ts: Huge \(1003 methods\)/, out);
+		const g = JSON.parse(fs.readFileSync(path.join(dir, ".planning/codebase/graph.json"), "utf-8"));
+		assert.equal(g.edges.filter((e) => e.relation === "method" && e.source === "src_huge_huge").length, 1000);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("#private methods are nodes and this.#x() binds to them", () => {
+	const g = graphOf({
+		"src/util.ts": "export function snapshot() { return 1; }\n",
+		"src/parser.ts": [
+			'import { snapshot } from "./util.js";',
+			"export class Parser {",
+			"\t#time(message: string): void { snapshot(); }",
+			"\trun(): void { this.#time(\"x\"); }",
+			"\t#snapshot(): number {",
+			"\t\treturn 1;",
+			"\t}",
+			"\tread(): number { return this.#snapshot(); }",
+			"\tstatic #make(): Parser { return new Parser(); }",
+			"}",
+		].join("\n"),
+	});
+	const node = g.nodes.find((n) => n.id === "src_parser_parser_time");
+	assert.ok(node, "#time() has no node");
+	assert.equal(node.label, "#time()");
+	assert.deepEqual(targetsOf(g, "src_parser_parser", "method"), ["src_parser_parser_make", "src_parser_parser_read", "src_parser_parser_run", "src_parser_parser_snapshot", "src_parser_parser_time"]);
+	assert.deepEqual(targetsOf(g, "src_parser_parser_run", "calls"), ["src_parser_parser_time"]);
+	// The private method, not the imported function of the same name.
+	assert.deepEqual(targetsOf(g, "src_parser_parser_read", "calls"), ["src_parser_parser_snapshot"]);
+	// A real bare call inside a private method still binds to the import…
+	assert.deepEqual(targetsOf(g, "src_parser_parser_time", "calls"), ["src_util_snapshot"]);
+	// …and the `#snapshot(): number {` header is not a call to it.
+	assert.deepEqual(targetsOf(g, "src_parser_parser_snapshot", "calls"), []);
+	assert.deepEqual(targetsOf(g, "src_parser_parser", "calls"), []);
+});
+
+test("methods named like reserved words are methods; statements are not", () => {
+	const g = graphOf({
+		"src/registry.ts": [
+			"export class Registry {",
+			"\tdelete(id: string): boolean { return id.length > 0; }",
+			"\tasync catch(onRejected: () => void): Promise<void> {}",
+			"\treturn(value: number): number { return (value); }",
+			"\tmatch(pattern: string): boolean { return this.delete(pattern); }",
+			"\tselect(): void {}",
+			"\tuse(): void {}",
+			"\tclear(): void { this.delete(\"x\"); }",
+			"}",
+			"export abstract class Shape {",
+			"\tabstract delete(id: string): void;",
+			"}",
+			// An ambient class: no bodies, no modifiers, a return type after the parameters.
+			"export declare class Ambient {",
+			"\tconstructor(name: string);",
+			"\tdelete(id: string): boolean;",
+			"\tget(id: string): string;",
+			"}",
+		].join("\n"),
+		"src/lazy.ts": [
+			"export class Lazy {",
+			// Continuation lines of field initializers, at class-member depth.
+			"\tload = () =>",
+			'\t\timport("./registry.js");',
+			"\tpick = (x: number) =>",
+			"\t\tdelete (this.cache[x]);",
+			"\thandler =",
+			"\t\tfunction (x: number) { return x; };",
+			"\tlater =",
+			"\t\tasync (x: number) => { return x; };",
+			"\tkind = (x: unknown) =>",
+			"\t\ttypeof (x) === \"number\" ? 1 : 2;",
+			"\tcache: Record<number, number> = {};",
+			"\trun(): number {",
+			"\t\tif (this.ok()) { return (1); }",
+			"\t\tfor (const x of [1]) { void x; }",
+			"\t\treturn (2);",
+			"\t}",
+			"\tok(): boolean { return true; }",
+			"}",
+		].join("\n"),
+	});
+	assert.deepEqual(targetsOf(g, "src_registry_registry", "method"), ["catch", "clear", "delete", "match", "return", "select", "use"].map((n) => "src_registry_registry_" + n));
+	assert.deepEqual(targetsOf(g, "src_registry_registry_clear", "calls"), ["src_registry_registry_delete"]);
+	assert.deepEqual(targetsOf(g, "src_registry_registry_match", "calls"), ["src_registry_registry_delete"]);
+	assert.deepEqual(targetsOf(g, "src_registry_shape", "method"), ["src_registry_shape_delete"], "a modifier marks a body-less signature as a declaration");
+	assert.deepEqual(targetsOf(g, "src_registry_ambient", "method"), ["constructor", "delete", "get"].map((n) => "src_registry_ambient_" + n), "a return type marks a body-less signature as a declaration");
+	assert.deepEqual(targetsOf(g, "src_lazy_lazy", "method"), ["src_lazy_lazy_ok", "src_lazy_lazy_run"], "a statement or expression became a method");
+});
+
+test("constructors are nodes and own the calls in their body", () => {
+	const g = graphOf({
+		"src/base.ts": "export function helper(x: string) { return x; }\n",
+		"src/service.ts": [
+			'import { helper } from "./base.js";',
+			"export class Service {",
+			"\tprivate ready = false;",
+			"\tconstructor(private readonly name: string) {",
+			"\t\thelper(name);",
+			"\t\tthis.init();",
+			"\t}",
+			"\tinit(): void { this.ready = true; }",
+			"}",
+			"export function make() { return new Service(\"x\"); }",
+		].join("\n"),
+	});
+	const ctor = g.nodes.find((n) => n.id === "src_service_service_constructor");
+	assert.ok(ctor, "constructor has no node");
+	assert.equal(ctor.label, "constructor()");
+	assert.equal(ctor.source_location, "L4");
+	assert.ok(targetsOf(g, "src_service_service", "method").includes("src_service_service_constructor"), "constructor is not a method of its class");
+	assert.deepEqual(targetsOf(g, "src_service_service_constructor", "calls"), ["src_base_helper", "src_service_service_init"]);
+	assert.deepEqual(targetsOf(g, "src_service_service", "calls"), [], "constructor calls were attributed to the class");
+	// `new Service()` still names the class, as graphify does.
+	assert.deepEqual(targetsOf(g, "src_service_make", "instantiates"), ["src_service_service"]);
+});
+
+test("methods whose names share an id get graphify's suffixed ids, in any order", () => {
+	// Ids below are what graphify 0.9.105 assigns to the same members.
+	const cell = [
+		"\tgetURL(): string { return \"\"; }",
+		"\tgetUrl(): string { return \"\"; }",
+		"\tget value(): number { return 1; }",
+		"\tset value(v: number) {}",
+		"\t#value(): number { return 2; }",
+		"\t$set(k: string): void {}",
+		"\tset(k: string): void {}",
+		"\t_a(): void {}",
+		"\t__a(): void {}",
+		"\tread(): number { return this.#value() + this.value; }",
+		"\twrite(): void { this.$set(\"k\"); this.set(\"k\"); }",
+	];
+	const expected = [
+		"src_a_cell_a_33a2c0", "src_a_cell_a_8f1d68", "src_a_cell_geturl_395b77", "src_a_cell_geturl_ae679b",
+		"src_a_cell_read", "src_a_cell_set", "src_a_cell_set_3c9713", "src_a_cell_value", "src_a_cell_value_75ab3a", "src_a_cell_write",
+	];
+	for (const body of [cell, [...cell].reverse()]) {
+		const g = graphOf({
+			"src/a.ts": ["export class Cell {", ...body, "}"].join("\n"),
+			"src/b.py": "class Repo:\n    def load(self):\n        return self._load()\n\n    def _load(self):\n        return 1\n",
+		});
+		assert.deepEqual(targetsOf(g, "src_a_cell", "method"), expected);
+		assert.equal(g.nodes.find((n) => n.id === "src_a_cell_value_75ab3a").label, "#value()");
+		assert.equal(g.nodes.find((n) => n.id === "src_a_cell_value").label, "value()");
+		assert.deepEqual(targetsOf(g, "src_a_cell_read", "calls"), ["src_a_cell_value_75ab3a"], "this.#value() bound to the public accessor");
+		assert.deepEqual(targetsOf(g, "src_a_cell_write", "calls"), ["src_a_cell_set", "src_a_cell_set_3c9713"]);
+		assert.deepEqual(targetsOf(g, "src_b_repo", "method"), ["src_b_repo_load", "src_b_repo_load_936cd9"]);
+		assert.deepEqual(targetsOf(g, "src_b_repo_load", "calls"), ["src_b_repo_load_936cd9"], "self._load() bound to load() itself");
 	}
 });

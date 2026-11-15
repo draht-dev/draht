@@ -1,16 +1,12 @@
 package graph
 
 import (
-	"context"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/draht-dev/draht/go/internal/model"
-	"github.com/draht-dev/draht/go/internal/parse"
 )
 
-// TestExpandStarReExports_NamedReExportSharesOrigin mirrors the CJS test
+// TestResolveReExports_NamedReExportSharesOrigin mirrors the CJS test
 // "a binding reached directly and through a named re-export is not
 // ambiguous": a star barrel reaching one definition both directly and
 // through `export { foo } from` keeps the name, with Via = the defining
@@ -19,10 +15,9 @@ import (
 // the defining module too. A named re-export of a module with no extracted
 // exports (CommonJS) still reaches the barrel, with the CommonJS module as
 // origin.
-func TestExpandStarReExports_NamedReExportSharesOrigin(t *testing.T) {
+func TestResolveReExports_NamedReExportSharesOrigin(t *testing.T) {
 	root := t.TempDir()
 	files := map[string]string{
-		".git/HEAD":      "ref: refs/heads/main\n",
 		"package.json":   `{"name":"named","version":"1.0.0"}`,
 		"src/xdef.ts":    "export function sharedFoo() { return 1; }\n",
 		"src/xnamed.ts":  "export { sharedFoo } from \"./xdef.js\";\n",
@@ -34,37 +29,8 @@ func TestExpandStarReExports_NamedReExportSharesOrigin(t *testing.T) {
 		"src/znamed.ts":  "export { legacy } from \"./zcjs.js\";\n",
 		"src/zbarrel.ts": "export * from \"./znamed.js\";\n",
 	}
-	for rel, text := range files {
-		p := filepath.Join(root, rel)
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	m, _, err := Build(context.Background(), Options{
-		Root:     root,
-		OutDir:   t.TempDir(),
-		CacheDir: t.TempDir(),
-		Parser:   parse.NewRegex(),
-	})
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-	export := func(id, name string) *model.Export {
-		for i := range m.Modules {
-			if m.Modules[i].ID != id {
-				continue
-			}
-			for j := range m.Modules[i].Exports {
-				if m.Modules[i].Exports[j].Name == name {
-					return &m.Modules[i].Exports[j]
-				}
-			}
-		}
-		return nil
-	}
+	m := buildFixtureMap(t, root, files)
+	export := func(id, name string) *model.Export { return findExport(m, id, name) }
 	for _, barrel := range []string{"src/xbarrel.ts", "src/ybarrel.ts"} {
 		e := export(barrel, "sharedFoo")
 		if e == nil {

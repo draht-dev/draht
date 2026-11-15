@@ -150,6 +150,34 @@ function symbolNodeId(rel, name) {
 	return makeId(fileStem(rel), name);
 }
 
+// Method name → node id for one class. makeId drops `_`, `$` and `#`, so
+// `close()` / `#close()` or `load()` / `_load()` in one class would share
+// an id and the second declaration would vanish. graphify's rule
+// (extractors/engine.py _underscore_salted_nid, _js_member_nid): the one
+// public name of such a group keeps the plain id, every other name gets a
+// suffix taken from its own name, so the result never depends on declaration
+// order. Accessor pairs and overloads are one name, not a collision. Applies
+// where graphify's ids were checked: JS/TS and Python.
+const PRIVATE_MEMBER_PREFIX = { js: /^[_$#]/, py: /^_/ };
+function methodNodeIds(rel, cls, lang) {
+	const privatePrefix = PRIVATE_MEMBER_PREFIX[LANG_FAMILY[lang]];
+	const groups = new Map(); // plain id -> distinct names
+	for (const meth of cls.methods) {
+		const id = makeId(fileStem(rel), cls.name, meth.name);
+		if (!groups.has(id)) groups.set(id, new Set());
+		groups.get(id).add(meth.name);
+	}
+	const ids = new Map();
+	for (const [id, names] of groups) {
+		const isPublic = privatePrefix ? [...names].filter((n) => !privatePrefix.test(n)) : [];
+		for (const name of names) {
+			const plain = !privatePrefix || names.size < 2 || (isPublic.length === 1 && name === isPublic[0]);
+			ids.set(name, plain ? id : makeId(id, crypto.createHash("sha1").update(name, "utf8").digest("hex").slice(0, 6)));
+		}
+	}
+	return ids;
+}
+
 // ============================================================================
 // Repo walk
 // ============================================================================
@@ -176,6 +204,17 @@ function findRepoRoot(startDir) {
 	return path.resolve(startDir);
 }
 
+// Paths ordered by their "/"-normalized form. Sorting the OS form would order
+// `a\b.ts` against `a0.ts` differently from `a/b.ts` (backslash sorts after
+// digits and capitals, slash before), and the first file wins an id collision
+// — so the same repo must not index differently per OS.
+function sortByPosixPath(paths, sep = path.sep) {
+	return paths
+		.map((p) => [sep === "/" ? p : p.split(sep).join("/"), p])
+		.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+		.map((x) => x[1]);
+}
+
 function walk(root, maxFiles = 20000) {
 	const files = [];
 	const stack = [root];
@@ -194,42 +233,305 @@ function walk(root, maxFiles = 20000) {
 			else if (e.isFile() && KG_LANG_BY_EXT[path.extname(e.name).toLowerCase()]) files.push(full);
 		}
 	}
-	files.sort();
-	return files;
+	return sortByPosixPath(files);
 }
 
 // ============================================================================
-// Comment/string stripping (for call-site scans; decls scan raw lines)
+// Source masking — ONE lexer pass (comments, strings, templates, regex literals)
 // ============================================================================
 
-// Comments (and Python docstrings) blanked to spaces, same length and line
-// structure, strings intact: import scans run on this so a documented
-// `import { logger } from './logger'` example is not a real dependency.
-function maskComments(content, lang) {
-	let s = content;
-	if (TS_LIKE.has(lang) || lang === "go" || lang === "rust") {
-		s = s.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "));
-		s = s.replace(/(^|[^:])\/\/[^\n]*/g, (m, p1) => p1 + " ".repeat(m.length - p1.length));
-	} else if (lang === "python") {
-		s = s.replace(/("""|''')[\s\S]*?\1/g, (m) => m.replace(/[^\n]/g, " "));
-		s = s.replace(/#[^\n]*/g, (m) => " ".repeat(m.length));
+// Keywords after which a `/` starts a regex literal instead of dividing.
+const REGEX_PREV_WORDS = new Set([
+	"return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw",
+	"case", "do", "else", "yield", "await",
+]);
+// Punctuation after which an expression may start (so `/` opens a regex).
+const REGEX_PREV_CHARS = new Set(["(", ",", "=", ":", "[", "!", "&", "|", "?", "{", ";"]);
+
+// Comments and string/regex/template TEXT become spaces — same length, same
+// line breaks — so offsets, line numbers and indentation survive. Quote
+// delimiters stay, and so does the code inside a template's `${ … }`
+// (nested templates included). One pass decides what each character is: a
+// `"src/*"` string cannot open a comment, a backtick inside a string or regex
+// cannot open a template, and a `//` in a URL string is not a comment, which
+// separate comment-then-string passes cannot guarantee across lines.
+// Python: `#` comments and ''' / """ strings. Go: raw backtick strings and
+// runes. Rust: nested block comments, raw strings, chars (a lifetime `'a` is
+// not one). When `multiline` is an array, [start, end] offset pairs of
+// multi-line (triple-quoted) strings are appended to it.
+function maskSource(src, lang, multiline) {
+	const js = TS_LIKE.has(lang), py = lang === "python", go = lang === "go", rust = lang === "rust";
+	const n = src.length;
+	const out = [];
+	let flushed = 0;
+	const blank = (a, b) => {
+		if (b <= a) return;
+		out.push(src.slice(flushed, a), src.slice(a, b).replace(/[^\r\n]/g, " "));
+		flushed = b;
+	};
+	const eol = (from) => { const e = src.indexOf("\n", from); return e < 0 ? n : e; };
+	const tplDepth = []; // brace depth inside each open `${ … }`
+	let sig = -1; // index of the last significant code character
+
+	// Opening quote at `start`; returns the index after the closing quote.
+	// An unterminated single-line string ends at its line break.
+	const scanString = (start, quote, multi) => {
+		let j = start + 1;
+		while (j < n) {
+			const ch = src[j];
+			if (ch === "\\") { j += src[j + 1] === "\r" && src[j + 2] === "\n" ? 3 : 2; continue; }
+			if (ch === quote) { blank(start + 1, j); return j + 1; }
+			if (ch === "\n" && !multi) break;
+			j++;
+		}
+		j = Math.min(j, n);
+		blank(start + 1, j);
+		return j;
+	};
+	const scanPyString = (start, quote) => {
+		if (src[start + 1] !== quote || src[start + 2] !== quote) return scanString(start, quote, false);
+		let j = start + 3;
+		while (j < n) {
+			if (src[j] === "\\") { j += 2; continue; }
+			if (src[j] === quote && src[j + 1] === quote && src[j + 2] === quote) {
+				blank(start + 3, j);
+				if (multiline) multiline.push(start, j + 3);
+				return j + 3;
+			}
+			j++;
+		}
+		blank(start + 3, n);
+		if (multiline) multiline.push(start, n);
+		return n;
+	};
+	const scanRaw = (start, close) => {
+		const e = src.indexOf(close, start + 1);
+		const end = e < 0 ? n : e;
+		blank(start + 1, end);
+		return e < 0 ? n : e + close.length;
+	};
+	// Go rune / Rust char literal; -1 when the quote is not one (a Rust lifetime).
+	const scanChar = (start) => {
+		if (src[start + 1] === "\\") {
+			const e = src.indexOf("'", start + 3);
+			return e > 0 && e - start <= 12 && !src.slice(start, e).includes("\n") ? e + 1 : -1;
+		}
+		const hi = src.charCodeAt(start + 1);
+		const close = hi >= 0xd800 && hi <= 0xdbff ? start + 3 : start + 2;
+		return src[close] === "'" && src[start + 1] !== "\n" ? close + 1 : -1;
+	};
+	const scanBlock = (start) => {
+		let depth = 1, j = start + 2;
+		while (j < n && depth) {
+			if (rust && src[j] === "/" && src[j + 1] === "*") { depth++; j += 2; }
+			else if (src[j] === "*" && src[j + 1] === "/") { depth--; j += 2; }
+			else j++;
+		}
+		j = Math.min(j, n);
+		blank(start, j);
+		return j;
+	};
+	// Template text from `from` (after the opening backtick or a closing `}`)
+	// up to the closing backtick or the next `${`.
+	const scanTemplate = (from) => {
+		let j = from;
+		while (j < n) {
+			const ch = src[j];
+			if (ch === "\\") { j += 2; continue; }
+			if (ch === "`") { blank(from, j); sig = j; return j + 1; }
+			if (ch === "$" && src[j + 1] === "{") { blank(from, j + 2); tplDepth.push(0); return j + 2; }
+			j++;
+		}
+		blank(from, n);
+		return n;
+	};
+	const regexAllowed = (at) => {
+		let k = at - 1;
+		while (k >= 0 && (src[k] === " " || src[k] === "\t")) k--;
+		if (k < 0 || src[k] === "\n" || src[k] === "\r") return true; // first token on its line
+		if (sig < 0) return true;
+		const p = src[sig];
+		if (isIdentChar(p)) {
+			let s = sig;
+			while (s > 0 && isIdentChar(src[s - 1])) s--;
+			return REGEX_PREV_WORDS.has(src.slice(s, sig + 1));
+		}
+		if (p === ">") return src[sig - 1] === "="; // `=>`
+		return REGEX_PREV_CHARS.has(p);
+	};
+	// Regex literal opening at `start`; returns the index after its flags, or
+	// -1 when the line has no closing slash (so it was a division).
+	const scanRegex = (start) => {
+		let j = start + 1, inClass = false;
+		while (j < n) {
+			const ch = src[j];
+			if (ch === "\n") return -1;
+			if (ch === "\\") { j += 2; continue; }
+			if (inClass) { if (ch === "]") inClass = false; }
+			else if (ch === "[") inClass = true;
+			else if (ch === "/") {
+				if (j === start + 1) return -1;
+				blank(start + 1, j);
+				let e = j + 1;
+				while (e < n && /[A-Za-z]/.test(src[e])) e++;
+				return e;
+			}
+			j++;
+		}
+		return -1;
+	};
+
+	let i = 0;
+	if (src.startsWith("#!")) { i = eol(0); blank(0, i); }
+	while (i < n) {
+		const c = src[i];
+		if (c === " " || c === "\t" || c === "\n" || c === "\r") { i++; continue; }
+		if (isIdentChar(c)) {
+			let j = i + 1;
+			while (j < n && isIdentChar(src[j])) j++;
+			if (rust && (src[j] === '"' || src[j] === "#") && (src.slice(i, j) === "r" || src.slice(i, j) === "br")) {
+				let h = j;
+				while (src[h] === "#") h++;
+				if (src[h] === '"') {
+					i = scanRaw(h, '"' + "#".repeat(h - j));
+					sig = h;
+					continue;
+				}
+			}
+			sig = j - 1;
+			i = j;
+			continue;
+		}
+		if (c === "/" && !py) {
+			const d = src[i + 1];
+			if (d === "/") { const e = eol(i); blank(i, e); i = e; continue; }
+			if (d === "*") { i = scanBlock(i); continue; }
+			if (js && regexAllowed(i)) {
+				const e = scanRegex(i);
+				if (e > 0) { sig = i; i = e; continue; }
+			}
+		} else if (py && c === "#") {
+			const e = eol(i);
+			blank(i, e);
+			i = e;
+			continue;
+		} else if (c === '"' || (c === "'" && !rust && !go)) {
+			const start = i;
+			i = py ? scanPyString(i, c) : scanString(i, c, rust);
+			sig = start;
+			continue;
+		} else if (c === "'" && (rust || go)) {
+			const e = scanChar(i);
+			if (e > 0) { blank(i + 1, e - 1); sig = i; i = e; continue; }
+		} else if (c === "`" && js) {
+			i = scanTemplate(i + 1);
+			continue;
+		} else if (c === "`" && go) {
+			const start = i;
+			i = scanRaw(i, "`");
+			sig = start;
+			continue;
+		} else if (js && tplDepth.length && (c === "{" || c === "}")) {
+			if (c === "{") tplDepth[tplDepth.length - 1]++;
+			else if (tplDepth[tplDepth.length - 1] === 0) {
+				tplDepth.pop();
+				blank(i, i + 1);
+				i = scanTemplate(i + 1);
+				continue;
+			} else tplDepth[tplDepth.length - 1]--;
+		}
+		sig = i;
+		i++;
 	}
-	return s;
+	out.push(src.slice(flushed));
+	return out.join("");
 }
 
-function stripCode(content, lang) {
-	return maskStrings(maskComments(content, lang), lang);
+// Offset ranges of interface bodies and type-alias right-hand sides in masked
+// TypeScript. Calls cannot occur there, so their member signatures
+// (`save(): number;`) must not be scanned as call sites.
+function typeDeclRanges(masked) {
+	const n = masked.length;
+	const ranges = [];
+	const declRe = /^[ \t]*(?:export\s+)?(?:default\s+)?(?:declare\s+)?(interface|type)\s+[A-Za-z_$][\w$]*/gm;
+	let m;
+	while ((m = declRe.exec(masked)) !== null) {
+		let j = declRe.lastIndex;
+		// Generic parameters and heritage clauses may hold braces and `=>`.
+		let angle = 0;
+		if (m[1] === "interface") {
+			for (; j < n; j++) {
+				const ch = masked[j];
+				if (ch === "<") angle++;
+				else if (ch === ">" && masked[j - 1] !== "=") angle = Math.max(0, angle - 1);
+				else if ((ch === "{" && !angle) || ch === ";") break;
+			}
+			if (masked[j] !== "{") continue;
+			let depth = 0, k = j;
+			for (; k < n; k++) {
+				if (masked[k] === "{") depth++;
+				else if (masked[k] === "}" && --depth === 0) break;
+			}
+			ranges.push([j + 1, Math.min(k, n)]);
+			declRe.lastIndex = Math.max(declRe.lastIndex, Math.min(k, n));
+			continue;
+		}
+		for (; j < n; j++) {
+			const ch = masked[j];
+			if (ch === "<") angle++;
+			else if (ch === ">" && masked[j - 1] !== "=") angle = Math.max(0, angle - 1);
+			else if (!angle && !/\s/.test(ch)) break;
+		}
+		if (masked[j] !== "=") continue;
+		const rhs = ++j;
+		let depth = 0;
+		for (; j < n; j++) {
+			const ch = masked[j];
+			if (ch === "(" || ch === "[" || ch === "{" || ch === "<") depth++;
+			else if (ch === ")" || ch === "]" || ch === "}") { if (--depth < 0) break; }
+			else if (ch === ">") { if (masked[j - 1] !== "=") depth = Math.max(0, depth - 1); }
+			else if (ch === ";" && !depth) break;
+			else if (ch === "\n" && !depth) {
+				// A line break ends the alias unless the type visibly goes on.
+				let p = j - 1;
+				while (p > rhs && /\s/.test(masked[p])) p--;
+				let q = j + 1;
+				while (q < n && /\s/.test(masked[q])) q++;
+				if (!"=|&?:,<(".includes(masked[p]) && !"|&?:.)".includes(masked[q] || "") && !(masked[p] === ">" && masked[p - 1] === "=")) break;
+			}
+		}
+		ranges.push([rhs, Math.min(j, n)]);
+		declRe.lastIndex = Math.max(declRe.lastIndex, Math.min(j, n));
+	}
+	return ranges;
 }
 
-// Strings and template literals blanked on an already comment-masked copy.
-function maskStrings(commentMasked, lang) {
-	let s = commentMasked;
-	if (TS_LIKE.has(lang) || lang === "go" || lang === "rust") {
-		s = s.replace(/`(?:[^`\\]|\\.)*`/g, (m) => m.replace(/[^\n]/g, " "));
+// `text` with the given [start, end) ranges turned to spaces (line breaks kept).
+function blankRanges(text, ranges) {
+	if (!ranges.length) return text;
+	const out = [];
+	let at = 0;
+	for (const [a, b] of [...ranges].sort((x, y) => x[0] - y[0] || y[1] - x[1])) {
+		if (a < at) continue;
+		out.push(text.slice(at, a), text.slice(a, b).replace(/[^\r\n]/g, " "));
+		at = b;
 	}
-	s = s.replace(/"(?:[^"\\\n]|\\.)*"/g, (m) => " ".repeat(m.length));
-	s = s.replace(/'(?:[^'\\\n]|\\.)*'/g, (m) => " ".repeat(m.length));
-	return s;
+	out.push(text.slice(at));
+	return out.join("");
+}
+
+// Line number (1-based) of a character offset, via precomputed line starts.
+function lineIndex(content) {
+	const starts = [0];
+	for (let i = content.indexOf("\n"); i >= 0; i = content.indexOf("\n", i + 1)) starts.push(i + 1);
+	return (idx) => {
+		let lo = 0, hi = starts.length - 1;
+		while (lo < hi) {
+			const mid = (lo + hi + 1) >> 1;
+			if (starts[mid] <= idx) lo = mid; else hi = mid - 1;
+		}
+		return lo + 1;
+	};
 }
 
 // ============================================================================
@@ -237,6 +539,42 @@ function maskStrings(commentMasked, lang) {
 // ============================================================================
 
 const MAX_SYMBOLS_PER_FILE = 300;
+// Methods one class keeps. A class that declares more is named in the
+// `kg build` output instead of losing the rest silently.
+const MAX_METHODS_PER_CLASS = 1000;
+
+// TypeScript/JavaScript: `word(` at class-member depth is a method header for
+// any word — `delete(id) {`, `catch(onRejected) {`, `return(value) {` are all
+// legal — except where the same text is something else:
+//  - a block statement or a function expression has the very shape of a
+//    method header (`if (x) {`, `function (x) {`, `async (x) => {`), so those
+//    words never name a method;
+//  - an expression keyword starts a statement or continues a field
+//    initializer (`import("./x.js");`, `return (x);`), so with no modifier
+//    in front it names a method only once its body opens, or when a return
+//    type follows its parameters (`delete(id: string): boolean;` in an
+//    ambient class).
+const TS_BLOCK_WORDS = new Set(["if", "for", "while", "switch", "with", "function", "async"]);
+const TS_EXPRESSION_WORDS = new Set([
+	"return", "throw", "typeof", "void", "await", "yield", "new", "delete", "import",
+	"super", "this", "case", "catch", "do", "else", "try", "in", "instanceof",
+]);
+
+// Adds a method to its class; false (and counted) past the limit.
+function addMethod(cls, meth) {
+	if (cls.methods.length >= MAX_METHODS_PER_CLASS) {
+		cls.methodsOverLimit = (cls.methodsOverLimit || 0) + 1;
+		return false;
+	}
+	cls.methods.push(meth);
+	return true;
+}
+// An open declaration that turned out not to be one (see TS_EXPRESSION_WORDS).
+function dropTentative(entry) {
+	const methods = entry.tentativeIn.methods;
+	const at = methods.lastIndexOf(entry.ref);
+	if (at >= 0) methods.splice(at, 1);
+}
 
 // Header vs body braces. While a declaration waits for its body, braces in
 // its HEADER — an object type in the parameter list
@@ -288,14 +626,20 @@ function openDecl(ref, depth, line) {
 }
 
 function parseDecls(rel, content, lang) {
-	const lines = content.split("\n");
-	const d = { classes: [], functions: [], types: [], imports: [], docstring: null };
-	// Brace depth is counted on a comment/string-masked copy (same line
-	// structure): a `{` inside `const marker = "{";` or a comment must not
-	// desynchronize `depth` and hide every later top-level declaration.
-	// Import scans read `importText`: comments masked, strings intact.
-	const importText = maskComments(content, lang);
-	const maskedLines = maskStrings(importText, lang).split("\n");
+	const d = { classes: [], functions: [], types: [], imports: [], docstring: null, masked: "", callText: "" };
+	// ONE masked copy (see maskSource) with the same offsets and line structure
+	// as `content`: declarations, brace depth and import statements are all
+	// found on it, so a `{` inside `const marker = "{";`, an `export function`
+	// inside a template literal or an `import` inside a string cannot
+	// desynchronize `depth` or fabricate a symbol or dependency. Import
+	// specifiers are read back from `content` at the match offsets.
+	const multiline = [];
+	const masked = maskSource(content, lang, multiline);
+	d.masked = masked;
+	const importRanges = []; // import statements are not call sites either
+	const maskedLines = masked.split("\n");
+	const lineOf = lineIndex(content);
+	const specAt = (m, g) => content.slice(m.indices[g][0], m.indices[g][1]);
 
 	if (TS_LIKE.has(lang)) {
 		// Leading /** */ or run of // as module rationale
@@ -314,19 +658,23 @@ function parseDecls(rel, content, lang) {
 		// signature, brace-less arrow).
 		const open = [];
 		const closeUnopened = (endLine) => {
-			while (open.length && !open[open.length - 1].opened && depth <= open[open.length - 1].depth) open.pop().ref.end = endLine;
+			while (open.length && !open[open.length - 1].opened && depth <= open[open.length - 1].depth) {
+				const ended = open.pop();
+				ended.ref.end = endLine;
+				if (ended.tentativeIn) dropTentative(ended);
+			}
 		};
 		const scan = { prev: "", word: "" };
-		for (let i = 0; i < lines.length && d.classes.length + d.functions.length + d.types.length < MAX_SYMBOLS_PER_FILE; i++) {
-			const ln = lines[i];
+		for (let i = 0; i < maskedLines.length && d.classes.length + d.functions.length + d.types.length < MAX_SYMBOLS_PER_FILE; i++) {
+			const ln = maskedLines[i];
 			let m;
-			if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)(?:\s*<[^{]*?>)?(?:\s+extends\s+([A-Za-z_$][\w$.]*)(?:\s*<[^{]*?>)?)?(?:\s+implements\s+([^{]+))?/)) && /\bclass\b/.test(ln)) {
+			if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)(?:\s*<[^{]*?>)?(?:\s+extends\s+([A-Za-z_$][\w$.]*)(?:\s*<[^{]*?>)?)?(?:\s+implements\s+([^{]+))?/)) && /\bclass\b/.test(ln)) {
 				closeUnopened(i);
 				currentClass = { name: m[1], line: i + 1, end: null, isDefault: /^\s*export\s+default\b/.test(ln), extends: m[2] ? m[2].split(".")[0] : null, implements: implementsList(m[3]), methods: [] };
 				d.classes.push(currentClass);
 				classDepth = depth;
 				open.push(openDecl(currentClass, depth, i + 1));
-			} else if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/))) {
+			} else if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/))) {
 				closeUnopened(i);
 				const fn = { name: m[1], line: i + 1, end: null, isDefault: /^\s*export\s+default\b/.test(ln) };
 				d.functions.push(fn);
@@ -342,11 +690,17 @@ function parseDecls(rel, content, lang) {
 				d.types.push({ name: m[1], line: i + 1, kind: /\binterface\b/.test(ln) ? "interface" : "enum", extends: m[2] ? m[2].split(".")[0] : null });
 			} else if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?type\s+([A-Za-z_$][\w$]*)/))) {
 				d.types.push({ name: m[1], line: i + 1, kind: "type" });
-			} else if (currentClass && depth === classDepth + 1 && (m = ln.match(/^\s*(?:public\s+|private\s+|protected\s+|static\s+|readonly\s+|override\s+|abstract\s+|async\s+|get\s+|set\s+|\*\s*)*([A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\(/))) {
-				if (!CALL_KEYWORDS.has(m[1]) && currentClass.methods.length < 80) {
-					const meth = { name: m[1], line: i + 1, end: null };
-					currentClass.methods.push(meth);
-					open.push(openDecl(meth, depth, i + 1));
+			} else if (currentClass && depth === classDepth + 1 && (m = ln.match(/^\s*((?:public\s+|private\s+|protected\s+|static\s+|readonly\s+|override\s+|abstract\s+|async\s+|get\s+|set\s+|\*\s*)*)(#?[A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\(/))) {
+				// Members: methods, the constructor, accessors, `#private` names.
+				// An expression keyword still waiting for its body was a statement.
+				while (open.length && open[open.length - 1].tentativeIn && !open[open.length - 1].opened) dropTentative(open.pop());
+				if (!TS_BLOCK_WORDS.has(m[2])) {
+					const meth = { name: m[2], line: i + 1, end: null };
+					if (addMethod(currentClass, meth)) {
+						const entry = openDecl(meth, depth, i + 1);
+						if (!m[1] && TS_EXPRESSION_WORDS.has(m[2])) entry.tentativeIn = currentClass;
+						open.push(entry);
+					}
 				}
 			}
 			// brace depth AFTER matching decls on this line (masked copy)
@@ -375,9 +729,16 @@ function parseDecls(rel, content, lang) {
 					}
 				} else if (header) {
 					if (ch === ";" && !header.paren && !header.angle && !header.type) {
-						open.pop().ref.end = i + 1;
+						const ended = open.pop();
+						ended.ref.end = i + 1;
+						if (ended.tentativeIn && !ended.typed) dropTentative(ended);
 						header = pendingHeader(open);
 					} else {
+						if (header.tentativeIn) {
+							// `typed`: the first thing after the parameter list is a `:`.
+							if (header.afterParams && ch !== " " && ch !== "\t" && ch !== "\r") { header.typed = ch === ":"; header.afterParams = false; }
+							if (ch === ")" && header.paren === 1) header.afterParams = true;
+						}
 						trackHeaderChar(header, lang, ch, scan.prev);
 						noteScanChar(scan, ch, last);
 					}
@@ -385,79 +746,123 @@ function parseDecls(rel, content, lang) {
 				last = ch;
 			}
 		}
-		// imports (content-level, multi-line safe), on the comment-masked copy
-		// so commented-out examples are not dependencies. A statement-level
-		// `type` (`import type OpenAI from "openai"`) is skipped unless it is
-		// itself the default binding (`import type from "./type"`).
-		const impRe = /import\s+(?:type\s+(?!from\s*["']))?(?:(?:([A-Za-z_$][\w$]*)\s*,?\s*)?(?:\*\s*as\s+([A-Za-z_$][\w$]*)|\{([^}]*)\})?\s*from\s*)?["']([^"']+)["']/g;
+		for (const entry of open) if (entry.tentativeIn && !entry.opened) dropTentative(entry);
+		// imports (content-level, multi-line safe), on the masked copy so
+		// commented-out examples and import text inside strings or templates are
+		// not dependencies. A statement-level `type` (`import type OpenAI from
+		// "openai"`) is skipped unless it is itself the default binding
+		// (`import type from "./type"`).
+		const importNames = (list) => list.split(",").map((x) => x.trim().replace(/^type\s+/, "")).filter(Boolean)
+			.map((t) => { const am = t.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/); return am ? { imported: am[1], local: am[2] || am[1] } : null; })
+			.filter(Boolean);
+		const impRe = /import\s+(?:type\s+(?!from\s*["']))?(?:(?:([A-Za-z_$][\w$]*)\s*,?\s*)?(?:\*\s*as\s+([A-Za-z_$][\w$]*)|\{([^}]*)\})?\s*from\s*)?["']([^"']+)["']/gd;
 		let m2;
-		while ((m2 = impRe.exec(importText)) !== null) {
-			if (!/^import/.test(m2[0])) continue;
-			const names = (m2[3] || "").split(",").map((s) => s.trim().replace(/^type\s+/, "")).filter(Boolean)
-				.map((t) => { const am = t.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/); return am ? { imported: am[1], local: am[2] || am[1] } : null; })
-				.filter(Boolean);
-			d.imports.push({ spec: m2[4], default: m2[1] || null, namespace: m2[2] || null, names, reExport: false, dynamic: false, line: lineAt(content, m2.index) });
+		while ((m2 = impRe.exec(masked)) !== null) {
+			importRanges.push([m2.index, m2.index + m2[0].length]);
+			d.imports.push({ spec: specAt(m2, 4), default: m2[1] || null, namespace: m2[2] || null, names: importNames(m2[3] || ""), reExport: false, dynamic: false, line: lineOf(m2.index) });
 		}
-		const reExpRe = /export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']([^"']+)["']/g;
-		while ((m2 = reExpRe.exec(importText)) !== null) {
-			const names = m2[1].split(",").map((s) => s.trim().replace(/^type\s+/, "")).filter(Boolean)
-				.map((t) => { const am = t.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/); return am ? { imported: am[1], local: am[2] || am[1] } : null; })
-				.filter(Boolean);
-			d.imports.push({ spec: m2[2], default: null, namespace: null, names, reExport: true, dynamic: false, line: lineAt(content, m2.index) });
+		const reExpRe = /export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']([^"']+)["']/gd;
+		while ((m2 = reExpRe.exec(masked)) !== null) {
+			importRanges.push([m2.index, m2.index + m2[0].length]);
+			d.imports.push({ spec: specAt(m2, 2), default: null, namespace: null, names: importNames(m2[1]), reExport: true, dynamic: false, line: lineOf(m2.index) });
 		}
-		const starRe = /export\s+\*(?:\s+as\s+[A-Za-z_$][\w$]*)?\s+from\s*["']([^"']+)["']/g;
-		while ((m2 = starRe.exec(importText)) !== null) {
-			d.imports.push({ spec: m2[1], default: null, namespace: "*", names: [], reExport: true, dynamic: false, line: lineAt(content, m2.index) });
+		// `export * from` re-exports every name (namespace "*"); `export * as ns
+		// from` exposes only `ns`, so it carries that name instead.
+		const starRe = /export\s+(?:type\s+)?\*(?:\s+as\s+([A-Za-z_$][\w$]*))?\s+from\s*["']([^"']+)["']/gd;
+		while ((m2 = starRe.exec(masked)) !== null) {
+			importRanges.push([m2.index, m2.index + m2[0].length]);
+			d.imports.push({ spec: specAt(m2, 2), default: null, namespace: m2[1] || "*", names: [], reExport: true, dynamic: false, line: lineOf(m2.index) });
 		}
-		const dynRe = /(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/g;
-		while ((m2 = dynRe.exec(importText)) !== null) {
-			d.imports.push({ spec: m2[1], default: null, namespace: null, names: [], reExport: false, dynamic: true, line: lineAt(content, m2.index) });
+		const dynRe = /(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/gd;
+		while ((m2 = dynRe.exec(masked)) !== null) {
+			d.imports.push({ spec: specAt(m2, 1), default: null, namespace: null, names: [], reExport: false, dynamic: true, line: lineOf(m2.index) });
 		}
 	} else if (lang === "python") {
 		const dm = content.match(/^(?:#[^\n]*\n|\s*\n)*\s*("""|''')([\s\S]*?)\1/);
 		if (dm) d.docstring = dm[2].trim().slice(0, 500) || null;
-		let currentClass = null;
-		for (let i = 0; i < lines.length; i++) {
-			const ln = lines[i];
-			let m;
-			if ((m = ln.match(/^class\s+([A-Za-z_][\w]*)\s*(?:\(([^)]*)\))?/))) {
-				currentClass = { name: m[1], line: i + 1, extends: (m[2] || "").split(",")[0]?.trim().split(".").pop() || null, implements: [], methods: [] };
-				d.classes.push(currentClass);
-			} else if ((m = ln.match(/^(?:async\s+)?def\s+([A-Za-z_][\w]*)/))) {
-				d.functions.push({ name: m[1], line: i + 1 });
-				currentClass = null;
-			} else if (currentClass && (m = ln.match(/^\s{2,8}(?:async\s+)?def\s+([A-Za-z_][\w]*)/))) {
-				if (currentClass.methods.length < 80) currentClass.methods.push({ name: m[1], line: i + 1 });
-			} else if (/^\S/.test(ln) && !/^[\s)\]}#@]/.test(ln) && !/^(class|def|async|from|import)/.test(ln)) {
-				currentClass = null;
-			}
+		// Scope follows indentation: a class or def ends before the next logical
+		// line at its own indent or less, so module-level code after it (an
+		// `if __name__ == "__main__":` block) belongs to the file, and `self.x()`
+		// can only bind inside the enclosing class. Lines inside brackets, after a
+		// backslash, or inside a triple-quoted string continue the previous
+		// statement and never open or close a scope.
+		const inString = new Set();
+		for (let k = 0; k < multiline.length; k += 2) {
+			for (let l = lineOf(multiline[k]) + 1; l <= lineOf(multiline[k + 1] - 1); l++) inString.add(l - 1);
 		}
+		const scopes = [];
+		let bracket = 0, continued = false, lastCode = 0;
+		for (let i = 0; i < maskedLines.length; i++) {
+			const ln = maskedLines[i];
+			const hasCode = /\S/.test(ln);
+			if (hasCode && bracket === 0 && !continued && !inString.has(i)) {
+				const indent = ln.match(/^[ \t]*/)[0].replace(/\t/g, "        ").length;
+				while (scopes.length && indent <= scopes[scopes.length - 1].indent) scopes.pop().ref.end = lastCode;
+				const top = scopes[scopes.length - 1];
+				let m;
+				if (indent === 0 && (m = ln.match(/^class\s+([A-Za-z_][\w]*)\s*(?:\(([^)]*)\))?/))) {
+					const cls = { name: m[1], line: i + 1, end: null, extends: (m[2] || "").split(",")[0]?.trim().split(".").pop() || null, implements: [], methods: [] };
+					d.classes.push(cls);
+					scopes.push({ ref: cls, indent, kind: "class" });
+				} else if ((m = ln.match(/^[ \t]*(?:async\s+)?def\s+([A-Za-z_][\w]*)/))) {
+					if (indent === 0) {
+						const fn = { name: m[1], line: i + 1, end: null };
+						d.functions.push(fn);
+						scopes.push({ ref: fn, indent, kind: "def" });
+					} else if (top && top.kind === "class") {
+						const meth = { name: m[1], line: i + 1, end: null };
+						if (addMethod(top.ref, meth)) scopes.push({ ref: meth, indent, kind: "def" });
+					}
+				}
+			}
+			for (const ch of ln) {
+				if (ch === "(" || ch === "[" || ch === "{") bracket++;
+				else if ((ch === ")" || ch === "]" || ch === "}") && bracket > 0) bracket--;
+			}
+			continued = /\\\s*$/.test(ln);
+			if (hasCode) lastCode = i + 1;
+		}
+		for (const sc of scopes) sc.ref.end = lastCode;
 		const impRe = /^\s*from\s+(\S+)\s+import\s+([^\n(]+|\([^)]*\))|^\s*import\s+([\w.]+)/gm;
 		let m2;
-		while ((m2 = impRe.exec(importText)) !== null) {
-			if (m2[3]) d.imports.push({ spec: m2[3], default: null, namespace: m2[3], names: [], reExport: false, dynamic: false, line: lineAt(content, m2.index) });
+		while ((m2 = impRe.exec(masked)) !== null) {
+			importRanges.push([m2.index, m2.index + m2[0].length]);
+			// `^\s*` can start the match on the blank lines before the statement.
+			const line = lineOf(m2.index + m2[0].search(/\S/));
+			if (m2[3]) d.imports.push({ spec: m2[3], default: null, namespace: m2[3], names: [], reExport: false, dynamic: false, line });
 			else {
-				const names = m2[2].replace(/[()]/g, "").split(",").map((s) => s.trim().split(/\s+as\s+/)).filter((p) => p[0])
-					.map((p) => ({ imported: p[0], local: p[1] || p[0] }));
-				d.imports.push({ spec: m2[1], default: null, namespace: null, names, reExport: false, dynamic: false, line: lineAt(content, m2.index) });
+				const names = m2[2].replace(/[()]/g, "").split(",").map((x) => x.trim().split(/\s+as\s+/)).filter((q) => q[0])
+					.map((q) => ({ imported: q[0], local: q[1] || q[0] }));
+				d.imports.push({ spec: m2[1], default: null, namespace: null, names, reExport: false, dynamic: false, line });
 			}
 		}
 	} else if (lang === "go") {
-		let currentType = null;
 		let depth = 0;
 		// Header braces (`func f(x interface{}) {`) are skipped; see isHeaderBrace.
 		const open = [];
 		const scan = { prev: "", word: "" };
-		for (let i = 0; i < lines.length; i++) {
-			const ln = lines[i];
+		// Types are collected first: a method may be declared above its type and
+		// still belongs to it.
+		const typeByLine = new Map();
+		for (let i = 0; i < maskedLines.length; i++) {
+			const tm = maskedLines[i].match(/^type\s+([A-Za-z_][\w]*)\s+(struct|interface)\b/);
+			if (!tm) continue;
+			const type = { name: tm[1], line: i + 1, end: null, extends: null, implements: [], methods: [] };
+			d.classes.push(type);
+			typeByLine.set(i, type);
+		}
+		// The type whose `{ … }` body is being scanned; its region ends with that
+		// brace, so a package-level `var x = f()` below it belongs to the file.
+		let pendingType = null;
+		for (let i = 0; i < maskedLines.length; i++) {
+			const ln = maskedLines[i];
 			let m;
-			if ((m = ln.match(/^type\s+([A-Za-z_][\w]*)\s+(struct|interface)\b/))) {
-				currentType = { name: m[1], line: i + 1, extends: null, implements: [], methods: [] };
-				d.classes.push(currentType);
+			if (typeByLine.has(i)) {
+				pendingType = { ref: typeByLine.get(i), depth, opened: false };
 			} else if ((m = ln.match(/^func\s+\(\s*\w+\s+\*?([A-Za-z_][\w]*)\s*\)\s+([A-Za-z_][\w]*)/))) {
 				const meth = { name: m[2], line: i + 1, end: null };
 				const owner = d.classes.find((c) => c.name === m[1]);
-				if (owner) { if (owner.methods.length < 80) owner.methods.push(meth); }
+				if (owner) addMethod(owner, meth);
 				else d.functions.push(meth);
 				open.push(openDecl(meth, depth, i + 1));
 			} else if ((m = ln.match(/^func\s+([A-Za-z_][\w]*)/))) {
@@ -472,6 +877,7 @@ function parseDecls(rel, content, lang) {
 			for (const ch of maskedLines[i] || "") {
 				if (ch === "{") {
 					depth++;
+					if (pendingType) pendingType.opened = true;
 					if (header) {
 						if (isHeaderBrace(header, lang, scan.prev, scan.word)) header.type++;
 						else if (depth === header.depth + 1) header.opened = true;
@@ -480,6 +886,10 @@ function parseDecls(rel, content, lang) {
 					}
 				} else if (ch === "}") {
 					depth--;
+					if (pendingType && pendingType.opened && depth <= pendingType.depth) {
+						pendingType.ref.end = i + 1;
+						pendingType = null;
+					}
 					if (header && header.type > 0) {
 						header.type--;
 						noteScanChar(scan, ch, last);
@@ -498,17 +908,20 @@ function parseDecls(rel, content, lang) {
 		// Named (`import foo "path"`), blank (`_`) and dot (`.`) imports all count;
 		// a named alias becomes the local namespace so call binding can resolve
 		// through it. Applies to both single-line and block forms.
-		const impRe = /^import\s+(?:([\w.]+)\s+)?"([^"]+)"|^import\s+\(([^)]*)\)/gm;
+		const impRe = /^import\s+(?:([\w.]+)\s+)?"([^"]+)"|^import\s+\(([^)]*)\)/gmd;
 		let m2;
-		while ((m2 = impRe.exec(importText)) !== null) {
+		while ((m2 = impRe.exec(masked)) !== null) {
 			const entries = [];
-			if (m2[2]) entries.push({ alias: m2[1] || null, spec: m2[2] });
+			if (m2[2]) entries.push({ alias: m2[1] || null, spec: specAt(m2, 2) });
 			else if (m2[3]) {
-				for (const lm of m2[3].matchAll(/^\s*(?:([\w.]+)\s+)?"([^"]+)"/gm)) entries.push({ alias: lm[1] || null, spec: lm[2] });
+				const block = m2.indices[3][0];
+				for (const lm of m2[3].matchAll(/^\s*(?:([\w.]+)\s+)?"([^"]+)"/gmd)) {
+					entries.push({ alias: lm[1] || null, spec: content.slice(block + lm.indices[2][0], block + lm.indices[2][1]) });
+				}
 			}
 			for (const e of entries) {
 				const ns = e.alias && e.alias !== "_" && e.alias !== "." ? e.alias : e.spec.split("/").pop();
-				d.imports.push({ spec: e.spec, default: null, namespace: ns, names: [], reExport: false, dynamic: false, line: lineAt(content, m2.index) });
+				d.imports.push({ spec: e.spec, default: null, namespace: ns, names: [], reExport: false, dynamic: false, line: lineOf(m2.index) });
 			}
 		}
 	} else if (lang === "rust") {
@@ -518,9 +931,8 @@ function parseDecls(rel, content, lang) {
 		let currentImpl = null; // { name, depth at impl line }
 		let depth = 0;
 		const openFns = [];
-		const importLines = importText.split("\n");
-		for (let i = 0; i < lines.length; i++) {
-			const ln = lines[i];
+		for (let i = 0; i < maskedLines.length; i++) {
+			const ln = maskedLines[i];
 			let m;
 			if ((m = ln.match(/^\s*(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum|trait)\s+([A-Za-z_][\w]*)/))) {
 				d.classes.push({ name: m[1], line: i + 1, extends: null, implements: [], methods: [] });
@@ -533,14 +945,11 @@ function parseDecls(rel, content, lang) {
 			} else if ((m = ln.match(/^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_][\w]*)/))) {
 				const fn = { name: m[1], line: i + 1, end: null };
 				const owner = currentImpl ? d.classes.find((c) => c.name === currentImpl.name) : null;
-				if (owner) {
-					if (owner.methods.length < 80) owner.methods.push(fn);
-				} else {
-					d.functions.push(fn);
-				}
+				if (owner) addMethod(owner, fn);
+				else d.functions.push(fn);
 				openFns.push(openDecl(fn, depth, i + 1));
 			}
-			if ((m = (importLines[i] || "").match(/^\s*use\s+([\w:]+)/))) {
+			if ((m = ln.match(/^\s*use\s+([\w:]+)/))) {
 				d.imports.push({ spec: m[1], default: null, namespace: m[1].split("::").pop(), names: [], reExport: false, dynamic: false, line: i + 1 });
 			}
 			for (const ch of maskedLines[i] || "") {
@@ -556,13 +965,10 @@ function parseDecls(rel, content, lang) {
 			}
 		}
 	}
+	// What the call scans read: the masked text minus import statements and, in
+	// TypeScript, interface bodies and type aliases.
+	d.callText = blankRanges(masked, lang === "typescript" ? importRanges.concat(typeDeclRanges(masked)) : importRanges);
 	return d;
-}
-
-function lineAt(content, idx) {
-	let n = 1;
-	for (let i = 0; i < idx && i < content.length; i++) if (content.charCodeAt(i) === 10) n++;
-	return n;
 }
 
 // ============================================================================
@@ -574,6 +980,19 @@ function lineAt(content, idx) {
 function exportTargets(v, out = []) {
 	if (typeof v === "string") out.push(v);
 	else if (v && typeof v === "object") for (const k of Object.values(v)) exportTargets(k, out);
+	return out;
+}
+
+// Targets of a package's root export ("." entry), in declaration order. Only
+// the conditions a Node/TypeScript consumer of the package can take are read:
+// others (`browser`, `bun`, `development`, …) may point at a different entry.
+const ROOT_EXPORT_CONDITIONS = new Set(["source", "types", "import", "module", "node", "require", "default"]);
+function rootExportTargets(v, out = []) {
+	if (typeof v === "string") out.push(v);
+	else if (Array.isArray(v)) for (const x of v) rootExportTargets(x, out);
+	else if (v && typeof v === "object") {
+		for (const [k, x] of Object.entries(v)) if (ROOT_EXPORT_CONDITIONS.has(k)) rootExportTargets(x, out);
+	}
 	return out;
 }
 
@@ -605,6 +1024,7 @@ function buildGraph(root) {
 	// collisions merge deterministically (first wins) — but they are counted
 	// and surfaced as a build warning instead of being silent.
 	const idCollisions = [];
+	const methodLimitHits = []; // classes that declare more than MAX_METHODS_PER_CLASS methods
 	const addNode = (n) => {
 		const existing = nodeById.get(n.id);
 		if (existing) {
@@ -639,7 +1059,10 @@ function buildGraph(root) {
 		try { content = fs.readFileSync(abs, "utf-8"); } catch { continue; }
 		if (content.length > 2_000_000) continue;
 		const decls = parseDecls(rel, content, lang);
-		const stripped = stripCode(content, lang);
+		for (const c of decls.classes) {
+			if (c.methodsOverLimit) methodLimitHits.push({ file: rel, name: c.name, declared: c.methods.length + c.methodsOverLimit });
+		}
+		const stripped = decls.callText;
 		const fileNid = fileNodeId(rel);
 		const fileNode = addNode({ id: fileNid, label: path.basename(rel), file_type: "code", source_file: rel, source_location: "L1" });
 		if (decls.docstring) fileNode.rationale = decls.docstring;
@@ -650,8 +1073,9 @@ function buildGraph(root) {
 			addNode({ id: nid, label: c.name, file_type: "code", source_file: rel, source_location: "L" + c.line, type: "class" });
 			addEdge(fileNid, nid, "contains", { file: rel, line: c.line });
 			localDefs.set(c.name, nid);
+			c.methodIds = methodNodeIds(rel, c, lang);
 			for (const meth of c.methods) {
-				const mid = makeId(fileStem(rel), c.name, meth.name);
+				const mid = c.methodIds.get(meth.name);
 				addNode({ id: mid, label: meth.name + "()", file_type: "code", source_file: rel, source_location: "L" + meth.line, _callable: true });
 				addEdge(nid, mid, "method", { file: rel, line: meth.line });
 			}
@@ -685,39 +1109,6 @@ function buildGraph(root) {
 	const relSet = new Set(rels);
 	const workspaceEntry = new Map();
 	const workspacePkg = new Map(); // package name -> { dir, exports: subpath map | null }
-	{
-		const pkgDirs = new Set([""]);
-		for (const rel of rels) {
-			const parts = rel.split("/");
-			for (let i = 1; i < parts.length; i++) pkgDirs.add(parts.slice(0, i).join("/"));
-		}
-		for (const dir of [...pkgDirs].sort()) {
-			const pjPath = path.join(root, dir, "package.json");
-			try {
-				const pj = JSON.parse(fs.readFileSync(pjPath, "utf-8"));
-				if (!pj.name) continue;
-				if (!workspacePkg.has(pj.name)) workspacePkg.set(pj.name, { dir, exports: subpathExports(pj.exports) });
-				const candidates = [];
-				if (typeof pj.main === "string") candidates.push(pj.main);
-				if (typeof pj.module === "string") candidates.push(pj.module);
-				if (pj.exports) exportTargets(pj.exports, candidates);
-				candidates.push("src/index.ts", "src/index.js", "index.ts", "index.js");
-				for (const c of candidates) {
-					if (typeof c !== "string") continue;
-					const base = path.posix.normalize(path.posix.join(dir, c.replace(/^\.\//, "")));
-					const stems = [base, base.replace(/\.(js|mjs|cjs|jsx)$/, "")];
-					let hit = null;
-					for (const stem of stems) {
-						for (const e of ["", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"]) {
-							if (relSet.has(stem + e)) { hit = stem + e; break; }
-						}
-						if (hit) break;
-					}
-					if (hit) { if (!workspaceEntry.has(pj.name)) workspaceEntry.set(pj.name, hit); break; }
-				}
-			} catch { /* empty */ }
-		}
-	}
 
 	// The file a module path names: as written, with a `.js`-family extension
 	// swapped for a source one, or a directory's index.
@@ -740,6 +1131,36 @@ function buildGraph(root) {
 		const source = distToSrc(target);
 		return source !== target ? probeModule(path.posix.normalize(path.posix.join(dir, source))) : null;
 	};
+
+	{
+		const pkgDirs = new Set([""]);
+		for (const rel of rels) {
+			const parts = rel.split("/");
+			for (let i = 1; i < parts.length; i++) pkgDirs.add(parts.slice(0, i).join("/"));
+		}
+		for (const dir of [...pkgDirs].sort()) {
+			const pjPath = path.join(root, dir, "package.json");
+			try {
+				const pj = JSON.parse(fs.readFileSync(pjPath, "utf-8"));
+				if (!pj.name) continue;
+				const exportMap = subpathExports(pj.exports);
+				if (!workspacePkg.has(pj.name)) workspacePkg.set(pj.name, { dir, exports: exportMap });
+				if (workspaceEntry.has(pj.name)) continue;
+				// The root import comes from `exports["."]` alone — another subpath's
+				// target (`./extension`) is not the package's entry — then the legacy
+				// fields, then a conventional index. Build output (`dist/`) is mapped
+				// back to the source it was compiled from (probeTarget).
+				const rootTargets = [];
+				if (exportMap && Object.hasOwn(exportMap, ".")) rootExportTargets(exportMap["."], rootTargets);
+				for (const f of [pj.module, pj.main, pj.types, pj.typings]) if (typeof f === "string") rootTargets.push(f);
+				rootTargets.push("src/index.ts", "src/index.tsx", "src/index.js", "index.ts", "index.js");
+				for (const t of rootTargets) {
+					const hit = probeTarget(dir, t.replace(/^\.\//, ""));
+					if (hit) { workspaceEntry.set(pj.name, hit); break; }
+				}
+			} catch { /* empty */ }
+		}
+	}
 
 	// A workspace subpath import (`@scope/pkg/testing`) resolves through the
 	// package's `exports`: the exact key, else the `*` pattern with the
@@ -773,52 +1194,115 @@ function buildGraph(root) {
 		return null;
 	};
 
-	const resolveSpec = (fromRel, spec) => {
-		const fromDir = path.posix.dirname(fromRel);
-		if (spec.startsWith(".")) return probeModule(path.posix.normalize(path.posix.join(fromDir, spec)));
+	// Python module path → file: `pkg/__init__.py` (a package wins over a
+	// same-named module, as in the import system) or `pkg/mod.py`.
+	const probePyModule = (base) => {
+		for (const c of [path.posix.join(base, "__init__.py"), base + ".py"]) if (relSet.has(c)) return c;
+		return null;
+	};
+	// Dots count package levels from the importing file's own package: `.` is
+	// its directory, `..` the parent. Absolute dotted paths start at the repo root.
+	const resolvePySpec = (fromRel, spec) => {
+		const dots = spec.match(/^\.*/)[0].length;
+		const rest = spec.slice(dots);
+		if (!/^[\w.]*$/.test(rest)) return null;
+		const mod = rest.replace(/\./g, "/");
+		if (!dots) return mod ? probePyModule(mod) : null;
+		let dir = path.posix.dirname(fromRel);
+		for (let k = 1; k < dots; k++) dir = path.posix.dirname(dir);
+		if (mod) return probePyModule(path.posix.join(dir, mod));
+		const init = path.posix.join(dir, "__init__.py"); // `from . import x`: the package itself
+		return relSet.has(init) ? init : null;
+	};
+
+	const specMemo = new Map();
+	const resolveSpecUncached = (fromRel, spec) => {
+		if (perFile.get(fromRel).lang === "python") return resolvePySpec(fromRel, spec);
+		if (spec.startsWith(".")) return probeModule(path.posix.normalize(path.posix.join(path.posix.dirname(fromRel), spec)));
 		if (workspaceEntry.has(spec)) return workspaceEntry.get(spec);
 		const slash = spec.indexOf("/", spec.startsWith("@") ? spec.indexOf("/") + 1 : 0);
 		if (slash > 0 && workspacePkg.has(spec.slice(0, slash))) return resolveWorkspaceSubpath(workspacePkg.get(spec.slice(0, slash)), "." + spec.slice(slash));
-		// python dotted module → path
-		if (/^[\w.]+$/.test(spec) && spec.includes(".")) {
-			const p = spec.replace(/\./g, "/");
-			for (const c of [p + ".py", p + "/__init__.py"]) if (relSet.has(c)) return c;
-		}
-		if (relSet.has(spec + ".py")) return spec + ".py";
 		return null;
 	};
+	const resolveSpec = (fromRel, spec) => {
+		const key = fromRel + "\n" + spec;
+		if (!specMemo.has(key)) specMemo.set(key, resolveSpecUncached(fromRel, spec));
+		return specMemo.get(key);
+	};
 
-	// Resolve an EXPORTED name of a module to the defining symbol node,
-	// following re-export bindings — named (`export { helper } from`,
-	// including aliases) and star — with a cycle guard. A barrel has no
-	// localDef for pass-through names, so consumers importing through it
-	// would otherwise lose their symbol-import and call edges.
-	const resolveExported = (rel, name, seen = new Set()) => {
-		const key = rel + "|" + name;
-		if (seen.has(key)) return null;
-		seen.add(key);
+	// A module's exported names → defining symbol node, following re-export
+	// bindings: named (`export { helper } from`, aliases, `default as X`) and
+	// star (`export * from`, which never carries `default`). `export * as ns`
+	// exposes only `ns`, no inner name. A barrel has no localDef for
+	// pass-through names, so consumers importing through it would otherwise
+	// lose their symbol-import and call edges. Built once per module (a
+	// 1500-entry barrel costs one pass, not one per importer), with a cycle
+	// guard: a map computed while a cycle cut part of it away is incomplete
+	// for every module on that cycle except the one the cut points at, so only
+	// the latter is kept.
+	const reExportsOf = new Map();
+	const reExportList = (rel) => {
+		let list = reExportsOf.get(rel);
+		if (!list) {
+			list = [];
+			for (const imp of perFile.get(rel).decls.imports) {
+				if (!imp.reExport) continue;
+				const target = resolveSpec(rel, imp.spec);
+				if (target) list.push({ target, star: imp.namespace === "*", names: imp.names });
+			}
+			reExportsOf.set(rel, list);
+		}
+		return list;
+	};
+	const NO_EXPORTS = new Map();
+	const exportMaps = new Map();
+	const exportsInProgress = new Map(); // rel -> depth on the resolution stack
+	let cutDepth = Infinity; // shallowest in-progress module a cycle cut pointed at
+	const exportsOf = (rel) => {
+		const done = exportMaps.get(rel);
+		if (done) return done;
 		const pf = perFile.get(rel);
-		if (!pf) return null;
-		if (pf.localDefs.has(name)) return pf.localDefs.get(name);
-		for (const imp of pf.decls.imports) {
-			if (!imp.reExport) continue;
-			const resolved = resolveSpec(rel, imp.spec);
-			if (!resolved) continue;
-			if (imp.namespace === "*") {
-				const hit = resolveExported(resolved, name, seen);
-				if (hit) return hit;
+		if (!pf) return NO_EXPORTS;
+		const depth = exportsInProgress.get(rel);
+		if (depth !== undefined) { cutDepth = Math.min(cutDepth, depth); return NO_EXPORTS; }
+		const myDepth = exportsInProgress.size;
+		exportsInProgress.set(rel, myDepth);
+		const outerCut = cutDepth;
+		cutDepth = Infinity;
+		const map = new Map(pf.localDefs);
+		if (pf.defaultNid) map.set("default", pf.defaultNid);
+		for (const re of reExportList(rel)) {
+			const target = exportsOf(re.target);
+			if (re.star) {
+				for (const [name, nid] of target) if (name !== "default" && !map.has(name)) map.set(name, nid);
 			} else {
-				for (const n of imp.names) {
-					if (n.local !== name) continue;
-					const hit = resolveExported(resolved, n.imported, seen);
-					if (hit) return hit;
+				for (const n of re.names) {
+					const nid = !map.has(n.local) && target.get(n.imported);
+					if (nid) map.set(n.local, nid);
 				}
 			}
 		}
-		return null;
+		exportsInProgress.delete(rel);
+		if (cutDepth >= myDepth) {
+			exportMaps.set(rel, map);
+			cutDepth = outerCut;
+		} else cutDepth = Math.min(outerCut, cutDepth);
+		return map;
+	};
+	const resolveExported = (rel, name) => exportsOf(rel).get(name) || null;
+	// The symbol a module's default import binds to: its own default
+	// declaration, else what it re-exports as `default`.
+	const defaultOf = (rel) => {
+		const pf = perFile.get(rel);
+		return pf ? pf.defaultNid || resolveExported(rel, "default") : null;
 	};
 
 	// -- phase 3: import edges
+	// Directory names and module stems the repo itself provides: a top-level
+	// package the repo defines (a `src/` layout the root-relative resolver
+	// misses) is not proof of an external import.
+	const repoNames = new Set();
+	for (const rel of rels) for (const part of rel.split("/")) repoNames.add(part.replace(/\.[^.]+$/, ""));
 	for (const rel of rels) {
 		const pf = perFile.get(rel);
 		for (const imp of pf.decls.imports) {
@@ -830,7 +1314,16 @@ function buildGraph(root) {
 				// external module node (concept-style: no source_file, like graphify module nodes)
 				targetFileNid = makeId(imp.spec);
 				if (!targetFileNid) continue;
+				// `models` (or `.models`) must not merge with the repo's own models.py.
+				const taken = nodeById.get(targetFileNid);
+				if (taken && taken.source_file) targetFileNid = makeId("external", imp.spec);
 				addNode({ id: targetFileNid, label: imp.spec, file_type: "code", source_file: "", source_location: "", type: "module" });
+				// Names imported from a package outside the repo stay with that
+				// import: they never fall back to a same-named repo symbol.
+				if (!imp.spec.startsWith(".") && !imp.dynamic && !repoNames.has(imp.spec.split(/[./]/)[0])) {
+					for (const n of imp.names) pf.importedNames.set(n.local, { rel: null, name: n.imported, nid: null, external: true });
+					if (imp.default) pf.importedNames.set(imp.default, { rel: null, name: "default", nid: null, external: true });
+				}
 			}
 			const relation = imp.dynamic ? "dynamic_import" : imp.reExport ? "re_exports" : "imports_from";
 			addEdge(pf.fileNid, targetFileNid, relation, { file: rel, line: imp.line, context: "import", deferred: imp.dynamic || undefined });
@@ -846,8 +1339,9 @@ function buildGraph(root) {
 						pf.importedNames.set(n.local, { rel: resolved, name: n.imported, nid: null });
 					}
 				}
-				if (imp.default) pf.importedNames.set(imp.default, { rel: resolved, name: "default", nid: tpf.defaultNid || null });
-				if (imp.namespace && imp.namespace !== "*") pf.importedNames.set(imp.namespace, { rel: resolved, name: "*", nid: null });
+				if (imp.default) pf.importedNames.set(imp.default, { rel: resolved, name: "default", nid: defaultOf(resolved) });
+				// `export * as ns from` binds `ns` for importers of this module, not here.
+				if (imp.namespace && imp.namespace !== "*" && !imp.reExport) pf.importedNames.set(imp.namespace, { rel: resolved, name: "*", nid: null });
 			}
 		}
 	}
@@ -866,12 +1360,13 @@ function buildGraph(root) {
 		if (pf.localDefs.has(name)) return { nid: pf.localDefs.get(name), confidence: "EXTRACTED" };
 		const imp = pf.importedNames.get(name);
 		if (imp && imp.nid) return { nid: imp.nid, confidence: "EXTRACTED" };
+		if (imp && imp.external) return null;
 		if (imp && imp.rel) {
 			const tpf = perFile.get(imp.rel);
 			// A default import binds to the TARGET's default declaration,
 			// whatever local name the importer chose.
 			const t = imp.name === "default"
-				? (tpf && tpf.defaultNid)
+				? defaultOf(imp.rel)
 				: (tpf && (tpf.localDefs.get(imp.name) || resolveExported(imp.rel, imp.name)));
 			if (t) return { nid: t, confidence: "EXTRACTED" };
 			return null;
@@ -913,7 +1408,7 @@ function buildGraph(root) {
 		// file, not to that function.
 		const anchors = [];
 		for (const c of pf.decls.classes) {
-			for (const meth of c.methods) anchors.push({ nid: makeId(fileStem(rel), c.name, meth.name), line: meth.line, end: meth.end != null ? meth.end : null });
+			for (const meth of c.methods) anchors.push({ nid: c.methodIds.get(meth.name), line: meth.line, end: meth.end != null ? meth.end : null });
 			anchors.push({ nid: pf.localDefs.get(c.name), line: c.line, end: c.end != null ? c.end : null });
 		}
 		for (const f of pf.decls.functions) anchors.push({ nid: pf.localDefs.get(f.name), line: f.line, end: f.end != null ? f.end : null });
@@ -926,18 +1421,33 @@ function buildGraph(root) {
 			}
 			return cur ? cur.nid : pf.fileNid;
 		};
+		// A declaration's own name on its header line (`load(): object {`,
+		// `def load(self):`) is not a call to whatever `load` the file imports.
+		const declNames = new Map(); // 1-based line → names declared there
+		const noteDecl = (name, line) => {
+			if (!declNames.has(line)) declNames.set(line, new Set());
+			declNames.get(line).add(name);
+		};
+		for (const c of pf.decls.classes) {
+			noteDecl(c.name, c.line);
+			for (const meth of c.methods) noteDecl(meth.name, meth.line);
+		}
+		for (const f of pf.decls.functions) noteDecl(f.name, f.line);
 		const seenCalls = new Set();
 		// Lookbehind (not a consuming prefix): a consumed delimiter would hide
 		// the NEXT match in nested calls like `outer(inner())`.
-		const callRe = /(?<![\w.$])([A-Za-z_$][\w$]*)\s*\(/g;
+		const callRe = /(?<![\w.$#])([A-Za-z_$][\w$]*)\s*\(/g;
 		const newRe = /\bnew\s+([A-Za-z_$][\w$.]*)\s*[(<]/g;
 		for (let i = 0; i < lines.length; i++) {
 			const ln = lines[i];
 			let m;
 			callRe.lastIndex = 0;
+			const headerNames = declNames.get(i + 1);
+			const headerSeen = headerNames ? new Set() : null;
 			while ((m = callRe.exec(ln)) !== null) {
 				const name = m[1];
 				if (CALL_KEYWORDS.has(name) || BUILTINS.has(name)) continue;
+				if (headerNames && headerNames.has(name) && !headerSeen.has(name)) { headerSeen.add(name); continue; }
 				const caller = regionOf(i + 1);
 				const r = resolveName(pf, name);
 				if (!r || r.nid === caller) continue;
@@ -957,7 +1467,7 @@ function buildGraph(root) {
 			// this.x()/self.x() → the ENCLOSING class's method, never an earlier
 			// unrelated class that happens to share the method name.
 			let sm;
-			const selfRe = /\b(?:this|self)\.([A-Za-z_][\w$]*)\s*\(/g;
+			const selfRe = /\b(?:this|self)\.(#?[A-Za-z_$][\w$]*)\s*\(/g;
 			while ((sm = selfRe.exec(ln)) !== null) {
 				const caller = regionOf(i + 1);
 				let owner = null;
@@ -967,7 +1477,7 @@ function buildGraph(root) {
 					if (c.methods.some((x) => x.name === sm[1])) owner = c;
 				}
 				if (owner) {
-					const mid = makeId(fileStem(rel), owner.name, sm[1]);
+					const mid = owner.methodIds.get(sm[1]);
 					const key = caller + "|" + mid + "|calls";
 					if (!seenCalls.has(key) && mid !== caller) { seenCalls.add(key); addEdge(caller, mid, "calls", { file: rel, line: i + 1, context: "call" }); }
 				}
@@ -979,7 +1489,7 @@ function buildGraph(root) {
 			// import) and must not be shadowed by a module-level declaration.
 			// Lookbehind, not a consuming prefix: `util.outer(util.inner())`
 			// must match the inner call too.
-			const nsCallRe = /(?<![\w.$])([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\s*\(/g;
+			const nsCallRe = /(?<![\w.$#])([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\s*\(/g;
 			let nc;
 			while ((nc = nsCallRe.exec(ln)) !== null) {
 				if (nc[1] === "this" || nc[1] === "self") continue;
@@ -1010,8 +1520,10 @@ function buildGraph(root) {
 				seenCalls.add(key);
 				addEdge(caller, r.nid, "instantiates", { file: rel, line: i + 1, confidence: r.confidence, context: "call" });
 			}
-			// indirect_call: known callable passed as a bare argument — f(cb) / f(x, cb)
-			const argRe = /[(,]\s*([A-Za-z_$][\w$]*)\s*[,)]/g;
+			// indirect_call: known callable passed as a bare argument — f(cb) / f(x, cb).
+			// The delimiter after the name is a lookahead: consuming it would hide
+			// the next argument's leading comma (`f(a, b, c)` would lose `b`).
+			const argRe = /[(,]\s*([A-Za-z_$][\w$]*)\s*(?=[,)])/g;
 			while ((m = argRe.exec(ln)) !== null) {
 				const name = m[1];
 				if (CALL_KEYWORDS.has(name) || BUILTINS.has(name)) continue;
@@ -1050,7 +1562,7 @@ function buildGraph(root) {
 		n.norm_label = normalizeId(n.label).replace(/_/g, " ");
 	}
 
-	return { nodes, edges: dedupedEdges, communities, idCollisions };
+	return { nodes, edges: dedupedEdges, communities, idCollisions, methodLimitHits };
 }
 
 // ---------------------------------------------------------------------------
@@ -1252,6 +1764,48 @@ function suggestQuestions(graph, adj, communities, gods) {
 	return q.slice(0, 8);
 }
 
+// Strongly connected components (iterative Tarjan): node id → component id,
+// and component sizes. A cycle lives entirely inside one component, so the
+// bounded path search below never leaves it — and never starts at all in an
+// acyclic graph, where it would otherwise walk every path up to maxLen.
+function stronglyConnected(adj) {
+	const index = new Map(), low = new Map(), comp = new Map(), size = [];
+	const onStack = new Set(), stack = [];
+	let counter = 0;
+	const visit = (root) => {
+		const work = [[root, 0]];
+		index.set(root, counter); low.set(root, counter); counter++;
+		stack.push(root); onStack.add(root);
+		while (work.length) {
+			const frame = work[work.length - 1];
+			const [v] = frame;
+			const nbrs = adj.get(v) || [];
+			if (frame[1] < nbrs.length) {
+				const w = nbrs[frame[1]++];
+				if (!index.has(w)) {
+					index.set(w, counter); low.set(w, counter); counter++;
+					stack.push(w); onStack.add(w);
+					work.push([w, 0]);
+				} else if (onStack.has(w)) low.set(v, Math.min(low.get(v), index.get(w)));
+				continue;
+			}
+			work.pop();
+			if (work.length) {
+				const parent = work[work.length - 1][0];
+				low.set(parent, Math.min(low.get(parent), low.get(v)));
+			}
+			if (low.get(v) === index.get(v)) {
+				const id = size.length;
+				let n = 0, w;
+				do { w = stack.pop(); onStack.delete(w); comp.set(w, id); n++; } while (w !== v);
+				size.push(n);
+			}
+		}
+	};
+	for (const v of adj.keys()) if (!index.has(v)) visit(v);
+	return { comp, size };
+}
+
 function importCycles(graph, maxLen = 5) {
 	// file-level digraph over imports_from/re_exports, excluding deferred (dynamic) imports
 	const adj = new Map();
@@ -1261,14 +1815,18 @@ function importCycles(graph, maxLen = 5) {
 		if (!adj.has(e.source)) adj.set(e.source, []);
 		adj.get(e.source).push(e.target);
 	}
+	const { comp, size } = stronglyConnected(adj);
 	const cycles = [];
 	const seen = new Set();
 	const nodes = [...adj.keys()].sort();
 	for (const start of nodes) {
+		const home = comp.get(start);
+		if (size[home] < 2) continue;
 		const stack = [[start, [start]]];
 		while (stack.length && cycles.length < 20) {
 			const [cur, pathArr] = stack.pop();
 			for (const nb of (adj.get(cur) || [])) {
+				if (comp.get(nb) !== home) continue;
 				if (nb === start && pathArr.length > 1) {
 					const rot = [...pathArr];
 					const minIdx = rot.indexOf([...rot].sort()[0]);
@@ -1590,14 +2148,21 @@ function findNode(graph, label) {
 // Commands
 // ---------------------------------------------------------------------------
 
+// A bad command line: reported with the usage text and a non-zero exit.
+class KgUsageError extends Error {}
+
+// A value flag must be followed by its value (never by another flag); a
+// missing one used to leave `true` behind for the command to choke on.
 function parseFlags(args, valueFlags = []) {
 	const flags = {}, positional = [];
 	for (let i = 0; i < args.length; i++) {
 		const a = args[i];
 		if (a.startsWith("--")) {
 			const name = a.slice(2);
-			if (valueFlags.includes(name) && i + 1 < args.length) { flags[name] = flags[name] ? [].concat(flags[name], args[++i]) : args[++i]; }
-			else flags[name] = true;
+			if (valueFlags.includes(name)) {
+				if (i + 1 >= args.length || args[i + 1].startsWith("--")) throw new KgUsageError(`--${name} requires a value`);
+				flags[name] = flags[name] ? [].concat(flags[name], args[++i]) : args[++i];
+			} else flags[name] = true;
 		} else positional.push(a);
 	}
 	return { flags, positional };
@@ -1631,6 +2196,11 @@ kgCommands.build = function (root, args) {
 			console.log(`warning: ${graph.idCollisions.length} id collision(s) — graphify ids.py canonicalization merges these (first wins):`);
 			for (const c of graph.idCollisions.slice(0, 5)) console.log(`  ${c.id}: kept ${c.kept}, merged ${c.dropped}`);
 			if (graph.idCollisions.length > 5) console.log(`  … and ${graph.idCollisions.length - 5} more`);
+		}
+		if (graph.methodLimitHits && graph.methodLimitHits.length) {
+			console.log(`warning: ${graph.methodLimitHits.length} class(es) declare more than ${MAX_METHODS_PER_CLASS} methods — the rest are not indexed:`);
+			for (const c of graph.methodLimitHits.slice(0, 5)) console.log(`  ${c.file}: ${c.name} (${c.declared} methods)`);
+			if (graph.methodLimitHits.length > 5) console.log(`  … and ${graph.methodLimitHits.length - 5} more`);
 		}
 		console.log(`→ ${jsonPath}\n→ ${reportPath}`);
 	}
@@ -1900,9 +2470,11 @@ kgCommands.export = function (root, args) {
 	const format = positional[0];
 	const graph = requireGraph(root);
 	if (!graph) return;
-	if (format === "tree") console.log("→ " + exportTree(root, graph, flags.output));
+	// A repeated `--output` keeps the last one.
+	const output = Array.isArray(flags.output) ? flags.output[flags.output.length - 1] : flags.output;
+	if (format === "tree") console.log("→ " + exportTree(root, graph, output));
 	else if (format === "wiki") console.log("→ " + exportWiki(root, graph));
-	else if (format === "graphml") console.log("→ " + exportGraphml(root, graph, flags.output));
+	else if (format === "graphml") console.log("→ " + exportGraphml(root, graph, output));
 	else console.log("usage: kg export tree|wiki|graphml [--output path]");
 };
 
@@ -2081,11 +2653,18 @@ function kgMain(argv) {
 	if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") { console.log(KG_HELP); return 0; }
 	if (!kgCommands[cmd]) { console.error(`unknown kg command: ${cmd}\n`); console.log(KG_HELP); return 1; }
 	const root = findRepoRoot(process.cwd());
-	kgCommands[cmd](root, args);
+	try {
+		kgCommands[cmd](root, args);
+	} catch (err) {
+		if (!(err instanceof KgUsageError)) throw err;
+		console.error(`kg ${cmd}: ${err.message}\n`);
+		console.log(KG_HELP);
+		return 1;
+	}
 	return 0;
 }
 
-module.exports = { kgMain, buildGraph, writeGraph, loadGraph, queryTerms, scoreNodes, normalizeId, makeId, parseDecls, KG_HELP };
+module.exports = { kgMain, buildGraph, writeGraph, loadGraph, queryTerms, scoreNodes, normalizeId, makeId, parseDecls, maskSource, sortByPosixPath, importCycles, KG_HELP };
 
 if (require.main === module) {
 	process.exit(kgMain(process.argv.slice(2)));

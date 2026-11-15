@@ -286,3 +286,47 @@ func TestApplyClusters(t *testing.T) {
 		t.Errorf("modules[1].Cluster = %v, want nil", modules[1].Cluster)
 	}
 }
+
+func labelsByID(res Result) map[string]string {
+	out := map[string]string{}
+	for _, c := range res.Clusters {
+		out[c.ID] = c.Label
+	}
+	return out
+}
+
+// TestCompute_BareRootDirKeepsItsName: a cluster living in one plain root
+// directory (src, scripts) keeps that name. It used to be relabelled after
+// its (root) package, which collapsed distinct clusters into
+// "<pkg> · application", "<pkg> · application · 2".
+func TestCompute_BareRootDirKeepsItsName(t *testing.T) {
+	root := pstr("my-app")
+	modules := []model.Module{
+		mod("src/a.ts", root), mod("src/b.ts", root),
+		mod("scripts/c.ts", root), mod("scripts/d.ts", root),
+	}
+	edges := []model.Edge{imp("src/a.ts", "src/b.ts"), imp("scripts/c.ts", "scripts/d.ts")}
+	// Padding keeps both 2-module clusters under the oversize-split threshold.
+	for i := 0; i < 14; i++ {
+		modules = append(modules, mod(fmt.Sprintf("dummy%d/f.ts", i), nil))
+	}
+	got := labelsByID(Compute(modules, edges))
+	if got["cluster:src"] != "src" || got["cluster:scripts"] != "scripts" {
+		t.Errorf("labels = %v, want cluster:src -> src and cluster:scripts -> scripts", got)
+	}
+}
+
+// TestCompute_ContainerDirIsRenamedAfterItsPackage: a bare prefix that is a
+// container directory (it holds modules of several packages) says nothing, so
+// a single-package cluster there is named after its package.
+func TestCompute_ContainerDirIsRenamedAfterItsPackage(t *testing.T) {
+	modules := []model.Module{
+		mod("packages/app/a.ts", pstr("@fx/app")),
+		mod("packages/core/b.ts", pstr("@fx/core")),
+		mod("packages/stray.ts", pstr("@fx/stray")),
+	}
+	got := labelsByID(Compute(modules, nil))
+	if got["cluster:packages"] != "stray" {
+		t.Errorf("labels = %v, want cluster:packages -> stray", got)
+	}
+}

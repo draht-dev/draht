@@ -15,22 +15,6 @@ type StarReExport struct {
 	Line   int    // 1-based line of the `export * from` statement
 }
 
-// exportOriginKey identifies the BINDING an export entry stands for: the
-// defining module plus the original name there (ViaName when an aliased
-// re-export renamed it). fallback is the entry's own module id, used when
-// Via is unset (a locally defined export).
-func exportOriginKey(e model.Export, fallback string) string {
-	via := e.Via
-	if via == "" {
-		via = fallback
-	}
-	name := e.ViaName
-	if name == "" {
-		name = e.Name
-	}
-	return via + "\x00" + name
-}
-
 // StarReExports collects, per barrel module id, its resolved bare star
 // re-exports (Namespace "*"; `export * as NS` records Namespace NS and is
 // handled by extractExports instead). Ports the starReExports recording in
@@ -92,262 +76,361 @@ func NamedReExports(mi []ModuleImports, resolver *Resolver) map[string]map[strin
 	return out
 }
 
-// reExportOrigins resolves the ORIGIN of a module's export: the module that
-// ultimately DEFINES the binding plus the binding's name there. Without it,
-// a barrel starring both the definer and a named re-exporter of the same
-// binding would see two origins and wrongly drop the name as ambiguous —
-// the ES spec treats same-binding routes as one export. Lockstep with the
-// CJS reExportOrigin.
-type reExportOrigins struct {
-	byID  map[string]*model.Module
-	named map[string]map[string]NamedReExport
+// exportBinding is the BINDING an export stands for: the defining module plus
+// the original name there (a local alias `export { a as b }` stands for `a`;
+// `export { b as a } from './x'` stands for x's `b`). Same-binding routes are
+// one export, so two star targets reaching the same binding never clash.
+type exportBinding struct {
+	mod, name string
 }
 
-// of returns the origin of m's export name. A local definition is its own
-// origin (a local alias `export { a as b }` stands for the binding `a`); a
-// star copy, or an entry resolved after expansion, carries Via/ViaName; a
-// named re-export is followed to its target. ok=false = pending: the target
-// does not export the name, perhaps not YET (its own star expansion may add
-// it). Once settled, a target that never exports it (CommonJS: no extracted
-// exports) is taken as the origin.
-func (r *reExportOrigins) of(m *model.Module, name string, settled bool, hops int) (via, binding string, ok bool) {
-	var e *model.Export
-	for i := range m.Exports {
-		if m.Exports[i].Name == name {
-			e = &m.Exports[i]
+type exportStatusKind int
+
+const (
+	statusNone      exportStatusKind = iota // the module does not export the name
+	statusBinding                           // it exports exactly one binding
+	statusAmbiguous                         // distinct bindings via different star targets: not exported
+)
+
+// exportStatus is the final answer for one (module, name) pair.
+type exportStatus struct {
+	kind    exportStatusKind
+	binding exportBinding // valid only for statusBinding
+}
+
+// baseExport is a module's OWN declared export, snapshotted before any star
+// copy exists so resolution is a pure function of the module graph.
+type baseExport struct {
+	kind    string
+	viaName string
+	doc     *string
+}
+
+type moduleBase struct {
+	names  []string // declaration order
+	byName map[string]baseExport
+}
+
+type exportEdge struct {
+	mod  *model.Module
+	name string
+}
+
+// exportNode is the dependency description of one (module, name) pair: a
+// terminal binding, or edges to the pairs it resolves through. named marks a
+// named re-export (single edge; a target that never exports the name is itself
+// the origin).
+type exportNode struct {
+	terminal *exportBinding
+	named    bool
+	edges    []exportEdge
+}
+
+// exportResolver resolves re-exports with ECMAScript module semantics,
+// computed per module from the modules' OWN declared exports so the answer
+// never depends on file names or iteration order:
+//   - an own export (local, alias, `export * as NS`) is its own binding; a named
+//     re-export (`export { x } from './y'`) takes the binding resolved at its
+//     target, and a target that never exports the name (CommonJS: no extracted
+//     exports) is itself the origin;
+//   - otherwise `export *` resolves the name at every star target (never
+//     `default`): one distinct binding → exported; several → ambiguous, NOT
+//     exported (ES ResolveExport);
+//   - ambiguity propagates (ES ResolveExport step "if resolution is ambiguous,
+//     return ambiguous"): a barrel starring a target where the name is ambiguous
+//     does not export it either, however its other targets resolve; a target
+//     where the name is merely absent contributes nothing;
+//   - modules that only reach a name through each other (a cycle) resolve it to
+//     the same thing, from what enters the cycle from outside, never from a
+//     stale half-computed state.
+//
+// Resolution runs Tarjan over lazily discovered (module, name) nodes: every
+// strongly connected component is closed once and its status is final, so work
+// stays polynomial even on dense barrel cycles. Lockstep with the CJS
+// resolveExport in draht-tools.cjs — change both together.
+type exportResolver struct {
+	byID  map[string]*model.Module
+	base  map[string]*moduleBase
+	stars map[string][]StarReExport
+	named map[string]map[string]NamedReExport
+
+	resolved map[string]exportStatus
+	index    map[string]int
+	low      map[string]int
+	nodes    map[string]*exportNode
+	stack    []string
+	counter  int
+}
+
+func newExportResolver(modules []model.Module, stars map[string][]StarReExport, named map[string]map[string]NamedReExport) *exportResolver {
+	r := &exportResolver{
+		byID:     make(map[string]*model.Module, len(modules)),
+		base:     make(map[string]*moduleBase, len(modules)),
+		stars:    stars,
+		named:    named,
+		resolved: make(map[string]exportStatus),
+		index:    make(map[string]int),
+		low:      make(map[string]int),
+		nodes:    make(map[string]*exportNode),
+	}
+	for i := range modules {
+		m := &modules[i]
+		r.byID[m.ID] = m
+		b := &moduleBase{names: make([]string, 0, len(m.Exports)), byName: make(map[string]baseExport, len(m.Exports))}
+		for _, e := range m.Exports {
+			if _, dup := b.byName[e.Name]; dup {
+				continue
+			}
+			b.names = append(b.names, e.Name)
+			b.byName[e.Name] = baseExport{kind: e.Kind, viaName: e.ViaName, doc: e.Doc}
+		}
+		r.base[m.ID] = b
+	}
+	return r
+}
+
+func exportKey(modID, name string) string { return modID + "\x00" + name }
+
+func (r *exportResolver) describe(m *model.Module, name string) *exportNode {
+	if own, ok := r.base[m.ID].byName[name]; ok {
+		var target *model.Module
+		var link NamedReExport
+		if own.kind == "re-export" {
+			if l, linked := r.named[m.ID][name]; linked {
+				link = l
+				target = r.byID[l.Target]
+			}
+		}
+		if target == nil {
+			binding := name
+			if own.viaName != "" {
+				binding = own.viaName
+			}
+			return &exportNode{terminal: &exportBinding{mod: m.ID, name: binding}}
+		}
+		return &exportNode{named: true, edges: []exportEdge{{mod: target, name: link.Imported}}}
+	}
+	node := &exportNode{}
+	if name != "default" { // a bare `export *` never forwards default (ES spec)
+		for _, st := range r.stars[m.ID] {
+			if t := r.byID[st.Target]; t != nil {
+				node.edges = append(node.edges, exportEdge{mod: t, name: name})
+			}
+		}
+	}
+	return node
+}
+
+func (r *exportResolver) resolve(m *model.Module, name string) exportStatus {
+	key := exportKey(m.ID, name)
+	if _, done := r.resolved[key]; !done {
+		r.strongConnect(m, name, key)
+	}
+	return r.resolved[key]
+}
+
+func (r *exportResolver) strongConnect(m *model.Module, name, key string) {
+	node := r.describe(m, name)
+	r.nodes[key] = node
+	r.index[key] = r.counter
+	r.low[key] = r.counter
+	r.counter++
+	r.stack = append(r.stack, key)
+	for _, e := range node.edges {
+		childKey := exportKey(e.mod.ID, e.name)
+		if _, done := r.resolved[childKey]; done {
+			continue
+		}
+		if _, seen := r.index[childKey]; !seen {
+			r.strongConnect(e.mod, e.name, childKey)
+			r.low[key] = min(r.low[key], r.low[childKey])
+		} else {
+			r.low[key] = min(r.low[key], r.index[childKey])
+		}
+	}
+	if r.low[key] != r.index[key] {
+		return
+	}
+	members := map[string]bool{}
+	var order []string
+	for {
+		k := r.stack[len(r.stack)-1]
+		r.stack = r.stack[:len(r.stack)-1]
+		members[k] = true
+		order = append(order, k)
+		if k == key {
 			break
 		}
 	}
-	if e == nil {
-		return "", "", false
+	var found []exportBinding
+	ambiguous := false
+	add := func(b exportBinding) {
+		for _, f := range found {
+			if f == b {
+				return
+			}
+		}
+		found = append(found, b)
 	}
-	binding = name
-	if e.ViaName != "" {
-		binding = e.ViaName
-	}
-	if e.Via != "" {
-		return e.Via, binding, true
-	}
-	link, linked := r.named[m.ID][name]
-	var t *model.Module
-	if linked && e.Kind == "re-export" && hops < 16 {
-		t = r.byID[link.Target]
-	}
-	if t == nil {
-		return m.ID, binding, true
-	}
-	if via, binding, ok := r.of(t, link.Imported, settled, hops+1); ok {
-		return via, binding, true
-	}
-	if settled {
-		return t.ID, link.Imported, true
-	}
-	return "", "", false
-}
-
-// AssignNamedReExportVias records each named re-export entry's origin as
-// Via. The origin BINDING matters too: `export { b as a } from './x'`
-// exposes x's `b` under the name `a` (ViaName "b") — a star sibling
-// exposing x's own `a` is a different binding, hence ambiguous. MUST run
-// after ExpandStarReExports (lockstep with the CJS pass after star
-// expansion) so an entry whose target gains the name through its own
-// `export *` names the defining module, not that intermediate barrel.
-// Mutates modules in place.
-func AssignNamedReExportVias(modules []model.Module, named map[string]map[string]NamedReExport) {
-	byID := make(map[string]*model.Module, len(modules))
-	for i := range modules {
-		byID[modules[i].ID] = &modules[i]
-	}
-	origins := &reExportOrigins{byID: byID, named: named}
-	for i := range modules {
-		m := &modules[i]
-		for j := range m.Exports {
-			e := &m.Exports[j]
-			if e.Kind != "re-export" || e.Via != "" {
+	for _, k := range order {
+		member := r.nodes[k]
+		if member.terminal != nil {
+			add(*member.terminal)
+		}
+		for _, e := range member.edges {
+			childKey := exportKey(e.mod.ID, e.name)
+			if members[childKey] {
 				continue
 			}
-			via, binding, ok := origins.of(m, e.Name, true, 0)
-			if !ok || via == m.ID {
-				continue
-			}
-			e.Via = via
-			if binding != e.Name {
-				e.ViaName = binding
+			switch child := r.resolved[childKey]; {
+			case child.kind == statusAmbiguous:
+				ambiguous = true
+			case child.kind == statusBinding:
+				add(child.binding)
+			case member.named:
+				add(exportBinding{mod: e.mod.ID, name: e.name})
 			}
 		}
 	}
+	status := exportStatus{}
+	switch {
+	case ambiguous || len(found) > 1:
+		status = exportStatus{kind: statusAmbiguous}
+	case len(found) == 1:
+		status = exportStatus{kind: statusBinding, binding: found[0]}
+	}
+	for _, k := range order {
+		r.resolved[k] = status
+		delete(r.nodes, k)
+	}
 }
 
-// ExpandStarReExports ports the CJS star re-export expansion pass
-// (draht-tools.cjs, after the edges loop): `export * from './x'` declares no
-// names, so without this a star barrel's public API is invisible to
-// graph-context/graph-query/MAP.html search. Copy the resolved target's
-// exported names in as kind "re-export" (with Via = the real defining
-// module). Fixpoint over sorted barrel ids (≤5 passes) settles
-// barrel→barrel chains deterministically; the 60-per-module cap bounds
-// MAP.json growth. Expanded names are then mirrored into symbols.
+// exportedNames is ES GetExportedNames: own names, then every star target's
+// (recursively, once per module), never `default` through a star.
+func (r *exportResolver) exportedNames(m *model.Module, visited map[string]bool) []string {
+	if visited[m.ID] {
+		return nil
+	}
+	visited[m.ID] = true
+	b := r.base[m.ID]
+	names := append([]string(nil), b.names...)
+	seen := make(map[string]bool, len(names))
+	for _, n := range names {
+		seen[n] = true
+	}
+	for _, st := range r.stars[m.ID] {
+		t := r.byID[st.Target]
+		if t == nil {
+			continue
+		}
+		for _, n := range r.exportedNames(t, visited) {
+			if n == "default" || seen[n] {
+				continue
+			}
+			seen[n] = true
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
+// docOf is the doc of the nearest entry providing binding for name: the
+// module's own entry, else the first star target (in source order) that
+// provides it. ok=false means no provider was found on this path.
+func (r *exportResolver) docOf(m *model.Module, name string, binding exportBinding, seen map[string]bool) (*string, bool) {
+	if own, ok := r.base[m.ID].byName[name]; ok {
+		return own.doc, true
+	}
+	key := exportKey(m.ID, name)
+	if seen[key] {
+		return nil, false
+	}
+	seen[key] = true
+	for _, st := range r.stars[m.ID] {
+		t := r.byID[st.Target]
+		if t == nil {
+			continue
+		}
+		s := r.resolve(t, name)
+		if s.kind != statusBinding || s.binding != binding {
+			continue
+		}
+		if doc, ok := r.docOf(t, name, binding, seen); ok {
+			return doc, true
+		}
+	}
+	return nil, false
+}
+
+// ResolveReExports ports the CJS re-export pass (draht-tools.cjs, after the
+// edges loop). `export * from './x'` declares no names, so without star
+// expansion a star barrel's public API is invisible to graph-context/
+// graph-query/MAP.html search: each resolved name is copied in as kind
+// "re-export" (Via = the real defining module, ViaName when an alias renamed
+// the binding) in GetExportedNames order. The 60-per-module cap (own exports
+// included) bounds MAP.json growth and is applied after resolution, so which
+// names survive it is deterministic. Expanded names are then mirrored into
+// symbols, and every named re-export entry records its origin as Via — the
+// origin BINDING matters too: `export { b as a } from './x'` exposes x's `b`
+// under the name `a` (ViaName "b"), a different binding than x's own `a`.
 //
 // MUST run after edges are built (targets need resolution) and before
 // Assemble (symbolIndex and every other consumer reads modules' exports/
 // symbols). Mutates modules in place.
-func ExpandStarReExports(modules []model.Module, stars map[string][]StarReExport, named map[string]map[string]NamedReExport) {
-	if len(stars) == 0 {
-		return
-	}
-	byID := make(map[string]*model.Module, len(modules))
-	for i := range modules {
-		byID[modules[i].ID] = &modules[i]
-	}
-	origins := &reExportOrigins{byID: byID, named: named}
+func ResolveReExports(modules []model.Module, stars map[string][]StarReExport, named map[string]map[string]NamedReExport) {
+	r := newExportResolver(modules, stars, named)
+
+	const expansionCap = 60
 	barrels := make([]string, 0, len(stars))
 	for id := range stars {
 		barrels = append(barrels, id)
 	}
 	sort.Strings(barrels)
 
-	// Iterate to the true fixpoint. Termination is guaranteed without a pass
-	// cap: every pass either appends at least one export (total additions are
-	// bounded by expansionCap × #barrels), marks a name ambiguous (bounded by
-	// distinct names), or sets changed=false and stops — a fixed ceiling
-	// would leave >N-deep barrel chains incomplete.
-	//
-	// Per-barrel bookkeeping: names added by THIS pass's star expansion
-	// (name → origin key) and names dropped as ambiguous. Two star targets
-	// providing the same name from DIFFERENT origins make it ambiguous (ES
-	// spec): removed and never re-added. The same origin reached through
-	// different chains is one binding and stays. Explicit exports are never
-	// in starAdded, so they are never removed. A name whose origin is pending
-	// (see reExportOrigins.of) waits for a later pass; if names are still
-	// pending once the fixpoint settles, one more round resolves them as
-	// settled.
-	const expansionCap = 60
-	starAdded := make(map[string]map[string]string, len(barrels))
-	starAmbiguous := make(map[string]map[string]bool, len(barrels))
 	for _, bid := range barrels {
-		starAdded[bid] = make(map[string]string)
-		starAmbiguous[bid] = make(map[string]bool)
-	}
-	settled := false
-	for {
-		changed := false
-		pending := false
-		for _, bid := range barrels {
-			b := byID[bid]
-			if b == nil {
+		b := r.byID[bid]
+		if b == nil {
+			continue
+		}
+		own := r.base[bid].byName
+		for _, name := range r.exportedNames(b, map[string]bool{}) {
+			if _, ok := own[name]; ok {
+				continue // an explicit export shadows the star
+			}
+			if len(b.Exports) >= expansionCap {
+				break
+			}
+			origin := r.resolve(b, name)
+			if origin.kind != statusBinding {
 				continue
 			}
-			have := make(map[string]bool, len(b.Exports))
-			for _, e := range b.Exports {
-				have[e.Name] = true
-			}
-			added := starAdded[bid]
-			amb := starAmbiguous[bid]
-			// Retract stale copies first: a downstream barrel can copy a name
-			// in the pass BEFORE its upstream barrel drops that name as
-			// ambiguous. If no current target still provides (name, via), the
-			// copy is withdrawn; if a target provides the name from another
-			// origin, the ambiguity branch below handles it.
-			addedNames := make([]string, 0, len(added))
-			for name := range added {
-				addedNames = append(addedNames, name)
-			}
-			sort.Strings(addedNames)
-			for _, name := range addedNames {
-				originKey := added[name]
-				stillProvided := false
-				sameNameElsewhere := false
-				for _, st := range stars[bid] {
-					t := byID[st.Target]
-					if t == nil {
-						continue
-					}
-					for _, e := range t.Exports {
-						if e.Name != name {
-							continue
-						}
-						if e.Name != "default" {
-							sameNameElsewhere = true
-						}
-						if via, binding, ok := origins.of(t, name, settled, 0); ok && via+"\x00"+binding == originKey {
-							stillProvided = true
-							break
-						}
-					}
-					if stillProvided {
-						break
-					}
-				}
-				if stillProvided || sameNameElsewhere {
-					continue // present, or left for the ambiguity branch
-				}
-				for i, x := range b.Exports {
-					if x.Name == name && x.Via != "" && exportOriginKey(x, bid) == originKey {
-						b.Exports = append(b.Exports[:i], b.Exports[i+1:]...)
-						break
-					}
-				}
-				delete(have, name)
-				delete(added, name)
-				changed = true
-			}
+			// line/doc come from the first star statement whose target provides the binding.
+			line := 1
+			var doc *string
 			for _, st := range stars[bid] {
-				t := byID[st.Target]
+				t := r.byID[st.Target]
 				if t == nil {
 					continue
 				}
-				for _, e := range t.Exports {
-					if e.Name == "default" {
-						continue // a bare `export *` never forwards default (ES spec)
-					}
-					if amb[e.Name] {
-						continue
-					}
-					via, binding, ok := origins.of(t, e.Name, settled, 0)
-					if !ok {
-						pending = true
-						continue
-					}
-					originKey := via + "\x00" + binding
-					if have[e.Name] {
-						if prev, ok := added[e.Name]; ok && prev != originKey {
-							for i, x := range b.Exports {
-								if x.Name == e.Name && x.Via != "" && exportOriginKey(x, bid) == prev {
-									b.Exports = append(b.Exports[:i], b.Exports[i+1:]...)
-									break
-								}
-							}
-							delete(have, e.Name)
-							delete(added, e.Name)
-							amb[e.Name] = true
-							changed = true
-						}
-						continue
-					}
-					if len(b.Exports) >= expansionCap {
-						break
-					}
-					have[e.Name] = true
-					added[e.Name] = originKey
-					cp := model.Export{Name: e.Name, Kind: "re-export", Line: st.Line, Doc: e.Doc, Via: via}
-					if binding != e.Name {
-						cp.ViaName = binding
-					}
-					b.Exports = append(b.Exports, cp)
-					changed = true
+				s := r.resolve(t, name)
+				if s.kind != statusBinding || s.binding != origin.binding {
+					continue
 				}
+				line = st.Line
+				if d, ok := r.docOf(t, name, origin.binding, map[string]bool{}); ok {
+					doc = d
+				}
+				break
 			}
+			cp := model.Export{Name: name, Kind: "re-export", Line: line, Doc: doc, Via: origin.binding.mod}
+			if origin.binding.name != name {
+				cp.ViaName = origin.binding.name
+			}
+			b.Exports = append(b.Exports, cp)
 		}
-		if changed {
-			continue
-		}
-		if pending && !settled {
-			settled = true
-			continue
-		}
-		break
 	}
 	for _, bid := range barrels {
-		b := byID[bid]
+		b := r.byID[bid]
 		if b == nil {
 			continue
 		}
@@ -364,6 +447,24 @@ func ExpandStarReExports(modules []model.Module, stars map[string][]StarReExport
 			}
 			seen[e.Name] = true
 			b.Symbols = append(b.Symbols, model.Symbol{Name: e.Name, Kind: "re-export", Line: e.Line, Exported: true})
+		}
+	}
+
+	for i := range modules {
+		m := &modules[i]
+		for j := range m.Exports {
+			e := &m.Exports[j]
+			if e.Kind != "re-export" || e.Via != "" {
+				continue
+			}
+			origin := r.resolve(m, e.Name)
+			if origin.kind != statusBinding || origin.binding.mod == m.ID {
+				continue
+			}
+			e.Via = origin.binding.mod
+			if origin.binding.name != e.Name {
+				e.ViaName = origin.binding.name
+			}
 		}
 	}
 }

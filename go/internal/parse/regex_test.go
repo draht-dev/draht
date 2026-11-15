@@ -158,3 +158,18 @@ func TestRegex_DoesNotPanicOnGarbage(t *testing.T) {
 		_ = err
 	}
 }
+
+// TestRegex_TypeOnlyNamedReExport: `export type { X } from` and the
+// per-specifier `export { type X } from` are named re-exports. Without the
+// optional `type` the first form produced no import, so the entry had no link
+// and a star-sibling of the real definer looked like a clash.
+func TestRegex_TypeOnlyNamedReExport(t *testing.T) {
+	src := `export type { Foo, Bar as Baz } from "./types";
+export { type Qux, Value } from "./values";
+`
+	res := regexExtract(t, "typescript", src)
+	assertImports(t, res.Imports, []wantImport{
+		{kind: KindReExport, specifier: "./types", names: []Name{{Imported: "Foo"}, {Imported: "Bar", Local: "Baz"}}},
+		{kind: KindReExport, specifier: "./values", names: []Name{{Imported: "Qux"}, {Imported: "Value"}}},
+	})
+}

@@ -92,7 +92,7 @@ func newTestState(t *testing.T) *state {
 	dir := t.TempDir()
 	jsonPath := filepath.Join(dir, "MAP.json")
 	htmlPath := filepath.Join(dir, "MAP.html")
-	if err := os.WriteFile(jsonPath, []byte(`{"schemaVersion":5}`), 0o644); err != nil {
+	if err := os.WriteFile(jsonPath, []byte(`{"schemaVersion":6}`), 0o644); err != nil {
 		t.Fatalf("seed MAP.json: %v", err)
 	}
 	if err := os.WriteFile(htmlPath, []byte(`<!doctype html><html></html>`), 0o644); err != nil {
@@ -161,7 +161,7 @@ func TestHandler_ServesMapJSON(t *testing.T) {
 		t.Errorf("content-type = %q", ct)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if string(body) != `{"schemaVersion":5}` {
+	if string(body) != `{"schemaVersion":6}` {
 		t.Errorf("body = %q", body)
 	}
 }

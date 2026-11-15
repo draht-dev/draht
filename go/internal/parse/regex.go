@@ -23,8 +23,12 @@ var (
 	// keyword capture group lets us classify Kind without a second scan.
 	reRequireOrDynamic = regexp.MustCompile(`(require|import)\s*\(\s*["']([^"']+)["']\s*\)`)
 
-	// export { foo, bar as baz } from "./x"
-	reNamedReExport = regexp.MustCompile(`export\s+\{([^}]+)\}\s+from\s+["']([^"']+)["']`)
+	// export { foo, bar as baz } from "./x"  |  export type { Foo } from "./x"
+	// (per-specifier `export { type Foo }` is stripped by parseNamedList). Without
+	// the optional `type`, a type-only re-export got no link, fell back to its
+	// barrel as origin, and made a sibling `export *` of the real definer look
+	// like a clash.
+	reNamedReExport = regexp.MustCompile(`export\s+(?:type\s+)?\{([^}]+)\}\s+from\s+["']([^"']+)["']`)
 
 	// export * from "./x"  |  export * as Foo from "./x"
 	reStarReExport = regexp.MustCompile(`export\s+\*(?:\s+as\s+([A-Za-z_$][\w$]*))?\s+from\s+["']([^"']+)["']`)

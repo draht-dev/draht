@@ -1345,8 +1345,11 @@ function visParseImports(content, language) {
 	while ((m = reqRe.exec(content)) !== null) {
 		out.push({ specifier: m[1], default: null, namespace: null, names: [] });
 	}
-	// re-exports: export { foo } from "./x"
-	const reExportRe = /export\s+\{([^}]+)\}\s+from\s+["']([^"']+)["']/g;
+	// re-exports: export { foo } from "./x"  |  export type { Foo } from "./x"
+	// (per-specifier `export { type Foo }` is stripped in the map below). Without the optional
+	// `type`, a type-only re-export got no link, fell back to its barrel as origin, and made a
+	// sibling `export *` of the real definer look like a clash.
+	const reExportRe = /export\s+(?:type\s+)?\{([^}]+)\}\s+from\s+["']([^"']+)["']/g;
 	while ((m = reExportRe.exec(content)) !== null) {
 		const names = m[1].split(",").map((s) => {
 			const t = s.trim().replace(/^type\s+/, "");
@@ -1388,6 +1391,132 @@ function visExtractRawImports(content, language) {
 		while ((m = re.exec(content)) !== null) imports.push(m[1]);
 	}
 	return imports;
+}
+
+// A regex literal longer than this is not treated as one (see visMaskNonCode).
+const VIS_REGEX_SCAN_LIMIT = 4096;
+// Keywords after which a `/` starts a regex literal rather than a division.
+const VIS_REGEX_AFTER_KEYWORDS = new Set([
+	"return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await",
+]);
+
+// Single-pass, length- and newline-preserving masker for JS/TS source: comments are blanked
+// entirely, string and regex-literal contents are blanked with their delimiters kept, and
+// template literals keep their `${ … }` expression code (nested) while the literal text is
+// blanked. Content-level pattern passes (named export lists, `export * as`) run on the result so
+// that neither a commented-out example nor an export list inside a string can become a fake
+// export — and a `/*` inside a string (`"packages/*/src"`) can no longer swallow real code up to
+// the next `*/`. Only "\n" is preserved: line numbers are derived by splitting on it.
+// Lockstep with Go parse.MaskNonCode — change both together.
+function visMaskNonCode(src) {
+	const n = src.length;
+	const parts = [];
+	let keep = 0; // start of the pending unmasked run
+	const mask = (a, b) => {
+		if (b <= a) return;
+		if (a > keep) parts.push(src.slice(keep, a));
+		parts.push(src.slice(a, b).replace(/[^\n]/g, " "));
+		keep = b;
+	};
+	const isWordChar = (c) => (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95 || c === 36 || c >= 128;
+	const exprDepth = []; // open `${` expressions: brace depth inside each
+	let inTemplate = false;
+	let regexOk = true; // may an expression (hence a regex literal) start here?
+	let i = 0;
+	while (i < n) {
+		if (inTemplate) {
+			const start = i;
+			while (i < n) {
+				const c = src.charCodeAt(i);
+				if (c === 92) { i += 2; continue; } // backslash escape
+				if (c === 96 || (c === 36 && src.charCodeAt(i + 1) === 123)) break; // ` or ${
+				i++;
+			}
+			if (i > n) i = n;
+			mask(start, i);
+			if (i >= n) break;
+			inTemplate = false;
+			if (src.charCodeAt(i) === 96) { i++; regexOk = false; } else { i += 2; exprDepth.push(0); regexOk = true; }
+			continue;
+		}
+		const c = src.charCodeAt(i);
+		if (c === 47) { // /
+			const next = src.charCodeAt(i + 1);
+			if (next === 47) { // line comment
+				let j = src.indexOf("\n", i);
+				if (j < 0) j = n;
+				mask(i, j);
+				i = j;
+				continue;
+			}
+			if (next === 42) { // block comment
+				const j = src.indexOf("*/", i + 2);
+				const end = j < 0 ? n : j + 2;
+				mask(i, end);
+				i = end;
+				continue;
+			}
+			if (regexOk) {
+				// A regex literal never spans lines; `/` inside a [...] class does not end it. The scan is
+				// bounded so a stray `/` in a huge minified line cannot make masking quadratic.
+				let k = i + 1, inClass = false, close = -1;
+				for (; k < n && k - i <= VIS_REGEX_SCAN_LIMIT; k++) {
+					const d = src.charCodeAt(k);
+					if (d === 10) break;
+					if (d === 92) { k++; continue; }
+					if (d === 91) inClass = true;
+					else if (d === 93) inClass = false;
+					else if (d === 47 && !inClass) { close = k; break; }
+				}
+				if (close >= 0) {
+					mask(i + 1, close);
+					i = close + 1;
+					while (i < n && isWordChar(src.charCodeAt(i))) i++; // flags
+					regexOk = false;
+					continue;
+				}
+			}
+			i++;
+			regexOk = true;
+			continue;
+		}
+		if (c === 39 || c === 34) { // ' or " — unterminated strings end at the line break
+			let k = i + 1;
+			while (k < n) {
+				const d = src.charCodeAt(k);
+				if (d === c || d === 10) break;
+				k += d === 92 ? 2 : 1;
+			}
+			if (k > n) k = n;
+			mask(i + 1, k);
+			i = k < n && src.charCodeAt(k) === c ? k + 1 : k;
+			regexOk = false;
+			continue;
+		}
+		if (c === 96) { i++; inTemplate = true; continue; } // `
+		if (c === 123) { if (exprDepth.length) exprDepth[exprDepth.length - 1]++; i++; regexOk = true; continue; } // {
+		if (c === 125) { // }
+			i++;
+			if (exprDepth.length) {
+				if (exprDepth[exprDepth.length - 1] === 0) { exprDepth.pop(); inTemplate = true; continue; }
+				exprDepth[exprDepth.length - 1]--;
+			}
+			regexOk = true;
+			continue;
+		}
+		if (isWordChar(c)) {
+			const start = i;
+			while (i < n && isWordChar(src.charCodeAt(i))) i++;
+			regexOk = VIS_REGEX_AFTER_KEYWORDS.has(src.slice(start, i));
+			continue;
+		}
+		if (c === 41 || c === 93) { i++; regexOk = false; continue; } // ) ]
+		if (c !== 32 && c !== 9 && c !== 10 && c !== 13) regexOk = true;
+		i++;
+	}
+	if (keep === 0) return src;
+	if (keep < n) parts.push(src.slice(keep));
+	return parts.join("");
 }
 
 // Extract exports — distinguish exported names so we can build a real call graph
@@ -1459,13 +1588,12 @@ function visExtractExports(rawContent, language) {
 			}
 			return lines.length;
 		};
-		// The content-level passes match against a comment-MASKED copy (every
-		// comment byte replaced by a space, so offsets and lines still map to the
-		// raw source): a commented-out `// export { Admin } from "./x"` example
-		// must not become a public export. Docs still read from the raw lines.
-		const maskedContent = rawContent
-			.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, " "))
-			.replace(/(^|[^:])\/\/.*$/gm, (c, p1) => p1 + " ".repeat(c.length - p1.length));
+		// The content-level passes match against a comment- and string-MASKED copy
+		// (see visMaskNonCode; offsets and lines still map to the raw source): a
+		// commented-out `// export { Admin } from "./x"` example, or an export list
+		// inside a string/template literal, must not become a public export.
+		// Docs still read from the raw lines.
+		const maskedContent = visMaskNonCode(rawContent);
 		const namedBlockRe = /export\s+(?:type\s+)?\{([^}]*)\}(\s*from\s*["'][^"']+["'])?/g;
 		let nb;
 		while ((nb = namedBlockRe.exec(maskedContent)) !== null && out.length <= 200) {
@@ -2036,6 +2164,22 @@ function visComputeClusters(modules, edges, moduleByRel, containerOf) {
 	const fallbackOrdinal = new Map();
 	const clusters = [];
 	const clusterOf = new Map();
+	const packageKeyOf = (m) => m.package || containerOf(m).replace(/^(pkg|dir):/, "");
+	// Container directories: top-level dirs holding modules of two or more packages (`packages/`,
+	// `apps/` style parents). Only these are renamed after their package below; a plain root dir
+	// (`src`, `scripts`) is the most informative label there is.
+	const containerDirs = new Set();
+	{
+		const packagesByTopDir = new Map();
+		for (const m of modules) {
+			const slash = m.path.indexOf("/");
+			if (slash < 0) continue;
+			const top = m.path.slice(0, slash);
+			if (!packagesByTopDir.has(top)) packagesByTopDir.set(top, new Set());
+			packagesByTopDir.get(top).add(packageKeyOf(m));
+		}
+		for (const [top, keys] of packagesByTopDir) if (keys.size > 1) containerDirs.add(top);
+	}
 	const sortedGroups = finalGroups
 		.map((members) => members.slice().sort())
 		.sort((a, b) => b.length - a.length || (a[0] < b[0] ? -1 : 1));
@@ -2043,7 +2187,7 @@ function visComputeClusters(modules, edges, moduleByRel, containerOf) {
 		const pkgCount = {}, layerCount = {};
 		for (const id of sorted) {
 			const m = moduleByRel.get(id);
-			const p = m.package || containerOf(m).replace(/^(pkg|dir):/, "");
+			const p = packageKeyOf(m);
 			pkgCount[p] = (pkgCount[p] || 0) + 1;
 			layerCount[m.layer] = (layerCount[m.layer] || 0) + 1;
 		}
@@ -2056,8 +2200,8 @@ function visComputeClusters(modules, edges, moduleByRel, containerOf) {
 		if (prefix) {
 			cid = "cluster:" + prefix;
 			clabel = prefix.split("/").slice(-2).join("/");
-			// A bare top-level dir ("packages") says nothing — prefer the package name when unambiguous.
-			if (!prefix.includes("/") && dominantPackage && packages.length === 1) {
+			// A bare container dir ("packages") says nothing — prefer the package name when unambiguous.
+			if (!prefix.includes("/") && containerDirs.has(prefix) && dominantPackage && packages.length === 1) {
 				clabel = String(dominantPackage).replace(/^@[^/]+\//, "");
 			}
 		} else {
@@ -2426,116 +2570,194 @@ function visBuildMap(root) {
 		}
 	}
 
-	// Named re-export provenance: the ORIGIN of a module's export `name` is the
-	// module that ultimately DEFINES the binding plus the binding's name there,
-	// [module id, name]. Without it, a barrel starring both the definer and a
-	// named re-exporter of the same binding would see two origins and wrongly
-	// drop the name as ambiguous — the ES spec treats same-binding routes as one
-	// export. A local definition is its own origin (a local alias
-	// `export { a as b }` stands for the binding `a`); a star copy, or an entry
-	// resolved after expansion, carries `via`/`viaName`; a named re-export
-	// (`export { x } from './y'`) is followed to its target. null = pending:
-	// the target does not export the name, perhaps not YET (its own star
-	// expansion may add it). Once `settled`, a target that never exports it
-	// (CommonJS: no extracted exports) is taken as the origin.
-	const reExportOrigin = (mod, name, settled, hops = 0) => {
-		const e = mod.exports.find((x) => x.name === name);
-		if (!e) return null;
-		if (e.via) return [e.via, e.viaName || name];
-		const link = e.kind === "re-export" && namedReExports.has(mod.id) ? namedReExports.get(mod.id).get(name) : null;
-		const target = link && hops < 16 ? moduleByRel.get(link.target) : null;
-		if (!target) return [mod.id, e.viaName || name];
-		return reExportOrigin(target, link.imported, settled, hops + 1) || (settled ? [target.id, link.imported] : null);
+	// Re-export resolution. The ORIGIN of a module's export `name` is the binding that ultimately
+	// DEFINES it: { mod, name there }. Same-binding routes are ONE export (a barrel starring both the
+	// definer and a named re-exporter of the same binding keeps the name; a local alias
+	// `export { a as b }` stands for the binding `a`). Everything is computed from the modules' OWN
+	// declared exports (snapshotted below, before any star copy exists), so the answer is a pure
+	// function of the module graph and never depends on file names or iteration order:
+	//   - an own export (local, alias, `export * as NS`) is its own binding; a named re-export
+	//     (`export { x } from './y'`) takes the binding resolved at its target, and a target that
+	//     never exports the name (CommonJS: no extracted exports) is itself the origin;
+	//   - otherwise `export *` resolves the name at every star target (never `default`): one distinct
+	//     binding → exported; several → ambiguous, NOT exported (ES ResolveExport);
+	//   - ambiguity propagates (ES ResolveExport step "if resolution is ambiguous, return ambiguous"):
+	//     a barrel starring a target where the name is ambiguous does not export it either, however
+	//     its other targets resolve; a target where the name is merely absent contributes nothing;
+	//   - modules that only reach a name through each other (a cycle) resolve it to the same thing,
+	//     from what enters the cycle from outside, never from a stale half-computed state.
+	// Resolution runs Tarjan over lazily discovered (module, name) nodes: every strongly connected
+	// component is closed once and its status is final, so work stays polynomial even on dense
+	// barrel cycles. Lockstep with Go graph.exportResolver — change both together.
+	const baseExports = new Map(modules.map((m) => [m.id, new Map(m.exports.map((e) => [e.name, e]))]));
+	const AMBIGUOUS = { ambiguous: true };
+	const exportKey = (modId, name) => modId + "\u0000" + name;
+	const sameBinding = (a, b) => a.mod === b.mod && a.name === b.name;
+	const describeExport = (mod, name) => {
+		const own = baseExports.get(mod.id).get(name);
+		if (own) {
+			const link = own.kind === "re-export" && namedReExports.has(mod.id) ? namedReExports.get(mod.id).get(name) : null;
+			const target = link ? moduleByRel.get(link.target) : null;
+			if (!target) return { terminal: { mod: mod.id, name: own.viaName || name }, edges: [] };
+			return { named: true, edges: [{ mod: target, name: link.imported }] };
+		}
+		const edges = [];
+		if (name !== "default") { // a bare `export *` never forwards default (ES spec)
+			for (const star of starReExports.get(mod.id) || []) {
+				const target = moduleByRel.get(star.target);
+				if (target) edges.push({ mod: target, name });
+			}
+		}
+		return { edges };
 	};
-	const originKeyOf = (origin) => origin[0] + "\u0000" + origin[1];
+	const resolvedExport = new Map(); // exportKey -> null (not exported) | AMBIGUOUS | { mod, name }
+	const tarjanIndex = new Map();
+	const tarjanLow = new Map();
+	const tarjanNodes = new Map();
+	const tarjanStack = [];
+	let tarjanCounter = 0;
+	// Closes the strongly connected component rooted at `key`: every member gets the same final status.
+	const closeComponent = (key) => {
+		const members = new Set();
+		for (;;) {
+			const k = tarjanStack.pop();
+			members.add(k);
+			if (k === key) break;
+		}
+		const found = [];
+		let ambiguous = false;
+		const add = (b) => { if (!found.some((f) => sameBinding(f, b))) found.push(b); };
+		for (const k of members) {
+			const member = tarjanNodes.get(k);
+			if (member.terminal) add(member.terminal);
+			for (const edge of member.edges) {
+				const childKey = exportKey(edge.mod.id, edge.name);
+				if (members.has(childKey)) continue;
+				const child = resolvedExport.get(childKey);
+				if (child === AMBIGUOUS) ambiguous = true;
+				else if (child) add(child);
+				else if (member.named) add({ mod: edge.mod.id, name: edge.name });
+			}
+		}
+		const status = ambiguous || found.length > 1 ? AMBIGUOUS : found.length === 1 ? found[0] : null;
+		for (const k of members) { resolvedExport.set(k, status); tarjanNodes.delete(k); }
+	};
+	// Iterative (explicit frame stack): barrel chains can be thousands deep.
+	const strongConnect = (rootMod, rootName, rootKey) => {
+		const frames = [];
+		const open = (mod, name, key) => {
+			tarjanNodes.set(key, describeExport(mod, name));
+			tarjanIndex.set(key, tarjanCounter);
+			tarjanLow.set(key, tarjanCounter);
+			tarjanCounter++;
+			tarjanStack.push(key);
+			frames.push({ key, edges: tarjanNodes.get(key).edges, i: 0 });
+		};
+		open(rootMod, rootName, rootKey);
+		while (frames.length) {
+			const frame = frames[frames.length - 1];
+			if (frame.i < frame.edges.length) {
+				const edge = frame.edges[frame.i++];
+				const childKey = exportKey(edge.mod.id, edge.name);
+				if (resolvedExport.has(childKey)) continue;
+				if (!tarjanIndex.has(childKey)) open(edge.mod, edge.name, childKey);
+				else tarjanLow.set(frame.key, Math.min(tarjanLow.get(frame.key), tarjanIndex.get(childKey)));
+				continue;
+			}
+			frames.pop();
+			if (tarjanLow.get(frame.key) === tarjanIndex.get(frame.key)) closeComponent(frame.key);
+			if (frames.length) {
+				const parent = frames[frames.length - 1];
+				tarjanLow.set(parent.key, Math.min(tarjanLow.get(parent.key), tarjanLow.get(frame.key)));
+			}
+		}
+	};
+	const resolveExport = (mod, name) => {
+		const key = exportKey(mod.id, name);
+		if (!resolvedExport.has(key)) strongConnect(mod, name, key);
+		return resolvedExport.get(key);
+	};
+	const isBinding = (r) => r !== null && r !== AMBIGUOUS;
+	// ES GetExportedNames: the module's own names, then every star target's (depth-first in source
+	// order, each module once), never `default` through a star; first occurrence wins.
+	const exportedNames = (root) => {
+		const names = [];
+		const seen = new Set();
+		const visited = new Set();
+		const pending = [root];
+		while (pending.length) {
+			const mod = pending.pop();
+			if (visited.has(mod.id)) continue;
+			visited.add(mod.id);
+			for (const n of baseExports.get(mod.id).keys()) {
+				if ((mod !== root && n === "default") || seen.has(n)) continue;
+				seen.add(n);
+				names.push(n);
+			}
+			const stars = starReExports.get(mod.id) || [];
+			for (let i = stars.length - 1; i >= 0; i--) {
+				const target = moduleByRel.get(stars[i].target);
+				if (target) pending.push(target);
+			}
+		}
+		return names;
+	};
+	// Doc of the nearest entry providing `binding` for `name`: the module's own entry, else the first
+	// star target (depth-first in source order) that provides it. undefined = no provider found.
+	const exportDocOf = (start, name, binding) => {
+		const seen = new Set();
+		const frames = [];
+		const enter = (mod) => {
+			const own = baseExports.get(mod.id).get(name);
+			if (own) return own.doc;
+			const key = exportKey(mod.id, name);
+			if (!seen.has(key)) { seen.add(key); frames.push({ mod, i: 0 }); }
+			return undefined;
+		};
+		let doc = enter(start);
+		while (doc === undefined && frames.length) {
+			const frame = frames[frames.length - 1];
+			const stars = starReExports.get(frame.mod.id) || [];
+			if (frame.i >= stars.length) { frames.pop(); continue; }
+			const target = moduleByRel.get(stars[frame.i++].target);
+			const r = target ? resolveExport(target, name) : null;
+			if (isBinding(r) && sameBinding(r, binding)) doc = enter(target);
+		}
+		return doc;
+	};
 
 	// Star re-export expansion: `export * from './x'` declares no names, so without this pass
 	// a star barrel's public API is invisible to graph-context/graph-query/MAP.html search.
-	// Copy the resolved target's exported names in as kind "re-export" (with `via` = the real
-	// defining module). Iterated to the true fixpoint over sorted barrel ids — termination is
-	// guaranteed without a pass cap (each pass appends ≥1 export, bounded by 60 × #barrels,
-	// or stops); the 60-per-module cap bounds MAP.json growth.
+	// Copy each resolved name in as kind "re-export" (with `via` = the real defining module), in
+	// GetExportedNames order; the 60-per-module cap (own exports included) bounds MAP.json growth
+	// and is applied after resolution, so which names survive it is deterministic.
 	if (starReExports.size > 0) {
 		const EXPANSION_CAP = 60;
 		const sortedBarrels = [...starReExports.keys()].sort();
-		// Per-barrel bookkeeping: names added by THIS pass's star expansion
-		// (name → origin key) and names dropped as ambiguous. Two star targets
-		// providing the same name from DIFFERENT origins make it ambiguous
-		// (ES spec): removed and never re-added. The same origin reached
-		// through different chains is one binding and stays. Explicit exports
-		// are never in starAdded, so they are never removed. A name whose
-		// origin is pending (see reExportOrigin) waits for a later pass; if
-		// names are still pending once the fixpoint settles, one more round
-		// resolves them as settled.
-		const starAdded = new Map(); // barrelId -> Map(name -> origin key)
-		const starAmbiguous = new Map(); // barrelId -> Set(name)
-		for (const b of sortedBarrels) { starAdded.set(b, new Map()); starAmbiguous.set(b, new Set()); }
-		let settled = false;
-		for (;;) {
-			let changed = false;
-			let pending = false;
-			for (const barrelId of sortedBarrels) {
-				const barrel = moduleByRel.get(barrelId);
-				if (!barrel) continue;
-				const have = new Set(barrel.exports.map((e) => e.name));
-				const added = starAdded.get(barrelId);
-				const amb = starAmbiguous.get(barrelId);
-				// Retract stale copies first: a downstream barrel can copy a name
-				// in the pass BEFORE its upstream barrel drops that name as
-				// ambiguous. If no current target still provides (name, via),
-				// the copy is withdrawn; if a target provides the name from
-				// another origin, the ambiguity branch below handles it.
-				for (const [name, originKey] of [...added]) {
-					const stillProvided = starReExports.get(barrelId).some((star) => {
-						const target = moduleByRel.get(star.target);
-						const origin = target ? reExportOrigin(target, name, settled) : null;
-						return origin !== null && originKeyOf(origin) === originKey;
-					});
-					if (stillProvided) continue;
-					const sameNameElsewhere = starReExports.get(barrelId).some((star) => {
-						const target = moduleByRel.get(star.target);
-						return target && target.exports.some((e) => e.name === name && e.name !== "default");
-					});
-					if (sameNameElsewhere) continue; // leave for the ambiguity branch
-					const idx = barrel.exports.findIndex((x) => x.name === name && x.via && x.via + "\u0000" + (x.viaName || x.name) === originKey);
-					if (idx >= 0) barrel.exports.splice(idx, 1);
-					have.delete(name);
-					added.delete(name);
-					changed = true;
-				}
-				for (const star of starReExports.get(barrelId)) {
+		for (const barrelId of sortedBarrels) {
+			const barrel = moduleByRel.get(barrelId);
+			if (!barrel) continue;
+			const stars = starReExports.get(barrelId);
+			const own = baseExports.get(barrelId);
+			for (const name of exportedNames(barrel)) {
+				if (own.has(name)) continue; // an explicit export shadows the star
+				if (barrel.exports.length >= EXPANSION_CAP) break;
+				const origin = resolveExport(barrel, name);
+				if (!isBinding(origin)) continue;
+				// line/doc come from the first star statement whose target provides the binding.
+				let line = 1, doc = null;
+				for (const star of stars) {
 					const target = moduleByRel.get(star.target);
-					if (!target) continue;
-					for (const e of target.exports) {
-						if (e.name === "default") continue; // a bare `export *` never forwards default (ES spec)
-						if (amb.has(e.name)) continue;
-						const origin = reExportOrigin(target, e.name, settled);
-						if (!origin) { pending = true; continue; }
-						const originKey = originKeyOf(origin);
-						if (have.has(e.name)) {
-							if (added.has(e.name) && added.get(e.name) !== originKey) {
-								const idx = barrel.exports.findIndex((x) => x.name === e.name && x.via && x.via + "\u0000" + (x.viaName || x.name) === added.get(e.name));
-								if (idx >= 0) barrel.exports.splice(idx, 1);
-								have.delete(e.name);
-								added.delete(e.name);
-								amb.add(e.name);
-								changed = true;
-							}
-							continue;
-						}
-						if (barrel.exports.length >= EXPANSION_CAP) break;
-						have.add(e.name);
-						added.set(e.name, originKey);
-						const copy = { name: e.name, kind: "re-export", line: star.line, doc: e.doc, via: origin[0] };
-						if (origin[1] !== e.name) copy.viaName = origin[1];
-						barrel.exports.push(copy);
-						changed = true;
-					}
+					const r = target ? resolveExport(target, name) : null;
+					if (!isBinding(r) || !sameBinding(r, origin)) continue;
+					line = star.line;
+					doc = exportDocOf(target, name, origin) ?? null;
+					break;
 				}
+				const copy = { name, kind: "re-export", line, doc, via: origin.mod };
+				if (origin.name !== name) copy.viaName = origin.name;
+				barrel.exports.push(copy);
 			}
-			if (changed) continue;
-			if (pending && !settled) { settled = true; continue; }
-			break;
 		}
 		// Mirror expanded names into symbols so graph-query and the HTML viewer see them.
 		for (const barrelId of sortedBarrels) {
@@ -2551,19 +2773,18 @@ function visBuildMap(root) {
 		}
 	}
 
-	// Record each named re-export entry's origin as `via`. The origin BINDING
-	// matters too: `export { b as a } from './x'` exposes x's `b` under the
-	// name `a` (viaName "b") — a star sibling exposing x's own `a` is a
-	// different binding, hence ambiguous. Runs after star expansion so an entry
-	// whose target gains the name through its own `export *` names the
-	// defining module, not that intermediate barrel.
+	// Record each named re-export entry's origin as `via`. The origin BINDING matters too:
+	// `export { b as a } from './x'` exposes x's `b` under the name `a` (viaName "b") — a star
+	// sibling exposing x's own `a` is a different binding, hence ambiguous. An entry whose target
+	// gains the name through its own `export *` names the defining module, not that intermediate
+	// barrel.
 	for (const m of modules) {
 		for (const e of m.exports) {
 			if (e.kind !== "re-export" || e.via) continue;
-			const origin = reExportOrigin(m, e.name, true);
-			if (!origin || origin[0] === m.id) continue;
-			e.via = origin[0];
-			if (origin[1] !== e.name) e.viaName = origin[1];
+			const origin = resolveExport(m, e.name);
+			if (!isBinding(origin) || origin.mod === m.id) continue;
+			e.via = origin.mod;
+			if (origin.name !== e.name) e.viaName = origin.name;
 		}
 	}
 
@@ -3129,17 +3350,20 @@ function visBuildMap(root) {
 
 	// Symbol index for agents (the searchable identifier glossary). Defect 25: rank exporting
 	// modules by import in-degree (most-depended-on first) BEFORE cutting, so a hard cap doesn't
-	// arbitrarily amputate whichever modules happened to sort last by file-walk order.
+	// arbitrarily amputate whichever modules happened to sort last by file-walk order. Re-export
+	// entries (`via`: barrel and star copies of a name defined elsewhere) are left out: the defining
+	// module already indexes the name, and ~1k duplicates would crowd real definitions out of the cap.
 	const SYMBOL_INDEX_CAP = 5000;
 	let symbolIndexTruncated = false;
 	const exportingModulesRanked = modules
-		.filter((m) => m.exports && m.exports.length > 0)
+		.filter((m) => m.exports && m.exports.some((e) => !e.via))
 		.slice()
 		.sort((a, b) => (inDeg.get(b.id) || 0) - (inDeg.get(a.id) || 0) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 	const symbolIndex = [];
 	for (const m of exportingModulesRanked) {
 		if (symbolIndex.length >= SYMBOL_INDEX_CAP) { symbolIndexTruncated = true; break; }
 		for (const e of m.exports) {
+			if (e.via) continue;
 			if (symbolIndex.length >= SYMBOL_INDEX_CAP) { symbolIndexTruncated = true; break; }
 			symbolIndex.push({ name: e.name, kind: e.kind, line: e.line, file: m.path, package: m.package, exported: true });
 		}
@@ -3178,7 +3402,7 @@ function visBuildMap(root) {
 		.slice(0, 600);
 
 	return {
-		schemaVersion: 5,
+		schemaVersion: 6,
 		generatedAt: new Date().toISOString(),
 		buildMs: Date.now() - startedAt,
 		root: path.basename(root),
@@ -5444,10 +5668,10 @@ const GRAPH_GO_COMMANDS = new Set([
 // npm shim for THIS file and spawn it forever. See also DRAHT_GRAPH_DELEGATED.
 const GRAPH_BIN_NAME = process.platform === "win32" ? "draht-graph.exe" : "draht-graph";
 
-// Must equal visBuildMap()'s schemaVersion (see the `schemaVersion: 5` literal
+// Must equal visBuildMap()'s schemaVersion (see the `schemaVersion: 6` literal
 // above). A stamped binary built for another schema is rejected rather than
 // silently producing an incompatible MAP.json.
-const GRAPH_SCHEMA_VERSION = 5;
+const GRAPH_SCHEMA_VERSION = 6;
 
 // Flip to true only when every gate in SPEC.md § "Requiring the Go engine" is
 // green. Until then a missing binary is a silent JS fallback, not an error.
@@ -6276,6 +6500,10 @@ commands["graph-query"] = function (...args) {
 		for (const t of terms) {
 			let best = 0;
 			for (const s of (m.symbols || [])) {
+				// Re-export symbols are the barrel's copies of names defined elsewhere: the defining
+				// module matches them, so scoring them here ranked barrels above the real definition.
+				// Barrels still match through path, doc and cluster below.
+				if (s.kind === "re-export") continue;
 				const nameLow = s.name.toLowerCase();
 				let sc = 0;
 				if (nameLow === t) sc = 400; else if (nameLow.startsWith(t)) sc = 200; else if (nameLow.includes(t)) sc = 100;
@@ -6301,10 +6529,18 @@ commands["graph-query"] = function (...args) {
 		// Display anchor: best-scoring symbol (exported preferred, first-in-file on ties), else the module itself.
 		let bestSym = null, bestVal = 0;
 		for (const s of (m.symbols || [])) {
+			if (s.kind === "re-export") continue;
 			const v = (symScores.get(s.name) || 0) * (s.exported ? 1.5 : 1);
 			if (v > bestVal) { bestVal = v; bestSym = s; }
 		}
 		if (bestSym && bestSym.exported) mult *= 1.5;
+		// A multi-term query that one declared symbol's name satisfies in full ("session token" ->
+		// SessionToken) is a definition lookup: prefer it over modules that merely cover the terms.
+		if (terms.length > 1 && (m.symbols || []).some((s) => {
+			if (s.kind === "re-export") return false;
+			const low = s.name.toLowerCase();
+			return terms.every((t) => low.includes(t));
+		})) mult *= 2;
 		cands.push({
 			score: +(sum * mult).toFixed(1),
 			matched, terms: terms.length,

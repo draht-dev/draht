@@ -175,15 +175,13 @@ func Build(ctx context.Context, opts Options) (*model.Map, Report, error) {
 	edges := BuildEdges(mi, resolver)
 	callEdges := BuildCallEdgesAll(mi, resolver, sitesByPath)
 
-	// Star re-export expansion (CJS parity): barrels inherit their resolved
+	// Re-export resolution (CJS parity): barrels inherit their resolved
 	// targets' exported names before anything downstream (symbolIndex,
-	// hotspots samples, HTML search) reads modules' exports/symbols. The
-	// expansion's ambiguity check follows named re-exports to their real
-	// origins, not intermediate barrels; afterwards the named re-export
-	// entries record that origin as Via.
-	named := NamedReExports(mi, resolver)
-	ExpandStarReExports(modules, StarReExports(mi, resolver), named)
-	AssignNamedReExportVias(modules, named)
+	// hotspots samples, HTML search) reads modules' exports/symbols. Origins
+	// are ES bindings (named re-exports followed to their real definer, not
+	// intermediate barrels); the named re-export entries record that origin as
+	// Via.
+	ResolveReExports(modules, StarReExports(mi, resolver), NamedReExports(mi, resolver))
 
 	// Language edges are appended AFTER the TS/JS set so that prefix stays
 	// byte-identical to a flag-off run; call edges stay TS/JS-only (the

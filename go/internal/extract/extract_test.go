@@ -89,6 +89,35 @@ export * as ns from "./star";
 	}
 }
 
+// TestExtractExportsIgnoresStringsAndTemplates: export lists inside string or
+// template literals are text, not exports, and a `/*` inside a string
+// (`"packages/*/src"`) must not mask real code up to the next `*/`.
+func TestExtractExportsIgnoresStringsAndTemplates(t *testing.T) {
+	src := []byte("const pattern = \"src/*.ts\";\n" +
+		"function helper() { return pattern; }\n" +
+		"function other() { return 1; }\n" +
+		"export { helper, other };\n" +
+		"const glob = \"**/*.ts\";\n" +
+		"export function gen() {\n" +
+		"\treturn `\nexport { fake } from \"./nope\";\nexport * as Ghost from \"./nope\";\n${ [1].map((n) => n) }`;\n" +
+		"}\n" +
+		"const s = 'export { quoted } from \"./nope\"';\n")
+	got := map[string]bool{}
+	for _, e := range extractExports("typescript", src) {
+		got[e.Name] = true
+	}
+	for _, want := range []string{"helper", "other", "gen"} {
+		if !got[want] {
+			t.Errorf("real export %q lost: %v", want, got)
+		}
+	}
+	for _, fake := range []string{"fake", "Ghost", "quoted"} {
+		if got[fake] {
+			t.Errorf("export list inside a string/template became a fake export %q", fake)
+		}
+	}
+}
+
 func TestExtractExportsDedup(t *testing.T) {
 	src := []byte(`export const dup = 1;
 export const dup = 2;

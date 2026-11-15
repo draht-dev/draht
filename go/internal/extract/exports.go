@@ -152,7 +152,7 @@ func extractExports(lang string, content []byte) []Export {
 		// and lines still map to the raw source): a commented-out
 		// `// export { Admin } from "./x"` example must not become a public
 		// export. findLeadingDoc keeps reading the raw lines.
-		raw := string(parse.MaskComments(content, parse.Lang(lang)))
+		raw := string(parse.MaskNonCode(content, parse.Lang(lang)))
 		lineOf := func(charIdx int) int {
 			pos := 0
 			for i := 0; i < len(lines); i++ {

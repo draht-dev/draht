@@ -10,7 +10,7 @@ content-hash cache.
 **Status: Phase 1 + Phase 2 + Phase 3 implemented.** This is NOT a scaffold
 of stubs — `map-graph` is a real, working, tested end-to-end pipeline: real
 gotreesitter AST parsing, a bounded worker pool, a content-hash incremental
-cache, and a schemaVersion-5 `MAP.json` writer with 26 of its 28 top-level
+cache, and a schemaVersion-6 `MAP.json` writer with 26 of its 28 top-level
 fields populated (`tests` and `planning` are still Phase-1 stubs — see
 below). `go test ./...` and the CJS byte-parity gate (`make parity`) both
 pass. The CJS engine at `packages/draht-tools/` is untouched and keeps
@@ -402,7 +402,7 @@ go/
     ├── parse/     The Parser swap seam: tree-sitter + regex importers. [WP-B]
     ├── extract/   Per-file facts (exports/symbols/sinks/routes/callSites).
     ├── cache/     Content-hash-keyed on-disk store for facts.          [WP-C]
-    ├── model/     MAP.json schemaVersion-5 wire structs + writer.      [WP-D]
+    ├── model/     MAP.json schemaVersion-6 wire structs + writer.      [WP-D]
     ├── rank/      Hotspots, entry points, sinks, the depth BFS.      [Phase 2]
     ├── cluster/   Label-propagation clustering + surprisingConnections. [Phase 2]
     ├── container/ containers/groups/containerEdges + GROUPS.json curation. [Phase 2]

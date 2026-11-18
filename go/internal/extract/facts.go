@@ -30,8 +30,10 @@ const FactsSchema = 3
 // began appearing as non-exported symbols, and "x10" -> "x11" when the
 // default-declaration symbol scan stopped matching identifiers that merely
 // start with "function", and "x11" -> "x12" when local alias exports
-// (`export { a as b }`) began recording the binding's local name.
-const Version = "x12"
+// (`export { a as b }`) began recording the binding's local name, and "x12"
+// -> "x13" when regex-literal masking and type-only re-export parsing
+// changed what the export and import passes see.
+const Version = "x13"
 
 // Facts is everything derivable from ONE file in isolation. It is exactly
 // what the cache stores. It deliberately contains NOTHING global: no

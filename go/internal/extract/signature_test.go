@@ -6,8 +6,8 @@ import (
 )
 
 func TestSignatureExtractorVersionInvalidatesInitializerSanitizationCache(t *testing.T) {
-	if Version != "x12" {
-		t.Fatalf("Version = %q, want x12 after local alias exports began recording the binding's local name", Version)
+	if Version != "x13" {
+		t.Fatalf("Version = %q, want x13 after regex-literal masking and type-only re-export parsing changed", Version)
 	}
 }
 

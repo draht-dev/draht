@@ -277,3 +277,84 @@ http.ServerResponse.prototype.write = function (chunk, ...args) {
 	const writes = fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").filter(Boolean) : [];
 	assert.equal(writes.length, 1, `backpressured SSE response received ${writes.length} event writes`);
 });
+
+function runKg(script, args, extraEnv = {}) {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "draht-shim-kg-"));
+	const binary = path.join(root, "draht-graph");
+	fs.writeFileSync(binary, script);
+	fs.chmodSync(binary, 0o755);
+	return spawnSync(process.execPath, [cli, "kg", ...args], {
+		cwd: root,
+		encoding: "utf8",
+		env: { ...process.env, HOME: root, PATH: "", DRAHT_GRAPH_BIN: binary, DRAHT_GRAPH_ENGINE: "auto", ...extraEnv },
+	});
+}
+
+const KG_BINARY = '#!/bin/sh\nif [ "$1 $2" = "kg help" ]; then printf "draht-kg\\n"; exit 0; fi\nprintf "go:%s" "$*"\nexit 7\n';
+const PRE_KG_BINARY = '#!/bin/sh\nprintf "Unknown command: %s\\n" "$1" >&2\nexit 1\n';
+
+test("kg runs in a Go binary that implements it, arguments and exit code passed through", { skip: process.platform === "win32" }, () => {
+	const result = runKg(KG_BINARY, ["query", "where is --out handled", "--depth", "2"]);
+	assert.equal(result.stdout, "go:kg query where is --out handled --depth 2");
+	assert.equal(result.status, 7);
+});
+
+test("kg falls back to the JavaScript engine when the Go binary predates it", { skip: process.platform === "win32" }, () => {
+	const result = runKg(PRE_KG_BINARY, ["help"]);
+	assert.equal(result.status, 0);
+	assert.match(result.stdout, /^draht-kg — /); // the JavaScript engine's own help
+	assert.doesNotMatch(result.stderr, /Unknown command/);
+});
+
+test("forced Go mode fails clearly when the binary predates kg", { skip: process.platform === "win32" }, () => {
+	const result = runKg(PRE_KG_BINARY, ["stats"], { DRAHT_GRAPH_ENGINE: "go" });
+	assert.equal(result.status, 127);
+	assert.match(result.stderr, /does not implement `kg`/);
+});
+
+function runHint(home, args = [], extraEnv = {}, cmd = "map-graph") {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "draht-shim-hint-"));
+	fs.writeFileSync(path.join(root, "package.json"), '{"name":"fixture"}\n');
+	fs.writeFileSync(path.join(root, "index.js"), "export const value = 1;\n");
+	const env = { ...process.env, HOME: home, PATH: "", DRAHT_GRAPH_BIN: "", DRAHT_GRAPH_ENGINE: "auto", ...extraEnv };
+	if (!("CI" in extraEnv)) delete env.CI;
+	if (!("DRAHT_GRAPH_HINT" in extraEnv)) delete env.DRAHT_GRAPH_HINT;
+	return spawnSync(process.execPath, [cli, cmd, ...args], { cwd: root, encoding: "utf8", env });
+}
+
+const HINT = /install-graph-engine/;
+
+test("the JavaScript fallback advertises the Go engine once a day, on stderr only", { skip: process.platform === "win32" }, () => {
+	const home = fs.mkdtempSync(path.join(os.tmpdir(), "draht-shim-home-"));
+	const first = runHint(home);
+	assert.equal(first.status, 0, first.stderr);
+	assert.match(first.stderr, HINT);
+	assert.doesNotMatch(first.stdout, HINT);
+	const second = runHint(home);
+	assert.equal(second.status, 0, second.stderr);
+	assert.doesNotMatch(second.stderr, HINT);
+
+	const stamp = path.join(home, ".draht", ".graph-engine-hint");
+	const yesterday = new Date(Date.now() - 25 * 60 * 60 * 1000);
+	fs.utimesSync(stamp, yesterday, yesterday);
+	assert.match(runHint(home).stderr, HINT);
+});
+
+test("the Go engine hint stays out of quiet, CI, opted-out and explicit-engine runs", { skip: process.platform === "win32" }, () => {
+	const fresh = () => fs.mkdtempSync(path.join(os.tmpdir(), "draht-shim-home-"));
+	assert.doesNotMatch(runHint(fresh(), ["--quiet"]).stderr, HINT);
+	assert.doesNotMatch(runHint(fresh(), [], { CI: "true" }).stderr, HINT);
+	assert.doesNotMatch(runHint(fresh(), [], { DRAHT_GRAPH_HINT: "0" }).stderr, HINT);
+	assert.doesNotMatch(runHint(fresh(), [], { DRAHT_GRAPH_ENGINE: "js" }).stderr, HINT);
+	// A home that cannot hold the once-a-day stamp gets no hint rather than one per run.
+	const file = path.join(fresh(), "not-a-dir");
+	fs.writeFileSync(file, "");
+	assert.doesNotMatch(runHint(file).stderr, HINT);
+});
+
+test("a binary that predates kg gets an update hint, not an install hint", { skip: process.platform === "win32" }, () => {
+	const result = runKg(PRE_KG_BINARY, ["help"], { CI: "", DRAHT_GRAPH_HINT: "" });
+	assert.equal(result.status, 0);
+	assert.match(result.stderr, /predates the Go `kg` engine/);
+	assert.match(result.stderr, HINT);
+});

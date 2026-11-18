@@ -1,0 +1,1 @@
+{"name":"@ws/knowledge","exports":{".":{"types":"./dist/index.d.ts","import":"./dist/index.js"},"./extension":{"import":"./src/extension.ts"}}}

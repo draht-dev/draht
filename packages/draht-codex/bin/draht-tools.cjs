@@ -5661,7 +5661,7 @@ function visRenderReport(map) {
 const GRAPH_GO_COMMANDS = new Set([
 	"map-graph", "map-serve", "graph-context", "graph-impact", "graph-callers",
 	"graph-callees", "graph-path", "graph-query", "graph-hotspots",
-	"graph-clusters", "graph-hook",
+	"graph-clusters", "graph-hook", "kg",
 ]);
 
 // Deliberately NOT "draht-tools": the $PATH scan below would otherwise find the
@@ -5674,7 +5674,7 @@ const GRAPH_BIN_NAME = process.platform === "win32" ? "draht-graph.exe" : "draht
 const GRAPH_SCHEMA_VERSION = 6;
 
 // Flip to true only when every gate in SPEC.md § "Requiring the Go engine" is
-// green. Until then a missing binary is a silent JS fallback, not an error.
+// green. Until then a missing binary is a JS fallback (see graphEngineHint), not an error.
 const GRAPH_REQUIRE_GO = false;
 
 function graphEngineMode() {
@@ -5808,6 +5808,34 @@ function graphMissingMessage() {
 	].join("\n");
 }
 
+// The Go engine stays an opt-in download (an unsigned native binary), so the
+// JavaScript fallback says once a day that it exists. Stderr only: stdout stays
+// byte-identical between the engines. Silent with --quiet, in CI, with
+// DRAHT_GRAPH_HINT=0, when the engine was chosen explicitly, and whenever the
+// once-a-day stamp cannot be written (better no hint than one on every run).
+const GRAPH_HINT_INTERVAL_MS = 24 * 60 * 60 * 1000;
+function graphEngineHint(args, outdated) {
+	if (process.env.DRAHT_GRAPH_HINT === "0" || process.env.CI) return;
+	if (args.some((a) => a === "--quiet" || a === "-q")) return;
+	let stamp;
+	try {
+		stamp = path.join(os.homedir(), ".draht", ".graph-engine-hint");
+		if (Date.now() - fs.statSync(stamp).mtimeMs < GRAPH_HINT_INTERVAL_MS) return;
+	} catch (err) {
+		if (!stamp || err.code !== "ENOENT") return;
+	}
+	try {
+		fs.mkdirSync(path.dirname(stamp), { recursive: true });
+		fs.writeFileSync(stamp, "");
+	} catch {
+		return;
+	}
+	const what = outdated
+		? "the installed `draht-graph` binary predates the Go `kg` engine, so `kg` ran on the built-in JavaScript engine. Update it:"
+		: "running the built-in JavaScript graph engine. The optional Go engine gives the same output faster:";
+	console.error(`draht-tools: ${what} npx draht-claude install-graph-engine (or npx draht-codex install-graph-engine). Shown once a day; DRAHT_GRAPH_HINT=0 turns this off.`);
+}
+
 // Delegates and EXITS the process on success; returns normally to fall through to JS.
 // Value-taking Go-only flags (accepted by the Go engine's own CLI, meaningless to
 // the JS engine's arg parsers) vs. boolean ones. graphParseArgs/map-graph's own
@@ -5856,6 +5884,19 @@ function graphSignatureFallbackWarning() {
 	return "draht-tools: --symbol-signatures requires the Go graph engine, but no usable `draht-graph` binary is available; continuing with the JavaScript engine without symbol signatures.";
 }
 
+// `kg` reached the Go engine later than the map commands: a binary built before
+// it answers "Unknown command: kg". Such a binary keeps serving the commands it
+// has, and `kg` stays on the JavaScript engine (same graph.json, same output).
+function graphBinHasKg(bin) {
+	const res = spawnSync(bin, ["kg", "help"], {
+		stdio: ["ignore", "pipe", "ignore"],
+		encoding: "utf-8",
+		windowsHide: true,
+		env: { ...process.env, DRAHT_GRAPH_DELEGATED: "1" },
+	});
+	return !res.error && res.status === 0 && String(res.stdout).startsWith("draht-kg");
+}
+
 function graphMaybeDelegate(cmd, args) {
 	if (!GRAPH_GO_COMMANDS.has(cmd)) return;
 	if (process.env.DRAHT_GRAPH_DELEGATED) return; // recursion guard, belt and braces
@@ -5868,7 +5909,16 @@ function graphMaybeDelegate(cmd, args) {
 			process.exit(127);
 		}
 		if (graphWantsSymbolSignatures(cmd, args)) console.error(graphSignatureFallbackWarning());
-		return; // auto: silent JS fallback
+		graphEngineHint(args, false);
+		return; // auto: JS fallback
+	}
+	if (cmd === "kg" && !graphBinHasKg(bin)) {
+		if (mode === "go" || GRAPH_REQUIRE_GO) {
+			console.error(`draht-tools: ${bin} does not implement \`kg\` (it predates the Go kg engine); reinstall it or unset DRAHT_GRAPH_ENGINE.`);
+			process.exit(127);
+		}
+		graphEngineHint(args, true);
+		return; // auto: JS fallback
 	}
 	const res = spawnSync(bin, [cmd, ...graphPinRegexParser(cmd, args)], {
 		stdio: "inherit", // byte-identical stdout/stderr, TTY preserved
@@ -5901,6 +5951,7 @@ function graphBuildOutputs(root, opts = {}) {
 			console.error(graphMissingMessage());
 			process.exit(127);
 		}
+		if (mode !== "js") graphEngineHint(opts.quiet ? ["--quiet"] : [], false);
 		return visWriteOutputs(root, opts);
 	}
 	const argv = ["map-graph", "--parser", "regex"]; // see graphPinRegexParser's doc comment
@@ -6595,6 +6646,8 @@ commands["graph-clusters"] = function (...args) {
 
 // graph-hook — install/uninstall a git post-commit hook that refreshes MAP.json (graphify-style).
 // --- kg — graphify-parity symbol-level knowledge graph (second engine, draht-kg.cjs) ---
+// Runs in the Go binary when one is installed that has it (graphMaybeDelegate); this is
+// the JavaScript engine, which writes the same graph.json and prints the same output.
 // Nodes are symbols (files/classes/functions/methods/types) with graphify's relation set
 // and confidence rubric; graph.json is node-link format loadable by graphify's own tools.
 commands.kg = function (...args) {
@@ -6682,8 +6735,9 @@ Knowledge Graph (query MAP.json instead of grepping — run map-graph first):
   (--jobs, --parser, --cache-dir, --out, --ast-max-bytes, --verbose) are recognized
   and forwarded when the Go binary handles the command, and are stripped (not
   passed through, not an error) when the JS engine handles it instead — so a
-  script using them works either way. Install the binary with
-  \`npx draht-claude install-graph-engine\` (or draht-codex).
+  script using them works either way. The binary is an opt-in download: install
+  it with \`npx draht-claude install-graph-engine\` (or draht-codex). Without it
+  a one-line reminder goes to stderr once a day (DRAHT_GRAPH_HINT=0 turns it off).
 
 Symbol-level knowledge graph (graphify-parity engine; nodes = functions/classes/types):
   kg build [--quiet]            Deterministic symbol graph → .planning/codebase/graph.json + KG_REPORT.md
@@ -6751,7 +6805,8 @@ const [cmd, ...args] = process.argv.slice(2);
 		// mean nothing to the JS engine and, left in, corrupt its own arg parsing (an
 		// unconsumed value token gets read as a positional file/dir — finding #4). Strip
 		// them here so the two engines accept the same command line.
-		const jsArgs = GRAPH_GO_COMMANDS.has(cmd) ? graphStripGoOnlyFlags(args) : args;
+		// (`kg` takes none of them, and its arguments are free text: left as typed.)
+		const jsArgs = GRAPH_GO_COMMANDS.has(cmd) && cmd !== "kg" ? graphStripGoOnlyFlags(args) : args;
 		await commands[cmd](...jsArgs);
 	} else {
 		console.error(`Unknown command: ${cmd}\nRun: draht-tools help`);

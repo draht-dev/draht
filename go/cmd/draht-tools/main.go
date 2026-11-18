@@ -12,6 +12,7 @@ import (
 	"runtime/debug"
 	"strings"
 
+	"github.com/draht-dev/draht/go/internal/kg"
 	"github.com/draht-dev/draht/go/internal/parse"
 )
 
@@ -137,6 +138,8 @@ func main() {
 		os.Exit(runGraphQuery(os.Args[1], os.Args[2:]))
 	case "graph-hook":
 		os.Exit(runGraphHook(os.Args[2:]))
+	case "kg":
+		os.Exit(kg.Main(os.Args[2:], os.Stdout, os.Stderr))
 	case "--version":
 		// The gotreesitter version is printed here (not just buried in the
 		// cache key) so a `go get -u` bump is visible without reading

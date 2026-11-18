@@ -25,7 +25,7 @@ Run `draht-tools help` for the full list. Highlights:
 | `graph-hotspots` / `graph-clusters [--surprising]` | God-nodes / structural neighborhoods + surprising connections |
 | `graph-hook install\|uninstall\|status` | Git post-commit hook that refreshes the map |
 | `kg build` | **Symbol-level** knowledge graph (graphify-parity engine) → `graph.json` + `KG_REPORT.md` |
-| `kg query "<question>"` | BFS/DFS subgraph traversal from scored seeds — graphify's `NODE`/`EDGE` output |
+| `kg query "<question>"` | Files ranked for the question (text, symbol names, path), then a BFS/DFS subgraph from the best — graphify's `NODE`/`EDGE` output |
 | `kg explain` / `kg path` / `kg affected` | Node dump · shortest path with relation arrows · reverse blast-radius |
 | `kg export tree\|wiki\|graphml` | Collapsible module tree HTML / wiki articles / GraphML |
 | `init` / `create-project` / `create-roadmap` / … | Planning scaffolding (see `help`) |
@@ -50,13 +50,16 @@ All `graph-*` commands are **read-only** (never mutate `MAP.json`), print concis
 
 ## Two engines, both deterministic (no LLM anywhere in indexing)
 
+Both run in the prebuilt `draht-graph` Go binary when one is installed and in JavaScript otherwise (`DRAHT_GRAPH_ENGINE=go|js|auto`). For `kg` the two implementations are held byte-identical — `graph.json`, reports, exports and command output — by `go/internal/kg`'s parity test.
+
 | | `map-graph` (living map) | `kg` (graphify-parity engine, `bin/draht-kg.cjs`) |
 |---|---|---|
-| Nodes | modules (files) with symbols as attributes | **symbols**: files, classes, `functions()`, `methods()`, types |
+| Languages | any file the map recognizes; symbols and imports for the code languages it parses | TS/JS, Python, Go, Rust — declarations, imports and calls each resolved by the language's own rules (module tree, package scope, source roots) |
+| Nodes | modules (files) with symbols as attributes | **symbols**: files, classes, `functions()`, `methods()`, types, constants, declarations nested in function bodies |
 | Edges | import / re-export / external + call heuristics | graphify's relation set: `imports`, `imports_from`, `re_exports`, `dynamic_import`, `contains`, `defines`, `method`, `calls`, `indirect_call`, `inherits`, `implements`, `extends`, `instantiates` |
 | Confidence | per-edge tag | tag **+ `confidence_score`** (EXTRACTED 1.0 · INFERRED 0.8 calls · AMBIGUOUS 0.2), graphify's rubric |
 | IDs | file paths | graphify `ids.py` canonicalization (NFKC → `_` → casefold), e.g. `packages_router_src_router_modelrouter`; methods of one class whose names share an id (`close()` / `#close()`) get graphify's 6-hex suffix |
-| Query | ranked search (`graph-query`) | **subgraph traversal** (`kg query`): scored seeds → BFS/DFS with p99-degree hub guard → `NODE`/`EDGE` lines under a token budget |
+| Query | ranked search (`graph-query`) | **file-first ranking + subgraph traversal** (`kg query`): files scored by BM25 over their stored keywords, best symbol name and path → the top files' symbols lead the output → BFS/DFS from the best three with p99-degree hub guard → `NODE`/`EDGE` lines under a token budget |
 | Output | MAP.json (schema v6) + MAP.html + GRAPH_REPORT.md | `graph.json` (node-link, loadable by graphify's own tooling) + KG_REPORT.md + GRAPH_TREE.html/wiki/GraphML |
 
 Both engines are pure deterministic JS — the LLM is only involved in the *narrative* docs

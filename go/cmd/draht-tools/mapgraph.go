@@ -34,6 +34,9 @@ Query the graph (all read the MAP.json produced above):
   graph-hotspots             god nodes, most-depended-on, orchestrators, largest
   graph-clusters             structural import-topology clusters
 
+Symbol graph (graph.json; same output as the JavaScript kg engine):
+  kg <command>               build, query, explain, path, affected, stats, report, export — see "kg help"
+
 Git integration:
   graph-hook                 install/manage the post-commit hook that refreshes MAP.json
 

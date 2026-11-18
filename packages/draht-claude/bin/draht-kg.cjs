@@ -15,20 +15,28 @@
  *
  * Ports of graphify internals (Graphify-Labs/graphify @ main):
  *  - ids.py            → normalizeId/makeId (NFKC, non-word→_, collapse, casefold)
- *  - serve.py          → query terms/stopwords, IDF, tier scoring with coverage²,
- *                        seed selection, BFS/DFS with hub guard, NODE/EDGE output
+ *  - serve.py          → query stopwords, label scoring for `path` endpoints,
+ *                        BFS/DFS with hub guard, NODE/EDGE output (`query` ranks
+ *                        files itself: rankFiles)
  *  - affected.py       → reverse traversal over the default relation set
  *  - analyze.py        → god nodes, surprising connections, suggested questions,
  *                        import cycles
  *  - cluster.py        → deterministic communities + cohesion + hub labels
  *  - report.py         → KG_REPORT.md section list
- *  - extract.py        → node/edge emission contract (regex heuristics stand in
- *                        for tree-sitter; confidence marks the difference)
+ *  - extract.py        → node/edge emission contract (hand-written scanners per
+ *                        language stand in for tree-sitter)
+ *
+ * A Go port of this file lives in go/internal/kg (the `kg` command of the
+ * `draht-graph` binary, which draht-tools.cjs prefers when one is installed).
+ * The two must stay identical in output: go/internal/kg/parity_test.go compares
+ * graph.json, reports, exports and every subcommand's output byte for byte, so
+ * a change here needs the same change there.
  *
  * Zero runtime dependencies; Node >= 20. Loaded by draht-tools.cjs (`kg` command)
  * and runnable standalone: `node draht-kg.cjs build`.
  */
 
+const childProcess = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -82,27 +90,27 @@ const PREFIX_MATCH_BONUS = 100.0;
 const SUBSTRING_MATCH_BONUS = 1.0;
 const SOURCE_MATCH_BONUS = 0.5;
 
-// Language builtins never bound as call targets (subset of graphify's
-// _LANGUAGE_BUILTIN_GLOBALS covering the languages this engine extracts).
-const BUILTINS = new Set([
-	// js/ts
-	"require", "import", "console", "parseInt", "parseFloat", "setTimeout", "setInterval",
-	"clearTimeout", "clearInterval", "fetch", "String", "Number", "Boolean", "Array",
-	"Object", "Promise", "Map", "Set", "WeakMap", "WeakSet", "Symbol", "Error", "TypeError",
-	"RangeError", "SyntaxError", "JSON", "Math", "Date", "RegExp", "Proxy", "Reflect",
-	"BigInt", "Function", "isNaN", "isFinite", "encodeURIComponent", "decodeURIComponent",
-	"structuredClone", "queueMicrotask", "atob", "btoa", "URL", "URLSearchParams",
-	"AbortController", "TextEncoder", "TextDecoder", "Buffer", "Int8Array", "Uint8Array",
-	"Float32Array", "Float64Array", "ArrayBuffer", "DataView", "Infinity", "globalThis",
-	// python
-	"print", "len", "range", "str", "int", "float", "bool", "list", "dict", "set", "tuple",
-	"type", "isinstance", "issubclass", "super", "open", "enumerate", "zip", "map", "filter",
-	"sorted", "reversed", "sum", "min", "max", "abs", "round", "repr", "hash", "iter", "next",
-	"getattr", "setattr", "hasattr", "delattr", "vars", "dir", "id", "input", "format", "any",
-	// go
-	"make", "new", "len", "cap", "append", "copy", "delete", "panic", "recover", "close",
-	// rust
-	"vec", "println", "eprintln", "format", "panic", "assert", "assert_eq", "write", "writeln",
+// Methods the languages' own objects have (arrays, strings, maps, promises,
+// streams, emitters, dicts, files): a call to one of these on a receiver of
+// unknown type says nothing about a repo class that happens to declare the
+// same name.
+const COMMON_METHOD_NAMES = new Set([
+	"push", "pop", "shift", "unshift", "map", "filter", "reduce", "forEach", "find", "findIndex", "findLast", "some", "every", "includes",
+	"indexOf", "lastIndexOf", "join", "split", "slice", "splice", "concat", "sort", "reverse", "keys", "values", "entries", "get", "set",
+	"has", "delete", "add", "clear", "then", "catch", "finally", "toString", "valueOf", "toJSON", "trim", "trimStart", "trimEnd", "replace",
+	"replaceAll", "match", "matchAll", "test", "exec", "startsWith", "endsWith", "padStart", "padEnd", "toLowerCase", "toUpperCase",
+	"substring", "substr", "charAt", "charCodeAt", "codePointAt", "flat", "flatMap", "fill", "from", "call", "apply", "bind", "on", "off",
+	"once", "emit", "addEventListener", "removeEventListener", "dispatchEvent", "addListener", "removeListener", "log", "error", "warn",
+	"info", "debug", "trace", "write", "read", "end", "close", "open", "send", "next", "return", "throw", "resolve", "reject", "parse",
+	"stringify", "assign", "freeze", "append", "remove", "update", "insert", "extend", "items", "copy", "format", "encode", "decode",
+	"strip", "lstrip", "rstrip", "lower", "upper", "count", "index", "json", "text", "blob", "arrayBuffer", "abort", "cancel", "destroy",
+	"pipe", "unref", "ref", "kill", "exit", "start", "stop", "run", "reset", "init", "setup", "render", "focus", "blur", "click",
+	"toFixed", "toISOString", "getTime", "localeCompare", "normalize", "repeat", "search", "isdigit", "isalpha", "splitlines", "title",
+	"setdefault", "popitem", "discard", "union", "intersection", "difference", "seek", "tell", "flush", "readline", "readlines", "writelines",
+	"subscribe", "unsubscribe", "connect", "disconnect", "listen", "getAttribute", "setAttribute", "querySelector", "querySelectorAll",
+	"appendChild", "removeChild", "preventDefault", "stopPropagation", "toBe", "toEqual", "mockReturnValue", "mockResolvedValue",
+	"address", "clone", "formData", "getReader", "releaseLock", "enqueue", "terminate", "postMessage", "toLocaleString", "getItem",
+	"setItem", "removeItem", "command", "option", "argument", "group", "route", "headers", "status", "redirect", "cookie", "header",
 ]);
 
 // Control-flow keywords that look like calls in `name(` scans.
@@ -158,7 +166,7 @@ function symbolNodeId(rel, name) {
 // suffix taken from its own name, so the result never depends on declaration
 // order. Accessor pairs and overloads are one name, not a collision. Applies
 // where graphify's ids were checked: JS/TS and Python.
-const PRIVATE_MEMBER_PREFIX = { js: /^[_$#]/, py: /^_/ };
+const PRIVATE_MEMBER_PREFIX = { js: /^[_$#]/, py: /^_/, go: /^[^A-Z]/ };
 function methodNodeIds(rel, cls, lang) {
 	const privatePrefix = PRIVATE_MEMBER_PREFIX[LANG_FAMILY[lang]];
 	const groups = new Map(); // plain id -> distinct names
@@ -172,6 +180,28 @@ function methodNodeIds(rel, cls, lang) {
 		const isPublic = privatePrefix ? [...names].filter((n) => !privatePrefix.test(n)) : [];
 		for (const name of names) {
 			const plain = !privatePrefix || names.size < 2 || (isPublic.length === 1 && name === isPublic[0]);
+			ids.set(name, plain ? id : makeId(id, crypto.createHash("sha1").update(name, "utf8").digest("hex").slice(0, 6)));
+		}
+	}
+	return ids;
+}
+
+// File-level names → node ids, by the same rule: names of one file that would
+// share an id (Go's `ResponseWriter` / `responseWriter`, a class and a
+// same-named constant in another case) each get their own.
+function fileSymbolIds(rel, names, lang) {
+	const privatePrefix = PRIVATE_MEMBER_PREFIX[LANG_FAMILY[lang]];
+	const groups = new Map();
+	for (const name of names) {
+		const id = symbolNodeId(rel, name);
+		if (!groups.has(id)) groups.set(id, new Set());
+		groups.get(id).add(name);
+	}
+	const ids = new Map();
+	for (const [id, set] of groups) {
+		const isPublic = privatePrefix ? [...set].filter((n) => !privatePrefix.test(n)) : [];
+		for (const name of set) {
+			const plain = set.size < 2 || (isPublic.length === 1 && name === isPublic[0]);
 			ids.set(name, plain ? id : makeId(id, crypto.createHash("sha1").update(name, "utf8").digest("hex").slice(0, 6)));
 		}
 	}
@@ -215,7 +245,34 @@ function sortByPosixPath(paths, sep = path.sep) {
 		.map((x) => x[1]);
 }
 
+// Code files of a git checkout: tracked files and untracked ones git does not
+// ignore, so a tracked dot-directory counts and ignored build output does
+// not. Null outside a git checkout (or without git): the directory walk and
+// its ignore list take over.
+function gitFiles(root, maxFiles) {
+	if (!fs.existsSync(path.join(root, ".git"))) return null;
+	let out;
+	try {
+		const r = childProcess.spawnSync("git", ["-C", root, "ls-files", "-co", "--exclude-standard", "-z"], { encoding: "utf-8", maxBuffer: 1 << 28 });
+		if (r.status !== 0 || typeof r.stdout !== "string") return null;
+		out = r.stdout;
+	} catch { return null; }
+	const files = [];
+	for (const rel of out.split("\0")) {
+		if (!rel || rel.endsWith("/") || !KG_LANG_BY_EXT[path.extname(rel).toLowerCase()]) continue;
+		const parts = rel.split("/");
+		if (parts.includes("node_modules") || parts.includes(".git")) continue;
+		const full = path.join(root, ...parts);
+		try { if (!fs.statSync(full).isFile()) continue; } catch { continue; }
+		files.push(full);
+		if (files.length >= maxFiles) break;
+	}
+	return files.length ? sortByPosixPath(files) : null;
+}
+
 function walk(root, maxFiles = 20000) {
+	const tracked = gitFiles(root, maxFiles);
+	if (tracked) return tracked;
 	const files = [];
 	const stack = [root];
 	while (stack.length && files.length < maxFiles) {
@@ -538,23 +595,16 @@ function lineIndex(content) {
 // Per-language declaration extraction (phase 1)
 // ============================================================================
 
-const MAX_SYMBOLS_PER_FILE = 300;
+const MAX_SYMBOLS_PER_FILE = 5000;
 // Methods one class keeps. A class that declares more is named in the
 // `kg build` output instead of losing the rest silently.
 const MAX_METHODS_PER_CLASS = 1000;
 
-// TypeScript/JavaScript: `word(` at class-member depth is a method header for
-// any word — `delete(id) {`, `catch(onRejected) {`, `return(value) {` are all
-// legal — except where the same text is something else:
-//  - a block statement or a function expression has the very shape of a
-//    method header (`if (x) {`, `function (x) {`, `async (x) => {`), so those
-//    words never name a method;
-//  - an expression keyword starts a statement or continues a field
-//    initializer (`import("./x.js");`, `return (x);`), so with no modifier
-//    in front it names a method only once its body opens, or when a return
-//    type follows its parameters (`delete(id: string): boolean;` in an
-//    ambient class).
-const TS_BLOCK_WORDS = new Set(["if", "for", "while", "switch", "with", "function", "async"]);
+// Python words that start a statement which is not an assignment.
+const PY_STATEMENT_WORDS = new Set([
+	"if", "elif", "else", "try", "except", "finally", "for", "while", "with", "def", "class", "return", "import", "from",
+	"lambda", "pass", "raise", "global", "nonlocal", "assert", "del", "async", "await", "match", "case", "yield", "not", "print",
+]);
 const TS_EXPRESSION_WORDS = new Set([
 	"return", "throw", "typeof", "void", "await", "yield", "new", "delete", "import",
 	"super", "this", "case", "catch", "do", "else", "try", "in", "instanceof",
@@ -569,42 +619,6 @@ function addMethod(cls, meth) {
 	cls.methods.push(meth);
 	return true;
 }
-// An open declaration that turned out not to be one (see TS_EXPRESSION_WORDS).
-function dropTentative(entry) {
-	const methods = entry.tentativeIn.methods;
-	const at = methods.lastIndexOf(entry.ref);
-	if (at >= 0) methods.splice(at, 1);
-}
-
-// Header vs body braces. While a declaration waits for its body, braces in
-// its HEADER — an object type in the parameter list
-// (`createOps(options?: { shellPath?: string }) {`), a generic argument or
-// constraint, a return type annotation (`): { ok: boolean } {`), Go's
-// `interface{}` / `struct{}` — neither open nor close it. `entry` carries the
-// header counters (paren, angle, type); `prev` is the previous non-space
-// masked char and `prevWord` the identifier ending there.
-const TYPE_BRACE_PREV = new Set([":", "|", "&", ",", "(", "<", "?"]);
-function isHeaderBrace(entry, lang, prev, prevWord) {
-	if (entry.paren > 0 || entry.angle > 0 || entry.type > 0) return true;
-	if (TYPE_BRACE_PREV.has(prev)) return true;
-	return lang === "go" && (prevWord === "interface" || prevWord === "struct");
-}
-function trackHeaderChar(entry, lang, ch, prev) {
-	if (ch === "(") entry.paren++;
-	else if (ch === ")") entry.paren = Math.max(0, entry.paren - 1);
-	// Angle brackets are TS generics only (Go's `<-chan` is not one); the `>`
-	// of `=>` closes nothing.
-	else if (ch === "<" && lang !== "go") entry.angle++;
-	else if (ch === ">" && lang !== "go" && prev !== "=") entry.angle = Math.max(0, entry.angle - 1);
-}
-// After each masked char of a pending header: remember the previous
-// non-space char and the identifier ending there (`last` is the raw char
-// before `ch`).
-function noteScanChar(scan, ch, last) {
-	if (isIdentChar(ch)) scan.word = isIdentChar(last) ? scan.word + ch : ch;
-	else if (ch !== " " && ch !== "\t" && ch !== "\r") scan.word = "";
-	if (ch !== " " && ch !== "\t" && ch !== "\r") scan.prev = ch;
-}
 function isIdentChar(c) {
 	return (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c === "_" || c === "$";
 }
@@ -615,14 +629,939 @@ function implementsList(text) {
 	while (/<[^<>]*>/.test(s)) s = s.replace(/<[^<>]*>/g, "");
 	return s.split(",").map((x) => (x.trim().match(/^[A-Za-z_$][\w$]*/) || [""])[0]).filter(Boolean);
 }
-// The top declaration of `open` while it still waits for its body brace.
-function pendingHeader(open) {
-	const top = open[open.length - 1];
-	return top && !top.opened ? top : null;
+// ============================================================================
+// Bracket helpers (masked text)
+// ============================================================================
+
+// Index of the bracket that closes the one at `open`, or -1.
+function matchClose(text, open) {
+	const o = text[open];
+	const c = o === "{" ? "}" : o === "(" ? ")" : o === "[" ? "]" : o === "<" ? ">" : null;
+	if (!c) return -1;
+	let depth = 0;
+	for (let i = open; i < text.length; i++) {
+		const ch = text[i];
+		if (ch === o) depth++;
+		else if (ch === c && --depth === 0) return i;
+	}
+	return -1;
 }
-// A declaration awaiting its body end (`opened` once its body brace is seen).
-function openDecl(ref, depth, line) {
-	return { ref, depth, line, opened: false, paren: 0, angle: 0, type: 0 };
+
+// Pieces of `text` split at commas outside every bracket.
+function splitTopLevel(text) {
+	const out = [];
+	let depth = 0, from = 0;
+	for (let i = 0; i < text.length; i++) {
+		const ch = text[i];
+		if (ch === "(" || ch === "[" || ch === "{") depth++;
+		else if (ch === ")" || ch === "]" || ch === "}") depth--;
+		else if (ch === "," && depth === 0) { out.push(text.slice(from, i)); from = i + 1; }
+	}
+	out.push(text.slice(from));
+	return out;
+}
+
+// ============================================================================
+// Go declarations
+// ============================================================================
+
+const GO_TYPE_WORDS = new Set(["func", "map", "chan", "struct", "interface"]);
+const GO_CALL_SKIP = new Set([
+	"if", "for", "switch", "select", "return", "func", "go", "defer", "range", "case", "else", "var", "const", "type",
+	"make", "new", "len", "cap", "append", "copy", "delete", "panic", "recover", "close", "print", "println", "min", "max", "clear",
+	"string", "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64", "uintptr", "byte", "rune",
+	"float32", "float64", "complex64", "complex128", "bool", "error", "any",
+]);
+
+// A Go type expression reduced to the name a method is looked up on:
+// `*pkg.T[K]` → "pkg.T"; `[]T` and `...T` → "[]T" (the elements are T). Null for
+// maps, channels, function types and type literals.
+function goTypeName(expr) {
+	let t = String(expr || "").trim();
+	let slice = false;
+	for (;;) {
+		if (t.startsWith("*")) t = t.slice(1).trim();
+		else if (t.startsWith("...")) { slice = true; t = t.slice(3).trim(); }
+		else if (t.startsWith("[")) {
+			const e = matchClose(t, 0);
+			if (e < 0) return null;
+			slice = true;
+			t = t.slice(e + 1).trim();
+		} else break;
+	}
+	if (t.startsWith("map[")) {
+		const e = matchClose(t, 3);
+		const v = e > 0 ? goTypeName(t.slice(e + 1)) : null;
+		return v ? "[]" + v.replace(/^\[\]/, "") : null;
+	}
+	const m = t.match(/^([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)/);
+	if (!m || GO_TYPE_WORDS.has(m[1])) return null;
+	return (slice ? "[]" : "") + m[1];
+}
+
+// `a, b int, c *T` → [{ name, type }], with Go's shared-type grouping. A list
+// of bare types (unnamed parameters) gives [].
+function goParams(text) {
+	const out = [];
+	let pending = [];
+	for (const raw of splitTopLevel(text)) {
+		const piece = raw.trim();
+		if (!piece) continue;
+		const m = piece.match(/^([A-Za-z_]\w*)\s+(\S[\s\S]*)$/);
+		if (m && !GO_TYPE_WORDS.has(m[1])) {
+			const type = goTypeName(m[2]);
+			for (const n of pending) out.push({ name: n, type });
+			pending = [];
+			out.push({ name: m[1], type });
+		} else if (/^[A-Za-z_]\w*$/.test(piece)) pending.push(piece);
+		else pending = [];
+	}
+	return out;
+}
+
+// The first result type of a signature's result text (`*T`, `(T, error)`,
+// `(x T, err error)`).
+function goFirstResult(text) {
+	let t = String(text || "").trim();
+	if (!t) return null;
+	if (t.startsWith("(")) {
+		const e = matchClose(t, 0);
+		const first = (splitTopLevel(t.slice(1, e < 0 ? t.length : e))[0] || "").trim();
+		const m = first.match(/^([A-Za-z_]\w*)\s+(\S[\s\S]*)$/);
+		t = m && !GO_TYPE_WORDS.has(m[1]) ? m[2] : first;
+	}
+	return goTypeName(t);
+}
+
+// Top-level Go declarations from masked source: functions and methods with
+// receiver, parameter and result types; named types (struct fields and
+// embedded types included); package-level constants and variables, single or
+// in `( … )` groups. Offsets index `masked`.
+function parseGoDecls(d, masked, lineOf) {
+	const pm = masked.match(/^package\s+([A-Za-z_]\w*)/m);
+	d.goPackage = pm ? pm[1] : "";
+	d.goMethods = [];
+	d.goVars = new Map(); // name -> { type, init }
+	const n = masked.length;
+
+	const addType = (name, at, rest, restAt) => {
+		// generic parameters, then an optional alias `=`
+		let r = rest, rAt = restAt;
+		const lead = r.match(/^\s*/)[0].length;
+		r = r.slice(lead); rAt += lead;
+		if (r.startsWith("[")) {
+			const e = matchClose(masked, rAt);
+			// `type A [4]int` is an array type, not generics: generics hold an identifier pair
+			if (e > 0 && /^\[\s*[A-Za-z_]\w*\s+[^\]]/.test(masked.slice(rAt, e + 1))) {
+				rAt = e + 1;
+				r = masked.slice(rAt, masked.indexOf("\n", rAt) < 0 ? n : masked.indexOf("\n", rAt));
+				const l2 = r.match(/^\s*/)[0].length;
+				r = r.slice(l2); rAt += l2;
+			}
+		}
+		if (r.startsWith("=")) { const l3 = r.slice(1).match(/^\s*/)[0].length + 1; r = r.slice(l3); rAt += l3; }
+		const kind = /^struct\b/.test(r) ? "struct" : /^interface\b/.test(r) ? "interface" : "type";
+		const cls = { name, line: lineOf(at), end: null, kind, extends: null, implements: [], methods: [], fields: new Map(), embeds: [], bodyStart: -1, bodyEnd: -1 };
+		if (kind !== "type") {
+			const open = masked.indexOf("{", rAt);
+			const close = open >= 0 ? matchClose(masked, open) : -1;
+			if (open >= 0 && close > open) {
+				cls.bodyStart = open; cls.bodyEnd = close; cls.end = lineOf(close);
+				let depth = 0, lineStart = open + 1;
+				for (let i = open + 1; i <= close; i++) {
+					const ch = masked[i];
+					if (ch === "\n" || i === close) {
+						if (depth === 0) {
+							const ln = masked.slice(lineStart, i).trim();
+							const em = ln.match(/^\*?\s*([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)(?:\[[^\]]*\])?\s*(?:"\s*"|`\s*`)?$/);
+							if (em) cls.embeds.push(em[1]);
+							else if (kind === "struct") {
+								const fm = ln.match(/^([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s+(\S.*)$/);
+								if (fm) { const t = goTypeName(fm[2]); if (t) for (const f of fm[1].split(",")) cls.fields.set(f.trim(), t); }
+							}
+						}
+						lineStart = i + 1;
+					}
+					if (ch === "{" || ch === "(") depth++;
+					else if (ch === "}" || ch === ")") depth--;
+				}
+			}
+		} else {
+			const t = goTypeName(r);
+			if (t && !t.startsWith("[]")) cls.underlying = t;
+		}
+		d.classes.push(cls);
+	};
+
+	const addValues = (names, at, rest) => {
+		const list = names.split(",").map((s) => s.trim()).filter((s) => s && s !== "_");
+		for (const name of list) d.types.push({ name, line: lineOf(at), kind: "const" });
+		if (list.length !== 1) return;
+		const eq = rest.indexOf("=");
+		const typeText = (eq < 0 ? rest : rest.slice(0, eq)).trim();
+		const init = eq < 0 ? "" : rest.slice(eq + 1).trim();
+		d.goVars.set(list[0], { type: typeText ? goTypeName(typeText) : null, init });
+	};
+
+	const funcRe = /func\s*(?:\(([^)]*)\)\s*)?([A-Za-z_]\w*)\s*(\[[^\]]*\]\s*)?\(/y;
+	const addFunc = (at) => {
+		funcRe.lastIndex = at;
+		const m = funcRe.exec(masked);
+		if (!m) return at;
+		const paramsOpen = funcRe.lastIndex - 1;
+		const paramsClose = matchClose(masked, paramsOpen);
+		if (paramsClose < 0) return at;
+		let bodyOpen = -1, paren = 0, i = paramsClose + 1, word = "";
+		for (; i < n; i++) {
+			const ch = masked[i];
+			if (ch === "(" || ch === "[") paren++;
+			else if (ch === ")" || ch === "]") paren--;
+			else if (ch === "{") {
+				if (word === "interface" || word === "struct") { const e = matchClose(masked, i); if (e < 0) break; i = e; word = ""; continue; }
+				bodyOpen = i;
+				break;
+			} else if (ch === "\n" && paren <= 0) break;
+			if (isIdentChar(ch)) word = isIdentChar(masked[i - 1]) ? word + ch : ch;
+			else if (ch !== " " && ch !== "\t") word = "";
+		}
+		const bodyClose = bodyOpen >= 0 ? matchClose(masked, bodyOpen) : -1;
+		const fn = {
+			name: m[2], line: lineOf(at), end: bodyClose > 0 ? lineOf(bodyClose) : lineOf(i < n ? i : n - 1),
+			params: goParams(masked.slice(paramsOpen + 1, paramsClose)),
+			result: goFirstResult(masked.slice(paramsClose + 1, bodyOpen >= 0 ? bodyOpen : i)),
+			declStart: at, bodyStart: bodyOpen, bodyEnd: bodyClose,
+		};
+		if (m[1] !== undefined) {
+			const rm = m[1].match(/^\s*(?:([A-Za-z_]\w*)\s+)?\*?\s*([A-Za-z_]\w*)/);
+			if (rm) {
+				fn.recvName = rm[1] && rm[1] !== "_" ? rm[1] : null;
+				fn.recvType = rm[2];
+				d.goMethods.push(fn);
+				return bodyClose > 0 ? bodyClose : i;
+			}
+		}
+		d.functions.push(fn);
+		return bodyClose > 0 ? bodyClose : i;
+	};
+
+	// Walk line starts at brace depth 0; `group` is the keyword of an open `( … )` block.
+	let brace = 0, paren = 0, group = null, prevEnd = "", paren1Start = false;
+	let i = 0;
+	while (i < n) {
+		const eol = masked.indexOf("\n", i) < 0 ? n : masked.indexOf("\n", i);
+		const ln = masked.slice(i, eol);
+		let skipTo = -1;
+		if (brace === 0) {
+			let m;
+			if (paren === 0) {
+				group = null;
+				if (/^func\b/.test(ln)) skipTo = addFunc(i);
+				else if ((m = ln.match(/^type\s+([A-Za-z_]\w*)/))) addType(m[1], i, ln.slice(m[0].length), i + m[0].length);
+				else if ((m = ln.match(/^(type|const|var)\s*\(/))) { group = m[1]; paren1Start = true; }
+				else if ((m = ln.match(/^(?:const|var)\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)/))) addValues(m[1], i, ln.slice(m[0].length));
+			} else if (paren === 1 && group) {
+				let m;
+				if (group === "type") {
+					if ((m = ln.match(/^\s*([A-Za-z_]\w*)\b/))) addType(m[1], i + ln.indexOf(m[1]), ln.slice(m[0].length), i + m[0].length);
+				} else if (paren1Start || !/[+\-*/%&|^<>=,]$/.test(prevEnd)) { if ((m = ln.match(/^\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*(?=$|=|[A-Za-z_*\[]|\/\/)/))) {
+					addValues(m[1], i + ln.indexOf(m[1]), ln.slice(m[0].length));
+				} }
+			}
+		}
+		if (skipTo > i) {
+			// a function was consumed up to its closing brace: resume on the next line
+			const next = masked.indexOf("\n", skipTo);
+			i = next < 0 ? n : next + 1;
+			prevEnd = "}";
+			continue;
+		}
+		for (let k = i; k < eol; k++) {
+			const ch = masked[k];
+			if (ch === "{") brace++;
+			else if (ch === "}") brace--;
+			else if (ch === "(") paren++;
+			else if (ch === ")") paren--;
+		}
+		const trimmed = ln.trimEnd();
+		if (trimmed) { prevEnd = trimmed[trimmed.length - 1]; if (!/^(?:type|const|var)\s*\($/.test(trimmed)) paren1Start = false; }
+		i = eol + 1;
+	}
+}
+
+// ============================================================================
+// Rust declarations
+// ============================================================================
+
+// Index after the `<…>` group opening at `open` (the `>` of `->` and `=>`
+// closes nothing), or -1.
+function skipAngles(text, open) {
+	let depth = 0;
+	for (let i = open; i < text.length; i++) {
+		const ch = text[i];
+		if (ch === "<") depth++;
+		else if (ch === ">" && text[i - 1] !== "-" && text[i - 1] !== "=") { if (--depth === 0) return i + 1; }
+		else if (ch === "{" || ch === ";") return -1;
+	}
+	return -1;
+}
+
+// `a::b::{c, d as e, f::*, self}` → [{ segs, alias, glob }].
+function rustUseTree(text, prefix, out) {
+	const t = text.trim();
+	if (!t) return out;
+	const brace = t.indexOf("{");
+	if (brace >= 0) {
+		const close = matchClose(t, brace);
+		const head = t.slice(0, brace).replace(/::\s*$/, "").trim();
+		const base = head ? prefix.concat(head.split("::").map((s) => s.trim()).filter(Boolean)) : prefix;
+		for (const piece of splitTopLevel(t.slice(brace + 1, close < 0 ? t.length : close))) rustUseTree(piece, base, out);
+		return out;
+	}
+	const m = t.match(/^((?:[A-Za-z_]\w*\s*::\s*)*)(\*|[A-Za-z_]\w*)(?:\s+as\s+([A-Za-z_]\w*))?$/);
+	if (!m) return out;
+	const head = m[1].split("::").map((s) => s.trim()).filter(Boolean);
+	if (m[2] === "*") out.push({ segs: prefix.concat(head), alias: null, glob: true });
+	else if (m[2] === "self" && (prefix.length || head.length)) {
+		const segs = prefix.concat(head);
+		out.push({ segs, alias: m[3] || segs[segs.length - 1], glob: false });
+	} else out.push({ segs: prefix.concat(head, [m[2]]), alias: m[3] || m[2], glob: false });
+	return out;
+}
+
+// The name a type expression is known by: `&'a mut path::Type<T>` → "Type",
+// with its full path segments (`["path", "Type"]`).
+function rustTypePath(expr) {
+	let t = String(expr || "").trim();
+	for (;;) {
+		const m = t.match(/^(?:&|\*\s*(?:const|mut)\b|'[A-Za-z_]\w*|mut\b|dyn\b|impl\b)\s*/);
+		if (!m || !m[0]) break;
+		t = t.slice(m[0].length);
+	}
+	const m = t.match(/^((?:[A-Za-z_]\w*\s*::\s*)*[A-Za-z_]\w*)/);
+	return m ? m[1].split("::").map((s) => s.trim()) : null;
+}
+
+const RUST_ITEM_RE = /(?:pub(?:\s*\([^)]*\))?\s+)?(?:default\s+)?(?:(?:const|async|unsafe)\s+)*(?:extern\s*(?:"[^"]*"\s*)?)?(fn|struct|enum|union|trait|impl|mod|type|const|static|use|macro_rules\s*!|extern\s+crate)(?![\w])/y;
+
+// Rust items from masked source, at any module depth: functions, structs,
+// enums, unions, traits (with their methods), impl blocks (methods grouped by
+// the type they are for), inline and file modules, type aliases, constants,
+// statics, macros and `use` trees. Offsets index `masked`.
+function parseRustDecls(d, masked, lineOf) {
+	d.rsScopes = new Map(); // inline module path ("" | "a::b") -> scope
+	d.rsImpls = [];
+	d.rsNested = [];
+	d.rsFns = [];
+	d.rsSkip = []; // ranges that hold no calls: type declarations, macro definitions
+	const n = masked.length;
+	const scopeOf = (inl, parent) => {
+		let s = d.rsScopes.get(inl);
+		if (!s) d.rsScopes.set(inl, s = { inl, items: new Map(), mods: new Map(), modDecls: [], uses: new Map(), globs: [], parent });
+		return s;
+	};
+	const nameAt = (i) => {
+		const m = /\s*((?:r#)?[A-Za-z_]\w*)/y;
+		m.lastIndex = i;
+		const r = m.exec(masked);
+		return r ? { name: r[1], end: m.lastIndex } : null;
+	};
+	// End of a statement starting at `i`: its `;`, or the brace that closes its first top-level block.
+	const statementEnd = (i, stopAtBlock) => {
+		for (let k = i; k < n; k++) {
+			const ch = masked[k];
+			if (ch === "(" || ch === "[") { const e = matchClose(masked, k); if (e < 0) return n; k = e; }
+			else if (ch === "{") { const e = matchClose(masked, k); if (e < 0) return n; if (stopAtBlock) return e; k = e; }
+			else if (ch === ";") return k;
+			else if (ch === "}") return k - 1;
+		}
+		return n;
+	};
+	// Body of an item whose header starts at `i`: { open, close } or { end } at its `;`.
+	const bodyOf = (i) => {
+		for (let k = i; k < n; k++) {
+			const ch = masked[k];
+			if (ch === "(" || ch === "[") { const e = matchClose(masked, k); if (e < 0) break; k = e; }
+			else if (ch === "<") { const e = skipAngles(masked, k); if (e > 0) k = e - 1; }
+			else if (ch === "{") { const e = matchClose(masked, k); return e < 0 ? { end: n } : { open: k, close: e }; }
+			else if (ch === ";") return { end: k };
+			else if (ch === "}") return { end: k - 1 };
+		}
+		return { end: n };
+	};
+	const nestedFnRe = /\b(fn|struct|enum)\s+((?:r#)?[A-Za-z_]\w*)/g;
+	const addFn = (at, nameInfo, inl, owner, list) => {
+		const b = bodyOf(nameInfo.end);
+		const fn = { name: nameInfo.name, line: lineOf(at), end: lineOf(b.close != null ? b.close : Math.min(b.end, n - 1)), declStart: at, bodyStart: b.open != null ? b.open : -1, bodyEnd: b.close != null ? b.close : -1, inl, owner };
+		list.push(fn);
+		d.rsFns.push(fn);
+		if (fn.bodyStart >= 0) {
+			nestedFnRe.lastIndex = fn.bodyStart;
+			let m;
+			while ((m = nestedFnRe.exec(masked)) !== null && m.index < fn.bodyEnd) {
+				const nb = bodyOf(m.index + m[0].length);
+				d.rsNested.push({ name: m[2], kind: m[1], line: lineOf(m.index), end: lineOf(nb.close != null ? nb.close : Math.min(nb.end, n - 1)), parent: fn });
+			}
+		}
+		return b.close != null ? b.close : b.end;
+	};
+
+	const scanItems = (from, to, inl, parent, ctx) => {
+		const scope = ctx ? null : scopeOf(inl, parent);
+		let i = from;
+		while (i < to) {
+			const ch = masked[i];
+			if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r" || ch === ";") { i++; continue; }
+			if (ch === "#") { // attribute
+				const open = masked.indexOf("[", i);
+				const e = open >= 0 && open <= i + 2 ? matchClose(masked, open) : -1;
+				i = e < 0 ? i + 1 : e + 1;
+				continue;
+			}
+			RUST_ITEM_RE.lastIndex = i;
+			const m = RUST_ITEM_RE.exec(masked);
+			if (!m) { i = statementEnd(i, true) + 1; continue; }
+			const kw = m[1].replace(/\s+/g, " ");
+			const after = RUST_ITEM_RE.lastIndex;
+			const nm = nameAt(after);
+			if (kw === "fn") {
+				if (!nm) { i = statementEnd(after, true) + 1; continue; }
+				if (ctx) i = addFn(i, nm, inl, ctx.owner, ctx.methods) + 1;
+				else {
+					const list = [];
+					i = addFn(i, nm, inl, null, list) + 1;
+					const fn = list[0];
+					d.functions.push(fn);
+					if (!scope.items.has(fn.name)) scope.items.set(fn.name, { kind: "fn", name: fn.name, ref: fn });
+				}
+			} else if (kw === "struct" || kw === "enum" || kw === "union" || kw === "trait") {
+				if (!nm || ctx) { i = statementEnd(after, true) + 1; continue; }
+				const b = bodyOf(nm.end);
+				const cls = { name: nm.name, line: lineOf(i), end: lineOf(b.close != null ? b.close : Math.min(b.end, n - 1)), kind: kw === "trait" ? "trait" : kw === "enum" ? "enum" : "struct", extends: null, implements: [], methods: [], inl, bodyStart: b.open != null ? b.open : -1, bodyEnd: b.close != null ? b.close : -1 };
+				if (kw !== "trait") d.rsSkip.push([i, (b.close != null ? b.close : b.end) + 1]);
+				d.classes.push(cls);
+				if (!scope.items.has(cls.name)) scope.items.set(cls.name, { kind: cls.kind, name: cls.name, ref: cls });
+				if (kw === "trait" && b.open != null) {
+					const impl = { inl, typeName: nm.name, typeSegs: [nm.name], traitSegs: null, line: cls.line, methods: [], isTrait: true };
+					d.rsImpls.push(impl);
+					scanItems(b.open + 1, b.close, inl, parent, { owner: nm.name, methods: impl.methods });
+				}
+				i = (b.close != null ? b.close : b.end) + 1;
+			} else if (kw === "impl") {
+				let k = after;
+				while (k < n && /\s/.test(masked[k])) k++;
+				if (masked[k] === "<") { const e = skipAngles(masked, k); if (e > 0) k = e; }
+				const b = bodyOf(k);
+				if (b.open == null || ctx) { i = (b.close != null ? b.close : b.end) + 1; continue; }
+				let header = masked.slice(k, b.open);
+				const wh = header.search(/\bwhere\b/);
+				if (wh >= 0) header = header.slice(0, wh);
+				// the first ` for ` outside angle brackets separates trait and type
+				let depth = 0, forAt = -1;
+				for (let q = 0; q < header.length; q++) {
+					const c = header[q];
+					if (c === "<") depth++;
+					else if (c === ">" && header[q - 1] !== "-" && header[q - 1] !== "=") depth--;
+					else if (depth === 0 && c === "f" && /^for\s+[^<\s]/.test(header.slice(q)) && /\s/.test(header[q - 1] || " ")) { forAt = q; break; }
+				}
+				const typeSegs = rustTypePath(forAt >= 0 ? header.slice(forAt + 3) : header);
+				const traitSegs = forAt >= 0 ? rustTypePath(header.slice(0, forAt).replace(/^\s*!/, "")) : null;
+				if (typeSegs) {
+					const impl = { inl, typeName: typeSegs[typeSegs.length - 1], typeSegs, traitSegs, line: lineOf(i), methods: [], isTrait: false };
+					d.rsImpls.push(impl);
+					scanItems(b.open + 1, b.close, inl, parent, { owner: impl.typeName, methods: impl.methods });
+				}
+				i = b.close + 1;
+			} else if (kw === "mod") {
+				if (!nm || ctx) { i = statementEnd(after, true) + 1; continue; }
+				const b = bodyOf(nm.end);
+				if (b.open != null) {
+					const sub = inl ? inl + "::" + nm.name : nm.name;
+					scope.mods.set(nm.name, { inline: sub });
+					scanItems(b.open + 1, b.close, sub, inl, null);
+					i = b.close + 1;
+				} else {
+					scope.modDecls.push({ name: nm.name, line: lineOf(i) });
+					i = b.end + 1;
+				}
+			} else if (kw === "type" || kw === "const" || kw === "static") {
+				let name = nm;
+				if (name && name.name === "mut") name = nameAt(name.end);
+				const end = statementEnd(after, false);
+				if (name && name.name !== "_" && !ctx) {
+					const t = { name: name.name, line: lineOf(i), kind: kw === "type" ? "type" : "const", inl };
+					d.types.push(t);
+					if (!scope.items.has(t.name)) scope.items.set(t.name, { kind: t.kind, name: t.name, ref: t });
+				}
+				i = end + 1;
+			} else if (kw === "macro_rules !" || kw === "macro_rules!") {
+				const b = nm ? bodyOf(nm.end) : { end: after };
+				let end = b.close != null ? b.close : b.end;
+				if (nm && b.open == null) { // macro_rules! name ( … );
+					const open = masked.indexOf("(", nm.end);
+					const e = open >= 0 ? matchClose(masked, open) : -1;
+					if (e > 0) end = e;
+				}
+				d.rsSkip.push([i, end + 1]);
+				if (nm && !ctx) {
+					const t = { name: nm.name, line: lineOf(i), kind: "macro", inl };
+					d.types.push(t);
+					if (!scope.items.has(t.name)) scope.items.set(t.name, { kind: "macro", name: t.name, ref: t });
+				}
+				i = end + 1;
+			} else if (kw === "use") {
+				const end = statementEnd(after, false);
+				if (!ctx) {
+					for (const u of rustUseTree(masked.slice(after, end), [], [])) {
+						if (u.glob) scope.globs.push(u.segs);
+						else if (u.alias !== "_") {
+							if (!scope.uses.has(u.alias)) scope.uses.set(u.alias, []);
+							scope.uses.get(u.alias).push(u.segs);
+						}
+						d.imports.push({ spec: u.segs.join("::"), default: null, namespace: u.alias, names: [], reExport: false, dynamic: false, line: lineOf(i), rsInl: inl, rsSegs: u.segs, rsGlob: u.glob });
+					}
+				}
+				i = end + 1;
+			} else i = statementEnd(after, false) + 1; // extern crate
+		}
+	};
+	scanItems(0, n, "", null, null);
+}
+
+// ============================================================================
+// TypeScript / JavaScript declarations
+// ============================================================================
+
+// Index after the `<…>` group opening at `open` (a generic parameter or
+// argument list: the `>` of `=>` closes nothing, brackets inside are skipped
+// whole), or -1 when it is not one.
+function tsAngles(text, open) {
+	let depth = 0;
+	const limit = Math.min(text.length, open + 4000);
+	for (let i = open; i < limit; i++) {
+		const ch = text[i];
+		if (ch === "(" || ch === "[" || ch === "{") { const e = matchClose(text, i); if (e < 0) return -1; i = e; }
+		else if (ch === "<") depth++;
+		else if (ch === ">" && text[i - 1] !== "=") { if (--depth === 0) return i + 1; }
+		else if (ch === ";" || ch === ")" || ch === "]" || ch === "}") return -1;
+	}
+	return -1;
+}
+
+const TS_TYPE_BRACE_PREV = new Set([":", "|", "&", ",", "(", "<", "?", "["]);
+const TS_TYPE_WORDS = new Set(["is", "extends", "keyof", "typeof", "infer", "readonly", "asserts", "in"]);
+const TS_LINE_CONTINUES = new Set(["+", "-", "*", "/", "%", "&", "|", "^", "<", ">", "=", "?", ":", ",", ".", "(", "[", "{", "!", "~"]);
+const TS_CONTINUE_WORDS = new Set(["return", "typeof", "new", "await", "yield", "extends", "in", "of", "instanceof", "as", "satisfies", "void", "delete", "throw", "case", "else"]);
+const TS_NEXT_CONTINUES = new Set([".", "?", ":", "+", "*", "/", "%", "&", "|", "^", "<", ">", "=", ",", ")", "]"]);
+const TS_NEXT_WORDS = new Set(["as", "satisfies", "instanceof", "in", "extends"]);
+const TS_MEMBER_MODIFIERS = new Set(["public", "private", "protected", "static", "readonly", "override", "abstract", "async", "declare", "accessor", "get", "set"]);
+const TS_NOT_A_NAME = new Set(["extends", "implements"]);
+
+// Where a function's body opens after its parameter list closed at `from - 1`:
+// { open } at the body brace, or { end } where a bodiless signature ends. A
+// brace that belongs to the return type (`): { ok: boolean } {`) is skipped.
+function tsBodyOpen(text, from) {
+	const n = text.length;
+	let prev = ")", word = "", arrow = false;
+	for (let k = from; k < n; k++) {
+		const ch = text[k];
+		if (ch === " " || ch === "\t" || ch === "\r") continue;
+		if (ch === "\n") {
+			if (TS_TYPE_BRACE_PREV.has(prev) || arrow || TS_TYPE_WORDS.has(word)) continue;
+			let q = k + 1;
+			while (q < n && /\s/.test(text[q])) q++;
+			const c2 = text[q];
+			if (c2 === "{" || c2 === "|" || c2 === "&" || c2 === ":" || c2 === "<" || c2 === "=" || c2 === "." || c2 === "?" || c2 === "[") continue;
+			if (prev === ")" && c2 === undefined) return { end: k };
+			if (/^(?:is|extends|keyof)\b/.test(text.slice(q, q + 8))) continue;
+			return { end: k };
+		}
+		if (ch === "{") {
+			if (TS_TYPE_BRACE_PREV.has(prev) || arrow || TS_TYPE_WORDS.has(word)) {
+				const e = matchClose(text, k);
+				if (e < 0) return { end: n };
+				k = e; prev = "}"; word = ""; arrow = false;
+				continue;
+			}
+			return { open: k };
+		}
+		if (ch === "(" || ch === "[") { const e = matchClose(text, k); if (e < 0) return { end: n }; k = e; prev = ")"; word = ""; arrow = false; continue; }
+		if (ch === "<") { const e = tsAngles(text, k); if (e > 0) { k = e - 1; prev = ">"; word = ""; arrow = false; continue; } }
+		if (ch === ";") return { end: k };
+		if (ch === "}" || ch === ")" || ch === "]") return { end: k - 1 };
+		if (ch === "," && prev !== ")") return { end: k };
+		if (ch === "=" && text[k + 1] === ">") { arrow = true; k++; prev = ">"; word = ""; continue; }
+		arrow = false;
+		word = isIdentChar(ch) ? (isIdentChar(text[k - 1]) ? word + ch : ch) : "";
+		prev = ch;
+	}
+	return { end: n };
+}
+
+// End (exclusive of the terminator) of the expression that starts at `from`:
+// its `;`, a top-level `,`, the bracket that closes the enclosing construct,
+// or the line break after which a new statement begins.
+function tsExprEnd(text, from) {
+	const n = text.length;
+	let prev = "", word = "";
+	for (let k = from; k < n; k++) {
+		const ch = text[k];
+		if (ch === " " || ch === "\t" || ch === "\r") continue;
+		if (ch === "(" || ch === "[" || ch === "{") { const e = matchClose(text, k); if (e < 0) return n; k = e; prev = ")"; word = ""; continue; }
+		if (ch === ";" || ch === ",") return k;
+		if (ch === ")" || ch === "]" || ch === "}") return k;
+		if (ch === "\n") {
+			const jsxClose = prev === ">" && k >= 2 && /[\w"'/}\])]/.test(text[k - 1] === ">" ? text[k - 2] : "");
+			if (!prev || (TS_LINE_CONTINUES.has(prev) && !jsxClose) || TS_CONTINUE_WORDS.has(word)) continue;
+			let q = k + 1;
+			while (q < n && /\s/.test(text[q])) q++;
+			if (q >= n) return k;
+			if (TS_NEXT_CONTINUES.has(text[q]) && !(text[q] === "/" && text[q + 1] === "/")) continue;
+			const nw = text.slice(q, q + 12).match(/^[A-Za-z]+/);
+			if (nw && TS_NEXT_WORDS.has(nw[0])) continue;
+			return k;
+		}
+		word = isIdentChar(ch) ? (isIdentChar(text[k - 1]) ? word + ch : ch) : "";
+		prev = ch;
+	}
+	return n;
+}
+
+// The function or class an initializer is, when it is one: `(a) => …`,
+// `async <T>(a: T): R => …`, `x => …`, `function (…) {…}`, `class {…}`.
+// Returns { kind, open, close } with the body's braces (close = the end of a
+// brace-less arrow body, open = -1), or null.
+function tsFunctionInit(text, from) {
+	const n = text.length;
+	let k = from;
+	const skipWs = () => { while (k < n && /\s/.test(text[k])) k++; };
+	skipWs();
+	let m = /async\b/y;
+	m.lastIndex = k;
+	if (m.test(text)) { const save = k; k = m.lastIndex; skipWs(); if (text[k] === "=" || text[k] === ";" || text[k] === "," || text[k] === ")") k = save; }
+	m = /(function|class)\b/y;
+	m.lastIndex = k;
+	const kw = m.exec(text);
+	if (kw && kw[1] === "function") {
+		const open = text.indexOf("(", m.lastIndex);
+		const pc = open >= 0 ? matchClose(text, open) : -1;
+		if (pc < 0) return null;
+		const b = tsBodyOpen(text, pc + 1);
+		const close = b.open != null ? matchClose(text, b.open) : -1;
+		return close > 0 ? { kind: "function", open: b.open, close } : null;
+	}
+	if (kw && kw[1] === "class") {
+		const b = tsClassBody(text, m.lastIndex);
+		return b ? { kind: "class", open: b.open, close: b.close, header: text.slice(m.lastIndex, b.open) } : null;
+	}
+	if (text[k] === "<") { const e = tsAngles(text, k); if (e < 0) return null; k = e; skipWs(); if (text[k] !== "(") return null; }
+	let arrowAt = -1;
+	if (text[k] === "(") {
+		const pc = matchClose(text, k);
+		if (pc < 0) return null;
+		k = pc + 1;
+		skipWs();
+		if (text[k] === "=" && text[k + 1] === ">") arrowAt = k;
+		else if (text[k] === ":") {
+			// a return type, then the arrow
+			for (let q = k + 1; q < n; q++) {
+				const ch = text[q];
+				if (ch === "(" || ch === "[" || ch === "{") { const e = matchClose(text, q); if (e < 0) return null; q = e; }
+				else if (ch === "<") { const e = tsAngles(text, q); if (e > 0) q = e - 1; }
+				else if (ch === "=" && text[q + 1] === ">") { arrowAt = q; break; }
+				else if (ch === ";" || ch === ")" || ch === "]" || ch === "}" || (ch === "=" && text[q + 1] !== "=")) return null;
+			}
+		}
+	} else {
+		m = /[A-Za-z_$][\w$]*/y;
+		m.lastIndex = k;
+		if (!m.test(text)) return null;
+		k = m.lastIndex;
+		skipWs();
+		if (text[k] === "=" && text[k + 1] === ">") arrowAt = k;
+	}
+	if (arrowAt < 0) return null;
+	k = arrowAt + 2;
+	skipWs();
+	if (text[k] === "{") {
+		const close = matchClose(text, k);
+		return close > 0 ? { kind: "arrow", open: k, close } : null;
+	}
+	return { kind: "arrow", open: -1, close: tsExprEnd(text, k) };
+}
+
+// The body braces of a class whose name (or `class` keyword) ends at `from`.
+function tsClassBody(text, from) {
+	const n = text.length;
+	for (let k = from; k < n; k++) {
+		const ch = text[k];
+		if (ch === "(" || ch === "[") { const e = matchClose(text, k); if (e < 0) return null; k = e; }
+		else if (ch === "<") { const e = tsAngles(text, k); if (e > 0) k = e - 1; }
+		else if (ch === "{") { const close = matchClose(text, k); return close > 0 ? { open: k, close } : null; }
+		else if (ch === ";" || ch === "}" || ch === ")") return null;
+	}
+	return null;
+}
+
+// `extends` / `implements` of a class header (the text between its name and body).
+function tsClassHeritage(header) {
+	let h = header;
+	const lead = h.match(/^\s*/)[0].length;
+	if (h[lead] === "<") { const e = tsAngles(h, lead); if (e > 0) h = h.slice(e); }
+	const ext = h.match(/\bextends\s+([A-Za-z_$][\w$.]*)/);
+	const impl = h.match(/\bimplements\s+([\s\S]+)$/);
+	return { extends: ext ? ext[1].split(".")[0] : null, implements: implementsList(impl ? impl[1] : "") };
+}
+
+// Members of a class body (between its braces): methods, the constructor,
+// accessors, `#private` names and function-valued properties. A word followed
+// by `(` at member position is a method header whatever the word is
+// (`delete(id) {`, `get() {`); statements cannot occur there.
+function tsClassMembers(cls, text, from, to, lineOf) {
+	const identRe = /#?[A-Za-z_$][\w$]*/y;
+	let i = from;
+	while (i < to) {
+		const ch = text[i];
+		if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r" || ch === ";" || ch === ",") { i++; continue; }
+		if (ch === "@") { // decorator
+			identRe.lastIndex = i + 1;
+			let k = identRe.test(text) ? identRe.lastIndex : i + 1;
+			while (text[k] === ".") { identRe.lastIndex = k + 1; if (!identRe.test(text)) break; k = identRe.lastIndex; }
+			if (text[k] === "(") { const e = matchClose(text, k); k = e < 0 ? to : e + 1; }
+			i = k;
+			continue;
+		}
+		// modifiers, then the name
+		let name = null, nameAt = i, k = i, accessor = false;
+		for (;;) {
+			while (k < to && (text[k] === " " || text[k] === "\t" || text[k] === "\n" || text[k] === "\r")) k++;
+			if (text[k] === "*") { k++; continue; }
+			identRe.lastIndex = k;
+			const w = identRe.exec(text);
+			if (!w) break;
+			let q = identRe.lastIndex;
+			while (q < to && (text[q] === " " || text[q] === "\t")) q++;
+			const next = text[q];
+			const startsName = next === "#" || next === "[" || next === '"' || next === "'" || next === "*" || (next !== undefined && isIdentChar(next)) || (next === "\n" && (w[0] === "static" || w[0] === "async"));
+			if (TS_MEMBER_MODIFIERS.has(w[0]) && startsName) {
+				if (w[0] === "get" || w[0] === "set" || w[0] === "accessor") accessor = true;
+				k = identRe.lastIndex;
+				continue;
+			}
+			name = w[0]; nameAt = k; k = identRe.lastIndex;
+			break;
+		}
+		if (name === null) {
+			if (text[k] === "{") { const e = matchClose(text, k); i = e < 0 ? to : e + 1; continue; } // static block
+			if (text[k] === "[" || text[k] === '"' || text[k] === "'") { // computed or quoted name: not indexed
+				if (text[k] === "[") { const e = matchClose(text, k); k = e < 0 ? to : e + 1; }
+				else { const e = text.indexOf(text[k], k + 1); k = e < 0 ? to : e + 1; }
+			} else if (/[0-9]/.test(text[k] || "")) { while (k < to && /[\w.]/.test(text[k])) k++; }
+			else { i = k + 1; continue; }
+		}
+		while (k < to && (text[k] === " " || text[k] === "\t")) k++;
+		if (text[k] === "?" || text[k] === "!") k++;
+		while (k < to && (text[k] === " " || text[k] === "\t")) k++;
+		let open = k;
+		if (text[open] === "<") { const e = tsAngles(text, open); if (e > 0) { open = e; while (open < to && /\s/.test(text[open])) open++; } }
+		if (text[open] === "(") {
+			const pc = matchClose(text, open);
+			if (pc < 0) return;
+			const b = tsBodyOpen(text, pc + 1);
+			const close = b.open != null ? matchClose(text, b.open) : -1;
+			const end = close > 0 ? close : Math.min(b.end, to);
+			if (name !== null) addMethod(cls, { name, line: lineOf(nameAt), end: lineOf(Math.min(end, text.length - 1)), bodyStart: close > 0 ? b.open : -1, bodyEnd: close });
+			i = end + 1;
+			continue;
+		}
+		// a property: its type annotation, then an initializer that may be a function
+		let eq = -1, stop = to;
+		for (let q = k; q < to; q++) {
+			const c = text[q];
+			if (c === "(" || c === "[" || c === "{") { const e = matchClose(text, q); if (e < 0) { stop = to; break; } q = e; }
+			else if (c === "<") { const e = tsAngles(text, q); if (e > 0) q = e - 1; }
+			else if (c === "=" && text[q + 1] === ">") q++;
+			else if (c === "=") { eq = q; break; }
+			else if (c === ";" || c === "}") { stop = q; break; }
+			else if (c === "\n") {
+				let p = q - 1;
+				while (p > k && (text[p] === " " || text[p] === "\t" || text[p] === "\r")) p--;
+				let nx = q + 1;
+				while (nx < to && /\s/.test(text[nx])) nx++;
+				if (!TS_TYPE_BRACE_PREV.has(text[p]) && !(text[p] === ">" && text[p - 1] === "=") && text[nx] !== "|" && text[nx] !== "&" && text[nx] !== "=" && text[nx] !== "?" && text[nx] !== ":") { stop = q; break; }
+			}
+		}
+		if (name !== null && text[k] === ":") {
+			const tm = text.slice(k + 1, eq < 0 ? stop : eq).match(/^\s*(?:readonly\s+)?([A-Za-z_$][\w$.]*)/);
+			if (tm) (cls.fields ||= new Map()).set(name, tm[1]);
+		}
+		if (eq < 0) { i = stop + 1; continue; }
+		if (name !== null && !(cls.fields && cls.fields.has(name))) {
+			const nm = text.slice(eq + 1, eq + 200).match(/^\s*new\s+([A-Za-z_$][\w$.]*)/);
+			if (nm) (cls.fields ||= new Map()).set(name, nm[1]);
+		}
+		const fn = accessor ? null : tsFunctionInit(text, eq + 1);
+		if (fn && fn.kind !== "class") {
+			if (name !== null) addMethod(cls, { name, line: lineOf(nameAt), end: lineOf(Math.min(fn.close, text.length - 1)), bodyStart: fn.open, bodyEnd: fn.close, property: true });
+			i = fn.close + 1;
+		} else i = tsExprEnd(text, eq + 1) + 1;
+	}
+}
+
+// Declarations of a TS/JS module from masked source. Top level: classes
+// (class expressions bound to a variable included), functions, function-valued
+// variables, other variables, interfaces, enums, type aliases, namespaces.
+// Below top level: named functions, function-valued variables, classes and
+// types declared inside function bodies and callbacks (`d.nested`).
+function parseTsDecls(d, masked, lineOf, lang) {
+	const n = masked.length;
+	d.nested = [];
+	d.cjsFunctions = [];
+	d.localExports = []; // `export { a as b }` without a source
+	d.defaultName = null; // `export default name`
+	const total = () => d.classes.length + d.functions.length + d.types.length;
+	const addClass = (name, at, bodyOpen, bodyClose, header, isDefault) => {
+		const h = tsClassHeritage(header);
+		const cls = { name, line: lineOf(at), end: lineOf(bodyClose), isDefault, extends: h.extends, implements: h.implements, methods: [], bodyStart: bodyOpen, bodyEnd: bodyClose };
+		d.classes.push(cls);
+		tsClassMembers(cls, masked, bodyOpen + 1, bodyClose, lineOf);
+		return cls;
+	};
+	const functionAt = (at, afterKeyword, name, isDefault) => {
+		let k = afterKeyword;
+		while (k < n && /\s/.test(masked[k])) k++;
+		if (masked[k] === "<") { const e = tsAngles(masked, k); if (e > 0) k = e; }
+		const open = masked.indexOf("(", k);
+		const pc = open >= 0 ? matchClose(masked, open) : -1;
+		if (pc < 0) return;
+		const b = tsBodyOpen(masked, pc + 1);
+		const close = b.open != null ? matchClose(masked, b.open) : -1;
+		d.functions.push({ name, line: lineOf(at), end: lineOf(Math.min(close > 0 ? close : b.end, n - 1)), isDefault, bodyStart: close > 0 ? b.open : -1, bodyEnd: close });
+	};
+	// The `=` that starts a variable's initializer, after an optional type annotation.
+	const initializerAt = (from) => {
+		for (let q = from; q < n; q++) {
+			const c = masked[q];
+			if (c === "(" || c === "[" || c === "{") { const e = matchClose(masked, q); if (e < 0) return -1; q = e; }
+			else if (c === "<") { const e = tsAngles(masked, q); if (e > 0) q = e - 1; }
+			else if (c === "=" && masked[q + 1] === ">") q++;
+			else if (c === "=") return q;
+			else if (c === ";" || c === "}" || c === ")" || c === ",") return -1;
+			else if (c === "\n" && masked[from] !== ":") return -1;
+		}
+		return -1;
+	};
+	// kind of `const name …`: { kind: "function" | "class" | "const", … }
+	const variableAt = (nameEnd) => {
+		let k = nameEnd;
+		while (k < n && (masked[k] === " " || masked[k] === "\t")) k++;
+		if (masked[k] === "!") k++;
+		const eq = masked[k] === "=" && masked[k + 1] !== "=" && masked[k + 1] !== ">" ? k : masked[k] === ":" ? initializerAt(k) : -1;
+		if (eq < 0) return { kind: "const", required: false };
+		const fn = tsFunctionInit(masked, eq + 1);
+		if (fn) return fn.kind === "class" ? fn : { kind: "function", open: fn.open, close: fn.close };
+		return { kind: "const", required: /^\s*(?:await\s+)?(?:require|import)\s*\(/.test(masked.slice(eq + 1, eq + 40)) };
+	};
+
+	// -- top level: lines that start a declaration outside every bracket
+	let brace = 0, paren = 0, i = 0, lineNo = 0;
+	while (i < n && total() < MAX_SYMBOLS_PER_FILE) {
+		const nl = masked.indexOf("\n", i);
+		const eol = nl < 0 ? n : nl;
+		if (brace === 0 && paren === 0) {
+			const ln = masked.slice(i, eol);
+			let m;
+			if ((m = ln.match(/^(\s*(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?)class\b\s*([A-Za-z_$][\w$]*)?/)) && (m[2] || /\bdefault\b/.test(m[1]))) {
+				const named = m[2] && !TS_NOT_A_NAME.has(m[2]);
+				const after = named ? i + m[0].length : i + m[1].length + 5;
+				const b = tsClassBody(masked, after);
+				if (b) addClass(named ? m[2] : "default", i + m[1].length, b.open, b.close, masked.slice(after, b.open), /\bdefault\b/.test(m[1]));
+			} else if ((m = ln.match(/^(\s*(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:async\s+)?)function\b\s*\*?\s*([A-Za-z_$][\w$]*)?/)) && (m[2] || /\bdefault\b/.test(m[1]))) {
+				functionAt(i + m[1].length, i + m[0].length, m[2] || "default", /\bdefault\b/.test(m[1]));
+			} else if ((m = ln.match(/^(\s*(?:export\s+)?(?:declare\s+)?(?:const|let|var)\s+)([A-Za-z_$][\w$]*)/))) {
+				const at = i + m[1].length;
+				const v = variableAt(i + m[0].length);
+				if (v.kind === "function") d.functions.push({ name: m[2], line: lineOf(at), end: lineOf(Math.min(v.close, n - 1)), bodyStart: v.open, bodyEnd: v.close });
+				else if (v.kind === "class") addClass(m[2], at, v.open, v.close, v.header, false);
+				else if (!v.required) d.types.push({ name: m[2], line: lineOf(at), kind: "const" });
+			} else if ((m = ln.match(/^\s*(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:const\s+)?(interface|enum)\s+([A-Za-z_$][\w$]*)/))) {
+				const t = { name: m[2], line: lineOf(i + ln.indexOf(m[1])), kind: m[1], extends: null, extendsAll: [] };
+				if (m[1] === "interface") {
+					const b = tsClassBody(masked, i + m[0].length);
+					let header = b ? masked.slice(i + m[0].length, b.open) : "";
+					const lead = header.match(/^\s*/)[0].length;
+					if (header[lead] === "<") { const e = tsAngles(header, lead); if (e > 0) header = header.slice(e); }
+					const em = header.match(/\bextends\s+([\s\S]+)$/);
+					t.extendsAll = implementsList(em ? em[1] : "");
+					t.extends = t.extendsAll[0] || null;
+				}
+				d.types.push(t);
+			} else if ((m = ln.match(/^\s*(?:export\s+)?(?:declare\s+)?type\s+([A-Za-z_$][\w$]*)\s*(?:<|=|$)/))) {
+				d.types.push({ name: m[1], line: lineOf(i + ln.indexOf("type")), kind: "type" });
+			} else if ((m = ln.match(/^\s*(?:export\s+)?(?:declare\s+)?(?:namespace|module)\s+([A-Za-z_$][\w$.]*)\s*\{/)) || (m = ln.match(/^\s*declare\s+(global)\s*\{/))) {
+				d.types.push({ name: m[1], line: lineOf(i + ln.search(/\S/)), kind: "namespace" });
+			} else if ((m = ln.match(/^\s*export\s+default\s+([A-Za-z_$][\w$]*)\s*;?\s*$/)) || (m = ln.match(/^\s*(?:exports\s*=\s*)?module\.exports\s*=\s*([A-Za-z_$][\w$]*)\s*;?\s*$/))) {
+				d.defaultName = m[1];
+			} else if ((m = ln.match(/^(\s*(?:module\.)?exports\.)([A-Za-z_$][\w$]*)\s*=(?!=)/))) {
+				// `exports.name = function …` declares `name` when nothing else does
+				const fn = tsFunctionInit(masked, i + m[0].length);
+				if (fn && fn.kind !== "class") d.cjsFunctions.push({ name: m[2], line: lineOf(i + m[1].length), end: lineOf(Math.min(fn.close, n - 1)), bodyStart: fn.open, bodyEnd: fn.close });
+			}
+		}
+		for (let k = i; k < eol; k++) {
+			const ch = masked[k];
+			if (ch === "{") brace++;
+			else if (ch === "}") brace--;
+			else if (ch === "(" || ch === "[") paren++;
+			else if (ch === ")" || ch === "]") paren--;
+		}
+		i = eol + 1;
+		lineNo++;
+	}
+	for (const fn of d.cjsFunctions) {
+		if (!d.functions.some((f) => f.name === fn.name) && !d.classes.some((c) => c.name === fn.name) && !d.types.some((t) => t.name === fn.name)) d.functions.push(fn);
+	}
+	const exportRe = /\bexport\s*\{([^}]*)\}(?!\s*from\b)/g;
+	let em;
+	while ((em = exportRe.exec(masked)) !== null) {
+		for (const piece of em[1].split(",")) {
+			const pm = piece.trim().replace(/^type\s+/, "").match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+			if (pm) d.localExports.push({ local: pm[1], exported: pm[2] || pm[1] });
+		}
+	}
+
+	// -- below top level
+	const depthAt = new Int32Array(n + 1);
+	{
+		let depth = 0;
+		for (let k = 0; k < n; k++) {
+			depthAt[k] = depth;
+			if (masked[k] === "{") depth++;
+			else if (masked[k] === "}") depth--;
+		}
+		depthAt[n] = depth;
+	}
+	const nestedRe = /(?<![\w$.])(?:(function)\s*\*?\s*([A-Za-z_$][\w$]*)\s*(?=[<(])|(const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?=[:=])|(class)\s+([A-Za-z_$][\w$]*)|(type|interface|enum)\s+([A-Za-z_$][\w$]*)\s*(?=[<={]|extends\b))/g;
+	let nm;
+	while ((nm = nestedRe.exec(masked)) !== null && d.nested.length < MAX_SYMBOLS_PER_FILE) {
+		if (depthAt[nm.index] === 0) continue;
+		const line = lineOf(nm.index);
+		if (nm[1]) d.nested.push({ name: nm[2], kind: "function", line });
+		else if (nm[3]) {
+			const v = variableAt(nm.index + nm[0].length);
+			if (v.kind === "function") d.nested.push({ name: nm[4], kind: "function", line });
+			else if (v.kind === "class") d.nested.push({ name: nm[4], kind: "class", line });
+		} else if (nm[5]) {
+			if (TS_NOT_A_NAME.has(nm[6])) continue;
+			d.nested.push({ name: nm[6], kind: "class", line });
+			const b = tsClassBody(masked, nm.index + nm[0].length);
+			if (b) {
+				const inner = { methods: [] };
+				tsClassMembers(inner, masked, b.open + 1, b.close, lineOf);
+				for (const meth of inner.methods) d.nested.push({ name: meth.name, kind: "function", line: meth.line });
+			}
+		}
+		else if (lang === "typescript") d.nested.push({ name: nm[8], kind: nm[7], line });
+	}
 }
 
 function parseDecls(rel, content, lang) {
@@ -646,107 +1585,7 @@ function parseDecls(rel, content, lang) {
 		const dm = content.match(/^\s*\/\*\*?([\s\S]*?)\*\//);
 		if (dm) d.docstring = dm[1].replace(/^\s*\*\s?/gm, "").trim().slice(0, 500) || null;
 
-		let currentClass = null, classDepth = 0, depth = 0;
-		// Open declarations whose body end we are waiting for. An entry only
-		// closes once a brace actually OPENED for it (`opened`) and depth has
-		// returned to its pre-decl level — a multiline header (`function run(\n
-		// x,\n) {`) must stay open until its body starts and ends. Entries that
-		// never open a brace (brace-less arrows) close when the next same-level
-		// declaration appears.
-		// Header braces (see isHeaderBrace) are skipped, and a header-level `;`
-		// ends a declaration that never gets a body (overload or abstract
-		// signature, brace-less arrow).
-		const open = [];
-		const closeUnopened = (endLine) => {
-			while (open.length && !open[open.length - 1].opened && depth <= open[open.length - 1].depth) {
-				const ended = open.pop();
-				ended.ref.end = endLine;
-				if (ended.tentativeIn) dropTentative(ended);
-			}
-		};
-		const scan = { prev: "", word: "" };
-		for (let i = 0; i < maskedLines.length && d.classes.length + d.functions.length + d.types.length < MAX_SYMBOLS_PER_FILE; i++) {
-			const ln = maskedLines[i];
-			let m;
-			if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)(?:\s*<[^{]*?>)?(?:\s+extends\s+([A-Za-z_$][\w$.]*)(?:\s*<[^{]*?>)?)?(?:\s+implements\s+([^{]+))?/)) && /\bclass\b/.test(ln)) {
-				closeUnopened(i);
-				currentClass = { name: m[1], line: i + 1, end: null, isDefault: /^\s*export\s+default\b/.test(ln), extends: m[2] ? m[2].split(".")[0] : null, implements: implementsList(m[3]), methods: [] };
-				d.classes.push(currentClass);
-				classDepth = depth;
-				open.push(openDecl(currentClass, depth, i + 1));
-			} else if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/))) {
-				closeUnopened(i);
-				const fn = { name: m[1], line: i + 1, end: null, isDefault: /^\s*export\s+default\b/.test(ln) };
-				d.functions.push(fn);
-				open.push(openDecl(fn, depth, i + 1));
-			} else if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)(?::[^=]+)?\s*=\s*(?:async\s*)?(?:\(|function\b|[A-Za-z_$][\w$]*\s*=>)/))) {
-				closeUnopened(i);
-				const fn = { name: m[1], line: i + 1, end: null };
-				d.functions.push(fn);
-				open.push(openDecl(fn, depth, i + 1));
-			} else if (depth === 0 && (m = ln.match(/^\s*export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)/))) {
-				d.types.push({ name: m[1], line: i + 1, kind: "const" });
-			} else if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?(?:interface|enum)\s+([A-Za-z_$][\w$]*)(?:\s+extends\s+([A-Za-z_$][\w$.]*))?/)) && /\b(?:interface|enum)\b/.test(ln)) {
-				d.types.push({ name: m[1], line: i + 1, kind: /\binterface\b/.test(ln) ? "interface" : "enum", extends: m[2] ? m[2].split(".")[0] : null });
-			} else if (depth === 0 && (m = ln.match(/^\s*(?:export\s+)?type\s+([A-Za-z_$][\w$]*)/))) {
-				d.types.push({ name: m[1], line: i + 1, kind: "type" });
-			} else if (currentClass && depth === classDepth + 1 && (m = ln.match(/^\s*((?:public\s+|private\s+|protected\s+|static\s+|readonly\s+|override\s+|abstract\s+|async\s+|get\s+|set\s+|\*\s*)*)(#?[A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\(/))) {
-				// Members: methods, the constructor, accessors, `#private` names.
-				// An expression keyword still waiting for its body was a statement.
-				while (open.length && open[open.length - 1].tentativeIn && !open[open.length - 1].opened) dropTentative(open.pop());
-				if (!TS_BLOCK_WORDS.has(m[2])) {
-					const meth = { name: m[2], line: i + 1, end: null };
-					if (addMethod(currentClass, meth)) {
-						const entry = openDecl(meth, depth, i + 1);
-						if (!m[1] && TS_EXPRESSION_WORDS.has(m[2])) entry.tentativeIn = currentClass;
-						open.push(entry);
-					}
-				}
-			}
-			// brace depth AFTER matching decls on this line (masked copy)
-			// `header` changes only at `{`, `}` and a header-level `;`.
-			let last = "\n";
-			let header = pendingHeader(open);
-			for (const ch of maskedLines[i] || "") {
-				if (ch === "{") {
-					depth++;
-					if (header) {
-						if (isHeaderBrace(header, lang, scan.prev, scan.word)) header.type++;
-						else if (depth === header.depth + 1) header.opened = true;
-						noteScanChar(scan, ch, last);
-						header = pendingHeader(open);
-					}
-				} else if (ch === "}") {
-					depth--;
-					if (header && header.type > 0) {
-						header.type--;
-						noteScanChar(scan, ch, last);
-					} else {
-						if (currentClass && depth <= classDepth) { currentClass.end = i + 1; currentClass = null; }
-						while (open.length && open[open.length - 1].opened && depth <= open[open.length - 1].depth) open.pop().ref.end = i + 1;
-						if (header) noteScanChar(scan, ch, last);
-						header = pendingHeader(open);
-					}
-				} else if (header) {
-					if (ch === ";" && !header.paren && !header.angle && !header.type) {
-						const ended = open.pop();
-						ended.ref.end = i + 1;
-						if (ended.tentativeIn && !ended.typed) dropTentative(ended);
-						header = pendingHeader(open);
-					} else {
-						if (header.tentativeIn) {
-							// `typed`: the first thing after the parameter list is a `:`.
-							if (header.afterParams && ch !== " " && ch !== "\t" && ch !== "\r") { header.typed = ch === ":"; header.afterParams = false; }
-							if (ch === ")" && header.paren === 1) header.afterParams = true;
-						}
-						trackHeaderChar(header, lang, ch, scan.prev);
-						noteScanChar(scan, ch, last);
-					}
-				}
-				last = ch;
-			}
-		}
-		for (const entry of open) if (entry.tentativeIn && !entry.opened) dropTentative(entry);
+		parseTsDecls(d, masked, lineOf, lang);
 		// imports (content-level, multi-line safe), on the masked copy so
 		// commented-out examples and import text inside strings or templates are
 		// not dependencies. A statement-level `type` (`import type OpenAI from
@@ -773,8 +1612,26 @@ function parseDecls(rel, content, lang) {
 			importRanges.push([m2.index, m2.index + m2[0].length]);
 			d.imports.push({ spec: specAt(m2, 2), default: null, namespace: m2[1] || "*", names: [], reExport: true, dynamic: false, line: lineOf(m2.index) });
 		}
+		// CommonJS: `const x = require("m")`, `const { a, b: c } = require("m")`,
+		// `const y = require("m").y`, and the comma-continued form
+		// (`var a = require("a")\n  , b = require("b")`) bind like imports.
+		const cjsRe = /(?:\b(?:const|let|var)\s+|,\s*)(?:([A-Za-z_$][\w$]*)|\{([^}]*)\})\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)(?:\s*\.\s*([A-Za-z_$][\w$]*))?/gd;
+		const cjsRanges = [];
+		while ((m2 = cjsRe.exec(masked)) !== null) {
+			cjsRanges.push([m2.index, m2.index + m2[0].length]);
+			const rec = { spec: specAt(m2, 3), default: null, namespace: null, names: [], reExport: false, dynamic: false, cjs: true, line: lineOf(m2.index + m2[0].search(/[A-Za-z_$\{]/)) };
+			if (m2[2] !== undefined) {
+				for (const piece of m2[2].split(",")) {
+					const pm = piece.trim().match(/^([A-Za-z_$][\w$]*)(?:\s*:\s*([A-Za-z_$][\w$]*))?$/);
+					if (pm) rec.names.push({ imported: pm[1], local: pm[2] || pm[1] });
+				}
+			} else if (m2[4]) rec.names.push({ imported: m2[4], local: m2[1] });
+			else rec.namespace = m2[1];
+			d.imports.push(rec);
+		}
 		const dynRe = /(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/gd;
 		while ((m2 = dynRe.exec(masked)) !== null) {
+			if (cjsRanges.some(([a, b]) => m2.index >= a && m2.index < b)) continue;
 			d.imports.push({ spec: specAt(m2, 1), default: null, namespace: null, names: [], reExport: false, dynamic: true, line: lineOf(m2.index) });
 		}
 	} else if (lang === "python") {
@@ -790,8 +1647,14 @@ function parseDecls(rel, content, lang) {
 		for (let k = 0; k < multiline.length; k += 2) {
 			for (let l = lineOf(multiline[k]) + 1; l <= lineOf(multiline[k + 1] - 1); l++) inString.add(l - 1);
 		}
+		// Declarations count wherever module-level code can put them: under an
+		// `if TYPE_CHECKING:`, a `try:`, a platform check. Only a def or class
+		// body ends module level. A decorator belongs to what it decorates, so
+		// `start` is the first decorator line.
 		const scopes = [];
-		let bracket = 0, continued = false, lastCode = 0;
+		let bracket = 0, continued = false, lastCode = 0, decoStart = null;
+		const lineStarts = [0];
+		for (let k = masked.indexOf("\n"); k >= 0; k = masked.indexOf("\n", k + 1)) lineStarts.push(k + 1);
 		for (let i = 0; i < maskedLines.length; i++) {
 			const ln = maskedLines[i];
 			const hasCode = /\S/.test(ln);
@@ -800,18 +1663,40 @@ function parseDecls(rel, content, lang) {
 				while (scopes.length && indent <= scopes[scopes.length - 1].indent) scopes.pop().ref.end = lastCode;
 				const top = scopes[scopes.length - 1];
 				let m;
-				if (indent === 0 && (m = ln.match(/^class\s+([A-Za-z_][\w]*)\s*(?:\(([^)]*)\))?/))) {
-					const cls = { name: m[1], line: i + 1, end: null, extends: (m[2] || "").split(",")[0]?.trim().split(".").pop() || null, implements: [], methods: [] };
-					d.classes.push(cls);
-					scopes.push({ ref: cls, indent, kind: "class" });
-				} else if ((m = ln.match(/^[ \t]*(?:async\s+)?def\s+([A-Za-z_][\w]*)/))) {
-					if (indent === 0) {
-						const fn = { name: m[1], line: i + 1, end: null };
-						d.functions.push(fn);
-						scopes.push({ ref: fn, indent, kind: "def" });
-					} else if (top && top.kind === "class") {
-						const meth = { name: m[1], line: i + 1, end: null };
-						if (addMethod(top.ref, meth)) scopes.push({ ref: meth, indent, kind: "def" });
+				if (/^[ \t]*@/.test(ln)) {
+					if (decoStart === null) decoStart = i + 1;
+				} else {
+					const start = decoStart !== null ? decoStart : i + 1;
+					decoStart = null;
+					if ((m = ln.match(/^[ \t]*class\s+([A-Za-z_][\w]*)\s*(\()?/))) {
+						if (top) scopes.push({ ref: {}, indent, kind: "inner" });
+						else {
+							let basesText = "";
+							if (m[2]) {
+								const open = lineStarts[i] + m[0].length - 1;
+								const close = matchClose(masked, open);
+								if (close > open) basesText = masked.slice(open + 1, close);
+							}
+							const bases = [];
+							for (const piece of splitTopLevel(basesText)) {
+								const bm = piece.trim().match(/^((?:[A-Za-z_]\w*\.)*)([A-Za-z_]\w*)\s*(?:\[[\s\S]*\])?$/);
+								if (bm) bases.push({ module: bm[1].replace(/\.$/, ""), name: bm[2] });
+							}
+							const cls = { name: m[1], line: i + 1, start, end: null, extends: null, bases, implements: [], methods: [] };
+							d.classes.push(cls);
+							scopes.push({ ref: cls, indent, kind: "class" });
+						}
+					} else if ((m = ln.match(/^[ \t]*(?:async\s+)?def\s+([A-Za-z_][\w]*)/))) {
+						if (!top) {
+							const fn = { name: m[1], line: i + 1, start, end: null };
+							d.functions.push(fn);
+							scopes.push({ ref: fn, indent, kind: "def" });
+						} else if (top.kind === "class") {
+							const meth = { name: m[1], line: i + 1, start, end: null };
+							scopes.push({ ref: addMethod(top.ref, meth) ? meth : {}, indent, kind: "def" });
+						} else scopes.push({ ref: {}, indent, kind: "inner" });
+					} else if (!top && (m = ln.match(/^[ \t]*([A-Za-z_]\w*)[ \t]*(?::[^=\n]*\S[^=\n]*(?:=(?!=)|$)|=(?!=))/)) && !PY_STATEMENT_WORDS.has(m[1])) {
+						d.types.push({ name: m[1], line: i + 1, kind: "const" });
 					}
 				}
 			}
@@ -823,88 +1708,26 @@ function parseDecls(rel, content, lang) {
 			if (hasCode) lastCode = i + 1;
 		}
 		for (const sc of scopes) sc.ref.end = lastCode;
-		const impRe = /^\s*from\s+(\S+)\s+import\s+([^\n(]+|\([^)]*\))|^\s*import\s+([\w.]+)/gm;
+		// `import a.b as c, d` binds `c` and `d`; without an alias the dotted path
+		// itself is the name calls go through (`a.b.f()`).
+		const impRe = /^[ \t]*from\s+(\S+)\s+import\s+([^\n(]+|\([^)]*\))|^[ \t]*import\s+([^\n]+)/gm;
 		let m2;
 		while ((m2 = impRe.exec(masked)) !== null) {
 			importRanges.push([m2.index, m2.index + m2[0].length]);
-			// `^\s*` can start the match on the blank lines before the statement.
 			const line = lineOf(m2.index + m2[0].search(/\S/));
-			if (m2[3]) d.imports.push({ spec: m2[3], default: null, namespace: m2[3], names: [], reExport: false, dynamic: false, line });
-			else {
+			if (m2[3]) {
+				for (const piece of m2[3].split(",")) {
+					const im = piece.trim().match(/^([\w.]+)(?:\s+as\s+([A-Za-z_]\w*))?$/);
+					if (im) d.imports.push({ spec: im[1], default: null, namespace: im[2] || im[1], names: [], reExport: false, dynamic: false, line });
+				}
+			} else {
 				const names = m2[2].replace(/[()]/g, "").split(",").map((x) => x.trim().split(/\s+as\s+/)).filter((q) => q[0])
 					.map((q) => ({ imported: q[0], local: q[1] || q[0] }));
 				d.imports.push({ spec: m2[1], default: null, namespace: null, names, reExport: false, dynamic: false, line });
 			}
 		}
 	} else if (lang === "go") {
-		let depth = 0;
-		// Header braces (`func f(x interface{}) {`) are skipped; see isHeaderBrace.
-		const open = [];
-		const scan = { prev: "", word: "" };
-		// Types are collected first: a method may be declared above its type and
-		// still belongs to it.
-		const typeByLine = new Map();
-		for (let i = 0; i < maskedLines.length; i++) {
-			const tm = maskedLines[i].match(/^type\s+([A-Za-z_][\w]*)\s+(struct|interface)\b/);
-			if (!tm) continue;
-			const type = { name: tm[1], line: i + 1, end: null, extends: null, implements: [], methods: [] };
-			d.classes.push(type);
-			typeByLine.set(i, type);
-		}
-		// The type whose `{ … }` body is being scanned; its region ends with that
-		// brace, so a package-level `var x = f()` below it belongs to the file.
-		let pendingType = null;
-		for (let i = 0; i < maskedLines.length; i++) {
-			const ln = maskedLines[i];
-			let m;
-			if (typeByLine.has(i)) {
-				pendingType = { ref: typeByLine.get(i), depth, opened: false };
-			} else if ((m = ln.match(/^func\s+\(\s*\w+\s+\*?([A-Za-z_][\w]*)\s*\)\s+([A-Za-z_][\w]*)/))) {
-				const meth = { name: m[2], line: i + 1, end: null };
-				const owner = d.classes.find((c) => c.name === m[1]);
-				if (owner) addMethod(owner, meth);
-				else d.functions.push(meth);
-				open.push(openDecl(meth, depth, i + 1));
-			} else if ((m = ln.match(/^func\s+([A-Za-z_][\w]*)/))) {
-				const fn = { name: m[1], line: i + 1, end: null };
-				d.functions.push(fn);
-				open.push(openDecl(fn, depth, i + 1));
-			} else if ((m = ln.match(/^type\s+([A-Za-z_][\w]*)\s/))) {
-				d.types.push({ name: m[1], line: i + 1, kind: "type" });
-			}
-			let last = "\n";
-			let header = pendingHeader(open);
-			for (const ch of maskedLines[i] || "") {
-				if (ch === "{") {
-					depth++;
-					if (pendingType) pendingType.opened = true;
-					if (header) {
-						if (isHeaderBrace(header, lang, scan.prev, scan.word)) header.type++;
-						else if (depth === header.depth + 1) header.opened = true;
-						noteScanChar(scan, ch, last);
-						header = pendingHeader(open);
-					}
-				} else if (ch === "}") {
-					depth--;
-					if (pendingType && pendingType.opened && depth <= pendingType.depth) {
-						pendingType.ref.end = i + 1;
-						pendingType = null;
-					}
-					if (header && header.type > 0) {
-						header.type--;
-						noteScanChar(scan, ch, last);
-					} else {
-						while (open.length && open[open.length - 1].opened && depth <= open[open.length - 1].depth) open.pop().ref.end = i + 1;
-						if (header) noteScanChar(scan, ch, last);
-						header = pendingHeader(open);
-					}
-				} else if (header) {
-					trackHeaderChar(header, lang, ch, scan.prev);
-					noteScanChar(scan, ch, last);
-				}
-				last = ch;
-			}
-		}
+		parseGoDecls(d, masked, lineOf);
 		// Named (`import foo "path"`), blank (`_`) and dot (`.`) imports all count;
 		// a named alias becomes the local namespace so call binding can resolve
 		// through it. Applies to both single-line and block forms.
@@ -921,49 +1744,11 @@ function parseDecls(rel, content, lang) {
 			}
 			for (const e of entries) {
 				const ns = e.alias && e.alias !== "_" && e.alias !== "." ? e.alias : e.spec.split("/").pop();
-				d.imports.push({ spec: e.spec, default: null, namespace: ns, names: [], reExport: false, dynamic: false, line: lineOf(m2.index) });
+				d.imports.push({ spec: e.spec, default: null, namespace: ns, names: [], reExport: false, dynamic: false, line: lineOf(m2.index), goAlias: e.alias });
 			}
 		}
 	} else if (lang === "rust") {
-		// Track impl blocks by brace depth so `fn`s inside them become METHODS of
-		// the owning type (owner-scoped ids + `method` edges), not file-level
-		// functions. Covers both inherent impls and `impl Trait for Type`.
-		let currentImpl = null; // { name, depth at impl line }
-		let depth = 0;
-		const openFns = [];
-		for (let i = 0; i < maskedLines.length; i++) {
-			const ln = maskedLines[i];
-			let m;
-			if ((m = ln.match(/^\s*(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum|trait)\s+([A-Za-z_][\w]*)/))) {
-				d.classes.push({ name: m[1], line: i + 1, extends: null, implements: [], methods: [] });
-			} else if (!currentImpl && (m = ln.match(/^\s*impl(?:<[^>]*>)?\s+([A-Za-z_][\w]*)(?:<[^>]*>)?\s+for\s+([A-Za-z_][\w]*)/))) {
-				const owner = d.classes.find((c) => c.name === m[2]);
-				if (owner) owner.implements.push(m[1]);
-				currentImpl = { name: m[2], depth };
-			} else if (!currentImpl && (m = ln.match(/^\s*impl(?:<[^>]*>)?\s+([A-Za-z_][\w]*)/))) {
-				currentImpl = { name: m[1], depth };
-			} else if ((m = ln.match(/^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_][\w]*)/))) {
-				const fn = { name: m[1], line: i + 1, end: null };
-				const owner = currentImpl ? d.classes.find((c) => c.name === currentImpl.name) : null;
-				if (owner) addMethod(owner, fn);
-				else d.functions.push(fn);
-				openFns.push(openDecl(fn, depth, i + 1));
-			}
-			if ((m = ln.match(/^\s*use\s+([\w:]+)/))) {
-				d.imports.push({ spec: m[1], default: null, namespace: m[1].split("::").pop(), names: [], reExport: false, dynamic: false, line: i + 1 });
-			}
-			for (const ch of maskedLines[i] || "") {
-				if (ch === "{") {
-					depth++;
-					const top = openFns[openFns.length - 1];
-					if (top && !top.opened && depth === top.depth + 1) top.opened = true;
-				} else if (ch === "}") {
-					depth--;
-					if (currentImpl && depth <= currentImpl.depth) currentImpl = null;
-					while (openFns.length && openFns[openFns.length - 1].opened && depth <= openFns[openFns.length - 1].depth) openFns.pop().ref.end = i + 1;
-				}
-			}
-		}
+		parseRustDecls(d, masked, lineOf);
 	}
 	// What the call scans read: the masked text minus import statements and, in
 	// TypeScript, interface bodies and type aliases.
@@ -1025,6 +1810,9 @@ function buildGraph(root) {
 	// and surfaced as a build warning instead of being silent.
 	const idCollisions = [];
 	const methodLimitHits = []; // classes that declare more than MAX_METHODS_PER_CLASS methods
+	const textStats = new Map(); // rel -> { node, tf, count }
+	const classMembers = new Map(); // class node id -> Map(method name -> node id)
+	const baseOf = new Map(); // class node id -> node ids of the classes it extends
 	const addNode = (n) => {
 		const existing = nodeById.get(n.id);
 		if (existing) {
@@ -1066,14 +1854,28 @@ function buildGraph(root) {
 		const fileNid = fileNodeId(rel);
 		const fileNode = addNode({ id: fileNid, label: path.basename(rel), file_type: "code", source_file: rel, source_location: "L1" });
 		if (decls.docstring) fileNode.rationale = decls.docstring;
+		// words of the file's text (comments and strings included), for `kg query`
+		if (fileNode.source_file === rel && !textStats.has(rel)) {
+			const tf = new Map();
+			let count = 0;
+			for (const m of content.matchAll(/[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+/g)) {
+				if (m[0].length < 3) continue;
+				const t = m[0].toLowerCase();
+				tf.set(t, (tf.get(t) || 0) + 1);
+				count++;
+			}
+			textStats.set(rel, { node: fileNode, tf, count });
+		}
 		const localDefs = new Map();
+		const symIds = fileSymbolIds(rel, [...decls.classes, ...decls.functions, ...decls.types].map((x) => x.name), lang);
 
 		for (const c of decls.classes) {
-			const nid = symbolNodeId(rel, c.name);
-			addNode({ id: nid, label: c.name, file_type: "code", source_file: rel, source_location: "L" + c.line, type: "class" });
+			const nid = symIds.get(c.name);
+			addNode({ id: nid, label: c.name, file_type: "code", source_file: rel, source_location: "L" + c.line, type: c.kind && c.kind !== "struct" ? c.kind : "class" });
 			addEdge(fileNid, nid, "contains", { file: rel, line: c.line });
 			localDefs.set(c.name, nid);
 			c.methodIds = methodNodeIds(rel, c, lang);
+			if (c.methods.length) classMembers.set(nid, c.methodIds);
 			for (const meth of c.methods) {
 				const mid = c.methodIds.get(meth.name);
 				addNode({ id: mid, label: meth.name + "()", file_type: "code", source_file: rel, source_location: "L" + meth.line, _callable: true });
@@ -1082,14 +1884,14 @@ function buildGraph(root) {
 		}
 		for (const f of decls.functions) {
 			if (localDefs.has(f.name)) continue;
-			const nid = symbolNodeId(rel, f.name);
+			const nid = symIds.get(f.name);
 			addNode({ id: nid, label: f.name + "()", file_type: "code", source_file: rel, source_location: "L" + f.line, _callable: true });
 			addEdge(fileNid, nid, "defines", { file: rel, line: f.line });
 			localDefs.set(f.name, nid);
 		}
 		for (const t of decls.types) {
 			if (localDefs.has(t.name)) continue;
-			const nid = symbolNodeId(rel, t.name);
+			const nid = symIds.get(t.name);
 			addNode({ id: nid, label: t.name, file_type: "code", source_file: rel, source_location: "L" + t.line, type: t.kind });
 			addEdge(fileNid, nid, "defines", { file: rel, line: t.line });
 			localDefs.set(t.name, nid);
@@ -1100,8 +1902,683 @@ function buildGraph(root) {
 		let defaultNid = null;
 		for (const c of decls.classes) if (c.isDefault && localDefs.has(c.name)) defaultNid = localDefs.get(c.name);
 		for (const f of decls.functions) if (f.isDefault && localDefs.has(f.name)) defaultNid = localDefs.get(f.name);
-		perFile.set(rel, { lang, decls, stripped, localDefs, defaultNid, importedNames: new Map(), fileNid });
+		if (!defaultNid && decls.defaultName && localDefs.has(decls.defaultName)) defaultNid = localDefs.get(decls.defaultName);
+		// Declarations below top level (inside function bodies and callbacks):
+		// one node each under the declaration that holds them, repeats numbered.
+		if (decls.nested && decls.nested.length) {
+			const holders = [];
+			for (const c of decls.classes) {
+				holders.push({ nid: localDefs.get(c.name), line: c.line, end: c.end });
+				for (const meth of c.methods) holders.push({ nid: c.methodIds.get(meth.name), line: meth.line, end: meth.end });
+			}
+			for (const f of decls.functions) holders.push({ nid: localDefs.get(f.name), line: f.line, end: f.end });
+			holders.sort((a, b) => a.line - b.line);
+			const used = new Map();
+			for (const nd of decls.nested) {
+				let parent = fileNid;
+				for (const h of holders) {
+					if (h.line > nd.line) break;
+					if (h.nid && h.end != null && nd.line <= h.end) parent = h.nid;
+				}
+				const base = makeId(parent, nd.name);
+				const seen = (used.get(base) || 0) + 1;
+				used.set(base, seen);
+				const nid = seen === 1 && !nodeById.has(base) ? base : makeId(base, String(seen));
+				if (nodeById.has(nid)) continue;
+				if (nd.kind === "function") addNode({ id: nid, label: nd.name + "()", file_type: "code", source_file: rel, source_location: "L" + nd.line, _callable: true });
+				else addNode({ id: nid, label: nd.name, file_type: "code", source_file: rel, source_location: "L" + nd.line, type: nd.kind });
+				addEdge(parent, nid, "contains", { file: rel, line: nd.line });
+			}
+		}
+		perFile.set(rel, { lang, decls, stripped, localDefs, defaultNid, importedNames: new Map(), fileNid, lineOf: lineIndex(content) });
 	}
+
+	// -- Go: package scopes. A package is every file of one directory with one
+	// package clause; functions, types and values are visible across its files,
+	// and a method joins its receiver type from whichever file declares it.
+	const goScopes = new Map();
+	const goScopeOf = (dir, name) => {
+		const k = dir + "\n" + name;
+		let s = goScopes.get(k);
+		if (!s) goScopes.set(k, s = { dir, name, files: [], funcs: new Map(), types: new Map(), values: new Map(), vars: new Map(), methods: new Map() });
+		return s;
+	};
+	const goMethodsByName = new Map(); // repo-wide: method name -> entries
+	for (const [rel, pf] of perFile) {
+		if (pf.lang !== "go") continue;
+		const d = pf.decls;
+		const scope = goScopeOf(path.posix.dirname(rel), d.goPackage);
+		pf.goScope = scope;
+		scope.files.push(rel);
+		for (const f of d.functions) if (!scope.funcs.has(f.name)) scope.funcs.set(f.name, { nid: pf.localDefs.get(f.name), fn: f, rel });
+		for (const c of d.classes) if (!scope.types.has(c.name)) scope.types.set(c.name, { nid: pf.localDefs.get(c.name), cls: c, rel, scope });
+		for (const t of d.types) if (!scope.values.has(t.name)) scope.values.set(t.name, { nid: pf.localDefs.get(t.name), rel });
+		for (const [name, v] of d.goVars) if (!scope.vars.has(name)) scope.vars.set(name, { type: v.type, init: v.init, rel });
+	}
+	for (const [rel, pf] of perFile) {
+		if (pf.lang !== "go") continue;
+		const byType = new Map();
+		for (const m of pf.decls.goMethods) {
+			if (!byType.has(m.recvType)) byType.set(m.recvType, []);
+			byType.get(m.recvType).push(m);
+		}
+		for (const [typeName, ms] of byType) {
+			const ids = methodNodeIds(rel, { name: typeName, methods: ms }, "go");
+			const owner = pf.goScope.types.get(typeName);
+			let table = pf.goScope.methods.get(typeName);
+			if (!table) pf.goScope.methods.set(typeName, table = new Map());
+			for (const m of ms) {
+				m.nid = ids.get(m.name);
+				addNode({ id: m.nid, label: m.name + "()", file_type: "code", source_file: rel, source_location: "L" + m.line, _callable: true });
+				if (owner) addEdge(owner.nid, m.nid, "method", { file: rel, line: m.line });
+				else addEdge(pf.fileNid, m.nid, "defines", { file: rel, line: m.line });
+				const entry = { nid: m.nid, fn: m, rel };
+				if (!table.has(m.name)) table.set(m.name, entry);
+				if (!goMethodsByName.has(m.name)) goMethodsByName.set(m.name, []);
+				goMethodsByName.get(m.name).push(entry);
+			}
+		}
+	}
+	// Module paths (go.mod) map an import path to a repo directory; the package a
+	// directory exports is its non-test one.
+	const goModules = [];
+	const goDirScope = new Map();
+	if (goScopes.size) {
+		const dirs = new Set();
+		for (const s of goScopes.values()) {
+			const parts = s.dir === "." ? [] : s.dir.split("/");
+			for (let i = 0; i <= parts.length; i++) dirs.add(parts.slice(0, i).join("/"));
+			if (s.name.endsWith("_test")) continue;
+			const cur = goDirScope.get(s.dir);
+			if (!cur || s.files.length > cur.files.length) goDirScope.set(s.dir, s);
+		}
+		for (const dir of [...dirs].sort()) {
+			try {
+				const mod = fs.readFileSync(path.join(root, dir, "go.mod"), "utf-8").match(/^module\s+(\S+)/m);
+				if (mod) goModules.push({ dir, path: mod[1] });
+			} catch { /* no go.mod here */ }
+		}
+		goModules.sort((a, b) => b.path.length - a.path.length || (a.dir < b.dir ? -1 : 1));
+	}
+	const resolveGoImport = (spec) => {
+		for (const m of goModules) {
+			if (spec !== m.path && !spec.startsWith(m.path + "/")) continue;
+			return goDirScope.get(path.posix.join(m.dir || ".", spec.slice(m.path.length + 1))) || null;
+		}
+		return null;
+	};
+	for (const pf of perFile.values()) {
+		if (pf.lang !== "go") continue;
+		pf.goImports = new Map(); // local name -> package scope, or null for a package outside the repo
+		pf.goDot = [];
+		for (const imp of pf.decls.imports) {
+			imp.goScope = resolveGoImport(imp.spec);
+			if (imp.goAlias === "_") continue;
+			if (imp.goAlias === ".") { if (imp.goScope) pf.goDot.push(imp.goScope); continue; }
+			const segs = imp.spec.split("/");
+			let base = segs[segs.length - 1];
+			if (/^v\d+$/.test(base) && segs.length > 1) base = segs[segs.length - 2];
+			imp.goLocal = imp.goAlias || (imp.goScope ? imp.goScope.name : base.replace(/\.v\d+$/, "").replace(/^go-/, ""));
+			pf.goImports.set(imp.goLocal, imp.goScope);
+		}
+	}
+	// An in-repo import depends on the files that declare what the importer
+	// names through it (`pkg.Symbol`), not on the whole package; a package used
+	// for nothing nameable (blank import) falls back to its entry file.
+	const goImportEdges = (rel, pf, imp) => {
+		const scope = imp.goScope;
+		if (!scope) return false;
+		const targets = new Set();
+		if (imp.goLocal) {
+			const re = new RegExp("(?<![\\w.])" + imp.goLocal.replace(/[^\w]/g, "\\$&") + "\\s*\\.\\s*([A-Za-z_]\\w*)", "g");
+			const seen = new Set();
+			let m;
+			while ((m = re.exec(pf.decls.masked)) !== null) {
+				if (seen.has(m[1])) continue;
+				seen.add(m[1]);
+				const e = scope.funcs.get(m[1]) || scope.types.get(m[1]) || scope.values.get(m[1]);
+				if (!e || !e.nid) continue;
+				targets.add(e.rel);
+				addEdge(pf.fileNid, e.nid, "imports", { file: rel, line: imp.line, context: "import" });
+			}
+		}
+		if (!targets.size) {
+			const own = scope.files.filter((f) => !f.endsWith("_test.go")).sort();
+			const named = own.find((f) => path.posix.basename(f) === scope.name + ".go") || own.find((f) => path.posix.basename(f) === "doc.go");
+			const entry = named || own[0] || scope.files[0];
+			if (entry) targets.add(entry);
+		}
+		for (const t of [...targets].sort()) addEdge(pf.fileNid, perFile.get(t).fileNid, "imports_from", { file: rel, line: imp.line, context: "import" });
+		return true;
+	};
+	// Type expression (as written in `ctxRel`) → the repo type it names, or null.
+	const goTypeRef = (typeStr, ctxRel) => {
+		if (!typeStr) return null;
+		const name = typeStr.startsWith("[]") ? typeStr.slice(2) : typeStr;
+		const pf = perFile.get(ctxRel);
+		const dot = name.indexOf(".");
+		if (dot < 0) return pf.goScope.types.get(name) || null;
+		const scope = pf.goImports.get(name.slice(0, dot));
+		return (scope && scope.types.get(name.slice(dot + 1))) || null;
+	};
+	// Methods and fields are looked up on the type, then on what it embeds
+	// (Go's promotion), a few levels deep.
+	const goFindMethod = (t, name, depth = 0) => {
+		if (!t || depth > 4) return null;
+		const table = t.scope.methods.get(t.cls.name);
+		const hit = table && table.get(name);
+		if (hit) return hit;
+		for (const e of t.cls.embeds) {
+			const r = goFindMethod(goTypeRef(e, t.rel), name, depth + 1);
+			if (r) return r;
+		}
+		if (t.cls.underlying && t.cls.kind === "type") return null;
+		return null;
+	};
+	const goFieldType = (t, field, depth = 0) => {
+		if (!t || depth > 4) return null;
+		const f = t.cls.fields.get(field);
+		if (f) return { type: f, rel: t.rel };
+		for (const e of t.cls.embeds) {
+			if (e.split(".").pop() === field) return { type: e, rel: t.rel };
+			const r = goFieldType(goTypeRef(e, t.rel), field, depth + 1);
+			if (r) return r;
+		}
+		return null;
+	};
+	const goVarTypes = new Map();
+	const goVarType = (v) => {
+		if (v.type) return { type: v.type, rel: v.rel };
+		if (goVarTypes.has(v)) return goVarTypes.get(v);
+		goVarTypes.set(v, null); // cycle guard
+		const t = goInitType(v.init, v.rel, new Map());
+		goVarTypes.set(v, t);
+		return t;
+	};
+	const GO_EXTERNAL = { kind: "external" };
+	const goFuncNamed = (pf, name) => {
+		const f = pf.goScope.funcs.get(name);
+		if (f) return f;
+		for (const ds of pf.goDot) { const g = ds.funcs.get(name); if (g) return g; }
+		return null;
+	};
+	// What `name` selects on the value, package or type reached so far. A member
+	// the repo does not declare (a type from outside, an interface method, a
+	// func-typed field) is "external": nothing binds to it, and nothing is
+	// guessed for it.
+	const goMember = (cur, name) => {
+		if (cur.kind === "pkg") {
+			const f = cur.scope.funcs.get(name);
+			if (f) return { kind: "fn", entry: f };
+			const v = cur.scope.vars.get(name);
+			if (v) { const t = goVarType(v); return t ? { kind: "value", type: t.type, rel: t.rel } : GO_EXTERNAL; }
+			const t = cur.scope.types.get(name);
+			return t ? { kind: "typename", t } : GO_EXTERNAL;
+		}
+		if (cur.kind === "value" || cur.kind === "typename") {
+			if (cur.kind === "value" && !cur.t && cur.type.startsWith("[]")) return GO_EXTERNAL;
+			const t = cur.t || goTypeRef(cur.type, cur.rel);
+			if (!t) return GO_EXTERNAL;
+			const m = goFindMethod(t, name);
+			if (m) return { kind: "fn", entry: m };
+			if (cur.kind === "typename") return GO_EXTERNAL;
+			const f = goFieldType(t, name);
+			return f ? { kind: "value", type: f.type, rel: f.rel } : GO_EXTERNAL;
+		}
+		return GO_EXTERNAL;
+	};
+	const goIdentRe = /[A-Za-z_]\w*/y;
+	// Evaluates the selector chain that starts with the identifier at `start`
+	// (`x.field.Method(args)[i].Other()`): every call it makes to a repo
+	// function or method is reported through `onCall`, and the result is what
+	// the chain yields (a typed value, where the types are known) with its end
+	// offset.
+	const goEval = (text, start, env, pf, rel, onCall) => {
+		goIdentRe.lastIndex = start;
+		const hm = goIdentRe.exec(text);
+		if (!hm) return null;
+		const head = hm[0];
+		let i = start + head.length;
+		let cur;
+		if (env.has(head)) { const v = env.get(head); cur = v.type ? { kind: "value", type: v.type, rel: v.rel } : GO_EXTERNAL; }
+		else if (pf.goImports.has(head)) { const s = pf.goImports.get(head); cur = s ? { kind: "pkg", scope: s } : GO_EXTERNAL; }
+		else if (pf.goScope.vars.has(head)) { const t = goVarType(pf.goScope.vars.get(head)); cur = t ? { kind: "value", type: t.type, rel: t.rel } : GO_EXTERNAL; }
+		else if (!GO_CALL_SKIP.has(head) && goFuncNamed(pf, head)) cur = { kind: "fn", entry: goFuncNamed(pf, head) };
+		else if (pf.goScope.types.has(head)) cur = { kind: "typename", t: pf.goScope.types.get(head) };
+		else cur = GO_EXTERNAL;
+		for (;;) {
+			let j = i;
+			while (text[j] === " " || text[j] === "\t") j++;
+			const ch = text[j];
+			if (ch === ".") {
+				let k = j + 1;
+				while (k < text.length && /\s/.test(text[k])) k++;
+				if (text[k] === "(") { // type assertion
+					const e = matchClose(text, k);
+					if (e < 0) break;
+					const tn = goTypeName(text.slice(k + 1, e));
+					cur = tn && tn !== "type" ? { kind: "value", type: tn, rel } : GO_EXTERNAL;
+					i = e + 1;
+					continue;
+				}
+				goIdentRe.lastIndex = k;
+				const fm = goIdentRe.exec(text);
+				if (!fm) break;
+				cur = goMember(cur, fm[0]);
+				i = k + fm[0].length;
+				continue;
+			}
+			if (ch === "(") {
+				const e = matchClose(text, j);
+				if (e < 0) break;
+				if (cur.kind === "fn") {
+					onCall(cur.entry, j);
+					cur = cur.entry.fn.result ? { kind: "value", type: cur.entry.fn.result, rel: cur.entry.rel } : GO_EXTERNAL;
+				} else if (cur.kind === "typename") cur = { kind: "value", t: cur.t, type: cur.t.cls.name, rel: cur.t.rel }; // conversion
+				else cur = GO_EXTERNAL;
+				i = e + 1;
+				continue;
+			}
+			if (ch === "[") {
+				const e = matchClose(text, j);
+				if (e < 0) break;
+				if (cur.kind === "value" && !cur.t && cur.type.startsWith("[]")) cur = { kind: "value", type: cur.type.slice(2), rel: cur.rel };
+				else if (cur.kind !== "fn" && cur.kind !== "typename") cur = GO_EXTERNAL; // generic arguments keep the function
+				i = e + 1;
+				continue;
+			}
+			break;
+		}
+		return { cur, end: i };
+	};
+	const goNoCall = () => {};
+	// The type an initializer yields: a composite literal, `new(T)`, or a
+	// selector chain (conversion, call result, field) that is the whole expression.
+	const goInitType = (init, rel, env) => {
+		const text = String(init || "").trim().replace(/^[&*]\s*/, "");
+		let m;
+		if ((m = text.match(/^([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s*\{/))) return goTypeRef(m[1], rel) ? { type: m[1], rel } : null;
+		if ((m = text.match(/^new\(\s*([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s*\)/))) return goTypeRef(m[1], rel) ? { type: m[1], rel } : null;
+		if (!/^[A-Za-z_]/.test(text)) return null;
+		const r = goEval(text, 0, env, perFile.get(rel), rel, goNoCall);
+		if (!r || r.cur.kind !== "value" || !/^\s*(?:$|[,;{)])/.test(text.slice(r.end))) return null;
+		return r.cur.t ? { type: r.cur.t.cls.name, rel: r.cur.t.rel } : { type: r.cur.type, rel: r.cur.rel };
+	};
+	// Variable types inside one function: receiver, parameters (closures'
+	// included) and the local declarations whose type is written or follows
+	// from the initializer. Any other local is recorded with no type, so it
+	// shadows a package-level name without a guess.
+	const goEnvOf = (fn, pf, rel, text) => {
+		const env = new Map();
+		if (fn.recvName) env.set(fn.recvName, { type: fn.recvType, rel });
+		for (const p of fn.params) env.set(p.name, { type: p.type, rel });
+		if (fn.bodyStart < 0) return env;
+		const body = text.slice(fn.bodyStart, fn.bodyEnd);
+		for (const m of body.matchAll(/\bfunc\s*\(([^)]*)\)/g)) {
+			for (const p of goParams(m[1])) if (!env.has(p.name)) env.set(p.name, { type: p.type, rel });
+		}
+		const bind = (name, t) => { if (name !== "_" && !env.has(name)) env.set(name, t || { type: null, rel }); };
+		for (const ln of body.split("\n")) {
+			let m;
+			if ((m = ln.match(/\bvar\s+([A-Za-z_]\w*)\s+([^=\n]+?)\s*(?:=|$)/))) bind(m[1], { type: goTypeName(m[2]), rel });
+			else if ((m = ln.match(/\bfor\s+(\w+)\s*(?:,\s*([A-Za-z_]\w*)\s*)?:=\s*range\s+(\S.*)$/))) {
+				bind(m[1], null);
+				if (m[2]) {
+					const tt = /^[A-Za-z_]/.test(m[3]) ? goEval(m[3], 0, env, pf, rel, goNoCall) : null;
+					const v = tt && tt.cur.kind === "value" && !tt.cur.t && tt.cur.type.startsWith("[]") ? { type: tt.cur.type.slice(2), rel: tt.cur.rel } : null;
+					bind(m[2], v);
+				}
+			} else if ((m = ln.match(/\b([A-Za-z_]\w*)\s*((?:,\s*[A-Za-z_]\w*\s*)*):=\s*(\S.*)$/))) {
+				bind(m[1], goInitType(m[3], rel, env));
+				for (const other of m[2].split(",")) if (other.trim()) bind(other.trim(), null);
+			}
+		}
+		return env;
+	};
+	const goHeadRe = /(?<![\w.)\]}])[A-Za-z_]\w*/g;
+	const goArgRe = /[(,]\s*([A-Za-z_]\w*)\s*(?=[,)])/g;
+	const goCalls = (rel, pf) => {
+		const text = pf.stripped;
+		const seen = new Set();
+		const emit = (caller, callee, offset, relation) => {
+			if (!callee || !callee.nid || callee.nid === caller) return;
+			const key = caller + "|" + callee.nid;
+			if (seen.has(key + "|calls") || seen.has(key + "|" + relation)) return;
+			seen.add(key + "|" + relation);
+			const inferred = relation === "indirect_call";
+			addEdge(caller, callee.nid, relation, { file: rel, line: pf.lineOf(offset), confidence: inferred ? "INFERRED" : "EXTRACTED", score: inferred ? INFERRED_CALL_SCORE : undefined, context: "call" });
+		};
+		const scan = (from, to, caller, env, source) => {
+			let m;
+			goHeadRe.lastIndex = from;
+			while ((m = goHeadRe.exec(source)) !== null && m.index < to) {
+				goEval(source, m.index, env, pf, rel, (callee, at) => emit(caller, callee, at, "calls"));
+			}
+			const segment = source.slice(from, to);
+			goArgRe.lastIndex = 0;
+			while ((m = goArgRe.exec(segment)) !== null) {
+				if (env.has(m[1]) || GO_CALL_SKIP.has(m[1])) continue;
+				const f = goFuncNamed(pf, m[1]);
+				if (f) emit(caller, f, from + m.index, "indirect_call");
+			}
+		};
+		const taken = [];
+		for (const fn of [...pf.decls.functions, ...pf.decls.goMethods]) {
+			const eol = text.indexOf("\n", fn.declStart);
+			taken.push([fn.declStart, fn.bodyEnd > 0 ? fn.bodyEnd + 1 : eol < 0 ? text.length : eol]);
+			if (fn.bodyStart < 0) continue;
+			const caller = fn.nid || pf.localDefs.get(fn.name);
+			if (caller) scan(fn.bodyStart + 1, fn.bodyEnd, caller, goEnvOf(fn, pf, rel, text), text);
+		}
+		for (const c of pf.decls.classes) if (c.bodyStart >= 0) taken.push([c.bodyStart, c.bodyEnd + 1]);
+		const outside = blankRanges(text, taken);
+		scan(0, outside.length, pf.fileNid, new Map(), outside);
+	};
+	// Embedded types (struct in struct, interface in interface).
+	for (const scope of goScopes.values()) {
+		for (const t of scope.types.values()) {
+			for (const e of t.cls.embeds) {
+				const target = goTypeRef(e, t.rel);
+				if (target && target.nid !== t.nid) addEdge(t.nid, target.nid, "embeds", { file: t.rel, line: t.cls.line });
+			}
+		}
+	}
+
+	// -- Rust: the module tree (`mod x;` → file, inline `mod x { … }`), each
+	// module's items and `use` bindings, crates of the workspace, and impl
+	// methods joined to the type they are for.
+	const rsKey = (rel, inl) => rel + "\n" + inl;
+	const rsScopes = new Map(); // key -> { rel, inl, items, mods: name -> key, modDecls, uses, globs, parent: key | null }
+	const rsCrates = new Map(); // crate name -> its lib root file
+	const rsChildOf = new Map(); // file -> key of the module that declares it
+	const rsMethods = new Map(); // owner node id -> Map(method name -> [node ids])
+	const RS_EXT = { ext: true };
+	for (const [rel, pf] of perFile) {
+		if (pf.lang !== "rust") continue;
+		for (const sc of pf.decls.rsScopes.values()) {
+			const mods = new Map();
+			for (const [name, m] of sc.mods) mods.set(name, rsKey(rel, m.inline));
+			for (const item of sc.items.values()) { item.rel = rel; item.nid = pf.localDefs.get(item.name) || null; }
+			rsScopes.set(rsKey(rel, sc.inl), { rel, inl: sc.inl, items: sc.items, mods, modDecls: sc.modDecls, uses: sc.uses, globs: sc.globs, parent: sc.parent === null ? null : rsKey(rel, sc.parent) });
+		}
+	}
+	if (rsScopes.size) {
+		const dirs = new Set();
+		for (const sc of rsScopes.values()) {
+			const parts = sc.rel.split("/");
+			for (let i = 0; i < parts.length; i++) dirs.add(parts.slice(0, i).join("/"));
+		}
+		for (const dir of [...dirs].sort()) {
+			let toml;
+			try { toml = fs.readFileSync(path.join(root, dir, "Cargo.toml"), "utf-8"); } catch { continue; }
+			let section = "", name = null, libPath = null;
+			for (const raw of toml.split("\n")) {
+				const ln = raw.trim();
+				if (ln.startsWith("[")) { section = ln; continue; }
+				const kv = ln.match(/^(name|path)\s*=\s*"([^"]*)"/);
+				if (!kv) continue;
+				if (section === "[package]" && kv[1] === "name" && name === null) name = kv[2];
+				else if (section === "[lib]" && kv[1] === "name") name = kv[2];
+				else if (section === "[lib]" && kv[1] === "path") libPath = kv[2];
+			}
+			const lib = path.posix.normalize(path.posix.join(dir || ".", libPath || "src/lib.rs"));
+			if (name && perFile.has(lib)) rsCrates.set(name.replace(/-/g, "_"), lib);
+		}
+		// `mod x;` in a.rs names a/x.rs or a/x/mod.rs; in mod.rs, lib.rs, main.rs
+		// and any other crate root it names a sibling.
+		const keys = [...rsScopes.keys()].sort();
+		for (const key of keys) {
+			const sc = rsScopes.get(key);
+			if (!sc.modDecls.length) continue;
+			const dir = path.posix.dirname(sc.rel);
+			const base = path.posix.basename(sc.rel);
+			const own = path.posix.join(dir, base.replace(/\.rs$/, ""));
+			const bases = base === "mod.rs" || base === "lib.rs" || base === "main.rs" ? [dir] : [own, dir];
+			const inl = sc.inl ? sc.inl.split("::") : [];
+			const pf = perFile.get(sc.rel);
+			for (const decl of sc.modDecls) {
+				let hit = null;
+				for (const b of bases) {
+					const here = path.posix.join(b, ...inl);
+					for (const c of [path.posix.join(here, decl.name + ".rs"), path.posix.join(here, decl.name, "mod.rs")]) {
+						const cand = path.posix.normalize(c);
+						if (perFile.has(cand) && cand !== sc.rel) { hit = cand; break; }
+					}
+					if (hit) break;
+				}
+				if (!hit) continue;
+				sc.mods.set(decl.name, rsKey(hit, ""));
+				if (!rsChildOf.has(hit)) rsChildOf.set(hit, key);
+				addEdge(pf.fileNid, perFile.get(hit).fileNid, "imports_from", { file: sc.rel, line: decl.line, context: "module" });
+			}
+		}
+	}
+	const rsCrateRoot = (rel) => {
+		const seen = new Set();
+		while (rsChildOf.has(rel) && !seen.has(rel)) { seen.add(rel); rel = rsScopes.get(rsChildOf.get(rel)).rel; }
+		return rel;
+	};
+	const rsParent = (key) => {
+		const sc = rsScopes.get(key);
+		if (!sc) return null;
+		return sc.parent !== null ? sc.parent : rsChildOf.get(sc.rel) || null;
+	};
+	// A name in a module: { mod: key } | { item } | RS_EXT | null. `use`
+	// bindings and glob imports are followed.
+	const rsLookup = (key, name, depth = 0) => {
+		const sc = rsScopes.get(key);
+		if (!sc || depth > 8) return null;
+		if (sc.mods.has(name)) return { mod: sc.mods.get(name) };
+		if (sc.items.has(name)) return { item: sc.items.get(name) };
+		if (sc.uses.has(name)) return rsUse(key, sc.uses.get(name), null, depth + 1);
+		for (const g of sc.globs) {
+			const r = rsResolve(key, g, depth + 1, true);
+			if (!r || !r.mod) continue;
+			const sub = rsScopes.get(r.mod);
+			if (sub && (sub.mods.has(name) || sub.items.has(name) || sub.uses.has(name))) return rsLookup(r.mod, name, depth + 1);
+		}
+		return null;
+	};
+	// A path from a module: additionally { member: [item, name] } for
+	// `Type::name`. Null when unknown, RS_EXT for a path outside the repo.
+	const rsResolve = (key, segs, depth = 0, viaUse = false) => {
+		if (!segs.length || depth > 8) return null;
+		const first = segs[0];
+		let cur, i = 1;
+		if (first === "crate") cur = { mod: rsKey(rsCrateRoot(rsScopes.get(key).rel), "") };
+		else if (first === "self") cur = { mod: key };
+		else if (first === "super") {
+			let k = key;
+			i = 0;
+			while (i < segs.length && segs[i] === "super") { k = rsParent(k); if (k === null) return null; i++; }
+			cur = { mod: k };
+		} else if (first === "std" || first === "core" || first === "alloc") return RS_EXT;
+		else {
+			const sc = rsScopes.get(key);
+			cur = null;
+			if (sc) {
+				if (sc.mods.has(first)) cur = { mod: sc.mods.get(first) };
+				else if (sc.items.has(first)) cur = { item: sc.items.get(first) };
+				else if (sc.uses.has(first)) cur = rsUse(key, sc.uses.get(first), viaUse ? segs : null, depth + 1);
+			}
+			if (!cur && rsCrates.has(first)) cur = { mod: rsKey(rsCrates.get(first), "") };
+			if (!cur && !viaUse) cur = rsLookup(key, first, depth + 1);
+			if (!cur) return null;
+		}
+		for (; i < segs.length; i++) {
+			if (!cur || !cur.mod) {
+				if (cur && cur.item && i === segs.length - 1) return { member: [cur.item, segs[i]] };
+				return cur && cur.ext ? RS_EXT : null;
+			}
+			cur = rsLookup(cur.mod, segs[i], depth + 1);
+		}
+		return cur;
+	};
+	// One `use` name can bind a type, a value and a macro (three namespaces):
+	// the binding that names a module or an item of this repo wins.
+	function rsUse(key, candidates, self, depth) {
+		let fallback = null;
+		for (const segs of candidates) {
+			if (self && segs.join("::") === self.join("::")) continue;
+			const r = rsResolve(key, segs, depth, true);
+			if (r && (r.mod || r.item)) return r;
+			if (r && !fallback) fallback = r;
+		}
+		return fallback;
+	}
+	const RS_OWNER_KINDS = new Set(["struct", "enum", "trait", "type"]);
+	for (const [rel, pf] of perFile) {
+		if (pf.lang !== "rust") continue;
+		const d = pf.decls;
+		for (const impl of d.rsImpls) {
+			const key = rsKey(rel, impl.inl);
+			const r = impl.typeSegs.length === 1 ? rsLookup(key, impl.typeName) : rsResolve(key, impl.typeSegs);
+			let ownerNid = r && r.item && RS_OWNER_KINDS.has(r.item.kind) ? r.item.nid : null;
+			if (!ownerNid) {
+				// an impl for a type this repo does not declare: the block itself stands for it
+				ownerNid = makeId(fileStem(rel), "impl", impl.typeName);
+				addNode({ id: ownerNid, label: impl.typeName, file_type: "code", source_file: rel, source_location: "L" + impl.line, type: "impl" });
+				addEdge(pf.fileNid, ownerNid, "contains", { file: rel, line: impl.line });
+			}
+			impl.ownerNid = ownerNid;
+			let table = rsMethods.get(ownerNid);
+			if (!table) rsMethods.set(ownerNid, table = new Map());
+			for (const m of impl.methods) {
+				m.nid = makeId(fileStem(rel), impl.typeName, m.name);
+				m.ownerNid = ownerNid;
+				addNode({ id: m.nid, label: m.name + "()", file_type: "code", source_file: rel, source_location: "L" + m.line, _callable: true });
+				addEdge(ownerNid, m.nid, "method", { file: rel, line: m.line });
+				if (!table.has(m.name)) table.set(m.name, []);
+				if (!table.get(m.name).includes(m.nid)) table.get(m.name).push(m.nid);
+			}
+			if (impl.traitSegs && !impl.isTrait) {
+				const tr = rsResolve(key, impl.traitSegs);
+				if (tr && tr.item && tr.item.kind === "trait" && tr.item.nid && tr.item.nid !== ownerNid) addEdge(ownerNid, tr.item.nid, "implements", { file: rel, line: impl.line });
+			}
+		}
+		for (const f of d.functions) f.nid = pf.localDefs.get(f.name);
+		for (const nf of d.rsNested) {
+			const parent = nf.parent.nid;
+			if (!parent) continue;
+			const nid = makeId(parent, nf.name);
+			if (nodeById.has(nid)) continue;
+			if (nf.kind === "fn") addNode({ id: nid, label: nf.name + "()", file_type: "code", source_file: rel, source_location: "L" + nf.line, _callable: true });
+			else addNode({ id: nid, label: nf.name, file_type: "code", source_file: rel, source_location: "L" + nf.line, type: nf.kind === "enum" ? "enum" : "class" });
+			addEdge(parent, nid, "contains", { file: rel, line: nf.line });
+		}
+	}
+	// `use` paths: the file that declares the module or item, and the item itself.
+	const rustImports = (rel, pf) => {
+		const seen = new Set();
+		const once = (target, relation, line) => {
+			const k = target + "|" + relation;
+			if (seen.has(k) || target === pf.fileNid) return;
+			seen.add(k);
+			addEdge(pf.fileNid, target, relation, { file: rel, line, context: "import" });
+		};
+		for (const imp of pf.decls.imports) {
+			const r = rsResolve(rsKey(rel, imp.rsInl), imp.rsSegs, 0, true);
+			if (r && r.mod) {
+				const target = rsScopes.get(r.mod);
+				if (target && target.rel !== rel) once(perFile.get(target.rel).fileNid, "imports_from", imp.line);
+			} else if (r && r.item) {
+				if (r.item.rel === rel) continue;
+				once(perFile.get(r.item.rel).fileNid, "imports_from", imp.line);
+				if (r.item.nid) once(r.item.nid, "imports", imp.line);
+			} else if (r && r.member) {
+				if (r.member[0].rel !== rel) once(perFile.get(r.member[0].rel).fileNid, "imports_from", imp.line);
+			} else {
+				const head = imp.rsSegs[0];
+				if (!head || head === "crate" || head === "self" || head === "super" || rsCrates.has(head)) continue;
+				let nid = makeId(head);
+				const taken = nodeById.get(nid);
+				if (taken && taken.source_file) nid = makeId("external", head);
+				if (!nid) continue;
+				addNode({ id: nid, label: head, file_type: "code", source_file: "", source_location: "", type: "module" });
+				once(nid, "imports_from", imp.line);
+			}
+		}
+	};
+	const RUST_CALL_SKIP = new Set([
+		"if", "while", "match", "for", "loop", "return", "fn", "let", "in", "as", "move", "async", "await", "unsafe", "where", "impl", "dyn",
+		"ref", "mut", "self", "super", "crate", "Some", "Ok", "Err", "None", "Box", "Vec", "String", "drop", "else", "break", "continue", "pub", "use", "mod",
+	]);
+	const rsPathCallRe = /(?<![\w.:!])((?:[A-Za-z_]\w*\s*::\s*)*[A-Za-z_]\w*)\s*(?:::\s*<[^<>()]*>\s*)?\(/g;
+	const rsSelfCallRe = /\bself\s*\.\s*([A-Za-z_]\w*)\s*(?:::\s*<[^<>()]*>\s*)?\(/g;
+	// `Name(…)` that destructures (after `let`, before `=>` or a single `=`,
+	// in closure parameters) instead of constructing.
+	const rsIsPattern = (segment, at, open) => {
+		if (/(?:\blet\s+(?:mut\s+)?|\|\s*)$/.test(segment.slice(Math.max(0, at - 24), at))) return true;
+		let k = matchClose(segment, open);
+		if (k < 0) return false;
+		for (k++; k < segment.length; k++) {
+			const ch = segment[k];
+			if (ch === ")" || ch === " " || ch === "\t" || ch === "\n" || ch === "\r") continue;
+			if (ch === "=") return segment[k + 1] !== "=";
+			if (ch === "|") return segment[k + 1] !== "|";
+			return ch === "i" && /^if\b/.test(segment.slice(k, k + 3)) ? true : ch === ":" && segment[k + 1] !== ":";
+		}
+		return false;
+	};
+	const rsUniqueMethod = (ownerNid, name) => {
+		const list = ownerNid && rsMethods.get(ownerNid) && rsMethods.get(ownerNid).get(name);
+		return list && list.length === 1 ? list[0] : null;
+	};
+	// Calls whose target the source names outright: a function in scope, a
+	// path (`module::f`, `Type::f`), `Self::f` and `self.f()` on a method the
+	// type declares once. A receiver that needs type inference is left alone.
+	const rustCalls = (rel, pf) => {
+		const text = pf.stripped;
+		const seen = new Set();
+		const emit = (caller, target, offset, relation) => {
+			if (!target || target === caller) return;
+			const k = caller + "|" + target + "|" + relation;
+			if (seen.has(k)) return;
+			seen.add(k);
+			addEdge(caller, target, relation, { file: rel, line: pf.lineOf(offset), context: "call" });
+		};
+		const scan = (segment, base, caller, key, ownerNid, locals) => {
+			let m;
+			rsPathCallRe.lastIndex = 0;
+			while ((m = rsPathCallRe.exec(segment)) !== null) {
+				const segs = m[1].split("::").map((s) => s.trim());
+				const name = segs[segs.length - 1];
+				if (segs.length === 1) {
+					if (RUST_CALL_SKIP.has(name) || locals.has(name)) continue;
+					const r = rsLookup(key, name);
+					if (!r || !r.item || !r.item.nid) continue;
+					if (r.item.kind === "fn") emit(caller, r.item.nid, base + m.index, "calls");
+					else if (r.item.kind === "struct" && !rsIsPattern(segment, m.index, m.index + m[0].length - 1)) emit(caller, r.item.nid, base + m.index, "instantiates");
+				} else if (segs[0] === "Self") {
+					if (segs.length === 2) emit(caller, rsUniqueMethod(ownerNid, name), base + m.index, "calls");
+				} else {
+					const r = rsResolve(key, segs);
+					if (!r) continue;
+					if (r.item && r.item.nid) {
+						if (r.item.kind === "fn") emit(caller, r.item.nid, base + m.index, "calls");
+						else if (r.item.kind === "struct" && !rsIsPattern(segment, m.index, m.index + m[0].length - 1)) emit(caller, r.item.nid, base + m.index, "instantiates");
+					} else if (r.member && r.member[0].nid) emit(caller, rsUniqueMethod(r.member[0].nid, r.member[1]), base + m.index, "calls");
+				}
+			}
+			if (!ownerNid) return;
+			rsSelfCallRe.lastIndex = 0;
+			while ((m = rsSelfCallRe.exec(segment)) !== null) emit(caller, rsUniqueMethod(ownerNid, m[1]), base + m.index, "calls");
+		};
+		const taken = [];
+		for (const fn of pf.decls.rsFns) {
+			const eol = text.indexOf("\n", fn.declStart);
+			taken.push([fn.declStart, fn.bodyEnd > 0 ? fn.bodyEnd + 1 : eol < 0 ? text.length : eol]);
+			if (fn.bodyStart < 0 || !fn.nid) continue;
+			const locals = new Set();
+			for (const m of text.slice(fn.declStart, fn.bodyStart).matchAll(/([A-Za-z_]\w*)\s*:/g)) locals.add(m[1]);
+			const body = text.slice(fn.bodyStart + 1, fn.bodyEnd);
+			for (const m of body.matchAll(/\blet\s+([^=;]*)/g)) for (const id of m[1].split(":")[0].matchAll(/[a-z_]\w*/g)) locals.add(id[0]);
+			for (const m of body.matchAll(/\|([^|\n]*)\|/g)) for (const id of m[1].matchAll(/([a-z_]\w*)\s*(?=[,:|]|$)/g)) locals.add(id[1]);
+			for (const m of body.matchAll(/\bfor\s+([^{]*?)\s+in\b/g)) for (const id of m[1].matchAll(/[a-z_]\w*/g)) locals.add(id[0]);
+			scan(body, fn.bodyStart + 1, fn.nid, rsKey(rel, fn.inl), fn.ownerNid || null, locals);
+		}
+		scan(blankRanges(text, taken.concat(pf.decls.rsSkip)), 0, pf.fileNid, rsKey(rel, ""), null, new Set());
+	};
 
 	// -- workspace package resolution (js/ts monorepos): each package's root
 	// entry, plus its directory and `exports` map for subpath imports
@@ -1202,12 +2679,35 @@ function buildGraph(root) {
 	};
 	// Dots count package levels from the importing file's own package: `.` is
 	// its directory, `..` the parent. Absolute dotted paths start at the repo root.
+	// Import roots: the repo root and every directory that holds a top-level
+	// package (a `src/` layout, an example project). The importing file's own
+	// root is tried first.
+	const pyOwnRoot = (rel) => {
+		const dir = path.posix.dirname(rel);
+		let d = dir;
+		while (d !== "." && relSet.has(d + "/__init__.py")) d = path.posix.dirname(d);
+		return d === "." ? "" : d;
+	};
+	const pyRoots = [...new Set([""].concat(rels.filter((r) => r.endsWith(".py")).map(pyOwnRoot)))].sort();
+	const probePyAbsolute = (fromRel, mod) => {
+		// the file's own root, then each directory above it (a namespace package
+		// has no __init__.py to mark where it starts), then the other roots
+		const own = pyOwnRoot(fromRel);
+		const order = [own];
+		for (let d = own ? path.posix.dirname(own) : "."; d !== "."; d = path.posix.dirname(d)) order.push(d);
+		order.push(...pyRoots);
+		for (const r of new Set(order)) {
+			const hit = probePyModule(r ? r + "/" + mod : mod);
+			if (hit) return hit;
+		}
+		return null;
+	};
 	const resolvePySpec = (fromRel, spec) => {
 		const dots = spec.match(/^\.*/)[0].length;
 		const rest = spec.slice(dots);
 		if (!/^[\w.]*$/.test(rest)) return null;
 		const mod = rest.replace(/\./g, "/");
-		if (!dots) return mod ? probePyModule(mod) : null;
+		if (!dots) return mod ? probePyAbsolute(fromRel, mod) : null;
 		let dir = path.posix.dirname(fromRel);
 		for (let k = 1; k < dots; k++) dir = path.posix.dirname(dir);
 		if (mod) return probePyModule(path.posix.join(dir, mod));
@@ -1271,6 +2771,23 @@ function buildGraph(root) {
 		cutDepth = Infinity;
 		const map = new Map(pf.localDefs);
 		if (pf.defaultNid) map.set("default", pf.defaultNid);
+		// `export { a as b }`: a local declaration, or a name this module imported
+		for (const le of pf.decls.localExports || []) {
+			if (map.has(le.exported) && le.exported === le.local) continue;
+			let nid = pf.localDefs.get(le.local) || null;
+			if (!nid) {
+				for (const imp of pf.decls.imports) {
+					if (imp.reExport || imp.dynamic) continue;
+					const target = resolveSpec(rel, imp.spec);
+					if (!target) continue;
+					if (imp.default === le.local) nid = perFile.get(target).defaultNid || exportsOf(target).get("default") || null;
+					const named = imp.names.find((x) => x.local === le.local);
+					if (named) nid = exportsOf(target).get(named.imported) || null;
+					if (nid) break;
+				}
+			}
+			if (nid) map.set(le.exported, nid);
+		}
 		for (const re of reExportList(rel)) {
 			const target = exportsOf(re.target);
 			if (re.star) {
@@ -1289,7 +2806,44 @@ function buildGraph(root) {
 		} else cutDepth = Math.min(outerCut, cutDepth);
 		return map;
 	};
-	const resolveExported = (rel, name) => exportsOf(rel).get(name) || null;
+	// A Python module exports every name it imports, and Python packages
+	// import each other in cycles as a matter of course, so a name is followed
+	// on its own (memoized per module and name) instead of through whole
+	// export maps: local declaration, else the import that binds it, else a
+	// star import.
+	const pyExported = new Map();
+	const resolvePyExported = (rel, name, depth = 0) => {
+		const key = rel + "\n" + name;
+		if (pyExported.has(key)) return pyExported.get(key);
+		const pf = perFile.get(rel);
+		if (!pf || depth > 12) return null;
+		pyExported.set(key, null); // cycle guard
+		let nid = pf.localDefs.get(name) || null;
+		if (!nid) {
+			for (const imp of pf.decls.imports) {
+				const bound = imp.names.find((x) => x.local === name);
+				if (!bound) continue;
+				const target = resolveSpec(rel, imp.spec);
+				if (target) nid = resolvePyExported(target, bound.imported, depth + 1);
+				if (nid) break;
+			}
+		}
+		if (!nid) {
+			for (const imp of pf.decls.imports) {
+				if (!imp.names.some((x) => x.imported === "*")) continue;
+				const target = resolveSpec(rel, imp.spec);
+				if (target) nid = resolvePyExported(target, name, depth + 1);
+				if (nid) break;
+			}
+		}
+		pyExported.set(key, nid);
+		return nid;
+	};
+	const resolveExported = (rel, name) => {
+		const pf = perFile.get(rel);
+		if (pf && pf.lang === "python") return resolvePyExported(rel, name);
+		return exportsOf(rel).get(name) || null;
+	};
 	// The symbol a module's default import binds to: its own default
 	// declaration, else what it re-exports as `default`.
 	const defaultOf = (rel) => {
@@ -1297,6 +2851,27 @@ function buildGraph(root) {
 		return pf ? pf.defaultNid || resolveExported(rel, "default") : null;
 	};
 
+	// The def (function or method) whose body holds 1-based `line`, innermost.
+	const pyDefRegion = (pf, line) => {
+		let best = null;
+		const consider = (f) => {
+			if (f.line < line && f.end != null && line <= f.end && (!best || f.line > best.start)) best = { start: f.line, end: f.end };
+		};
+		for (const f of pf.decls.functions) consider(f);
+		for (const c of pf.decls.classes) for (const m of c.methods) consider(m);
+		return best;
+	};
+	// What `name` was imported as, seen from `line`: a def's own imports first.
+	const importedAt = (pf, name, line) => {
+		if (line && pf.scopedImports) {
+			let hit = null, hitStart = -1;
+			for (const sc of pf.scopedImports) {
+				if (line >= sc.start && line <= sc.end && sc.start >= hitStart && sc.map.has(name)) { hit = sc.map.get(name); hitStart = sc.start; }
+			}
+			if (hit) return hit;
+		}
+		return pf.importedNames.get(name);
+	};
 	// -- phase 3: import edges
 	// Directory names and module stems the repo itself provides: a top-level
 	// package the repo defines (a `src/` layout the root-relative resolver
@@ -1305,7 +2880,17 @@ function buildGraph(root) {
 	for (const rel of rels) for (const part of rel.split("/")) repoNames.add(part.replace(/\.[^.]+$/, ""));
 	for (const rel of rels) {
 		const pf = perFile.get(rel);
+		if (pf.lang === "rust") { rustImports(rel, pf); continue; }
 		for (const imp of pf.decls.imports) {
+			if (pf.lang === "go" && goImportEdges(rel, pf, imp)) continue;
+			let bind = pf.importedNames;
+			if (pf.lang === "python") {
+				const region = pyDefRegion(pf, imp.line);
+				if (region) {
+					bind = new Map();
+					(pf.scopedImports ||= []).push({ start: region.start, end: region.end, map: bind });
+				}
+			}
 			const resolved = resolveSpec(rel, imp.spec);
 			let targetFileNid;
 			if (resolved) {
@@ -1321,44 +2906,55 @@ function buildGraph(root) {
 				// Names imported from a package outside the repo stay with that
 				// import: they never fall back to a same-named repo symbol.
 				if (!imp.spec.startsWith(".") && !imp.dynamic && !repoNames.has(imp.spec.split(/[./]/)[0])) {
-					for (const n of imp.names) pf.importedNames.set(n.local, { rel: null, name: n.imported, nid: null, external: true });
-					if (imp.default) pf.importedNames.set(imp.default, { rel: null, name: "default", nid: null, external: true });
+					for (const n of imp.names) bind.set(n.local, { rel: null, name: n.imported, nid: null, external: true });
+					if (imp.default) bind.set(imp.default, { rel: null, name: "default", nid: null, external: true });
+					if (imp.namespace && imp.namespace !== "*" && !imp.reExport) bind.set(imp.namespace, { rel: null, name: "*", nid: null, external: true });
 				}
 			}
 			const relation = imp.dynamic ? "dynamic_import" : imp.reExport ? "re_exports" : "imports_from";
+			// Python: `from pkg import mod` imports the submodule, `from m import *`
+			// brings every name of m into scope.
+			let names = imp.names;
+			if (pf.lang === "python" && resolved && names.length) {
+				const rest = [];
+				for (const n of names) {
+					if (n.imported === "*") { (pf.starImports ||= []).push(resolved); continue; }
+					const sub = resolved.endsWith("/__init__.py") || resolved === "__init__.py" ? probePyModule(path.posix.join(path.posix.dirname(resolved), n.imported)) : null;
+					if (sub && !perFile.get(resolved).localDefs.has(n.imported)) {
+						addEdge(pf.fileNid, perFile.get(sub).fileNid, relation, { file: rel, line: imp.line, context: "import" });
+						bind.set(n.local, { rel: sub, name: "*", nid: null });
+					} else rest.push(n);
+				}
+				if (!rest.length && names.some((n) => n.imported !== "*")) continue;
+				names = rest;
+			}
 			addEdge(pf.fileNid, targetFileNid, relation, { file: rel, line: imp.line, context: "import", deferred: imp.dynamic || undefined });
 			// symbol-level imports edges (only when target resolves in-repo)
 			if (resolved && !imp.dynamic) {
 				const tpf = perFile.get(resolved);
-				for (const n of imp.names) {
+				for (const n of names) {
 					const tnid = tpf.localDefs.get(n.imported) || resolveExported(resolved, n.imported);
 					if (tnid) {
 						if (!imp.reExport) addEdge(pf.fileNid, tnid, "imports", { file: rel, line: imp.line, context: "import" });
-						pf.importedNames.set(n.local, { rel: resolved, name: n.imported, nid: tnid });
+						bind.set(n.local, { rel: resolved, name: n.imported, nid: tnid });
 					} else {
-						pf.importedNames.set(n.local, { rel: resolved, name: n.imported, nid: null });
+						bind.set(n.local, { rel: resolved, name: n.imported, nid: null });
 					}
 				}
-				if (imp.default) pf.importedNames.set(imp.default, { rel: resolved, name: "default", nid: defaultOf(resolved) });
+				if (imp.default) bind.set(imp.default, { rel: resolved, name: "default", nid: defaultOf(resolved) });
 				// `export * as ns from` binds `ns` for importers of this module, not here.
-				if (imp.namespace && imp.namespace !== "*" && !imp.reExport) pf.importedNames.set(imp.namespace, { rel: resolved, name: "*", nid: null });
+				if (imp.namespace && imp.namespace !== "*" && !imp.reExport) bind.set(imp.namespace, { rel: resolved, name: "*", nid: null, cjs: imp.cjs || undefined });
 			}
 		}
 	}
 
 	// -- phase 4: inherits / implements / extends
-	const globalDefs = new Map(); // name -> [ {rel, nid, family} ]
-	for (const rel of rels) {
-		const pf = perFile.get(rel);
-		for (const [name, nid] of pf.localDefs) {
-			if (!globalDefs.has(name)) globalDefs.set(name, []);
-			globalDefs.get(name).push({ rel, nid, family: LANG_FAMILY[pf.lang] });
-		}
-	}
-	const resolveName = (pf, name) => {
-		// local → import evidence → unique global (same family) → null
-		if (pf.localDefs.has(name)) return { nid: pf.localDefs.get(name), confidence: "EXTRACTED" };
-		const imp = pf.importedNames.get(name);
+	const resolveName = (pf, name, line) => {
+		// local → import evidence → a star import → null. A name nothing in the
+		// file accounts for is not guessed from the rest of the repo.
+		const scoped = line && pf.scopedImports ? importedAt(pf, name, line) : null;
+		if (pf.localDefs.has(name) && (!scoped || scoped === pf.importedNames.get(name))) return { nid: pf.localDefs.get(name), confidence: "EXTRACTED" };
+		const imp = scoped || pf.importedNames.get(name);
 		if (imp && imp.nid) return { nid: imp.nid, confidence: "EXTRACTED" };
 		if (imp && imp.external) return null;
 		if (imp && imp.rel) {
@@ -1371,8 +2967,10 @@ function buildGraph(root) {
 			if (t) return { nid: t, confidence: "EXTRACTED" };
 			return null;
 		}
-		const cands = (globalDefs.get(name) || []).filter((c) => c.family === LANG_FAMILY[pf.lang]);
-		if (cands.length === 1 && !TS_LIKE.has(pf.lang)) return { nid: cands[0].nid, confidence: "INFERRED" };
+		for (const star of pf.starImports || []) {
+			const t = resolveExported(star, name);
+			if (t) return { nid: t, confidence: "EXTRACTED" };
+		}
 		return null;
 	};
 	for (const rel of rels) {
@@ -1380,9 +2978,26 @@ function buildGraph(root) {
 		for (const c of pf.decls.classes) {
 			const cnid = pf.localDefs.get(c.name);
 			if (!cnid) continue;
+			for (const base of c.bases || []) {
+				let r = null;
+				if (base.module) {
+					const ns = pf.importedNames.get(base.module);
+					const t = ns && ns.name === "*" && ns.rel ? (perFile.get(ns.rel).localDefs.get(base.name) || resolveExported(ns.rel, base.name)) : null;
+					if (t) r = { nid: t, confidence: "EXTRACTED" };
+				} else if (!BUILTIN_NOISE_LABELS.has(base.name)) r = resolveName(pf, base.name);
+				if (r && r.nid !== cnid && nodeById.get(r.nid) && nodeById.get(r.nid).type === "class") {
+					addEdge(cnid, r.nid, "inherits", { file: rel, line: c.line, confidence: r.confidence });
+					if (!baseOf.has(cnid)) baseOf.set(cnid, []);
+					baseOf.get(cnid).push(r.nid);
+				}
+			}
 			if (c.extends && !BUILTIN_NOISE_LABELS.has(c.extends)) {
 				const r = resolveName(pf, c.extends);
-				if (r) addEdge(cnid, r.nid, "inherits", { file: rel, line: c.line, confidence: r.confidence, score: r.confidence === "INFERRED" ? INFERRED_CALL_SCORE : undefined });
+				if (r) {
+					addEdge(cnid, r.nid, "inherits", { file: rel, line: c.line, confidence: r.confidence, score: r.confidence === "INFERRED" ? INFERRED_CALL_SCORE : undefined });
+					if (!baseOf.has(cnid)) baseOf.set(cnid, []);
+					baseOf.get(cnid).push(r.nid);
+				}
 			}
 			for (const iface of c.implements || []) {
 				if (BUILTIN_NOISE_LABELS.has(iface)) continue;
@@ -1391,16 +3006,56 @@ function buildGraph(root) {
 			}
 		}
 		for (const t of pf.decls.types) {
-			if (t.extends && pf.localDefs.has(t.name)) {
-				const r = resolveName(pf, t.extends);
-				if (r) addEdge(pf.localDefs.get(t.name), r.nid, "extends", { file: rel, line: t.line, confidence: r.confidence });
+			if (!pf.localDefs.has(t.name)) continue;
+			for (const base of t.extendsAll || (t.extends ? [t.extends] : [])) {
+				const r = resolveName(pf, base);
+				if (r && r.nid !== pf.localDefs.get(t.name)) addEdge(pf.localDefs.get(t.name), r.nid, "extends", { file: rel, line: t.line, confidence: r.confidence });
 			}
 		}
 	}
 
+	// A member of a class: its own, or the nearest base class's (`from` skips
+	// the class itself).
+	const memberOf = (classNid, name, from, depth = 0) => {
+		if (!classNid || depth > 5) return null;
+		if (depth >= from) {
+			const own = classMembers.get(classNid);
+			if (own && own.has(name)) return own.get(name);
+		}
+		for (const base of baseOf.get(classNid) || []) {
+			const hit = memberOf(base, name, 0, depth + 1);
+			if (hit) return hit;
+		}
+		return null;
+	};
+	// Method names one class of the repo declares and no other, per language
+	// family: what a call on a receiver of unknown type most plausibly reaches.
+	// Names the language's own objects answer to are never guessed.
+	const methodsByName = new Map();
+	for (const [classNid, members] of classMembers) {
+		const node = nodeById.get(classNid);
+		const lang = node && node.source_file ? perFile.get(node.source_file).lang : null;
+		if (!lang) continue;
+		const family = LANG_FAMILY[lang];
+		if (!methodsByName.has(family)) methodsByName.set(family, new Map());
+		const table = methodsByName.get(family);
+		for (const [name, mid] of members) {
+			if (!table.has(name)) table.set(name, new Set());
+			table.get(name).add(mid);
+		}
+	}
+	const uniqueMethod = (lang, name) => {
+		if (name.length < 4 || COMMON_METHOD_NAMES.has(name)) return null;
+		const table = methodsByName.get(LANG_FAMILY[lang]);
+		const set = table && table.get(name);
+		return set && set.size === 1 ? [...set][0] : null;
+	};
+
 	// -- phase 5: calls / instantiates / indirect_call
 	for (const rel of rels) {
 		const pf = perFile.get(rel);
+		if (pf.lang === "go") { goCalls(rel, pf); continue; }
+		if (pf.lang === "rust") { rustCalls(rel, pf); continue; }
 		const lines = pf.stripped.split("\n");
 		// symbol regions: decl line → tracked body end (brace depth), falling
 		// back to open-ended (next-anchor semantics) where no end was tracked.
@@ -1408,18 +3063,133 @@ function buildGraph(root) {
 		// file, not to that function.
 		const anchors = [];
 		for (const c of pf.decls.classes) {
-			for (const meth of c.methods) anchors.push({ nid: c.methodIds.get(meth.name), line: meth.line, end: meth.end != null ? meth.end : null });
-			anchors.push({ nid: pf.localDefs.get(c.name), line: c.line, end: c.end != null ? c.end : null });
+			const classNid = pf.localDefs.get(c.name);
+			for (const meth of c.methods) anchors.push({ nid: c.methodIds.get(meth.name), line: meth.start || meth.line, decl: meth.line, headerEnd: meth.bodyStart > 0 ? pf.lineOf(meth.bodyStart) : meth.line, end: meth.end != null ? meth.end : null, cls: c, classNid });
+			anchors.push({ nid: classNid, line: c.start || c.line, decl: c.line, end: c.end != null ? c.end : null, isClass: true, cls: c, classNid });
 		}
-		for (const f of pf.decls.functions) anchors.push({ nid: pf.localDefs.get(f.name), line: f.line, end: f.end != null ? f.end : null });
+		for (const f of pf.decls.functions) anchors.push({ nid: pf.localDefs.get(f.name), line: f.start || f.line, decl: f.line, headerEnd: f.bodyStart > 0 ? pf.lineOf(f.bodyStart) : f.line, end: f.end != null ? f.end : null });
 		anchors.sort((a, b) => a.line - b.line);
-		const regionOf = (lineNo) => {
+		const regionAt = (lineNo) => {
 			let cur = null;
 			for (const a of anchors) {
 				if (a.line > lineNo) break;
 				if (a.end == null || lineNo <= a.end) cur = a;
 			}
-			return cur ? cur.nid : pf.fileNid;
+			return cur;
+		};
+		const regionOf = (lineNo) => {
+			const a = regionAt(lineNo);
+			return a ? a.nid : pf.fileNid;
+		};
+		// Names a function binds itself (parameters, local declarations) and the
+		// class types written or constructed for them. A local name shadows a
+		// file-level or imported one; a typed one says which class `x.method()`
+		// is called on.
+		const py = pf.lang === "python";
+		const regionInfo = new Map();
+		const infoOf = (a) => {
+			let info = regionInfo.get(a);
+			if (info) return info;
+			info = { locals: new Set(), types: new Map() };
+			regionInfo.set(a, info);
+			if (a.end == null || a.isClass) return info;
+			const note = (name, type) => {
+				if (!name) return;
+				info.locals.add(name);
+				if (type && !info.types.has(name)) info.types.set(name, type);
+			};
+			// parameters: the first parenthesised list of the header
+			let headerEnd = a.decl;
+			{
+				let text = "", open = -1, close = -1;
+				for (let l = a.decl; l <= a.end && l < a.decl + 60; l++) {
+					text += (lines[l - 1] || "") + "\n";
+					if (open < 0) open = text.indexOf("(");
+					if (open >= 0) close = matchClose(text, open);
+					headerEnd = l;
+					if (close >= 0 || (open < 0 && l >= (a.headerEnd || a.decl))) break;
+				}
+				if (open >= 0 && close > open) {
+					for (const piece of splitTopLevel(text.slice(open + 1, close))) {
+						const pm = piece.match(/^\s*(?:\*{1,2}|\.\.\.)?(?:(?:public|private|protected|readonly|override)\s+)*([A-Za-z_$][\w$]*)\??\s*(?::\s*["']?([A-Za-z_$][\w$.]*))?/);
+						if (pm) note(pm[1], pm[2]);
+						else for (const id of piece.split("=")[0].split(":")[0].matchAll(/[A-Za-z_$][\w$]*/g)) note(id[0]); // a destructured parameter
+					}
+				}
+				headerEnd = Math.min(Math.max(headerEnd, a.headerEnd || a.decl), a.end);
+			}
+			for (let l = py ? headerEnd + 1 : a.decl; l <= a.end; l++) {
+				const ln = lines[l - 1] || "";
+				let m;
+				if (py) {
+					if ((m = ln.match(/^\s+([A-Za-z_]\w*)\s*(?::\s*([A-Za-z_][\w.]*))?[^=\n]*=(?!=)\s*(?:([A-Za-z_][\w.]*)\s*\()?/))) note(m[1], m[2] || m[3]);
+					else if ((m = ln.match(/^\s+(?:async\s+)?for\s+([^:]*?)\s+in\b/))) for (const id of m[1].matchAll(/[A-Za-z_]\w*/g)) note(id[0]);
+					for (const w of ln.matchAll(/\bas\s+([A-Za-z_]\w*)/g)) note(w[1]);
+				} else {
+					const declRe = /\b(?:const|let|var)\s+(?:([A-Za-z_$][\w$]*)\s*(?::\s*([A-Za-z_$][\w$.]*)[^=;]*)?(?:=\s*(?:await\s+)?(?:new\s+([A-Za-z_$][\w$.]*))?)?|[[{]([^=]*?)[\]}]\s*=)/g;
+					while ((m = declRe.exec(ln)) !== null) {
+						if (m[1]) note(m[1], m[2] || m[3]);
+						else for (const id of (m[4] || "").matchAll(/(?:[A-Za-z_$][\w$]*\s*:\s*)?([A-Za-z_$][\w$]*)/g)) note(id[1]);
+					}
+					for (const w of ln.matchAll(/\(([^()]*)\)\s*(?::[^=;{]+)?=>/g)) for (const id of w[1].matchAll(/(?<![\w$.:])([A-Za-z_$][\w$]*)\??\s*(?::\s*([A-Za-z_$][\w$.]*))?/g)) note(id[1], id[2]);
+					for (const w of ln.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*=>/g)) note(w[1]);
+					if ((m = ln.match(/\bcatch\s*\(\s*([A-Za-z_$][\w$]*)/))) note(m[1]);
+					for (const w of ln.matchAll(/\bfunction\s*\*?\s*[A-Za-z_$][\w$]*\s*\(([^)]*)\)/g)) for (const id of w[1].matchAll(/(?<![\w$.:])([A-Za-z_$][\w$]*)/g)) note(id[1]);
+				}
+			}
+			return info;
+		};
+		// Outside every indexed declaration (a callback, a function assigned to a
+		// property): `name` declared with var/let/const in a block that encloses
+		// `lineNo`, found by walking outward through less-indented lines.
+		const indentOf = (t) => t.match(/^[ \t]*/)[0].replace(/\t/g, "    ").length;
+		const shadowedAbove = (name, lineNo) => {
+			let indent = indentOf(lines[lineNo - 1] || "");
+			if (indent === 0) return false;
+			const re = new RegExp("\\b(?:var|let|const)\\s+(?:[^;=]*,\\s*)?" + name.replace(/[$]/g, "\\$&") + "\\b|^\\s*,\\s*" + name.replace(/[$]/g, "\\$&") + "\\s*=");
+			for (let l = lineNo - 1; l >= 1 && l > lineNo - 600; l--) {
+				const t = lines[l - 1];
+				if (!t || !t.trim()) continue;
+				const ind = indentOf(t);
+				if (ind > indent) continue;
+				if (ind === 0) return false;
+				if (re.test(t)) return true;
+				indent = ind;
+			}
+			return false;
+		};
+		// Field types of the classes in this file: written (`agent: Agent`,
+		// constructor parameter properties) or constructed (`self.pool = Pool()`).
+		const fieldTypes = (c) => {
+			if (c.fieldTypes) return c.fieldTypes;
+			c.fieldTypes = new Map(c.fields || []);
+			if (c.end == null) return c.fieldTypes;
+			for (let l = c.line; l <= c.end; l++) {
+				const ln = lines[l - 1] || "";
+				if (py) {
+					for (const m of ln.matchAll(/\bself\.([A-Za-z_]\w*)\s*(?::\s*["']?([A-Za-z_][\w.]*))?[^=\n]*=(?!=)\s*(?:([A-Za-z_][\w.]*)\s*\()?/g)) {
+						if ((m[2] || m[3]) && !c.fieldTypes.has(m[1])) c.fieldTypes.set(m[1], m[2] || m[3]);
+					}
+				} else {
+					for (const m of ln.matchAll(/\b(?:public|private|protected|readonly)\s+(?:readonly\s+)?([A-Za-z_$][\w$]*)\??\s*:\s*([A-Za-z_$][\w$.]*)/g)) if (!c.fieldTypes.has(m[1])) c.fieldTypes.set(m[1], m[2]);
+					for (const m of ln.matchAll(/\bthis\.(#?[A-Za-z_$][\w$]*)\s*=\s*new\s+([A-Za-z_$][\w$.]*)/g)) if (!c.fieldTypes.has(m[1])) c.fieldTypes.set(m[1], m[2]);
+				}
+			}
+			return c.fieldTypes;
+		};
+		// The class a type name written in this file refers to (node id), or null.
+		const classNamed = (typeName, line) => {
+			if (!typeName) return null;
+			const parts = typeName.split(".");
+			let r = null;
+			if (parts.length === 1) r = resolveName(pf, parts[0], line);
+			else {
+				const ns = importedAt(pf, parts.slice(0, -1).join("."), line);
+				const t = ns && ns.name === "*" && ns.rel ? (perFile.get(ns.rel).localDefs.get(parts[parts.length - 1]) || resolveExported(ns.rel, parts[parts.length - 1])) : null;
+				if (t) r = { nid: t };
+			}
+			const node = r && nodeById.get(r.nid);
+			return node && node.type === "class" ? r.nid : null;
 		};
 		// A declaration's own name on its header line (`load(): object {`,
 		// `def load(self):`) is not a call to whatever `load` the file imports.
@@ -1446,10 +3216,26 @@ function buildGraph(root) {
 			const headerSeen = headerNames ? new Set() : null;
 			while ((m = callRe.exec(ln)) !== null) {
 				const name = m[1];
-				if (CALL_KEYWORDS.has(name) || BUILTINS.has(name)) continue;
+				if (CALL_KEYWORDS.has(name)) continue;
 				if (headerNames && headerNames.has(name) && !headerSeen.has(name)) { headerSeen.add(name); continue; }
-				const caller = regionOf(i + 1);
-				const r = resolveName(pf, name);
+				const region = regionAt(i + 1);
+				const caller = region ? region.nid : pf.fileNid;
+				// a parameter or local of the enclosing function, not the file-level name
+				if (region && !region.isClass && pf.localDefs.get(name) !== region.nid && infoOf(region).locals.has(name) && !(pf.scopedImports && importedAt(pf, name, i + 1) !== pf.importedNames.get(name))) continue;
+				if (!region && !py && shadowedAbove(name, i + 1)) continue;
+				let r = resolveName(pf, name, i + 1);
+				if (!r && !pf.localDefs.has(name)) {
+					const bound = importedAt(pf, name, i + 1);
+					if (bound && bound.cjs && bound.rel) {
+						// the function the module assigns to module.exports, else the module itself
+						const moduleNid = defaultOf(bound.rel) || perFile.get(bound.rel).fileNid;
+						const key = caller + "|" + moduleNid + "|calls";
+						if (moduleNid !== caller && !seenCalls.has(key)) {
+							seenCalls.add(key);
+							addEdge(caller, moduleNid, "calls", { file: rel, line: i + 1, context: "call" });
+						}
+					}
+				}
 				if (!r || r.nid === caller) continue;
 				const key = caller + "|" + r.nid + "|calls";
 				if (seenCalls.has(key)) continue;
@@ -1476,8 +3262,12 @@ function buildGraph(root) {
 					if (c.end != null && i + 1 > c.end) continue;
 					if (c.methods.some((x) => x.name === sm[1])) owner = c;
 				}
-				if (owner) {
-					const mid = owner.methodIds.get(sm[1]);
+				let mid = owner ? owner.methodIds.get(sm[1]) : null;
+				if (!mid) {
+					const region = regionAt(i + 1);
+					if (region && region.classNid) mid = memberOf(region.classNid, sm[1], 1);
+				}
+				if (mid) {
 					const key = caller + "|" + mid + "|calls";
 					if (!seenCalls.has(key) && mid !== caller) { seenCalls.add(key); addEdge(caller, mid, "calls", { file: rel, line: i + 1, context: "call" }); }
 				}
@@ -1489,30 +3279,64 @@ function buildGraph(root) {
 			// import) and must not be shadowed by a module-level declaration.
 			// Lookbehind, not a consuming prefix: `util.outer(util.inner())`
 			// must match the inner call too.
-			const nsCallRe = /(?<![\w.$#])([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\s*\(/g;
+			const nsCallRe = /(?<![\w.$#])((?:[A-Za-z_$][\w$]*\.)+)([A-Za-z_$][\w$]*)\s*\(/g;
 			let nc;
 			while ((nc = nsCallRe.exec(ln)) !== null) {
-				if (nc[1] === "this" || nc[1] === "self") continue;
-				if (pf.localDefs.has(nc[1])) continue;
-				const imp = pf.importedNames.get(nc[1]);
-				if (!imp || imp.name !== "*" || !imp.rel) continue;
-				const tpfNs = perFile.get(imp.rel);
-				const tnid = (tpfNs && tpfNs.localDefs.get(nc[2])) || resolveExported(imp.rel, nc[2]);
+				const recv = nc[1].slice(0, -1);
+				if (recv === "this" || recv === "self") continue;
+				if (pf.localDefs.has(recv.split(".")[0]) && !pf.localDefs.has(recv)) continue;
+				let tnid = null, relation = "calls";
+				const imp = importedAt(pf, recv, i + 1);
+				if (imp && imp.name === "*" && imp.rel && !pf.localDefs.has(recv)) {
+					const tpfNs = perFile.get(imp.rel);
+					tnid = (tpfNs && tpfNs.localDefs.get(nc[2])) || resolveExported(imp.rel, nc[2]);
+				} else {
+					const region = regionAt(i + 1);
+					const segs = recv.split(".");
+					let typeName = null, known = false;
+					if ((segs[0] === "this" || segs[0] === "self") && segs.length === 2 && region && region.cls) {
+						typeName = fieldTypes(region.cls).get(segs[1]) || null;
+					} else if (segs.length === 1) {
+						// `Name.member()` on a class of the repo: a static or class method
+						const owner = region && !region.isClass && infoOf(region).locals.has(recv) ? null : resolveName(pf, recv, i + 1);
+						if (owner) {
+							known = true;
+							tnid = nodeById.get(owner.nid) && nodeById.get(owner.nid).type === "class" ? memberOf(owner.nid, nc[2], 0) : null;
+						} else {
+							const bound = importedAt(pf, recv, i + 1);
+							if (bound && !(region && !region.isClass && infoOf(region).locals.has(recv))) known = true; // an import: its members are not this repo's methods
+							else if (region && !region.isClass) typeName = infoOf(region).types.get(recv) || null;
+						}
+					}
+					if (!tnid && !known) {
+						const cls = classNamed(typeName, i + 1);
+						if (cls) tnid = memberOf(cls, nc[2], 0);
+						else if (!typeName || !importedAt(pf, typeName.split(".")[0], i + 1) || !importedAt(pf, typeName.split(".")[0], i + 1).external) {
+							tnid = uniqueMethod(pf.lang, nc[2]);
+							if (tnid) relation = "inferred";
+						}
+					}
+				}
 				if (!tnid) continue;
 				const target = nodeById.get(tnid);
-				if (!target || !target._callable) continue;
+				if (!target) continue;
+				if (!target._callable) {
+					if (target.type !== "class" || pf.lang !== "python") continue;
+					relation = "instantiates";
+				}
 				const caller = regionOf(i + 1);
 				if (tnid === caller) continue;
-				const key = caller + "|" + tnid + "|calls";
+				const inferred = relation === "inferred";
+				if (inferred) relation = "calls";
+				const key = caller + "|" + tnid + "|" + relation;
 				if (seenCalls.has(key)) continue;
 				seenCalls.add(key);
-				addEdge(caller, tnid, "calls", { file: rel, line: i + 1, context: "call" });
+				addEdge(caller, tnid, relation, { file: rel, line: i + 1, context: "call", confidence: inferred ? "INFERRED" : undefined, score: inferred ? INFERRED_CALL_SCORE : undefined });
 			}
 			newRe.lastIndex = 0;
 			while ((m = newRe.exec(ln)) !== null) {
 				const name = m[1].split(".")[0];
-				if (BUILTINS.has(name) || BUILTIN_NOISE_LABELS.has(name)) continue;
-				const r = resolveName(pf, name);
+				const r = resolveName(pf, name, i + 1);
 				if (!r) continue;
 				const caller = regionOf(i + 1);
 				const key = caller + "|" + r.nid + "|instantiates";
@@ -1526,7 +3350,7 @@ function buildGraph(root) {
 			const argRe = /[(,]\s*([A-Za-z_$][\w$]*)\s*(?=[,)])/g;
 			while ((m = argRe.exec(ln)) !== null) {
 				const name = m[1];
-				if (CALL_KEYWORDS.has(name) || BUILTINS.has(name)) continue;
+				if (CALL_KEYWORDS.has(name)) continue;
 				const r = pf.localDefs.has(name) ? { nid: pf.localDefs.get(name) } : (pf.importedNames.get(name) && pf.importedNames.get(name).nid ? { nid: pf.importedNames.get(name).nid } : null);
 				if (!r) continue;
 				const target = nodeById.get(r.nid);
@@ -1537,6 +3361,19 @@ function buildGraph(root) {
 				seenCalls.add(key);
 				addEdge(caller, r.nid, "indirect_call", { file: rel, line: i + 1, confidence: "INFERRED", score: INFERRED_CALL_SCORE, context: "call" });
 			}
+		}
+	}
+
+	// -- file keywords: each file's most distinctive words
+	{
+		const df = new Map();
+		for (const st of textStats.values()) for (const t of st.tf.keys()) df.set(t, (df.get(t) || 0) + 1);
+		const N = textStats.size || 1;
+		const idfOf = (t) => Math.log(1 + (N - df.get(t) + 0.5) / (df.get(t) + 0.5));
+		for (const st of textStats.values()) {
+			if (!st.count) continue;
+			st.node.terms = fileKeywords(st.tf, idfOf);
+			st.node.tokens = st.count;
 		}
 	}
 
@@ -1975,28 +3812,6 @@ function scoreNodes(graph, terms) {
 	return scored;
 }
 
-function pickSeeds(graph, scored, terms, adjDeg, maxK = 3, gapRatio = 0.2) {
-	if (!scored.length) return [];
-	const topScore = scored[0][0];
-	const seeds = [];
-	for (const [score, nid] of scored.slice(0, maxK)) {
-		if (seeds.length && score < topScore * gapRatio) break;
-		seeds.push(nid);
-	}
-	// per-term guaranteed seed, degree-broken ties
-	const normTerms = [...new Set(terms.flatMap((t) => searchTokens(t)))].sort();
-	for (const term of normTerms) {
-		const termScored = scoreNodes(graph, [term]);
-		if (!termScored.length) continue;
-		const best = termScored[0][0];
-		const tied = termScored.filter(([s]) => s === best).map(([, nid]) => nid);
-		let bestNid = tied[0];
-		if (tied.length > 1) for (const nid of tied) if ((adjDeg.get(nid) || 0) > (adjDeg.get(bestNid) || 0)) bestNid = nid;
-		if (!seeds.includes(bestNid)) seeds.push(bestNid);
-	}
-	return seeds;
-}
-
 function pickScoredEndpoint(graph, scored, query) {
 	const qtokens = new Set(searchTokens(query));
 	if (!qtokens.size) return scored[0][1];
@@ -2129,6 +3944,144 @@ function subgraphToText(graph, visited, edgesSeen, edges, deg, tokenBudget, seed
 	return output;
 }
 
+// ---------------------------------------------------------------------------
+// File-first ranking for `kg query`
+// ---------------------------------------------------------------------------
+
+// Words of an identifier or a sentence: camelCase, PascalCase, ACRONYMWord,
+// snake_case and punctuation all split; lowercased.
+function wordsOf(text) {
+	const out = [];
+	for (const m of String(text).matchAll(/[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+/g)) out.push(m[0].toLowerCase());
+	return out;
+}
+
+const KEYWORDS_PER_FILE = 100;
+const BM25_K1 = 1.2;
+const BM25_B = 0.75;
+// Signal weights: file text (BM25 over the stored keywords), the best symbol
+// label, the path. A label that IS the query outranks everything else.
+const RANK_LABEL_WEIGHT = 4;
+const RANK_PATH_WEIGHT = 2;
+const RANK_SUBSTRING = 0.35;
+const RANK_DEMOTE = 0.3;
+const RANK_FILES = 10;
+const DEMOTED_PATH_RE = /(\.test\.|\.spec\.|\.e2e\.|(^|\/)tests?\/|__tests__|(^|\/)testdata\/|(^|\/)fixtures?\/|(^|\/)examples?\/|(^|\/)benches\/|(^|\/)benchmarks?\/|_test\.go$|(^|\/)test_[^/]*\.py$|(^|\/)conftest\.py$|(^|\/)vendor\/|\.min\.[cm]?js$|(^|\/)docs?\/|\.d\.[cm]?ts$)/;
+const DEMOTE_EXEMPT_WORDS = new Set(["test", "tests", "testing", "spec", "fixture", "fixtures", "example", "examples", "benchmark", "benchmarks", "vendor", "docs"]);
+
+// The keywords `kg build` stores on a file node: its most distinctive words
+// (term frequency × rarity across the repo), as "word:count" pairs.
+function fileKeywords(tf, idfOf) {
+	return [...tf]
+		.map(([t, c]) => [t, c, c * idfOf(t)])
+		.sort((a, b) => b[2] - a[2] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+		.slice(0, KEYWORDS_PER_FILE)
+		.map(([t, c]) => t + ":" + c)
+		.join(" ");
+}
+
+// Files ranked for a question, best first: [{ rel, score, nodes }], where
+// `nodes` are the file's symbols that match (best first) or its file node.
+// Three signals per file — its text, its best-matching symbol label, its path
+// — and one override: a symbol whose name is the whole query. Tests, docs,
+// vendored and generated code rank below source unless the question names
+// them.
+function rankFiles(graph, question) {
+	const allWords = wordsOf(question);
+	const terms = [...new Set(allWords.filter((t) => t.length >= 2 && !QUERY_STOPWORDS.has(t)))];
+	const qs = terms.length ? terms : [...new Set(allWords)];
+	if (!qs.length) return [];
+	const joined = allWords.join("");
+	const rawQuery = /^\S+$/.test(question.trim()) ? question.trim().replace(/\(\)$/, "") : null;
+	const keepDemoted = qs.some((q) => DEMOTE_EXEMPT_WORDS.has(q));
+
+	const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+	const files = new Map(); // rel -> { node, labels, pathWords, tf, len }
+	const fileOf = (rel) => {
+		let f = files.get(rel);
+		if (!f) files.set(rel, f = { node: null, labels: [], pathWords: new Set(wordsOf(rel)), tf: null, len: 0 });
+		return f;
+	};
+	const topLevel = new Set();
+	for (const e of graph.edges) {
+		if (e.relation !== "contains" && e.relation !== "defines") continue;
+		const a = byId.get(e.source);
+		if (a && a.source_file && a.source_location === "L1" && a.label === path.posix.basename(a.source_file)) topLevel.add(e.target);
+	}
+	for (const n of graph.nodes) {
+		if (!n.source_file) continue;
+		const f = fileOf(n.source_file);
+		if (n.source_location === "L1" && n.label === path.posix.basename(n.source_file) && !f.node) {
+			f.node = n;
+			if (typeof n.terms === "string" && n.terms) {
+				f.tf = new Map();
+				for (const pair of n.terms.split(" ")) {
+					const at = pair.lastIndexOf(":");
+					if (at > 0) f.tf.set(pair.slice(0, at), +pair.slice(at + 1) || 1);
+				}
+				f.len = +n.tokens || 0;
+			}
+			continue;
+		}
+		const raw = String(n.label || "").replace(/\(\)$/, "").replace(/^\./, "");
+		const w = wordsOf(raw);
+		if (w.length) f.labels.push({ id: n.id, w: new Set(w), joined: w.join(""), n: w.length, raw, top: topLevel.has(n.id) && n.type !== "impl" });
+	}
+	// rarity of a word: over the stored keywords, else over labels and paths
+	const df = new Map();
+	let withText = 0, totalLen = 0;
+	for (const f of files.values()) {
+		const seen = new Set(f.pathWords);
+		if (f.tf) { withText++; totalLen += f.len; for (const t of f.tf.keys()) seen.add(t); }
+		for (const L of f.labels) for (const t of L.w) seen.add(t);
+		for (const t of seen) df.set(t, (df.get(t) || 0) + 1);
+	}
+	const N = files.size || 1;
+	const avgLen = withText ? totalLen / withText : 1;
+	const idf = (t) => { const d = df.get(t) || 0; return Math.log(1 + (N - d + 0.5) / (d + 0.5)); };
+
+	const ranked = [];
+	for (const [rel, f] of files) {
+		let lex = 0;
+		if (f.tf) {
+			for (const q of qs) {
+				const tf = f.tf.get(q);
+				if (tf) lex += idf(q) * (tf * (BM25_K1 + 1)) / (tf + BM25_K1 * (1 - BM25_B + BM25_B * (f.len || avgLen) / avgLen));
+			}
+		}
+		let best = 0, exact = 0;
+		const hits = [];
+		for (const L of f.labels) {
+			let matched = 0, weight = 0;
+			for (const q of qs) {
+				if (L.w.has(q)) { matched++; weight += idf(q); }
+				else if (q.length >= 4 && L.joined.includes(q)) { matched += RANK_SUBSTRING; weight += RANK_SUBSTRING * idf(q); }
+			}
+			const isExact = L.joined === joined;
+			if (!matched && !isExact) continue;
+			const coverage = matched / qs.length;
+			const value = weight * coverage * (0.5 + 0.5 * (matched / Math.max(L.n, matched)));
+			let ex = 0;
+			if (isExact) ex = (L.top ? 1 : 0.5) + (rawQuery && L.raw === rawQuery ? 0.5 : 0);
+			if (value > best) best = value;
+			if (ex > exact) exact = ex;
+			hits.push([ex, value, L.id]);
+		}
+		let pathScore = 0;
+		for (const q of qs) if (f.pathWords.has(q)) pathScore += idf(q);
+		const base = lex + RANK_LABEL_WEIGHT * best + RANK_PATH_WEIGHT * pathScore;
+		let score = exact ? 1000 * exact - rel.length * 0.01 + base * 0.001 : base;
+		if (score <= 0) continue;
+		if (!keepDemoted && DEMOTED_PATH_RE.test(rel)) score *= RANK_DEMOTE;
+		hits.sort((a, b) => b[0] - a[0] || b[1] - a[1] || (a[2] < b[2] ? -1 : 1));
+		const nodes = hits.slice(0, 2).map((h) => h[2]);
+		if (!nodes.length && f.node) nodes.push(f.node.id);
+		if (nodes.length) ranked.push({ rel, score, nodes });
+	}
+	ranked.sort((a, b) => b.score - a.score || a.rel.length - b.rel.length || (a.rel < b.rel ? -1 : 1));
+	return ranked;
+}
+
 function findNode(graph, label) {
 	const term = searchTokens(label).join(" ");
 	if (!term) return [];
@@ -2212,18 +4165,23 @@ kgCommands.query = function (root, args) {
 	if (!question) { console.log('usage: kg query "<question>" [--dfs] [--depth N] [--budget N] [--context C]'); return; }
 	const graph = requireGraph(root);
 	if (!graph) return;
-	const terms = queryTerms(question);
-	const scored = scoreNodes(graph, terms);
-	const { deg } = undirectedNeighbors(graph);
-	const seeds = pickSeeds(graph, scored, terms, deg);
+	// The files that answer the question lead the output, best first, each
+	// through its matching symbols; the traversal then starts from the best
+	// three and adds what they connect to.
+	const ranked = rankFiles(graph, question).slice(0, RANK_FILES);
+	const seeds = [];
+	for (const f of ranked) for (const nid of f.nodes) if (!seeds.includes(nid)) seeds.push(nid);
 	if (!seeds.length) { console.log("No matching nodes found."); return; }
+	const startNodes = [];
+	for (const f of ranked.slice(0, 3)) for (const nid of f.nodes) if (!startNodes.includes(nid)) startNodes.push(nid);
 	const mode = flags.dfs ? "dfs" : "bfs";
 	const depth = Math.min(6, parseInt(flags.depth, 10) || 2);
 	const budget = parseInt(flags.budget, 10) || 2000;
 	const contextFilter = flags.context ? [].concat(flags.context) : null;
-	const t = traverse(graph, seeds, depth, mode, contextFilter);
+	const t = traverse(graph, startNodes, depth, mode, contextFilter);
+	for (const nid of seeds) t.visited.add(nid);
 	const byId = new Map(graph.nodes.map((n) => [n.id, n]));
-	const headerParts = [`Traversal: ${mode.toUpperCase()} depth=${depth}`, `Start: [${seeds.map((s) => (byId.get(s) || {}).label || s).join(", ")}]`];
+	const headerParts = [`Traversal: ${mode.toUpperCase()} depth=${depth}`, `Start: [${startNodes.map((s) => (byId.get(s) || {}).label || s).join(", ")}]`];
 	if (contextFilter) headerParts.push(`Context: ${contextFilter.join(", ")}`);
 	headerParts.push(`${t.visited.size} nodes found`);
 	console.log(headerParts.join(" | ") + "\n");
@@ -2635,7 +4593,7 @@ Usage: draht-tools kg <command> [args]
 
   build [--quiet]                 Index the repo → .planning/codebase/graph.json + KG_REPORT.md
   query "<question>" [--dfs] [--depth N] [--budget N] [--context C]
-                                  BFS/DFS subgraph traversal from scored seeds (NODE/EDGE output)
+                                  Best files for the question first, then a BFS/DFS subgraph from them (NODE/EDGE output)
   explain "<node>"                Node dump: id, source, community, degree, connections
   path "<a>" "<b>"                Shortest path with directed arrows and confidence
   affected "<node>" [--depth N] [--relation R]
@@ -2644,9 +4602,10 @@ Usage: draht-tools kg <command> [args]
   report                          Regenerate KG_REPORT.md
   export tree|wiki|graphml        GRAPH_TREE.html / kg-wiki/ / graph.graphml
 
-Nodes are symbols (files, classes, functions(), methods(), types); edges carry
-graphify's relation set with EXTRACTED/INFERRED/AMBIGUOUS confidence. graph.json
-is node-link format, directed — loadable by graphify's own tooling.`;
+Languages: TypeScript, JavaScript, Python, Go, Rust. Nodes are symbols (files,
+classes, functions(), methods(), types, constants); edges carry graphify's
+relation set with EXTRACTED/INFERRED/AMBIGUOUS confidence. graph.json is
+node-link format, directed — loadable by graphify's own tooling.`;
 
 function kgMain(argv) {
 	const [cmd, ...args] = argv;
@@ -2664,7 +4623,7 @@ function kgMain(argv) {
 	return 0;
 }
 
-module.exports = { kgMain, buildGraph, writeGraph, loadGraph, queryTerms, scoreNodes, normalizeId, makeId, parseDecls, maskSource, sortByPosixPath, importCycles, KG_HELP };
+module.exports = { kgMain, buildGraph, writeGraph, loadGraph, queryTerms, scoreNodes, rankFiles, wordsOf, normalizeId, makeId, parseDecls, maskSource, sortByPosixPath, importCycles, KG_HELP };
 
 if (require.main === module) {
 	process.exit(kgMain(process.argv.slice(2)));

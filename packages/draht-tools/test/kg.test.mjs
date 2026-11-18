@@ -10,7 +10,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../bin/draht-tools.cjs");
-const { parseDecls, buildGraph, maskSource, sortByPosixPath, importCycles } = createRequire(import.meta.url)("../bin/draht-kg.cjs");
+const { parseDecls, buildGraph, maskSource, sortByPosixPath, importCycles, rankFiles, wordsOf } = createRequire(import.meta.url)("../bin/draht-kg.cjs");
 let root;
 
 function run(args) {
@@ -1173,7 +1173,14 @@ test("methods named like reserved words are methods; statements are not", () => 
 	assert.deepEqual(targetsOf(g, "src_registry_registry_match", "calls"), ["src_registry_registry_delete"]);
 	assert.deepEqual(targetsOf(g, "src_registry_shape", "method"), ["src_registry_shape_delete"], "a modifier marks a body-less signature as a declaration");
 	assert.deepEqual(targetsOf(g, "src_registry_ambient", "method"), ["constructor", "delete", "get"].map((n) => "src_registry_ambient_" + n), "a return type marks a body-less signature as a declaration");
-	assert.deepEqual(targetsOf(g, "src_lazy_lazy", "method"), ["src_lazy_lazy_ok", "src_lazy_lazy_run"], "a statement or expression became a method");
+	// Function-valued fields are members like methods; the continuation lines of
+	// their initializers (`import(…)`, `delete (…)`, `function (…)`, `async (…)`,
+	// `typeof (…)`) and the plain field `cache` are not.
+	assert.deepEqual(
+		targetsOf(g, "src_lazy_lazy", "method"),
+		["handler", "kind", "later", "load", "ok", "pick", "run"].map((n) => "src_lazy_lazy_" + n),
+		"a statement or expression became a method",
+	);
 });
 
 test("constructors are nodes and own the calls in their body", () => {
@@ -1235,4 +1242,290 @@ test("methods whose names share an id get graphify's suffixed ids, in any order"
 		assert.deepEqual(targetsOf(g, "src_b_repo", "method"), ["src_b_repo_load", "src_b_repo_load_936cd9"]);
 		assert.deepEqual(targetsOf(g, "src_b_repo_load", "calls"), ["src_b_repo_load_936cd9"], "self._load() bound to load() itself");
 	}
+});
+
+// ---------------------------------------------------------------------------
+// Per-language extraction (Go, Rust, Python, TS/JS) and file-first query ranking.
+// ---------------------------------------------------------------------------
+
+test("go: package scope spans files, methods join their type, calls bind by type", () => {
+	const g = graphOf({
+		"go.mod": "module example.com/app\n\ngo 1.22\n",
+		"store/store.go": [
+			"package store", "",
+			"type Store struct {", "\tname string", "}", "",
+			"type (", "\tKey  string", "\tkind int", ")", "",
+			"const (", '\tDefaultName = "main"', "\tlimit       = 10", ")", "",
+			"func New(name string) *Store {", "\treturn &Store{name: name}", "}", "",
+		].join("\n"),
+		// methods in another file of the package; a receiver without a name
+		"store/save.go": [
+			"package store", "",
+			"func (s *Store) Save(k Key) error {", "\treturn s.flush()", "}", "",
+			"func (s *Store) flush() error { return nil }", "",
+			"func (*Store) Close() {}", "",
+		].join("\n"),
+		// names that differ only in case each keep a node
+		"store/writer.go": "package store\n\ntype Writer interface {\n\tWrite(p []byte) (int, error)\n}\n\ntype writer struct{ Writer }\n",
+		"app/app.go": [
+			"package app", "",
+			"import (", '\t"fmt"', "", '\t"example.com/app/store"', ")", "",
+			"type App struct {", "\tdb *store.Store", "}", "",
+			"func Run(w fmt.Stringer) {",
+			"\ts := store.New(store.DefaultName)",
+			'\ts.Save("k")',
+			"\ta := &App{db: s}",
+			"\ta.db.Close()",
+			"\tw.String()",
+			"\tfmt.Println(a)",
+			"}", "",
+		].join("\n"),
+	});
+	assert.deepEqual(targetsOf(g, "store_store_store", "method"), ["store_save_store_close", "store_save_store_flush", "store_save_store_save"]);
+	for (const id of ["store_store_key", "store_store_kind", "store_store_defaultname", "store_store_limit"]) assert.ok(hasNode(g, id), id);
+	assert.deepEqual(targetsOf(g, "store_save_store_save", "calls"), ["store_save_store_flush"], "receiver call");
+	// constructor result, then a field chain; a method of a type from outside the repo binds nothing
+	assert.deepEqual(targetsOf(g, "app_app_run", "calls"), ["store_save_store_close", "store_save_store_save", "store_store_new"]);
+	assert.ok(g.edges.every((e) => e.relation !== "calls" || e.confidence === "EXTRACTED"), "typed Go calls are never guessed");
+	// the import depends on the file that declares what is used, and on those symbols
+	assert.deepEqual(targetsOf(g, "app_app", "imports_from"), ["fmt", "store_store"]);
+	assert.deepEqual(targetsOf(g, "app_app", "imports"), ["store_store_defaultname", "store_store_new", "store_store_store"]);
+	const writers = g.nodes.filter((n) => n.source_file === "store/writer.go" && /^writer$/i.test(n.label)).map((n) => n.label).sort();
+	assert.deepEqual(writers, ["Writer", "writer"]);
+	assert.equal(g.edges.filter((e) => e.relation === "embeds").length, 1);
+});
+
+test("rust: module tree, use paths, impl methods and path calls", () => {
+	const g = graphOf({
+		"Cargo.toml": '[package]\nname = "demo"\n',
+		"src/lib.rs": [
+			"mod store;", "pub mod util;", "",
+			"use crate::store::{Store, Json};", "use util::helper;", "",
+			"pub fn run() {",
+			"    let s = Store::new();",
+			"    s.save();",
+			"    helper(1);",
+			"    let Json(inner) = Json(2);",
+			"    fn local() {}",
+			"}", "",
+		].join("\n"),
+		"src/store.rs": [
+			"pub struct Store;",
+			"pub struct Json(pub u8);",
+			"pub trait Save { fn save(&self); fn twice(&self) { self.save(); } }", "",
+			"impl Store {",
+			"    pub fn new() -> Self { Self::build() }",
+			"    fn build() -> Self { Store }",
+			"}", "",
+			"impl Save for Store {",
+			"    fn save(&self) { self.flush(); }",
+			"}", "",
+			"impl Store { fn flush(&self) {} }", "",
+			"pub type Alias = Store;",
+			"pub const LIMIT: u8 = 3;", "",
+		].join("\n"),
+		"src/util.rs": "pub fn helper(x: u8) -> u8 { x }\n",
+	});
+	assert.deepEqual(targetsOf(g, "src_lib", "imports_from"), ["src_store", "src_util"]);
+	assert.deepEqual(targetsOf(g, "src_lib", "imports"), ["src_store_json", "src_store_store", "src_util_helper"]);
+	// every impl block of the type contributes its methods; the trait impl is heritage
+	assert.deepEqual(targetsOf(g, "src_store_store", "method"), ["build", "flush", "new", "save"].map((n) => "src_store_store_" + n));
+	assert.deepEqual(targetsOf(g, "src_store_store", "implements"), ["src_store_save"]);
+	assert.deepEqual(targetsOf(g, "src_store_save", "method"), ["src_store_save_save", "src_store_save_twice"]);
+	assert.deepEqual(targetsOf(g, "src_store_store_new", "calls"), ["src_store_store_build"], "Self::build()");
+	assert.deepEqual(targetsOf(g, "src_store_store_save", "calls"), ["src_store_store_flush"], "self.flush()");
+	// `s.save()` needs the type of `s`: not guessed. `let Json(inner)` destructures, `Json(2)` constructs.
+	assert.deepEqual(targetsOf(g, "src_lib_run", "calls"), ["src_store_store_new", "src_util_helper"]);
+	assert.deepEqual(targetsOf(g, "src_lib_run", "instantiates"), ["src_store_json"]);
+	assert.ok(hasNode(g, "src_lib_run_local"), "fn declared inside a fn");
+	assert.equal(g.nodes.find((n) => n.id === "src_store_alias").type, "type");
+	assert.equal(g.nodes.find((n) => n.id === "src_store_limit").type, "const");
+});
+
+test("python: conditional declarations, constants, decorators, scoped imports and typed receivers", () => {
+	const g = graphOf({
+		"src/pkg/__init__.py": "from .core import Engine as Engine\nfrom . import tools\n",
+		"src/pkg/core.py": [
+			"import typing as t", "",
+			"LIMIT = 3", "",
+			"if t.TYPE_CHECKING:",
+			"    class Hint:",
+			"        pass", "",
+			"class Base:",
+			"    def start(self):",
+			"        return 1", "",
+			"class Mixin(t.Generic[t.Any]):",
+			"    pass", "",
+			"class Engine(Base, Mixin):",
+			"    def __init__(self):",
+			"        self.pool = Pool()", "",
+			"    def run(self):",
+			"        self.start()",
+			"        self.pool.acquire()", "",
+			"class Pool:",
+			"    def acquire(self):",
+			"        return 2", "",
+		].join("\n"),
+		"src/pkg/tools.py": [
+			"def build():", "    return 1", "",
+			"def option(x):", "    return x", "",
+			"@option(build())",
+			"def decorated():",
+			"    from .core import Pool as cls",
+			"    return cls()", "",
+			"def other():",
+			"    from .core import Engine as cls",
+			"    return cls()", "",
+		].join("\n"),
+		"app.py": [
+			"from pkg import Engine, tools",
+			"import click", "",
+			"def main(engine: Engine, hook):",
+			"    engine.run()",
+			"    tools.build()",
+			"    hook()",
+			"    click.option()",
+			"    return Engine()", "",
+		].join("\n"),
+	});
+	assert.ok(hasNode(g, "src_pkg_core_hint"), "class under `if TYPE_CHECKING:`");
+	assert.equal(g.nodes.find((n) => n.id === "src_pkg_core_limit").type, "const");
+	assert.deepEqual(targetsOf(g, "src_pkg_core_engine", "inherits"), ["src_pkg_core_base", "src_pkg_core_mixin"]);
+	// an inherited method, and a method of the class a field was constructed as
+	assert.deepEqual(targetsOf(g, "src_pkg_core_engine_run", "calls"), ["src_pkg_core_base_start", "src_pkg_core_pool_acquire"]);
+	// a decorator's calls belong to what it decorates; each def keeps its own `cls`
+	assert.deepEqual(targetsOf(g, "src_pkg_tools_decorated", "calls"), ["src_pkg_tools_build", "src_pkg_tools_option"]);
+	assert.deepEqual(targetsOf(g, "src_pkg_tools_decorated", "instantiates"), ["src_pkg_core_pool"]);
+	assert.deepEqual(targetsOf(g, "src_pkg_tools_other", "instantiates"), ["src_pkg_core_engine"]);
+	// src layout, a re-export through __init__, a submodule import, a typed
+	// parameter; a parameter called like a function and an external module bind nothing
+	assert.deepEqual(targetsOf(g, "app", "imports_from"), ["click", "src_pkg_init", "src_pkg_tools"]);
+	assert.deepEqual(targetsOf(g, "app", "imports"), ["src_pkg_core_engine"]);
+	assert.deepEqual(targetsOf(g, "app_main", "calls"), ["src_pkg_core_engine_run", "src_pkg_tools_build"]);
+	assert.deepEqual(targetsOf(g, "app_main", "instantiates"), ["src_pkg_core_engine"]);
+});
+
+test("ts: generic arrows, multi-line headers, field functions, nested declarations, typed members", () => {
+	const g = graphOf({
+		"src/a.ts": [
+			"export interface Base<T> { id: T }",
+			"export interface Named { name: string }",
+			"export interface Item<T extends string = string> extends Base<T>, Named {}", "",
+			"export class Agent {",
+			"\tprivate pool: Pool = new Pool();",
+			"\tconstructor(private readonly log: Logger) {}",
+			"\tasync runAll<",
+			"\t\tT extends string,",
+			"\t>(items: T[]): Promise<void> {",
+			"\t\tthis.pool.acquire();",
+			"\t\tthis.log.record(items.join());",
+			"\t}",
+			"\tstop = (): void => { this.pool.release(); };",
+			"}", "",
+			"export class Pool {", "\tacquire(): void {}", "\trelease(): void {}", "}", "",
+			"export class Logger {", "\trecord(msg: string): void {}", "\tpush(x: string): void {}", "}", "",
+			"const make = <T,>(x: T): T => x;",
+			"export const Legacy = class { run() {} };",
+			"function helper() { return 1; }",
+			"export { helper as publicHelper };", "",
+		].join("\n"),
+		"src/b.ts": [
+			'import { publicHelper, Agent, Logger } from "./a.js";', "",
+			"export function start(agent: Agent, make: () => number) {",
+			"\tmake();",
+			"\tagent.runAll([]);",
+			"\tconst inner = () => publicHelper();",
+			"\tfunction nested() { return inner(); }",
+			"\treturn nested;",
+			"}", "",
+			"export function log(x: { record(m: string): void; push(m: string): void }) {",
+			'\tx.record("a");',
+			'\tx.push("b");',
+			"}", "",
+		].join("\n"),
+	});
+	assert.deepEqual(targetsOf(g, "src_a_item", "extends"), ["src_a_base", "src_a_named"], "generic parameters are not the extends clause");
+	assert.deepEqual(targetsOf(g, "src_a_agent", "method"), ["constructor", "runall", "stop"].map((n) => "src_a_agent_" + n));
+	assert.deepEqual(targetsOf(g, "src_a_agent_runall", "calls"), ["src_a_logger_record", "src_a_pool_acquire"], "field types: annotation and constructor parameter property");
+	assert.deepEqual(targetsOf(g, "src_a_agent_stop", "calls"), ["src_a_pool_release"]);
+	assert.ok(hasNode(g, "src_a_make"), "generic arrow function");
+	assert.deepEqual(targetsOf(g, "src_a_legacy", "method"), ["src_a_legacy_run"], "class expression bound to a constant");
+	// `export { helper as publicHelper }`, a typed parameter, a parameter that shadows nothing in this file
+	assert.deepEqual(targetsOf(g, "src_b", "imports"), ["src_a_agent", "src_a_helper", "src_a_logger"]);
+	assert.deepEqual(targetsOf(g, "src_b_start", "calls"), ["src_a_agent_runall", "src_a_helper"]);
+	assert.ok(hasNode(g, "src_b_start_inner") && hasNode(g, "src_b_start_nested"), "declarations inside a function body");
+	// a receiver of unknown type: a method name one class declares is inferred, a name every array has is not
+	const inferred = edgesFrom(g, "src_b_log", "calls");
+	assert.deepEqual(inferred.map((e) => [e.target, e.confidence]), [["src_a_logger_record", "INFERRED"]]);
+});
+
+test("a local declaration shadows the file-level name it repeats", () => {
+	const g = graphOf({
+		"src/a.ts": [
+			"export function stream() { return 1; }",
+			"export function wrap(make: () => number) {",
+			"\tconst stream = make();",
+			"\treturn stream;",
+			"}",
+			"export function open(stream: () => number) { return stream(); }",
+			"export function real() { return stream(); }", "",
+		].join("\n"),
+	});
+	assert.deepEqual(targetsOf(g, "src_a_open", "calls"), [], "a parameter");
+	assert.deepEqual(targetsOf(g, "src_a_real", "calls"), ["src_a_stream"]);
+});
+
+test("commonjs: require bindings import, calling the binding calls the module", () => {
+	const g = graphOf({
+		"lib/c.js": [
+			'const util = require("./util");',
+			'const { pick } = require("./util");',
+			'const make = require("./make")',
+			'  , build = require("./build");', "",
+			"function go() {",
+			"\tutil.pick(1);",
+			"\tpick(2);",
+			"\tbuild();",
+			"\treturn make();",
+			"}",
+			"module.exports = go;", "",
+		].join("\n"),
+		"lib/util.js": "function pick(x) { return x; }\nexports.pick = pick;\nexports.other = function (y) { return y; };\n",
+		"lib/make.js": "module.exports = function () { return 1; };\n",
+		"lib/build.js": "function build() { return 2; }\nmodule.exports = build;\n",
+	});
+	assert.deepEqual(targetsOf(g, "lib_c", "imports_from"), ["lib_build", "lib_make", "lib_util"]);
+	assert.deepEqual(targetsOf(g, "lib_c", "dynamic_import"), []);
+	assert.ok(hasNode(g, "lib_util_other"), "exports.name = function");
+	// the function a module assigns to module.exports, else the module itself
+	assert.deepEqual(targetsOf(g, "lib_c_go", "calls"), ["lib_build_build", "lib_make", "lib_util_pick"]);
+});
+
+test("kg query ranks files by text, symbol name and path; an exact name leads", () => {
+	const g = graphOf({
+		// the words of the question occur in the text, not in any symbol name
+		"src/retry.ts": "// exponential backoff with jitter for flaky upstream requests\nexport function schedule(attempt: number) { return 2 ** attempt; }\n",
+		"src/clock.ts": "export function now() { return Date.now(); }\nexport function schedule() { return now(); }\n",
+		"src/session-store.ts": "export class SessionStore { open() {} }\n",
+		"test/session-store.test.ts": "import { SessionStore } from '../src/session-store.js';\nexport class SessionStoreFixture { open() { return new SessionStore(); } }\n",
+		"src/barrel.ts": "export { SessionStore } from './session-store.js';\n",
+	});
+	const fileNode = g.nodes.find((n) => n.id === "src_retry");
+	assert.match(fileNode.terms, /(^| )backoff:1( |$)/, "file keywords are stored as word:count");
+	const top = (q) => rankFiles(g, q).map((f) => f.rel);
+	assert.equal(top("exponential backoff jitter")[0], "src/retry.ts");
+	assert.equal(top("SessionStore")[0], "src/session-store.ts", "the declaration, not the test or the barrel");
+	assert.equal(top("session store")[0], "src/session-store.ts");
+	assert.equal(top("session store test")[0], "test/session-store.test.ts", "a question about tests keeps them");
+	assert.deepEqual(rankFiles(g, "zzzz qqqq"), []);
+	assert.deepEqual(wordsOf("parseHTTPResponse_v2 fooBar"), ["parse", "http", "response", "v", "2", "foo", "bar"]);
+});
+
+test("kg query lists the best files first and expands from them", () => {
+	const out = run(["query", "open session"]);
+	const nodes = out.split("\n").filter((l) => l.startsWith("NODE "));
+	assert.match(nodes[0], /^NODE openSession\(\) \[src=src\/session\.ts /);
+	assert.match(out, /^Traversal: BFS depth=2 \| Start: \[openSession\(\)/);
+	assert.match(out, /EDGE openSession\(\) --instantiates/);
+	assert.equal(run(["query", "zzzzqqqq"]).trim(), "No matching nodes found.");
 });

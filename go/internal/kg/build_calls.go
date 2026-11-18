@@ -19,7 +19,7 @@ var (
 	reCallDestruct   = mustRE(`(?:[A-Za-z_$][\w$]*\s*:\s*)?([A-Za-z_$][\w$]*)`, "")
 	reCallArrowList  = mustRE(`\(([^()]*)\)\s*(?::[^=;{]+)?=>`, "")
 	reCallArrowParam = mustRE(`(?<![\w$.:])([A-Za-z_$][\w$]*)\??\s*(?::\s*([A-Za-z_$][\w$.]*))?`, "")
-	reCallArrowOne   = mustRE(`(?<![\w$.])([A-Za-z_$][\w$]*)\s*=>`, "")
+	reCallArrowOne   = mustRE(`(?<![\w$.])(?<!\)\s*:\s*)([A-Za-z_$][\w$]*)\s*=>`, "")
 	reCallCatch      = mustRE(`\bcatch\s*\(\s*([A-Za-z_$][\w$]*)`, "")
 	reCallFuncParams = mustRE(`\bfunction\s*\*?\s*[A-Za-z_$][\w$]*\s*\(([^)]*)\)`, "")
 	reCallFuncParam  = mustRE(`(?<![\w$.:])([A-Za-z_$][\w$]*)`, "")
@@ -39,6 +39,7 @@ type callAnchor struct {
 	line      int
 	decl      int
 	headerEnd int // 0: not set (a class)
+	body      int // offset of the body's `{`, <= 0 without one
 	end       int // 0: open-ended
 	isClass   bool
 	cls       *Class
@@ -101,12 +102,12 @@ func (b *builder) scriptCalls(rel string, pf *fileInfo) {
 	for _, c := range pf.Decls.Classes {
 		classNid := pf.LocalDefs.G(c.Name)
 		for _, meth := range c.Methods {
-			anchors = append(anchors, &callAnchor{nid: c.MethodIds.G(meth.Name), line: startOr(meth.Start, meth.Line), decl: meth.Line, headerEnd: headerEndOf(meth), end: meth.End, cls: c, classNid: classNid})
+			anchors = append(anchors, &callAnchor{nid: c.MethodIds.G(meth.Name), line: startOr(meth.Start, meth.Line), decl: meth.Line, headerEnd: headerEndOf(meth), body: meth.BodyStart, end: meth.End, cls: c, classNid: classNid})
 		}
 		anchors = append(anchors, &callAnchor{nid: classNid, line: startOr(c.Start, c.Line), decl: c.Line, end: c.End, isClass: true, cls: c, classNid: classNid})
 	}
 	for _, f := range pf.Decls.Functions {
-		anchors = append(anchors, &callAnchor{nid: pf.LocalDefs.G(f.Name), line: startOr(f.Start, f.Line), decl: f.Line, headerEnd: headerEndOf(f), end: f.End})
+		anchors = append(anchors, &callAnchor{nid: pf.LocalDefs.G(f.Name), line: startOr(f.Start, f.Line), decl: f.Line, headerEnd: headerEndOf(f), body: f.BodyStart, end: f.End})
 	}
 	sort.SliceStable(anchors, func(i, j int) bool { return anchors[i].line < anchors[j].line })
 	regionAt := func(lineNo int) *callAnchor {
@@ -393,6 +394,105 @@ func (b *builder) scriptCalls(rel string, pf *fileInfo) {
 	}
 	seenCalls := map[string]bool{}
 	scoped := len(pf.ScopedImports) > 0
+	// `name` at `lineNo` is a parameter or local of the enclosing function
+	// (or, outside every declaration, of an enclosing block), not the
+	// file-level or imported name.
+	shadowedAt := func(name string, lineNo int) bool {
+		region := regionAt(lineNo)
+		if region != nil && !region.isClass && pf.LocalDefs.G(name) != region.nid && infoOf(region).locals[name] && !(scoped && importedAt(pf, name, lineNo) != pf.ImportedNames.G(name)) {
+			return true
+		}
+		return region == nil && !py && shadowedAbove(name, lineNo)
+	}
+	// TypeScript: the type annotations of a declaration's parameters and its
+	// return type, as [from, to) columns per line. A method signature written
+	// there (`cfg: { log(): void }`) is not a call; a default value is not
+	// part of the span.
+	typeSpans := map[int][][2]int{} // 0-based line → [[from, to)]
+	if pf.Lang == "typescript" {
+		text := pf.Stripped
+		lineStart := make([]int, 1, len(lines)+1)
+		for _, ln := range lines {
+			lineStart = append(lineStart, lineStart[len(lineStart)-1]+len(ln)+1)
+		}
+		mark := func(from, to int) {
+			for l := pf.LineOf(from) - 1; l < len(lines) && lineStart[l] < to; l++ {
+				a, e := max(from, lineStart[l])-lineStart[l], min(to, lineStart[l+1])-lineStart[l]
+				if a >= e {
+					continue
+				}
+				typeSpans[l] = append(typeSpans[l], [2]int{a, e})
+			}
+		}
+		for _, a := range anchors {
+			if a.isClass {
+				continue
+			}
+			// the header ends at the body's brace; a brace-less arrow has none
+			// and is bounded by its last line
+			bound := -1
+			if a.body > 0 {
+				bound = a.body
+			} else if a.end != 0 {
+				bound = lineStart[min(a.end, len(lines))]
+			}
+			open := indexRune(text, '(', lineStart[a.decl-1])
+			if open < 0 || open >= bound {
+				continue
+			}
+			closeAt := matchClose(text, open)
+			if closeAt < 0 || closeAt >= bound {
+				continue
+			}
+			depth, angle, from, inDefault := 0, 0, -1, false
+			for k := open + 1; k <= closeAt; k++ {
+				ch := text[k]
+				switch {
+				case k == closeAt || (depth == 0 && angle == 0 && (ch == ',' || (ch == '=' && at(text, k+1) != '>' && from >= 0))):
+					if from >= 0 {
+						mark(from, k)
+					}
+					from = -1
+					angle = 0
+					inDefault = ch == '='
+				case ch == '(' || ch == '[' || ch == '{':
+					depth++
+				case ch == ')' || ch == ']' || ch == '}':
+					depth--
+				case from >= 0 && ch == '<':
+					angle++
+				case from >= 0 && ch == '>' && text[k-1] != '=':
+					angle = max(0, angle-1)
+				case ch == ':' && depth == 0 && from < 0 && !inDefault:
+					from = k + 1
+				}
+			}
+			k := closeAt + 1
+			for k < bound && isSpace(text[k]) {
+				k++
+			}
+			if at(text, k) != ':' {
+				continue
+			}
+			to := -1
+			if a.body > 0 {
+				to = a.body
+			}
+			for q, d := k+1, 0; to < 0 && q < bound; q++ {
+				switch ch := text[q]; {
+				case ch == '(' || ch == '[' || ch == '{':
+					d++
+				case ch == ')' || ch == ']' || ch == '}':
+					d--
+				case d == 0 && ch == '=' && at(text, q+1) == '>':
+					to = q
+				}
+			}
+			if to > k {
+				mark(k+1, to)
+			}
+		}
+	}
 	for i, ln := range lines {
 		lineNo := i + 1
 		// Every pattern below needs a `(` (the argument scan: or a `,`), so a
@@ -425,6 +525,16 @@ func (b *builder) scriptCalls(rel string, pf *fileInfo) {
 			}
 			if headerNames != nil && headerNames[name] && !headerSeen[name] {
 				headerSeen[name] = true
+				continue
+			}
+			inType := false
+			for _, sp := range typeSpans[i] {
+				if m.index >= sp[0] && m.index < sp[1] {
+					inType = true
+					break
+				}
+			}
+			if inType {
 				continue
 			}
 			region := regionAt(lineNo)
@@ -620,6 +730,9 @@ func (b *builder) scriptCalls(rel string, pf *fileInfo) {
 		}
 		for m := range reCallNew.Iter(ln, newFrom) {
 			name := firstSeg(m.S(1))
+			if shadowedAt(name, lineNo) {
+				continue
+			}
 			r := b.resolveName(pf, name, lineNo)
 			if r == nil {
 				continue
@@ -638,6 +751,9 @@ func (b *builder) scriptCalls(rel string, pf *fileInfo) {
 		for m := range reCallArg.Iter(ln, argFrom) {
 			name := m.S(1)
 			if callKeywords[name] {
+				continue
+			}
+			if shadowedAt(name, lineNo) {
 				continue
 			}
 			nid := ""

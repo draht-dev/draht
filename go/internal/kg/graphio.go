@@ -289,7 +289,7 @@ func writeGraph(root string, graph *Graph) (string, error) {
 	next := graphJSON(graph)
 	prev, err := os.ReadFile(jsonPath)
 	if err != nil || string(prev) != string(next) {
-		if err := os.WriteFile(jsonPath, next, 0o666); err != nil {
+		if err := cmdWriteFile(jsonPath, string(next)); err != nil {
 			return jsonPath, err
 		}
 	}

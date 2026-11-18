@@ -248,7 +248,8 @@ function sortByPosixPath(paths, sep = path.sep) {
 // Code files of a git checkout: tracked files and untracked ones git does not
 // ignore, so a tracked dot-directory counts and ignored build output does
 // not. Null outside a git checkout (or without git): the directory walk and
-// its ignore list take over.
+// its ignore list take over. A checkout with no code file of its own is an
+// empty list, not null: the walk would read what git ignores.
 function gitFiles(root, maxFiles) {
 	if (!fs.existsSync(path.join(root, ".git"))) return null;
 	let out;
@@ -267,7 +268,21 @@ function gitFiles(root, maxFiles) {
 		files.push(full);
 		if (files.length >= maxFiles) break;
 	}
-	return files.length ? sortByPosixPath(files) : null;
+	return sortByPosixPath(files);
+}
+
+// Write through a sibling temporary file and rename it into place: an
+// interrupted build leaves the previous file whole, and a reader never sees a
+// half-written one.
+function writeFileAtomic(file, data) {
+	const tmp = file + "." + process.pid + ".tmp";
+	try {
+		fs.writeFileSync(tmp, data, "utf-8");
+		fs.renameSync(tmp, file);
+	} catch (err) {
+		try { fs.unlinkSync(tmp); } catch { /* empty */ }
+		throw err;
+	}
 }
 
 function walk(root, maxFiles = 20000) {
@@ -3064,10 +3079,10 @@ function buildGraph(root) {
 		const anchors = [];
 		for (const c of pf.decls.classes) {
 			const classNid = pf.localDefs.get(c.name);
-			for (const meth of c.methods) anchors.push({ nid: c.methodIds.get(meth.name), line: meth.start || meth.line, decl: meth.line, headerEnd: meth.bodyStart > 0 ? pf.lineOf(meth.bodyStart) : meth.line, end: meth.end != null ? meth.end : null, cls: c, classNid });
+			for (const meth of c.methods) anchors.push({ nid: c.methodIds.get(meth.name), line: meth.start || meth.line, decl: meth.line, headerEnd: meth.bodyStart > 0 ? pf.lineOf(meth.bodyStart) : meth.line, body: meth.bodyStart, end: meth.end != null ? meth.end : null, cls: c, classNid });
 			anchors.push({ nid: classNid, line: c.start || c.line, decl: c.line, end: c.end != null ? c.end : null, isClass: true, cls: c, classNid });
 		}
-		for (const f of pf.decls.functions) anchors.push({ nid: pf.localDefs.get(f.name), line: f.start || f.line, decl: f.line, headerEnd: f.bodyStart > 0 ? pf.lineOf(f.bodyStart) : f.line, end: f.end != null ? f.end : null });
+		for (const f of pf.decls.functions) anchors.push({ nid: pf.localDefs.get(f.name), line: f.start || f.line, decl: f.line, headerEnd: f.bodyStart > 0 ? pf.lineOf(f.bodyStart) : f.line, body: f.bodyStart, end: f.end != null ? f.end : null });
 		anchors.sort((a, b) => a.line - b.line);
 		const regionAt = (lineNo) => {
 			let cur = null;
@@ -3132,7 +3147,8 @@ function buildGraph(root) {
 						else for (const id of (m[4] || "").matchAll(/(?:[A-Za-z_$][\w$]*\s*:\s*)?([A-Za-z_$][\w$]*)/g)) note(id[1]);
 					}
 					for (const w of ln.matchAll(/\(([^()]*)\)\s*(?::[^=;{]+)?=>/g)) for (const id of w[1].matchAll(/(?<![\w$.:])([A-Za-z_$][\w$]*)\??\s*(?::\s*([A-Za-z_$][\w$.]*))?/g)) note(id[1], id[2]);
-					for (const w of ln.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*=>/g)) note(w[1]);
+					// `x => …` binds x; the return type of `(a): Type => …` binds nothing
+					for (const w of ln.matchAll(/(?<![\w$.])(?<!\)\s*:\s*)([A-Za-z_$][\w$]*)\s*=>/g)) note(w[1]);
 					if ((m = ln.match(/\bcatch\s*\(\s*([A-Za-z_$][\w$]*)/))) note(m[1]);
 					for (const w of ln.matchAll(/\bfunction\s*\*?\s*[A-Za-z_$][\w$]*\s*\(([^)]*)\)/g)) for (const id of w[1].matchAll(/(?<![\w$.:])([A-Za-z_$][\w$]*)/g)) note(id[1]);
 				}
@@ -3191,6 +3207,67 @@ function buildGraph(root) {
 			const node = r && nodeById.get(r.nid);
 			return node && node.type === "class" ? r.nid : null;
 		};
+		// `name` at `lineNo` is a parameter or local of the enclosing function
+		// (or, outside every declaration, of an enclosing block), not the
+		// file-level or imported name.
+		const shadowedAt = (name, lineNo) => {
+			const region = regionAt(lineNo);
+			if (region && !region.isClass && pf.localDefs.get(name) !== region.nid && infoOf(region).locals.has(name) && !(pf.scopedImports && importedAt(pf, name, lineNo) !== pf.importedNames.get(name))) return true;
+			return !region && !py && shadowedAbove(name, lineNo);
+		};
+		// TypeScript: the type annotations of a declaration's parameters and its
+		// return type, as [from, to) columns per line. A method signature written
+		// there (`cfg: { log(): void }`) is not a call; a default value is not
+		// part of the span.
+		const typeSpans = new Map(); // 0-based line → [[from, to)]
+		if (pf.lang === "typescript") {
+			const text = pf.stripped;
+			const lineStart = [0];
+			for (const ln of lines) lineStart.push(lineStart[lineStart.length - 1] + ln.length + 1);
+			const mark = (from, to) => {
+				for (let l = pf.lineOf(from) - 1; l < lines.length && lineStart[l] < to; l++) {
+					const a = Math.max(from, lineStart[l]) - lineStart[l], b = Math.min(to, lineStart[l + 1]) - lineStart[l];
+					if (a >= b) continue;
+					if (!typeSpans.has(l)) typeSpans.set(l, []);
+					typeSpans.get(l).push([a, b]);
+				}
+			};
+			for (const a of anchors) {
+				if (a.isClass) continue;
+				// the header ends at the body's brace; a brace-less arrow has none
+				// and is bounded by its last line
+				const bound = a.body > 0 ? a.body : a.end != null ? lineStart[Math.min(a.end, lines.length)] : -1;
+				const open = text.indexOf("(", lineStart[a.decl - 1]);
+				if (open < 0 || open >= bound) continue;
+				const close = matchClose(text, open);
+				if (close < 0 || close >= bound) continue;
+				let depth = 0, angle = 0, from = -1, inDefault = false;
+				for (let k = open + 1; k <= close; k++) {
+					const ch = text[k];
+					if (k === close || (depth === 0 && angle === 0 && (ch === "," || (ch === "=" && text[k + 1] !== ">" && from >= 0)))) {
+						if (from >= 0) mark(from, k);
+						from = -1;
+						angle = 0;
+						inDefault = ch === "=";
+					} else if (ch === "(" || ch === "[" || ch === "{") depth++;
+					else if (ch === ")" || ch === "]" || ch === "}") depth--;
+					else if (from >= 0 && ch === "<") angle++;
+					else if (from >= 0 && ch === ">" && text[k - 1] !== "=") angle = Math.max(0, angle - 1);
+					else if (ch === ":" && depth === 0 && from < 0 && !inDefault) from = k + 1;
+				}
+				let k = close + 1;
+				while (k < bound && /\s/.test(text[k])) k++;
+				if (text[k] !== ":") continue;
+				let to = a.body > 0 ? a.body : -1;
+				for (let q = k + 1, d = 0; to < 0 && q < bound; q++) {
+					const ch = text[q];
+					if (ch === "(" || ch === "[" || ch === "{") d++;
+					else if (ch === ")" || ch === "]" || ch === "}") d--;
+					else if (d === 0 && ch === "=" && text[q + 1] === ">") to = q;
+				}
+				if (to > k) mark(k + 1, to);
+			}
+		}
 		// A declaration's own name on its header line (`load(): object {`,
 		// `def load(self):`) is not a call to whatever `load` the file imports.
 		const declNames = new Map(); // 1-based line → names declared there
@@ -3218,6 +3295,8 @@ function buildGraph(root) {
 				const name = m[1];
 				if (CALL_KEYWORDS.has(name)) continue;
 				if (headerNames && headerNames.has(name) && !headerSeen.has(name)) { headerSeen.add(name); continue; }
+				const spans = typeSpans.get(i);
+				if (spans && spans.some(([a, b]) => m.index >= a && m.index < b)) continue;
 				const region = regionAt(i + 1);
 				const caller = region ? region.nid : pf.fileNid;
 				// a parameter or local of the enclosing function, not the file-level name
@@ -3336,6 +3415,7 @@ function buildGraph(root) {
 			newRe.lastIndex = 0;
 			while ((m = newRe.exec(ln)) !== null) {
 				const name = m[1].split(".")[0];
+				if (shadowedAt(name, i + 1)) continue;
 				const r = resolveName(pf, name, i + 1);
 				if (!r) continue;
 				const caller = regionOf(i + 1);
@@ -3351,6 +3431,7 @@ function buildGraph(root) {
 			while ((m = argRe.exec(ln)) !== null) {
 				const name = m[1];
 				if (CALL_KEYWORDS.has(name)) continue;
+				if (shadowedAt(name, i + 1)) continue;
 				const r = pf.localDefs.has(name) ? { nid: pf.localDefs.get(name) } : (pf.importedNames.get(name) && pf.importedNames.get(name).nid ? { nid: pf.importedNames.get(name).nid } : null);
 				if (!r) continue;
 				const target = nodeById.get(r.nid);
@@ -3711,7 +3792,7 @@ function writeGraph(root, graph) {
 	const next = JSON.stringify(payload, null, 1);
 	let prev = null;
 	try { prev = fs.readFileSync(jsonPath, "utf-8"); } catch { /* empty */ }
-	if (prev !== next) fs.writeFileSync(jsonPath, next, "utf-8");
+	if (prev !== next) writeFileAtomic(jsonPath, next);
 	return jsonPath;
 }
 
@@ -4415,7 +4496,7 @@ function writeReport(root, graph) {
 	const next = L.join("\n");
 	let prev = null;
 	try { prev = fs.readFileSync(p, "utf-8"); } catch { /* empty */ }
-	if (prev !== next) fs.writeFileSync(p, next, "utf-8");
+	if (prev !== next) writeFileAtomic(p, next);
 	return p;
 }
 
@@ -4497,7 +4578,7 @@ document.getElementById('expand').onclick=function(){document.querySelectorAll('
 document.getElementById('collapse').onclick=function(){document.querySelectorAll('.kids').forEach(function(k){k.classList.add('hidden')})};
 </script></body></html>`;
 	const p = output || path.join(outDir(root), "GRAPH_TREE.html");
-	fs.writeFileSync(p, html, "utf-8");
+	writeFileAtomic(p, html);
 	return p;
 }
 
@@ -4525,7 +4606,7 @@ function exportWiki(root, graph) {
 	}
 	idx.push("", "## God Nodes", "");
 	for (const g of gods) idx.push(`- [${g.label}](${wikiPageName(g.id)}) — degree ${g.degree}`);
-	fs.writeFileSync(path.join(dir, "index.md"), idx.join("\n") + "\n", "utf-8");
+	writeFileAtomic(path.join(dir, "index.md"), idx.join("\n") + "\n");
 
 	for (const c of communities) {
 		if (c.size < 3) continue;
@@ -4548,7 +4629,7 @@ function exportWiki(root, graph) {
 			for (const e of es) L.push(`- \`${(byId.get(e.source) || {}).label || e.source}\` → \`${(byId.get(e.target) || {}).label || e.target}\` [${e.confidence}]`);
 			L.push("");
 		}
-		fs.writeFileSync(path.join(dir, `community-${c.id}.md`), L.join("\n") + "\n", "utf-8");
+		writeFileAtomic(path.join(dir, `community-${c.id}.md`), L.join("\n") + "\n");
 	}
 	for (const g of gods) {
 		const L = [`# ${g.label}`, "", `Degree ${g.degree} · ${g.source_file || ""}`, "", "## Relationships", ""];
@@ -4556,7 +4637,7 @@ function exportWiki(root, graph) {
 		conns.sort((a, b) => (adj.deg.get(b[1]) || 0) - (adj.deg.get(a[1]) || 0));
 		for (const [arrow, nb, e] of conns.slice(0, 30)) L.push(`- ${arrow} \`${(byId.get(nb) || {}).label || nb}\` [${e.relation}] [${e.confidence}]`);
 		L.push("", "## Audit Trail", "", `Extraction: deterministic (draht-tools kg). Source: ${g.source_file || "-"}.`);
-		fs.writeFileSync(path.join(dir, wikiPageName(g.id)), L.join("\n") + "\n", "utf-8");
+		writeFileAtomic(path.join(dir, wikiPageName(g.id)), L.join("\n") + "\n");
 	}
 	return dir;
 }
@@ -4579,7 +4660,7 @@ function exportGraphml(root, graph, output) {
 	}
 	L.push("</graph></graphml>");
 	const p = output || path.join(outDir(root), "graph.graphml");
-	fs.writeFileSync(p, L.join("\n"), "utf-8");
+	writeFileAtomic(p, L.join("\n"));
 	return p;
 }
 

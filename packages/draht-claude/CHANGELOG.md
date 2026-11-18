@@ -20,6 +20,7 @@
 
 ### Fixed
 
+- `kg` no longer links a parameter that shadows an import as the import's constructor or callback, nor a method signature in a parameter or return type as a call; a checkout whose only code is git-ignored yields an empty graph; `graph.json`, the report and exports are replaced atomically; and `map-graph` keeps a name that reaches a barrel both directly and through `import { x }` + `export { x }` ([#2](https://github.com/draht-dev/draht/pull/2))
 - graph-query recall: term coverage is scored at the module level with coverage² scaling (was a per-symbol AND that missed multi-word concepts); tests are demoted below the code they test ([#2](https://github.com/draht-dev/draht/pull/2))
 - graph-impact echoes full resolved paths and explains zero-impact barrels instead of printing a bare `index.ts — 0 modules` ([#2](https://github.com/draht-dev/draht/pull/2))
 - graph-clusters labels are unique and descriptive (dominant layer / ordinal suffixes instead of six identical `packages/ai` rows) ([#2](https://github.com/draht-dev/draht/pull/2))

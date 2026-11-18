@@ -131,7 +131,9 @@ func gitFiles(root string, maxFiles int) []string {
 		}
 	}
 	if len(files) == 0 {
-		return nil
+		// a checkout with no code file of its own: empty, not nil — the
+		// directory walk would read what git ignores
+		return []string{}
 	}
 	return sortByPosixPath(files)
 }

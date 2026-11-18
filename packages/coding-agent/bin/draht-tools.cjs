@@ -2485,6 +2485,7 @@ function visBuildMap(root) {
 
 	const starReExports = new Map(); // barrel module id -> [{ target, line }] for `export * from`
 	const namedReExports = new Map(); // module id -> Map(exported name -> { target, imported }) for `export { x } from`
+	const importedLocals = new Map(); // module id -> Map(local name -> { resolved, importedName }) for plain imports
 
 	const resolveSpec = (fromDir, spec) => {
 		// Relative path
@@ -2551,6 +2552,7 @@ function visBuildMap(root) {
 				usedLocals.set(n.local, { resolved, importedName: n.imported });
 			}
 		}
+		importedLocals.set(m.id, usedLocals);
 		// For each imported local, scan for call sites: `localName(` or `localName.x(` (member call)
 		if (usedLocals.size > 0) {
 			const text = file.content || "";
@@ -2576,7 +2578,8 @@ function visBuildMap(root) {
 	// `export { a as b }` stands for the binding `a`). Everything is computed from the modules' OWN
 	// declared exports (snapshotted below, before any star copy exists), so the answer is a pure
 	// function of the module graph and never depends on file names or iteration order:
-	//   - an own export (local, alias, `export * as NS`) is its own binding; a named re-export
+	//   - an own export (local, alias, `export * as NS`) is its own binding, unless it exports a
+	//     name the module imported (`import { x } from './y'; export { x }`): that is y's binding; a named re-export
 	//     (`export { x } from './y'`) takes the binding resolved at its target, and a target that
 	//     never exports the name (CommonJS: no extracted exports) is itself the origin;
 	//   - otherwise `export *` resolves the name at every star target (never `default`): one distinct
@@ -2598,7 +2601,15 @@ function visBuildMap(root) {
 		if (own) {
 			const link = own.kind === "re-export" && namedReExports.has(mod.id) ? namedReExports.get(mod.id).get(name) : null;
 			const target = link ? moduleByRel.get(link.target) : null;
-			if (!target) return { terminal: { mod: mod.id, name: own.viaName || name }, edges: [] };
+			if (!target) {
+				// `import { foo } from './x'; export { foo }` exports x's binding, not a new one:
+				// a barrel starring both files reaches ONE `foo`, not an ambiguous pair.
+				const binding = own.viaName || name;
+				const imported = own.kind === "named" && importedLocals.has(mod.id) ? importedLocals.get(mod.id).get(binding) : null;
+				const source = imported && imported.importedName !== "*" ? moduleByRel.get(imported.resolved) : null;
+				if (source && source !== mod) return { named: true, edges: [{ mod: source, name: imported.importedName }] };
+				return { terminal: { mod: mod.id, name: binding }, edges: [] };
+			}
 			return { named: true, edges: [{ mod: target, name: link.imported }] };
 		}
 		const edges = [];

@@ -209,3 +209,25 @@ func TestBuild_SymbolIndexSkipsReExports(t *testing.T) {
 		t.Errorf("symbolIndex entries for realThing/alias = %v, want only realThing@src/def.ts", files)
 	}
 }
+
+// `import { foo } from "./x"; export { foo }` exports x's binding: a barrel
+// starring x and that file reaches one `foo`. A different binding imported
+// under the same name still clashes.
+func TestResolveReExports_ImportedNameExportedLocally(t *testing.T) {
+	m := buildFixtureMap(t, t.TempDir(), map[string]string{
+		"x.ts":      "export function foo() {}\nexport function bar() {}\n",
+		"y.ts":      "export function bar() {}\n",
+		"named.ts":  "import { foo } from \"./x\";\nimport { bar } from \"./y\";\nexport { foo, bar };\n",
+		"barrel.ts": "export * from \"./x\";\nexport * from \"./named\";\n",
+	})
+	foo := findExport(m, "barrel.ts", "foo")
+	if foo == nil {
+		t.Fatalf("one binding through two routes was dropped: %v", exportNames(m, "barrel.ts"))
+	}
+	if foo.Via != "x.ts" {
+		t.Errorf("foo via = %q, want x.ts", foo.Via)
+	}
+	if findExport(m, "barrel.ts", "bar") != nil {
+		t.Errorf("distinct bindings must stay ambiguous: %v", exportNames(m, "barrel.ts"))
+	}
+}

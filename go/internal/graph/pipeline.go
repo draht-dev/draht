@@ -181,7 +181,7 @@ func Build(ctx context.Context, opts Options) (*model.Map, Report, error) {
 	// are ES bindings (named re-exports followed to their real definer, not
 	// intermediate barrels); the named re-export entries record that origin as
 	// Via.
-	ResolveReExports(modules, StarReExports(mi, resolver), NamedReExports(mi, resolver))
+	ResolveReExports(modules, StarReExports(mi, resolver), NamedReExports(mi, resolver), ImportedLocals(mi, resolver))
 
 	// Language edges are appended AFTER the TS/JS set so that prefix stays
 	// byte-identical to a flag-off run; call edges stay TS/JS-only (the

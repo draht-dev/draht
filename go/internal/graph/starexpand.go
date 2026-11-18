@@ -76,6 +76,29 @@ func NamedReExports(mi []ModuleImports, resolver *Resolver) map[string]map[strin
 	return out
 }
 
+// ImportedLocals collects, per module id, the local names its plain imports
+// bind (default and named; never a namespace), each with the module and name
+// it stands for. `import { foo } from "./x"; export { foo }` exports x's
+// binding, so origin resolution follows these like a named re-export. A name
+// imported twice keeps the last import, as in CollectUsedLocals.
+func ImportedLocals(mi []ModuleImports, resolver *Resolver) map[string]map[string]NamedReExport {
+	out := make(map[string]map[string]NamedReExport)
+	for _, m := range mi {
+		for _, l := range CollectUsedLocals(ResolveImports(m.Imports, path.Dir(m.Path), resolver)) {
+			if l.ImportedName == "*" {
+				continue
+			}
+			links := out[m.Path]
+			if links == nil {
+				links = make(map[string]NamedReExport)
+				out[m.Path] = links
+			}
+			links[l.Local] = NamedReExport{Target: l.Target, Imported: l.ImportedName}
+		}
+	}
+	return out
+}
+
 // exportBinding is the BINDING an export stands for: the defining module plus
 // the original name there (a local alias `export { a as b }` stands for `a`;
 // `export { b as a } from './x'` stands for x's `b`). Same-binding routes are
@@ -129,7 +152,9 @@ type exportNode struct {
 // exportResolver resolves re-exports with ECMAScript module semantics,
 // computed per module from the modules' OWN declared exports so the answer
 // never depends on file names or iteration order:
-//   - an own export (local, alias, `export * as NS`) is its own binding; a named
+//   - an own export (local, alias, `export * as NS`) is its own binding, unless
+//     it exports a name the module imported (`import { x } from './y'; export { x }`
+//     is y's binding); a named
 //     re-export (`export { x } from './y'`) takes the binding resolved at its
 //     target, and a target that never exports the name (CommonJS: no extracted
 //     exports) is itself the origin;
@@ -153,6 +178,8 @@ type exportResolver struct {
 	base  map[string]*moduleBase
 	stars map[string][]StarReExport
 	named map[string]map[string]NamedReExport
+	// imported: module id -> local name -> the import it binds.
+	imported map[string]map[string]NamedReExport
 
 	resolved map[string]exportStatus
 	index    map[string]int
@@ -162,12 +189,13 @@ type exportResolver struct {
 	counter  int
 }
 
-func newExportResolver(modules []model.Module, stars map[string][]StarReExport, named map[string]map[string]NamedReExport) *exportResolver {
+func newExportResolver(modules []model.Module, stars map[string][]StarReExport, named, imported map[string]map[string]NamedReExport) *exportResolver {
 	r := &exportResolver{
 		byID:     make(map[string]*model.Module, len(modules)),
 		base:     make(map[string]*moduleBase, len(modules)),
 		stars:    stars,
 		named:    named,
+		imported: imported,
 		resolved: make(map[string]exportStatus),
 		index:    make(map[string]int),
 		low:      make(map[string]int),
@@ -205,6 +233,13 @@ func (r *exportResolver) describe(m *model.Module, name string) *exportNode {
 			binding := name
 			if own.viaName != "" {
 				binding = own.viaName
+			}
+			if own.kind == "named" {
+				if imp, ok := r.imported[m.ID][binding]; ok {
+					if source := r.byID[imp.Target]; source != nil && source != m {
+						return &exportNode{named: true, edges: []exportEdge{{mod: source, name: imp.Imported}}}
+					}
+				}
 			}
 			return &exportNode{terminal: &exportBinding{mod: m.ID, name: binding}}
 		}
@@ -377,8 +412,8 @@ func (r *exportResolver) docOf(m *model.Module, name string, binding exportBindi
 // MUST run after edges are built (targets need resolution) and before
 // Assemble (symbolIndex and every other consumer reads modules' exports/
 // symbols). Mutates modules in place.
-func ResolveReExports(modules []model.Module, stars map[string][]StarReExport, named map[string]map[string]NamedReExport) {
-	r := newExportResolver(modules, stars, named)
+func ResolveReExports(modules []model.Module, stars map[string][]StarReExport, named, imported map[string]map[string]NamedReExport) {
+	r := newExportResolver(modules, stars, named, imported)
 
 	const expansionCap = 60
 	barrels := make([]string, 0, len(stars))

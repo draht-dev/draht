@@ -518,3 +518,26 @@ test("plain root directories keep their own name as cluster label", () => {
 		assert.equal(label("cluster:scripts"), "scripts");
 	});
 });
+
+test("an imported name exported locally is the exporter's binding, not a second one", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "draht-impexp-test-"));
+	try {
+		fs.mkdirSync(path.join(root, ".git"));
+		fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "impexp", version: "1.0.0" }));
+		fs.writeFileSync(path.join(root, "x.ts"), "export function foo() {}\nexport function bar() {}\n");
+		fs.writeFileSync(path.join(root, "y.ts"), "export function bar() {}\n");
+		// named.ts hands on x's `foo` and exports y's `bar` under x's name for it
+		fs.writeFileSync(path.join(root, "named.ts"), 'import { foo } from "./x";\nimport { bar } from "./y";\nexport { foo, bar };\n');
+		fs.writeFileSync(path.join(root, "barrel.ts"), 'export * from "./x";\nexport * from "./named";\n');
+		execFileSync(process.execPath, [CLI, "map-graph", "--quiet"], { cwd: root, encoding: "utf-8", env: ENV });
+		const m = JSON.parse(fs.readFileSync(path.join(root, ".planning/codebase/MAP.json"), "utf-8"));
+		const barrel = m.modules.find((x) => x.id === "barrel.ts");
+		const foo = barrel.exports.find((e) => e.name === "foo");
+		assert.ok(foo, `one binding through two routes was dropped: ${JSON.stringify(barrel.exports)}`);
+		assert.equal(foo.via, "x.ts");
+		// x's own `bar` and y's `bar` (through named.ts) are two bindings: still ambiguous
+		assert.ok(!barrel.exports.some((e) => e.name === "bar"), `distinct bindings must stay ambiguous: ${JSON.stringify(barrel.exports)}`);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});

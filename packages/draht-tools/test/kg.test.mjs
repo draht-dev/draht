@@ -1529,3 +1529,84 @@ test("kg query lists the best files first and expands from them", () => {
 	assert.match(out, /EDGE openSession\(\) --instantiates/);
 	assert.equal(run(["query", "zzzzqqqq"]).trim(), "No matching nodes found.");
 });
+
+test("a parameter shadows an imported name in `new` and as a passed argument", () => {
+	const g = graphOf({
+		"src/lib.ts": "export class Logger {}\nexport function log(): void {}\nexport function register(f: unknown): void {}\n",
+		"src/use.ts": [
+			'import { Logger, log, register } from "./lib";',
+			"export function create(Logger: new () => unknown) { return new Logger(); }",
+			"export function pass(log: () => void) { register(log); }",
+			"export function real() { register(log); return new Logger(); }", "",
+		].join("\n"),
+	});
+	assert.deepEqual(targetsOf(g, "src_use_create", "instantiates"), [], "the supplied constructor, not the import");
+	assert.deepEqual(targetsOf(g, "src_use_pass", "indirect_call"), [], "the parameter, not the import");
+	assert.deepEqual(targetsOf(g, "src_use_real", "instantiates"), ["src_lib_logger"]);
+	assert.deepEqual(targetsOf(g, "src_use_real", "indirect_call"), ["src_lib_log"]);
+});
+
+test("ts: a method signature in a parameter or return type is not a call; a default value is", () => {
+	const g = graphOf({
+		"src/lib.ts": "export function log(): void {}\n",
+		"src/use.ts": [
+			'import { log } from "./lib";',
+			"export function typed(",
+			"\tcfg: {",
+			"\t\tlog(): void;",
+			"\t},",
+			") { return cfg; }",
+			"export function ret(): {",
+			"\tlog(): void;",
+			"} { return null as never; }",
+			"export const arrow = (",
+			"\tcfg: {",
+			"\t\tlog(): void;",
+			"\t},",
+			") => cfg;",
+			"export function dflt(",
+			"\tcfg: {",
+			"\t\tlog(): void;",
+			"\t},",
+			"\tvalue = log(),",
+			") { return value; }",
+			"export function body(cfg: { name: string }): { name: string } { log(); return cfg; }", "",
+		].join("\n"),
+	});
+	for (const fn of ["typed", "ret", "arrow"]) assert.deepEqual(targetsOf(g, "src_use_" + fn, "calls"), [], fn);
+	assert.deepEqual(targetsOf(g, "src_use_dflt", "calls"), ["src_lib_log"], "a default value is executable");
+	assert.deepEqual(targetsOf(g, "src_use_body", "calls"), ["src_lib_log"]);
+});
+
+test("a git checkout with no code file of its own yields an empty graph, not its ignored files", () => {
+	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "draht-kg-empty-"));
+	try {
+		const git = (...args) => execFileSync("git", ["-C", repo, ...args], { stdio: "ignore" });
+		try { git("init", "-q"); } catch { return; } // no git: the directory walk is the only path
+		fs.writeFileSync(path.join(repo, ".gitignore"), "generated/\n");
+		fs.writeFileSync(path.join(repo, "A.java"), "class A {}\n");
+		fs.mkdirSync(path.join(repo, "generated"));
+		fs.writeFileSync(path.join(repo, "generated/client.js"), "export function gen() {}\n");
+		const g = buildGraph(repo);
+		assert.deepEqual(g.nodes.map((n) => n.id), []);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("graph.json is replaced through a temporary file, leaving none behind", () => {
+	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "draht-kg-atomic-"));
+	try {
+		fs.mkdirSync(path.join(repo, ".git"));
+		fs.writeFileSync(path.join(repo, "a.ts"), "export function one() {}\n");
+		const kg = (...args) => execFileSync(process.execPath, [CLI, "kg", ...args], { cwd: repo, encoding: "utf-8", env: { ...process.env, DRAHT_GRAPH_ENGINE: "js" } });
+		kg("build", "--quiet");
+		fs.writeFileSync(path.join(repo, "a.ts"), "export function one() {}\nexport function two() {}\n");
+		kg("build", "--quiet");
+		const out = path.join(repo, ".planning/codebase");
+		assert.deepEqual(fs.readdirSync(out).filter((f) => f.endsWith(".tmp")), []);
+		assert.ok(JSON.parse(fs.readFileSync(path.join(out, "graph.json"), "utf-8")).nodes.some((n) => n.label === "two()"));
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});

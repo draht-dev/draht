@@ -156,9 +156,20 @@ func cmdCommunity(d *Node) string {
 	return ""
 }
 
-// cmdWriteFile is `fs.writeFileSync(p, data, "utf-8")`.
+// cmdWriteFile is writeFileAtomic: the data goes to a sibling temporary file
+// that is renamed into place, so an interrupted build leaves the previous file
+// whole and a reader never sees a half-written one.
 func cmdWriteFile(p, data string) error {
-	return os.WriteFile(p, []byte(data), 0o666)
+	tmp := p + "." + strconv.Itoa(os.Getpid()) + ".tmp"
+	if err := os.WriteFile(tmp, []byte(data), 0o666); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, p); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // cmdWriteIfChanged rewrites p only when its content differs.

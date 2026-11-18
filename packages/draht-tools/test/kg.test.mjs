@@ -1631,7 +1631,10 @@ test("a parameter's type or default value does not shadow the name it mentions",
 			"\treg(log);",
 			"\treturn new Foo();",
 			"}",
-			"export function e({ log, Foo }: { log: () => void; Foo: new () => unknown }) { reg(log); return new Foo(); }", "",
+			"export function e({ log, Foo }: { log: () => void; Foo: new () => unknown }) { reg(log); return new Foo(); }",
+			"export function f(flag = 1 < 2, log = flag) { return log(); }",
+			"export function g({ cb = log, n: [m, ...rest] = [] }) { log(); return [cb, m, rest]; }",
+			"export function h({ a: log }: { a: () => void }, b = (1 > 2)) { log(); }", "",
 		].join("\n"),
 	});
 	assert.deepEqual(targetsOf(g, "src_use_a", "instantiates"), ["src_lib_foo"]);
@@ -1642,4 +1645,7 @@ test("a parameter's type or default value does not shadow the name it mentions",
 	assert.deepEqual(targetsOf(g, "src_use_d", "indirect_call"), ["src_lib_log"]);
 	assert.deepEqual(targetsOf(g, "src_use_e", "instantiates"), [], "destructured parameters do shadow");
 	assert.deepEqual(targetsOf(g, "src_use_e", "indirect_call"), []);
+	assert.deepEqual(targetsOf(g, "src_use_f", "calls"), [], "a comparison in a default value does not hide the next parameter");
+	assert.deepEqual(targetsOf(g, "src_use_g", "calls"), ["src_lib_log"], "a default value inside a pattern binds nothing");
+	assert.deepEqual(targetsOf(g, "src_use_h", "calls"), [], "the target of a renamed property does shadow");
 });

@@ -77,3 +77,23 @@ export function nested(x: Logger | undefined, y?: Map<string, Logger>) {
 	register(log);
 	return new Logger();
 }
+
+export function compared(flag = 1 < 2, log = flag) {
+	return log();
+}
+
+export class Patterns {
+	run({ cb = log, n: [m, ...rest] = [] }) {
+		log();
+		return [cb, m, rest];
+	}
+	renamed({ a: log }: { a: () => void }, b = 1 > 2, c: Map<string, Logger> = new Map()) {
+		log();
+		return new Logger();
+	}
+}
+
+export const arrows = (flag = 1 < 2, register = flag, { x = log } = {}) => {
+	log();
+	return register;
+};

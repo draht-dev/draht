@@ -19,7 +19,6 @@ var (
 	reCallDestruct   = mustRE(`(?:[A-Za-z_$][\w$]*\s*:\s*)?([A-Za-z_$][\w$]*)`, "")
 	reCallArrowList  = mustRE(`\(([^()]*)\)\s*(?::[^=;{]+)?=>`, "")
 	reParamPiece     = mustRE(`^\s*(?:\.\.\.)?\s*(?:(?:public|private|protected|readonly|override)\s+)*([A-Za-z_$][\w$]*)\??\s*(?::\s*([A-Za-z_$][\w$.]*))?`, "")
-	reParamPattern   = mustRE(`(?:[A-Za-z_$][\w$]*\s*:\s*)?([A-Za-z_$][\w$]*)`, "")
 	reCallArrowOne   = mustRE(`(?<![\w$.])(?<!\)\s*:\s*)([A-Za-z_$][\w$]*)\s*=>`, "")
 	reCallCatch      = mustRE(`\bcatch\s*\(\s*([A-Za-z_$][\w$]*)`, "")
 	reCallFuncParams = mustRE(`\bfunction\s*\*?\s*[A-Za-z_$][\w$]*\s*\(([^)]*)\)`, "")
@@ -52,50 +51,116 @@ type regionNames struct {
 	types  map[string]string
 }
 
+// splitBindings splits text at the commas that separate parameters or
+// pattern elements: outside every bracket, and outside the `<…>` of a type
+// annotation. A `<` counts only between an element's `:` and its `=`: in a
+// default value it is a comparison.
+func splitBindings(text []rune) [][]rune {
+	var out [][]rune
+	depth, angle, from, mode := 0, 0, 0, 0 // mode: 0 name, 1 type, 2 default value
+	for i := 0; i <= len(text); i++ {
+		if i == len(text) {
+			out = append(out, text[from:i])
+			break
+		}
+		ch := text[i]
+		switch {
+		case ch == ',' && depth == 0 && angle == 0:
+			out = append(out, text[from:i])
+			from = i + 1
+			mode = 0
+			angle = 0
+		case ch == '(' || ch == '[' || ch == '{':
+			depth++
+		case ch == ')' || ch == ']' || ch == '}':
+			depth--
+		case depth != 0:
+		case ch == ':' && mode == 0:
+			mode = 1
+		case ch == '=' && at(text, i+1) != '>' && angle == 0:
+			mode = 2
+		case mode == 1 && ch == '<':
+			angle++
+		case mode == 1 && ch == '>' && at(text, i-1) != '=':
+			angle = max(0, angle-1)
+		}
+	}
+	return out
+}
+
+// bindingStart is the offset of the first character of t that is neither
+// blank nor a dot (the `...` of a rest element), or -1.
+func bindingStart(t []rune) int {
+	for i, c := range t {
+		if !isSpace(c) && c != '.' {
+			return i
+		}
+	}
+	return -1
+}
+
+// patternNames appends the names a destructuring pattern binds (inner is the
+// text between its brackets): `a`, the target of `key: b`, `...rest`, nested
+// patterns. A default value (`cb = log`) binds nothing.
+func patternNames(inner []rune, out [][2]string) [][2]string {
+	for _, el := range splitBindings(inner) {
+		depth, eq, colon := 0, -1, -1
+		for i := 0; i < len(el) && eq < 0; i++ {
+			switch ch := el[i]; {
+			case ch == '(' || ch == '[' || ch == '{':
+				depth++
+			case ch == ')' || ch == ']' || ch == '}':
+				depth--
+			case depth == 0 && ch == '=' && at(el, i+1) != '>':
+				eq = i
+			case depth == 0 && ch == ':' && colon < 0:
+				colon = i
+			}
+		}
+		end := len(el)
+		if eq >= 0 {
+			end = eq
+		}
+		target := el[colon+1 : end]
+		open := bindingStart(target)
+		if open < 0 {
+			continue
+		}
+		if target[open] == '{' || target[open] == '[' {
+			closeAt := matchClose(target, open)
+			if closeAt < 0 {
+				closeAt = len(target)
+			}
+			out = patternNames(target[open+1:closeAt], out)
+			continue
+		}
+		if e := identRunEnd(target, open); e > open && isIdentStart(target[open]) {
+			out = append(out, [2]string{string(target[open:e]), ""})
+		}
+	}
+	return out
+}
+
 // paramBindings is the names a TS/JS parameter list binds, each with its
 // written type name (or ""): `a`, `b?: Type`, `...rest`, `{ c, d: e }`. A
 // type (`x: Foo | Bar`) and a default value (`cb = log`) bind nothing. The
 // list may be cut short (the callers stop at the first `)`).
 func paramBindings(list []rune) [][2]string {
 	var out [][2]string
-	depth, angle, from := 0, 0, 0
-	for i := 0; i <= len(list); i++ {
-		if i < len(list) {
-			ch := list[i]
-			if !(ch == ',' && depth == 0 && angle == 0) {
-				switch {
-				case ch == '(' || ch == '[' || ch == '{':
-					depth++
-				case ch == ')' || ch == ']' || ch == '}':
-					depth--
-				case ch == '<':
-					angle++
-				case ch == '>' && at(list, i-1) != '=':
-					angle = max(0, angle-1)
-				}
-				continue
-			}
-		}
-		piece := list[from:i]
-		from = i + 1
+	for _, piece := range splitBindings(list) {
 		if m := reParamPiece.Find(piece); m != nil {
 			out = append(out, [2]string{m.S(1), m.S(2)})
 			continue
 		}
-		open := 0
-		for open < len(piece) && (isSpace(piece[open]) || piece[open] == '.') {
-			open++
-		}
-		if open >= len(piece) || (piece[open] != '{' && piece[open] != '[') {
+		open := bindingStart(piece)
+		if open < 0 || (piece[open] != '{' && piece[open] != '[') {
 			continue
 		}
-		end := matchClose(piece, open)
-		if end < 0 {
-			end = len(piece)
+		closeAt := matchClose(piece, open)
+		if closeAt < 0 {
+			closeAt = len(piece)
 		}
-		for id := range reParamPattern.Iter(piece[open+1:end], 0) {
-			out = append(out, [2]string{id.S(1), ""})
-		}
+		out = patternNames(piece[open+1:closeAt], out)
 	}
 	return out
 }

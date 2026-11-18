@@ -663,30 +663,70 @@ function matchClose(text, open) {
 	return -1;
 }
 
+// `text` split at the commas that separate parameters or pattern elements:
+// outside every bracket, and outside the `<…>` of a type annotation. A `<`
+// counts only between an element's `:` and its `=`: in a default value it
+// is a comparison.
+function splitBindings(text) {
+	const out = [];
+	let depth = 0, angle = 0, from = 0, mode = 0; // mode: 0 name, 1 type, 2 default value
+	for (let i = 0; i <= text.length; i++) {
+		const ch = text[i];
+		if (i === text.length || (ch === "," && depth === 0 && angle === 0)) {
+			out.push(text.slice(from, i));
+			from = i + 1;
+			mode = 0;
+			angle = 0;
+		} else if (ch === "(" || ch === "[" || ch === "{") depth++;
+		else if (ch === ")" || ch === "]" || ch === "}") depth--;
+		else if (depth !== 0) continue;
+		else if (ch === ":" && mode === 0) mode = 1;
+		else if (ch === "=" && text[i + 1] !== ">" && angle === 0) mode = 2;
+		else if (mode === 1 && ch === "<") angle++;
+		else if (mode === 1 && ch === ">" && text[i - 1] !== "=") angle = Math.max(0, angle - 1);
+	}
+	return out;
+}
+
+// The names a destructuring pattern binds (`inner` is the text between its
+// brackets): `a`, the target of `key: b`, `...rest`, nested patterns. A
+// default value (`cb = log`) binds nothing.
+function patternNames(inner, out) {
+	for (const el of splitBindings(inner)) {
+		let depth = 0, eq = -1, colon = -1;
+		for (let i = 0; i < el.length && eq < 0; i++) {
+			const ch = el[i];
+			if (ch === "(" || ch === "[" || ch === "{") depth++;
+			else if (ch === ")" || ch === "]" || ch === "}") depth--;
+			else if (depth === 0 && ch === "=" && el[i + 1] !== ">") eq = i;
+			else if (depth === 0 && ch === ":" && colon < 0) colon = i;
+		}
+		const target = el.slice(colon + 1, eq < 0 ? el.length : eq);
+		const open = target.search(/[^\s.]/);
+		if (open < 0) continue;
+		if (target[open] === "{" || target[open] === "[") {
+			const close = matchClose(target, open);
+			patternNames(target.slice(open + 1, close < 0 ? target.length : close), out);
+			continue;
+		}
+		const m = /^[A-Za-z_$][\w$]*/.exec(target.slice(open));
+		if (m) out.push([m[0], null]);
+	}
+}
+
 // The names a TS/JS parameter list binds, each with its written type name
 // (or null): `a`, `b?: Type`, `...rest`, `{ c, d: e }`. A type (`x: Foo | Bar`)
 // and a default value (`cb = log`) bind nothing. The list may be cut short
 // (the callers stop at the first `)`).
 function paramBindings(list) {
 	const out = [];
-	let depth = 0, angle = 0, from = 0;
-	for (let i = 0; i <= list.length; i++) {
-		const ch = list[i];
-		if (i < list.length && !(ch === "," && depth === 0 && angle === 0)) {
-			if (ch === "(" || ch === "[" || ch === "{") depth++;
-			else if (ch === ")" || ch === "]" || ch === "}") depth--;
-			else if (ch === "<") angle++;
-			else if (ch === ">" && list[i - 1] !== "=") angle = Math.max(0, angle - 1);
-			continue;
-		}
-		const piece = list.slice(from, i);
-		from = i + 1;
+	for (const piece of splitBindings(list)) {
 		const m = piece.match(/^\s*(?:\.\.\.)?\s*(?:(?:public|private|protected|readonly|override)\s+)*([A-Za-z_$][\w$]*)\??\s*(?::\s*([A-Za-z_$][\w$.]*))?/);
 		if (m) { out.push([m[1], m[2] || null]); continue; }
 		const open = piece.search(/[^\s.]/);
 		if (open < 0 || (piece[open] !== "{" && piece[open] !== "[")) continue;
 		const close = matchClose(piece, open);
-		for (const id of piece.slice(open + 1, close < 0 ? piece.length : close).matchAll(/(?:[A-Za-z_$][\w$]*\s*:\s*)?([A-Za-z_$][\w$]*)/g)) out.push([id[1], null]);
+		patternNames(piece.slice(open + 1, close < 0 ? piece.length : close), out);
 	}
 	return out;
 }

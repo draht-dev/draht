@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2026.11.18-1] - 2026-11-18
+
+### Changed
+
+- refactor(mcp): share the MCP server summary helper as mcpServerSummary()
 
 ## [2026.11.14-1] - 2026-11-14
 

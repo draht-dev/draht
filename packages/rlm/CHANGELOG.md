@@ -1,10 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2026.11.18-1] - 2026-11-18
 
 ### Fixed
 
-- Fixed the Linux sandbox printing a ctypes `_pack_` DeprecationWarning to stderr on Python 3.14
+- declare the PathRule ctypes layout for Python 3.14
 
 ## [2026.10.23-1] - 2026-10-23
 

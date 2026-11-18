@@ -29,6 +29,12 @@
 - living map and `kg` engine correctness: type-only re-exports, order-independent star expansion, string-aware source masking, workspace root resolution, Python import resolution, and linear-time `kg build` on large repos ([#2](https://github.com/draht-dev/draht/pull/2))
 - `kg` engine: a class keeps every method (was capped at 80), constructors and `#private` methods are nodes that own their calls, and methods named like reserved words (`delete()`) are indexed ([#2](https://github.com/draht-dev/draht/pull/2))
 
+## [2026.11.18-1] - 2026-11-18
+
+### Changed
+
+- refactor(mcp): share the MCP server summary helper as mcpServerSummary()
+
 ## [2026.11.14-1] - 2026-11-14
 
 ### Added

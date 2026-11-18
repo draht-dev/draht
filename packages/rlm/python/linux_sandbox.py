@@ -76,6 +76,7 @@ class Ruleset(ctypes.Structure):
 
 class PathRule(ctypes.Structure):
     _pack_ = 1
+    _layout_ = "ms"  # Python 3.14 requires an explicit layout with _pack_; size and offsets are unchanged.
     _fields_ = [("allowed_access", ctypes.c_uint64), ("parent_fd", ctypes.c_int32)]
 
 

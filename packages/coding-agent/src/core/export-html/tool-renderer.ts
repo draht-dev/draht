@@ -10,7 +10,7 @@ import type { Component } from "@draht/tui";
 import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.js";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import type { ToolRenderContext, ToolRenderers } from "../extensions/types.js";
-import { ansiLinesToHtml } from "./ansi-to-html.js";
+import { ansiLinesToHtml, stripAnsiEscapes } from "./ansi-to-html.js";
 
 export interface ToolHtmlRendererDeps {
 	/** Renderers of calls to a tool, as resolved by extensions and the registered tool */
@@ -42,10 +42,8 @@ export interface ToolHtmlRenderer {
  * The renderer looks up tool definitions and invokes their renderCall/renderResult
  * methods, converting the resulting TUI Component output (ANSI) to HTML.
  */
-const ANSI_ESCAPE_REGEX = /\x1b\[[\d;]*m/g;
-
 function isBlankRenderedLine(line: string): boolean {
-	return line.replace(ANSI_ESCAPE_REGEX, "").trim().length === 0;
+	return stripAnsiEscapes(line).trim().length === 0;
 }
 
 function trimRenderedResultLines(lines: string[]): string[] {

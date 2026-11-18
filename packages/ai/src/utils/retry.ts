@@ -71,12 +71,20 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"connection.?error",
 	"connection.?refused",
 	"connection.?lost",
+	// Gateway mid-stream drop relayed as an Anthropic-style `api_error` event,
+	// e.g. {"type":"error","error":{"type":"api_error","message":"Connection closed."}} (#12064).
+	"connection.?closed",
 	"other side closed",
 	"fetch failed",
 	// node-fetch system errors, e.g. the Google ADC OAuth token refresh used by
 	// google-vertex. The reason is often empty (#10996).
 	"request to \\S+ failed, reason:",
 	"getaddrinfo",
+	// Bare Node socket error codes, e.g. "read ECONNRESET", "write EPIPE", or
+	// "connect ETIMEDOUT 1.2.3.4:443" when a transport reports only the code (#12128).
+	// The codes must not be part of a longer identifier.
+	"(?<![a-z0-9_])(?:ECONNRESET|ECONNABORTED|ECONNREFUSED|ETIMEDOUT|EPIPE)(?![a-z0-9_])",
+	"connection reset by peer",
 	"ENOTFOUND",
 	"EAI_AGAIN",
 	"upstream.?connect",

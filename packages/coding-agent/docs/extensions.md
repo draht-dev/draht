@@ -1915,7 +1915,7 @@ const result = await pi.exec("git", ["status"], { signal, timeout: 5000 });
 // result.stdout, result.stderr, result.code, result.killed, result.truncated
 ```
 
-Options: `signal` and `timeout` terminate the command, `cwd` sets the working directory, and `maxBuffer` limits stdout and stderr combined (default 256 MiB). When output exceeds `maxBuffer`, draht terminates the command and returns the output up to the limit with `truncated: true`, `killed: true`, and a nonzero `code`. `killed` is true whenever draht terminated the command: timeout, abort, or `maxBuffer`. A command that ignores SIGTERM gets SIGKILL after 5 seconds.
+Options: `signal` and `timeout` terminate the command, `cwd` sets the working directory, and `maxBuffer` limits stdout and stderr combined (default 256 MiB). When output exceeds `maxBuffer`, draht terminates the command and returns the output up to the limit with `truncated: true`, `killed: true`, and a nonzero `code`. `killed` is true whenever draht terminated the command: timeout, abort, or `maxBuffer`. A command that ignores SIGTERM gets SIGKILL after 5 seconds. A command terminated by a signal, by draht or otherwise, reports 128 + the signal number as `code`, like a shell: 143 for SIGTERM, 137 for SIGKILL.
 
 ### pi.getActiveTools() / pi.getAllTools() / pi.setActiveTools(names)
 
@@ -2001,7 +2001,7 @@ import { createProvider, openAICompletionsApi } from "@draht/ai/compat";
 const provider = createProvider({
   id: "local-server",
   name: "Local Server",
-  baseUrl: "http://localhost:8080/v1",
+  baseUrl: "http://localhost:9931/v1",
   auth: {
     apiKey: {
       name: "Local server setup",
@@ -2045,11 +2045,11 @@ pi.registerProvider("my-proxy", {
 
 // Register a live llama.cpp catalog without persisting discovered models
 pi.registerProvider("llama.cpp", {
-  baseUrl: "http://localhost:8080/v1",
+  baseUrl: "http://localhost:9931/v1",
   apiKey: "local",
   api: "openai-completions",
   async refreshModels({ signal }) {
-    const response = await fetch("http://localhost:8080/v1/models", { signal });
+    const response = await fetch("http://localhost:9931/v1/models", { signal });
     const { data } = (await response.json()) as { data: Array<{ id: string }> };
     return data.map(({ id }) => ({
       id,

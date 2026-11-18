@@ -43,6 +43,10 @@ export function dflt(
 	return [cfg, value, cb];
 }
 
+export function pick(ready: boolean, value = ready ? 1 : log(), other: number = ready ? 2 : 3) {
+	return value + other;
+}
+
 export class Holder {
 	run(
 		cfg: {
@@ -54,4 +58,22 @@ export class Holder {
 		log();
 		return cfg;
 	}
+}
+
+export function typedParam(x: Logger) {
+	return new Logger();
+}
+
+export function defaulted(n: number, cb = log, { a, b: c }: { a: number; b: number } = { a: 1, b: 2 }) {
+	register(log);
+	return new Logger();
+}
+
+export function nested(x: Logger | undefined, y?: Map<string, Logger>) {
+	function inner(z: Logger, ...rest: Logger[]) {
+		return z;
+	}
+	const arrow = (w: Logger | null, v = log) => w;
+	register(log);
+	return new Logger();
 }

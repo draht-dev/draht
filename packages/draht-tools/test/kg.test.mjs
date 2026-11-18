@@ -1570,12 +1570,14 @@ test("ts: a method signature in a parameter or return type is not a call; a defa
 			"\t},",
 			"\tvalue = log(),",
 			") { return value; }",
-			"export function body(cfg: { name: string }): { name: string } { log(); return cfg; }", "",
+			"export function body(cfg: { name: string }): { name: string } { log(); return cfg; }",
+			"export function pick(ready: boolean, value = ready ? 1 : log()) { return value; }", "",
 		].join("\n"),
 	});
 	for (const fn of ["typed", "ret", "arrow"]) assert.deepEqual(targetsOf(g, "src_use_" + fn, "calls"), [], fn);
 	assert.deepEqual(targetsOf(g, "src_use_dflt", "calls"), ["src_lib_log"], "a default value is executable");
 	assert.deepEqual(targetsOf(g, "src_use_body", "calls"), ["src_lib_log"]);
+	assert.deepEqual(targetsOf(g, "src_use_pick", "calls"), ["src_lib_log"], "the else branch of an untyped default");
 });
 
 test("a git checkout with no code file of its own yields an empty graph, not its ignored files", () => {
@@ -1605,8 +1607,39 @@ test("graph.json is replaced through a temporary file, leaving none behind", () 
 		kg("build", "--quiet");
 		const out = path.join(repo, ".planning/codebase");
 		assert.deepEqual(fs.readdirSync(out).filter((f) => f.endsWith(".tmp")), []);
+		// a target whose name is already as long as a name can be
+		const long = path.join(repo, "x".repeat(250) + ".html");
+		kg("export", "tree", "--output", long);
+		assert.ok(fs.statSync(long).size > 0);
 		assert.ok(JSON.parse(fs.readFileSync(path.join(out, "graph.json"), "utf-8")).nodes.some((n) => n.label === "two()"));
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}
+});
+
+test("a parameter's type or default value does not shadow the name it mentions", () => {
+	const g = graphOf({
+		"src/lib.ts": "export class Foo {}\nexport function log(): void {}\nexport function reg(f: unknown): void {}\n",
+		"src/use.ts": [
+			'import { Foo, log, reg } from "./lib";',
+			"export function a(x: Foo) { return new Foo(); }",
+			"export function b(x: number, cb = log) { reg(log); return new Foo(); }",
+			"export function c(ready: boolean, value = ready ? 1 : log()) { return value; }",
+			"export function d(x: Foo | undefined, y?: Map<string, Foo>) {",
+			"\tfunction inner(z: Foo, ...rest: Foo[]) { return z; }",
+			"\tconst arrow = (w: Foo | null, v = log) => w;",
+			"\treg(log);",
+			"\treturn new Foo();",
+			"}",
+			"export function e({ log, Foo }: { log: () => void; Foo: new () => unknown }) { reg(log); return new Foo(); }", "",
+		].join("\n"),
+	});
+	assert.deepEqual(targetsOf(g, "src_use_a", "instantiates"), ["src_lib_foo"]);
+	assert.deepEqual(targetsOf(g, "src_use_b", "instantiates"), ["src_lib_foo"]);
+	assert.deepEqual(targetsOf(g, "src_use_b", "indirect_call"), ["src_lib_log"]);
+	assert.deepEqual(targetsOf(g, "src_use_c", "calls"), ["src_lib_log"]);
+	assert.deepEqual(targetsOf(g, "src_use_d", "instantiates"), ["src_lib_foo"]);
+	assert.deepEqual(targetsOf(g, "src_use_d", "indirect_call"), ["src_lib_log"]);
+	assert.deepEqual(targetsOf(g, "src_use_e", "instantiates"), [], "destructured parameters do shadow");
+	assert.deepEqual(targetsOf(g, "src_use_e", "indirect_call"), []);
 });

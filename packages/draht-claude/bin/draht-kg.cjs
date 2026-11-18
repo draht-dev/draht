@@ -271,11 +271,12 @@ function gitFiles(root, maxFiles) {
 	return sortByPosixPath(files);
 }
 
-// Write through a sibling temporary file and rename it into place: an
-// interrupted build leaves the previous file whole, and a reader never sees a
-// half-written one.
+// Write through a temporary file in the same directory and rename it into
+// place: an interrupted build leaves the previous file whole, and a reader
+// never sees a half-written one. The temporary name is short and does not
+// build on the target's, which may already be as long as a name can be.
 function writeFileAtomic(file, data) {
-	const tmp = file + "." + process.pid + ".tmp";
+	const tmp = path.join(path.dirname(file), ".kg-" + process.pid + ".tmp");
 	try {
 		fs.writeFileSync(tmp, data, "utf-8");
 		fs.renameSync(tmp, file);
@@ -660,6 +661,34 @@ function matchClose(text, open) {
 		else if (ch === c && --depth === 0) return i;
 	}
 	return -1;
+}
+
+// The names a TS/JS parameter list binds, each with its written type name
+// (or null): `a`, `b?: Type`, `...rest`, `{ c, d: e }`. A type (`x: Foo | Bar`)
+// and a default value (`cb = log`) bind nothing. The list may be cut short
+// (the callers stop at the first `)`).
+function paramBindings(list) {
+	const out = [];
+	let depth = 0, angle = 0, from = 0;
+	for (let i = 0; i <= list.length; i++) {
+		const ch = list[i];
+		if (i < list.length && !(ch === "," && depth === 0 && angle === 0)) {
+			if (ch === "(" || ch === "[" || ch === "{") depth++;
+			else if (ch === ")" || ch === "]" || ch === "}") depth--;
+			else if (ch === "<") angle++;
+			else if (ch === ">" && list[i - 1] !== "=") angle = Math.max(0, angle - 1);
+			continue;
+		}
+		const piece = list.slice(from, i);
+		from = i + 1;
+		const m = piece.match(/^\s*(?:\.\.\.)?\s*(?:(?:public|private|protected|readonly|override)\s+)*([A-Za-z_$][\w$]*)\??\s*(?::\s*([A-Za-z_$][\w$.]*))?/);
+		if (m) { out.push([m[1], m[2] || null]); continue; }
+		const open = piece.search(/[^\s.]/);
+		if (open < 0 || (piece[open] !== "{" && piece[open] !== "[")) continue;
+		const close = matchClose(piece, open);
+		for (const id of piece.slice(open + 1, close < 0 ? piece.length : close).matchAll(/(?:[A-Za-z_$][\w$]*\s*:\s*)?([A-Za-z_$][\w$]*)/g)) out.push([id[1], null]);
+	}
+	return out;
 }
 
 // Pieces of `text` split at commas outside every bracket.
@@ -3124,7 +3153,9 @@ function buildGraph(root) {
 					headerEnd = l;
 					if (close >= 0 || (open < 0 && l >= (a.headerEnd || a.decl))) break;
 				}
-				if (open >= 0 && close > open) {
+				if (open >= 0 && close > open && !py) {
+					for (const [name, type] of paramBindings(text.slice(open + 1, close))) note(name, type);
+				} else if (open >= 0 && close > open) {
 					for (const piece of splitTopLevel(text.slice(open + 1, close))) {
 						const pm = piece.match(/^\s*(?:\*{1,2}|\.\.\.)?(?:(?:public|private|protected|readonly|override)\s+)*([A-Za-z_$][\w$]*)\??\s*(?::\s*["']?([A-Za-z_$][\w$.]*))?/);
 						if (pm) note(pm[1], pm[2]);
@@ -3146,11 +3177,11 @@ function buildGraph(root) {
 						if (m[1]) note(m[1], m[2] || m[3]);
 						else for (const id of (m[4] || "").matchAll(/(?:[A-Za-z_$][\w$]*\s*:\s*)?([A-Za-z_$][\w$]*)/g)) note(id[1]);
 					}
-					for (const w of ln.matchAll(/\(([^()]*)\)\s*(?::[^=;{]+)?=>/g)) for (const id of w[1].matchAll(/(?<![\w$.:])([A-Za-z_$][\w$]*)\??\s*(?::\s*([A-Za-z_$][\w$.]*))?/g)) note(id[1], id[2]);
+					for (const w of ln.matchAll(/\(([^()]*)\)\s*(?::[^=;{]+)?=>/g)) for (const [name, type] of paramBindings(w[1])) note(name, type);
 					// `x => …` binds x; the return type of `(a): Type => …` binds nothing
 					for (const w of ln.matchAll(/(?<![\w$.])(?<!\)\s*:\s*)([A-Za-z_$][\w$]*)\s*=>/g)) note(w[1]);
 					if ((m = ln.match(/\bcatch\s*\(\s*([A-Za-z_$][\w$]*)/))) note(m[1]);
-					for (const w of ln.matchAll(/\bfunction\s*\*?\s*[A-Za-z_$][\w$]*\s*\(([^)]*)\)/g)) for (const id of w[1].matchAll(/(?<![\w$.:])([A-Za-z_$][\w$]*)/g)) note(id[1]);
+					for (const w of ln.matchAll(/\bfunction\s*\*?\s*[A-Za-z_$][\w$]*\s*\(([^)]*)\)/g)) for (const [name] of paramBindings(w[1])) note(name);
 				}
 			}
 			return info;
@@ -3244,7 +3275,7 @@ function buildGraph(root) {
 				let depth = 0, angle = 0, from = -1, inDefault = false;
 				for (let k = open + 1; k <= close; k++) {
 					const ch = text[k];
-					if (k === close || (depth === 0 && angle === 0 && (ch === "," || (ch === "=" && text[k + 1] !== ">" && from >= 0)))) {
+					if (k === close || (depth === 0 && angle === 0 && (ch === "," || (ch === "=" && text[k + 1] !== ">")))) {
 						if (from >= 0) mark(from, k);
 						from = -1;
 						angle = 0;

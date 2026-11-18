@@ -18,11 +18,11 @@ var (
 	reCallDecl       = mustRE(`\b(?:const|let|var)\s+(?:([A-Za-z_$][\w$]*)\s*(?::\s*([A-Za-z_$][\w$.]*)[^=;]*)?(?:=\s*(?:await\s+)?(?:new\s+([A-Za-z_$][\w$.]*))?)?|[[{]([^=]*?)[\]}]\s*=)`, "")
 	reCallDestruct   = mustRE(`(?:[A-Za-z_$][\w$]*\s*:\s*)?([A-Za-z_$][\w$]*)`, "")
 	reCallArrowList  = mustRE(`\(([^()]*)\)\s*(?::[^=;{]+)?=>`, "")
-	reCallArrowParam = mustRE(`(?<![\w$.:])([A-Za-z_$][\w$]*)\??\s*(?::\s*([A-Za-z_$][\w$.]*))?`, "")
+	reParamPiece     = mustRE(`^\s*(?:\.\.\.)?\s*(?:(?:public|private|protected|readonly|override)\s+)*([A-Za-z_$][\w$]*)\??\s*(?::\s*([A-Za-z_$][\w$.]*))?`, "")
+	reParamPattern   = mustRE(`(?:[A-Za-z_$][\w$]*\s*:\s*)?([A-Za-z_$][\w$]*)`, "")
 	reCallArrowOne   = mustRE(`(?<![\w$.])(?<!\)\s*:\s*)([A-Za-z_$][\w$]*)\s*=>`, "")
 	reCallCatch      = mustRE(`\bcatch\s*\(\s*([A-Za-z_$][\w$]*)`, "")
 	reCallFuncParams = mustRE(`\bfunction\s*\*?\s*[A-Za-z_$][\w$]*\s*\(([^)]*)\)`, "")
-	reCallFuncParam  = mustRE(`(?<![\w$.:])([A-Za-z_$][\w$]*)`, "")
 	reCallPyField    = mustRE(`\bself\.([A-Za-z_]\w*)\s*(?::\s*["']?([A-Za-z_][\w.]*))?[^=\n]*=(?!=)\s*(?:([A-Za-z_][\w.]*)\s*\()?`, "")
 	reCallTsField    = mustRE(`\b(?:public|private|protected|readonly)\s+(?:readonly\s+)?([A-Za-z_$][\w$]*)\??\s*:\s*([A-Za-z_$][\w$.]*)`, "")
 	reCallThisNew    = mustRE(`\bthis\.(#?[A-Za-z_$][\w$]*)\s*=\s*new\s+([A-Za-z_$][\w$.]*)`, "")
@@ -50,6 +50,54 @@ type callAnchor struct {
 type regionNames struct {
 	locals map[string]bool
 	types  map[string]string
+}
+
+// paramBindings is the names a TS/JS parameter list binds, each with its
+// written type name (or ""): `a`, `b?: Type`, `...rest`, `{ c, d: e }`. A
+// type (`x: Foo | Bar`) and a default value (`cb = log`) bind nothing. The
+// list may be cut short (the callers stop at the first `)`).
+func paramBindings(list []rune) [][2]string {
+	var out [][2]string
+	depth, angle, from := 0, 0, 0
+	for i := 0; i <= len(list); i++ {
+		if i < len(list) {
+			ch := list[i]
+			if !(ch == ',' && depth == 0 && angle == 0) {
+				switch {
+				case ch == '(' || ch == '[' || ch == '{':
+					depth++
+				case ch == ')' || ch == ']' || ch == '}':
+					depth--
+				case ch == '<':
+					angle++
+				case ch == '>' && at(list, i-1) != '=':
+					angle = max(0, angle-1)
+				}
+				continue
+			}
+		}
+		piece := list[from:i]
+		from = i + 1
+		if m := reParamPiece.Find(piece); m != nil {
+			out = append(out, [2]string{m.S(1), m.S(2)})
+			continue
+		}
+		open := 0
+		for open < len(piece) && (isSpace(piece[open]) || piece[open] == '.') {
+			open++
+		}
+		if open >= len(piece) || (piece[open] != '{' && piece[open] != '[') {
+			continue
+		}
+		end := matchClose(piece, open)
+		if end < 0 {
+			end = len(piece)
+		}
+		for id := range reParamPattern.Iter(piece[open+1:end], 0) {
+			out = append(out, [2]string{id.S(1), ""})
+		}
+	}
+	return out
 }
 
 func firstSeg(s string) string {
@@ -177,7 +225,11 @@ func (b *builder) scriptCalls(rel string, pf *fileInfo) {
 					break
 				}
 			}
-			if open >= 0 && closeAt > open {
+			if open >= 0 && closeAt > open && !py {
+				for _, p := range paramBindings(sub(text, open+1, closeAt)) {
+					note(p[0], p[1])
+				}
+			} else if open >= 0 && closeAt > open {
 				for _, piece := range splitTopLevel(sub(text, open+1, closeAt)) {
 					if pm := reCallParam.Find(piece); pm != nil {
 						note(pm.S(1), pm.S(2))
@@ -232,8 +284,8 @@ func (b *builder) scriptCalls(rel string, pf *fileInfo) {
 					}
 				}
 				for w := range reCallArrowList.Iter(ln, fromIfAny(ln, "=>")) {
-					for id := range reCallArrowParam.Iter(w.R(1), 0) {
-						note(id.S(1), id.S(2))
+					for _, p := range paramBindings(w.R(1)) {
+						note(p[0], p[1])
 					}
 				}
 				for w := range reCallArrowOne.Iter(ln, fromIfAny(ln, "=>")) {
@@ -243,8 +295,8 @@ func (b *builder) scriptCalls(rel string, pf *fileInfo) {
 					note(m.S(1), "")
 				}
 				for w := range reCallFuncParams.Iter(ln, fromIfAny(ln, "function")) {
-					for id := range reCallFuncParam.Iter(w.R(1), 0) {
-						note(id.S(1), "")
+					for _, p := range paramBindings(w.R(1)) {
+						note(p[0], "")
 					}
 				}
 			}
@@ -448,7 +500,7 @@ func (b *builder) scriptCalls(rel string, pf *fileInfo) {
 			for k := open + 1; k <= closeAt; k++ {
 				ch := text[k]
 				switch {
-				case k == closeAt || (depth == 0 && angle == 0 && (ch == ',' || (ch == '=' && at(text, k+1) != '>' && from >= 0))):
+				case k == closeAt || (depth == 0 && angle == 0 && (ch == ',' || (ch == '=' && at(text, k+1) != '>'))):
 					if from >= 0 {
 						mark(from, k)
 					}

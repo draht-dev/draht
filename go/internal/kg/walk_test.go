@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -52,8 +53,13 @@ func TestCmdWriteFile_ReplacesAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 {
+	if len(entries) != 1 || entries[0].Name() != "graph.json" {
 		t.Fatalf("left behind: %v", entries)
+	}
+	// a target whose name is already as long as a name can be
+	long := filepath.Join(dir, strings.Repeat("x", 250)+".html")
+	if err := cmdWriteFile(long, "data"); err != nil {
+		t.Fatalf("long name: %v", err)
 	}
 	if err := cmdWriteFile(filepath.Join(dir, "missing", "x"), "data"); err == nil {
 		t.Fatal("want an error for a missing directory")

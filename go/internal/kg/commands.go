@@ -5,6 +5,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -156,11 +157,13 @@ func cmdCommunity(d *Node) string {
 	return ""
 }
 
-// cmdWriteFile is writeFileAtomic: the data goes to a sibling temporary file
-// that is renamed into place, so an interrupted build leaves the previous file
-// whole and a reader never sees a half-written one.
+// cmdWriteFile is writeFileAtomic: the data goes to a temporary file in the
+// same directory that is renamed into place, so an interrupted build leaves
+// the previous file whole and a reader never sees a half-written one. The
+// temporary name is short and does not build on the target's, which may
+// already be as long as a name can be.
 func cmdWriteFile(p, data string) error {
-	tmp := p + "." + strconv.Itoa(os.Getpid()) + ".tmp"
+	tmp := filepath.Join(filepath.Dir(p), ".kg-"+strconv.Itoa(os.Getpid())+".tmp")
 	if err := os.WriteFile(tmp, []byte(data), 0o666); err != nil {
 		_ = os.Remove(tmp)
 		return err

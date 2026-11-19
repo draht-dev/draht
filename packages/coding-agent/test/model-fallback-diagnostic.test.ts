@@ -76,7 +76,7 @@ describe("model fallback message", () => {
 
 		const child = spawn(process.execPath, ["--import", sourceResolverUrl, cliPath, "--mode", "rpc", "--no-session"], {
 			cwd: projectDir,
-			env: { ...process.env, [ENV_AGENT_DIR]: agentDir, PI_OFFLINE: "1" },
+			env: { ...process.env, [ENV_AGENT_DIR]: agentDir, DRAHT_OFFLINE: "1" },
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 		let stdout = "";

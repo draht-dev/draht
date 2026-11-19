@@ -28,6 +28,7 @@ import {
 } from "../../core/output-guard.ts";
 import type { RelayOutcome } from "../../core/permission-relay/types.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
+import { writeDiagnosticsToStderr } from "../diagnostics-stderr.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
 import { toJsonEvent } from "../json-event.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
@@ -380,6 +381,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 	runtimeHost.setRebindSession(async () => {
 		await rebindSession();
+		// stderr, never stdout: stdout carries the RPC protocol.
+		writeDiagnosticsToStderr(runtimeHost.takeUnreportedDiagnostics());
 	});
 
 	const rebindSession = async (): Promise<void> => {

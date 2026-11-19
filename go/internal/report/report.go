@@ -1,5 +1,5 @@
 // Package report renders .planning/codebase/GRAPH_REPORT.md, the
-// deterministic human-facing digest of a schemaVersion-5 map. Ported
+// deterministic human-facing digest of a schemaVersion-6 map. Ported
 // push-for-push from draht-tools.cjs visRenderReport (lines 5046-5096). No
 // Date, no locale, no randomness: identical *model.Map in => identical
 // bytes out.

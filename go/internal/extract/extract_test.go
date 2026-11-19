@@ -39,28 +39,82 @@ export default class Widget {}
 	if _, ok := names["sayHi"]; !ok {
 		t.Fatalf("expected named re-export alias 'sayHi', got %+v", exports)
 	}
-	// `export default class Widget {}` matches exportRe's own (class|...)
-	// alternative BEFORE defaultRe is even tried (verbatim CJS if/else-if
-	// chain, draht-tools.cjs:1432 precedes 1441) — so this yields a "class"
-	// export named "Widget", never a distinct "default" entry.
-	if _, ok := names["Widget"]; !ok {
-		t.Fatalf("expected 'Widget' export (class kind, from 'export default class'), got %+v", exports)
+	// `export default class Widget {}` exports ONLY `default`: the class name
+	// binds locally, never as an exported binding (ES spec). Recording it as a
+	// named export let star expansion forward `Widget` through `export *`.
+	if _, ok := names["Widget"]; ok {
+		t.Fatalf("'export default class Widget' must not yield a named 'Widget' export, got %+v", exports)
 	}
-	if names["Widget"].Kind != "class" {
-		t.Errorf("expected kind 'class' for Widget, got %q", names["Widget"].Kind)
+	d, ok := names["default"]
+	if !ok {
+		t.Fatalf("expected 'default' export from 'export default class', got %+v", exports)
+	}
+	if d.Kind != "default" {
+		t.Errorf("expected kind 'default', got %q", d.Kind)
 	}
 }
 
-func TestExtractExportsNamedFromIsExcluded(t *testing.T) {
-	// export { a, b } from "./x" is a RE-EXPORT statement (parse.Import
-	// territory), not an export declaration — visExtractExports's
-	// namedExportRe has a (?!\s+from) negative lookahead specifically to
-	// exclude this case (design §R2).
+func TestExtractExportsNamedFromIsReExport(t *testing.T) {
+	// export { a, b } from "./x" IS part of the barrel's public API: the CJS
+	// engine captures it with kind "re-export" (the old (?!\s+from) lookahead
+	// deliberately excluded it, which left every barrel with exports(0) —
+	// removed in the graphify-parity work). Multi-line blocks and
+	// `export * as NS from` are captured too.
 	src := []byte(`export { a, b } from "./other";
+export {
+	c,
+	d as e,
+} from "./more";
+export * as ns from "./star";
 `)
 	exports := extractExports("typescript", src)
-	if len(exports) != 0 {
-		t.Fatalf("expected 0 exports for a from-re-export line, got %+v", exports)
+	got := map[string]Export{}
+	for _, ex := range exports {
+		got[ex.Name] = ex
+	}
+	for _, name := range []string{"a", "b", "c", "e", "ns"} {
+		ex, ok := got[name]
+		if !ok {
+			t.Fatalf("expected re-export %q captured, got %+v", name, exports)
+		}
+		if ex.Kind != "re-export" {
+			t.Errorf("expected kind 're-export' for %q, got %q", name, ex.Kind)
+		}
+	}
+	if got["c"].Line != 2 {
+		t.Errorf("multi-line block should anchor at the block's first line: got %d", got["c"].Line)
+	}
+	if _, ok := got["d"]; ok {
+		t.Errorf("aliased re-export should surface the alias (e), not the source name (d)")
+	}
+}
+
+// TestExtractExportsIgnoresStringsAndTemplates: export lists inside string or
+// template literals are text, not exports, and a `/*` inside a string
+// (`"packages/*/src"`) must not mask real code up to the next `*/`.
+func TestExtractExportsIgnoresStringsAndTemplates(t *testing.T) {
+	src := []byte("const pattern = \"src/*.ts\";\n" +
+		"function helper() { return pattern; }\n" +
+		"function other() { return 1; }\n" +
+		"export { helper, other };\n" +
+		"const glob = \"**/*.ts\";\n" +
+		"export function gen() {\n" +
+		"\treturn `\nexport { fake } from \"./nope\";\nexport * as Ghost from \"./nope\";\n${ [1].map((n) => n) }`;\n" +
+		"}\n" +
+		"const s = 'export { quoted } from \"./nope\"';\n")
+	got := map[string]bool{}
+	for _, e := range extractExports("typescript", src) {
+		got[e.Name] = true
+	}
+	for _, want := range []string{"helper", "other", "gen"} {
+		if !got[want] {
+			t.Errorf("real export %q lost: %v", want, got)
+		}
+	}
+	for _, fake := range []string{"fake", "Ghost", "quoted"} {
+		if got[fake] {
+			t.Errorf("export list inside a string/template became a fake export %q", fake)
+		}
 	}
 }
 

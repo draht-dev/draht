@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 )
 
-// Map is the schemaVersion-5 MAP.json wire format. Field order below is the
+// Map is the schemaVersion-6 MAP.json wire format. Field order below is the
 // declaration/emission order (28 top-level keys). Construct via NewMap();
 // never build a &Map{...} literal directly (see design §R5 — every top-level
 // array field must be a non-nil empty slice, not nil, even when empty).
@@ -82,6 +82,18 @@ type Export struct {
 	Kind string  `json:"kind"`
 	Line int     `json:"line"`
 	Doc  *string `json:"doc"`
+	// Via is set only on re-export entries whose defining module is known
+	// (named re-exports resolved by ResolveReExports and
+	// star-expansion copies); omitted otherwise, matching the CJS engine's
+	// `via` field. MUST stay after Doc: encoding/json emits struct fields in
+	// declaration order and the CJS engine appends via before viaName.
+	Via string `json:"via,omitempty"`
+	// ViaName is the ORIGINAL binding name at Via when an aliased re-export
+	// renamed it (`export { b as a } from './x'` → Name "a", ViaName "b").
+	// Star expansion compares (Via, ViaName|Name) pairs, so the same name
+	// from two different bindings is ambiguous even when both live in the
+	// same module. MUST stay after Via (field-order contract as above).
+	ViaName string `json:"viaName,omitempty"`
 }
 
 // Symbol is one symbol-level node.
@@ -337,14 +349,14 @@ type Assets struct {
 	ByLanguage *OrderedCounts `json:"byLanguage"`
 }
 
-// NewMap returns a Map with schemaVersion 5 and all 13 deferred array
+// NewMap returns a Map with schemaVersion 6 and all 13 deferred array
 // fields pre-initialized to non-nil empty slices (design §R5: a nil
 // top-level slice marshals to null and crashes the unmodified MAP.html
 // viewer). graph/pipeline.go MUST build every Map through NewMap(), never
 // via a &Map{...} literal.
 func NewMap() *Map {
 	return &Map{
-		SchemaVersion:         5,
+		SchemaVersion:         6,
 		Packages:              []Package{},
 		Groups:                []json.RawMessage{},
 		Containers:            []Container{},

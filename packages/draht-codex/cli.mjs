@@ -583,7 +583,7 @@ const GRAPH_BIN_DIR = path.join(os.homedir(), ".draht", "bin");
 const GRAPH_RELEASE_REPO = "draht-dev/draht";
 // Must equal draht-tools.cjs's GRAPH_SCHEMA_VERSION — kept in sync by hand,
 // these are separate npm packages with no shared import.
-const GRAPH_SCHEMA_VERSION = 5;
+const GRAPH_SCHEMA_VERSION = 6;
 // node-style platform ids matching scripts/build-graph-binaries.sh's
 // PLATFORMS table — the only shapes a release ever ships.
 const GRAPH_SHIPPED_PLATFORMS = new Set(["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64", "windows-x64"]);

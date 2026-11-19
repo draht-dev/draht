@@ -296,7 +296,7 @@ for (const implementation of IMPLEMENTATIONS) {
 		writeFileSync(join(binDir, ".draht-graph.json"), JSON.stringify({
 			name: "draht-graph",
 			version: "1.2.3",
-			schemaVersion: 5,
+			schemaVersion: 6,
 			sha256: createHash("sha256").update(expected).digest("hex"),
 			size: Buffer.byteLength(expected),
 		}));

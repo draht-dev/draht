@@ -18,7 +18,7 @@ func convertExports(in []extract.Export) []model.Export {
 			d := e.Doc
 			doc = &d
 		}
-		out[i] = model.Export{Name: e.Name, Kind: e.Kind, Line: e.Line, Doc: doc}
+		out[i] = model.Export{Name: e.Name, Kind: e.Kind, Line: e.Line, Doc: doc, ViaName: e.LocalName}
 	}
 	return out
 }

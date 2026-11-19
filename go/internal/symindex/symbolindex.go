@@ -11,15 +11,19 @@ import (
 // design notes reference).
 const SymbolIndexCap = 5000
 
-// BuildSymbolIndex is the verbatim port of the symbolIndex construction at
-// draht-tools.cjs:2884-2905.
+// BuildSymbolIndex is the verbatim port of the symbolIndex construction in
+// draht-tools.cjs (visBuildMap).
+//
+// Re-export entries (Via set: barrel and star copies of a name defined
+// elsewhere) are left out: the defining module already indexes the name, and
+// ~1k duplicates would crowd real definitions out of the cap.
 //
 // Ranking is the truncation contract: modules that export at least one
-// symbol are sorted by import in-degree DESCENDING (inDeg[m.ID], which MUST
-// be the same in-degree map used for hotspots — test-originated edges are
-// counted here, unlike the hotspot-only inDegNT variant), tie-broken by
+// definition are sorted by import in-degree DESCENDING (inDeg[m.ID], which
+// MUST be the same in-degree map used for hotspots — test-originated edges
+// are counted here, unlike the hotspot-only inDegNT variant), tie-broken by
 // m.Path ASCENDING. Entries are then flattened module-by-module,
-// export-by-export (m.Exports is already capped at 30/module upstream), and
+// export-by-export (m.Exports is already capped at 60/module upstream), and
 // the cap is checked BEFORE every push — both before starting a module's
 // exports and before each individual export — so symbolIndexTruncated is
 // only set true when the cap is hit AND there was more work left to do.
@@ -31,7 +35,7 @@ const SymbolIndexCap = 5000
 func BuildSymbolIndex(modules []model.Module, inDeg map[string]int) ([]model.SymbolIndexEntry, bool) {
 	ranked := make([]model.Module, 0, len(modules))
 	for _, m := range modules {
-		if len(m.Exports) > 0 {
+		if hasDefinition(m.Exports) {
 			ranked = append(ranked, m)
 		}
 	}
@@ -53,6 +57,9 @@ outer:
 			break
 		}
 		for _, e := range m.Exports {
+			if e.Via != "" {
+				continue
+			}
 			if len(entries) >= SymbolIndexCap {
 				truncated = true
 				break outer
@@ -68,4 +75,15 @@ outer:
 		}
 	}
 	return entries, truncated
+}
+
+// hasDefinition reports whether any export is a definition rather than a
+// re-export of a name defined elsewhere.
+func hasDefinition(exports []model.Export) bool {
+	for _, e := range exports {
+		if e.Via == "" {
+			return true
+		}
+	}
+	return false
 }

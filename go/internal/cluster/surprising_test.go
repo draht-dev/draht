@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -134,5 +135,18 @@ func TestSurprising_CapAndSortOrder(t *testing.T) {
 		if out[i-1].Score == out[i].Score && out[i-1].From > out[i].From {
 			t.Fatalf("out[%d].From (%q) > out[%d].From (%q): not sorted ASC on tie", i-1, out[i-1].From, i, out[i].From)
 		}
+	}
+}
+
+// TestSurprising_EmptyMarshalsAsArray: no surprising edge must yield an empty,
+// NON-nil slice so MAP.json carries [] (the CJS engine's output), not null.
+func TestSurprising_EmptyMarshalsAsArray(t *testing.T) {
+	out := Surprising(nil, nil, nil, nil, nil)
+	if out == nil {
+		t.Fatal("Surprising returned nil for no edges; it marshals as null")
+	}
+	b, err := json.Marshal(out)
+	if err != nil || string(b) != "[]" {
+		t.Errorf("marshal = %s, %v; want []", b, err)
 	}
 }

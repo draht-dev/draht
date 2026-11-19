@@ -70,6 +70,13 @@ const TEST_TIMEOUT_MS = 120_000;
  */
 const NON_OFFERED_ANSWER = "banana-is-not-an-offered-option";
 
+/**
+ * The last line of every rendered ask. The client prints the block one `console.log` per line, and
+ * each is its own write to the pipe, so stdout can hold the `Permission required` header while the
+ * fields below it are still on their way: wait for this line before reading the block.
+ */
+const ASK_BLOCK_END = "Type the number, the label or the id to answer. Anything else is not sent.";
+
 const tempDirs: string[] = [];
 const children: ChildProcessWithoutNullStreams[] = [];
 
@@ -208,7 +215,7 @@ test(
 			attached.type("run it");
 
 			await until(
-				() => attached.stdout().includes("Permission required"),
+				() => attached.stdout().includes(ASK_BLOCK_END),
 				"the attach client to render the permission ask",
 				() => `attach stdout:\n${attached.stdout()}\nsession stderr:\n${session.stderr()}`,
 			);
@@ -232,7 +239,7 @@ test(
 			// ── a second surface attaches mid-ask: the replay renders exactly once ──────────────
 			const watcher = launch(["--attach", sessionId], cwd, env);
 			await until(
-				() => watcher.stdout().includes("Permission required"),
+				() => watcher.stdout().includes(ASK_BLOCK_END),
 				"the replayed ask to reach a client that attached after it was raised",
 				() => `watcher stdout:\n${watcher.stdout()}\nwatcher stderr:\n${watcher.stderr()}`,
 			);
@@ -389,6 +396,7 @@ test(
 				await until(
 					() =>
 						countLines(attached.stdout(), "Permission required") === ordinal &&
+						countLines(attached.stdout(), ASK_BLOCK_END) === ordinal &&
 						lines(attached.stdout()).includes(`  Command: ${command}`),
 					`ask #${ordinal}, gating ${JSON.stringify(command)}`,
 					() => `attach stdout:\n${attached.stdout()}\nsession stderr:\n${session.stderr()}`,

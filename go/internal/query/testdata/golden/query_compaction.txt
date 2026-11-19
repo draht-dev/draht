@@ -1,17 +1,17 @@
-query "compaction" — 15/134 hits
-packages/coding-agent/test/session-manager/build-context.test.ts:41  function compaction
+query "compaction" — 15/34 hits
 packages/coding-agent/src/core/session-manager.ts:71  interface CompactionEntry  [exported]
 packages/coding-agent/src/core/settings-manager.ts:11  interface CompactionSettings  [exported]
 packages/agent/src/harness/types.ts:197  type CompactionErrorCode  — Stable compaction error codes returned by compaction helpers  [exported]
-packages/agent/src/harness/types.ts:200  class CompactionError  — Error returned by compaction helpers.  [exported]
-packages/agent/src/harness/types.ts:403  interface CompactionEntry  [exported]
 packages/coding-agent/src/core/messages.ts:11  const COMPACTION_SUMMARY_PREFIX  [exported]
-packages/coding-agent/src/core/messages.ts:16  const COMPACTION_SUMMARY_SUFFIX  [exported]
-packages/coding-agent/src/core/messages.ts:62  interface CompactionSummaryMessage  [exported]
 packages/agent/src/harness/compaction/compaction.ts:35  interface CompactionDetails  — File-operation details stored on generated compaction entrie  [exported]
-packages/agent/src/harness/compaction/compaction.ts:103  interface CompactionResult  — Generated compaction data ready to be persisted as a compact  [exported]
-packages/agent/src/harness/compaction/compaction.ts:164  interface CompactionSettings  — Compaction thresholds and retention settings.  [exported]
-packages/agent/src/harness/compaction/compaction.ts:620  interface CompactionPreparation  — Prepared inputs for a compaction run.  [exported]
 packages/coding-agent/src/core/compaction/compaction.ts:34  interface CompactionDetails  — Details stored in CompactionEntry.details for file tracking  [exported]
-packages/coding-agent/src/core/compaction/compaction.ts:88  interface CompactionResult  — Result from compact() - SessionManager adds uuid/parentUuid   [exported]
-(119 more: --json for all)
+packages/agent/src/harness/messages.ts:4  const COMPACTION_SUMMARY_PREFIX  [exported]
+packages/coding-agent/src/modes/interactive/components/status-indicator.ts:74  type CompactionStatusReason  [exported]
+packages/coding-agent/src/modes/interactive/components/compaction-summary-message.ts:10  class CompactionSummaryMessageComponent  — Component that renders a compaction message with collapsed/e  [exported]
+packages/coding-agent/test/session-manager/build-context.test.ts:41  function compaction
+packages/coding-agent/src/core/compaction/branch-summarization.ts:108  function collectEntriesForBranchSummary  — Collect entries that should be summarized when navigating fr  [exported]
+packages/agent/src/harness/compaction/utils.ts:13  interface FileOperations  — File paths touched by a session branch or compaction range.  [exported]
+packages/agent/test/harness/compaction.test.ts:90  function createCompactionEntry
+packages/coding-agent/test/compaction.test.ts:96  function createCompactionEntry
+packages/coding-agent/test/suite/regressions/5217-compaction-reason.test.ts:35  function createCompactionHarness
+(19 more: --json for all)

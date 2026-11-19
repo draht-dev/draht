@@ -62,7 +62,8 @@ func Surprising(
 		callSym[key] = append(syms, ce.Symbol)
 	}
 
-	var out []model.SurprisingConnection
+	// Non-nil so an empty result marshals as [] (the CJS engine's output), not null.
+	out := []model.SurprisingConnection{}
 	seen := make(map[string]struct{})
 	for _, e := range edges {
 		if e.Kind != model.EdgeKindImport {
@@ -126,7 +127,10 @@ func Surprising(
 		if out[i].Score != out[j].Score {
 			return out[i].Score > out[j].Score
 		}
-		return out[i].From < out[j].From
+		if out[i].From != out[j].From {
+			return out[i].From < out[j].From
+		}
+		return out[i].To < out[j].To
 	})
 
 	if len(out) > SurprisingCap {

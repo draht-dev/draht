@@ -10,7 +10,7 @@ content-hash cache.
 **Status: Phase 1 + Phase 2 + Phase 3 implemented.** This is NOT a scaffold
 of stubs — `map-graph` is a real, working, tested end-to-end pipeline: real
 gotreesitter AST parsing, a bounded worker pool, a content-hash incremental
-cache, and a schemaVersion-5 `MAP.json` writer with 26 of its 28 top-level
+cache, and a schemaVersion-6 `MAP.json` writer with 26 of its 28 top-level
 fields populated (`tests` and `planning` are still Phase-1 stubs — see
 below). `go test ./...` and the CJS byte-parity gate (`make parity`) both
 pass. The CJS engine at `packages/draht-tools/` is untouched and keeps
@@ -251,6 +251,37 @@ no spawns, no hashing on this path): `$DRAHT_GRAPH_BIN` →
 stat for a binary). Full detail: `.planning/kg-integration/SPEC.md`'s "Go
 engine cutover" section.
 
+## `kg` — the symbol-level graph
+
+`draht-tools kg <build|query|explain|path|affected|stats|report|export>` is
+the second engine: symbols as nodes, graphify's relation set, `graph.json` in
+graphify's node-link format. `internal/kg` is a statement-by-statement port
+of `packages/draht-tools/bin/draht-kg.cjs`, and unlike `map-graph`'s default
+tree-sitter parser it is held to full byte parity:
+`internal/kg/parity_test.go` (`make kg-parity`) runs both engines on every
+fixture repository and compares `graph.json`, `KG_REPORT.md`, the export
+files, and each subcommand's stdout, stderr and exit code. A change to either
+engine needs the same change in the other.
+
+What makes the port exact rather than approximate:
+
+- **Regexes keep JavaScript semantics.** Patterns are copied verbatim and run
+  by `github.com/dlclark/regexp2` in ECMAScript mode (`jsre.go`), so
+  lookarounds, backreferences and `\s` / `\w` behave as in the original.
+- **Maps iterate in insertion order** (`omap.go`), as JS `Map` / `Set` do;
+  the output order and every first-wins decision depend on it.
+- **Text is `[]rune`**, so offsets equal JS string offsets for everything in
+  the Basic Multilingual Plane.
+
+Known gaps against the JS engine, none of which the fixtures or nine
+benchmark repositories reach: a file containing characters outside the BMP has
+shifted internal offsets (names and line numbers are unaffected), and
+multi-line patterns treat only `\n` as a line break where JS also accepts a
+lone `\r`, U+2028 and U+2029.
+
+Files are parsed on all cores; the build phases after parsing are sequential
+because their memo tables and first-wins edges depend on file order.
+
 ## Build
 
 Go 1.26.4 is not on `PATH` by default on this box, and there is **no C
@@ -402,7 +433,7 @@ go/
     ├── parse/     The Parser swap seam: tree-sitter + regex importers. [WP-B]
     ├── extract/   Per-file facts (exports/symbols/sinks/routes/callSites).
     ├── cache/     Content-hash-keyed on-disk store for facts.          [WP-C]
-    ├── model/     MAP.json schemaVersion-5 wire structs + writer.      [WP-D]
+    ├── model/     MAP.json schemaVersion-6 wire structs + writer.      [WP-D]
     ├── rank/      Hotspots, entry points, sinks, the depth BFS.      [Phase 2]
     ├── cluster/   Label-propagation clustering + surprisingConnections. [Phase 2]
     ├── container/ containers/groups/containerEdges + GROUPS.json curation. [Phase 2]

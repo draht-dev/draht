@@ -217,3 +217,30 @@ func TestBuildSymbolIndex_Determinism(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildSymbolIndex_ReExportsDoNotCrowdOutDefinitions: re-export entries
+// (Via set) are indexed once, at the defining module, so thousands of barrel
+// copies can no longer push real definitions out of the cap.
+func TestBuildSymbolIndex_ReExportsDoNotCrowdOutDefinitions(t *testing.T) {
+	barrelExports := make([]model.Export, SymbolIndexCap)
+	for i := range barrelExports {
+		barrelExports[i] = model.Export{Name: fmt.Sprintf("Copy%d", i), Kind: "re-export", Line: 1, Via: "def.ts"}
+	}
+	modules := []model.Module{
+		{ID: "barrel.ts", Path: "barrel.ts", Exports: barrelExports},
+		exportedModule("def.ts", "", 3),
+	}
+	// The barrel outranks the definer, as barrels do.
+	entries, truncated := BuildSymbolIndex(modules, map[string]int{"barrel.ts": 100, "def.ts": 1})
+	if truncated {
+		t.Errorf("truncated = true although only 3 definitions exist")
+	}
+	if len(entries) != 3 {
+		t.Fatalf("want the 3 definitions only, got %d entries", len(entries))
+	}
+	for _, e := range entries {
+		if e.File != "def.ts" {
+			t.Errorf("entry from %q leaked into the index: %+v", e.File, e)
+		}
+	}
+}

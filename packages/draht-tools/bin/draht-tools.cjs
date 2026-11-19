@@ -1345,8 +1345,11 @@ function visParseImports(content, language) {
 	while ((m = reqRe.exec(content)) !== null) {
 		out.push({ specifier: m[1], default: null, namespace: null, names: [] });
 	}
-	// re-exports: export { foo } from "./x"
-	const reExportRe = /export\s+\{([^}]+)\}\s+from\s+["']([^"']+)["']/g;
+	// re-exports: export { foo } from "./x"  |  export type { Foo } from "./x"
+	// (per-specifier `export { type Foo }` is stripped in the map below). Without the optional
+	// `type`, a type-only re-export got no link, fell back to its barrel as origin, and made a
+	// sibling `export *` of the real definer look like a clash.
+	const reExportRe = /export\s+(?:type\s+)?\{([^}]+)\}\s+from\s+["']([^"']+)["']/g;
 	while ((m = reExportRe.exec(content)) !== null) {
 		const names = m[1].split(",").map((s) => {
 			const t = s.trim().replace(/^type\s+/, "");
@@ -1359,7 +1362,9 @@ function visParseImports(content, language) {
 	// star re-exports: export * from "./x" or export * as Foo from "./x"
 	const starReExportRe = /export\s+\*(?:\s+as\s+([A-Za-z_$][\w$]*))?\s+from\s+["']([^"']+)["']/g;
 	while ((m = starReExportRe.exec(content)) !== null) {
-		out.push({ specifier: m[2], default: null, namespace: m[1] || "*", names: [], reExport: true });
+		let line = 1;
+		for (let i = 0; i < m.index; i++) if (content.charCodeAt(i) === 10) line++;
+		out.push({ specifier: m[2], default: null, namespace: m[1] || "*", names: [], reExport: true, line });
 	}
 	return out;
 }
@@ -1386,6 +1391,132 @@ function visExtractRawImports(content, language) {
 		while ((m = re.exec(content)) !== null) imports.push(m[1]);
 	}
 	return imports;
+}
+
+// A regex literal longer than this is not treated as one (see visMaskNonCode).
+const VIS_REGEX_SCAN_LIMIT = 4096;
+// Keywords after which a `/` starts a regex literal rather than a division.
+const VIS_REGEX_AFTER_KEYWORDS = new Set([
+	"return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await",
+]);
+
+// Single-pass, length- and newline-preserving masker for JS/TS source: comments are blanked
+// entirely, string and regex-literal contents are blanked with their delimiters kept, and
+// template literals keep their `${ … }` expression code (nested) while the literal text is
+// blanked. Content-level pattern passes (named export lists, `export * as`) run on the result so
+// that neither a commented-out example nor an export list inside a string can become a fake
+// export — and a `/*` inside a string (`"packages/*/src"`) can no longer swallow real code up to
+// the next `*/`. Only "\n" is preserved: line numbers are derived by splitting on it.
+// Lockstep with Go parse.MaskNonCode — change both together.
+function visMaskNonCode(src) {
+	const n = src.length;
+	const parts = [];
+	let keep = 0; // start of the pending unmasked run
+	const mask = (a, b) => {
+		if (b <= a) return;
+		if (a > keep) parts.push(src.slice(keep, a));
+		parts.push(src.slice(a, b).replace(/[^\n]/g, " "));
+		keep = b;
+	};
+	const isWordChar = (c) => (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95 || c === 36 || c >= 128;
+	const exprDepth = []; // open `${` expressions: brace depth inside each
+	let inTemplate = false;
+	let regexOk = true; // may an expression (hence a regex literal) start here?
+	let i = 0;
+	while (i < n) {
+		if (inTemplate) {
+			const start = i;
+			while (i < n) {
+				const c = src.charCodeAt(i);
+				if (c === 92) { i += 2; continue; } // backslash escape
+				if (c === 96 || (c === 36 && src.charCodeAt(i + 1) === 123)) break; // ` or ${
+				i++;
+			}
+			if (i > n) i = n;
+			mask(start, i);
+			if (i >= n) break;
+			inTemplate = false;
+			if (src.charCodeAt(i) === 96) { i++; regexOk = false; } else { i += 2; exprDepth.push(0); regexOk = true; }
+			continue;
+		}
+		const c = src.charCodeAt(i);
+		if (c === 47) { // /
+			const next = src.charCodeAt(i + 1);
+			if (next === 47) { // line comment
+				let j = src.indexOf("\n", i);
+				if (j < 0) j = n;
+				mask(i, j);
+				i = j;
+				continue;
+			}
+			if (next === 42) { // block comment
+				const j = src.indexOf("*/", i + 2);
+				const end = j < 0 ? n : j + 2;
+				mask(i, end);
+				i = end;
+				continue;
+			}
+			if (regexOk) {
+				// A regex literal never spans lines; `/` inside a [...] class does not end it. The scan is
+				// bounded so a stray `/` in a huge minified line cannot make masking quadratic.
+				let k = i + 1, inClass = false, close = -1;
+				for (; k < n && k - i <= VIS_REGEX_SCAN_LIMIT; k++) {
+					const d = src.charCodeAt(k);
+					if (d === 10) break;
+					if (d === 92) { k++; continue; }
+					if (d === 91) inClass = true;
+					else if (d === 93) inClass = false;
+					else if (d === 47 && !inClass) { close = k; break; }
+				}
+				if (close >= 0) {
+					mask(i + 1, close);
+					i = close + 1;
+					while (i < n && isWordChar(src.charCodeAt(i))) i++; // flags
+					regexOk = false;
+					continue;
+				}
+			}
+			i++;
+			regexOk = true;
+			continue;
+		}
+		if (c === 39 || c === 34) { // ' or " — unterminated strings end at the line break
+			let k = i + 1;
+			while (k < n) {
+				const d = src.charCodeAt(k);
+				if (d === c || d === 10) break;
+				k += d === 92 ? 2 : 1;
+			}
+			if (k > n) k = n;
+			mask(i + 1, k);
+			i = k < n && src.charCodeAt(k) === c ? k + 1 : k;
+			regexOk = false;
+			continue;
+		}
+		if (c === 96) { i++; inTemplate = true; continue; } // `
+		if (c === 123) { if (exprDepth.length) exprDepth[exprDepth.length - 1]++; i++; regexOk = true; continue; } // {
+		if (c === 125) { // }
+			i++;
+			if (exprDepth.length) {
+				if (exprDepth[exprDepth.length - 1] === 0) { exprDepth.pop(); inTemplate = true; continue; }
+				exprDepth[exprDepth.length - 1]--;
+			}
+			regexOk = true;
+			continue;
+		}
+		if (isWordChar(c)) {
+			const start = i;
+			while (i < n && isWordChar(src.charCodeAt(i))) i++;
+			regexOk = VIS_REGEX_AFTER_KEYWORDS.has(src.slice(start, i));
+			continue;
+		}
+		if (c === 41 || c === 93) { i++; regexOk = false; continue; } // ) ]
+		if (c !== 32 && c !== 9 && c !== 10 && c !== 13) regexOk = true;
+		i++;
+	}
+	if (keep === 0) return src;
+	if (keep < n) parts.push(src.slice(keep));
+	return parts.join("");
 }
 
 // Extract exports — distinguish exported names so we can build a real call graph
@@ -1425,20 +1556,19 @@ function visExtractExports(rawContent, language) {
 	};
 
 	if (language === "typescript" || language === "javascript") {
-		const exportRe = /^\s*export\s+(?:default\s+)?(?:async\s+)?(class|interface|type|function|const|let|enum|var)\s+([A-Za-z_$][\w$]*)/;
-		const namedExportRe = /^\s*export\s*\{([^}]+)\}(?!\s+from)/;
+		const exportRe = /^\s*export\s+(default\s+)?(?:async\s+)?(class|interface|type|function|const|let|enum|var)\s+([A-Za-z_$][\w$]*)/;
 		const defaultRe = /^\s*export\s+default\s/;
 		const commandRe = /^\s*commands\s*\[\s*["']([^"']+)["']\s*\]\s*=/;
 		for (let i = 0; i < lines.length; i++) {
 			let m;
 			if ((m = exportRe.exec(lines[i]))) {
-				out.push({ name: m[2], kind: m[1], line: i + 1, doc: findLeadingDoc(i) });
-			} else if ((m = namedExportRe.exec(lines[i]))) {
-				const doc = findLeadingDoc(i);
-				for (const part of m[1].split(",")) {
-					const t = part.trim().replace(/^type\s+/, "");
-					const asMatch = t.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
-					if (asMatch) out.push({ name: asMatch[2] || asMatch[1], kind: "named", line: i + 1, doc });
+				// `export default class Widget {}` exports ONLY `default` — the
+				// name binds locally, never as an exported binding (ES spec), so
+				// star expansion must not forward it under its local name.
+				if (m[1]) {
+					if (!out.some((e) => e.name === "default")) out.push({ name: "default", kind: "default", line: i + 1, doc: findLeadingDoc(i) });
+				} else {
+					out.push({ name: m[3], kind: m[2], line: i + 1, doc: findLeadingDoc(i) });
 				}
 			} else if (defaultRe.test(lines[i]) && !out.some((e) => e.name === "default")) {
 				out.push({ name: "default", kind: "default", line: i + 1, doc: findLeadingDoc(i) });
@@ -1446,6 +1576,49 @@ function visExtractExports(rawContent, language) {
 				out.push({ name: m[1], kind: "command", line: i + 1, doc: findLeadingDoc(i) });
 			}
 			if (out.length > 200) break;
+		}
+		// Named export lists — content-level so multi-line `export {\n a,\n b\n}` blocks (with or
+		// without `from`) are captured. Barrels are pure re-export lists; without this every
+		// package index.ts reports exports(0) and its public API is invisible to graph-query.
+		const lineOf = (charIdx) => {
+			let pos = 0;
+			for (let i = 0; i < lines.length; i++) {
+				if (pos + lines[i].length + 1 > charIdx) return i + 1;
+				pos += lines[i].length + 1;
+			}
+			return lines.length;
+		};
+		// The content-level passes match against a comment- and string-MASKED copy
+		// (see visMaskNonCode; offsets and lines still map to the raw source): a
+		// commented-out `// export { Admin } from "./x"` example, or an export list
+		// inside a string/template literal, must not become a public export.
+		// Docs still read from the raw lines.
+		const maskedContent = visMaskNonCode(rawContent);
+		const namedBlockRe = /export\s+(?:type\s+)?\{([^}]*)\}(\s*from\s*["'][^"']+["'])?/g;
+		let nb;
+		while ((nb = namedBlockRe.exec(maskedContent)) !== null && out.length <= 200) {
+			const isReExport = Boolean(nb[2]);
+			const line = lineOf(nb.index);
+			const doc = findLeadingDoc(line - 1);
+			for (const part of nb[1].split(",")) {
+				const t = part.trim().replace(/^type\s+/, "");
+				if (!t) continue;
+				const asMatch = t.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+				if (asMatch) {
+					const entry = { name: asMatch[2] || asMatch[1], kind: isReExport ? "re-export" : "named", line, doc };
+					// A LOCAL alias (`export { a as b }`, no `from`) exposes one binding
+					// under two names: keep the local name so origin keys compare the
+					// BINDING (`b` ≡ `a`), not the export name.
+					if (!isReExport && asMatch[2] && asMatch[2] !== asMatch[1]) entry.viaName = asMatch[1];
+					out.push(entry);
+				}
+			}
+		}
+		// `export * as NS from "./x"` exposes NS as a named export of this module.
+		const starAsRe = /export\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*["'][^"']+["']/g;
+		let sa;
+		while ((sa = starAsRe.exec(maskedContent)) !== null && out.length <= 200) {
+			out.push({ name: sa[1], kind: "re-export", line: lineOf(sa.index), doc: null });
 		}
 	} else if (language === "python") {
 		const re = /^(class|def)\s+([A-Za-z_][A-Za-z0-9_]*)/;
@@ -1833,6 +2006,10 @@ function visBuildSymbols(exportsArr, content, language) {
 	};
 	if (language === "typescript" || language === "javascript") {
 		addDecl(/^(?:async\s+)?(?:function|class)\s+([A-Za-z_$][\w$]*)|^(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/, (l) => /^\s*(?:async\s+)?class\b/.test(l) ? "class" : /^\s*(?:async\s+)?function\b/.test(l) ? "function" : "const");
+		// `export default class Widget {}` exports only `default`; the name binds
+		// locally. Record it as a non-exported symbol so search still finds the
+		// defining file by its real name.
+		if (syms.length < 60) addDecl(/^export\s+default\s+(?:async\s+)?(?:function(?:\s*\*\s*|\s+)|(?:abstract\s+)?class\s+)([A-Za-z_$][\w$]*)/, (l) => /\bclass\b/.test(l) ? "class" : "function");
 	} else if (language === "python") {
 		addDecl(/^(?:class|def)\s+([A-Za-z_][\w]*)/, (l) => /^class\b/.test(l) ? "class" : "def");
 	} else if (language === "go") {
@@ -1987,6 +2164,22 @@ function visComputeClusters(modules, edges, moduleByRel, containerOf) {
 	const fallbackOrdinal = new Map();
 	const clusters = [];
 	const clusterOf = new Map();
+	const packageKeyOf = (m) => m.package || containerOf(m).replace(/^(pkg|dir):/, "");
+	// Container directories: top-level dirs holding modules of two or more packages (`packages/`,
+	// `apps/` style parents). Only these are renamed after their package below; a plain root dir
+	// (`src`, `scripts`) is the most informative label there is.
+	const containerDirs = new Set();
+	{
+		const packagesByTopDir = new Map();
+		for (const m of modules) {
+			const slash = m.path.indexOf("/");
+			if (slash < 0) continue;
+			const top = m.path.slice(0, slash);
+			if (!packagesByTopDir.has(top)) packagesByTopDir.set(top, new Set());
+			packagesByTopDir.get(top).add(packageKeyOf(m));
+		}
+		for (const [top, keys] of packagesByTopDir) if (keys.size > 1) containerDirs.add(top);
+	}
 	const sortedGroups = finalGroups
 		.map((members) => members.slice().sort())
 		.sort((a, b) => b.length - a.length || (a[0] < b[0] ? -1 : 1));
@@ -1994,7 +2187,7 @@ function visComputeClusters(modules, edges, moduleByRel, containerOf) {
 		const pkgCount = {}, layerCount = {};
 		for (const id of sorted) {
 			const m = moduleByRel.get(id);
-			const p = m.package || containerOf(m).replace(/^(pkg|dir):/, "");
+			const p = packageKeyOf(m);
 			pkgCount[p] = (pkgCount[p] || 0) + 1;
 			layerCount[m.layer] = (layerCount[m.layer] || 0) + 1;
 		}
@@ -2007,6 +2200,10 @@ function visComputeClusters(modules, edges, moduleByRel, containerOf) {
 		if (prefix) {
 			cid = "cluster:" + prefix;
 			clabel = prefix.split("/").slice(-2).join("/");
+			// A bare container dir ("packages") says nothing — prefer the package name when unambiguous.
+			if (!prefix.includes("/") && containerDirs.has(prefix) && dominantPackage && packages.length === 1) {
+				clabel = String(dominantPackage).replace(/^@[^/]+\//, "");
+			}
 		} else {
 			const base = "cluster:" + (dominantPackage || "root");
 			const n = (fallbackOrdinal.get(base) || 0) + 1;
@@ -2025,6 +2222,29 @@ function visComputeClusters(modules, edges, moduleByRel, containerOf) {
 		clusters.push({ id: cid, label: clabel, size: sorted.length, members: sorted, dominantPackage, dominantLayer, packages });
 	}
 	clusters.sort((a, b) => b.size - a.size || (a.id < b.id ? -1 : 1));
+	// Disambiguate duplicate labels: recursive splitting of oversized communities yields several
+	// groups sharing one directory prefix, so graph-clusters printed six indistinguishable
+	// "packages/ai" rows. Append the dominant layer, then a stable ordinal. Iteration order is
+	// the sorted clusters array, so the suffixes are deterministic across rebuilds.
+	{
+		const dupes = new Set();
+		const seenOnce = new Set();
+		for (const c of clusters) {
+			if (seenOnce.has(c.label)) dupes.add(c.label);
+			seenOnce.add(c.label);
+		}
+		const used = new Set();
+		for (const c of clusters) {
+			let label = dupes.has(c.label) ? c.label + " · " + c.dominantLayer : c.label;
+			if (used.has(label)) {
+				let n = 2;
+				while (used.has(label + " · " + n)) n++;
+				label = label + " · " + n;
+			}
+			used.add(label);
+			c.label = label;
+		}
+	}
 	return { clusters, clusterOf };
 }
 
@@ -2060,7 +2280,7 @@ function visComputeSurprising(edges, callEdges, moduleByRel, clusterOf, groupOfC
 		if (score <= 0) continue;
 		out.push({ from: e.from, to: e.to, score, reason: reasons.join(", "), sampleSymbols: callSym.get(e.from + "|" + e.to) || [] });
 	}
-	out.sort((x, y) => y.score - x.score || (x.from < y.from ? -1 : x.from > y.from ? 1 : 0));
+	out.sort((x, y) => y.score - x.score || (x.from < y.from ? -1 : x.from > y.from ? 1 : 0) || (x.to < y.to ? -1 : x.to > y.to ? 1 : 0));
 	return out.slice(0, 20);
 }
 
@@ -2144,11 +2364,19 @@ function visBuildMap(root) {
 				loc = content.split("\n").length;
 				if (VIS_CODE_LANGS.has(lang)) {
 					totalLoc.value += loc; // WP2: LOC rollup tracks code modules only, matching stats.files
-					// Use raw content for export/JSDoc extraction (need comments) and stripped for sink/import detection
+					// Use raw content for export/JSDoc extraction (need comments) and stripped for sink/import detection.
 					const stripped = content
 						.replace(/\/\*[\s\S]*?\*\//g, "")
 						.replace(/(^|[^:])\/\/.*$/gm, "$1");
-					parsedImports = visParseImports(stripped, lang);
+					// Import parsing gets a NEWLINE-PRESERVING strip so Import line numbers
+					// (star re-export expansion feeds them into exports/symbols) stay aligned
+					// with the raw source even when a multiline block comment precedes the
+					// statement. Sinks/routes keep the fully-deleting strip (lockstep with
+					// the Go engine's StripComments / StripCommentsPreserveLines pair).
+					const importStripped = content
+						.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ""))
+						.replace(/(^|[^:])\/\/.*$/gm, "$1");
+					parsedImports = visParseImports(importStripped, lang);
 					exports = visExtractExports(content, lang);
 					sinks = visDetectSinks(stripped);
 					sinkSites = visFindSinkSites(content, lang);
@@ -2181,7 +2409,7 @@ function visBuildMap(root) {
 			loc,
 			isTest,
 			package: pkg,
-			exports: exports.slice(0, 30),
+			exports: exports.slice(0, 60),
 			symbols,
 			sinks,
 			sinkSites: sinkSites.slice(0, 10),
@@ -2255,6 +2483,10 @@ function visBuildMap(root) {
 		} catch { /* empty */ }
 	}
 
+	const starReExports = new Map(); // barrel module id -> [{ target, line }] for `export * from`
+	const namedReExports = new Map(); // module id -> Map(exported name -> { target, imported }) for `export { x } from`
+	const importedLocals = new Map(); // module id -> Map(local name -> { resolved, importedName }) for plain imports
+
 	const resolveSpec = (fromDir, spec) => {
 		// Relative path
 		if (spec.startsWith(".") || spec.startsWith("/")) {
@@ -2301,13 +2533,26 @@ function visBuildMap(root) {
 			edges.push({ from: m.id, to: resolved, kind: imp.reExport ? "re-export" : "import", confidence: "EXTRACTED" });
 			// Re-exports don't introduce local usage — they pass the symbol through to the
 			// importer of THIS module. We capture them separately for re-export traversal in flow BFS.
-			if (imp.reExport) continue;
+			if (imp.reExport) {
+				if (imp.namespace === "*") {
+					if (!starReExports.has(m.id)) starReExports.set(m.id, []);
+					starReExports.get(m.id).push({ target: resolved, line: imp.line || 1 });
+				} else if (!imp.namespace) {
+					if (!namedReExports.has(m.id)) namedReExports.set(m.id, new Map());
+					const links = namedReExports.get(m.id);
+					for (const n of imp.names || []) {
+						if (!links.has(n.local)) links.set(n.local, { target: resolved, imported: n.imported });
+					}
+				}
+				continue;
+			}
 			if (imp.default) usedLocals.set(imp.default, { resolved, importedName: "default" });
 			if (imp.namespace) usedLocals.set(imp.namespace, { resolved, importedName: "*" });
 			for (const n of imp.names || []) {
 				usedLocals.set(n.local, { resolved, importedName: n.imported });
 			}
 		}
+		importedLocals.set(m.id, usedLocals);
 		// For each imported local, scan for call sites: `localName(` or `localName.x(` (member call)
 		if (usedLocals.size > 0) {
 			const text = file.content || "";
@@ -2324,6 +2569,233 @@ function visBuildMap(root) {
 					callEdges.push({ from: m.id, to: ref.resolved, symbol: ref.importedName, count, confidence });
 				}
 			}
+		}
+	}
+
+	// Re-export resolution. The ORIGIN of a module's export `name` is the binding that ultimately
+	// DEFINES it: { mod, name there }. Same-binding routes are ONE export (a barrel starring both the
+	// definer and a named re-exporter of the same binding keeps the name; a local alias
+	// `export { a as b }` stands for the binding `a`). Everything is computed from the modules' OWN
+	// declared exports (snapshotted below, before any star copy exists), so the answer is a pure
+	// function of the module graph and never depends on file names or iteration order:
+	//   - an own export (local, alias, `export * as NS`) is its own binding, unless it exports a
+	//     name the module imported (`import { x } from './y'; export { x }`): that is y's binding; a named re-export
+	//     (`export { x } from './y'`) takes the binding resolved at its target, and a target that
+	//     never exports the name (CommonJS: no extracted exports) is itself the origin;
+	//   - otherwise `export *` resolves the name at every star target (never `default`): one distinct
+	//     binding → exported; several → ambiguous, NOT exported (ES ResolveExport);
+	//   - ambiguity propagates (ES ResolveExport step "if resolution is ambiguous, return ambiguous"):
+	//     a barrel starring a target where the name is ambiguous does not export it either, however
+	//     its other targets resolve; a target where the name is merely absent contributes nothing;
+	//   - modules that only reach a name through each other (a cycle) resolve it to the same thing,
+	//     from what enters the cycle from outside, never from a stale half-computed state.
+	// Resolution runs Tarjan over lazily discovered (module, name) nodes: every strongly connected
+	// component is closed once and its status is final, so work stays polynomial even on dense
+	// barrel cycles. Lockstep with Go graph.exportResolver — change both together.
+	const baseExports = new Map(modules.map((m) => [m.id, new Map(m.exports.map((e) => [e.name, e]))]));
+	const AMBIGUOUS = { ambiguous: true };
+	const exportKey = (modId, name) => modId + "\u0000" + name;
+	const sameBinding = (a, b) => a.mod === b.mod && a.name === b.name;
+	const describeExport = (mod, name) => {
+		const own = baseExports.get(mod.id).get(name);
+		if (own) {
+			const link = own.kind === "re-export" && namedReExports.has(mod.id) ? namedReExports.get(mod.id).get(name) : null;
+			const target = link ? moduleByRel.get(link.target) : null;
+			if (!target) {
+				// `import { foo } from './x'; export { foo }` exports x's binding, not a new one:
+				// a barrel starring both files reaches ONE `foo`, not an ambiguous pair.
+				const binding = own.viaName || name;
+				const imported = own.kind === "named" && importedLocals.has(mod.id) ? importedLocals.get(mod.id).get(binding) : null;
+				const source = imported && imported.importedName !== "*" ? moduleByRel.get(imported.resolved) : null;
+				if (source && source !== mod) return { named: true, edges: [{ mod: source, name: imported.importedName }] };
+				return { terminal: { mod: mod.id, name: binding }, edges: [] };
+			}
+			return { named: true, edges: [{ mod: target, name: link.imported }] };
+		}
+		const edges = [];
+		if (name !== "default") { // a bare `export *` never forwards default (ES spec)
+			for (const star of starReExports.get(mod.id) || []) {
+				const target = moduleByRel.get(star.target);
+				if (target) edges.push({ mod: target, name });
+			}
+		}
+		return { edges };
+	};
+	const resolvedExport = new Map(); // exportKey -> null (not exported) | AMBIGUOUS | { mod, name }
+	const tarjanIndex = new Map();
+	const tarjanLow = new Map();
+	const tarjanNodes = new Map();
+	const tarjanStack = [];
+	let tarjanCounter = 0;
+	// Closes the strongly connected component rooted at `key`: every member gets the same final status.
+	const closeComponent = (key) => {
+		const members = new Set();
+		for (;;) {
+			const k = tarjanStack.pop();
+			members.add(k);
+			if (k === key) break;
+		}
+		const found = [];
+		let ambiguous = false;
+		const add = (b) => { if (!found.some((f) => sameBinding(f, b))) found.push(b); };
+		for (const k of members) {
+			const member = tarjanNodes.get(k);
+			if (member.terminal) add(member.terminal);
+			for (const edge of member.edges) {
+				const childKey = exportKey(edge.mod.id, edge.name);
+				if (members.has(childKey)) continue;
+				const child = resolvedExport.get(childKey);
+				if (child === AMBIGUOUS) ambiguous = true;
+				else if (child) add(child);
+				else if (member.named) add({ mod: edge.mod.id, name: edge.name });
+			}
+		}
+		const status = ambiguous || found.length > 1 ? AMBIGUOUS : found.length === 1 ? found[0] : null;
+		for (const k of members) { resolvedExport.set(k, status); tarjanNodes.delete(k); }
+	};
+	// Iterative (explicit frame stack): barrel chains can be thousands deep.
+	const strongConnect = (rootMod, rootName, rootKey) => {
+		const frames = [];
+		const open = (mod, name, key) => {
+			tarjanNodes.set(key, describeExport(mod, name));
+			tarjanIndex.set(key, tarjanCounter);
+			tarjanLow.set(key, tarjanCounter);
+			tarjanCounter++;
+			tarjanStack.push(key);
+			frames.push({ key, edges: tarjanNodes.get(key).edges, i: 0 });
+		};
+		open(rootMod, rootName, rootKey);
+		while (frames.length) {
+			const frame = frames[frames.length - 1];
+			if (frame.i < frame.edges.length) {
+				const edge = frame.edges[frame.i++];
+				const childKey = exportKey(edge.mod.id, edge.name);
+				if (resolvedExport.has(childKey)) continue;
+				if (!tarjanIndex.has(childKey)) open(edge.mod, edge.name, childKey);
+				else tarjanLow.set(frame.key, Math.min(tarjanLow.get(frame.key), tarjanIndex.get(childKey)));
+				continue;
+			}
+			frames.pop();
+			if (tarjanLow.get(frame.key) === tarjanIndex.get(frame.key)) closeComponent(frame.key);
+			if (frames.length) {
+				const parent = frames[frames.length - 1];
+				tarjanLow.set(parent.key, Math.min(tarjanLow.get(parent.key), tarjanLow.get(frame.key)));
+			}
+		}
+	};
+	const resolveExport = (mod, name) => {
+		const key = exportKey(mod.id, name);
+		if (!resolvedExport.has(key)) strongConnect(mod, name, key);
+		return resolvedExport.get(key);
+	};
+	const isBinding = (r) => r !== null && r !== AMBIGUOUS;
+	// ES GetExportedNames: the module's own names, then every star target's (depth-first in source
+	// order, each module once), never `default` through a star; first occurrence wins.
+	const exportedNames = (root) => {
+		const names = [];
+		const seen = new Set();
+		const visited = new Set();
+		const pending = [root];
+		while (pending.length) {
+			const mod = pending.pop();
+			if (visited.has(mod.id)) continue;
+			visited.add(mod.id);
+			for (const n of baseExports.get(mod.id).keys()) {
+				if ((mod !== root && n === "default") || seen.has(n)) continue;
+				seen.add(n);
+				names.push(n);
+			}
+			const stars = starReExports.get(mod.id) || [];
+			for (let i = stars.length - 1; i >= 0; i--) {
+				const target = moduleByRel.get(stars[i].target);
+				if (target) pending.push(target);
+			}
+		}
+		return names;
+	};
+	// Doc of the nearest entry providing `binding` for `name`: the module's own entry, else the first
+	// star target (depth-first in source order) that provides it. undefined = no provider found.
+	const exportDocOf = (start, name, binding) => {
+		const seen = new Set();
+		const frames = [];
+		const enter = (mod) => {
+			const own = baseExports.get(mod.id).get(name);
+			if (own) return own.doc;
+			const key = exportKey(mod.id, name);
+			if (!seen.has(key)) { seen.add(key); frames.push({ mod, i: 0 }); }
+			return undefined;
+		};
+		let doc = enter(start);
+		while (doc === undefined && frames.length) {
+			const frame = frames[frames.length - 1];
+			const stars = starReExports.get(frame.mod.id) || [];
+			if (frame.i >= stars.length) { frames.pop(); continue; }
+			const target = moduleByRel.get(stars[frame.i++].target);
+			const r = target ? resolveExport(target, name) : null;
+			if (isBinding(r) && sameBinding(r, binding)) doc = enter(target);
+		}
+		return doc;
+	};
+
+	// Star re-export expansion: `export * from './x'` declares no names, so without this pass
+	// a star barrel's public API is invisible to graph-context/graph-query/MAP.html search.
+	// Copy each resolved name in as kind "re-export" (with `via` = the real defining module), in
+	// GetExportedNames order; the 60-per-module cap (own exports included) bounds MAP.json growth
+	// and is applied after resolution, so which names survive it is deterministic.
+	if (starReExports.size > 0) {
+		const EXPANSION_CAP = 60;
+		const sortedBarrels = [...starReExports.keys()].sort();
+		for (const barrelId of sortedBarrels) {
+			const barrel = moduleByRel.get(barrelId);
+			if (!barrel) continue;
+			const stars = starReExports.get(barrelId);
+			const own = baseExports.get(barrelId);
+			for (const name of exportedNames(barrel)) {
+				if (own.has(name)) continue; // an explicit export shadows the star
+				if (barrel.exports.length >= EXPANSION_CAP) break;
+				const origin = resolveExport(barrel, name);
+				if (!isBinding(origin)) continue;
+				// line/doc come from the first star statement whose target provides the binding.
+				let line = 1, doc = null;
+				for (const star of stars) {
+					const target = moduleByRel.get(star.target);
+					const r = target ? resolveExport(target, name) : null;
+					if (!isBinding(r) || !sameBinding(r, origin)) continue;
+					line = star.line;
+					doc = exportDocOf(target, name, origin) ?? null;
+					break;
+				}
+				const copy = { name, kind: "re-export", line, doc, via: origin.mod };
+				if (origin.name !== name) copy.viaName = origin.name;
+				barrel.exports.push(copy);
+			}
+		}
+		// Mirror expanded names into symbols so graph-query and the HTML viewer see them.
+		for (const barrelId of sortedBarrels) {
+			const barrel = moduleByRel.get(barrelId);
+			if (!barrel) continue;
+			const seen = new Set(barrel.symbols.map((s) => s.name));
+			for (const e of barrel.exports) {
+				if (barrel.symbols.length >= EXPANSION_CAP) break;
+				if (seen.has(e.name)) continue;
+				seen.add(e.name);
+				barrel.symbols.push({ name: e.name, kind: "re-export", line: e.line, exported: true });
+			}
+		}
+	}
+
+	// Record each named re-export entry's origin as `via`. The origin BINDING matters too:
+	// `export { b as a } from './x'` exposes x's `b` under the name `a` (viaName "b") — a star
+	// sibling exposing x's own `a` is a different binding, hence ambiguous. An entry whose target
+	// gains the name through its own `export *` names the defining module, not that intermediate
+	// barrel.
+	for (const m of modules) {
+		for (const e of m.exports) {
+			if (e.kind !== "re-export" || e.via) continue;
+			const origin = resolveExport(m, e.name);
+			if (!isBinding(origin) || origin.mod === m.id) continue;
+			e.via = origin.mod;
+			if (origin.name !== e.name) e.viaName = origin.name;
 		}
 	}
 
@@ -2889,17 +3361,20 @@ function visBuildMap(root) {
 
 	// Symbol index for agents (the searchable identifier glossary). Defect 25: rank exporting
 	// modules by import in-degree (most-depended-on first) BEFORE cutting, so a hard cap doesn't
-	// arbitrarily amputate whichever modules happened to sort last by file-walk order.
+	// arbitrarily amputate whichever modules happened to sort last by file-walk order. Re-export
+	// entries (`via`: barrel and star copies of a name defined elsewhere) are left out: the defining
+	// module already indexes the name, and ~1k duplicates would crowd real definitions out of the cap.
 	const SYMBOL_INDEX_CAP = 5000;
 	let symbolIndexTruncated = false;
 	const exportingModulesRanked = modules
-		.filter((m) => m.exports && m.exports.length > 0)
+		.filter((m) => m.exports && m.exports.some((e) => !e.via))
 		.slice()
 		.sort((a, b) => (inDeg.get(b.id) || 0) - (inDeg.get(a.id) || 0) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 	const symbolIndex = [];
 	for (const m of exportingModulesRanked) {
 		if (symbolIndex.length >= SYMBOL_INDEX_CAP) { symbolIndexTruncated = true; break; }
 		for (const e of m.exports) {
+			if (e.via) continue;
 			if (symbolIndex.length >= SYMBOL_INDEX_CAP) { symbolIndexTruncated = true; break; }
 			symbolIndex.push({ name: e.name, kind: e.kind, line: e.line, file: m.path, package: m.package, exported: true });
 		}
@@ -2938,7 +3413,7 @@ function visBuildMap(root) {
 		.slice(0, 600);
 
 	return {
-		schemaVersion: 5,
+		schemaVersion: 6,
 		generatedAt: new Date().toISOString(),
 		buildMs: Date.now() - startedAt,
 		root: path.basename(root),
@@ -3194,6 +3669,16 @@ svg, canvas { display:block; user-select:none; position:absolute; inset:0; width
 .ctrl-checkbox { display:inline-flex; align-items:center; gap:5px; color:var(--muted);
   font-size:11px; cursor:pointer; padding:4px 8px; border:1px solid var(--border); border-radius:6px; background:var(--panel); }
 .ctrl-checkbox input { margin:0; cursor:pointer; }
+#insights { position:absolute; inset:0; overflow:auto; padding:18px 24px; background:var(--bg); }
+#insights h2 { font-size:13px; text-transform:uppercase; letter-spacing:0.08em; color:var(--muted); margin:18px 0 8px; }
+#insights table { border-collapse:collapse; width:100%; max-width:1100px; font-size:12px; }
+#insights th { text-align:left; color:var(--muted); font-weight:500; padding:4px 10px 4px 0; border-bottom:1px solid var(--border); }
+#insights td { padding:4px 10px 4px 0; border-bottom:1px solid var(--border); vertical-align:top; }
+#insights .num { text-align:right; font-variant-numeric:tabular-nums; }
+#insights .tag { display:inline-block; padding:1px 6px; border-radius:4px; font-size:10px; background:var(--panel); border:1px solid var(--border); color:var(--muted); margin-right:6px; }
+#insights .tag.hot { color:#f85149; border-color:#f85149; }
+#insights .ins-link { cursor:pointer; color:#58a6ff; }
+#insights .ins-link:hover { text-decoration:underline; }
 </style>
 </head>
 <body>
@@ -3204,6 +3689,7 @@ svg, canvas { display:block; user-select:none; position:absolute; inset:0; width
     <button id="tab-graph" class="active">Graph</button>
     <button id="tab-architecture">Architecture</button>
     <button id="tab-flows">Flows</button>
+    <button id="tab-insights">Insights</button>
   </div>
   <div class="live dead" id="live-indicator">● static snapshot</div>
 </header>
@@ -3234,6 +3720,7 @@ svg, canvas { display:block; user-select:none; position:absolute; inset:0; width
     <div id="error-banner"></div>
     <svg id="svg" width="100%" height="100%" style="display:none"></svg>
     <canvas id="canvas"></canvas>
+    <div id="insights" style="display:none"></div>
     <div id="overlay-left">
       <div id="graph-controls">
         <label class="ctrl-checkbox"><input type="checkbox" id="show-tests-cb"/> show tests</label>
@@ -3461,13 +3948,19 @@ function connectLive() {
 // ====================== view routing ======================
 function setView(v) {
   state.view = v;
-  ["tab-graph","tab-architecture","tab-flows"].forEach(function (id) {
+  ["tab-graph","tab-architecture","tab-flows","tab-insights"].forEach(function (id) {
     $(id).classList.toggle("active", id === "tab-" + v);
   });
   svg.style.display = (v === "architecture" || v === "flows") ? "block" : "none";
   canvas.style.display = (v === "graph") ? "block" : "none";
+  $("insights").style.display = (v === "insights") ? "block" : "none";
   $("graph-controls").style.display = (v === "graph") ? "flex" : "none";
   $("flows-sidebar").style.display = (v === "flows") ? "block" : "none";
+  // Insights is a document, not a canvas — the legend/camera/export overlays don't apply.
+  // Clear the inline style (not "block"/"flex") so the stylesheet layout returns intact.
+  $("overlay-left").style.display = (v === "insights") ? "none" : "";
+  var ctrls = document.querySelector(".controls");
+  if (ctrls) ctrls.style.display = (v === "insights") ? "none" : "";
   // B3: re-measure the canvas's backing-store size whenever it becomes visible. A resize while
   // the Graph tab was hidden left canvas.width/height stale (clientWidth/height reflow correctly
   // even for display:none, but resizeCanvas() only ran on the debounced window "resize" handler
@@ -3483,6 +3976,8 @@ function render() {
   if (state.view === "graph") {
     ensureGraphModel();
     requestDraw();
+  } else if (state.view === "insights") {
+    renderInsights();
   } else {
     var W = svg.clientWidth, H = svg.clientHeight;
     svg.innerHTML = "";
@@ -3734,6 +4229,66 @@ function svgToWorld(ev) {
   var rect = svg.getBoundingClientRect();
   var sx = ev.clientX - rect.left, sy = ev.clientY - rect.top;
   return { x: (sx - state.pan.x) / state.zoom, y: (sy - state.pan.y) / state.zoom };
+}
+
+// ====================== Insights view ======================
+// Skimmable clusters / hotspots / surprising-connections / rationale panel (the graphify-style
+// "read this first" view). All map fields are optional (|| []) so a stale pre-v6 MAP.json served
+// by map-serve still renders the other tabs without breaking this one.
+function renderInsights() {
+  var map = state.map;
+  var box = $("insights");
+  var h = "";
+  var mod = function (id) { return linkBtn(id.split("/").slice(-2).join("/"), "module", id); };
+
+  var clusters = (map.clusters || []).slice().sort(function (a, b) { return b.size - a.size; });
+  h += "<h2>Clusters (" + clusters.length + ") — structural import neighborhoods</h2>";
+  if (clusters.length) {
+    h += '<table><tr><th>label</th><th class="num">modules</th><th>layer</th><th>packages</th><th>sample members</th></tr>';
+    clusters.slice(0, 30).forEach(function (c) {
+      var sample = (c.members || []).slice(0, 3).map(mod).join(", ");
+      h += "<tr><td>" + linkBtn(c.label, "cluster", c.id) + '</td><td class="num">' + c.size + "</td><td>" + escapeHtml(c.dominantLayer || "-") + "</td><td>" + escapeHtml((c.packages || []).slice(0, 3).join(", ")) + "</td><td>" + sample + "</td></tr>";
+    });
+    h += "</table>";
+    if (clusters.length > 30) h += '<div class="tag">+' + (clusters.length - 30) + " more</div>";
+  } else h += '<div class="tag">no cluster data — rebuild with map-graph</div>';
+
+  var hs = map.hotspots || {};
+  var hsSection = function (title, arr) {
+    h += "<h2>" + title + "</h2>";
+    if (!arr || !arr.length) { h += '<div class="tag">none</div>'; return; }
+    h += '<table><tr><th>module</th><th class="num">in</th><th class="num">out</th><th class="num">loc</th><th>why</th></tr>';
+    arr.slice(0, 10).forEach(function (g) {
+      h += "<tr><td>" + linkBtn(g.path, "module", g.id || g.path) + '</td><td class="num">' + g.inDegree + '</td><td class="num">' + g.outDegree + '</td><td class="num">' + g.loc + "</td><td>" + escapeHtml(g.reason || "") + "</td></tr>";
+    });
+    h += "</table>";
+  };
+  hsSection("God nodes (most connected)", hs.godNodes);
+  hsSection("Most depended-on", hs.mostDependedOn);
+  hsSection("Orchestrators (most dependencies)", hs.orchestrators);
+
+  var sc = map.surprisingConnections || [];
+  h += "<h2>Surprising connections (" + sc.length + ") — bridges, cross-group and layer-violating edges</h2>";
+  if (sc.length) {
+    h += '<table><tr><th>from</th><th>to</th><th>reason</th><th class="num">score</th><th>symbols</th></tr>';
+    sc.slice(0, 20).forEach(function (x) {
+      h += "<tr><td>" + mod(x.from) + "</td><td>" + mod(x.to) + "</td><td>" + escapeHtml(x.reason || "") + '</td><td class="num">' + x.score + "</td><td>" + escapeHtml((x.sampleSymbols || []).slice(0, 3).join(", ")) + "</td></tr>";
+    });
+    h += "</table>";
+  } else h += '<div class="tag">none detected</div>';
+
+  var rat = (map.rationaleIndex || []).filter(function (r) { return ["SECURITY", "BUG", "FIXME", "HACK"].indexOf(r.tag) !== -1; });
+  h += "<h2>Rationale highlights (" + rat.length + ") — SECURITY / BUG / FIXME / HACK notes in source</h2>";
+  if (rat.length) {
+    h += '<table><tr><th>tag</th><th>where</th><th>note</th></tr>';
+    rat.slice(0, 25).forEach(function (r) {
+      var hot = r.tag === "SECURITY" || r.tag === "BUG";
+      h += '<tr><td><span class="tag' + (hot ? " hot" : "") + '">' + escapeHtml(r.tag) + "</span></td><td>" + linkBtn(r.file + ":" + r.line, "module", r.file) + "</td><td>" + escapeHtml(r.text || "") + "</td></tr>";
+    });
+    h += "</table>";
+  } else h += '<div class="tag">none</div>';
+
+  box.innerHTML = h;
 }
 
 function renderArchitecture(g, W, H) {
@@ -4795,7 +5350,13 @@ function applySearch(q) {
     var needle = q.toLowerCase();
     var set = new Set();
     (state.map.modules || []).forEach(function (m) {
-      if (m.path.toLowerCase().indexOf(needle) !== -1) set.add(m.id);
+      if (m.path.toLowerCase().indexOf(needle) !== -1) { set.add(m.id); return; }
+      // modules[*].symbols covers non-exported decls and barrel re-exports that the
+      // exported-only symbolIndex misses.
+      (m.symbols || []).some(function (s) {
+        if (s.name.toLowerCase().indexOf(needle) !== -1) { set.add(m.id); return true; }
+        return false;
+      });
     });
     (state.map.symbolIndex || []).forEach(function (s) {
       if (s.name.toLowerCase().indexOf(needle) !== -1) set.add(s.file);
@@ -4948,11 +5509,13 @@ window.addEventListener("keydown", function (e) {
   if (e.key === "g") setView("graph");
   if (e.key === "a") setView("architecture");
   if (e.key === "F") setView("flows");
+  if (e.key === "i") setView("insights");
 });
 
 $("tab-graph").onclick = function () { setView("graph"); };
 $("tab-architecture").onclick = function () { setView("architecture"); };
 $("tab-flows").onclick = function () { setView("flows"); };
+$("tab-insights").onclick = function () { setView("insights"); };
 $("fit").onclick = fit;
 $("clear").onclick = function () { clearFlow(); state.collapsedGroups = {}; render(); };
 $("reload").onclick = function () { refreshFromServer(); };
@@ -5109,20 +5672,20 @@ function visRenderReport(map) {
 const GRAPH_GO_COMMANDS = new Set([
 	"map-graph", "map-serve", "graph-context", "graph-impact", "graph-callers",
 	"graph-callees", "graph-path", "graph-query", "graph-hotspots",
-	"graph-clusters", "graph-hook",
+	"graph-clusters", "graph-hook", "kg",
 ]);
 
 // Deliberately NOT "draht-tools": the $PATH scan below would otherwise find the
 // npm shim for THIS file and spawn it forever. See also DRAHT_GRAPH_DELEGATED.
 const GRAPH_BIN_NAME = process.platform === "win32" ? "draht-graph.exe" : "draht-graph";
 
-// Must equal visBuildMap()'s schemaVersion (see the `schemaVersion: 5` literal
+// Must equal visBuildMap()'s schemaVersion (see the `schemaVersion: 6` literal
 // above). A stamped binary built for another schema is rejected rather than
 // silently producing an incompatible MAP.json.
-const GRAPH_SCHEMA_VERSION = 5;
+const GRAPH_SCHEMA_VERSION = 6;
 
 // Flip to true only when every gate in SPEC.md § "Requiring the Go engine" is
-// green. Until then a missing binary is a silent JS fallback, not an error.
+// green. Until then a missing binary is a JS fallback (see graphEngineHint), not an error.
 const GRAPH_REQUIRE_GO = false;
 
 function graphEngineMode() {
@@ -5256,6 +5819,34 @@ function graphMissingMessage() {
 	].join("\n");
 }
 
+// The Go engine stays an opt-in download (an unsigned native binary), so the
+// JavaScript fallback says once a day that it exists. Stderr only: stdout stays
+// byte-identical between the engines. Silent with --quiet, in CI, with
+// DRAHT_GRAPH_HINT=0, when the engine was chosen explicitly, and whenever the
+// once-a-day stamp cannot be written (better no hint than one on every run).
+const GRAPH_HINT_INTERVAL_MS = 24 * 60 * 60 * 1000;
+function graphEngineHint(args, outdated) {
+	if (process.env.DRAHT_GRAPH_HINT === "0" || process.env.CI) return;
+	if (args.some((a) => a === "--quiet" || a === "-q")) return;
+	let stamp;
+	try {
+		stamp = path.join(os.homedir(), ".draht", ".graph-engine-hint");
+		if (Date.now() - fs.statSync(stamp).mtimeMs < GRAPH_HINT_INTERVAL_MS) return;
+	} catch (err) {
+		if (!stamp || err.code !== "ENOENT") return;
+	}
+	try {
+		fs.mkdirSync(path.dirname(stamp), { recursive: true });
+		fs.writeFileSync(stamp, "");
+	} catch {
+		return;
+	}
+	const what = outdated
+		? "the installed `draht-graph` binary predates the Go `kg` engine, so `kg` ran on the built-in JavaScript engine. Update it:"
+		: "running the built-in JavaScript graph engine. The optional Go engine gives the same output faster:";
+	console.error(`draht-tools: ${what} npx draht-claude install-graph-engine (or npx draht-codex install-graph-engine). Shown once a day; DRAHT_GRAPH_HINT=0 turns this off.`);
+}
+
 // Delegates and EXITS the process on success; returns normally to fall through to JS.
 // Value-taking Go-only flags (accepted by the Go engine's own CLI, meaningless to
 // the JS engine's arg parsers) vs. boolean ones. graphParseArgs/map-graph's own
@@ -5304,6 +5895,19 @@ function graphSignatureFallbackWarning() {
 	return "draht-tools: --symbol-signatures requires the Go graph engine, but no usable `draht-graph` binary is available; continuing with the JavaScript engine without symbol signatures.";
 }
 
+// `kg` reached the Go engine later than the map commands: a binary built before
+// it answers "Unknown command: kg". Such a binary keeps serving the commands it
+// has, and `kg` stays on the JavaScript engine (same graph.json, same output).
+function graphBinHasKg(bin) {
+	const res = spawnSync(bin, ["kg", "help"], {
+		stdio: ["ignore", "pipe", "ignore"],
+		encoding: "utf-8",
+		windowsHide: true,
+		env: { ...process.env, DRAHT_GRAPH_DELEGATED: "1" },
+	});
+	return !res.error && res.status === 0 && String(res.stdout).startsWith("draht-kg");
+}
+
 function graphMaybeDelegate(cmd, args) {
 	if (!GRAPH_GO_COMMANDS.has(cmd)) return;
 	if (process.env.DRAHT_GRAPH_DELEGATED) return; // recursion guard, belt and braces
@@ -5316,7 +5920,16 @@ function graphMaybeDelegate(cmd, args) {
 			process.exit(127);
 		}
 		if (graphWantsSymbolSignatures(cmd, args)) console.error(graphSignatureFallbackWarning());
-		return; // auto: silent JS fallback
+		graphEngineHint(args, false);
+		return; // auto: JS fallback
+	}
+	if (cmd === "kg" && !graphBinHasKg(bin)) {
+		if (mode === "go" || GRAPH_REQUIRE_GO) {
+			console.error(`draht-tools: ${bin} does not implement \`kg\` (it predates the Go kg engine); reinstall it or unset DRAHT_GRAPH_ENGINE.`);
+			process.exit(127);
+		}
+		graphEngineHint(args, true);
+		return; // auto: JS fallback
 	}
 	const res = spawnSync(bin, [cmd, ...graphPinRegexParser(cmd, args)], {
 		stdio: "inherit", // byte-identical stdout/stderr, TTY preserved
@@ -5349,6 +5962,7 @@ function graphBuildOutputs(root, opts = {}) {
 			console.error(graphMissingMessage());
 			process.exit(127);
 		}
+		if (mode !== "js") graphEngineHint(opts.quiet ? ["--quiet"] : [], false);
 		return visWriteOutputs(root, opts);
 	}
 	const argv = ["map-graph", "--parser", "regex"]; // see graphPinRegexParser's doc comment
@@ -5855,7 +6469,15 @@ commands["graph-impact"] = function (...args) {
 	const epLabel = (e) => e.kind === "cli" ? "cli:" + (e.name || "") : e.kind === "http" ? "http:" + ((e.routes && e.routes[0] && (e.routes[0].method + " " + e.routes[0].path)) || "") : "lib:" + (e.name || e.path.split("/").pop());
 	const L = [];
 	if (notes.length) L.push(...notes);
-	L.push(`impact ${targets.map((t) => t.split("/").pop()).join(", ")} — ${impacted.length} modules · ${Object.keys(byPkg).length} packages · ${eps.length} entry points · sinks: ${[...sinkKinds].join(", ") || "none"}`);
+	L.push(`impact ${targets.join(", ")} — ${impacted.length} modules · ${Object.keys(byPkg).length} packages · ${eps.length} entry points · sinks: ${[...sinkKinds].join(", ") || "none"}`);
+	// A barrel with no importers still fronts a public API — say so instead of a bare zero.
+	if (!impacted.length) {
+		for (const t of targets) {
+			const tm = modById.get(t);
+			const reexp = (tm.exports || []).filter((e) => e.kind === "re-export");
+			if (reexp.length) L.push(`note: ${t} is a barrel (re-exports ${reexp.length} symbols) with no direct importers — changes only affect external consumers of ${tm.package || "this package"}`);
+		}
+	}
 	if (eps.length) L.push(`entry points reaching it (${eps.length}): ${eps.slice(0, 8).map(epLabel).join(", ")}${eps.length > 8 ? " …" : ""}`);
 	const pkgs = Object.entries(byPkg).sort((a, b) => b[1].length - a[1].length || (a[0] < b[0] ? -1 : 1));
 	if (pkgs.length) L.push("by package:");
@@ -5890,7 +6512,7 @@ function graphCallDir(args, direction) {
 		const arr = byHop[d] || []; if (!arr.length) continue;
 		console.log(`  hop ${d}:`);
 		const seen = new Set();
-		for (const h of arr) { const node = direction === "callers" ? h.to : h.to; if (seen.has(node)) continue; seen.add(node); const syms = arr.filter((x) => x.to === node && x.symbol).map((x) => x.symbol); console.log(`    ${node}${syms.length ? "  [" + [...new Set(syms)].slice(0, 4).join(", ") + "]" : ""}`); }
+		for (const h of arr) { const node = h.to; if (seen.has(node)) continue; seen.add(node); const syms = arr.filter((x) => x.to === node && x.symbol).map((x) => x.symbol); console.log(`    ${node}${syms.length ? "  [" + [...new Set(syms)].slice(0, 4).join(", ") + "]" : ""}`); }
 	}
 };
 commands["graph-callers"] = function (...args) { return graphCallDir(args, "callers"); };
@@ -5924,34 +6546,83 @@ commands["graph-query"] = function (...args) {
 	if (!terms.length) { console.log("usage: graph-query <term...> [--json]  (terms ≥3 chars)"); return; }
 	const stem = (s) => s.replace(/(ing|tion|ed|s)$/, "");
 	const clusterLabel = new Map((map.clusters || []).map((c) => [c.id, (c.label || "").toLowerCase()]));
-	const deg = new Map(); for (const e of map.edges) { if (e.kind !== "import") continue; deg.set(e.from, (deg.get(e.from) || 0) + 1); deg.set(e.to, (deg.get(e.to) || 0) + 1); }
+	const deg = new Map(); for (const e of map.edges) { if (e.kind !== "import" && e.kind !== "re-export") continue; deg.set(e.from, (deg.get(e.from) || 0) + 1); deg.set(e.to, (deg.get(e.to) || 0) + 1); }
+	// Term coverage is satisfied at the MODULE level (any symbol/path/doc/cluster hit), scaled by
+	// coverage² — graphify's scheme. The old per-symbol AND required every term to hit the same
+	// symbol, so "auth session" only matched files that packed both words into one identifier.
 	const cands = [];
 	for (const m of map.modules) {
 		const expDoc = new Map((m.exports || []).map((e) => [e.name, e.doc || ""]));
 		const baseLow = m.path.split("/").pop().toLowerCase();
+		const pathLow = m.path.toLowerCase();
 		const clab = clusterLabel.get(m.cluster) || "";
-		for (const s of (m.symbols || [])) {
-			const nameLow = s.name.toLowerCase(), doc = expDoc.get(s.name) || "", docLow = doc.toLowerCase();
-			let total = 0, ok = true;
-			for (const t of terms) {
+		const allDocsLow = (m.exports || []).map((e) => e.doc || "").filter(Boolean).join(" ").toLowerCase();
+		const symScores = new Map(); // symbol name -> summed per-term score, for display pick
+		let matched = 0, sum = 0;
+		for (const t of terms) {
+			let best = 0;
+			for (const s of (m.symbols || [])) {
+				// Re-export symbols are the barrel's copies of names defined elsewhere: the defining
+				// module matches them, so scoring them here ranked barrels above the real definition.
+				// Barrels still match through path, doc and cluster below.
+				if (s.kind === "re-export") continue;
+				const nameLow = s.name.toLowerCase();
 				let sc = 0;
 				if (nameLow === t) sc = 400; else if (nameLow.startsWith(t)) sc = 200; else if (nameLow.includes(t)) sc = 100;
-				if (sc < 60 && baseLow.includes(t)) sc = 60;
-				if (sc < 40 && (docLow.includes(t) || docLow.includes(stem(t)))) sc = 40;
-				if (sc < 30 && clab.includes(t)) sc = 30;
-				if (sc === 0) { ok = false; break; }
-				total += sc;
+				if (sc < 40) {
+					const dl = (expDoc.get(s.name) || "").toLowerCase();
+					if (dl && (dl.includes(t) || dl.includes(stem(t)))) sc = 40;
+				}
+				if (sc > 0) symScores.set(s.name, (symScores.get(s.name) || 0) + sc);
+				if (sc > best) best = sc;
 			}
-			if (!ok) continue;
-			let mult = 1; if (s.exported) mult *= 1.5; if (m.entryPoint) mult *= 1.3;
-			cands.push({ score: +(total * mult).toFixed(1), deg: deg.get(m.id) || 0, path: m.path, line: s.line, kind: s.kind, name: s.name, exported: !!s.exported, doc });
+			if (best < 60 && baseLow.includes(t)) best = 60;
+			if (best < 50 && pathLow.includes(t)) best = 50;
+			if (best < 40 && allDocsLow && (allDocsLow.includes(t) || allDocsLow.includes(stem(t)))) best = 40;
+			if (best < 30 && clab.includes(t)) best = 30;
+			if (best > 0) matched++;
+			sum += best;
 		}
+		if (!matched) continue;
+		const coverage = matched / terms.length;
+		let mult = coverage * coverage;
+		if (m.entryPoint) mult *= 1.3;
+		if (m.isTest) mult *= 0.7; // tests match everything; keep them below the code they test
+		// Display anchor: best-scoring symbol (exported preferred, first-in-file on ties), else the module itself.
+		let bestSym = null, bestVal = 0;
+		for (const s of (m.symbols || [])) {
+			if (s.kind === "re-export") continue;
+			const v = (symScores.get(s.name) || 0) * (s.exported ? 1.5 : 1);
+			if (v > bestVal) { bestVal = v; bestSym = s; }
+		}
+		if (bestSym && bestSym.exported) mult *= 1.5;
+		// A multi-term query that one declared symbol's name satisfies in full ("session token" ->
+		// SessionToken) is a definition lookup: prefer it over modules that merely cover the terms.
+		if (terms.length > 1 && (m.symbols || []).some((s) => {
+			if (s.kind === "re-export") return false;
+			const low = s.name.toLowerCase();
+			return terms.every((t) => low.includes(t));
+		})) mult *= 2;
+		cands.push({
+			score: +(sum * mult).toFixed(1),
+			matched, terms: terms.length,
+			deg: deg.get(m.id) || 0,
+			path: m.path,
+			line: bestSym ? bestSym.line : 1,
+			kind: bestSym ? bestSym.kind : "module",
+			name: bestSym ? bestSym.name : m.path.split("/").pop(),
+			exported: !!(bestSym && bestSym.exported),
+			doc: bestSym ? (expDoc.get(bestSym.name) || "") : "",
+		});
 	}
 	cands.sort((a, b) => b.score - a.score || b.deg - a.deg || a.path.length - b.path.length || (a.path < b.path ? -1 : 1));
 	const top = cands.slice(0, 15);
 	if (flags.json) { console.log(JSON.stringify(top, null, 2)); return; }
 	console.log(`query "${terms.join(" ")}" — ${top.length}/${cands.length} hits`);
-	for (const c of top) console.log(`${c.path}:${c.line}  ${c.kind} ${c.name}${c.doc ? "  — " + c.doc.slice(0, 60) : ""}${c.exported ? "  [exported]" : ""}`);
+	for (const c of top) {
+		const partial = c.matched < c.terms ? `  (${c.matched}/${c.terms} terms)` : "";
+		console.log(`${c.path}:${c.line}  ${c.kind} ${c.name}${c.doc ? "  — " + c.doc.slice(0, 60) : ""}${c.exported ? "  [exported]" : ""}${partial}`);
+	}
 	if (cands.length > 15) console.log(`(${cands.length - 15} more: --json for all)`);
 };
 
@@ -5985,6 +6656,23 @@ commands["graph-clusters"] = function (...args) {
 };
 
 // graph-hook — install/uninstall a git post-commit hook that refreshes MAP.json (graphify-style).
+// --- kg — graphify-parity symbol-level knowledge graph (second engine, draht-kg.cjs) ---
+// Runs in the Go binary when one is installed that has it (graphMaybeDelegate); this is
+// the JavaScript engine, which writes the same graph.json and prints the same output.
+// Nodes are symbols (files/classes/functions/methods/types) with graphify's relation set
+// and confidence rubric; graph.json is node-link format loadable by graphify's own tools.
+commands.kg = function (...args) {
+	let kg;
+	try {
+		kg = require(path.join(__dirname, "draht-kg.cjs"));
+	} catch (err) {
+		console.error(`kg engine not found next to draht-tools.cjs (${err.message}) — reinstall the package.`);
+		process.exit(1);
+	}
+	const code = kg.kgMain(args);
+	if (code) process.exitCode = code;
+};
+
 commands["graph-hook"] = function (...args) {
 	const sub = args[0] || "status";
 	const gitDir = path.join(process.cwd(), ".git");
@@ -6058,8 +6746,19 @@ Knowledge Graph (query MAP.json instead of grepping — run map-graph first):
   (--jobs, --parser, --cache-dir, --out, --ast-max-bytes, --verbose) are recognized
   and forwarded when the Go binary handles the command, and are stripped (not
   passed through, not an error) when the JS engine handles it instead — so a
-  script using them works either way. Install the binary with
-  \`npx draht-claude install-graph-engine\` (or draht-codex).
+  script using them works either way. The binary is an opt-in download: install
+  it with \`npx draht-claude install-graph-engine\` (or draht-codex). Without it
+  a one-line reminder goes to stderr once a day (DRAHT_GRAPH_HINT=0 turns it off).
+
+Symbol-level knowledge graph (graphify-parity engine; nodes = functions/classes/types):
+  kg build [--quiet]            Deterministic symbol graph → .planning/codebase/graph.json + KG_REPORT.md
+  kg query "<question>"         BFS/DFS subgraph traversal from scored seeds (NODE/EDGE output)
+                                [--dfs] [--depth N] [--budget N] [--context call|import]
+  kg explain "<node>"           Node dump: id, source, community, degree, top connections
+  kg path "<a>" "<b>"           Shortest path with directed relation arrows + confidence
+  kg affected "<node>"          Reverse blast-radius over calls/imports/inherits/… [--depth N]
+  kg stats | report             Counts / regenerate KG_REPORT.md
+  kg export tree|wiki|graphml   GRAPH_TREE.html / kg-wiki/ articles / graph.graphml
   create-project [name]         Create PROJECT.md
   create-requirements           Create REQUIREMENTS.md
   create-domain-model           Generate DOMAIN-MODEL.md from PROJECT.md
@@ -6117,7 +6816,8 @@ const [cmd, ...args] = process.argv.slice(2);
 		// mean nothing to the JS engine and, left in, corrupt its own arg parsing (an
 		// unconsumed value token gets read as a positional file/dir — finding #4). Strip
 		// them here so the two engines accept the same command line.
-		const jsArgs = GRAPH_GO_COMMANDS.has(cmd) ? graphStripGoOnlyFlags(args) : args;
+		// (`kg` takes none of them, and its arguments are free text: left as typed.)
+		const jsArgs = GRAPH_GO_COMMANDS.has(cmd) && cmd !== "kg" ? graphStripGoOnlyFlags(args) : args;
 		await commands[cmd](...jsArgs);
 	} else {
 		console.error(`Unknown command: ${cmd}\nRun: draht-tools help`);

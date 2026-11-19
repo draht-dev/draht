@@ -342,7 +342,7 @@ func TestBuild_CancelledContextReturnsErrorAndDoesNotWrite(t *testing.T) {
 	outPath := filepath.Join(outDir, "MAP.json")
 
 	// Seed a "good" prior MAP.json so we can assert it survives untouched.
-	sentinel := []byte(`{"schemaVersion":5,"sentinel":true}`)
+	sentinel := []byte(`{"schemaVersion":6,"sentinel":true}`)
 	if err := os.WriteFile(outPath, sentinel, 0o644); err != nil {
 		t.Fatalf("seed sentinel MAP.json: %v", err)
 	}

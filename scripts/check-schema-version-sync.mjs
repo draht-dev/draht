@@ -3,7 +3,7 @@
  * Asserts GRAPH_SCHEMA_VERSION stays in sync across its independently
  * hand-maintained copies:
  *   - packages/draht-tools/bin/draht-tools.cjs: visBuildMap()'s
- *     `schemaVersion: 5` literal (what MAP.json actually gets stamped with)
+ *     `schemaVersion: N` literal (what MAP.json actually gets stamped with)
  *     AND the GRAPH_SCHEMA_VERSION constant the resolver checks binaries
  *     against.
  *   - packages/draht-claude/cli.mjs and packages/draht-codex/cli.mjs: the

@@ -45,6 +45,10 @@ Phase-1 rewrite is built on, demonstrated at real-repo scale.
 
 ### A. `export type { X } from "mod"` — type-only re-exports (~82 of 118, the majority)
 
+> **Closed since this snapshot:** `reNamedReExport` now accepts the optional `type`
+> (`export\s+(?:type\s+)?\{…`), in lockstep with the CJS engine, so category A no longer
+> separates the two parsers. The text below describes the measurement as taken.
+
 `regex.go`'s `reNamedReExport` is
 `` export\s+\{([^}]+)\}\s+from\s+["']([^"']+)["'] `` — it requires the
 literal token `export` immediately followed by whitespace then `{`. The

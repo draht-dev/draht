@@ -18,7 +18,7 @@ ifeq ($(strip $(GRAMMAR_TAGS)),)
 $(error grammar-tags produced an empty tag list — is the Go toolchain on PATH?)
 endif
 
-.PHONY: build build-full test vet fmt parity clean
+.PHONY: build build-full test vet fmt parity kg-parity clean
 
 build:
 	go build -ldflags="-s -w" -tags '$(GRAMMAR_TAGS)' -o bin/draht-tools ./cmd/draht-tools
@@ -50,6 +50,13 @@ fmt:
 #   make parity PARITY_MAP=/path/to/CJS/MAP.json
 parity:
 	go test ./internal/graph -run TestParity_RegexParserMatchesCJSEngine -v $(if $(PARITY_MAP),-parity-map=$(PARITY_MAP))
+
+# Compares the Go `kg` engine (internal/kg) with the CJS one
+# (packages/draht-tools/bin/draht-kg.cjs) on every fixture repository:
+# graph.json, KG_REPORT.md and the export files byte for byte, plus stdout,
+# stderr and exit code of every subcommand. Shells out to `node`.
+kg-parity:
+	go test ./internal/kg -run TestParity_MatchesCJSEngine -count=1 -v
 
 clean:
 	rm -rf bin

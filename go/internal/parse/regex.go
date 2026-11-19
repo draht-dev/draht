@@ -23,8 +23,12 @@ var (
 	// keyword capture group lets us classify Kind without a second scan.
 	reRequireOrDynamic = regexp.MustCompile(`(require|import)\s*\(\s*["']([^"']+)["']\s*\)`)
 
-	// export { foo, bar as baz } from "./x"
-	reNamedReExport = regexp.MustCompile(`export\s+\{([^}]+)\}\s+from\s+["']([^"']+)["']`)
+	// export { foo, bar as baz } from "./x"  |  export type { Foo } from "./x"
+	// (per-specifier `export { type Foo }` is stripped by parseNamedList). Without
+	// the optional `type`, a type-only re-export got no link, fell back to its
+	// barrel as origin, and made a sibling `export *` of the real definer look
+	// like a clash.
+	reNamedReExport = regexp.MustCompile(`export\s+(?:type\s+)?\{([^}]+)\}\s+from\s+["']([^"']+)["']`)
 
 	// export * from "./x"  |  export * as Foo from "./x"
 	reStarReExport = regexp.MustCompile(`export\s+\*(?:\s+as\s+([A-Za-z_$][\w$]*))?\s+from\s+["']([^"']+)["']`)
@@ -66,11 +70,12 @@ func (p *regexParser) Extract(ctx context.Context, lang Lang, path string, src [
 		return Result{}, err
 	}
 
-	// visParseImports/visExtractRawImports both operate on the STRIPPED copy
-	// (draht-tools.cjs:2146-2149 strips once, then passes the stripped text
-	// to visParseImports, which for non-ts/js languages forwards that SAME
-	// stripped text into visExtractRawImports) — never the raw content.
-	stripped := StripComments(src, lang)
+	// visParseImports/visExtractRawImports both operate on a STRIPPED copy —
+	// never the raw content. The newline-preserving variant keeps Import.Line
+	// aligned with the raw source (a fully-deleted multiline block comment
+	// used to shift every line computed after it), matching the CJS engine's
+	// import-parse input; sinks/routes still use the fully-deleting strip.
+	stripped := StripCommentsPreserveLines(src, lang)
 
 	var imports []Import
 	switch lang {

@@ -526,6 +526,9 @@ ${chalk.bold("Environment Variables:")}
   DRAHT_SELF_UPDATE_COMMAND           - Command draht update runs to update draht itself ({packageName}, {version}, {installSpec})
   DRAHT_TELEMETRY                     - Override provider attribution headers (OpenRouter/NVIDIA NIM/Cloudflare) when set to 1/true/yes or 0/false/no
   DRAHT_SHARE_VIEWER_URL              - Base URL for /share command (default: none; the gist URL is shown directly)
+  DRAHT_GRAPH_ENGINE                  - Knowledge-graph engine for draht-tools: auto (default), go, or js. The Go engine is an
+                                        optional download (npx draht-claude install-graph-engine); without it the built-in
+                                        JavaScript engine runs and draht-tools says so once a day (DRAHT_GRAPH_HINT=0 turns that off)
 
 ${chalk.bold("Built-in Tool Names:")}
   read       - Read file contents

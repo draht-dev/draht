@@ -1,4 +1,4 @@
-query "types" — 15/357 hits
+query "types" — 15/65 hits
 go/internal/extract/extract_test.go:12  func TestExtractExportsTypeScript  [exported]
 go/internal/parse/regex_test.go:32  func TestRegex_TypeScript  [exported]
 go/internal/parse/treesitter_test.go:87  func TestTreeSitter_TypeScriptAndTSX  [exported]
@@ -6,12 +6,12 @@ go/internal/symindex/comments_test.go:16  func TestExtractComments_LineCommentTy
 go/internal/symindex/rationale_test.go:11  func TestExtractRationale_TypeScriptLineComment  [exported]
 packages/coding-agent/src/utils/clipboard-image.ts:15  const SUPPORTED_IMAGE_MIME_TYPES
 packages/coding-agent/src/modes/interactive/components/config-selector.ts:32  const RESOURCE_TYPES
-packages/coding-agent/test/suite/agent-session-bash-persistence.test.ts:9  function getEntryTypes
 packages/ai/src/utils/validation.ts:19  function getSchemaTypes
-packages/coding-agent/test/gsd-quality-gate.test.ts:29  const defaultTypeScriptScriptContent
-packages/coding-agent/test/gsd-quality-gate.test.ts:131  function createTypeScriptShimFile
-packages/coding-agent/test/gsd-quality-gate.test.ts:186  function createTypeScriptErrorSourceFile
-packages/coding-agent/test/gsd-quality-gate.test.ts:193  function createFailingTypeScriptScript
-packages/ai/src/types.ts:16  type KnownApi  [exported]
-packages/ai/src/types.ts:28  type Api  [exported]
-(342 more: --json for all)
+packages/ai/src/types.ts:207  interface ApiOptionsMap  — Maps known APIs to their full provider-specific stream optio  [exported]
+packages/agent/src/harness/types.ts:48  function toError  — Normalize unknown thrown values into Error instances before   [exported]
+packages/ai/src/auth/types.ts:37  type Credential  — One type-tagged credential per provider — the shape of today  [exported]
+packages/agent/src/types.ts:310  interface CustomAgentMessages  — Extensible interface for custom app messages. Apps can exten  [exported]
+packages/router/src/types.ts:9  type RouterRole  — Built-in router roles. Extensible via string type.  [exported]
+packages/coding-agent/src/core/socket-server/types.ts:12  type ClientMessage  — Message types: Client → Server  [exported]
+packages/coding-agent/test/suite/agent-session-bash-persistence.test.ts:9  function getEntryTypes
+(50 more: --json for all)

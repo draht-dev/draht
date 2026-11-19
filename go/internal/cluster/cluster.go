@@ -177,19 +177,14 @@ func Compute(modules []model.Module, edges []model.Edge) Result {
 	fallbackOrdinal := make(map[string]int)
 	clusters := make([]Cluster, 0, len(sortedGroups))
 	clusterOf := make(map[string]string, len(ids))
+	containerDirs := containerDirSet(modules)
 
 	for _, sorted := range sortedGroups {
 		pkgCount := make(map[string]int)
 		layerCount := make(map[string]int)
 		for _, id := range sorted {
 			m := moduleByID[id]
-			var p string
-			if m.Package != nil && *m.Package != "" {
-				p = *m.Package
-			} else {
-				p = strings.TrimPrefix(ContainerOf(m), "dir:")
-			}
-			pkgCount[p]++
+			pkgCount[packageKey(m)]++
 			layerCount[m.Layer]++
 		}
 
@@ -213,6 +208,11 @@ func Compute(modules []model.Module, edges []model.Edge) Result {
 				segs = segs[len(segs)-2:]
 			}
 			clabel = strings.Join(segs, "/")
+			// A bare container dir ("packages") says nothing — prefer the
+			// package name when unambiguous (CJS parity).
+			if !strings.Contains(prefix, "/") && containerDirs[prefix] && dominantPackage != nil && len(packages) == 1 {
+				clabel = stripScope(*dominantPackage)
+			}
 		} else {
 			rawPkg := "root"
 			if dominantPackage != nil {
@@ -270,6 +270,36 @@ func Compute(modules []model.Module, edges []model.Edge) Result {
 		}
 		return clusters[i].ID < clusters[j].ID
 	})
+
+	// Disambiguate duplicate labels (CJS parity): recursive splitting of
+	// oversized communities yields several groups sharing one directory
+	// prefix, so graph-clusters printed six indistinguishable "packages/ai"
+	// rows. Append the dominant layer, then a stable ordinal. Iteration
+	// order is the sorted clusters slice, so suffixes are deterministic.
+	dupes := make(map[string]bool)
+	seenOnce := make(map[string]bool)
+	for i := range clusters {
+		if seenOnce[clusters[i].Label] {
+			dupes[clusters[i].Label] = true
+		}
+		seenOnce[clusters[i].Label] = true
+	}
+	used := make(map[string]bool)
+	for i := range clusters {
+		label := clusters[i].Label
+		if dupes[label] {
+			label = label + " · " + clusters[i].DominantLayer
+		}
+		if used[label] {
+			n := 2
+			for used[label+" · "+strconv.Itoa(n)] {
+				n++
+			}
+			label = label + " · " + strconv.Itoa(n)
+		}
+		used[label] = true
+		clusters[i].Label = label
+	}
 
 	return Result{Clusters: clusters, ClusterOf: clusterOf}
 }
@@ -329,4 +359,40 @@ func sortedStringKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// packageKey is the package a module counts toward in cluster bookkeeping:
+// its package name, else its top-level directory.
+func packageKey(m *model.Module) string {
+	if m.Package != nil && *m.Package != "" {
+		return *m.Package
+	}
+	return strings.TrimPrefix(ContainerOf(m), "dir:")
+}
+
+// containerDirSet returns the top-level directories holding modules of two or
+// more packages (`packages/`, `apps/` style parents). Only these are renamed
+// after their package; a plain root dir (`src`, `scripts`) is the most
+// informative label there is. Lockstep with the CJS containerDirs.
+func containerDirSet(modules []model.Module) map[string]bool {
+	packagesByTopDir := make(map[string]map[string]bool)
+	for i := range modules {
+		m := &modules[i]
+		slash := strings.Index(m.Path, "/")
+		if slash < 0 {
+			continue
+		}
+		top := m.Path[:slash]
+		if packagesByTopDir[top] == nil {
+			packagesByTopDir[top] = make(map[string]bool)
+		}
+		packagesByTopDir[top][packageKey(m)] = true
+	}
+	out := make(map[string]bool)
+	for top, keys := range packagesByTopDir {
+		if len(keys) > 1 {
+			out[top] = true
+		}
+	}
+	return out
 }

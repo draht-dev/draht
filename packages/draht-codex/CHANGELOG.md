@@ -1,33 +1,40 @@
 # Changelog
 
-## [Unreleased]
+## [2026.11.19-1] - 2026-11-19
 
 ### Added
 
-- `kg` engine (`bin/draht-kg.cjs`): graphify-parity **symbol-level** knowledge graph — deterministic indexer (`kg build` → `graph.json` in graphify's node-link schema + `KG_REPORT.md`), graphify query semantics (`kg query` seed-scored BFS/DFS traversal with NODE/EDGE output, `kg explain`, `kg path`, `kg affected`), and exports (`kg export tree|wiki|graphml`) ([#2](https://github.com/draht-dev/draht/pull/2))
-- graphify parity for the living map: barrel re-exports (`export { X } from`, multi-line blocks, `export * from` with `via` provenance) now populate each barrel's exports/symbols; MAP.html gains the Insights view (clusters, hotspots, surprising connections, rationale highlights; keyboard `i`) ([#2](https://github.com/draht-dev/draht/pull/2))
-- `kg` engine: Go, Rust and Python are extracted as deeply as TypeScript — Go package scopes, methods joined to their type across files, calls bound by receiver, parameter, field and result types, imports resolved through `go.mod`; Rust module tree (`mod`, inline modules, workspace crates), `use` resolution, impl methods, `Self::` / `self.` / path calls; Python declarations under `if` / `try`, module constants, decorators, source-root and re-export imports, function-local imports ([#2](https://github.com/draht-dev/draht/pull/2))
-- `kg` engine (TS/JS): generic arrow functions, multi-line method headers, function-valued class fields, class expressions, declarations nested in function bodies and callbacks, top-level constants, `export { a as b }`, CommonJS `require` bindings; `x.method()` binds through the type written or constructed for `x` (parameters, locals, fields), else through a method name one class of the repo declares (INFERRED) ([#2](https://github.com/draht-dev/draht/pull/2))
-- `kg query` ranks files first: BM25 over each file's 100 most distinctive words (stored by `kg build` on the file node), its best-matching symbol name and its path; a symbol whose name is the whole query leads, and tests, docs and vendored code rank below source unless the question names them ([#2](https://github.com/draht-dev/draht/pull/2))
-- `kg` runs in the Go engine: `draht-graph kg …` (`go/internal/kg`) is a port of `bin/draht-kg.cjs` that writes the same `graph.json`, report and exports and prints the same output, parses files on all cores and builds about 1.7× faster on a large TypeScript repo; `draht-tools kg` uses it when an installed `draht-graph` binary has the command and the JavaScript engine otherwise ([#2](https://github.com/draht-dev/draht/pull/2))
-- `draht-tools` says once a day, on stderr, that the optional Go graph engine is not installed (or predates `kg`) and how to install it; `--quiet`, CI and `DRAHT_GRAPH_HINT=0` keep it silent, and the engine stays an opt-in download ([#2](https://github.com/draht-dev/draht/pull/2))
+- run kg in the Go engine with output identical to the JavaScript engine
+- align Go engine with CJS parity
+- port graphify-parity graph fixes into the Go draht-graph engine
+- kg engine — graphify-parity symbol-level knowledge graph
+- graphify parity for the living map — barrel exports, query recall, Insights view
+- kg engine — graphify-parity symbol-level knowledge graph
+- graphify parity for the living map — barrel exports, query recall, Insights view
 
 ### Changed
 
-- MAP.json `schemaVersion` is 6 (barrel re-exports in `exports`, `via`/`viaName` provenance, 60-name cap); a `draht-graph` binary stamped for schema 5 is rejected and the JS engine runs until the binary is reinstalled ([#2](https://github.com/draht-dev/draht/pull/2))
-- `kg build` lists files through git in a checkout (tracked files plus untracked ones git does not ignore): tracked dot-directories are indexed, ignored output is not; outside git the directory walk and its ignore list still apply ([#2](https://github.com/draht-dev/draht/pull/2))
-- `kg` engine: a call binds through a declaration, an import or a type of the calling file — the guess from a name unique in the whole repo is gone for Python, Go and Rust, and a parameter or local shadows the file-level name it repeats ([#2](https://github.com/draht-dev/draht/pull/2))
+- add kg build step 2b to map-codebase at the skill source of truth
 
 ### Fixed
 
-- `kg` no longer links a parameter that shadows an import as the import's constructor or callback, nor a method signature in a parameter or return type as a call; a checkout whose only code is git-ignored yields an empty graph; `graph.json`, the report and exports are replaced atomically; and `map-graph` keeps a name that reaches a barrel both directly and through `import { x }` + `export { x }` ([#2](https://github.com/draht-dev/draht/pull/2))
-- graph-query recall: term coverage is scored at the module level with coverage² scaling (was a per-symbol AND that missed multi-word concepts); tests are demoted below the code they test ([#2](https://github.com/draht-dev/draht/pull/2))
-- graph-impact echoes full resolved paths and explains zero-impact barrels instead of printing a bare `index.ts — 0 modules` ([#2](https://github.com/draht-dev/draht/pull/2))
-- graph-clusters labels are unique and descriptive (dominant layer / ordinal suffixes instead of six identical `packages/ai` rows) ([#2](https://github.com/draht-dev/draht/pull/2))
-- MAP.html search covers `modules[*].symbols` (non-exported declarations and barrel APIs), not just the exported-only symbolIndex ([#2](https://github.com/draht-dev/draht/pull/2))
-- graph-query ranks the defining file above barrels: re-exported names score at their defining module, and a module whose single symbol carries every query term ranks first ([#2](https://github.com/draht-dev/draht/pull/2))
-- living map and `kg` engine correctness: type-only re-exports, order-independent star expansion, string-aware source masking, workspace root resolution, Python import resolution, and linear-time `kg build` on large repos ([#2](https://github.com/draht-dev/draht/pull/2))
-- `kg` engine: a class keeps every method (was capped at 80), constructors and `#private` methods are nodes that own their calls, and methods named like reserved words (`delete()`) are indexed ([#2](https://github.com/draht-dev/draht/pull/2))
+- kg reads comparisons and pattern defaults in parameter lists correctly
+- kg keeps calls in default values and reads parameter lists by binding
+- kg no longer links shadowed names or type signatures as calls
+- resolve kg workspace subpath imports through package exports
+- keep star-barrel names whose re-export target stars them in
+- keep kg declaration headers, type imports and wiki pages accurate
+- resolve local export aliases before comparing star-export binding origins
+- accept generic class headers, compare star origins by binding, bound wiki names
+- address Greptile round-6 findings on kg parsing and star origins
+- use lookbehind in kg call scans so nested calls are not consumed
+- harden default-decl regex, retract stale star copies, isolate query test
+- keep multiline function headers open and guard namespace-call receivers
+- address Greptile review findings on kg engine and star expansion
+- classify named default declarations as the default export
+- address CodeRabbit re-review findings on export extraction
+- address CodeRabbit review findings on knowledge-graph parity
+- address Greptile P1 findings — expansion fixpoint, Go aliases, Rust impl methods
 
 ## [2026.11.14-1] - 2026-11-14
 

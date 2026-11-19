@@ -1042,6 +1042,12 @@ export async function main(args: string[], options?: MainOptions) {
 				created.session.setThinkingLevel(effectiveThinking);
 			}
 		}
+		// "Could not restore model x/y. Using a/b." is set again on /resume and /fork. As a diagnostic, every
+		// mode reports it at startup and after each replacement. Without any model, the message is login
+		// guidance instead: interactive mode shows it at startup, the other modes exit with it below.
+		if (created.modelFallbackMessage && created.session.model) {
+			diagnostics.push({ type: "warning", message: created.modelFallbackMessage });
+		}
 
 		return {
 			...created,
@@ -1247,7 +1253,8 @@ export async function main(args: string[], options?: MainOptions) {
 			const interactiveMode = new InteractiveMode(runtime, {
 				migratedProviders,
 				startupDiagnostics,
-				modelFallbackMessage,
+				// A fallback to another model is already in startupDiagnostics.
+				modelFallbackMessage: session.model ? undefined : modelFallbackMessage,
 				autoTrustOnReloadCwd,
 				initialMessage,
 				initialImages,

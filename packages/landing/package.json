@@ -10,9 +10,9 @@
 		"preview": "astro preview"
 	},
 	"dependencies": {
-		"@astrojs/sitemap": "^3.7.0",
+		"@astrojs/sitemap": "^3.7.6",
 		"@resvg/resvg-js": "^2.6.2",
-		"astro": "^5.5.0",
+		"astro": "^7.4.13",
 		"astro-sst": "^3.1.4",
 		"satori": "^0.19.2"
 	}

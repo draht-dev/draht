@@ -1,0 +1,15 @@
+diff --git a/dist/entrypoint.js b/dist/entrypoint.js
+index dedb206e4f16572da83ecc736912c51f685d0d76..4592de67e291b8ed077b1d3de650f92e2015955a 100644
+--- a/dist/entrypoint.js
++++ b/dist/entrypoint.js
+@@ -1,8 +1,8 @@
+ import fs from "fs/promises";
+-import { NodeApp, applyPolyfills } from "astro/app/node";
++import { NodeApp } from "astro/app/node";
+ import { convertFrom, convertTo } from "./lib/event-mapper.js";
+ import { debug } from "./lib/logger.js";
+-applyPolyfills();
++// applyPolyfills() was removed in Astro 6; Node >= 22 ships these globals (ops#120).
+ function createRequest(internalEvent) {
+     const requestUrl = internalEvent.url;
+     const requestProps = {

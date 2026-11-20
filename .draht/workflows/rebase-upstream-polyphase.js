@@ -152,7 +152,7 @@ const BRANDING_SCHEMA = {
   properties: {
     files_changed: { type: "array", items: { type: "string" } },
     committed: { type: "boolean" },
-    zero_hits: { type: "boolean", description: "final scans show zero branding hits" },
+    zero_hits: { type: "boolean", description: "the sync adds no branding hits: every remaining hit also exists on main" },
     notes: { type: "string" },
   },
   required: ["files_changed", "committed", "zero_hits", "notes"],
@@ -423,14 +423,14 @@ function brandingTask(kind) {
   const scope =
     kind === "sweep"
       ? "Scan the codebase and the diff main.." + BRANCH + " for pi branding leaks. Fix all hits."
-      : "Final audit. Scan the entire codebase for pi branding leaks. Fix all hits and confirm zero remaining.";
+      : "Final audit. Scan the entire codebase for pi branding leaks and compare the hits against main. Fix every hit that main does not have and confirm none remain.";
   return [
     PRE,
     "",
     "TASK (branding-guard): " + scope,
     "Branch `" + BRANCH + "` must be checked out (`git branch --show-current`). Never touch README.md files; a README hit means revert that README to main (`git checkout main -- <readme>`) and re-check, never an edit. Do not rename the `pi` git remote, `pi-test.sh`, `Math.PI`, upstream GitHub URLs used as remote refs, or references inside " + POLICY + " and .draht/agents/branding-guard.md.",
     "After fixing, run `" + GUARD + "`, then commit your fixes on `" + BRANCH + "` with explicit paths and subject `fix(branding): remove pi references leaked by upstream sync`. If nothing needed fixing, commit nothing.",
-    "Report files_changed (empty when clean), committed, zero_hits (true only if the final re-scan shows zero hits), notes with the final scan output summary. End with `STATUS: OK` or `STATUS: FAIL <reason>`.",
+    "Report files_changed (empty when clean), committed, zero_hits (true when every hit left in the final re-scan also exists on main with the same patterns and exclusions, ignoring line numbers; hits already on main are out of scope and must not fail this gate), notes with the final scan output summary. End with `STATUS: OK` or `STATUS: FAIL <reason>`.",
   ].join("\n");
 }
 

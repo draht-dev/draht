@@ -60,7 +60,11 @@ function residueAfterColourCodes(line: string): string {
 	return line.replace(/\u001b\[[0-9;]*m/g, "");
 }
 
-function renderSelectorAt(width: number, detailRows: readonly string[], title = "Approve tool call?"): string[] {
+function renderSelectorAt(
+	width: number,
+	detailRows: readonly string[],
+	title = "Approve tool call?",
+): readonly string[] {
 	const selector = new ExtensionSelectorComponent(
 		title,
 		["Yes", "No"],
@@ -71,16 +75,16 @@ function renderSelectorAt(width: number, detailRows: readonly string[], title = 
 	return selector.render(width);
 }
 
-function renderSelector(detailRows: readonly string[], title = "Approve tool call?"): string[] {
+function renderSelector(detailRows: readonly string[], title = "Approve tool call?"): readonly string[] {
 	return renderSelectorAt(RENDER_WIDTH, detailRows, title);
 }
 
 /** Rows a human could mistake for one of the offered choices. */
-function countOptionLookingRows(lines: string[]): number {
+function countOptionLookingRows(lines: readonly string[]): number {
 	return lines.filter((line) => OPTION_ROW_PATTERN.test(stripAnsi(line))).length;
 }
 
-function indexOfOptionRow(lines: string[], label: "Yes" | "No"): number {
+function indexOfOptionRow(lines: readonly string[], label: "Yes" | "No"): number {
 	const pattern = new RegExp(`^\\s*(?:→\\s*)?${label}\\s*$`);
 	return lines.findIndex((line) => pattern.test(stripAnsi(line)));
 }
@@ -89,7 +93,7 @@ function indexOfOptionRow(lines: string[], label: "Yes" | "No"): number {
  * The LAST row that reads like `label`. When a caller's own message text can look like an option,
  * the genuine option list is still the one drawn beneath the whole header — i.e. the last pair.
  */
-function lastIndexOfOptionRow(lines: string[], label: "Yes" | "No"): number {
+function lastIndexOfOptionRow(lines: readonly string[], label: "Yes" | "No"): number {
 	const pattern = new RegExp(`^\\s*(?:→\\s*)?${label}\\s*$`);
 	for (let i = lines.length - 1; i >= 0; i--) {
 		if (pattern.test(stripAnsi(lines[i]))) return i;
@@ -407,7 +411,7 @@ const LF_PICTURE = "␊";
  * The teardown is what settles the promise, so every caller must await it — an unawaited
  * `showExtensionConfirm` is exactly the stranding bug this suite exists to catch.
  */
-async function confirmLines(columns: number, title: string, message: string): Promise<string[]> {
+async function confirmLines(columns: number, title: string, message: string): Promise<readonly string[]> {
 	const host = createHost(columns);
 	const confirm = host.showExtensionConfirm(title, message);
 	const lines = host.extensionSelector?.render(columns) ?? [];
@@ -418,7 +422,7 @@ async function confirmLines(columns: number, title: string, message: string): Pr
 }
 
 /** Undo the word wrap: rows re-joined by the spaces the wrapper broke at. */
-function reflow(lines: string[]): string {
+function reflow(lines: readonly string[]): string {
 	return lines
 		.map((line) => stripAnsi(line).trim())
 		.join(" ")

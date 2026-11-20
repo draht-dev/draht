@@ -633,6 +633,9 @@
       },
     },
   },
+  "patchedDependencies": {
+    "astro-sst@3.1.4": "patches/astro-sst@3.1.4.patch",
+  },
   "overrides": {
     "brace-expansion": "5.0.12",
     "fast-xml-parser": "5.3.8",

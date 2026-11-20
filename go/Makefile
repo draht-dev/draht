@@ -1,5 +1,7 @@
 # Go 1.26 is not on PATH by default on this box, and there is no C compiler
 # (cc/gcc/clang absent) — CGO_ENABLED=0 is mandatory. See README.md.
+# The nix Go below is only the bootstrap: go.mod pins `toolchain go1.26.11`,
+# so the go command fetches and runs that release (GOTOOLCHAIN=auto).
 NIX_GO_BIN := /nix/store/gb0njhqswlc5n127ikgyikvq39r40l6f-go-1.26.4/bin
 export PATH := $(NIX_GO_BIN):$(PATH)
 export CGO_ENABLED := 0

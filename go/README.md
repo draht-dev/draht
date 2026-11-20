@@ -284,9 +284,15 @@ because their memo tables and first-wins edges depend on file order.
 
 ## Build
 
-Go 1.26.4 is not on `PATH` by default on this box, and there is **no C
+Go is not on `PATH` by default on this box, and there is **no C
 compiler** (cc/gcc/clang are all absent) — `CGO_ENABLED=0` is mandatory for
 every Go command run in this repo.
+
+The toolchain is pinned to Go 1.26.11 in two places that must move together:
+the `toolchain` line in `go.mod` (local builds) and `.go-version` (CI and
+release builds via `actions/setup-go`). The nix store Go below is older and
+only bootstraps: with the default `GOTOOLCHAIN=auto` the go command downloads
+and runs the pinned release.
 
 ```sh
 export PATH="/nix/store/gb0njhqswlc5n127ikgyikvq39r40l6f-go-1.26.4/bin:$PATH"

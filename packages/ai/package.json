@@ -76,6 +76,7 @@
 	"dependencies": {
 		"@anthropic-ai/sdk": "^0.129.0",
 		"@aws-sdk/client-bedrock-runtime": "^3.1127.0",
+		"@aws-sdk/credential-provider-node": "^3.972.82",
 		"@draht/schema": "workspace:*",
 		"@draht/telemetry": "workspace:*",
 		"@google/genai": "^2.32.0",

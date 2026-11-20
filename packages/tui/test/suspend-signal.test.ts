@@ -4,7 +4,7 @@ import type { TUI } from "../src/tui.ts";
 import { TuiMainScreen } from "../src/tui-main-screen.ts";
 import { VirtualTerminal } from "./virtual-terminal.ts";
 
-// Regression for #12272: an external SIGTSTP stopped pi without restoring the terminal.
+// Regression for #12272: an external SIGTSTP stopped draht without restoring the terminal.
 // The listener must exist only while the TUI owns the terminal, so a child that owns it
 // after stop() (external editor, interactive command) is suspended with the default action.
 describe("TUI suspend signal handler", () => {

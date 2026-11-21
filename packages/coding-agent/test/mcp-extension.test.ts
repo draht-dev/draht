@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderToolOutputType } from "@draht/codemode/declarations";
 import {
+	createMcpResultSchema,
 	createMcpToolName,
 	type JsonRpcMessage,
 	LATEST_PROTOCOL_VERSION,
@@ -30,7 +31,7 @@ import {
 	McpServerConnection,
 	McpServerLog,
 } from "../src/extensions/mcp/runtime.ts";
-import { convertMcpResult, createMcpResultSchema } from "../src/extensions/mcp/tools.ts";
+import { convertMcpResult } from "../src/extensions/mcp/tools.ts";
 
 // Config values are resolved at connect time, so the literal reference must survive loading.
 // biome-ignore lint/suspicious/noTemplateCurlyInString: literal config value reference

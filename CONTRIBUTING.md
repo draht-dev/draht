@@ -8,15 +8,15 @@ This guide exists to save both sides time.
 
 Using AI to write code is fine. Submitting AI-generated slop without understanding it is not.
 
-If you use an agent, run it from the `draht-mono` root directory so it picks up `AGENTS.md` automatically. Your agent must follow the rules and guidelines in that file.
+If you use an agent, run it from the repository root so it picks up `AGENTS.md` automatically. Your agent must follow the rules and guidelines in that file.
 
 ## Contribution Gate
 
-All issues and PRs from new contributors are auto-closed by default.
+Issues filed with one of the official GitHub issue templates, on Monday to Thursday (UTC), stay open for review, including issues from new contributors.
 
-Issues submitted Friday through Sunday are not reviewed. If something is urgent, ask on Discord: https://discord.com/invite/3cU7Bz4UPx
+Issues without a template, and issues opened Friday through Sunday (UTC), are still auto-closed. Maintainers review auto-closed issues on weekdays and reopen worthwhile ones. Issues that do not meet the quality bar below will not be reopened or receive a reply.
 
-Maintainers review auto-closed issues daily and reopen worthwhile ones. Issues that do not meet the quality bar below will not be reopened or receive a reply.
+Pull requests from contributors who do not yet have `lgtm` are still auto-closed. Open an issue first.
 
 Approval happens through maintainer replies on issues:
 
@@ -68,17 +68,17 @@ draht's core is minimal. If your feature does not belong in the core, it should 
 
 ## Questions?
 
-Ask on [Discord](https://discord.com/invite/nKXTsAcmbT).
+A draht Discord is planned. The invite is not published yet (TODO). Until then, use a templated issue on a weekday.
 
 ## FAQ
 
-### Why are new issues and PRs auto-closed?
+### Why are some issues and PRs auto-closed?
 
-draht receives more issues than the maintainers can responsibly review in real time. Many reports do not meet the quality bar in this guide or do not follow CONTRIBUTING.md. Some are slung at the repository mindlessly via an agent instead of being reviewed and shaped by the person submitting them. Auto-closing creates a buffer so maintainers can review the tracker on their own schedule and reopen the issues that meet the quality bar.
+draht still auto-closes issues that skip the official templates, issues opened on the weekend (UTC), and pull requests from contributors who do not yet have `lgtm`. That keeps a buffer against tracker spam and unreviewed agent-generated reports, while letting a templated weekday issue stay open for review.
 
 ### Why are weekend issues not reviewed?
 
-Maintainers need uninterrupted time away from the issue tracker. Issues submitted Friday through Sunday are auto-closed and are not part of the Monday review queue. If a problem is urgent, ask on Discord and include the short version, a repro, and the relevant logs.
+Maintainers need uninterrupted time away from the issue tracker. Issues submitted Friday through Sunday (UTC) are auto-closed and are not part of the Monday review queue. A draht Discord invite is not published yet (TODO). If a problem is urgent, reopen or comment on the issue on Monday with the short version, a repro, and the relevant logs.
 
 ### Why do some issues get no reply?
 

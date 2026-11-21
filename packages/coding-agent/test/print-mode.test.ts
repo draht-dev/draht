@@ -186,7 +186,7 @@ describe("runPrintMode", () => {
 		expect(process.listenerCount("SIGTERM")).toBe(listenersBefore);
 	});
 
-	// Windows emits SIGHUP when the console window is closed. pi used to listen for it only on POSIX,
+	// Windows emits SIGHUP when the console window is closed. draht used to listen for it only on POSIX,
 	// so closing the window skipped session_shutdown and left the bash tool's processes running.
 	it("disposes and exits on SIGHUP on Windows", async () => {
 		const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");

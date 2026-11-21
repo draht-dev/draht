@@ -1,5 +1,5 @@
 /**
- * The model-facing content of an MCP result as pi's coding agent shows it: text and images, embedded text resources
+ * The model-facing content of an MCP result as draht's coding agent shows it: text and images, embedded text resources
  * as text, binary resources saved where the model can read them, and resource links that name the tool reading them.
  */
 
@@ -61,7 +61,7 @@ async function blockToContent(
 	return toLlmContent({ content: [block] });
 }
 
-/** A byte count as pi's coding agent shows sizes: `512B`, `2.0KB`, `1.5MB`. */
+/** A byte count as draht's coding agent shows sizes: `512B`, `2.0KB`, `1.5MB`. */
 function formatSize(bytes: number): string {
 	if (bytes < 1024) return `${bytes}B`;
 	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;

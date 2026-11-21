@@ -1,6 +1,42 @@
 # Changelog
 
-## [Unreleased]
+## [2026.11.21-1] - 2026-11-21
+
+### Changed
+
+- fix(ai): Gemini 3+ detection for prefixed Google model IDs, add compat.supportsStrictMode (badlogic/pi-mono#12371)
+- fix(coding-agent): load sessions with very many entries after the last compaction (badlogic/pi-mono#12360)
+- fix(coding-agent): show the end of an over-long line followed by a blank line in bash output (badlogic/pi-mono#12355)
+- fix(coding-agent): repaint editor after extension pasteToEditor and setEditorText (badlogic/pi-mono#12349)
+- fix(coding-agent): keep tool preview text readable across terminal themes (badlogic/pi-mono#12347)
+- feat(ai,coding-agent): report reasoning items OpenAI drops from requests
+- fix(ai,coding-agent): make system the default instruction role in openai-completions (badlogic/pi-mono#12134)
+- fix(ai,coding-agent): keep Codex prompt cache across thinking level changes
+- fix(coding-agent): handle external SIGTSTP like Ctrl+Z (badlogic/pi-mono#12283)
+- fix(coding-agent): flush stdout before exiting after stopping a TUI (badlogic/pi-mono#12336)
+- fix(coding-agent): send images to llama.cpp decision classifiers (badlogic/pi-mono#12335)
+- fix(coding-agent,tui): cursor keys in selector search keep the selection (badlogic/pi-mono#12334)
+- fix(coding-agent): /login and /logout search selects the best match (badlogic/pi-mono#12246)
+- feat(coding-agent): print resume command on its own line on exit
+- feat(ai,coding-agent): add GPT-6.2 Astra and GPT-6.2 Sol
+- fix(coding-agent): capture git and npm output while the interactive TUI runs (badlogic/pi-mono#12236)
+- fix(tui,coding-agent): make fullscreen scroll frames O(viewport) (badlogic/pi-mono#11968)
+- fix(coding-agent): report pi.events handler errors like other extension errors (badlogic/pi-mono#12233)
+- fix(coding-agent): report model fallback after /resume and in every mode (badlogic/pi-mono#12234)
+- fix(ai): recover from the Codex websocket 60-minute connection limit (badlogic/pi-mono#12229)
+- fix(coding-agent): emit session_start on reload after bindExtensions({}) (badlogic/pi-mono#12231)
+- fix(coding-agent): stream session_start events in JSON print mode (badlogic/pi-mono#12232)
+- fix(coding-agent): emit session_start once on RPC session replacement (badlogic/pi-mono#12230)
+- fix(coding-agent): report diagnostics that appear on session replacement (badlogic/pi-mono#12115)
+- fix(coding-agent): remove two remaining direct terminal writes (badlogic/pi-mono#12117)
+- docs(coding-agent): regenerate models configuration reference
+
+### Fixed
+
+- spawn the CLI through tsx in two synced RPC tests
+- remove pi references leaked by upstream sync
+- build the graph engine with Go 1.26.11 (security release)
+- remove pi references leaked by upstream sync
 
 ## [2026.11.19-1] - 2026-11-19
 

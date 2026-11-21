@@ -1,6 +1,19 @@
 # Changelog
 
-## [Unreleased]
+## [2026.11.21-1] - 2026-11-21
+
+### Changed
+
+- fix(tui): move repeated prompts to the front of editor history instead of duplicating them (badlogic/pi-mono#12370)
+- fix(tui): keep the SIGTSTP listener tied to terminal ownership (badlogic/pi-mono#12339)
+- fix(coding-agent): handle external SIGTSTP like Ctrl+Z (badlogic/pi-mono#12283)
+- fix(coding-agent,tui): cursor keys in selector search keep the selection (badlogic/pi-mono#12334)
+- fix(tui): Enter on a Tab menu for an absolute path no longer submits (badlogic/pi-mono#12312)
+- fix(tui,coding-agent): make fullscreen scroll frames O(viewport) (badlogic/pi-mono#11968)
+
+### Fixed
+
+- remove pi references leaked by upstream sync
 
 ## [2026.11.14-1] - 2026-11-14
 

@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2026.11.21-1] - 2026-11-21
+
+### Fixed
+
+- build the graph engine with Go 1.26.11 (security release)
 
 ## [2026.11.19-1] - 2026-11-19
 

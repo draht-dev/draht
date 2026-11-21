@@ -1,6 +1,30 @@
 # Changelog
 
-## [Unreleased]
+## [2026.11.21-1] - 2026-11-21
+
+### Changed
+
+- regenerate model catalog for the upstream sync
+- fix(ai): Gemini 3+ detection for prefixed Google model IDs, add compat.supportsStrictMode (badlogic/pi-mono#12371)
+- fix(ai): resolve Bedrock SSO credentials through HTTPS_PROXY (badlogic/pi-mono#12365)
+- fix(ai): merge createProvider model catalog once per publish, not per read (badlogic/pi-mono#12366)
+- fix(ai): report OpenAI Decisions cache read and write tokens (badlogic/pi-mono#12358)
+- fix(ai): retry more temporary provider failures
+- fix(ai): retry gateway provider-unavailable and partial-response errors (badlogic/pi-mono#12352)
+- fix(ai): retry Cloudflare 525 errors
+- fix(ai): remove abort listeners after retry backoff (badlogic/pi-mono#12348)
+- feat(ai,coding-agent): report reasoning items OpenAI drops from requests
+- fix(ai,coding-agent): make system the default instruction role in openai-completions (badlogic/pi-mono#12134)
+- fix(ai,coding-agent): keep Codex prompt cache across thinking level changes
+- fix(ai): send Codex system prompt as leading developer item
+- feat(ai): send strict tools to Claude on GitHub Copilot (badlogic/pi-mono#12332)
+- fix(ai): send strict on GitHub Copilot Responses tools (badlogic/pi-mono#12329)
+- fix(ai): add qwen4-max-preview to qwen-token-plan-individual models (badlogic/pi-mono#12313)
+- fix(ai): use Codex's context windows for GPT-6.2 (500K Sol, 272K Astra)
+- feat(ai,coding-agent): add GPT-6.2 Astra and GPT-6.2 Sol
+- fix(ai): recover from the Codex websocket 60-minute connection limit (badlogic/pi-mono#12229)
+- fix(ai): send Mistral tools non-strict unless compat.supportsStrictMode is set
+- fix(ai): Together Kimi K3 test expects the upstream 1M output limit
 
 ## [2026.11.14-1] - 2026-11-14
 

@@ -1,7 +1,5 @@
 # Changelog
 
-## [Unreleased]
-
 ## [2026.11.19-1] - 2026-11-19
 
 ### Added

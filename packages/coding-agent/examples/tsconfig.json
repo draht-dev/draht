@@ -16,14 +16,14 @@
 			"@draht/chord/delta": [
 				"../../../packages/chord/src/delta/index.ts"
 			],
-			"@draht/chord/node": [
-				"../../../packages/chord/src/node.ts"
+			"@draht/chord/json": [
+				"../../../packages/chord/src/json.ts"
+			],
+			"@draht/chord/watch": [
+				"../../../packages/chord/src/watch.ts"
 			],
 			"@draht/chord/output": [
 				"../../../packages/chord/src/output.ts"
-			],
-			"@draht/chord/telemetry-sqlite": [
-				"../../../packages/chord/src/telemetry-sqlite/index.ts"
 			],
 			"@draht/chord/sqlite": [
 				"../../../packages/chord/src/sqlite/index.ts"
@@ -33,6 +33,75 @@
 			],
 			"@draht/chord/sqlite/cloudflare": [
 				"../../../packages/chord/src/sqlite/cloudflare.ts"
+			],
+			"@draht/chord/telemetry-sqlite": [
+				"../../../packages/chord/src/telemetry-sqlite/index.ts"
+			],
+			"@draht/chord/telemetry-sqlite/node": [
+				"../../../packages/chord/src/telemetry-sqlite/node.ts"
+			],
+			"@draht/chord/telemetry-ingest": [
+				"../../../packages/chord/src/telemetry-ingest/index.ts"
+			],
+			"@draht/chord/http": [
+				"../../../packages/chord/src/node/http/index.ts"
+			],
+			"@draht/chord/workers": [
+				"../../../packages/chord/src/node/workers/index.ts"
+			],
+			"@draht/chord/compression": [
+				"../../../packages/chord/src/node/compression.ts"
+			],
+			"@draht/chord/workers/child": [
+				"../../../packages/chord/src/node/workers/child.ts"
+			],
+			"@draht/chord/plugins": [
+				"../../../packages/chord/src/node/plugins/index.ts"
+			],
+			"@draht/chord/plugins/runtime": [
+				"../../../packages/chord/src/node/plugins/runtime.ts"
+			],
+			"@draht/chord/app": [
+				"../../../packages/chord/src/node/app/index.ts"
+			],
+			"@draht/chord/app/files": [
+				"../../../packages/chord/src/node/app/files-entry.ts"
+			],
+			"@draht/chord/web": [
+				"../../../packages/chord/src/web/index.ts"
+			],
+			"@draht/chord/surfaces": [
+				"../../../packages/chord/src/node/surfaces/index.ts"
+			],
+			"@draht/chord/react": [
+				"../../../packages/chord/src/react/index.ts"
+			],
+			"@draht/chord/tui": [
+				"../../../packages/chord/src/tui/index.ts"
+			],
+			"@draht/chord/tui/launcher": [
+				"../../../packages/chord/src/node/tui/index.ts"
+			],
+			"@draht/chord/sync": [
+				"../../../packages/chord/src/sync/index.ts"
+			],
+			"@test/contracts/*": [
+				"../../chord/test/node/fixtures/plugins/contracts/*.ts"
+			],
+			"@example/contracts/*": [
+				"../../chord/test/examples/35-plugins/plugins/contracts/*.ts"
+			],
+			"@example/weather/*": [
+				"../../chord/test/examples/36-plugin-failures/plugins/weather/*.ts"
+			],
+			"@example/prices/*": [
+				"../../chord/test/examples/36-plugin-failures/plugins/prices/*.ts"
+			],
+			"@example/shapes/*": [
+				"../../chord/test/examples/37-plugin-imports/plugins/shapes/*.ts"
+			],
+			"@example/shared/*": [
+				"../../chord/test/examples/38-watch-and-rollout/plugins/contracts/*.ts"
 			],
 			"@draht/telemetry": [
 				"../../../packages/telemetry/src/index.ts"
@@ -91,6 +160,17 @@
 			],
 			"@draht/agent-core": [
 				"../../../packages/agent/src/index.ts"
+			],
+			"@draht/durable": [
+				"../../../packages/durable/src/index.ts"
+			],
+			"@draht/durable/testing": [
+				"../../../packages/durable/src/testing/index.ts"
+			],
+			"@draht/durable/*": [
+				"../../../packages/durable/src/*.ts",
+				"../../../packages/durable/src/*/index.ts",
+				"../../../packages/durable/src/*"
 			],
 			"@draht/coding-agent": [
 				"../../../packages/coding-agent/src/index.ts"

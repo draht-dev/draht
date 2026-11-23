@@ -1,6 +1,16 @@
 # Changelog
 
-## [Unreleased]
+## [2026.11.23-1] - 2026-11-23
+
+### Changed
+
+- map the Chord v2 and Durable entry points for the example extensions' type check
+- fix(p2): MCP results reach scripts as pi's whole CallToolResult, model content as pi's
+- fix(coding-agent): run shutdown cleanup when the Windows console closes (badlogic/pi-mono#11889)
+
+### Fixed
+
+- remove pi references leaked by upstream sync
 
 ## [2026.11.21-1] - 2026-11-21
 

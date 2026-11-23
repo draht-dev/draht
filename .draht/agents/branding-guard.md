@@ -13,13 +13,13 @@ Run these scans and fix EVERY hit:
 ```bash
 rg -i --glob '!node_modules' --glob '!.git' '@mariozechner/pi|@earendil-works/pi' .
 rg --glob '!node_modules' --glob '!.git' --glob '!pi-test.sh' --glob '!.draht/prompts/rebase-upstream.md' --glob '!.draht/agents/branding-guard.md' '"pi"' .
-rg -i --glob '!node_modules' --glob '!.git' --glob '!pi-test.sh' --glob '!.draht/prompts/rebase-upstream.md' --glob '!.draht/agents/branding-guard.md' 'pi-mono|pi-agent|pi-tui|pi-ai|pi-coding-agent|pi-mom|pi-pods|pi-web-ui|earendil-works' .
+rg -i --glob '!node_modules' --glob '!.git' --glob '!pi-test.sh' --glob '!.draht/prompts/rebase-upstream.md' --glob '!.draht/agents/branding-guard.md' 'pi-mono|pi-agent|pi-tui|pi-ai|pi-coding-agent|pi-durable|pi-mom|pi-pods|pi-web-ui|earendil-works' .
 ```
 
 If a task message specifies a diff range (e.g. "check diff main..upstream-sync"), also scan the diff:
 
 ```bash
-git diff <range> -- . ':!node_modules' | grep -iE '@mariozechner/pi|@earendil-works/pi|pi-mono|pi-agent|pi-tui|pi-ai|pi-coding-agent|pi-mom|pi-pods|pi-web-ui'
+git diff <range> -- . ':!node_modules' | grep -iE '@mariozechner/pi|@earendil-works/pi|pi-mono|pi-agent|pi-tui|pi-ai|pi-coding-agent|pi-durable|pi-mom|pi-pods|pi-web-ui'
 ```
 
 ## Mandatory Replacements
@@ -48,6 +48,8 @@ git diff <range> -- . ':!node_modules' | grep -iE '@mariozechner/pi|@earendil-wo
 - Internal variable names where `pi` is an abbreviation for something else (e.g., `Math.PI`).
 - Upstream GitHub URLs when used exclusively as remote references.
 - References inside `rebase-upstream.md` and this file (they document the upstream relationship).
+- Persisted and telemetry names with the `pi.` prefix (`pi.ai.request`, `pi.user`, `pi.agent`, `pi.durable.phase`, ...) and the trace carrier keys `pi-sqlite-span`, `pi-sqlite-trace`, `pi-memory-span`, `pi-memory-trace`, `pi-memory-scope`. They are a storage and wire format shared with upstream.
+- Prose in `packages/chord/docs/`. These are upstream's design documents: "pi `<hash>`", "pi #<issue>" and "pi first" name upstream's repository, and `p2` and `p3` are upstream's apps. Rebrand package names there (`@earendil-works/chord`, `pi-ai`, `pi-tui`), nothing else.
 
 ## Output
 

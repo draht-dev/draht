@@ -224,6 +224,57 @@ See the `branding-guard` agent for the full replacement table and rules. Key poi
 
 **Do NOT rename**: `pi` git remote, `pi-test.sh`, `Math.PI`, upstream GitHub URLs as remote refs.
 
+## Chord and Durable
+
+`packages/chord` (`@draht/chord`) is upstream's Chord v2 and `packages/durable` (`@draht/durable`) is upstream's
+Durable. Both are carried in full since 2026-11-23, Chord from `befc2d59b` and Durable from `32c71a6d4`. Take their
+commits like those of any other carried package, including `docs/`, `test/examples/` and the plugin `package.json`
+files under `packages/chord/test/`. The 2026-10-31 decision not to carry Chord v2 no longer applies, and Chord v1 is
+gone as it is upstream.
+
+Fork rules for the two packages:
+
+- **One React in the workspace.** Upstream pins exact versions of `react`, `react-dom`, `@types/react` and
+  `@types/react-dom` in `packages/chord/package.json`. draht keeps the ranges `packages/geist-console` and
+  `packages/reels` use for these four, and Chord's `react` peer range starts at that version. `ws` and `@types/ws`
+  keep draht's caret ranges too. Do not take upstream's pins. A second React version takes the top-level slot in `bun.lock`, and under the release's hoisted
+  install geist-console and reels then run with two Reacts. `scripts/check-draht-customizations.mjs` fails when
+  `bun.lock` resolves more than one version of `react`, `react-dom`, `@types/react` or `@types/react-dom`. To move
+  Chord to a newer React, move the whole workspace.
+- `miniflare` is a dev dependency of `@draht/chord`. Upstream imports it in `test/bench/sync-memory.ts` without
+  declaring it, because npm hoists it from Durable's `@cloudflare/vitest-plugin`; bun's isolated install does not. Keep
+  its version equal to the one that plugin depends on.
+- `packages/durable/test-workers/vitest.config.ts` aliases `@vitest/*` to the packages of the vitest that runs. vitest
+  resolves them from the project root, and the workerd pool loads vitest through that resolver. The workspace has two
+  vitest majors, so under the release's hoisted install the root holds the other one and the suite fails with
+  "`@vitest/expect` does not provide an export named `ChaiStyleAssertions`". Keep the alias until the workspace is on
+  one vitest.
+- `packages/chord/test/examples/61-tutorial` is a workspace (`@todo/app`), as upstream. The root `package.json` lists
+  `@todo/app` and `@draht/chord` in `devDependencies`, so that bun links both into the root `node_modules`. Chord's
+  example plugins have their own `package.json` and resolve the two from there, which npm's hoisting gives upstream
+  for free.
+- Persisted and wire names keep upstream's `pi` prefix: Durable's entry kinds, documents, tasks and telemetry names
+  (`pi.user`, `pi.agent`, `pi.generation`, `pi.durable.phase`), and the trace carrier keys `pi-sqlite-span`,
+  `pi-sqlite-trace`, `pi-memory-span`, `pi-memory-trace` and `pi-memory-scope`. They are a storage and wire format,
+  not branding; do not rename them. Environment variables follow the usual rule: `PI_DURABLE_*` becomes
+  `DRAHT_DURABLE_*`.
+- The documents under `packages/chord/docs/` are upstream's design history. Rebrand package names in them
+  (`@earendil-works/chord` to `@draht/chord`, `pi-ai` to `@draht/ai`) and nothing else: "pi `<hash>`", "pi #<issue>"
+  and "pi first" name upstream's repository, and `p2` and `p3` are upstream's apps.
+- These files in `packages/chord` carry hand edits that no rename rule reproduces. Keep them when a pick touches the
+  file:
+  - `test/boundary.test.ts` checks `@draht/` names; `test/state-fuzz.test.ts` has a 60 second timeout;
+    `test/output.test.ts` uses `https://example.com` where upstream uses its own domain.
+  - `src/node/plugins/discover.ts` and `src/node/plugins/README.md` say "as draht's `draht.extensions`".
+  - `src/sync/files.ts` and `test/sync/node-files.ts` say "Durable's", `src/sync/lines.ts` says "an older draht".
+  - `src/node/tui/actions.ts` cites the upstream issue as `badlogic/pi-mono#11592`.
+  - `README.md` and `CHANGELOG.md` are draht's own, as for every package.
+
+Chord's and Durable's full suites load other workspace packages from `dist/`. CI and the release build before they
+test; locally, emit `packages/telemetry`, `schema`, `chord`, `codemode` and `ai` with `npx tsc -p tsconfig.build.json`
+first. Chord's browser tests need `CHROMIUM_BIN` and its terminal tests `CHORD_TUI_NODE` (Node 26.5.1 or later); both
+are skipped without.
+
 ---
 
 ## Summary checklist

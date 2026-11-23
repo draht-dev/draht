@@ -1,4 +1,4 @@
-import { createHost, memoryLinkPair, replicatedState } from "@draht/chord";
+import { createHost, memoryLinkPair } from "@draht/chord";
 import { createAssistantMessageEventStream, validateToolArguments } from "@draht/ai";
 import { complete, getModel, getProviders, streamSimple } from "@draht/ai/compat";
 import { Agent, streamProxy } from "@draht/agent-core";
@@ -28,5 +28,4 @@ console.log(
 	typeof streamProxy,
 	typeof createHost,
 	typeof memoryLinkPair,
-	replicatedState({ browser: true }).value.browser,
 );

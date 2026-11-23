@@ -150,7 +150,7 @@ The workflow skills ship both in the `@draht/coding-agent` npm package and in th
 | **[@draht/web-ui](packages/web-ui)** | Web components for AI chat interfaces |
 | **[@draht/pods](packages/pods)** | CLI for managing vLLM deployments on GPU pods |
 | **[@draht/router](packages/router)** | Role-based model routing with direct API calls, automatic fallback, and cost tracking |
-| **[@draht/chord](packages/chord)** | Typed host runtime for plugins, contracts, replicated state, and RPC over JSON links |
+| **[@draht/chord](packages/chord)** | Object runtime for apps across processes: contracts, documents, a store, links, plugins with hot reload, HTTP, workers, web and terminal clients |
 
 The table lists supported public packages, not every workspace. In particular, `@draht/infra`, `@draht/invoice`, `@draht/compliance`, and `@draht/workflows` are examples; `@draht/ci`, `@draht/landing`, and `@draht/x-markdown` are internal tools. They are private and excluded from public package releases.
 

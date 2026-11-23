@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- keep /orchestrate and /orchestrate-loop independent of GSD: they no longer point at /execute-phase ([#52](https://github.com/draht-dev/draht/pull/52))
+
 ## [2026.11.23-1] - 2026-11-23
 
 ### Changed

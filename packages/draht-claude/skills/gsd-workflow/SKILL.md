@@ -8,7 +8,7 @@ description: Optional GSD milestone and phase workflow with .planning/ artifacts
 
 GSD is an optional milestone → phase → plan → task hierarchy in `.planning/`, selected through explicit project-management commands. It is not required for ordinary coding, debugging, review, or verification. The presence of `.planning/` alone does not select this workflow; it may hold only a codebase graph or historical context.
 
-At repository-saga scope, each planned `saga-spawner` beat maps 1:1 to one roadmap phase; the saga graph schedules phases without replacing their plans or verification.
+The user runs phases by hand, one at a time, through `/discuss-phase`, `/plan-phase`, `/execute-phase`, and `/verify-work`. Sagas (`saga-spawner`), `/orchestrate`, and `/orchestrate-loop` are separate workflows and never drive GSD phases.
 
 ## Directory Structure
 
@@ -78,7 +78,6 @@ Session resets are optional. Carry relevant plans, evidence, and unresolved work
 - **`/fix`** — investigate a bug, test the leading explanation, then fix and verify it. Stops after 3 failed fix attempts without treating that retry limit as a diagnosis.
 - **`/review`** — parallel `reviewer` + `security-auditor`, plus `spec-reviewer` when a plan is in scope.
 - **`/atomic-commit`** — analyze the diff and create authorized atomic conventional commits.
-- **`/orchestrate`** — general-purpose specialist dispatch with parallel / chain / fan-out / two-stage modes.
 
 ## Subagent Roster
 

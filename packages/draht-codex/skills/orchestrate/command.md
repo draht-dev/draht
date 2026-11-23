@@ -64,7 +64,7 @@ Dispatch several Codex subagent calls in a single assistant turn when the sub-ta
 Dispatch Codex subagent calls sequentially when later work depends on earlier output. Example: architect produces plan → implementer executes plan → verifier runs tests → reviewer audits the diff.
 
 ### Fan-out / Fan-in
-Architect decomposes independent work → dispatch implementers in parallel → collect results for verification and review. When both reviews are selected, spec review precedes quality review; `/execute-phase` keeps its explicit per-task sequence.
+Architect decomposes independent work → dispatch implementers in parallel → collect results for verification and review. When both reviews are selected, spec review precedes quality review.
 
 ### Two-Stage Review (spec → quality)
 When the requested workflow needs separate spec and quality review, use this order:
@@ -75,7 +75,7 @@ implementer → spec-reviewer → reviewer
               re-dispatch implementer with required fixes
 ```
 
-Never run quality review on a spec-non-compliant diff. This is the standard pattern inside `/execute-phase`'s per-task loop.
+Never run quality review on a spec-non-compliant diff.
 
 ### Loop (iterate until a check passes)
 When the work cannot land in one dispatch but success is provable by a deterministic check, do not improvise retries here — hand off to `/orchestrate-loop`. It runs fresh worker iterations gated by an independent re-run of the check, with max-iteration and stall bounds. See the `loop-workflow` skill for the discipline.

@@ -5,7 +5,7 @@ description: Design bounded agent loops with explicit stopping conditions, deter
 
 # Loop Workflow
 
-Use a loop when repeated work has an observable stopping condition. A small task can finish in one pass; GSD phases and fresh sessions are optional coordination choices.
+Use a loop when repeated work has an observable stopping condition. A small task can finish in one pass; fresh sessions are an optional coordination choice.
 
 Define the check, iteration/time budget, and stall condition before starting. Completion depends on the check's actual outcome, not the worker's status text. A check proves only the property it tests; review its adequacy for the goal.
 

@@ -63,7 +63,7 @@ Use the `subagent` tool with `tasks: [...]` when sub-tasks don't depend on each 
 Use the `subagent` tool with `chain: [...]` when later work depends on earlier output. Earlier output is interpolated via `{previous}` in the next task. Example: architect produces plan → implementer executes plan → verifier runs tests → reviewer audits the diff.
 
 ### Fan-out / Fan-in
-Architect decomposes independent work → dispatch implementers in parallel → collect results for verification and review. When both reviews are selected, spec review precedes quality review; `/execute-phase` keeps its explicit per-task sequence.
+Architect decomposes independent work → dispatch implementers in parallel → collect results for verification and review. When both reviews are selected, spec review precedes quality review.
 
 ### Two-Stage Review (spec → quality)
 When the requested workflow needs separate spec and quality review, use this order:
@@ -74,7 +74,7 @@ implementer → spec-reviewer → reviewer
               re-dispatch implementer with required fixes
 ```
 
-Never run quality review on a spec-non-compliant diff. This is the per-task loop inside `/execute-phase`.
+Never run quality review on a spec-non-compliant diff.
 
 ### Loop (iterate until a check passes)
 When the work cannot land in one dispatch but success is provable by a deterministic check, do not improvise retries here — hand off to `/orchestrate-loop`. It runs fresh worker iterations gated by an independent re-run of the check, with max-iteration and stall bounds.

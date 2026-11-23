@@ -17,7 +17,6 @@ Goal: $ARGUMENTS
 | Situation | Command |
 |---|---|
 | Decomposition is known, sub-tasks dispatch once | `/orchestrate` |
-| Phase plans exist in `.planning/phases/` | `/execute-phase` |
 | Goal needs iteration until a measurable criterion holds | `/orchestrate-loop` |
 
 Loops trade tokens for persistence: use one when the work is too large or too uncertain for a single pass AND success is checkable without human judgment.

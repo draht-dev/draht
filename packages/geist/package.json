@@ -1,6 +1,6 @@
 {
 	"name": "@draht/geist",
-	"version": "2026.11.19-1",
+	"version": "2026.11.22-1",
 	"private": true,
 	"description": "geist CLI + composition root — wires geist-core, geist-acp and geist-console together",
 	"type": "module",
@@ -34,7 +34,7 @@
 		"@draht/geist-acp": "workspace:*",
 		"@draht/geist-core": "workspace:*",
 		"@draht/geist-protocol": "workspace:*",
-		"hono": "^4.12.5",
+		"hono": "^4.13.19",
 		"qrcode": "^1.5.4"
 	},
 	"devDependencies": {

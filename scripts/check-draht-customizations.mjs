@@ -16,7 +16,9 @@
  *      bun.lock carries no file:/link: text at all *and* its workspace
  *      manifest snapshot matches every package.json byte for byte — a file:
  *      sibling dep duplicates the package physically, breaks tsc, and makes
- *      the lockfile unreproducible
+ *      the lockfile unreproducible. bun.lock also resolves one version each of
+ *      react, react-dom and their types: a second one splits React for the
+ *      apps under the release's hoisted install
  *   4. Draht-only scripts exist on disk
  *   5. verify.sh branding check targets @mariozechner/pi-* (not @draht/*)
  *   6. .planning/ files are not modified since branching from main (branding guard must not touch them)
@@ -500,6 +502,57 @@ console.log("\nPublished packages depend only on published workspaces");
 		publishGraphError = error instanceof Error ? error.message : String(error);
 	}
 	check(publishGraphError === null, `the public workspace graph is publishable${publishGraphError ? ` — ${publishGraphError}` : ""}`);
+}
+
+// ── 3f. bun.lock resolves one React ─────────────────────────────────
+//
+// React is a singleton: `react`, `react-dom` and every package with a React
+// peer have to load the same copy, and `@types/react` the same types. In
+// bun.lock the top-level key is what a package without a nested entry gets
+// under the release's hoisted install (`bun install --linker hoisted`). A
+// workspace that resolves a second version can take that slot — upstream pins
+// exact React versions in packages/chord, and "chord" sorts before
+// "geist-console" and "reels" — which pushes the version the apps use into
+// nested entries while their third-party React libraries (remotion,
+// @tanstack/react-virtual) keep resolving the top-level one. Nothing fails at
+// install time; hooks break at run time, and only in the release.
+
+console.log("\nbun.lock resolves one React");
+
+{
+	const SINGLETONS = ["react", "react-dom", "@types/react", "@types/react-dom"];
+	const lockPath = resolve(root, "bun.lock");
+	let lockPackages = null;
+	try {
+		lockPackages = JSON.parse(readFileSync(lockPath, "utf-8").replace(/,(\s*[}\]])/g, "$1")).packages ?? {};
+	} catch (err) {
+		fail(`bun.lock: could not read the resolved packages — ${err.message}`);
+	}
+	if (lockPackages) {
+		for (const name of SINGLETONS) {
+			// Keys are paths ("react", "@draht/reels/react"); the value's first
+			// element is the resolution ("react@19.2.7").
+			const resolved = new Map();
+			for (const [key, value] of Object.entries(lockPackages)) {
+				if (key !== name && !key.endsWith(`/${name}`)) continue;
+				const resolution = Array.isArray(value) ? value[0] : undefined;
+				if (typeof resolution !== "string" || !resolution.startsWith(`${name}@`)) continue;
+				const version = resolution.slice(name.length + 1);
+				resolved.set(version, [...(resolved.get(version) ?? []), key]);
+			}
+			check(
+				resolved.size <= 1,
+				`bun.lock: one version of ${name}` +
+					(resolved.size === 1 ? ` (${[...resolved.keys()][0]})` : "") +
+					(resolved.size > 1
+						? ` — found ${[...resolved].map(([version, keys]) => `${version} at ${keys.join(", ")}`).join(" and ")}` +
+							` (keep every workspace on the same range: a carried package follows the` +
+							` workspace's React, not upstream's exact pins; see "Chord and Durable"` +
+							` in .draht/prompts/rebase-upstream.md)`
+						: ""),
+			);
+		}
+	}
 }
 
 // ── 4. Draht-only scripts exist on disk ─────────────────────────────

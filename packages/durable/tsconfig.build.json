@@ -1,0 +1,23 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"outDir": "./dist",
+		"paths": {
+			"@draht/chord": ["../chord/dist/index.d.ts"],
+			"@draht/chord/context": ["../chord/dist/context/index.d.ts"],
+			"@draht/chord/delta": ["../chord/dist/delta/index.d.ts"],
+			"@draht/chord/json": ["../chord/dist/json.d.ts"],
+			"@draht/chord/watch": ["../chord/dist/watch.d.ts"],
+			"@draht/chord/output": ["../chord/dist/output.d.ts"],
+			"@draht/chord/sqlite": ["../chord/dist/sqlite/index.d.ts"],
+			"@draht/chord/sqlite/node": ["../chord/dist/sqlite/node.d.ts"],
+			"@draht/chord/sqlite/cloudflare": ["../chord/dist/sqlite/cloudflare.d.ts"],
+			"@draht/ai": ["../ai/dist/index.d.ts"]
+		},
+		"rootDir": "./src"
+	},
+	"include": ["src/**/*.ts"],
+	// Ambient declarations the build needs; `exclude` below does not apply to `files`.
+	"files": ["src/images/photon-wasm.d.ts"],
+	"exclude": ["node_modules", "dist", "**/*.d.ts", "src/**/*.d.ts"]
+}

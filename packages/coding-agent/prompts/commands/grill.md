@@ -16,4 +16,6 @@ Continue while useful unresolved questions remain and the user wants deeper exam
 
 End with the decisions, consequential assumptions, remaining risks, and recommended next action. Produce the artifact the user requested; otherwise a chat summary is sufficient. Use project conventions for files, and `.planning/` only when that workflow is selected. Follow `unslop` for prose and preserve quoted user decisions exactly.
 
+When an open decision belongs to someone outside the session, such as a client or another team, offer `/questionnaire` to send it to them.
+
 A request to discuss alone does not authorize implementation. When the user subsequently asks to implement, use that authorization without requiring another ceremonial approval.

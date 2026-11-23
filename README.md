@@ -111,11 +111,11 @@ draht ships prompt templates (slash commands), skills and subagent prompts that 
 
 - Project lifecycle (GSD, "Get Shit Done"): `/new-project`, `/init-project`, `/map-codebase`, `/discuss-phase`, `/plan-phase`, `/execute-phase`, `/verify-work`, `/next-milestone`, `/progress`, `/pause-work`, `/resume-work`
 - Everyday work: `/quick`, `/fix` (4-phase debugging protocol with TDD discipline), `/review` (parallel reviewer and security-auditor), `/atomic-commit`, `/resolve-conflicts`, `/why` (cited investigation of why code is the way it is)
-- Thinking and coordination: `/brainstorm`, `/grill`, `/orchestrate` (dispatch specialist subagents), `/orchestrate-loop` (fresh subagent iterations until a deterministic check passes), `/triage` (classify an external issue report), `/create-verification-skill`
+- Thinking and coordination: `/brainstorm`, `/grill`, `/orchestrate` (dispatch specialist subagents), `/orchestrate-loop` (fresh subagent iterations until a deterministic check passes), `/triage` (classify an external issue report), `/questionnaire` (send a decision you can't answer alone to someone else), `/create-verification-skill`
 
 **Skills**, loaded by the model when a task matches, or forced with `/skill:name`. They come through two channels:
 
-- [packages/coding-agent/skills](packages/coding-agent/skills) ships inside the `@draht/coding-agent` npm package: `atomic-reasoning`, `blast-radius`, `epistemics`, `explainers`, `typescript-discipline`, `unslop` and `hexagon-animation`. These are the skills the bundled commands and subagents refer to by name.
+- [packages/coding-agent/skills](packages/coding-agent/skills) ships inside the `@draht/coding-agent` npm package: `atomic-reasoning`, `blast-radius`, `epistemics`, `explainers`, `typescript-discipline`, `unslop`, `writing-for-agents` and `hexagon-animation`. These are the skills the bundled commands and subagents refer to by name.
 - [skills/](skills) is the full catalog, including the workflow skills below. It ships with the `draht-claude` and `draht-codex` plugins. For the draht CLI, install it with `npx skills add draht-dev/draht -g` (into `~/.agents/skills/`; without `-g` it goes to the project's `.agents/skills/`, which draht loads once you trust the project), or copy the skill directories you want into `~/.draht/agent/skills/` or `.draht/skills/`. If `/skill:` does not list `tdd-workflow`, the catalog is not installed.
 
 Catalog skills:

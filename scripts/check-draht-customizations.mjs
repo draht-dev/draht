@@ -648,6 +648,7 @@ const requiredCommandPrompts = [
 	"pause-work",
 	"plan-phase",
 	"progress",
+	"questionnaire",
 	"quick",
 	"resolve-conflicts",
 	"resume-work",
@@ -697,6 +698,7 @@ const DUAL_CHANNEL_SKILLS = [
 	"explainers",
 	"typescript-discipline",
 	"unslop",
+	"writing-for-agents",
 ];
 
 function walkSkillFiles(dirAbs, prefix = "") {

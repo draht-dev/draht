@@ -34,9 +34,9 @@ describe("generate-skills-artifacts: computeArtifacts is a pure function", () =>
 		expect(second).toEqual(first);
 	});
 
-	it("discovers 150 artifacts from the 42 canonical skills", () => {
+	it("discovers 159 artifacts from the 44 canonical skills", () => {
 		const artifacts = computeArtifacts(SKILLS_ROOT);
-		expect(artifacts.length).toBe(150);
+		expect(artifacts.length).toBe(159);
 	});
 
 	it("requires explicit invocation for Codex ad-hoc workflows and GSD lifecycle skills", () => {
@@ -53,6 +53,7 @@ describe("generate-skills-artifacts: computeArtifacts is a pure function", () =>
 			"draht-codex/skills/pause-work/agents/openai.yaml",
 			"draht-codex/skills/plan-phase/agents/openai.yaml",
 			"draht-codex/skills/progress/agents/openai.yaml",
+			"draht-codex/skills/questionnaire/agents/openai.yaml",
 			"draht-codex/skills/quick/agents/openai.yaml",
 			"draht-codex/skills/resume-work/agents/openai.yaml",
 			"draht-codex/skills/triage/agents/openai.yaml",
@@ -203,7 +204,7 @@ describe("generate-skills-artifacts: CLI, isolated in a temp output root", () =>
 	it("regenerated output into a temp root matches the real committed package files", () => {
 		run(["--output-root", tmpRoot]);
 		const generated = collectFiles(join(tmpRoot, "packages"));
-		expect(Object.keys(generated).length).toBe(150);
+		expect(Object.keys(generated).length).toBe(159);
 		for (const [relPath, content] of Object.entries(generated)) {
 			const committedPath = join(REPO_ROOT, "packages", relPath);
 			expect(readFileSync(committedPath, "utf8"), `${relPath} differs from the committed file`).toBe(content);

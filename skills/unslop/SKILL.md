@@ -7,7 +7,7 @@ description: Edit requested prose for clarity, specificity, and the reader's reg
 
 Apply to prose you are writing or were asked to edit: documentation, reports, handoffs, specs, commit bodies, and client-facing text. Preserve meaning and the author's intended tone. Do not sweep unrelated repository text.
 
-Exclude code, identifiers, code comments, quoted evidence, and user-authored text outside the request. Draht's prompt and skill corpus is outside this skill's scope. Keep fixed formats exact, including conventional commit subjects, `red:`/`green:`/`refactor:`, `STATUS:` lines, frontmatter, and verdict-first reports.
+Exclude code, identifiers, code comments, quoted evidence, and user-authored text outside the request. Draht's prompt and skill corpus is outside this skill's scope; `writing-for-agents` covers it. Keep fixed formats exact, including conventional commit subjects, `red:`/`green:`/`refactor:`, `STATUS:` lines, frontmatter, and verdict-first reports.
 
 Lead with the concrete fact or action. Name actors, mechanisms, and evidence. Replace promotional claims, vague attribution, filler, repeated conclusions, and unnecessary jargon with specific information or remove them. Preserve established project terminology.
 

@@ -27,10 +27,11 @@ export const PLUGIN_ROOT_RENDER = {
 	codex: "${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$HOME/.draht/codex-marketplace/plugins/draht}}",
 };
 
-// ── 17 discipline skills — line-scoped dialect spans ────────────────────────
-// 6 of the 17 discipline skills have any host-specific span; the other 11
+// ── 19 discipline skills — line-scoped dialect spans ────────────────────────
+// 6 of the 19 discipline skills have any host-specific span; the other 13
 // (blast-radius, brainstorming, ddd-workflow, draht, epistemics, explainers,
-// judge, loop-workflow, tdd-workflow, typescript-discipline, unslop)
+// judge, loop-workflow, tdd-workflow, test-audit, typescript-discipline,
+// unslop, writing-for-agents)
 // render identically for every host and have no entry here. saga-spawner
 // carries an asymmetric pair: the canonical "strongest tier" line renders
 // with a Claude model example on the claude side but a generic "strongest
@@ -114,7 +115,7 @@ export const DISCIPLINE_DIALECT = {
 	],
 };
 
-// ── 22 command templates — line-scoped dialect spans ────────────────────────
+// ── 25 command templates — line-scoped dialect spans ────────────────────────
 // Lines that differ only by the plugin-root token (e.g. every tool-note line
 // in discuss-phase, init-project, next-milestone, pause-work, progress,
 // resume-work) are not listed — PLUGIN_ROOT_TOKEN handles those generically.
@@ -423,7 +424,7 @@ export const COMMAND_DIALECT = {
 	],
 };
 
-// ── 22 command-wrapper skills (codex-only) — one shared span ────────────────
+// ── 25 command-wrapper skills (codex-only) — one shared span ────────────────
 // Claude never renders these files at all (no wrapper skills on the claude
 // side), so there is no "claude" field: only "codex" is ever read.
 export const WRAPPER_DIALECT = [

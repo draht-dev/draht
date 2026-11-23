@@ -51,6 +51,7 @@ Ad-hoc:
 - `commands/grill.md` - whole-frontier interrogation of any subject; output form chosen at the end
 - `commands/why.md` - code archaeology: design rationale and history via parallel evidence investigators, synthesized with confidence tiers and citations
 - `commands/triage.md` - external issue-report triage: classify, bounded cause trace, dedupe against GitHub Issues, fail-closed ticket creation
+- `commands/questionnaire.md` - turn a decision you can't answer alone into a questionnaire for someone else to fill in async
 - `commands/create-verification-skill.md` - generate a committed project-local `verify-<app>` skill that drives the real app and captures proof artifacts
 - `commands/speak.md` - speak text aloud via the ElevenLabs text-to-speech helper
 
@@ -118,6 +119,7 @@ The plugin ships a command prompt wrapper for each `commands/*.md` template:
 - `grill`
 - `why`
 - `triage`
+- `questionnaire`
 - `create-verification-skill`
 - `speak`
 
@@ -157,6 +159,7 @@ Creative:
 - `model-tiering`
 - `saga-spawner`
 - `unslop` — cut AI tells from prose deliverables, then add voice back; includes an STE-lite register for procedures
+- `writing-for-agents` — writing skills, prompts, and AGENTS.md for agents: context pointers, information hierarchy, completion criteria, leading words, pruning
 - `explainers` — evidence-built Mermaid diagrams and HTML explainers for graph-shaped reports
 - `epistemics` — confidence calibration for investigation findings
 - `typescript-discipline` — make illegal states unrepresentable

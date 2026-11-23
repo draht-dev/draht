@@ -16,7 +16,7 @@ Turn something the user can't answer alone into a **questionnaire**: a Markdown 
 
 2. **What do you need back?** Ask, in one exchange, the specific decisions or facts the user can't resolve alone and needs from this person. When the topic or the session already lists them, confirm that list instead. Done when you have a concrete list of what the user must walk away able to do or decide.
 
-3. **Write the questionnaire.** Draft questions aimed at the gap from steps 1–2, following the Document structure below, in the recipient's language and by `unslop`. Write it to `questionnaire-<slug>.md` in the current directory (slug from the topic) and report the path. Done when the file exists and every item the user named in step 2 is covered by a question.
+3. **Write the questionnaire.** Draft questions aimed at the gap from steps 1–2, following the Document structure below, in the recipient's language and by `unslop`. Write it to `questionnaire-<slug>.md` in the current directory (slug from the topic; when that file exists, add a numeric suffix rather than replace it) and report the path. Done when the file exists and every item the user named in step 2 is covered by a question.
 
 ## Document structure
 

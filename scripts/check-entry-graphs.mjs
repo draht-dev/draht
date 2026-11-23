@@ -21,6 +21,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const WORKSPACE = {
 	"@draht/chord": "packages/chord/src",
 	"@draht/ai": "packages/ai/src",
+	"@draht/durable": "packages/durable/src",
 	"@draht/agent-core": "packages/agent/src",
 	"@draht/codemode": "packages/codemode/src",
 	"@draht/telemetry": "packages/telemetry/src",
@@ -68,6 +69,39 @@ const BUDGETS = {
 		"./cloudflare": {
 			maxFiles: 9,
 			forbid: ["codemode/src/index.ts", "runtime/host.ts", "runtime/worker.ts", "codemode/src/wasm.ts"],
+		},
+	},
+	"packages/durable": {
+		".": {
+			// Tool argument validation reaches @draht/schema (validator, coercion and format checks; 39 files that replace
+			// TypeBox, which this walk did not count); provider-session creation reaches @draht/ai's lean UUID utility; the
+			// memory and SQLite storages share scan order and cursor handling. Values from Chord's root (copyJson,
+			// replicatedState) reach its host runtime through the root barrel. Chord's context reaches @draht/telemetry's root
+			// (index, noop, metrics, memory) for its NOOP telemetry default; harness/telemetry.ts is Durable's schema.
+			// The Harness's request identity reaches @draht/ai's utils/identity.ts and its version constant. Partial commits
+			// parse streamed tool-call arguments with @draht/ai's utils/streaming-json.ts (and its json-parse.ts) to append what
+			// argument strings grew by (harness/partial-changes.ts). Chord's watches fold pending ops with Delta's
+			// pending queue (delta/pending.ts). `registryReader` (harness/registry-reader.ts) reads a Chord v2 registry
+			// value through type-only imports. The Session caches hot Storage reads (session/cached-storage.ts) and keeps
+			// each conversation's newest entry and head marker (session/conversation-tails.ts). Group commit sends batches
+			// through `commit()`, or one `commit()` each (storage/commit-batch.ts), from a writer off the Session line
+			// (session/writer.ts) that gates reads by the keys of unpublished writes (session/keys.ts).
+			maxFiles: 123,
+			forbid: [
+				"packages/ai/src/index.ts",
+				"packages/ai/src/utils/string-enum.ts",
+				// Photon (WebAssembly) loads only through `./images`.
+				"packages/durable/src/images/",
+			],
+		},
+		// The file tools reach their environment helpers and the Harness definitions they need, not the Harness itself,
+		// and @draht/schema's root for their schema builders (10 files; its format checks stay out).
+		"./tools": { maxFiles: 27, forbid: ["packages/durable/src/images/", "packages/schema/src/formats/"] },
+		// The fit-images extension hooks the Harness's tool task, so it reaches most of the root's graph (what a Harness
+		// user loads anyway); Photon stays behind `./images`.
+		"./images/fit": {
+			maxFiles: 100,
+			forbid: ["packages/durable/src/images/index.ts", "packages/durable/src/images/node.ts"],
 		},
 	},
 };

@@ -38,7 +38,20 @@ func TestDiscover_RealWorktreePlausibleModuleCount(t *testing.T) {
 		t.Fatal("GitFiltered = false; expected git to be available for this repo")
 	}
 	if res.Truncated {
-		t.Fatal("Truncated = true; repo unexpectedly exceeds the 5000-file walk cap")
+		// The repository has outgrown the walk cap (it passed 5000 files when
+		// Chord v2 and Durable were carried). The checks below compare the walk
+		// with the whole git-visible set, so they need an uncapped walk; the
+		// cap itself is covered by walk_test.go. What this means for the
+		// product is unchanged and worth knowing: map-graph on this repository
+		// stops at DefaultMaxFiles.
+		t.Logf("repository exceeds the %d-file walk cap; scanning it uncapped for the checks below", DefaultMaxFiles)
+		res, err = discover(root, 1<<30)
+		if err != nil {
+			t.Fatalf("discover(%q, uncapped): %v", root, err)
+		}
+		if res.Truncated {
+			t.Fatal("Truncated = true for an uncapped walk")
+		}
 	}
 
 	code := res.CodeFiles()

@@ -12,6 +12,18 @@
 - point /grill at /questionnaire for decisions that belong to someone outside the session, and unslop and /create-verification-skill at writing-for-agents ([#51](https://github.com/draht-dev/draht/pull/51))
 - give /grill a done condition: it ends when every question that changes the result is decided or labelled an assumption ([#51](https://github.com/draht-dev/draht/pull/51))
 
+## [2026.11.23-1] - 2026-11-23
+
+### Changed
+
+- map the Chord v2 and Durable entry points for the example extensions' type check
+- fix(p2): MCP results reach scripts as pi's whole CallToolResult, model content as pi's
+- fix(coding-agent): run shutdown cleanup when the Windows console closes (badlogic/pi-mono#11889)
+
+### Fixed
+
+- remove pi references leaked by upstream sync
+
 ## [2026.11.21-1] - 2026-11-21
 
 ### Changed

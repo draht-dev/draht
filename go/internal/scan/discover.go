@@ -88,7 +88,13 @@ func IsTest(rel string) bool {
 // (i.e. for every walked+git-kept file, code or not). Verbatim port of the
 // file-discovery phase of visBuildMap (draht-tools.cjs:2065-2133).
 func Discover(root string) (*Result, error) {
-	walked, err := Walk(WalkOptions{Root: root})
+	return discover(root, 0)
+}
+
+// discover is Discover with the walk cap as a parameter (0: DefaultMaxFiles),
+// for tests that scan a tree larger than the cap.
+func discover(root string, maxFiles int) (*Result, error) {
+	walked, err := Walk(WalkOptions{Root: root, MaxFiles: maxFiles})
 	if err != nil {
 		return nil, fmt.Errorf("scan: walk %s: %w", root, err)
 	}

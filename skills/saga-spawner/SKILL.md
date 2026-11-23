@@ -32,7 +32,7 @@ beats:
     attempts: 0
     spec: |
       One-paragraph spec of the shippable increment. The PR is mergeable
-      exactly when this holds. Written like a PLAN.md objective.
+      exactly when this holds.
     check: "npm run check && npx tsx ../../node_modules/vitest/dist/cli.js --run test/stream.test.ts"
 ```
 
@@ -42,7 +42,7 @@ Rules for the graph:
 - `check` is a deterministic command whose exit code proves the spec. No check, no beat — a beat without a check is a wish, and per `loop-workflow` the loop is only as good as its check.
 - Only `ready | done | blocked` are ever written to the file. In-flight and in-review are **derived** from GitHub each run, never stored — stored liveness lies the moment a session dies.
 - `deps` are satisfied only by `status: done` **on main**. An unmerged PR satisfies nothing.
-- Planned beats map 1:1 to roadmap phases where a `.planning/ROADMAP.md` exists; the spec then references the phase and the run drives the standard GSD per-phase cycle.
+- A beat is self-contained: the run plans, builds, and verifies it from its `spec` and `check` alone.
 
 ## Coordination: the branch is the lease
 
@@ -57,7 +57,7 @@ Concurrent runs are real — a nightly trigger and a PR-merge trigger can fire m
 
 One reconciliation iteration. Every step is safe to kill and safe to repeat.
 
-1. **Orient** — read `.planning/saga-graph.yaml` and `.planning/STATE.md`. `gh pr list --state all` filtered to `beat/*` heads. Graph-first per `gsd-workflow`: if `.planning/codebase/MAP.json` exists, use `draht-tools graph-context` / `graph-impact` before grepping.
+1. **Orient** — read `.planning/saga-graph.yaml`. `gh pr list --state all` filtered to `beat/*` heads. Graph-first: if `.planning/codebase/MAP.json` exists, use `draht-tools graph-context` / `graph-impact` before grepping.
 2. **Reconcile** — compute truth from GitHub:
    - merged PR for `beat/<id>` → beat is `done` (the work PR already flipped it; verify main agrees)
    - closed-unmerged PR → `attempts + 1`; at `max_attempts` → `status: blocked` (needs human)
@@ -65,7 +65,7 @@ One reconciliation iteration. Every step is safe to kill and safe to repeat.
    - durable mutations (attempts, blocked flips, new audit beats) land as one graph-file-only PR from `saga/reconcile-<YYYYMMDD-HHmm>`. No mutations, no PR.
 3. **Select** — ready set = `status: ready` ∧ all deps `done` ∧ (`risk` < high ∨ `approved`) ∧ not in-flight. Order riskiest-first — highest uncertainty × blast radius fails the graph cheapest, before effort is sunk into work it would obsolete (`/orchestrate` rule). Take up to `max_in_flight − |in-flight|`. Zero selected and zero in-flight → **Idle mode** below.
 4. **Spawn** — per selected beat: acquire the lease, then drive the inner cycle on the branch with your host's subagent mechanism, `/orchestrate` discipline throughout:
-   - `architect` turns the spec into an atomic plan (PLAN.md task XML where a `.planning/` project exists)
+   - `architect` turns the spec into an atomic plan
    - `implementer` fan-out per plan — TDD red → green → refactor inside each task; tasks within a plan sequential, independent plans parallel
    - two-stage review: `spec-reviewer` first, `reviewer` second — never quality-review a spec-non-compliant diff
    - `verifier` runs the beat's `check` plus the suite; the orchestrating context **re-runs the check itself** — subagent claims are inputs, not verdicts (`verification-gate`)
@@ -85,7 +85,7 @@ Bounded, read-mostly audit pass:
 | Coverage gaps | `.planning/TEST-STRATEGY.md` vs actual coverage |
 | Docs drift | README / `docs/` claims vs current code |
 | Dependency staleness | lockfile vs upstream, majors flagged high risk |
-| Flaky or slow checks | `execution-log.jsonl`, CI history |
+| Flaky or slow checks | CI history |
 
 Emit at most `audit_max_new` findings as `kind: audit` beats in the reconcile PR — each with spec, check, risk tier, deps if ordering matters. Dedupe against existing beats and the `declined` list. `risk` ≤ `audit_auto_risk` beats are spawn-eligible next run; everything above waits for a human `approved: true`. A human deleting an audit beat moves its id to `declined` — it is never re-emitted.
 
@@ -117,7 +117,6 @@ Run this command's session on the strongest tier and let workers execute on the 
 
 - `loop-workflow` — the spawner is the session-based loop at repo scope; consult it before adding any retry behaviour here
 - `atomic-reasoning` — cuts the beats; the well-cut test above is its acceptance bar
-- `gsd-workflow` — supplies the inner per-beat cycle and the `.planning/` structure beats map onto
 - `verification-gate` — evidence labeling for everything quoted in PR bodies and run reports
 - `model-tiering` — orchestrator/executor economics for the fan-out
 

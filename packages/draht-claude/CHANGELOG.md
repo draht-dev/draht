@@ -2,8 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- add the /questionnaire command, which turns a decision you can't answer alone into an async questionnaire for someone else (adapted from mattpocock/skills to-questionnaire, MIT) ([#51](https://github.com/draht-dev/draht/pull/51))
+- add the writing-for-agents skill, a reference for writing skills, prompts, and AGENTS.md (adapted from mattpocock/skills writing-for-agents, MIT) ([#51](https://github.com/draht-dev/draht/pull/51))
+
 ### Changed
 
+- point /grill at /questionnaire for decisions that belong to someone outside the session, and unslop and /create-verification-skill at writing-for-agents ([#51](https://github.com/draht-dev/draht/pull/51))
+- give /grill a done condition, and route test-audit in the draht router skill ([#51](https://github.com/draht-dev/draht/pull/51))
 - separate sagas and loops from GSD: saga-spawner beats no longer map to roadmap phases or read GSD state, gsd-workflow states that phases run by hand, and orchestrate, orchestrate-loop, and loop-workflow drop their GSD pointers ([#52](https://github.com/draht-dev/draht/pull/52))
 
 ## [2026.11.21-1] - 2026-11-21

@@ -33,7 +33,7 @@ If the checkout doesn't build or start as-is, resolve in-scope prerequisites or 
 
 Write `.draht/skills/verify-<app>/SKILL.md`. `.draht/skills/` is the project-level skills directory, and project skills win name collisions against installed or shipped skills — the generated skill is authoritative for its repo. (If the target project's agents discover project skills at a different path, write the identical content there instead; the skill body is host-neutral.)
 
-Frontmatter is `name: verify-<app>` plus a `description` that names the app, the surface, and when to reach for it — without frontmatter the skill never registers. Then these six sections, each grounded in what the interview actually found (no placeholders left):
+Frontmatter is `name: verify-<app>` plus a `description` that names the app, the surface, and when to reach for it — without frontmatter the skill never registers. Word the description and the body by `writing-for-agents`. Then these six sections, each grounded in what the interview actually found (no placeholders left):
 
 - **Launch:** the exact command that starts the app for verification, and how to tell it's ready (a log line, a port answering, a prompt). Include teardown. For a short-lived CLI or TUI there is no server to keep alive: launch means build the binary (or install deps) once, then start each drive in its own isolated PTY or tmux session.
 - **Doctor:** one read-only check that answers "is this instance worth driving?" — process up, right version/build, port owned by us, auth valid. Run it before the first drive and again whenever anything looks off.

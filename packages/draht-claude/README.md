@@ -43,6 +43,7 @@ This bundles everything draht gives its own CLI — slash commands, specialist s
 - `/grill <subject>` — whole-frontier interrogation of any idea, spec, ticket list, or decision; output form chosen at the end
 - `/why <question>` — code archaeology: parallel `investigator` subagents gather evidence per category, synthesized into a confidence-tiered, citation-backed answer
 - `/triage <report>` — classify an external issue report after a bounded cause trace, dedupe against GitHub Issues, create a ticket only behind a fail-closed gate
+- `/questionnaire [topic]` — turn a decision you can't answer alone into a questionnaire for someone else to fill in async
 - `/create-verification-skill [app]` — generate a committed project-local `verify-<app>` skill that drives the real app the way a user does and captures proof artifacts
 - `/speak [text]` — speak text aloud via the ElevenLabs text-to-speech helper; with no text, voices a short summary of the latest result
 
@@ -65,7 +66,7 @@ All usable via Claude Code's `Task` tool (`subagent_type: <name>`):
 | `security-auditor` | Scans for injection, auth, secrets, unsafe patterns |
 | `advisor` | Strongest-tier strategic steer, consulted rarely when stuck or before committing to an approach |
 
-### 19 bundled skills
+### 20 bundled skills
 
 - **`draht`** — router and catalog for the skill family: what draht is, which skill fits which situation
 - **`gsd-workflow`** — complete GSD methodology reference (directory structure, cycle, hooks, config)
@@ -81,6 +82,7 @@ All usable via Claude Code's `Task` tool (`subagent_type: <name>`):
 - **`saga-spawner`** — unattended repo advancement as a cloud routine reconciling a saga graph of beats
 - **`cinematic-continuation`** — provider-neutral, time-coded video continuation from bundled distilled style and continuity references
 - **`unslop`** — cut AI tells from prose deliverables, then add voice back so the result is neither slop nor sterile; includes an STE-lite register (after ASD-STE100) for procedures
+- **`writing-for-agents`** — writing skills, prompts, and AGENTS.md for agents: context pointers, information hierarchy, completion criteria, leading words, pruning
 - **`explainers`** — evidence-built Mermaid diagrams and self-contained HTML explainers when a report's content is a graph
 - **`epistemics`** — confidence calibration for investigation findings: five tiers, cite-or-label-as-inference, null results as evidence
 - **`typescript-discipline`** — make illegal states unrepresentable: discriminated unions, branded primitives, boundary parsing, exhaustiveness

@@ -6,7 +6,7 @@ describe("portable workflow invocation policy", () => {
 	it("keeps explicit workflows discoverable by name but out of native model-selected skills", () => {
 		const result = loadSkillsFromDir({ dir: resolve("../../skills"), source: "path" });
 		const names =
-			"triage fix quick new-project init-project discuss-phase plan-phase execute-phase verify-work next-milestone pause-work resume-work progress gsd-workflow".split(
+			"triage questionnaire fix quick new-project init-project discuss-phase plan-phase execute-phase verify-work next-milestone pause-work resume-work progress gsd-workflow".split(
 				" ",
 			);
 		const prompt = formatSkillsForPrompt(result.skills);

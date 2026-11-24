@@ -13,21 +13,21 @@ This catalog routes to sibling skills; it does not activate them all.
 
 ## Two Kinds of Sibling Skills
 
-- **16 support skills** — load the relevant discipline or explicitly chosen workflow: `atomic-reasoning`, `blast-radius`, `brainstorming`, `ddd-workflow`, `debugging-workflow`, `epistemics`, `explainers`, `gsd-workflow`, `judge`, `loop-workflow`, `model-tiering`, `saga-spawner`, `tdd-workflow`, `typescript-discipline`, `unslop`, `verification-gate`.
-- **24 command skills** — explicit actions, including ad-hoc work and optional GSD lifecycle stages: `new-project`, `init-project`, `map-codebase`, `discuss-phase`, `plan-phase`, `execute-phase`, `verify-work`, `next-milestone`, `pause-work`, `resume-work`, `progress`, `quick`, `fix`, `review`, `atomic-commit`, `orchestrate`, `orchestrate-loop`, `resolve-conflicts`, `grill`, `why`, `create-verification-skill`, `triage`, `speak`, `budget`.
+- **18 support skills** — load the relevant discipline or explicitly chosen workflow: `atomic-reasoning`, `blast-radius`, `brainstorming`, `ddd-workflow`, `debugging-workflow`, `epistemics`, `explainers`, `gsd-workflow`, `judge`, `loop-workflow`, `model-tiering`, `saga-spawner`, `tdd-workflow`, `test-audit`, `typescript-discipline`, `unslop`, `verification-gate`, `writing-for-agents`.
+- **25 command skills** — explicit actions, including ad-hoc work and optional GSD lifecycle stages: `new-project`, `init-project`, `map-codebase`, `discuss-phase`, `plan-phase`, `execute-phase`, `verify-work`, `next-milestone`, `pause-work`, `resume-work`, `progress`, `quick`, `fix`, `review`, `atomic-commit`, `orchestrate`, `orchestrate-loop`, `resolve-conflicts`, `grill`, `why`, `create-verification-skill`, `triage`, `questionnaire`, `speak`, `budget`.
 
 Every skill's frontmatter `name` matches its directory name, so `skills/<name>/` and the name you invoke are always the same string.
 
 ## Repository Layout
 
 - `skills/<name>/SKILL.md` — every skill has one; frontmatter (`name`, `description`) plus instructions.
-- `skills/<name>/command.md` — the 24 command skills only. This is the full prompt template; the command skill's `SKILL.md` is a thin wrapper that reads it.
-- The 16 support skills have no `command.md` — their `SKILL.md` is self-contained.
+- `skills/<name>/command.md` — the 25 command skills only. This is the full prompt template; the command skill's `SKILL.md` is a thin wrapper that reads it.
+- The 18 support skills have no `command.md` — their `SKILL.md` is self-contained.
 - This file, `skills/draht/SKILL.md`, is itself a plain skill (no `command.md`) — it is discovered and loaded the same way any discipline skill is.
 
 ## How the Catalog Composes
 
-An explicitly selected command may use supporting disciplines; ordinary requests do not need a command workflow. `plan-phase` and `execute-phase` both assume `atomic-reasoning` and `tdd-workflow`; every command that ends with a completion claim assumes `verification-gate`; `fix` applies the `debugging-workflow` protocol; `orchestrate-loop` is `loop-workflow` applied to one goal; `why` leans on `epistemics` for every claim it reports; `triage` borrows `debugging-workflow`'s cause-first discipline for its bounded trace and `epistemics` for labeling what it carries into a ticket; `create-verification-skill` generates the project-local harness whose evidence `verification-gate` demands and `verify-work`'s verifier drives; `review`'s refutation step escalates to `blast-radius`'s rung-4 script when a Critical finding hinges on library or runtime behavior; `why`, `review`, `plan-phase`, `verify-work`, and `blast-radius` reach for `explainers` when their output is a graph. When in doubt about which disciplines a command skill pulls in, open that command skill's `command.md` — the disciplines it expects are named in its own text.
+An explicitly selected command may use supporting disciplines; ordinary requests do not need a command workflow. `plan-phase` and `execute-phase` both assume `atomic-reasoning` and `tdd-workflow`; every command that ends with a completion claim assumes `verification-gate`; `fix` applies the `debugging-workflow` protocol; `orchestrate-loop` is `loop-workflow` applied to one goal; `why` leans on `epistemics` for every claim it reports; `triage` borrows `debugging-workflow`'s cause-first discipline for its bounded trace and `epistemics` for labeling what it carries into a ticket; `create-verification-skill` generates the project-local harness whose evidence `verification-gate` demands and `verify-work`'s verifier drives; `review`'s refutation step escalates to `blast-radius`'s rung-4 script when a Critical finding hinges on library or runtime behavior; `why`, `review`, `plan-phase`, `verify-work`, and `blast-radius` reach for `explainers` when their output is a graph; `grill` offers `questionnaire` for a decision that belongs to someone outside the session; `create-verification-skill` words its generated skill by `writing-for-agents`. When in doubt about which disciplines a command skill pulls in, open that command skill's `command.md` — the disciplines it expects are named in its own text.
 
 ## Situation → Skill
 
@@ -61,9 +61,10 @@ An explicitly selected command may use supporting disciplines; ordinary requests
 | Decomposing a task and dispatching the right mix of specialists | `orchestrate` |
 | Running one goal in a deterministic-check-gated loop until it passes | `orchestrate-loop` |
 | Resolving an in-progress merge/rebase conflict — including a failed `agent/<taskId>` worktree merge-back | `resolve-conflicts` |
-| Stress-testing any subject — an idea, a spec, tickets, a decision — in whole-frontier question rounds | `grill` |
+| Stress-testing any subject — an idea, a spec, tickets, a decision — with questions until every decision that changes the result is made | `grill` |
+| Sending a decision you can't answer alone to someone else — a client, another team — as an async questionnaire | `questionnaire` |
 | Recovering why code is the way it is — design rationale, decision history, rejected alternatives | `why` |
-| Generating a committed project-local `verify-<app>` skill that drives the real app as a user and captures proof artifacts | `create-verification-skill` |
+| Generating a project-local `verify-<app>` skill that drives the real app as a user and captures proof artifacts | `create-verification-skill` |
 | Classifying an external issue report — dedupe, file, reroute, or answer — without fixing it | `triage` |
 
 ### Supporting disciplines and optional workflows
@@ -81,8 +82,10 @@ An explicitly selected command may use supporting disciplines; ordinary requests
 | Putting a human in the loop — permission prompts and finished turns queued as cards to swipe through | `judge` |
 | Advancing a repo unattended — saga graph, beats, scheduled or cloud routines | `saga-spawner` |
 | Writing testable code — the red → green → refactor cycle | `tdd-workflow` |
+| Writing, changing, reviewing, or sweeping tests — gating new tests and cutting low-value ones | `test-audit` |
 | Writing or editing TypeScript — modelling state, narrowing, casts, exhaustiveness | `typescript-discipline` |
 | Editing prose deliverables — cutting AI tells from docs, reports, handoffs, commit bodies | `unslop` |
+| Writing or editing text an agent reads — skills, command and agent prompts, AGENTS.md, CLAUDE.md | `writing-for-agents` |
 | About to claim "done", "fixed", "passing", "ready", or "complete" | `verification-gate` |
 
 ## Disambiguation
@@ -93,18 +96,20 @@ A few sibling pairs are easy to reach for incorrectly:
 - `quick` vs `execute-phase` — `quick` completes an ad-hoc task without planning artifacts; `execute-phase` explicitly selects execution of existing phase plans and their review gates.
 - `orchestrate` vs `orchestrate-loop` — `orchestrate` fans a task out to specialists once; `orchestrate-loop` re-runs one worker against a deterministic check until it passes or a bound is hit.
 - `review` vs `verify-work` — `review` is ad hoc, any time; `verify-work` is the phase-level acceptance gate and additionally checks the diff against the phase's plan files.
-- `grill` vs `brainstorming` — `brainstorming` is the project-creation gate: it ends in a written spec and a handoff to `/new-project` or `/init-project`; `grill` interrogates any subject with no presumed outcome — the artifact (spec, tickets, decision record, notes, or nothing) is chosen only when the frontier is empty.
+- `grill` vs `brainstorming` — `brainstorming` helps the user choose an approach to a goal; `grill` stress-tests a subject the user already has, with no presumed outcome — the artifact (spec, tickets, decision record, notes, or nothing) is chosen at the end.
+- `grill` vs `questionnaire` — `grill` questions the user in the session; `questionnaire` writes a document for someone else to answer async and asks the user only who it goes to and what they need back.
 - `why` vs `fix`/`debugging-workflow` — `why` reconstructs intent and history when nothing is misbehaving ("why is it built this way"); `fix` and the debugging protocol answer defects ("why is it doing the wrong thing right now"). A `why` run that uncovers a live defect hands off to `fix`; a `fix` that needs design intent consults `why`.
 - `blast-radius` vs `review` — `review` audits a diff for defects across the board and merges subagent findings; `blast-radius` investigates one change's impact beyond the diff, reducing its safety to a single fact proven by running real code. `review`'s refutation step borrows blast-radius's rung-4 bar for Critical findings; the phrase "uncertainty × blast radius" in the planning commands is a risk-ordering heuristic, not this skill.
-- `create-verification-skill` vs `verify-work` — `verify-work` is the recurring phase acceptance gate; `create-verification-skill` is the one-time generator of the committed `verify-<app>` skill that `verify-work`'s verifier then drives. Generate once, drive every phase.
+- `create-verification-skill` vs `verify-work` — `verify-work` is the recurring phase acceptance gate; `create-verification-skill` is the one-time generator of the `verify-<app>` skill that `verify-work`'s verifier then drives. Generate once, drive every phase.
 - `triage` vs `fix` — `fix` starts from a bug you already own and ends in a landed fix; `triage` starts from someone else's report and ends in one verdict: a classification, a typed dedupe outcome, and at most one tracker issue. A `[triage:bug]` marker with its tracker link is a ready entry into `fix`; `triage` never fixes, and `fix` never files tickets.
+- `unslop` vs `writing-for-agents` — `unslop` edits prose a person reads; `writing-for-agents` covers text an agent reads, where the wording decides what the agent does and when it loads the material.
 
 ## Host Invocation
 
 | Host | How to invoke a draht skill |
 |---|---|
-| Claude Code | `/draht:<command>` slash commands for the 24 command skills (for example `/draht:plan-phase`); the 16 discipline skills load automatically by description match or on request |
-| Codex | `$draht:<command>` prompts, or `/skills` and pick the wrapper, for the 24 command skills; discipline skills load automatically or by name |
+| Claude Code | `/draht:<command>` slash commands for the 25 command skills (for example `/draht:plan-phase`); the 18 discipline skills load automatically by description match or on request |
+| Codex | `$draht:<command>` prompts, or `/skills` and pick the wrapper, for the 25 command skills; discipline skills load automatically or by name |
 | Any Agent-Skills-compatible host | invoke the sibling skill directly by name — every `SKILL.md` in this tree is self-contained and portable |
 | draht CLI (`@draht/coding-agent`) | work directly with the coding tools, or explicitly invoke a bundled command |
 

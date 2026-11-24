@@ -1,7 +1,9 @@
 import { EventEmitter } from "node:events";
 import { readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const childProcessMocks = vi.hoisted(() => ({
 	spawn: vi.fn(),
@@ -23,6 +25,7 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 
 describe("shareSession", () => {
 	beforeAll(() => initTheme("dark"));
+	beforeEach(() => vi.clearAllMocks());
 
 	it("keeps concurrent session exports isolated", async () => {
 		const uploads: string[] = [];
@@ -84,5 +87,24 @@ describe("shareSession", () => {
 
 		expect(uploads).toEqual(["A", "B"]);
 		expect(errors).toEqual([]);
+	});
+
+	// #10585: /share runs from the editor's submit handler, so a full or unwritable temp dir must not throw.
+	it("reports a temp dir it cannot write to", async () => {
+		const missing = join(tmpdir(), `draht-share-missing-${process.pid}`, "tmp");
+		for (const name of ["TMPDIR", "TEMP", "TMP"]) vi.stubEnv(name, missing);
+		const errors: string[] = [];
+
+		await shareSession({
+			session: {},
+			ui: {},
+			editorContainer: {},
+			editor: {},
+			showStatus: vi.fn(),
+			showError: (message: string) => errors.push(message),
+		} as never);
+
+		expect(errors).toEqual([expect.stringMatching(/^Failed to export session: ENOENT/)]);
+		expect(childProcessMocks.spawn).not.toHaveBeenCalled();
 	});
 });

@@ -58,7 +58,14 @@ export function exportSessionForShare(filePath: string, session: AgentSession): 
  * through gist export rather than attempting an artifact upload first.
  */
 export async function shareSession(context: SessionShareContext): Promise<void> {
-	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "draht-share-"));
+	let tempDir: string;
+	try {
+		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "draht-share-"));
+	} catch (error: unknown) {
+		// /share runs from the editor's submit handler, where a thrown error would crash draht.
+		context.showError(`Failed to export session: ${error instanceof Error ? error.message : "Unknown error"}`);
+		return;
+	}
 	const htmlFile = path.join(tempDir, "session.html");
 
 	try {

@@ -1,6 +1,6 @@
 {
 	"name": "@draht/mom",
-	"version": "2026.11.23-1",
+	"version": "2026.11.24-1",
 	"description": "Slack bot that delegates messages to the Draht coding agent",
 	"type": "module",
 	"bin": {

@@ -1,6 +1,6 @@
 {
 	"name": "@draht/durable",
-	"version": "2026.11.23-1",
+	"version": "2026.11.24-1",
 	"description": "Durable conversation, task, and document runtime for draht",
 	"type": "module",
 	"main": "./dist/index.js",

@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2026.11.24-1] - 2026-11-24
+
+### Added
+
+- add the /questionnaire command and the writing-for-agents skill
 
 ## [2026.11.14-1] - 2026-11-14
 

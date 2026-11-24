@@ -1,17 +1,19 @@
 # Changelog
 
-## [Unreleased]
+## [2026.11.24-1] - 2026-11-24
 
 ### Added
 
-- add the native /questionnaire command prompt, which turns a decision you can't answer alone into an async questionnaire for someone else (adapted from mattpocock/skills to-questionnaire, MIT) ([#51](https://github.com/draht-dev/draht/pull/51))
-- ship the writing-for-agents skill, a reference for writing skills, prompts, and AGENTS.md, so the shipped unslop and /create-verification-skill pointers resolve with nothing installed (adapted from mattpocock/skills writing-for-agents, MIT) ([#51](https://github.com/draht-dev/draht/pull/51))
+- add the /questionnaire command and the writing-for-agents skill
 
 ### Changed
 
-- point /grill at /questionnaire for decisions that belong to someone outside the session, and unslop and /create-verification-skill at writing-for-agents ([#51](https://github.com/draht-dev/draht/pull/51))
-- give /grill a done condition: it ends when every question that changes the result is decided or labelled an assumption ([#51](https://github.com/draht-dev/draht/pull/51))
-- keep /orchestrate and /orchestrate-loop independent of GSD: they no longer point at /execute-phase ([#52](https://github.com/draht-dev/draht/pull/52))
+- wait for the partial message before aborting in the subagent SIGKILL test
+- separate sagas, orchestrate, and loops from GSD
+
+### Fixed
+
+- give /grill a done condition and route test-audit in the draht router
 
 ## [2026.11.23-1] - 2026-11-23
 

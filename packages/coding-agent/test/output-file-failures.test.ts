@@ -1,4 +1,4 @@
-// #10585: a full, over-quota or unwritable temp dir must not crash pi. Bash output that cannot be
+// #10585: a full, over-quota or unwritable temp dir must not crash draht. Bash output that cannot be
 // saved to a temp file keeps its in-memory tail and says why the full output is missing.
 import type * as fs from "node:fs";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -99,7 +99,7 @@ beforeAll(() => initTheme(undefined, false));
 
 beforeEach(() => {
 	// Every file the tests create goes here and is removed with it.
-	tempRoot = mkdtempSync(join(tmpdir(), "pi-output-file-failures-"));
+	tempRoot = mkdtempSync(join(tmpdir(), "draht-output-file-failures-"));
 	for (const name of ["TMPDIR", "TEMP", "TMP"]) vi.stubEnv(name, tempRoot);
 	fsMocks.failure = undefined;
 	fsMocks.createdPaths = [];

@@ -78,7 +78,7 @@ function getActiveManagedInstallRoot(): string | undefined {
 		throw new Error(`Managed install marker is missing or invalid: ${markerPath}`);
 	}
 
-	// install.ps1 records a Windows entrypoint (C:\...\pi.cmd). WSL can run that install
+	// install.ps1 records a Windows entrypoint (C:\...\draht.cmd). WSL can run that install
 	// through its sh launcher on Linux Node, where an update would rebuild it with Linux npm.
 	const entrypointPath = marker.entrypoint?.path;
 	if (

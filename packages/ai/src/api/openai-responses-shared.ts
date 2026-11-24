@@ -411,7 +411,7 @@ function renderResponsesTranscript<TApi extends Api>(
 
 					// OpenAI returns tool calls with status "completed", so replay them the same way. Over the Codex WebSocket,
 					// OpenAI keeps the previous response's items itself, and later reasoning is generated after calls that have
-					// the status. After 5 idle minutes the connection closes and pi sends the whole history again. If a call
+					// the status. After 5 idle minutes the connection closes and draht sends the whole history again. If a call
 					// lacks the status there, the history no longer matches, and from GPT-6.2 on OpenAI drops the reasoning
 					// that follows it (`prefix_mismatch`, #12367).
 					// Always "completed": a stream that ends with an unfinished tool call fails, and failed messages are not replayed.

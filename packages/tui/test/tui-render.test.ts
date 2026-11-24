@@ -312,7 +312,7 @@ describe("TUI crash dump without configured log directory", () => {
 
 	// #10585: a full or unwritable temp dir must not replace the width error.
 	it("reports the width error when the crash dump cannot be written", async () => {
-		const crashDir = mkdtempSync(join(tmpdir(), "pi-tui-crash-"));
+		const crashDir = mkdtempSync(join(tmpdir(), "draht-tui-crash-"));
 		// A regular file where the log directory should be makes the dump fail to write.
 		const logDirectory = join(crashDir, "not-a-directory");
 		writeFileSync(logDirectory, "");

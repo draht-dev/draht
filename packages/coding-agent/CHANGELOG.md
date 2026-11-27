@@ -1,6 +1,24 @@
 # Changelog
 
-## [Unreleased]
+## [2026.11.27-1] - 2026-11-27
+
+### Changed
+
+- link the draht Discord and simplify the issue gate
+- fix(coding-agent): correct the fallbacks for unsaved bash output files (badlogic/pi-mono#12461)
+- fix(coding-agent,tui): stop temp file write failures from crashing pi (badlogic/pi-mono#12452)
+- fix(coding-agent): show stored keys that did not resolve in /login and retry failed key commands
+- fix(coding-agent): refuse pi update of the Windows install run from WSL (badlogic/pi-mono#12457)
+- fix(coding-agent): report unresolved stored credentials as not configured (badlogic/pi-mono#12454)
+- fix(coding-agent): explain why oversized Mermaid diagrams show source (badlogic/pi-mono#12442)
+- fix(ai,coding-agent): replace retired Mistral models devstral-medium-latest and pixtral-12b (badlogic/pi-mono#12449)
+- fix(coding-agent): pass explicit text/plain MIME type to wl-copy (badlogic/pi-mono#12446)
+- docs(coding-agent): clarify xhigh and max in thinkingLevelMap (badlogic/pi-mono#12435)
+- test(coding-agent): make coalesced auth reload test independent of timestamp resolution (badlogic/pi-mono#12425)
+
+### Fixed
+
+- remove pi references leaked by upstream sync
 
 ## [2026.11.24-1] - 2026-11-24
 

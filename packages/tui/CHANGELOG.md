@@ -1,6 +1,15 @@
 # Changelog
 
-## [Unreleased]
+## [2026.11.27-1] - 2026-11-27
+
+### Changed
+
+- fix(coding-agent): correct the fallbacks for unsaved bash output files (badlogic/pi-mono#12461)
+- fix(coding-agent,tui): stop temp file write failures from crashing pi (badlogic/pi-mono#12452)
+
+### Fixed
+
+- remove pi references leaked by upstream sync
 
 ## [2026.11.21-1] - 2026-11-21
 

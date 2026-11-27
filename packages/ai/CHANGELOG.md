@@ -1,6 +1,27 @@
 # Changelog
 
-## [Unreleased]
+## [2026.11.27-1] - 2026-11-27
+
+### Changed
+
+- fix(ai): classify finish_reason "error" in the retry classifier, not in provider messages (badlogic/pi-mono#12455)
+- fix(ai): drop shut down Groq models and undocumented mistral-medium-3.5 (badlogic/pi-mono#12453)
+- fix(ai): drop shut down gpt-5-chat-latest from the OpenAI catalog (badlogic/pi-mono#12450)
+- fix(ai,coding-agent): replace retired Mistral models devstral-medium-latest and pixtral-12b (badlogic/pi-mono#12449)
+- fix(ai): pin Codex request effort to the initial selection (badlogic/pi-mono#12437)
+- docs(coding-agent): clarify xhigh and max in thinkingLevelMap (badlogic/pi-mono#12435)
+- fix(ai): retry "request rate increased too quickly" errors (badlogic/pi-mono#12434)
+- feat(ai): add classifier model support to Radius provider
+- feat(ai): add pi-classifier API (badlogic/pi-mono#12421)
+- fix(ai): preserve declared dialect in non-strict Anthropic tools
+- fix(ai): send empty assistant content for affected Workers AI models
+- fix(ai): distinguish Google prompt blocks from incomplete streams (badlogic/pi-mono#12357)
+- fix(ai): replay Responses tool calls with status "completed"
+
+### Fixed
+
+- send non-null assistant content to Workers AI models that require it
+- remove pi references leaked by upstream sync
 
 ## [2026.11.21-1] - 2026-11-21
 

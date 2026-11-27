@@ -53,10 +53,10 @@ All `graph-*` commands are read-only and print concise text (`--json` for full d
 
 ## Contribution Gate
 
-- New issues from new contributors are auto-closed by `.github/workflows/issue-gate.yml`
+- `.github/workflows/issue-gate.yml` auto-closes issues from new contributors that are opened Friday through Sunday (UTC) or without an issue template; templated weekday issues stay open
 - New PRs from new contributors without PR rights are auto-closed by `.github/workflows/pr-gate.yml`
 - Maintainer approval comments are handled by `.github/workflows/approve-contributor.yml`
-- Maintainers review auto-closed issues daily; issues below the `CONTRIBUTING.md` quality bar are not reopened and get no reply
+- Maintainers review auto-closed issues on weekdays; issues below the `CONTRIBUTING.md` quality bar are not reopened and get no reply
 - `lgtmi` approves future issues; `lgtm` approves future issues and rights to submit PRs
 
 When creating issues:

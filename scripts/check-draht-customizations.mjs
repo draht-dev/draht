@@ -39,9 +39,10 @@
  *  15. All package.json author fields are draht authors (not upstream)
  *  16. No @mariozechner/pi* import paths in source files
  *  17. No @mariozechner/pi* references in README.md files
- *  18. No discord invite badge or stale "graciously donated by" domain credit
- *      in README.md files (draht has no discord community; the domain credit
- *      was replaced with a Spaceship referral link)
+ *  18. No Discord link other than the draht invite, and no stale "graciously
+ *      donated by" domain credit, in README.md files (upstream syncs bring back
+ *      pi's Discord badge and links; the domain credit was replaced with a
+ *      Spaceship referral link)
  *  19. system-prompt.ts uses APP_NAME (not a hardcoded "pi" product name) —
  *      upstream syncs tend to overwrite buildSystemPrompt() wholesale and
  *      reintroduce "operating inside pi" / "Pi documentation" / "pi docs"
@@ -1158,13 +1159,14 @@ for (const readmePath of readmeFiles) {
 	}
 }
 
-// ── 18. No discord badge / stale domain-donation credit in README.md files ──
+// ── 18. Only the draht Discord invite / no stale domain-donation credit in README.md files ──
 
 console.log(
-	"\nREADME branding (no discord badge, no stale domain-donation credit)",
+	"\nREADME branding (only the draht Discord invite, no stale domain-donation credit)",
 );
 
-const discordBadgePattern = /discord\.com\/invite/i;
+const DRAHT_DISCORD_INVITE = "https://discord.gg/AU2QnN9Fsu";
+const discordLinkPattern = /https?:\/\/(?:www\.)?discord(?:app)?(?:\.gg|\.com\/(?:invite|channels))\/[^\s)"'<>\]]+/gi;
 const staleDomainCreditPattern = /graciously donated by/i;
 
 for (const readmePath of readmeFiles) {
@@ -1172,10 +1174,13 @@ for (const readmePath of readmeFiles) {
 		const content = readFileSync(readmePath, "utf-8");
 		const relPath = relative(root, readmePath);
 
-		if (discordBadgePattern.test(content)) {
-			fail(`${relPath}: contains discord invite badge (no discord community exists)`);
+		const foreignDiscordLinks = (content.match(discordLinkPattern) ?? []).filter(
+			(link) => link !== DRAHT_DISCORD_INVITE,
+		);
+		if (foreignDiscordLinks.length > 0) {
+			fail(`${relPath}: contains non-draht Discord link(s): ${foreignDiscordLinks.join(", ")} (use ${DRAHT_DISCORD_INVITE})`);
 		} else {
-			pass(`${relPath}: no discord badge`);
+			pass(`${relPath}: no foreign Discord links`);
 		}
 
 		if (staleDomainCreditPattern.test(content)) {

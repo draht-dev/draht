@@ -12,9 +12,9 @@ If you use an agent, run it from the repository root so it picks up `AGENTS.md` 
 
 ## Contribution Gate
 
-Issues filed with one of the official GitHub issue templates, on Monday to Thursday (UTC), stay open for review, including issues from new contributors.
+Issues opened Monday to Thursday (UTC) with one of the issue templates stay open for review, including issues from new contributors. The issue form on GitHub always uses a template.
 
-Issues without a template, and issues opened Friday through Sunday (UTC), are still auto-closed. Maintainers review auto-closed issues on weekdays and reopen worthwhile ones. Issues that do not meet the quality bar below will not be reopened or receive a reply.
+Issues opened Friday through Sunday (UTC), and issues created without a template (for example through the API or `gh issue create --body`), are still auto-closed. Maintainers review auto-closed issues on weekdays and reopen worthwhile ones. Issues that do not meet the quality bar below will not be reopened or receive a reply.
 
 Pull requests from contributors who do not yet have `lgtm` are still auto-closed. Open an issue first.
 
@@ -68,7 +68,7 @@ draht's core is minimal. If your feature does not belong in the core, it should 
 
 ## Questions?
 
-A draht Discord is planned. The invite is not published yet (TODO). Until then, use a templated issue on a weekday.
+Ask on [Discord](https://discord.gg/AU2QnN9Fsu).
 
 ## FAQ
 
@@ -78,7 +78,7 @@ draht still auto-closes issues that skip the official templates, issues opened o
 
 ### Why are weekend issues not reviewed?
 
-Maintainers need uninterrupted time away from the issue tracker. Issues submitted Friday through Sunday (UTC) are auto-closed and are not part of the Monday review queue. A draht Discord invite is not published yet (TODO). If a problem is urgent, reopen or comment on the issue on Monday with the short version, a repro, and the relevant logs.
+Maintainers need uninterrupted time away from the issue tracker. Issues submitted Friday through Sunday (UTC) are auto-closed and are not part of the Monday review queue. If a problem is urgent, ask on [Discord](https://discord.gg/AU2QnN9Fsu) and include the short version, a repro, and the relevant logs.
 
 ### Why do some issues get no reply?
 

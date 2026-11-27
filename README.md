@@ -14,13 +14,11 @@
 
 # draht: TDD-first, DDD-native coding agent for the terminal
 
-draht is an open source (MIT) AI coding agent for the terminal, published on npm as `@draht/coding-agent`. The positioning is TDD-first and DDD-native. Those workflows are optional skills, not a requirement (see the [FAQ](#does-draht-require-tdd-ddd-or-gsd)). It is built on [pi](https://github.com/earendil-works/pi) by Mario Zechner and adds duet mode (two or more models in one session), Polyphase multi-agent workflows, RLM for inputs larger than the context window, and optional workflow prompts (TDD, DDD and GSD).
+draht is an open source (MIT) AI coding agent for the terminal, published on npm as `@draht/coding-agent`. It ships test-driven and domain-driven workflows as skills, slash commands and subagent prompts. They are optional, not a requirement (see the [FAQ](#does-draht-require-tdd-ddd-or-gsd)). It is built on [pi](https://github.com/earendil-works/pi) by Mario Zechner and adds duet mode (two or more models in one session), Polyphase multi-agent workflows, and RLM for inputs larger than the context window.
 
 <!-- Oskar: /rlm inside a session is not documented; only `draht rlm` is. Add it if it ships. -->
 
 <!-- TODO(ops#66): Duet Mode GIF, 20 to 30 seconds, recorded from a real session after Board go. Do not add a fabricated or stock image. Suggested path: docs/images/duet-mode.gif. Alt text once the file exists: "draht duet mode in the terminal, two models in one session." -->
-
-_A short GIF of Duet Mode will be added here once a real session has been recorded._
 
 ## Quickstart
 
@@ -33,7 +31,14 @@ draht
 
 In the session, run `/login` to use an existing subscription (Claude Pro/Max, ChatGPT Plus/Pro (Codex), GitHub Copilot, Google Gemini CLI, or Google Antigravity).
 
-Alternatively, run without installing with `npx @draht/coding-agent`, or set an API key (for example `export ANTHROPIC_API_KEY=...`) before starting draht.
+Or set an API key before starting draht:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+draht
+```
+
+To try it without installing, run `npx @draht/coding-agent`.
 
 Then describe what you want. By default the model gets four tools: `read`, `write`, `edit` and `bash`.
 
@@ -151,7 +156,7 @@ Differences documented in this repo:
 - Duet mode, Polyphase, RLM, codemode, built-in MCP support, documented in [duet.md](packages/coding-agent/docs/duet.md) and [polyphase.md](packages/coding-agent/docs/polyphase.md).
 - Additional workflow skills, slash commands and subagent prompts (see [Opinionated prompts for agentic engineering](#opinionated-prompts-for-agentic-engineering)), plus Drahtbank and the Claude Code and Codex plugins.
 
-<!-- Oskar: confirm the upstream link (earendil-works/pi (former pi-mono paths redirect here; confirm which features are still draht-only vs current pi)) and which of these features are draht-only vs also in current pi. -->
+<!-- Oskar: confirm which of these features are draht-only vs also in current pi. -->
 
 ## FAQ
 
@@ -194,7 +199,7 @@ Yes. `npx draht-claude install` and `npx draht-codex install` install the comman
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [AGENTS.md](AGENTS.md) for project-specific rules (for both humans and agents).
 
-Community chat will be a draht Discord. The invite is not published yet (TODO). Do not use leftover upstream Discord links.
+Questions and discussion: [draht Discord](https://discord.gg/AU2QnN9Fsu).
 
 ## Development
 

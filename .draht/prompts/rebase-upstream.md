@@ -24,7 +24,7 @@ each cherry-pick; for manual commits, run `node scripts/check-draht-customizatio
 | **Import paths** | Any `@mariozechner/pi*` import/require in source files (`.ts`, `.js`, `.mjs`, etc.) |
 | **README references** | Any `@mariozechner/pi*` references in `README.md` files |
 | **README modification** | Any diff touching `README.md` files (revert with `git checkout HEAD -- <readme>`) |
-| **README domain/discord branding** | Discord invite badge, or "graciously donated by" domain credit, reintroduced into `README.md` files |
+| **README domain/discord branding** | A Discord link other than the draht invite (`https://discord.gg/AU2QnN9Fsu`), or "graciously donated by" domain credit, reintroduced into `README.md` files |
 
 ---
 
@@ -94,9 +94,9 @@ If any README was modified, re-run the commit hook to confirm zero remaining pi 
 node scripts/check-draht-customizations.mjs
 ```
 
-This same check also fails if a README regains the fake discord invite badge or the
-stale "graciously donated by" domain credit — draht has no discord community, and the
-domain credit was replaced with a Spaceship referral link (`https://draht.dev/domain`,
+This same check also fails if a README regains an upstream Discord badge or link (any
+Discord link other than `https://discord.gg/AU2QnN9Fsu`) or the stale "graciously
+donated by" domain credit. The domain credit was replaced with a Spaceship referral link (`https://draht.dev/domain`,
 redirecting via `packages/landing/astro.config.mjs`). If `git checkout HEAD --
 README.md` ever reintroduces either of these (e.g. because `HEAD` predates this fix),
 manually reapply the fix rather than accepting the reverted content.

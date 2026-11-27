@@ -23,4 +23,4 @@
 
 ## Upstream
 
-- [pi by Mario Zechner](https://github.com/earendil-works/pi-mono)
+- [pi by Mario Zechner](https://github.com/earendil-works/pi)

@@ -1,6 +1,6 @@
 {
 	"name": "@draht/chord",
-	"version": "2026.11.27-1",
+	"version": "2026.11.27",
 	"description": "Object runtime for apps across processes: contracts, documents, a store, links, plugins with hot reload, HTTP, workers, web and terminal clients",
 	"type": "module",
 	"main": "./dist/index.js",
